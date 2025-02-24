@@ -7,9 +7,10 @@
 #include "list.h"
 
 #include "kcp_def.h"
-#include "conv_set.h"
+#include "connection_set.h"
 #include "kcp_config.h"
 #include "kcpp.h"
+#include "bitmap.h"
 
 #define KCP_HEADER_SIZE (24)
 
@@ -63,8 +64,11 @@ typedef struct KcpAck {
     uint32_t ts;    // 时间戳
 } kcp_ack_t;
 
+// MTU探测回调
+typedef void (*on_probe_completed_t)(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code);
+
 /// @brief KCP控制块
-typedef struct KcpSocket {
+typedef struct KcpConnection {
     // 基础配置
     uint32_t conv;          // 会话ID，用于标识一个会话
     uint32_t mtu;           // 最大传输单元
@@ -139,7 +143,13 @@ typedef struct KcpSocket {
 
     // 其他配置
     int nocwnd;          // 是否关闭拥塞控制，0=不关闭
-} kcp_socket_t;
+
+    struct KcpContext*      kcp_ctx;
+
+    // mtu
+    on_probe_completed_t    on_probe_completed;
+    void*                   probe_user_data;
+} kcp_connection_t;
 
 typedef struct KcpFunctionCallback {
     on_kcp_connected_t      on_connected;
@@ -148,31 +158,28 @@ typedef struct KcpFunctionCallback {
     on_kcp_closed_t         on_closed;
 } kcp_function_callback_t;
 
-// MTU探测回调
-typedef void (*on_probe_completed_t)(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code);
-
-typedef struct KcpConnection {
-    socket_set_node_t       socket_node;
-    struct KcpContext*      kcp_ctx;
-
-    // mtu
-    on_probe_completed_t    on_probe_completed;
-    void*                   probe_user_data;
-} kcp_connection_t;
+typedef struct KcpSYNNode {
+    struct list_head node;
+    int32_t conv;
+    sockaddr_t remote_host;
+} kcp_syn_node_t;
 
 struct KcpContext {
     socket_t                    sock;
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
 
-    conversation_set_t          socket_set;
+    bitmap_t                    conv_bitmap;
+    int32_t                     backlog;
+    struct list_head            syn_queue;
+    connection_set_t            socket_set;
     struct event_base*          event_loop;
     void*                       user_data;
 };
 
 EXTERN_C_BEGIN
 
-void kcp_socket_init(kcp_socket_t *kcp, uint32_t conv, void *user);
+void kcp_socket_init(kcp_connection_t *kcp, uint32_t conv, void *user);
 
 EXTERN_C_END
 

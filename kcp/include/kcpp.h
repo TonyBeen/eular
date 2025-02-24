@@ -105,6 +105,8 @@ KCP_PORT int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, co
  */
 KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, int32_t backlog, on_kcp_syn_received_t cb);
 
+KCP_PORT void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb);
+
 /**
  * @brief 
  *
@@ -115,6 +117,15 @@ KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, int32_t backlog, on_kcp_
  */
 KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr);
 
+/**
+ * @brief 
+ * 
+ * @param kcp_ctx 
+ * @param addr 
+ * @param timeout_ms 
+ * @param cb 
+ * @return KCP_PORT 
+ */
 KCP_PORT int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb);
 
 /**

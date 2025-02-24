@@ -144,17 +144,82 @@ _error:
     return status;
 }
 
-struct KcpConnection *kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
+int32_t kcp_listen(struct KcpContext *kcp_ctx, int32_t backlog, on_kcp_syn_received_t cb)
+{
+    if (kcp_ctx == NULL || cb == NULL) {
+        return INVALID_PARAM;
+    }
+
+    kcp_ctx->backlog = backlog;
+    kcp_ctx->callback.on_syn_received = cb;
+    return NO_ERROR;
+}
+
+void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb)
+{
+    if (kcp_ctx != NULL) {
+        kcp_ctx->callback.on_accepted = cb;
+    }
+}
+
+int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
 {
     if (kcp_ctx == NULL) {
-        return NULL;
+        return INVALID_PARAM;
     }
 
     struct KcpConnection *kcp_connection = (struct KcpConnection *)malloc(sizeof(struct KcpConnection));
     if (kcp_connection == NULL) {
-        return NULL;
+        return NO_MEMORY;
     }
 
-    // TODO 从半连接队列处理连接
+    if (list_empty(&kcp_ctx->syn_queue)) {
+        return NO_PENDING_CONNECTION;
+    }
+
+    kcp_syn_node_t* syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
+    if (syn_packet == NULL) {
+        return NO_PENDING_CONNECTION;
+    }
+    // TODO 发送SYN给对端
+
     return NULL;
+}
+
+// TODO 实现 syn_received 回调函数, 用于connect连接回调
+static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
+{
+    if (kcp_ctx == NULL || addr == NULL) {
+        return false;
+    }
+
+
+
+    // TODO 发送SYN_ACK给对端
+
+    return true;
+}
+
+int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb)
+{
+    if (kcp_ctx == NULL || addr == NULL || cb == NULL) {
+        return INVALID_PARAM;
+    }
+
+    struct KcpConnection *kcp_connection = (struct KcpConnection *)malloc(sizeof(struct KcpConnection));
+    if (kcp_connection == NULL) {
+        return NO_MEMORY;
+    }
+
+
+
+    // kcp_connection->timer = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
+    // if (kcp_connection->timer == NULL) {
+    //     return NO_MEMORY;
+    // }
+
+    // struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    // evtimer_add(kcp_connection->timer, &tv);
+
+    return NO_ERROR;
 }
