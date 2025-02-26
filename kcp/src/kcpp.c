@@ -23,7 +23,7 @@ struct KcpContext *kcp_create(struct event_base *base, void *user)
         .on_closed = NULL
     };
 
-    ctx->socket_set.rb_node = NULL;
+    ctx->connection_set.rb_node = NULL;
     ctx->event_loop = base;
     ctx->user_data = user;
     return ctx;
@@ -181,7 +181,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
     if (syn_packet == NULL) {
         return NO_PENDING_CONNECTION;
     }
-    // TODO 发送SYN给对端
+    // TODO 发送SYN给对端并等待对端ACK响应并设置超时时间
 
     return NULL;
 }
@@ -193,6 +193,11 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
         return false;
     }
 
+    // struct KcpConnection *kcp_connection = kcp_ctx->;
+    // if (kcp_connection == NULL) {
+    //     return false;
+    // }
+    // kcp_connection->state = KCP_STATE_SYN_RECEIVED;
 
 
     // TODO 发送SYN_ACK给对端

@@ -1,6 +1,13 @@
 #include "connection_set.h"
 #include <assert.h>
 
+void connection_set_init(connection_set_t *root)
+{
+    if (root != NULL) {
+        root->rb_node = NULL;
+    }
+}
+
 connection_set_node_t *connection_set_search(connection_set_t *root, int32_t conv)
 {
     struct rb_node *node = root->rb_node;
@@ -64,5 +71,21 @@ void connection_set_erase_node(connection_set_t *root, connection_set_node_t *no
 {
     if (root != NULL && node != NULL) {
         rb_erase(&node->node, root);
+    }
+}
+
+void connection_set_clear(connection_set_t *root, connection_set_destroy_cb_t cb)
+{
+    if (root == NULL) {
+        return;
+    }
+
+    struct rb_node* node = NULL;
+    while((node = rb_first(&root))) {
+        rb_erase(node, &root);
+        if (cb) {
+            connection_set_node_t *pthis = rb_entry(node, connection_set_node_t, node);
+            cb(pthis);
+        }
     }
 }

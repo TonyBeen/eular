@@ -172,7 +172,7 @@ struct KcpContext {
     bitmap_t                    conv_bitmap;
     int32_t                     backlog;
     struct list_head            syn_queue;
-    connection_set_t            socket_set;
+    connection_set_t            connection_set;
     struct event_base*          event_loop;
     void*                       user_data;
 };
