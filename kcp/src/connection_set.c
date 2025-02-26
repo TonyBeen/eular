@@ -1,7 +1,7 @@
 #include "connection_set.h"
 #include <assert.h>
 
-connection_set_node_t *socket_set_search(connection_set_t *root, int32_t conv)
+connection_set_node_t *connection_set_search(connection_set_t *root, int32_t conv)
 {
     struct rb_node *node = root->rb_node;
   	while (node) {
@@ -20,7 +20,7 @@ connection_set_node_t *socket_set_search(connection_set_t *root, int32_t conv)
 	return NULL;
 }
 
-bool socket_set_insert(connection_set_t *root, connection_set_node_t *data)
+bool connection_set_insert(connection_set_t *root, connection_set_node_t *data)
 {
     if (root == NULL || data == NULL || data->sock == NULL) {
         return false;
@@ -46,13 +46,13 @@ bool socket_set_insert(connection_set_t *root, connection_set_node_t *data)
     return true;
 }
 
-connection_set_node_t *socket_set_erase(connection_set_t *root, int32_t conv)
+connection_set_node_t *connection_set_erase(connection_set_t *root, int32_t conv)
 {
     if (root == NULL) {
         return NULL;
     }
 
-    connection_set_node_t *pthis = socket_set_search(root, conv);
+    connection_set_node_t *pthis = connection_set_search(root, conv);
     if (pthis) {
         rb_erase(&pthis->node, root);
     }
@@ -60,7 +60,7 @@ connection_set_node_t *socket_set_erase(connection_set_t *root, int32_t conv)
     return pthis;
 }
 
-void socket_set_erase_node(connection_set_t *root, connection_set_node_t *node)
+void connection_set_erase_node(connection_set_t *root, connection_set_node_t *node)
 {
     if (root != NULL && node != NULL) {
         rb_erase(&node->node, root);

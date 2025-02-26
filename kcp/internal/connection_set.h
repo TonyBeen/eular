@@ -16,13 +16,13 @@ typedef struct rb_root connection_set_t;
 
 EXTERN_C_BEGIN
 
-connection_set_node_t *socket_set_search(connection_set_t *root, int32_t conv);
+connection_set_node_t *connection_set_search(connection_set_t *root, int32_t conv);
 
-bool socket_set_insert(connection_set_t *root, connection_set_node_t *node);
+bool connection_set_insert(connection_set_t *root, connection_set_node_t *node);
 
-connection_set_node_t *socket_set_erase(connection_set_t *root, int32_t conv);
+connection_set_node_t *connection_set_erase(connection_set_t *root, int32_t conv);
 
-void socket_set_erase_node(connection_set_t *root, connection_set_node_t *node);
+void connection_set_erase_node(connection_set_t *root, connection_set_node_t *node);
 
 EXTERN_C_END
 

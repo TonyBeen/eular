@@ -53,11 +53,11 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, config_key_t flags, 
     }
 
     if (flags & CONFIG_KEY_NODELAY) {
-        kcp_connection->socket_node.sock->nodelay = config->nodelay ? 1 : 0;
-        if (kcp_connection->socket_node.sock->nodelay) {
-            kcp_connection->socket_node.sock->rx_minrto = IKCP_RTO_NDL;
+        kcp_connection->nodelay = config->nodelay ? 1 : 0;
+        if (kcp_connection->nodelay) {
+            kcp_connection->rx_minrto = IKCP_RTO_NDL;
         } else {
-            kcp_connection->socket_node.sock->rx_minrto = IKCP_RTO_MIN;
+            kcp_connection->rx_minrto = IKCP_RTO_MIN;
         }
     }
 
@@ -66,7 +66,7 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, config_key_t flags, 
             return INVALID_PARAM;
         }
 
-        kcp_connection->socket_node.sock->interval = config->interval;
+        kcp_connection->interval = config->interval;
     }
 
     if (flags & CONFIG_KEY_RESEND) {
@@ -74,11 +74,11 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, config_key_t flags, 
             return INVALID_PARAM;
         }
 
-        kcp_connection->socket_node.sock->fastresend = config->resend;
+        kcp_connection->fastresend = config->resend;
     }
 
     if (flags & CONFIG_KEY_NC) {
-        kcp_connection->socket_node.sock->nocwnd = config->nc ? 1 : 0;
+        kcp_connection->nocwnd = config->nc ? 1 : 0;
     }
 
     return NO_ERROR;
