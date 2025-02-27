@@ -247,7 +247,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     if (kcp_connection == NULL) {
         return NO_MEMORY;
     }
-    kcp_connection_init(kcp_connection, kcp_ctx->sock, addr);
+    kcp_connection_init(kcp_connection, addr, kcp_ctx);
     if (!connection_set_insert(&kcp_ctx->connection_set, kcp_connection)) {
         return UNKNOWN_ERROR;
     }

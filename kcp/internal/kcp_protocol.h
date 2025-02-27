@@ -199,7 +199,7 @@ typedef struct KcpMtuProbeCtx {
 
 EXTERN_C_BEGIN
 
-void kcp_connection_init(kcp_connection_t *kcp_conn, sockaddr_t remote_host, struct KcpContext* kcp_ctx);
+void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx);
 
 EXTERN_C_END
 

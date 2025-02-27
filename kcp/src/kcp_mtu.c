@@ -49,7 +49,7 @@ int32_t kcp_get_localhost_mss(bool ipv6)
     }
 }
 
-static void kcp_mtu_probe_cb(evutil_socket_t fd, short event, void *arg)
+static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
 {
     kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
     kcp_mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
@@ -59,9 +59,6 @@ static void kcp_mtu_probe_cb(evutil_socket_t fd, short event, void *arg)
 
     if (probe_ctx->retries == 0) {
         evtimer_del(probe_ctx->probe_timeout_event);
-        evtimer_free(probe_ctx->probe_timeout_event);
-        // TODO 回调探测失败
-        free(probe_ctx);
         return;
     }
 
@@ -75,24 +72,20 @@ static void kcp_mtu_probe_cb(evutil_socket_t fd, short event, void *arg)
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry)
 {
-    kcp_mtu_probe_ctx_t *probe_ctx = (kcp_mtu_probe_ctx_t *)malloc(sizeof(kcp_mtu_probe_ctx_t));
-    if (probe_ctx == NULL) {
-        return NO_MEMORY;
-    }
-
+    kcp_mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     kcp_conn->mtu_probe_ctx = probe_ctx;
     probe_ctx->mtu_best = ETHERNET_MTU_V4_MIN;
     probe_ctx->mtu_lbound = ETHERNET_MTU_V4_MIN;
     probe_ctx->mtu_ubound = LOCALHOST_MTU;
     probe_ctx->timeout = timeout;
     probe_ctx->retries = retry;
-    probe_ctx->probe_timeout_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, kcp_mtu_probe_cb, kcp_conn);
+    probe_ctx->probe_timeout_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, kcp_mtu_probe_timeout_cb, kcp_conn);
     if (probe_ctx->probe_timeout_event == NULL) {
-        free(probe_ctx);
         return NO_MEMORY;
     }
 
-    evtimer_add(probe_ctx->probe_timeout_event, timeout);
+    struct timeval tv = {timeout / 1000, (timeout % 1000) * 1000};
+    evtimer_add(probe_ctx->probe_timeout_event, &tv);
     return NO_ERROR;
 }
 

@@ -7,11 +7,11 @@
 
 #include "kcp_protocol.h"
 
-void kcp_connection_init(kcp_connection_t *kcp_conn, sockaddr_t remote_host, struct KcpContext* kcp_ctx)
+void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timer_event = NULL;
     kcp_conn->syn_retries = 0;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
-    memcpy(&kcp_conn->remote_host, &remote_host, sizeof(sockaddr_t));
+    memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 }
