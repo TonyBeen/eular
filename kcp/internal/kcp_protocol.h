@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <event2/event.h>
+
 #include "list.h"
 
 #include "kcp_def.h"
@@ -64,16 +66,12 @@ typedef struct KcpAck {
     uint32_t ts;    // 时间戳
 } kcp_ack_t;
 
-// MTU探测回调
-typedef void (*on_probe_completed_t)(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code);
-
 /// @brief KCP控制块
 typedef struct KcpConnection {
     // 基础配置
     uint32_t conv;          // 会话ID，用于标识一个会话
     uint32_t mtu;           // 最大传输单元
     uint32_t mss;           // 最大报文段大小，默认mtu-24字节
-    uint32_t state;         // 连接状态，0=正常，-1=断开
 
     // 发送和接收序号
     uint32_t snd_una;       // 第一个未确认的包序号
@@ -144,11 +142,15 @@ typedef struct KcpConnection {
     // 其他配置
     int nocwnd;          // 是否关闭拥塞控制，0=不关闭
 
+    // base
     struct KcpContext*      kcp_ctx;
+    struct event*           syn_timer_event;
+    kcp_connection_state_t  state;
+    uint32_t                syn_retries;
+    sockaddr_t              remote_host;
 
     // mtu
-    on_probe_completed_t    on_probe_completed;
-    void*                   probe_user_data;
+    struct KcpMtuProbeCtx*  mtu_probe_ctx;
 } kcp_connection_t;
 
 typedef struct KcpFunctionCallback {
@@ -177,9 +179,27 @@ struct KcpContext {
     void*                       user_data;
 };
 
+////////////////////////////////////////MTU探测////////////////////////////////////////
+// MTU探测回调
+typedef void (*on_probe_completed_t)(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code);
+
+// MTU响应
+typedef void (*on_probe_response_t)(kcp_connection_t *kcp_conn);
+
+typedef struct KcpMtuProbeCtx {
+    struct event*           probe_timeout_event;    // MTU探测超时事件
+    on_probe_completed_t    on_probe_completed;     // MTU探测完成回调
+    on_probe_response_t     on_probe_response;      // MTU响应回调, 用以下一步探测
+    uint32_t                mtu_best;               // 最佳MTU
+    uint32_t                mtu_lbound;             // MTU下限
+    uint32_t                mtu_ubound;             // MTU上限
+    uint32_t                timeout;                // 超时时间
+    uint16_t                retries;                // 重试次数
+} kcp_mtu_probe_ctx_t;
+
 EXTERN_C_BEGIN
 
-void kcp_socket_init(kcp_connection_t *kcp, uint32_t conv, void *user);
+void kcp_connection_init(kcp_connection_t *kcp_conn, sockaddr_t remote_host, struct KcpContext* kcp_ctx);
 
 EXTERN_C_END
 

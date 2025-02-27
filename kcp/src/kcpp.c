@@ -1,5 +1,8 @@
 #include "kcpp.h"
 
+#include <string.h>
+#include <assert.h>
+
 #include <event2/event.h>
 
 #include "kcp_error.h"
@@ -17,13 +20,14 @@ struct KcpContext *kcp_create(struct event_base *base, void *user)
         return NULL;
     }
 
+    ctx->sock = INVALID_SOCKET;
+    memset(&ctx->local_addr, 0, sizeof(sockaddr_t));
     ctx->callback = (kcp_function_callback_t) {
         .on_accepted = NULL,
         .on_connected = NULL,
         .on_closed = NULL
     };
-
-    ctx->connection_set.rb_node = NULL;
+    connection_set_init(&ctx->connection_set);
     ctx->event_loop = base;
     ctx->user_data = user;
     return ctx;
@@ -205,26 +209,57 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
     return true;
 }
 
+static void kcp_connect_timeout(int fd, short ev, void *arg)
+{
+    kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
+    assert(kcp_connection != NULL);
+    if (kcp_connection == NULL) {
+        return;
+    }
+
+    
+
+    // TODO 超时处理
+    // 1. 重发SYN
+    // 2. 超时关闭连接
+    // 3. 重试次数超过限制
+    // 4. 重试间隔时间
+    // 5. 重试次数
+
+    evtimer_del(kcp_connection->syn_timer_event);
+    evtimer_free(kcp_connection->syn_timer_event);
+    kcp_connection->syn_timer_event = NULL;
+    free(kcp_connection);
+    kcp_connection = NULL;
+}
+
 int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb)
 {
     if (kcp_ctx == NULL || addr == NULL || cb == NULL) {
         return INVALID_PARAM;
     }
 
-    struct KcpConnection *kcp_connection = (struct KcpConnection *)malloc(sizeof(struct KcpConnection));
+    if (kcp_ctx->sock == INVALID_SOCKET) {
+        return SOCKET_CLOSED;
+    }
+
+    kcp_connection_t *kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
     if (kcp_connection == NULL) {
         return NO_MEMORY;
     }
+    kcp_connection_init(kcp_connection, kcp_ctx->sock, addr);
+    if (!connection_set_insert(&kcp_ctx->connection_set, kcp_connection)) {
+        return UNKNOWN_ERROR;
+    }
+    kcp_connection->state = KCP_STATE_SYN_SENT;
+    kcp_ctx->callback.on_connected = cb;
+    kcp_ctx->callback.on_syn_received = on_kcp_syn_received;
 
-
-
-    // kcp_connection->timer = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
-    // if (kcp_connection->timer == NULL) {
-    //     return NO_MEMORY;
-    // }
-
-    // struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-    // evtimer_add(kcp_connection->timer, &tv);
-
+    kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
+    if (kcp_connection->syn_timer_event == NULL) {
+        return NO_MEMORY;
+    }
+    struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    evtimer_add(kcp_connection->syn_timer_event, &tv);
     return NO_ERROR;
 }

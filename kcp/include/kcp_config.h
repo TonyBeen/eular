@@ -54,4 +54,7 @@ static const uint32_t   KCP_KEEPALIVE_TIMEOUT   = 10;   // 心跳超时时间 10
 static const uint32_t   KCP_KEEPALIVE_INTERVAL  = 10000;// 心跳间隔时间
 static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次数
 
+extern uint32_t g_kcp_syn_retries           = 3;    // syn重试次数
+extern uint32_t g_kcp_mtu_probe_timeout     = 1500; // MTU探测超时时间
+
 #endif // __KCP_CONFIG_H__

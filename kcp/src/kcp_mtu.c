@@ -49,64 +49,50 @@ int32_t kcp_get_localhost_mss(bool ipv6)
     }
 }
 
-typedef struct KcpMtuProbeCB {
-    struct event*           ev_timer;
-    kcp_connection_t*       kcp_conn;
-    uint32_t                mtu_best;
-    uint32_t                mtu_lbound;
-    uint32_t                mtu_ubound;
-    uint32_t                timeout;
-    uint16_t                retry;
-} kcp_mtu_probe_cb_t;
-
 static void kcp_mtu_probe_cb(evutil_socket_t fd, short event, void *arg)
 {
-    kcp_mtu_probe_cb_t *probe_cb = (kcp_mtu_probe_cb_t *)arg;
-    if (probe_cb == NULL) {
+    kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
+    kcp_mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
+    if (probe_ctx == NULL) {
         return;
     }
 
-    if (probe_cb->retry == 0) {
-        evtimer_del(probe_cb->ev_timer);
-        evtimer_free(probe_cb->ev_timer);
+    if (probe_ctx->retries == 0) {
+        evtimer_del(probe_ctx->probe_timeout_event);
+        evtimer_free(probe_ctx->probe_timeout_event);
         // TODO 回调探测失败
-        free(probe_cb);
+        free(probe_ctx);
         return;
     }
 
-    probe_cb->retry--;
+    probe_ctx->retries--;
 
     // TODO send probe packet
-    // kcp_send_probe_packet(probe_cb->kcp_conn);
+    // kcp_send_probe_packet(probe_ctx->kcp_conn);
 
-    evtimer_add(probe_cb->ev_timer, probe_cb->timeout);
+    evtimer_add(probe_ctx->probe_timeout_event, probe_ctx->timeout);
 }
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry)
 {
-    if (kcp_conn == NULL || kcp_conn->on_probe_completed == NULL || timeout == 0) {
-        return INVALID_PARAM;
-    }
-
-    kcp_mtu_probe_cb_t *probe_cb = (kcp_mtu_probe_cb_t *)malloc(sizeof(kcp_mtu_probe_cb_t));
-    if (probe_cb == NULL) {
+    kcp_mtu_probe_ctx_t *probe_ctx = (kcp_mtu_probe_ctx_t *)malloc(sizeof(kcp_mtu_probe_ctx_t));
+    if (probe_ctx == NULL) {
         return NO_MEMORY;
     }
 
-    probe_cb->kcp_conn = kcp_conn;
-    probe_cb->mtu_best = ETHERNET_MTU_V4_MIN;
-    probe_cb->mtu_lbound = ETHERNET_MTU_V4_MIN;
-    probe_cb->mtu_ubound = LOCALHOST_MTU;
-    probe_cb->timeout = timeout;
-    probe_cb->retry = retry;
-    probe_cb->ev_timer = evtimer_new(kcp_conn->kcp_ctx->event_loop, kcp_mtu_probe_cb, probe_cb);
-    if (probe_cb->ev_timer == NULL) {
-        free(probe_cb);
+    kcp_conn->mtu_probe_ctx = probe_ctx;
+    probe_ctx->mtu_best = ETHERNET_MTU_V4_MIN;
+    probe_ctx->mtu_lbound = ETHERNET_MTU_V4_MIN;
+    probe_ctx->mtu_ubound = LOCALHOST_MTU;
+    probe_ctx->timeout = timeout;
+    probe_ctx->retries = retry;
+    probe_ctx->probe_timeout_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, kcp_mtu_probe_cb, kcp_conn);
+    if (probe_ctx->probe_timeout_event == NULL) {
+        free(probe_ctx);
         return NO_MEMORY;
     }
-    kcp_conn->probe_user_data = probe_cb;
 
-    evtimer_add(probe_cb->ev_timer, timeout);
+    evtimer_add(probe_ctx->probe_timeout_event, timeout);
     return NO_ERROR;
 }
 

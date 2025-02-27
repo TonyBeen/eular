@@ -74,6 +74,20 @@ void connection_set_erase_node(connection_set_t *root, connection_set_node_t *no
     }
 }
 
+connection_set_node_t *connection_first(connection_set_t *root)
+{
+    if (root == NULL) {
+        return NULL;
+    }
+
+    struct rb_node *node = rb_first(root);
+    if (node) {
+        return rb_entry(node, connection_set_node_t, node);
+    }
+
+    return NULL;
+}
+
 void connection_set_clear(connection_set_t *root, connection_set_destroy_cb_t cb)
 {
     if (root == NULL) {
