@@ -27,7 +27,7 @@ int32_t kcp_get_localhost_mss(bool ipv6);
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry);
 
-int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, void *arg);
+int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, size_t len);
 
 EXTERN_C_END
 

@@ -195,7 +195,7 @@ typedef struct KcpMtuProbeCtx {
     uint32_t                mtu_ubound;             // MTU上限
     uint32_t                timeout;                // 超时时间
     uint16_t                retries;                // 重试次数
-} kcp_mtu_probe_ctx_t;
+} mtu_probe_ctx_t;
 
 EXTERN_C_BEGIN
 

@@ -7,7 +7,7 @@
 
 #include "kcp_error.h"
 #include "kcp_protocol.h"
-#include "kcp_inc.h"
+#include "kcp_net_utils.h"
 
 struct KcpContext *kcp_create(struct event_base *base, void *user)
 {
@@ -120,19 +120,31 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
         return status;
     }
 
+    status = set_socket_nonblock(kcp_ctx->sock);
+    if (status != NO_ERROR) {
+        goto _error;
+    }
+    // status = set_socket_reuseaddr(kcp_ctx->sock);
+    // if (status != NO_ERROR) {
+    //     goto _error;
+    // }
+    // status = set_socket_reuseport(kcp_ctx->sock);
+    // if (status != NO_ERROR) {
+    //     goto _error;
+    // }
+    status = set_socket_dont_fragment(kcp_ctx->sock);
+    if (status != NO_ERROR) {
+        goto _error;
+    }
+    status = set_socket_recverr(kcp_ctx->sock, addr); // 开启接收ICMP错误报文
+    if (status != NO_ERROR) {
+        goto _error;
+    }
     if (nic != NULL) {
-#if defined(OS_LINUX) || defined(OS_MAC)
-        if (setsockopt(kcp_ctx->sock, SOL_SOCKET, SO_BINDTODEVICE, nic, strlen(nic)) < 0) {
-            status = IOCTL_ERROR;
+        status = set_socket_bind_nic(kcp_ctx->sock, nic);
+        if (status != NO_ERROR) {
             goto _error;
         }
-#else
-        DWORD bytesReturned = 0;
-        if (WSAIoctl(kcp_ctx->sock, SIO_BINDTODEVICE, (LPVOID)nic, (DWORD)strlen(nic), NULL, 0, &bytesReturned, NULL, NULL) == SOCKET_ERROR) {
-            status = IOCTL_ERROR;
-            goto _error;
-        }
-#endif
     }
 
     if (bind(kcp_ctx->sock, (const struct sockaddr *)addr, sizeof(sockaddr_t)) == SOCKET_ERROR) {
@@ -217,8 +229,6 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         return;
     }
 
-    
-
     // TODO 超时处理
     // 1. 重发SYN
     // 2. 超时关闭连接
@@ -235,7 +245,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
 
 int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb)
 {
-    if (kcp_ctx == NULL || addr == NULL || cb == NULL) {
+    if (kcp_ctx == NULL || addr == NULL || cb == NULL || timeout_ms == 0) {
         return INVALID_PARAM;
     }
 

@@ -14,4 +14,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->syn_retries = 0;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
+
+    kcp_conn->mtu_probe_ctx = (mtu_probe_ctx_t *)malloc(sizeof(mtu_probe_ctx_t));
+    kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
 }
