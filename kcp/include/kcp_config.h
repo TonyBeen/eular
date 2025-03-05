@@ -4,7 +4,8 @@
 #include <stdint.h>
 
 // kcp 交流号标志, 即最多支持65535个会话
-#define KCP_CONV_FLAG  0xFFFF0000
+#define KCP_CONV_FLAG       0xFFFF0000
+#define KCP_BITMAP_SIZE     65535
 
 enum ConfigKey {
     CONFIG_KEY_NODELAY  = 0b0001,

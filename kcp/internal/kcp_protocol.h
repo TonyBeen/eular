@@ -42,6 +42,18 @@ enum KcpConnectionState {
 };
 typedef int32_t kcp_connection_state_t;
 
+typedef struct KcpProtoHeader {
+    uint32_t    conv;       // 会话ID
+    uint8_t     cmd;        // 命令
+    uint8_t     frg;        // 分片序号
+    uint16_t    wnd;        // 窗口大小
+    uint32_t    ts;         // 时间戳
+    uint32_t    sn;         // 序号
+    uint32_t    una;        // 未确认序号
+    uint32_t    len;        // 数据长度
+    char*       data;       // 数据
+} kcp_proto_header_t;
+
 /// @brief KCP报文段
 typedef struct KcpSengment {
     struct list_head node; // 链表节点
@@ -65,6 +77,8 @@ typedef struct KcpAck {
     uint32_t sn;    // 序号
     uint32_t ts;    // 时间戳
 } kcp_ack_t;
+
+typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *);
 
 /// @brief KCP控制块
 typedef struct KcpConnection {
@@ -140,7 +154,7 @@ typedef struct KcpConnection {
     int fastlimit;      // 快速重传次数限制，默认 KCP_FASTACK_LIMIT(5)
 
     // 其他配置
-    int nocwnd;          // 是否关闭拥塞控制，0=不关闭
+    int nocwnd;         // 是否关闭拥塞控制，0=不关闭
 
     // base
     struct KcpContext*      kcp_ctx;
@@ -151,6 +165,9 @@ typedef struct KcpConnection {
 
     // mtu
     struct KcpMtuProbeCtx*  mtu_probe_ctx;
+
+    // socket callback
+    kcp_read_cb_t           read_cb;
 } kcp_connection_t;
 
 typedef struct KcpFunctionCallback {
@@ -176,7 +193,11 @@ struct KcpContext {
     struct list_head            syn_queue;
     connection_set_t            connection_set;
     struct event_base*          event_loop;
+    struct event*               read_event;
+    struct event*               write_event;
     void*                       user_data;
+    char*                       read_buffer;
+    size_t                      read_buffer_size;
 };
 
 ////////////////////////////////////////MTU探测////////////////////////////////////////
@@ -190,7 +211,7 @@ typedef struct KcpMtuProbeCtx {
     struct event*           probe_timeout_event;    // MTU探测超时事件
     on_probe_completed_t    on_probe_completed;     // MTU探测完成回调
     on_probe_response_t     on_probe_response;      // MTU响应回调, 用以下一步探测
-    uint32_t                mtu_best;               // 最佳MTU
+    uint32_t                mtu_last;               // 最佳MTU
     uint32_t                mtu_lbound;             // MTU下限
     uint32_t                mtu_ubound;             // MTU上限
     uint32_t                timeout;                // 超时时间
@@ -200,6 +221,8 @@ typedef struct KcpMtuProbeCtx {
 EXTERN_C_BEGIN
 
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx);
+
+int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size);
 
 EXTERN_C_END
 

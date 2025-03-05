@@ -44,6 +44,9 @@ enum KcpError {
     UNKNOWN_PROTO,
     PROTO_ERROR,
     IOCTL_ERROR,
+
+    // proto error
+    INVALID_KCP_HEADER = -120000,
 };
 typedef int32_t kcp_error_t;
 

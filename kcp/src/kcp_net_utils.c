@@ -84,5 +84,65 @@ int32_t set_socket_recverr(socket_t fd, const sockaddr_t *addr)
         }
     }
 
-    return 0;
+    return NO_ERROR;
+}
+
+int32_t set_socket_sendbuf(socket_t fd, int32_t size)
+{
+    int32_t status = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
+    if (status != 0) {
+        status = IOCTL_ERROR;
+    }
+
+    return status;
+}
+
+int32_t set_socket_recvbuf(socket_t fd, int32_t size)
+{
+    int32_t status = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+    if (status != 0) {
+        status = IOCTL_ERROR;
+    }
+
+    return status;
+}
+
+bool sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b)
+{
+    if (a->sa.sa_family != b->sa.sa_family) {
+        return false;
+    }
+
+    if (a->sa.sa_family == AF_INET) {
+        return (a->sin.sin_port == b->sin.sin_port) &&
+               (a->sin.sin_addr.s_addr == b->sin.sin_addr.s_addr);
+    } else if (a->sa.sa_family == AF_INET6) {
+        return (a->sin6.sin6_port == b->sin6.sin6_port) &&
+               (memcmp(a->sin6.sin6_addr.s6_addr, b->sin6.sin6_addr.s6_addr, 16) == 0);
+    }
+
+    return false;
+}
+
+const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, size_t len)
+{
+    if (addr == NULL || buf == NULL || len == 0) {
+        return NULL;
+    }
+
+    char ip[SOCKADDR_STRING_LEN] = {0};
+    uint16_t port = 0;
+    if (addr->sa.sa_family == AF_INET) {
+        inet_ntop(AF_INET, &addr->sin.sin_addr, ip, len);
+        port = ntohs(addr->sin.sin_port);
+        snprintf(buf, len, "%s:%d", ip, port);
+    } else if (addr->sa.sa_family == AF_INET6) {
+        inet_ntop(AF_INET6, &addr->sin6.sin6_addr, ip, len);
+        port = ntohs(addr->sin6.sin6_port);
+        snprintf(buf, len, "[%s]:%d", ip, port);
+    } else {
+        buf[0] = '\0';
+    }
+
+    return buf;
 }

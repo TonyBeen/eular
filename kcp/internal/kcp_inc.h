@@ -31,6 +31,8 @@ struct iovec {
 #include <fcntl.h>
 #include <net/if.h>
 #include <linux/time.h>
+#include <linux/errqueue.h>
+#include <netinet/ip_icmp.h>
 
 #ifndef SO_REUSEPORT
 #define SO_REUSEPORT 15

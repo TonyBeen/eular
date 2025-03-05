@@ -1,8 +1,11 @@
 #include "kcp_mtu.h"
 
+#include <assert.h>
+
 #include <event2/event.h>
 
 #include "kcp_error.h"
+#include "kcp_net_utils.h"
 
 #define GRE_HEADER_SIZE     24
 #define PPPOE_HEADER_SIZE   8
@@ -11,8 +14,6 @@
 // with a payload of 1416 for the first fragment
 // There are reports of routers that have MTU sizes as small as 1392
 #define FUDGE_HEADER_SIZE       36
-#define ETHERNET_MTU_V4_MIN     68   // IPv4 minimum MTU
-#define ETHERNET_MTU_V6_MIN     1280 // IPv6 minimum MTU
 
 #define UDP_IPV4_OVERHEAD (IPV4_HEADER_SIZE + UDP_HEADER_SIZE)
 #define UDP_IPV6_OVERHEAD (IPV6_HEADER_SIZE + UDP_HEADER_SIZE)
@@ -49,6 +50,11 @@ int32_t kcp_get_localhost_mss(bool ipv6)
     }
 }
 
+static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
+{
+    // TODO
+}
+
 static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
 {
     kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
@@ -74,8 +80,7 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
 {
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     kcp_conn->mtu_probe_ctx = probe_ctx;
-    probe_ctx->mtu_best = ETHERNET_MTU_V4_MIN;
-    probe_ctx->mtu_lbound = ETHERNET_MTU_V4_MIN;
+    probe_ctx->mtu_lbound = probe_ctx->mtu_last; // 下一次探测从上一次的MTU最小值开始
     probe_ctx->mtu_ubound = LOCALHOST_MTU;
     probe_ctx->timeout = timeout;
     probe_ctx->retries = retry;
@@ -86,6 +91,8 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
         return NO_MEMORY;
     }
 
+    kcp_send_mtu_probe_packet(kcp_conn);
+
     struct timeval tv = {timeout / 1000, (timeout % 1000) * 1000};
     return evtimer_add(probe_ctx->probe_timeout_event, &tv);
 }
@@ -93,4 +100,80 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
 int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, size_t len)
 {
 
+}
+
+/////////ICMP/////////
+static kcp_connection_t *parse_icmp_payload(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
+{
+    if (len < KCP_HEADER_SIZE) {
+        return NULL;
+    }
+    uint32_t conv = le32toh(*(uint32_t *)buffer); // 会话ID
+    if (!(conv & KCP_CONV_FLAG)) {
+        return NULL;
+    }
+
+    connection_set_node_t* node = connection_set_search(&kcp_ctx->connection_set, conv);
+    if (node != NULL) {
+        kcp_connection_t *kcp_conn = node->sock;
+        if (sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
+            return NULL;
+        }
+        return node->sock;
+    }
+
+    return NULL;
+}
+
+static void mtu_probe_update(kcp_connection_t *kcp_conn)
+{
+    mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
+    assert(probe_ctx->mtu_lbound <= probe_ctx->mtu_ubound);
+
+    // 二分法
+    probe_ctx->mtu_last = (probe_ctx->mtu_lbound + probe_ctx->mtu_ubound) / 2;
+
+    // 如果二者相近, 则认为找到了最佳的MTU
+    if (probe_ctx->mtu_ubound - probe_ctx->mtu_lbound <= 16) {
+        probe_ctx->mtu_last = probe_ctx->mtu_lbound;
+        probe_ctx->mtu_ubound = probe_ctx->mtu_lbound;
+
+        // 结束探测
+        event_del(probe_ctx->probe_timeout_event);
+
+        if (kcp_conn->mtu_probe_ctx->on_probe_completed != NULL) {
+            kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_last, NO_ERROR);
+        }
+    }
+}
+
+void kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr, uint16_t next_hop_mtu)
+{
+    kcp_connection_t *kcp_conn = parse_icmp_payload(kcp_ctx, buffer, len, remote_addr);
+    if (kcp_conn == NULL) {
+        return;
+    }
+
+    if (next_hop_mtu >= 576 && next_hop_mtu < 0x2000) {
+        kcp_conn->mtu_probe_ctx->mtu_ubound = MIN(next_hop_mtu, kcp_conn->mtu_probe_ctx->mtu_ubound);
+        mtu_probe_update(kcp_conn);
+        // this is something of a speecial case, where we don't set mtu_last
+        // to the value in between the floor and the ceiling. We can update the
+        // floor, because there might be more network segments after the one
+        // that sent this ICMP with smaller MTUs. But we want to test this
+        // MTU size first. If the next probe gets through, mtu_floor is updated
+        kcp_conn->mtu_probe_ctx->mtu_last = kcp_conn->mtu_probe_ctx->mtu_ubound;
+    } else {
+        // Otherwise, binary search. At this point we don't actually know
+        // what size the packet that failed was, and apparently we can't
+        // trust the next hop mtu either. It seems reasonably conservative
+        // to just lower the ceiling. This should not happen on working networks
+        // anyway.
+        kcp_conn->mtu_probe_ctx->mtu_ubound = (kcp_conn->mtu_probe_ctx->mtu_lbound + kcp_conn->mtu_probe_ctx->mtu_ubound) / 2;
+        mtu_probe_update(kcp_conn);
+    }
+}
+
+void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
+{
 }
