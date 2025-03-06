@@ -6,6 +6,9 @@
  ************************************************************************/
 
 #include "kcp_protocol.h"
+
+#include <string.h>
+
 #include "kcp_endian.h"
 #include "kcp_error.h"
 #include "kcp_mtu.h"
@@ -13,12 +16,13 @@
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
     kcp_conn->kcp_ctx = kcp_ctx;
-    kcp_conn->syn_timer_event = NULL;
+    kcp_conn->syn_timeout_event = NULL;
     kcp_conn->syn_retries = 0;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
     kcp_conn->mtu_probe_ctx = (mtu_probe_ctx_t *)malloc(sizeof(mtu_probe_ctx_t));
+    kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + LOCALHOST_MTU);
     kcp_conn->mtu_probe_ctx->mtu_last = ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
 }
@@ -53,4 +57,32 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t
     }
 
     return NO_ERROR;
+}
+
+int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size)
+{
+    if (buffer_size < (KCP_HEADER_SIZE + kcp_header->len)) {
+        return BUFFER_TOO_SMALL;
+    }
+
+    char *buffer_offset = buffer;
+    *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
+    buffer_offset += 4;
+    *(uint8_t *)buffer_offset = kcp_header->cmd;
+    buffer_offset += 1;
+    *(uint8_t *)buffer_offset = kcp_header->frg;
+    buffer_offset += 1;
+    *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
+    buffer_offset += 2;
+    *(uint32_t *)buffer_offset = htole32(kcp_header->ts);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(kcp_header->sn);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(kcp_header->una);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(kcp_header->len);
+    buffer_offset += 4;
+    memcpy(buffer_offset, kcp_header->data, kcp_header->len);
+
+    return (KCP_HEADER_SIZE + kcp_header->len);
 }

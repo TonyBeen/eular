@@ -52,7 +52,61 @@ int32_t kcp_get_localhost_mss(bool ipv6)
 
 static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 {
-    // TODO
+    mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
+
+    do {
+        int32_t mtu_current = (probe_ctx->mtu_lbound + probe_ctx->mtu_ubound) / 2;
+        bool ipv6 = kcp_conn->remote_host.sa.sa_family == AF_INET6;
+        int32_t data_length = 0;
+        if (ipv6) {
+            data_length = mtu_current - IPV6_HEADER_SIZE - UDP_HEADER_SIZE;
+        } else {
+            data_length = mtu_current - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
+        }
+
+        kcp_proto_header_t header;
+        kcp_proto_header_t *kcp_header = &header;
+        header.conv = kcp_conn->conv;
+        header.cmd = KCP_CMD_MTU_PROBE;
+        header.frg = 0;
+        header.wnd = 0;
+        header.ts = time(NULL);
+        header.sn = header.ts;
+        probe_ctx->prev_sn = header.sn;
+        header.una = 0;
+        header.len = data_length;
+        header.data = probe_ctx->probe_buf + KCP_HEADER_SIZE;
+
+        char *buffer_offset = probe_ctx->probe_buf;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
+        buffer_offset += 4;
+        *(uint8_t *)buffer_offset = kcp_header->cmd;
+        buffer_offset += 1;
+        *(uint8_t *)buffer_offset = kcp_header->frg;
+        buffer_offset += 1;
+        *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
+        buffer_offset += 2;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->ts);
+        buffer_offset += 4;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->sn);
+        buffer_offset += 4;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->una);
+        buffer_offset += 4;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->len);
+        buffer_offset += 4;
+
+        int32_t status = kcp_send_packet(kcp_conn, probe_ctx->probe_buf, KCP_HEADER_SIZE + data_length);
+        if (status == NO_ERROR) {
+            break;
+        }
+
+        if (errno == EMSGSIZE) {
+            probe_ctx->mtu_ubound = mtu_current - 1;
+        } else {
+            // TODO log
+            break;
+        }
+    } while (true);
 }
 
 static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
@@ -70,9 +124,7 @@ static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
 
     probe_ctx->retries--;
 
-    // TODO send probe packet
-    // kcp_send_probe_packet(probe_ctx->kcp_conn);
-
+    kcp_send_mtu_probe_packet(kcp_conn);
     evtimer_add(probe_ctx->probe_timeout_event, probe_ctx->timeout);
 }
 

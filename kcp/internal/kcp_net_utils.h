@@ -21,7 +21,11 @@ int32_t set_socket_sendbuf(socket_t fd, int32_t size);
 int32_t set_socket_recvbuf(socket_t fd, int32_t size);
 
 bool    sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b);
-const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, size_t len);
+const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, uint32_t len);
+
+int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data, uint32_t size);
+
+int32_t get_last_errno();
 
 EXTERN_C_END
 

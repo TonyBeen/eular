@@ -158,7 +158,7 @@ typedef struct KcpConnection {
 
     // base
     struct KcpContext*      kcp_ctx;
-    struct event*           syn_timer_event;
+    struct event*           syn_timeout_event;
     kcp_connection_state_t  state;
     uint32_t                syn_retries;
     sockaddr_t              remote_host;
@@ -216,6 +216,8 @@ typedef struct KcpMtuProbeCtx {
     uint32_t                mtu_ubound;             // MTU上限
     uint32_t                timeout;                // 超时时间
     uint16_t                retries;                // 重试次数
+    uint32_t                prev_sn;                // 上一个序号
+    char*                   probe_buf;              // 探测数据
 } mtu_probe_ctx_t;
 
 EXTERN_C_BEGIN
@@ -223,6 +225,8 @@ EXTERN_C_BEGIN
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx);
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size);
+
+int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
 
 EXTERN_C_END
 

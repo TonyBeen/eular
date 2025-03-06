@@ -386,9 +386,9 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
     // 4. 重试间隔时间
     // 5. 重试次数
 
-    evtimer_del(kcp_connection->syn_timer_event);
-    evtimer_free(kcp_connection->syn_timer_event);
-    kcp_connection->syn_timer_event = NULL;
+    evtimer_del(kcp_connection->syn_timeout_event);
+    evtimer_free(kcp_connection->syn_timeout_event);
+    kcp_connection->syn_timeout_event = NULL;
     free(kcp_connection);
     kcp_connection = NULL;
 }
@@ -411,15 +411,19 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     if (!connection_set_insert(&kcp_ctx->connection_set, kcp_connection)) {
         return UNKNOWN_ERROR;
     }
+    // TODO 发送SYN给对端, 等待对端SYN响应并设置超时时间
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;
     kcp_ctx->callback.on_syn_received = on_kcp_syn_received;
 
-    kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
-    if (kcp_connection->syn_timer_event == NULL) {
+    kcp_connection->syn_timeout_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
+    if (kcp_connection->syn_timeout_event == NULL) {
         return NO_MEMORY;
     }
+
+    // 添加超时事件, 读事件
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-    evtimer_add(kcp_connection->syn_timer_event, &tv);
+    evtimer_add(kcp_connection->syn_timeout_event, &tv);
+    event_add(kcp_ctx->read_event, NULL);
     return NO_ERROR;
 }

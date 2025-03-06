@@ -25,6 +25,12 @@ enum KcpError {
     TIMED_OUT           = -ETIMEDOUT,   /* Something timed out */
     NOT_SUPPORT         = -EOPNOTSUPP,  /* Operation not supported on transport endpoint */
     NO_MORE_ITEM        = -ENOBUFS,     /* No buffer space available */
+    IN_PROGRESS         = -EINPROGRESS, /* Operation now in progress */
+    ALREADY_DONE        = -EALREADY,    /* Operation already in progress */
+    CANCELED            = -ECANCELED,   /* Operation canceled */
+    INVALID_STATE       = -EILSEQ,      /* Invalid state */
+    BAD_VALUE           = -EINVAL,      /* Bad value */
+    BUFFER_TOO_SMALL    = -ENOSPC,      /* Buffer too small */
 
     // I/O errors
     READ_ERROR          = -11000,

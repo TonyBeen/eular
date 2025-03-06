@@ -18,6 +18,30 @@ struct iovec {
     size_t  iov_len;
 };
 
+#ifndef EMSGSIZE
+#define EMSGSIZE WSAEMSGSIZE
+#endif
+
+#ifndef EINPROGRESS
+#define EINPROGRESS WSAEINPROGRESS
+#endif
+
+#ifndef EWOULDBLOCK
+#define EWOULDBLOCK WSAEWOULDBLOCK
+#endif
+
+#ifndef ECONNRESET
+#define ECONNRESET WSAECONNRESET
+#endif
+
+#ifndef ECONNABORTED
+#define ECONNABORTED WSAECONNABORTED
+#endif
+
+#ifndef ECONNREFUSED
+#define ECONNREFUSED WSAECONNREFUSED
+#endif
+
 #elif defined(OS_LINUX)
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE

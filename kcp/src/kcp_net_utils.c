@@ -1,6 +1,7 @@
 #include "kcp_net_utils.h"
 #include "kcp_inc.h"
 #include "kcp_error.h"
+#include "kcp_protocol.h"
 
 int32_t set_socket_nonblock(socket_t fd)
 {
@@ -124,7 +125,7 @@ bool sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b)
     return false;
 }
 
-const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, size_t len)
+const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, uint32_t len)
 {
     if (addr == NULL || buf == NULL || len == 0) {
         return NULL;
@@ -145,4 +146,66 @@ const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, size_t len)
     }
 
     return buf;
+}
+
+/**
+ * @brief 
+ * 
+ * @param kcp_conn 由调用者保证不为NULL
+ * @param data 由调用者保证不为NULL
+ * @param len 由调用者保证不为0
+ * @return int32_t 成功返回发送的字节数, 失败返回错误码
+ */
+int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, uint32_t size)
+{
+    int32_t send_size = 0;
+#if defined(OS_LINUX) || defined(OS_MAC)
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = &kcp_conn->remote_host;
+    msg.msg_namelen = sizeof(sockaddr_t);
+    msg.msg_iov = data;
+    msg.msg_iovlen = size;
+    send_size = sendmsg(kcp_conn->kcp_ctx->sock, &msg, 0);
+    if (send_size < 0) {
+        return WRITE_ERROR;
+    }
+#else
+    WSABUF *wsa_buf = (WSABUF *)malloc(size * sizeof(WSABUF));
+    if (wsa_buf == NULL) {
+        return NO_MEMORY;
+    }
+
+    for (uint32_t i = 0; i < size; i++) {
+        wsa_buf[i].buf = (char *)data[i].iov_base;
+        wsa_buf[i].len = data[i].iov_len;
+    }
+
+    WSAMSG msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.name = (SOCKADDR*)&kcp_conn->remote_host;
+    msg.namelen = sizeof(sockaddr_t);
+    msg.lpBuffers = wsa_buf;
+    msg.dwBufferCount = size;
+
+    DWORD bytes_sent = 0;
+    int32_t status = WSASendMsg(sock, &msg, 0, &bytesSent, NULL, NULL);
+    if (status == SOCKET_ERROR) {
+        send_size = WRITE_ERROR;
+    } else {
+        send_size = bytes_sent;
+    }
+
+    free(wsa_buf);
+#endif
+    return send_size;
+}
+
+int32_t get_last_errno()
+{
+#ifdef OS_WINDOWS
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
 }
