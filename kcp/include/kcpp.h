@@ -26,7 +26,7 @@ struct iovec;
  * @param user 用户数据
  * @param code 连接结果
  */
-typedef void (*on_kcp_connected_t)(struct KcpConnection *kcp_connection, void *user, int32_t code);
+typedef void (*on_kcp_connected_t)(struct KcpConnection *kcp_connection, int32_t code);
 
 /**
  * @brief kcp断连回调函数
@@ -35,7 +35,7 @@ typedef void (*on_kcp_connected_t)(struct KcpConnection *kcp_connection, void *u
  * @param user 用户数据
  * @param code 断连原因
  */
-typedef void (*on_kcp_closed_t)(struct KcpConnection *kcp_connection, void *user, int32_t code);
+typedef void (*on_kcp_closed_t)(struct KcpConnection *kcp_connection, int32_t code);
 
 /**
  * @brief SYN连接请求回调函数

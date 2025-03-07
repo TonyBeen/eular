@@ -142,6 +142,7 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
     if (probe_ctx->probe_timeout_event == NULL) {
         return NO_MEMORY;
     }
+    evtimer_del(probe_ctx->probe_timeout_event);
 
     kcp_send_mtu_probe_packet(kcp_conn);
 
@@ -151,7 +152,8 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
 
 int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, size_t len)
 {
-
+    mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
+    evtimer_del(probe_ctx->probe_timeout_event);
 }
 
 /////////ICMP/////////
@@ -196,6 +198,8 @@ static void mtu_probe_update(kcp_connection_t *kcp_conn)
         if (kcp_conn->mtu_probe_ctx->on_probe_completed != NULL) {
             kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_last, NO_ERROR);
         }
+    } else {
+        kcp_mtu_probe(kcp_conn, probe_ctx->timeout, probe_ctx->retries);
     }
 }
 

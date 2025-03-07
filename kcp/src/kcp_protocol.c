@@ -13,11 +13,23 @@
 #include "kcp_error.h"
 #include "kcp_mtu.h"
 
+static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
+{
+    if (code == NO_ERROR) {
+        int32_t ip_header_size = kcp_conn->remote_host.sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
+        kcp_conn->mtu = mtu - ip_header_size - UDP_HEADER_SIZE;
+        kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
+    }
+}
+
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
+    kcp_conn->conv = KCP_CONV_FLAG;
+    kcp_conn->mss = kcp_get_mss(remote_host->sa.sa_family == AF_INET6);
+    kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timeout_event = NULL;
-    kcp_conn->syn_retries = 0;
+    kcp_conn->syn_retries = 2;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
@@ -25,6 +37,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + LOCALHOST_MTU);
     kcp_conn->mtu_probe_ctx->mtu_last = ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
+    kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
 }
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size)

@@ -85,7 +85,7 @@ typedef struct KcpConnection {
     // 基础配置
     uint32_t conv;          // 会话ID，用于标识一个会话
     uint32_t mtu;           // 最大传输单元
-    uint32_t mss;           // 最大报文段大小，默认mtu-24字节
+    uint32_t mss;           // 最大报文段大小
 
     // 发送和接收序号
     uint32_t snd_una;       // 第一个未确认的包序号
@@ -160,6 +160,8 @@ typedef struct KcpConnection {
     struct KcpContext*      kcp_ctx;
     struct event*           syn_timeout_event;
     kcp_connection_state_t  state;
+    uint32_t                syn_sn;
+    uint32_t                syn_timeout;
     uint32_t                syn_retries;
     sockaddr_t              remote_host;
 
@@ -179,7 +181,8 @@ typedef struct KcpFunctionCallback {
 
 typedef struct KcpSYNNode {
     struct list_head node;
-    int32_t conv;
+    uint32_t    conv;
+    uint32_t    sn;
     sockaddr_t remote_host;
 } kcp_syn_node_t;
 
