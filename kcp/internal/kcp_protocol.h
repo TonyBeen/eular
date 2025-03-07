@@ -177,6 +177,7 @@ typedef struct KcpFunctionCallback {
     on_kcp_syn_received_t   on_syn_received;
     on_kcp_accepted_t       on_accepted;
     on_kcp_closed_t         on_closed;
+    on_kcp_error_t          on_error;
 } kcp_function_callback_t;
 
 typedef struct KcpSYNNode {

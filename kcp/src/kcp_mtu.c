@@ -133,7 +133,7 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     kcp_conn->mtu_probe_ctx = probe_ctx;
     probe_ctx->mtu_lbound = probe_ctx->mtu_last; // 下一次探测从上一次的MTU最小值开始
-    probe_ctx->mtu_ubound = LOCALHOST_MTU;
+    probe_ctx->mtu_ubound = ETHERNET_MTU;
     probe_ctx->timeout = timeout;
     probe_ctx->retries = retry;
     if (probe_ctx->probe_timeout_event == NULL) {

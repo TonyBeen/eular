@@ -54,12 +54,11 @@ static void kcp_read_cb(int fd, short ev, void *arg)
 
         struct cmsghdr *cmsg = NULL;
         char cmsgbuf[4096] = {0};
-
+        struct msghdr msg;
         struct iovec iov;
         iov.iov_base = kcp_ctx->read_buffer;
         iov.iov_len = kcp_ctx->read_buffer_size;
-
-        struct msghdr msg;
+    
         msg.msg_name = &remote_addr;
         msg.msg_namelen = addr_len;
         msg.msg_iov = &iov;
@@ -73,7 +72,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             } else {
-                // TODO 处理错误
+                kcp_ctx->callback.on_error(kcp_ctx, READ_ERROR);
                 break;
             }
         }
@@ -95,7 +94,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
             if (err->ee_type == ICMP_DEST_UNREACH && err->ee_code == ICMP_FRAG_NEEDED) {
                 kcp_process_icmp_fragmentation(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr, err->ee_info);
             } else {
-                kcp_process_icmp_error(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr);
+                kcp_process_icmp_error(kcp_ctx, kcp_ctx->read_buffer_size, nreads, &remote_addr);
             }
         }
     }
@@ -104,11 +103,12 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         sockaddr_t remote_addr;
         socklen_t addr_len = sizeof(sockaddr_t);
         struct msghdr msg;
-        struct iovec iov;
         struct cmsghdr *cmsg = NULL;
         char cmsgbuf[1024] = {0};
+        struct iovec iov;
         iov.iov_base = kcp_ctx->read_buffer;
         iov.iov_len = kcp_ctx->read_buffer_size;
+
         msg.msg_name = &remote_addr;
         msg.msg_namelen = addr_len;
         msg.msg_iov = &iov;
@@ -124,6 +124,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
                 return;
             }
         }
+        // TODO 解析一包数据
     }
 #else
     sockaddr_t remote_addr;
@@ -140,9 +141,9 @@ static void kcp_write_cb(int fd, short ev, void *arg)
 
 }
 
-struct KcpContext *kcp_create(struct event_base *base, void *user)
+struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user)
 {
-    if (base == NULL) {
+    if (base == NULL || cb == NULL) {
         return NULL;
     }
 
@@ -160,7 +161,8 @@ struct KcpContext *kcp_create(struct event_base *base, void *user)
     ctx->callback = (kcp_function_callback_t) {
         .on_accepted = NULL,
         .on_connected = NULL,
-        .on_closed = NULL
+        .on_closed = NULL,
+        .on_error = cb,
     };
     ctx->backlog = 128;
     list_init(&ctx->syn_queue);
@@ -348,12 +350,12 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
     if (syn_packet == NULL) {
         return NO_PENDING_CONNECTION;
     }
+
     // TODO 发送SYN给对端并等待对端ACK响应并设置超时时间
 
     return NULL;
 }
 
-// TODO 实现 syn_received 回调函数, 用于connect连接回调
 static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 {
     if (kcp_ctx == NULL || addr == NULL) {
@@ -398,7 +400,7 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
         }
     }
 
-    // 检验序号不通过时依靠超时处理异常场景
+    // 检验序号不通过时依靠超时处理异常场景, 客户端不接受SYN
     list_del(&node->node);
     free(node);
     return status;

@@ -56,6 +56,14 @@ typedef bool (*on_kcp_syn_received_t)(struct KcpContext *kcp_ctx, const sockaddr
  */
 typedef void (*on_kcp_accepted_t)(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code);
 
+/**
+ * @brief 错误回调
+ *
+ * @param kcp_ctx kcp上下文
+ * @param code 错误码
+ */
+typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, int32_t code);
+
 /// kcp function
 
 /**
@@ -65,7 +73,7 @@ typedef void (*on_kcp_accepted_t)(struct KcpContext *kcp_ctx, struct KcpConnecti
  * @param user The user data.
  * @return struct KcpContext*
  */
-KCP_PORT struct KcpContext *kcp_create(struct event_base *base, void *user);
+KCP_PORT struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user);
 
 /**
  * @brief destroy kcp control block.
@@ -119,7 +127,7 @@ KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr);
 
 /**
  * @brief 
- * 
+ *
  * @param kcp_ctx 
  * @param addr 
  * @param timeout_ms 
@@ -143,7 +151,7 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
  * @param kcp The kcp control block.
  * @param data The data to send.
  * @param size The size of data.
- * 
+ *
  * @return int32_t Return the byte size written to the sending queue.
  */
 KCP_PORT int32_t kcp_write(struct KcpContext *kcp_ctx, const void *data, size_t size);
