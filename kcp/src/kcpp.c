@@ -28,10 +28,21 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
 
     connection_set_node_t *kcp_conn_node = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
     if (kcp_conn_node == NULL) {
-        // TODO 处理 conv == KCP_CONV_FLAG 情况
-
+        if (kcp_header.cmd == KCP_CMD_SYN) {
+            kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
+            if (syn_node == NULL) {
+                kcp_ctx->callback.on_error(kcp_ctx, NO_MEMORY);
+                return;
+            }
+            syn_node->conv = kcp_header.conv;
+            memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
+            syn_node->sn = kcp_header.sn;
+            list_add_tail(&kcp_ctx->syn_queue, syn_node);
+            kcp_ctx->callback.on_syn_received(kcp_ctx, addr);
+        }
         return;
     }
+
     kcp_connection_t *kcp_connection = kcp_conn_node->sock;
     if (kcp_connection->read_cb != NULL) {
         kcp_connection->read_cb(kcp_connection, &kcp_header);
@@ -91,9 +102,23 @@ static void kcp_read_cb(int fd, short ev, void *arg)
             if (err->ee_origin != SO_EE_ORIGIN_ICMP) {
                 continue;
             }
-            if (err->ee_type == ICMP_DEST_UNREACH && err->ee_code == ICMP_FRAG_NEEDED) {
-                kcp_process_icmp_fragmentation(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr, err->ee_info);
-            } else {
+
+            if (err->ee_type == ICMP_DEST_UNREACH) {
+                switch (err->ee_code) {
+                case ICMP_FRAG_NEEDED:
+                    kcp_process_icmp_fragmentation(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr, err->ee_info);
+                    break;
+                case ICMP_NET_UNREACH:
+                case ICMP_HOST_UNREACH:
+                case ICMP_PROT_UNREACH:
+                case ICMP_PORT_UNREACH:
+                    kcp_process_icmp_unreach(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr);
+                    break;
+                default:
+                    break;
+                }
+            } else { // 其他未知错误
+                // TODO 记录日志
                 kcp_process_icmp_error(kcp_ctx, kcp_ctx->read_buffer_size, nreads, &remote_addr);
             }
         }
@@ -124,7 +149,8 @@ static void kcp_read_cb(int fd, short ev, void *arg)
                 return;
             }
         }
-        // TODO 解析一包数据
+
+        kcp_parse_packet(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr);
     }
 #else
     sockaddr_t remote_addr;

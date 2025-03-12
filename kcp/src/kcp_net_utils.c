@@ -209,3 +209,19 @@ int32_t get_last_errno()
     return errno;
 #endif
 }
+
+const char *errno_string(int32_t err)
+{
+#ifdef OS_WINDOWS
+    THREAD_LOCAL char buffer[128];
+
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS |
+        FORMAT_MESSAGE_MAX_WIDTH_MASK,
+        0, ABS(err), 0, buffer, sizeof(buffer), NULL);
+
+    return buffer;
+#else
+    return strerror(ABS(err));
+#endif
+}

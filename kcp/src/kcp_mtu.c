@@ -6,6 +6,7 @@
 
 #include "kcp_error.h"
 #include "kcp_net_utils.h"
+#include "kcp_log.h"
 
 #define GRE_HEADER_SIZE     24
 #define PPPOE_HEADER_SIZE   8
@@ -100,10 +101,10 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
             break;
         }
 
-        if (errno == EMSGSIZE) {
+        if (get_last_errno() == EMSGSIZE) {
             probe_ctx->mtu_ubound = mtu_current - 1;
         } else {
-            // TODO log
+            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
             break;
         }
     } while (true);
@@ -232,4 +233,5 @@ void kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buff
 
 void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
 {
+    // TODO 处理
 }

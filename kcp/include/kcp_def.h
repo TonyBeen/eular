@@ -92,12 +92,22 @@ typedef int socket_t;
 
 #endif
 
+#ifdef _MSC_VER
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL __thread
+#endif
+
 #ifndef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a): (b))
+#endif
+
+#ifndef ABS
+#define ABS(n)  ((n) > 0 ? (n) : -(n))
 #endif
 
 #endif // __KCP_DEF_H__

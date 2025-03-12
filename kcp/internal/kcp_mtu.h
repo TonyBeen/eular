@@ -41,6 +41,16 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, s
  */
 void    kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr, uint16_t next_hop_mtu);
 
+/**
+ * @brief 目标不可达
+ * 
+ * @param kcp_ctx 
+ * @param buffer 
+ * @param len 
+ * @param remote_addr 
+ */
+void    kcp_process_icmp_unreach(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr);
+
 void    kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr);
 
 EXTERN_C_END
