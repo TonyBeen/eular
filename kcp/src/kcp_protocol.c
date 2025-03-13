@@ -34,10 +34,34 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
     kcp_conn->mtu_probe_ctx = (mtu_probe_ctx_t *)malloc(sizeof(mtu_probe_ctx_t));
-    kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + LOCALHOST_MTU);
+    kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + ETHERNET_MTU);
     kcp_conn->mtu_probe_ctx->mtu_last = ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
     kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
+}
+
+void kcp_connection_destroy(kcp_connection_t *kcp_conn)
+{
+    if (kcp_conn->mtu_probe_ctx) {
+        if (kcp_conn->mtu_probe_ctx->probe_buf) {
+            free(kcp_conn->mtu_probe_ctx->probe_buf);
+            kcp_conn->mtu_probe_ctx->probe_buf = NULL;
+        }
+
+        if (kcp_conn->mtu_probe_ctx->probe_timeout_event) {
+            free(kcp_conn->mtu_probe_ctx->probe_timeout_event);
+            kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
+        }
+
+        free(kcp_conn->mtu_probe_ctx);
+        kcp_conn->mtu_probe_ctx = NULL;
+    }
+
+    if (kcp_conn->syn_timeout_event) {
+        event_del(kcp_conn->syn_timeout_event);
+        event_free(kcp_conn->syn_timeout_event);
+        kcp_conn->syn_timeout_event = NULL;
+    }
 }
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size)

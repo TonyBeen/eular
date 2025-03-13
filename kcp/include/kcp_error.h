@@ -31,6 +31,7 @@ enum KcpError {
     INVALID_STATE       = -EILSEQ,      /* Invalid state */
     BAD_VALUE           = -EINVAL,      /* Bad value */
     BUFFER_TOO_SMALL    = -ENOSPC,      /* Buffer too small */
+    NO_MORE_CONV,                       /* No more conversation */
 
     // I/O errors
     READ_ERROR          = -11000,

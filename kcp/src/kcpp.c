@@ -14,6 +14,7 @@
 #include "connection_set.h"
 #include "kcp_mtu.h"
 #include "kcp_time.h"
+#include "kcp_log.h"
 
 static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, size_t buffer_size, const sockaddr_t *addr)
 {
@@ -26,8 +27,8 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         return;
     }
 
-    connection_set_node_t *kcp_conn_node = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
-    if (kcp_conn_node == NULL) {
+    kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
+    if (kcp_connection == NULL) {
         if (kcp_header.cmd == KCP_CMD_SYN) {
             kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
             if (syn_node == NULL) {
@@ -43,7 +44,6 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         return;
     }
 
-    kcp_connection_t *kcp_connection = kcp_conn_node->sock;
     if (kcp_connection->read_cb != NULL) {
         kcp_connection->read_cb(kcp_connection, &kcp_header);
     }
@@ -118,7 +118,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
                     break;
                 }
             } else { // 其他未知错误
-                // TODO 记录日志
+                KCP_LOGE("ICMP Error. type: %u, code: %u\n", err->ee_type, err->ee_code);
                 kcp_process_icmp_error(kcp_ctx, kcp_ctx->read_buffer_size, nreads, &remote_addr);
             }
         }
@@ -164,7 +164,12 @@ static void kcp_read_cb(int fd, short ev, void *arg)
 
 static void kcp_write_cb(int fd, short ev, void *arg)
 {
-
+    assert(arg != NULL);
+    struct KcpContext *kcp_ctx = (struct KcpContext *)arg;
+    if (kcp_ctx == NULL) {
+        return;
+    }
+    // TODO 遍历 conn_write_event_queue
 }
 
 struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user)
@@ -195,9 +200,9 @@ struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *
     connection_set_init(&ctx->connection_set);
     ctx->event_loop = base;
     ctx->read_event = event_new(base, -1, EV_READ | EV_PERSIST, kcp_read_cb, ctx);
-    ctx->write_event = NULL;
-    ctx->read_buffer = (char *)malloc(LOCALHOST_MTU);
-    ctx->read_buffer_size = LOCALHOST_MTU;
+    ctx->write_event = event_new(base, -1, EV_WRITE | EV_PERSIST, kcp_write_cb, ctx);
+    ctx->read_buffer = (char *)malloc(ETHERNET_MTU);
+    ctx->read_buffer_size = ETHERNET_MTU;
     ctx->user_data = user;
     return ctx;
 }
@@ -357,6 +362,12 @@ void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb)
     }
 }
 
+static void kcp_accept_timeout(int fd, short ev, void *arg)
+{
+    struct KcpConnection *kcp_connection = (struct KcpConnection *)arg;
+
+}
+
 int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
 {
     if (kcp_ctx == NULL) {
@@ -369,17 +380,78 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
     }
 
     if (list_empty(&kcp_ctx->syn_queue)) {
+        free(kcp_connection);
         return NO_PENDING_CONNECTION;
     }
 
+    int32_t status = NO_ERROR;
     kcp_syn_node_t* syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
-    if (syn_packet == NULL) {
-        return NO_PENDING_CONNECTION;
-    }
+    do {
+        if (bitmap_count(&kcp_ctx->conv_bitmap) == kcp_ctx->conv_bitmap.size) {
+            status = NO_MORE_CONV;
+            break;
+        }
+        uint32_t conv = 0;
+        for (int32_t i = 0; i < kcp_ctx->conv_bitmap.size; ++i) {
+            if (!bitmap_get(&kcp_ctx->conv_bitmap, i)) {
+                conv = KCP_CONV_FLAG | i;
+                bitmap_set(&kcp_ctx->conv_bitmap, i, true);
+                break;
+            }
+        }
+        if (conv == 0) {
+            KCP_LOGE("bitmap count = %d, no more conversation\n", bitmap_count(&kcp_ctx->conv_bitmap));
+            abort();
+        }
 
-    // TODO 发送SYN给对端并等待对端ACK响应并设置超时时间
+        kcp_connection_init(kcp_connection, &syn_packet->remote_host, kcp_ctx);
+        kcp_connection->conv = conv;
+        kcp_connection->syn_timeout_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
+        if (kcp_connection->syn_timeout_event == NULL) {
+            status = NO_MEMORY;
+            break;
+        }
 
-    return NULL;
+        // TODO 发送SYN给对端并等待对端ACK响应并设置超时时间
+        kcp_proto_header_t kcp_header;
+        kcp_header.conv = conv;
+        kcp_header.cmd = KCP_CMD_SYN;
+        kcp_header.frg = 0;
+        kcp_header.wnd = 0;
+        kcp_header.ts = time(NULL);
+        kcp_header.sn = kcp_header.ts;
+        kcp_header.una = 0;
+        kcp_header.len = 0;
+        kcp_header.data = NULL;
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+
+        struct iovec data[1];
+        data->iov_base = buffer;
+        data->iov_len = KCP_HEADER_SIZE;
+        status = kcp_send_packet(kcp_connection, &data, 1);
+        if (status != NO_ERROR) {
+            int32_t code = get_last_errno();
+            if (code != EAGAIN) {
+                break;
+            }
+
+
+        }
+
+        // connection_set_insert(&kcp_ctx->connection_set, )
+
+        // list_del((kcp_syn_node_t *)syn_packet);
+        free(syn_packet);
+        return status;
+    } while (false);
+
+    kcp_connection_destroy(kcp_connection);
+    // TODO 发送FIN
+    // 删除SYN节点
+    list_del((kcp_syn_node_t *)syn_packet);
+    free(syn_packet);
+    return status;
 }
 
 static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
@@ -388,13 +460,12 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
         return false;
     }
 
-    connection_set_node_t *kcp_conn_node = connection_first(&kcp_ctx->connection_set);
-    if (kcp_conn_node == NULL) {
+    kcp_connection_t *kcp_connection = connection_first(&kcp_ctx->connection_set);
+    if (kcp_connection == NULL) {
         return false;
     }
 
     bool status = false;
-    struct KcpConnection *kcp_connection = kcp_conn_node->sock;
     kcp_syn_node_t *node = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
     if (node->sn == kcp_connection->syn_sn) {
         kcp_proto_header_t kcp_header;
@@ -414,8 +485,11 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
+        
         if (kcp_send_packet(kcp_connection, &data, sizeof(data)) <= 0) {
-            // TOOD log
+            // NOTE 此处不会触发 EAGAIN
+            int32_t code = get_last_errno();
+            KCP_LOGE("kcp send packet error. [%d, %s]\n", code, errno_string(code));
         } else {
             evtimer_del(kcp_connection->syn_timeout_event);
             evtimer_free(kcp_connection->syn_timeout_event);

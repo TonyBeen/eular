@@ -79,9 +79,13 @@ typedef struct KcpAck {
 } kcp_ack_t;
 
 typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *);
+typedef void (*kcp_write_cb_t)(struct KcpConnection *);
 
 /// @brief KCP控制块
 typedef struct KcpConnection {
+    struct rb_node      node_rbtree; // for set
+    struct list_node    node_list;   // for list
+
     // 基础配置
     uint32_t conv;          // 会话ID，用于标识一个会话
     uint32_t mtu;           // 最大传输单元
@@ -170,6 +174,7 @@ typedef struct KcpConnection {
 
     // socket callback
     kcp_read_cb_t           read_cb;
+    kcp_write_cb_t          write_cb;
 } kcp_connection_t;
 
 typedef struct KcpFunctionCallback {
@@ -181,10 +186,10 @@ typedef struct KcpFunctionCallback {
 } kcp_function_callback_t;
 
 typedef struct KcpSYNNode {
-    struct list_head node;
-    uint32_t    conv;
-    uint32_t    sn;
-    sockaddr_t remote_host;
+    struct list_head    node;
+    uint32_t            conv;
+    uint32_t            sn;
+    sockaddr_t          remote_host;
 } kcp_syn_node_t;
 
 struct KcpContext {
@@ -199,6 +204,7 @@ struct KcpContext {
     struct event_base*          event_loop;
     struct event*               read_event;
     struct event*               write_event;
+    struct list_head            conn_write_event_queue;
     void*                       user_data;
     char*                       read_buffer;
     size_t                      read_buffer_size;
@@ -227,6 +233,8 @@ typedef struct KcpMtuProbeCtx {
 EXTERN_C_BEGIN
 
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx);
+
+void kcp_connection_destroy(kcp_connection_t *kcp_conn);
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size);
 

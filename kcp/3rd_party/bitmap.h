@@ -32,4 +32,6 @@ void bitmap_set(bitmap_t *bitmap, uint32_t index, bool value);
 
 bool bitmap_get(bitmap_t *bitmap, uint32_t index);
 
+int32_t bitmap_count(bitmap_t *bitmap);
+
 #endif // __KCP_3RD_PARTY_BITMAP_H__

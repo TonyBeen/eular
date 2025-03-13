@@ -29,6 +29,8 @@ int32_t     get_last_errno();
 
 const char *errno_string(int32_t err);
 
+int32_t     kcp_add_write_event(struct KcpConnection *kcp_conn);
+
 EXTERN_C_END
 
 #endif // __KCP_NET_UTILS_H__

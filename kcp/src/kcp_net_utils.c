@@ -210,11 +210,11 @@ int32_t get_last_errno()
 #endif
 }
 
+THREAD_LOCAL char buffer[128];
+
 const char *errno_string(int32_t err)
 {
 #ifdef OS_WINDOWS
-    THREAD_LOCAL char buffer[128];
-
     FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
         FORMAT_MESSAGE_IGNORE_INSERTS |
         FORMAT_MESSAGE_MAX_WIDTH_MASK,
@@ -224,4 +224,12 @@ const char *errno_string(int32_t err)
 #else
     return strerror(ABS(err));
 #endif
+}
+
+int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
+{
+    if (kcp_conn->kcp_ctx->write_event) {
+        
+    }
+    return 0;
 }

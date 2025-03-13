@@ -104,7 +104,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         if (get_last_errno() == EMSGSIZE) {
             probe_ctx->mtu_ubound = mtu_current - 1;
         } else {
-            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
+            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]\n", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
             break;
         }
     } while (true);
@@ -168,7 +168,7 @@ static kcp_connection_t *parse_icmp_payload(struct KcpContext *kcp_ctx, const vo
         return NULL;
     }
 
-    connection_set_node_t* node = connection_set_search(&kcp_ctx->connection_set, conv);
+    kcp_connection_t* node = connection_set_search(&kcp_ctx->connection_set, conv);
     if (node != NULL) {
         kcp_connection_t *kcp_conn = node->sock;
         if (sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
