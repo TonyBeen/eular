@@ -47,6 +47,10 @@ static const uint32_t IKCP_THRESH_MIN = 2;
 static const uint32_t IKCP_PROBE_INIT = 7000;       // 7 secs to probe window size
 static const uint32_t IKCP_PROBE_LIMIT = 120000;    // up to 120 secs to probe window
 
+/////////////////
+#define PACKET_COUNT_PER_SENT   32
+static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - 24) * PACKET_COUNT_PER_SENT; // 一次发送的最大字节数
+
 static const uint32_t   KCP_INTERVAL_MAX        = 500;  // 协议内部发送数据的最大间隔
 static const uint32_t   KCP_INTERVAL_MIN        = 10;   // 协议内部发送数据的最小间隔
 static const int32_t    KCP_FASTACK_LIMIT       = 5;   // 快速重传ACK最大跳过次数
@@ -57,5 +61,6 @@ static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次
 
 extern uint32_t g_kcp_syn_retries           = 3;    // syn重试次数
 extern uint32_t g_kcp_mtu_probe_timeout     = 1500; // MTU探测超时时间
+
 
 #endif // __KCP_CONFIG_H__

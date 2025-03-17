@@ -11,6 +11,7 @@ enum KcpError {
     UNKNOWN_ERROR       = (-0x7FFFFFFF), // INT32_MIN value
 
     NO_MEMORY           = -ENOMEM,      /* Out of memory */
+    OP_TRY_AGAIN        = -EAGAIN,      /* Try again */
     INVALID_OPERATION   = -ENOSYS,      /* Illegal operation */
     INVALID_PARAM       = -EINVAL,      /* Invalid argument */
     NOT_FOUND           = -ENOENT,      /* No such file or directory */
@@ -29,7 +30,6 @@ enum KcpError {
     ALREADY_DONE        = -EALREADY,    /* Operation already in progress */
     CANCELED            = -ECANCELED,   /* Operation canceled */
     INVALID_STATE       = -EILSEQ,      /* Invalid state */
-    BAD_VALUE           = -EINVAL,      /* Bad value */
     BUFFER_TOO_SMALL    = -ENOSPC,      /* Buffer too small */
     NO_MORE_CONV,                       /* No more conversation */
 

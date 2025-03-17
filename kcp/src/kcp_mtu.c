@@ -168,13 +168,13 @@ static kcp_connection_t *parse_icmp_payload(struct KcpContext *kcp_ctx, const vo
         return NULL;
     }
 
-    kcp_connection_t* node = connection_set_search(&kcp_ctx->connection_set, conv);
-    if (node != NULL) {
-        kcp_connection_t *kcp_conn = node->sock;
+    kcp_connection_t* kcp_conn = connection_set_search(&kcp_ctx->connection_set, conv);
+    if (kcp_conn != NULL) {
         if (sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
             return NULL;
         }
-        return node->sock;
+
+        return kcp_conn;
     }
 
     return NULL;

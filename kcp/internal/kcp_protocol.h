@@ -79,7 +79,7 @@ typedef struct KcpAck {
 } kcp_ack_t;
 
 typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *);
-typedef void (*kcp_write_cb_t)(struct KcpConnection *);
+typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *);
 
 /// @brief KCP控制块
 typedef struct KcpConnection {

@@ -169,7 +169,29 @@ static void kcp_write_cb(int fd, short ev, void *arg)
     if (kcp_ctx == NULL) {
         return;
     }
-    // TODO 遍历 conn_write_event_queue
+
+    kcp_connection_t *pos = NULL;
+    kcp_connection_t *next = NULL;
+    list_for_each_entry_safe(pos, next, &kcp_ctx->conn_write_event_queue, node_list) {
+        if (pos->write_cb) {
+            int32_t status = pos->write_cb(pos);
+            if (status == NO_ERROR) {
+                list_del(&pos->node_list);
+                list_init(&pos->node_list);
+            } else if (status == OP_TRY_AGAIN) { // 缓存区已满
+                break;
+            } else {
+                if (kcp_ctx->callback.on_error) {
+                    kcp_ctx->callback.on_error(kcp_ctx, status);
+                }
+                break;
+            }
+        }
+    }
+
+    if (list_empty(&kcp_ctx->conn_write_event_queue)) {
+        event_del(kcp_ctx->write_event);
+    }
 }
 
 struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user)
@@ -430,7 +452,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr)
         data->iov_base = buffer;
         data->iov_len = KCP_HEADER_SIZE;
         status = kcp_send_packet(kcp_connection, &data, 1);
-        if (status != NO_ERROR) {
+        if (status != KCP_HEADER_SIZE) {
             int32_t code = get_last_errno();
             if (code != EAGAIN) {
                 break;

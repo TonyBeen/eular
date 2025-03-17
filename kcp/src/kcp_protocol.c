@@ -38,6 +38,10 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->mtu_probe_ctx->mtu_last = ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
     kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
+
+    // TODO 实现内部读写回调
+    kcp_conn->read_cb = NULL;
+    kcp_conn->write_cb = NULL;
 }
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
