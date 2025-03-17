@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "kcp_config.h"
 #include "kcp_endian.h"
 #include "kcp_error.h"
 #include "kcp_mtu.h"
@@ -29,7 +30,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timeout_event = NULL;
-    kcp_conn->syn_retries = 2;
+    kcp_conn->syn_retries = g_kcp_syn_retries;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
@@ -46,6 +47,17 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
+    // 从红黑树中移除连接
+    connection_set_erase(kcp_conn->kcp_ctx, kcp_conn->conv);
+    int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
+    bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, index, false);
+
+    // 移除读事件
+    if (!list_empty(&kcp_conn->node_list)) {
+        list_del_init(&kcp_conn->node_list);
+    }
+
+    // 释放MTU探测资源
     if (kcp_conn->mtu_probe_ctx) {
         if (kcp_conn->mtu_probe_ctx->probe_buf) {
             free(kcp_conn->mtu_probe_ctx->probe_buf);
@@ -61,11 +73,14 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         kcp_conn->mtu_probe_ctx = NULL;
     }
 
+    // 释放超时事件
     if (kcp_conn->syn_timeout_event) {
         event_del(kcp_conn->syn_timeout_event);
         event_free(kcp_conn->syn_timeout_event);
         kcp_conn->syn_timeout_event = NULL;
     }
+
+    free(kcp_conn);
 }
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size)

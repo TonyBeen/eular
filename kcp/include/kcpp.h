@@ -123,7 +123,7 @@ KCP_PORT void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb
  * @param addrlen 
  * @return struct KcpConnection* 
  */
-KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr);
+KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeout_ms);
 
 /**
  * @brief 

@@ -192,7 +192,7 @@ typedef struct KcpSYNNode {
     sockaddr_t          remote_host;
 } kcp_syn_node_t;
 
-struct KcpContext {
+typedef struct KcpContext {
     socket_t                    sock;
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
@@ -208,7 +208,7 @@ struct KcpContext {
     void*                       user_data;
     char*                       read_buffer;
     size_t                      read_buffer_size;
-};
+} kcp_context_t;
 
 ////////////////////////////////////////MTU探测////////////////////////////////////////
 // MTU探测回调

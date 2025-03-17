@@ -175,7 +175,7 @@ int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, ui
         msg.msg_iov = &data[i];
         msg.msg_iovlen = 1;
         send_size = sendmsg(kcp_conn->kcp_ctx->sock, &msg, MSG_NOSIGNAL);
-        if (send_size < 0) {
+        if (send_size <= 0) {
             int32_t code = get_last_errno();
             if (code != EAGAIN) {
                 return WRITE_ERROR;
@@ -183,6 +183,8 @@ int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, ui
                 break;
             }
         }
+
+        ++send_packet;
     }
 #else
     struct mmsghdr msgvec[PACKET_COUNT_PER_SENT];
@@ -195,7 +197,7 @@ int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, ui
 
         msgvec[i].msg_len = 1;
     }
-    send_packet = sendmmsg(kcp_conn->kcp_ctx->sock, msgvec, size, 0);
+    send_packet = sendmmsg(kcp_conn->kcp_ctx->sock, msgvec, size, MSG_NOSIGNAL);
 
 #endif
 

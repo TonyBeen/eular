@@ -126,7 +126,8 @@ static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
     probe_ctx->retries--;
 
     kcp_send_mtu_probe_packet(kcp_conn);
-    evtimer_add(probe_ctx->probe_timeout_event, probe_ctx->timeout);
+    struct timeval tv = {probe_ctx->timeout / 1000, (probe_ctx->timeout % 1000) * 1000};
+    evtimer_add(probe_ctx->probe_timeout_event, &tv);
 }
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry)
