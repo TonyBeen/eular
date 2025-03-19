@@ -136,10 +136,12 @@ KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32
  */
 KCP_PORT int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb);
 
+KCP_PORT void kcp_set_close_cb(struct KcpContext *kcp_ctx, on_kcp_closed_t cb);
+
 /**
  * @brief Send FIN to peer.
  */
-KCP_PORT void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms, on_kcp_closed_t cb);
+KCP_PORT void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms);
 
 /**
  * @brief Send RST to peer.

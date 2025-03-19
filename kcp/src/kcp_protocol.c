@@ -23,16 +23,61 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
     }
 }
 
+// KCP读事件回调, 用于接收数据
+static void on_kcp_read_event(struct KcpConnection *kcp_conn, const kcp_proto_header_t *kcp_header)
+{
+
+}
+
+// kcp写事件回调, 主要用于EAGAIN错误
+static void on_kcp_write_event(struct KcpConnection *kcp_conn)
+{
+
+}
+
+static void on_write_timeout_event()
+{
+
+}
+
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
     kcp_conn->conv = KCP_CONV_FLAG;
+    kcp_conn->kcp_ctx = NULL;
     kcp_conn->mss = kcp_get_mss(remote_host->sa.sa_family == AF_INET6);
     kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
     kcp_conn->kcp_ctx = kcp_ctx;
-    kcp_conn->syn_timeout_event = NULL;
+    kcp_conn->syn_timer_event = NULL;
+    kcp_conn->fin_timer_event = NULL;
+    kcp_conn->write_timer_event = NULL;
+    kcp_conn->ping_timer_event = NULL;
     kcp_conn->syn_retries = g_kcp_syn_retries;
+    kcp_conn->fin_retries = g_kcp_syn_retries;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
+    kcp_conn->syn_fin_sn = 0;
+    kcp_conn->syn_timeout = DEFAULT_SYN_TIMEOUT;
+    kcp_conn->fin_timeout = DEFAULT_SYN_TIMEOUT;
+    kcp_conn->ping_timeout = DEFAULT_PING_TIMEOUT;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
+
+    kcp_conn->nodelay = 0;      // 关闭nodelay
+    kcp_conn->rx_minrto = IKCP_RTO_MIN;
+    kcp_conn->interval = 40;    // 发送间隔 40ms
+    kcp_conn->fastresend = 0;   // 关闭快速重传
+    kcp_conn->nocwnd = 0;       // 开启拥塞控制
+
+    list_init(&kcp_conn->snd_queue);
+    list_init(&kcp_conn->snd_buf);
+    list_init(&kcp_conn->snd_buf_unused);
+
+    list_init(&kcp_conn->rcv_queue);
+    list_init(&kcp_conn->rcv_buf);
+    list_init(&kcp_conn->rcv_buf_unused);
+
+    list_init(&kcp_conn->ack_item);
+    list_init(&kcp_conn->ack_unused);
+
+    kcp_conn->buffer = (char *)malloc(ETHERNET_MTU);
 
     kcp_conn->mtu_probe_ctx = (mtu_probe_ctx_t *)malloc(sizeof(mtu_probe_ctx_t));
     kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + ETHERNET_MTU);
@@ -40,9 +85,8 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
     kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
 
-    // TODO 实现内部读写回调
-    kcp_conn->read_cb = NULL;
-    kcp_conn->write_cb = NULL;
+    kcp_conn->read_cb = on_kcp_read_event;
+    kcp_conn->write_cb = on_kcp_write_event;
 }
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
@@ -74,10 +118,10 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     }
 
     // 释放超时事件
-    if (kcp_conn->syn_timeout_event) {
-        event_del(kcp_conn->syn_timeout_event);
-        event_free(kcp_conn->syn_timeout_event);
-        kcp_conn->syn_timeout_event = NULL;
+    if (kcp_conn->syn_timer_event) {
+        event_del(kcp_conn->syn_timer_event);
+        event_free(kcp_conn->syn_timer_event);
+        kcp_conn->syn_timer_event = NULL;
     }
 
     free(kcp_conn);

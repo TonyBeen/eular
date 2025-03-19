@@ -110,4 +110,7 @@ typedef int socket_t;
 #define ABS(n)  ((n) > 0 ? (n) : -(n))
 #endif
 
+// 让x介于min和max之间, x ∈ [min, max]
+#define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
+
 #endif // __KCP_DEF_H__

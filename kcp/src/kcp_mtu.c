@@ -104,7 +104,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         if (get_last_errno() == EMSGSIZE) {
             probe_ctx->mtu_ubound = mtu_current - 1;
         } else {
-            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]\n", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
+            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
             break;
         }
     } while (true);
@@ -230,6 +230,11 @@ void kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buff
         kcp_conn->mtu_probe_ctx->mtu_ubound = (kcp_conn->mtu_probe_ctx->mtu_lbound + kcp_conn->mtu_probe_ctx->mtu_ubound) / 2;
         mtu_probe_update(kcp_conn);
     }
+}
+
+void kcp_process_icmp_unreach(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
+{
+    // TODO 处理
 }
 
 void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)

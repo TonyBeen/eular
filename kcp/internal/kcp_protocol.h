@@ -162,11 +162,17 @@ typedef struct KcpConnection {
 
     // base
     struct KcpContext*      kcp_ctx;
-    struct event*           syn_timeout_event;
+    struct event*           syn_timer_event;
+    struct event*           fin_timer_event;
+    struct event*           write_timer_event;
+    struct event*           ping_timer_event;
     kcp_connection_state_t  state;
-    uint32_t                syn_sn;
+    uint32_t                syn_fin_sn;
     uint32_t                syn_timeout;
     uint32_t                syn_retries;
+    uint32_t                fin_timeout;
+    uint32_t                fin_retries;
+    uint32_t                ping_timeout;
     sockaddr_t              remote_host;
 
     // mtu

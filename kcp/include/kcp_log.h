@@ -35,18 +35,18 @@ typedef enum {
     LOG_LEVEL_SILENT,
 } kcp_log_level_t;
 
-#define KCP_LOGD(fmt, ...)  kcp_log_format(LOG_LEVEL_DEBUG, fmt, ##__VA_ARGS__)
-#define KCP_LOGI(fmt, ...)  kcp_log_format(LOG_LEVEL_INFO, fmt, ##__VA_ARGS__)
-#define KCP_LOGW(fmt, ...)  kcp_log_format(LOG_LEVEL_WARN, fmt, ##__VA_ARGS__)
-#define KCP_LOGE(fmt, ...)  kcp_log_format(LOG_LEVEL_ERROR, fmt, ##__VA_ARGS__)
-#define KCP_LOGF(fmt, ...)  kcp_log_format(LOG_LEVEL_FATAL, fmt, ##__VA_ARGS__)
+#define KCP_LOGD(fmt, ...)  kcp_log_format(LOG_LEVEL_DEBUG, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
+#define KCP_LOGI(fmt, ...)  kcp_log_format(LOG_LEVEL_INFO, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
+#define KCP_LOGW(fmt, ...)  kcp_log_format(LOG_LEVEL_WARN, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
+#define KCP_LOGE(fmt, ...)  kcp_log_format(LOG_LEVEL_ERROR, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
+#define KCP_LOGF(fmt, ...)  kcp_log_format(LOG_LEVEL_FATAL, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 typedef void (*kcp_log_callback_t) (int32_t, const char *, int32_t);
 
 EXTERN_C_BEGIN
 
 // thread safe
-KCP_PORT int32_t kcp_log_format(int32_t level, const char* fmt, ...);
+KCP_PORT int32_t kcp_log_format(int32_t level, const char *file_name, const char *func_name, int32_t line, const char* fmt, ...);
 
 // thread unsafe
 KCP_PORT void    kcp_log_callback(kcp_log_callback_t cb);

@@ -255,8 +255,10 @@ const char *errno_string(int32_t err)
 
 int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
 {
-    if (kcp_conn->kcp_ctx->write_event) {
-        
+    if (list_empty(&kcp_conn->node_list)) {
+        kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
+        return event_add(kcp_ctx->write_event, NULL);
     }
-    return 0;
+
+    return NO_ERROR;
 }
