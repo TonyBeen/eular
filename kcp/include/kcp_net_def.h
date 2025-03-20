@@ -24,12 +24,4 @@ typedef union {
     struct sockaddr_in6 sin6;
 } sockaddr_t;
 
-static inline int32_t socket_errno() {
-#ifdef OS_WINDOWS
-    return WSAGetLastError();
-#else
-    return errno;
-#endif
-}
-
 #endif // __KCP_NET_DEF_H__

@@ -124,15 +124,22 @@ KCP_PORT int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, co
  */
 KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, int32_t backlog, on_kcp_syn_received_t cb);
 
+/**
+ * @brief set accept callback
+ * 
+ * @param kcp_ctx kcp context
+ * @param cb callback
+ * @return void
+ */
 KCP_PORT void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb);
 
 /**
- * @brief 
+ * @brief accept a connection
  *
- * @param kcp 
- * @param addr 
- * @param addrlen 
- * @return struct KcpConnection* 
+ * @param kcp_ctx kcp context
+ * @param addr store remote address
+ * @param timeout_ms timeout in milliseconds
+ * @return int32_t 0 if success, otherwise < 0
  */
 KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeout_ms);
 

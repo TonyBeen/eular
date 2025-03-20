@@ -23,6 +23,7 @@ enum IOControl {
     IOCTL_KEEPALIVE_INTERVAL,
     IOCTL_SYN_RETRIES,
     IOCTL_FIN_RETRIES,
+    IOCTL_WINDOW_SIZE,
 };
 typedef uint32_t em_ioctl_t;
 

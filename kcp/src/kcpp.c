@@ -326,6 +326,10 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
     case IOCTL_FIN_RETRIES:
         kcp_connection->fin_retries = *(uint32_t *)data;
         break;
+    case IOCTL_WINDOW_SIZE:
+        kcp_connection->rcv_wnd = MAX(IKCP_WND_RCV, *(uint32_t *)data);
+        kcp_connection->snd_wnd = *(uint32_t *)data;
+        break;
     default:
         return INVALID_PARAM;
     }
