@@ -8,11 +8,14 @@
 #include "kcp_protocol.h"
 
 #include <string.h>
+#include <assert.h>
 
 #include "kcp_config.h"
 #include "kcp_endian.h"
 #include "kcp_error.h"
 #include "kcp_mtu.h"
+#include "kcp_net_utils.h"
+#include "kcp_log.h"
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
@@ -24,15 +27,154 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
 }
 
 // KCP读事件回调, 用于接收数据
-static void on_kcp_read_event(struct KcpConnection *kcp_conn, const kcp_proto_header_t *kcp_header)
+static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_proto_header_t *kcp_header, const sockaddr_t *remote_host)
 {
+    if (!sockaddr_equal(&kcp_connection->remote_host, remote_host)) {
+        KCP_LOGW("remote host not match, ignore packet");
+        return;
+    }
 
+    switch (kcp_connection->state) {
+    case KCP_STATE_DISCONNECTED:
+        KCP_LOGE("KCP_STATE_DISCONNECTED state, ignore packet");
+        break;
+    case KCP_STATE_SYN_SENT: { // client
+        KCP_LOGW("KCP_STATE_SYN_SENT state, ignore packet");
+        // if (kcp_header->cmd == KCP_CMD_SYN) {
+        //     kcp_proto_header_t kcp_pcaket;
+        //     kcp_pcaket.conv = kcp_header->conv;
+        //     kcp_pcaket.cmd = KCP_CMD_ACK;
+        //     kcp_pcaket.frg = 0;
+        //     kcp_pcaket.wnd = 0;
+        //     kcp_pcaket.ts = (uint32_t)time(NULL);
+        //     kcp_pcaket.sn = kcp_pcaket.ts;
+        //     kcp_connection->syn_fin_sn = kcp_pcaket.sn;
+        //     kcp_pcaket.una = 0;
+        //     kcp_pcaket.len = 0;
+        //     kcp_pcaket.data = NULL;
+
+        //     char buffer[KCP_HEADER_SIZE] = {0};
+        //     kcp_proto_header_encode(&kcp_connection, buffer, KCP_HEADER_SIZE);
+        //     struct iovec data[1];
+        //     data[0].iov_base = buffer;
+        //     data[0].iov_len = KCP_HEADER_SIZE;
+        //     int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        //     if (status != 1) {
+        //         kcp_connection->kcp_ctx->callback.on_connected(NULL, WRITE_ERROR);
+        //         kcp_connection_destroy(kcp_connection);
+        //     } else {
+        //         kcp_connection->state = KCP_STATE_CONNECTED;
+        //         kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
+        //     }
+        // }
+        break;
+    }
+    case KCP_STATE_SYN_RECEIVED: {
+        if (kcp_header->cmd == KCP_CMD_SYN) {
+            // TODO 发送ACK
+        } else if (kcp_header->cmd == KCP_CMD_ACK) {
+            // TODO 连接建立
+        } else {
+            // TODO 发送RST
+        }
+        break;
+    }
+    case KCP_STATE_CONNECTED: {
+        // TODO 正常接收数据
+        break;
+    }
+    case KCP_STATE_FIN_SENT:
+    case KCP_STATE_FIN_RECEIVED: {
+        // TODO 发送ACK
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 // kcp写事件回调, 主要用于EAGAIN错误
-static void on_kcp_write_event(struct KcpConnection *kcp_conn)
+static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection)
 {
+    assert(kcp_connection != NULL);
+    if (kcp_connection == NULL) {
+        return NO_ERROR;
+    }
 
+    switch (kcp_connection->state) {
+    case KCP_STATE_DISCONNECTED:
+        return CONNECTION_CLOSED;
+    case KCP_STATE_SYN_SENT:
+    case KCP_STATE_SYN_RECEIVED: {
+        kcp_proto_header_t kcp_header;
+        kcp_header.conv = KCP_CONV_FLAG;
+        kcp_header.cmd = KCP_CMD_SYN;
+        kcp_header.frg = 0;
+        kcp_header.wnd = 0;
+        kcp_header.ts = (uint32_t)time(NULL);
+        kcp_header.sn = kcp_header.ts;
+        kcp_connection->syn_fin_sn = kcp_header.sn;
+        kcp_header.una = 0;
+        kcp_header.len = 0;
+        kcp_header.data = NULL;
+
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_connection, buffer, KCP_HEADER_SIZE);
+        struct iovec data[1];
+        data[0].iov_base = buffer;
+        data[0].iov_len = KCP_HEADER_SIZE;
+        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        if (status != 1) {
+            int32_t code = get_last_errno();
+            if (code == EAGAIN || code == EWOULDBLOCK) {
+                return OP_TRY_AGAIN;
+            } else {
+                return WRITE_ERROR;
+            }
+        }
+
+        evtimer_del(kcp_connection->syn_timer_event);
+        uint32_t timeout_ms = kcp_connection->receive_timeout;
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        evtimer_add(kcp_connection->syn_timer_event, &tv);
+        break;
+    }
+    case KCP_STATE_CONNECTED: {
+        // TODO 正常发送数据
+        break;
+    }
+    case KCP_STATE_FIN_SENT:
+    case KCP_STATE_FIN_RECEIVED: {
+        kcp_proto_header_t kcp_header;
+        kcp_header.conv = kcp_connection->conv;
+        kcp_header.cmd = KCP_CMD_FIN;
+        kcp_header.frg = 0;
+        kcp_header.wnd = 0;
+        kcp_header.ts = time(NULL);
+        kcp_header.sn = kcp_header.ts;
+        kcp_header.una = 0;
+        kcp_header.len = 0;
+        kcp_header.data = NULL;
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+
+        struct iovec data[1];
+        data->iov_base = buffer;
+        data->iov_len = KCP_HEADER_SIZE;
+        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        if (status != 1) {
+            int32_t code = get_last_errno();
+            if (code == EAGAIN || code == EWOULDBLOCK) {
+                return OP_TRY_AGAIN;
+            } else {
+                return WRITE_ERROR;
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 static void on_write_timeout_event()
@@ -42,7 +184,7 @@ static void on_write_timeout_event()
 
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
-    kcp_conn->conv = KCP_CONV_FLAG;
+    kcp_conn->conv = 0;
     kcp_conn->kcp_ctx = NULL;
     kcp_conn->mss = kcp_get_mss(remote_host->sa.sa_family == AF_INET6);
     kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
@@ -95,7 +237,7 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
     bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, index, false);
 
-    // 移除读事件
+    // 移除写事件
     if (!list_empty(&kcp_conn->node_list)) {
         list_del_init(&kcp_conn->node_list);
     }

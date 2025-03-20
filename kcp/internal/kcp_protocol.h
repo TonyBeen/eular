@@ -78,7 +78,7 @@ typedef struct KcpAck {
     uint32_t ts;    // 时间戳
 } kcp_ack_t;
 
-typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *);
+typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *, const sockaddr_t *);
 typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *);
 
 /// @brief KCP控制块

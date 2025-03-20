@@ -24,6 +24,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
 
     kcp_proto_header_t kcp_header;
     if (NO_ERROR != kcp_proto_parse(&kcp_header, buffer, buffer_size)) {
+        KCP_LOGW("kcp parse packet error");
         return;
     }
 
@@ -44,9 +45,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         return;
     }
 
-    if (kcp_connection->read_cb != NULL) {
-        kcp_connection->read_cb(kcp_connection, &kcp_header);
-    }
+    kcp_connection->read_cb(kcp_connection, &kcp_header, addr);
 }
 
 static void kcp_read_cb(int fd, short ev, void *arg)
@@ -181,11 +180,11 @@ static void kcp_write_cb(int fd, short ev, void *arg)
             } else if (status == OP_TRY_AGAIN) { // 缓存区已满
                 break;
             } else {
-                if (kcp_ctx->callback.on_error) {
-                    kcp_ctx->callback.on_error(kcp_ctx, status);
-                }
+                kcp_ctx->callback.on_error(kcp_ctx, status);
                 break;
             }
+        } else {
+            list_del_init(&pos->node_list);
         }
     }
 
@@ -594,6 +593,9 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
     bool status = false;
     kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
     if (syn_packet->sn == kcp_connection->syn_fin_sn) {
+        kcp_connection->conv = syn_packet->conv;
+        memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
+
         kcp_proto_header_t kcp_header;
         kcp_header.conv = syn_packet->conv;
         kcp_header.cmd = KCP_CMD_ACK;
@@ -616,14 +618,16 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
             // NOTE 此处不会触发 EAGAIN
             int32_t code = get_last_errno();
             KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
+            kcp_ctx->callback.on_connected(kcp_connection, WRITE_ERROR);
+            kcp_connection_destroy(kcp_connection);
         } else {
             evtimer_del(kcp_connection->syn_timer_event);
             evtimer_free(kcp_connection->syn_timer_event);
             kcp_connection->syn_timer_event = NULL;
             kcp_connection->state = KCP_STATE_CONNECTED;
             status = true;
-            kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-            kcp_connection->conv = syn_packet->conv;
+            kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
+            // TODO 创建定时器, 定时发送心跳包, 创建写超时事件, 定时发送数据
         }
     }
 
@@ -683,7 +687,24 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         return SOCKET_CLOSED;
     }
 
-    kcp_connection_t *kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
+    // 客户端只能有一个连接
+    kcp_connection_t *kcp_connection = connection_first(&kcp_ctx->connection_set);
+    if (kcp_connection != NULL) {
+        if (kcp_connection->state == KCP_STATE_CONNECTED) {
+            return NO_ERROR;
+        } else if (kcp_connection->state == KCP_STATE_SYN_SENT) {
+            return IN_PROGRESS;
+        } else {
+            return INVALID_STATE;
+        }
+    }
+
+    // 调用connect前此回调函数必须为空
+    if (kcp_ctx->callback.on_syn_received != NULL) {
+        return INVALID_OPERATION;
+    }
+
+    kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
     if (kcp_connection == NULL) {
         return NO_MEMORY;
     }
@@ -759,12 +780,13 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
         int32_t status = kcp_send_packet(kcp_connection, &data, 1);
-        if (status <= 0) {
+        if (status != 1) {
             // Linux EAGAIN, Windows EWOULDBLOCK (WSAEWOULDBLOCK)
-            if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
+            int32_t code = get_last_errno();
+            if (code == EAGAIN || code == EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, status);
+                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, WRITE_ERROR);
                 return;
             }
         }
@@ -836,7 +858,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
     if (kcp_ctx->callback.on_closed) {
         kcp_ctx->callback.on_closed(kcp_connection, status);
     }
-
+ 
     kcp_connection_destroy(kcp_connection);
 }
 
