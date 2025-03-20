@@ -48,19 +48,19 @@ typedef void (*on_kcp_closed_t)(struct KcpConnection *kcp_connection, int32_t co
 typedef bool (*on_kcp_syn_received_t)(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 
 /**
- * @brief kcp建连回调函数
+ * @brief KCP connection callback function
  *
- * @param kcp kcp上下文
- * @param kcp_connection kcp连接
- * @param code 建连结果, 0表示成功, 其他表示失败
+ * @param kcp KCP context
+ * @param kcp_connection KCP connection
+ * @param code Connection result, NO_ERROR indicates success, others indicate failure
  */
 typedef void (*on_kcp_accepted_t)(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code);
 
 /**
- * @brief 错误回调
+ * @brief Error callback
  *
- * @param kcp_ctx kcp上下文
- * @param code 错误码
+ * @param kcp_ctx KCP context
+ * @param code error code
  */
 typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, int32_t code);
 
@@ -78,20 +78,29 @@ KCP_PORT struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t c
 /**
  * @brief destroy kcp control block.
  *
- * @param kcp The kcp control block.
+ * @param kcp_ctx The kcp control block.
  */
 KCP_PORT void kcp_destroy(struct KcpContext *kcp_ctx);
 
 /**
  * @brief configure kcp control block.
  *
- * @param kcp The kcp control block.
+ * @param kcp_connection KCP connection
+ * @param flags The configuration flags.
  * @param config The kcp configuration.
  *
  * @return int32_t 0 if success, otherwise -1.
  */
 KCP_PORT int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flags, const kcp_config_t *config);
 
+/**
+ * @brief Configure IO related parameters
+ *
+ * @param kcp_connection KCP connection
+ * @param flags The configuration flags.
+ * @param data The kcp configuration.
+ * @return int32_t 0 if success, otherwise < 0. 
+ */
 KCP_PORT int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *data);
 
 /**
@@ -158,16 +167,9 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
  *
  * @return int32_t Return the byte size written to the sending queue.
  */
-KCP_PORT int32_t kcp_write(struct KcpContext *kcp_ctx, const void *data, size_t size);
+KCP_PORT int32_t kcp_send(struct KcpContext *kcp_ctx, const void *data, size_t size);
 
-KCP_PORT int32_t kcp_writev(struct KcpContext *kcp_ctx, const struct iovec *iov, int32_t iovcnt);
-
-KCP_PORT int32_t kcp_recd(struct KcpContext *kcp_ctx, void *data, size_t size);
-
-KCP_PORT int32_t kcp_recdv(struct KcpContext *kcp_ctx, struct iovec *iov, int32_t iovcnt);
-
-KCP_PORT int32_t kcp_update(struct KcpContext *kcp_ctx, uint32_t current);
-
+KCP_PORT int32_t kcp_recv(struct KcpContext *kcp_ctx, void *data, size_t size);
 
 /**
  * @brief 获取kcp上下文的用户数据
