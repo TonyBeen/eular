@@ -14,7 +14,17 @@ enum ConfigKey {
     CONFIG_KEY_NC       = 0b1000,
     CONFIG_KEY_ALL      = 0b1111,
 };
-typedef uint32_t config_key_t;
+typedef uint32_t em_config_key_t;
+
+enum IOControl {
+    IOCTL_RECEIVE_TIMEOUT,
+    IOCTL_MTU_PROBE_TIMEOUT,
+    IOCTL_KEEPALIVE_TIMEOUT,
+    IOCTL_KEEPALIVE_INTERVAL,
+    IOCTL_SYN_RETRIES,
+    IOCTL_FIN_RETRIES,
+};
+typedef uint32_t em_ioctl_t;
 
 typedef struct KcpConfig {
     int32_t nodelay;    // 是否启用 nodelay模式, 0不启用; 1启用
@@ -53,17 +63,15 @@ static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - 24) * PACKET_C
 
 static const uint32_t   KCP_INTERVAL_MAX        = 500;  // 协议内部发送数据的最大间隔
 static const uint32_t   KCP_INTERVAL_MIN        = 10;   // 协议内部发送数据的最小间隔
-static const int32_t    KCP_FASTACK_LIMIT       = 5;   // 快速重传ACK最大跳过次数
+static const int32_t    KCP_FASTACK_LIMIT       = 5;    // 快速重传ACK最大跳过次数
 static const uint32_t   KCP_RETRANSMISSION_MAX  = 5;    // 最大重传次数
 static const uint32_t   KCP_KEEPALIVE_TIMEOUT   = 10;   // 心跳超时时间 10 * rtt
 static const uint32_t   KCP_KEEPALIVE_INTERVAL  = 10000;// 心跳间隔时间
 static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次数
 
-#define DEFAULT_SYN_TIMEOUT     1000
-#define DEFAULT_PING_TIMEOUT    5000
-
-extern uint32_t g_kcp_syn_retries           = 2;    // syn/fin重试次数
-extern uint32_t g_kcp_mtu_probe_timeout     = 1500; // MTU探测超时时间
-
+#define DEFAULT_RECEIVE_TIMEOUT     1000
+#define DEFAULT_KEEPALIVE_TIMEOUT   5000
+#define DEFAULT_SYN_FIN_RETRIES     2
+#define DEFAULT_MTU_PROBE_TIMEOUT   1500
 
 #endif // __KCP_CONFIG_H__

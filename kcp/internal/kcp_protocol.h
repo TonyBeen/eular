@@ -167,12 +167,12 @@ typedef struct KcpConnection {
     struct event*           write_timer_event;
     struct event*           ping_timer_event;
     kcp_connection_state_t  state;
+    uint32_t                receive_timeout;
     uint32_t                syn_fin_sn;
-    uint32_t                syn_timeout;
     uint32_t                syn_retries;
-    uint32_t                fin_timeout;
     uint32_t                fin_retries;
-    uint32_t                ping_timeout;
+    uint32_t                keepalive_timeout;  // keepalive超时时间
+    uint32_t                keepalive_interval; // keepalive间隔时间
     sockaddr_t              remote_host;
 
     // mtu

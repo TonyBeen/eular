@@ -51,13 +51,12 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->fin_timer_event = NULL;
     kcp_conn->write_timer_event = NULL;
     kcp_conn->ping_timer_event = NULL;
-    kcp_conn->syn_retries = g_kcp_syn_retries;
-    kcp_conn->fin_retries = g_kcp_syn_retries;
+    kcp_conn->syn_retries = DEFAULT_SYN_FIN_RETRIES;
+    kcp_conn->fin_retries = DEFAULT_SYN_FIN_RETRIES;
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     kcp_conn->syn_fin_sn = 0;
-    kcp_conn->syn_timeout = DEFAULT_SYN_TIMEOUT;
-    kcp_conn->fin_timeout = DEFAULT_SYN_TIMEOUT;
-    kcp_conn->ping_timeout = DEFAULT_PING_TIMEOUT;
+    kcp_conn->receive_timeout = DEFAULT_RECEIVE_TIMEOUT;
+    kcp_conn->keepalive_timeout = DEFAULT_KEEPALIVE_TIMEOUT;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
     kcp_conn->nodelay = 0;      // 关闭nodelay

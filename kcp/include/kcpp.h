@@ -90,7 +90,9 @@ KCP_PORT void kcp_destroy(struct KcpContext *kcp_ctx);
  *
  * @return int32_t 0 if success, otherwise -1.
  */
-KCP_PORT int32_t kcp_configure(struct KcpConnection *kcp_connection, config_key_t flags, kcp_config_t *config);
+KCP_PORT int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flags, const kcp_config_t *config);
+
+KCP_PORT int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *data);
 
 /**
  * @brief 绑定本地地址和端口, 网卡

@@ -246,7 +246,7 @@ void kcp_destroy(struct KcpContext *kcp_ctx)
     free(kcp_ctx);
 }
 
-int32_t kcp_configure(kcp_connection_t *kcp_connection, config_key_t flags, kcp_config_t *config)
+int32_t kcp_configure(kcp_connection_t *kcp_connection, em_config_key_t flags, const kcp_config_t *config)
 {
     if (kcp_connection == NULL || config == NULL) {
         return INVALID_PARAM;
@@ -296,6 +296,50 @@ static int32_t create_socket(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
     if (kcp_ctx->sock == INVALID_SOCKET) {
         return CREATE_SOCKET_ERROR;
+    }
+
+    return NO_ERROR;
+}
+
+int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *data)
+{
+    if (kcp_connection == NULL || data == NULL) {
+        return INVALID_PARAM;
+    }
+
+    switch (flags) {
+    case IOCTL_RECEIVE_TIMEOUT:
+    {
+        kcp_connection->receive_timeout = *(uint32_t *)data;
+        break;
+    }
+    case IOCTL_MTU_PROBE_TIMEOUT:
+    {
+        kcp_connection->mtu_probe_ctx->timeout = *(uint32_t *)data;
+        break;
+    }
+    case IOCTL_KEEPALIVE_TIMEOUT:
+    {
+        kcp_connection->keepalive_timeout = *(uint32_t *)data;
+        break;
+    }
+    case IOCTL_KEEPALIVE_INTERVAL:
+    {
+        kcp_connection->keepalive_interval = *(uint32_t *)data;
+        break;
+    }
+    case IOCTL_SYN_RETRIES:
+    {
+        kcp_connection->syn_retries = *(uint32_t *)data;
+        break;
+    }
+    case IOCTL_FIN_RETRIES:
+    {
+        kcp_connection->fin_retries = *(uint32_t *)data;
+        break;
+    }
+    default:
+        return INVALID_PARAM;
     }
 
     return NO_ERROR;
@@ -417,7 +461,7 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
             }
         }
 
-        uint32_t timeout_ms = kcp_connection->syn_timeout;
+        uint32_t timeout_ms = kcp_connection->receive_timeout;
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
         evtimer_add(kcp_connection->syn_timer_event, &tv);
         return;
@@ -475,7 +519,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         }
         kcp_connection->state = KCP_STATE_SYN_RECEIVED;
         connection_set_insert(&kcp_ctx->connection_set, kcp_connection);
-        kcp_connection->syn_timeout = timeout_ms;
+        kcp_connection->receive_timeout = timeout_ms;
 
         kcp_proto_header_t kcp_header;
         kcp_header.conv = conv;
@@ -626,7 +670,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
             return;
         }
 
-        uint32_t timeout_ms = kcp_connection->syn_timeout;
+        uint32_t timeout_ms = kcp_connection->receive_timeout;
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
         evtimer_add(kcp_connection->syn_timer_event, &tv);
         return;
@@ -687,7 +731,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     }
 
     // 添加超时事件, 读事件
-    kcp_connection->syn_timeout = timeout_ms;
+    kcp_connection->receive_timeout = timeout_ms;
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     evtimer_add(kcp_connection->syn_timer_event, &tv);
     event_add(kcp_ctx->read_event, NULL);
@@ -703,7 +747,41 @@ void kcp_set_close_cb(struct KcpContext *kcp_ctx, on_kcp_closed_t cb)
 
 static void kcp_close_timeout(int fd, short ev, void *arg)
 {
+    kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
+    if (kcp_connection->fin_retries--) {
+        kcp_proto_header_t kcp_header;
+        kcp_header.conv = kcp_connection->conv;
+        kcp_header.cmd = KCP_CMD_FIN;
+        kcp_header.frg = 0;
+        kcp_header.wnd = 0;
+        kcp_header.ts = (uint32_t)time(NULL);
+        kcp_header.sn = kcp_header.ts;
+        kcp_connection->syn_fin_sn = kcp_header.sn;
+        kcp_header.una = 0;
+        kcp_header.len = 0;
+        kcp_header.data = NULL;
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
 
+        struct iovec data[1];
+        data[0].iov_base = buffer;
+        data[0].iov_len = KCP_HEADER_SIZE;
+        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
+        if (status <= 0) {
+            // Linux EAGAIN, Windows EWOULDBLOCK (WSAEWOULDBLOCK)
+            if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
+                kcp_add_write_event(kcp_connection);
+            } else {
+                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, status);
+                return;
+            }
+        }
+
+        uint32_t timeout_ms = kcp_connection->receive_timeout;
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        evtimer_add(kcp_connection->fin_timer_event, &tv);
+        return;
+    }
 }
 
 void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
@@ -713,7 +791,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
     }
 
     timeout_ms = CLAMP(timeout_ms, 100, 10000);
-    kcp_connection->fin_timeout = timeout_ms;
+    kcp_connection->receive_timeout = timeout_ms;
 
     kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
     int32_t status = NO_ERROR;
