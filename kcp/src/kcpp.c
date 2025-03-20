@@ -711,6 +711,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
     if (kcp_connection == NULL) {
         return;
     }
+
     timeout_ms = CLAMP(timeout_ms, 100, 10000);
     kcp_connection->fin_timeout = timeout_ms;
 
@@ -722,27 +723,8 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         break;
     case KCP_STATE_SYN_SENT:
     case KCP_STATE_SYN_RECEIVED:
-    {
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = kcp_connection->conv;
-        kcp_header.cmd = KCP_CMD_RST;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.ts = (uint32_t)time(NULL);
-        kcp_header.sn = 0;
-        kcp_header.una = 0;
-        kcp_header.len = 0;
-        kcp_header.data = NULL;
-        char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
-
-        struct iovec data[1];
-        data[0].iov_base = buffer;
-        data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_connection, data, 1);
-        kcp_connection->state = KCP_STATE_DISCONNECTED;
-        break;
-    }
+        kcp_shutdown(kcp_connection);
+        return;
     case KCP_STATE_CONNECTED:
     {
         kcp_proto_header_t kcp_header;
