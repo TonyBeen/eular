@@ -246,7 +246,7 @@ void kcp_destroy(struct KcpContext *kcp_ctx)
     free(kcp_ctx);
 }
 
-int32_t kcp_configure(kcp_connection_t *kcp_connection, em_config_key_t flags, const kcp_config_t *config)
+int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flags, const kcp_config_t *config)
 {
     if (kcp_connection == NULL || config == NULL) {
         return INVALID_PARAM;
