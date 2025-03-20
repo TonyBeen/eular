@@ -309,35 +309,23 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
 
     switch (flags) {
     case IOCTL_RECEIVE_TIMEOUT:
-    {
         kcp_connection->receive_timeout = *(uint32_t *)data;
         break;
-    }
     case IOCTL_MTU_PROBE_TIMEOUT:
-    {
         kcp_connection->mtu_probe_ctx->timeout = *(uint32_t *)data;
         break;
-    }
     case IOCTL_KEEPALIVE_TIMEOUT:
-    {
         kcp_connection->keepalive_timeout = *(uint32_t *)data;
         break;
-    }
     case IOCTL_KEEPALIVE_INTERVAL:
-    {
         kcp_connection->keepalive_interval = *(uint32_t *)data;
         break;
-    }
     case IOCTL_SYN_RETRIES:
-    {
         kcp_connection->syn_retries = *(uint32_t *)data;
         break;
-    }
     case IOCTL_FIN_RETRIES:
-    {
         kcp_connection->fin_retries = *(uint32_t *)data;
         break;
-    }
     default:
         return INVALID_PARAM;
     }
