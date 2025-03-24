@@ -22,30 +22,39 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         return;
     }
 
-    kcp_proto_header_t kcp_header;
-    if (NO_ERROR != kcp_proto_parse(&kcp_header, buffer, buffer_size)) {
-        KCP_LOGW("kcp parse packet error");
-        return;
-    }
-
-    kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
-    if (kcp_connection == NULL) {
-        if (kcp_header.cmd == KCP_CMD_SYN) {
-            kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
-            if (syn_node == NULL) {
-                kcp_ctx->callback.on_error(kcp_ctx, NO_MEMORY);
-                return;
-            }
-            syn_node->conv = kcp_header.conv;
-            memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
-            syn_node->sn = kcp_header.sn;
-            list_add_tail(&kcp_ctx->syn_queue, syn_node);
-            kcp_ctx->callback.on_syn_received(kcp_ctx, addr);
+    const char *buffer_offset = buffer;
+    size_t buffer_remain = buffer_size;
+    do {
+        kcp_proto_header_t kcp_header;
+        if (NO_ERROR != kcp_proto_parse(&kcp_header, &buffer_offset, buffer_remain)) {
+            KCP_LOGW("kcp parse packet error");
+            break;
         }
-        return;
-    }
+        buffer_remain = buffer + buffer_size - buffer_offset;
 
-    kcp_connection->read_cb(kcp_connection, &kcp_header, addr);
+        kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
+        if (kcp_connection == NULL) {
+            if (kcp_header.cmd == KCP_CMD_SYN) {
+                kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
+                if (syn_node == NULL) {
+                    kcp_ctx->callback.on_error(kcp_ctx, NO_MEMORY);
+                    return;
+                }
+                syn_node->conv = kcp_header.conv;
+                memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
+                syn_node->sn = kcp_header.sn;
+                list_add_tail(&kcp_ctx->syn_queue, syn_node);
+                kcp_ctx->callback.on_syn_received(kcp_ctx, addr);
+            }
+            return;
+        }
+
+        kcp_connection->read_cb(kcp_connection, &kcp_header, addr);
+        if (kcp_connection->state == KCP_STATE_DISCONNECTED) {
+            kcp_connection_destroy(kcp_connection);
+            break;
+        }
+    } while (buffer_offset < (buffer + buffer_size)); // ACK 包可能会有多个
 }
 
 static void kcp_read_cb(int fd, short ev, void *arg)
