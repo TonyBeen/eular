@@ -148,15 +148,12 @@ const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, uint32_t len)
     return buf;
 }
 
-/**
- * @brief 
- * 
- * @param kcp_conn 由调用者保证不为NULL
- * @param data 由调用者保证不为NULL
- * @param len 由调用者保证不为0
- * @return int32_t 成功返回发送的包个数, 失败返回错误码
- */
-int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, uint32_t size)
+int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data, uint32_t size)
+{
+    return kcp_send_packet_raw(kcp_conn->kcp_ctx->sock, &kcp_conn->remote_host, data, size);
+}
+
+int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
 {
     if (size > PACKET_COUNT_PER_SENT) {
         return INVALID_PARAM;
@@ -170,11 +167,11 @@ int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, ui
     for (int32_t i = 0; i < size; ++i) {
         struct msghdr msg;
         memset(&msg, 0, sizeof(msg));
-        msg.msg_name = &kcp_conn->remote_host;
+        msg.msg_name = remote_addr;
         msg.msg_namelen = sizeof(sockaddr_t);
         msg.msg_iov = &data[i];
         msg.msg_iovlen = 1;
-        send_size = sendmsg(kcp_conn->kcp_ctx->sock, &msg, MSG_NOSIGNAL);
+        send_size = sendmsg(sock, &msg, MSG_NOSIGNAL);
         if (send_size <= 0) {
             int32_t code = get_last_errno();
             if (code != EAGAIN) {
@@ -190,39 +187,39 @@ int32_t kcp_send_packet(kcp_connection_t *kcp_conn, const struct iovec *data, ui
     struct mmsghdr msgvec[PACKET_COUNT_PER_SENT];
     for (int32_t i = 0; i < size; ++i) {
         struct msghdr *msg = &msgvec[i].msg_hdr;
-        msg->msg_name = &kcp_conn->remote_host;
+        msg->msg_name = remote_addr;
         msg->msg_namelen = sizeof(sockaddr_t);
         msg->msg_iov = &data[i];
         msg->msg_iovlen = 1;
 
         msgvec[i].msg_len = 1;
     }
-    send_packet = sendmmsg(kcp_conn->kcp_ctx->sock, msgvec, size, MSG_NOSIGNAL);
+    send_packet = sendmmsg(sock, msgvec, size, MSG_NOSIGNAL);
 
 #endif
 
 #else
     // TODO WSASendMsg 会合并数据为一个包, 需要使用类似sendmmsg接口
-    WSABUF wsa_buf[PACKET_COUNT_PER_SENT];
-    for (uint32_t i = 0; i < size; i++) {
-        wsa_buf[i].buf = (char *)data[i].iov_base;
-        wsa_buf[i].len = data[i].iov_len;
-    }
+    // WSABUF wsa_buf[PACKET_COUNT_PER_SENT];
+    // for (uint32_t i = 0; i < size; i++) {
+    //     wsa_buf[i].buf = (char *)data[i].iov_base;
+    //     wsa_buf[i].len = data[i].iov_len;
+    // }
 
-    WSAMSG msg;
-    memset(&msg, 0, sizeof(msg));
-    msg.name = (SOCKADDR*)&kcp_conn->remote_host;
-    msg.namelen = sizeof(sockaddr_t);
-    msg.lpBuffers = wsa_buf;
-    msg.dwBufferCount = size;
+    // WSAMSG msg;
+    // memset(&msg, 0, sizeof(msg));
+    // msg.name = (SOCKADDR *)remote_addr;
+    // msg.namelen = sizeof(sockaddr_t);
+    // msg.lpBuffers = wsa_buf;
+    // msg.dwBufferCount = size;
 
-    DWORD bytes_sent = 0;
-    int32_t status = WSASendMsg(sock, &msg, 0, &bytes_sent, NULL, NULL);
-    if (status == SOCKET_ERROR) {
-        send_size = WRITE_ERROR;
-    } else {
-        send_size = bytes_sent;
-    }
+    // DWORD bytes_sent = 0;
+    // int32_t status = WSASendMsg(sock, &msg, 0, &bytes_sent, NULL, NULL);
+    // if (status == SOCKET_ERROR) {
+    //     send_size = WRITE_ERROR;
+    // } else {
+    //     send_size = bytes_sent;
+    // }
 
 #endif
     return send_packet;

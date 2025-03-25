@@ -73,14 +73,14 @@ typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, int32_t code);
  * @param user The user data.
  * @return struct KcpContext*
  */
-KCP_PORT struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user);
+KCP_PORT struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb, void *user);
 
 /**
  * @brief destroy kcp control block.
  *
  * @param kcp_ctx The kcp control block.
  */
-KCP_PORT void kcp_destroy(struct KcpContext *kcp_ctx);
+KCP_PORT void kcp_context_destroy(struct KcpContext *kcp_ctx);
 
 /**
  * @brief configure kcp control block.
@@ -177,14 +177,6 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
 KCP_PORT int32_t kcp_send(struct KcpContext *kcp_ctx, const void *data, size_t size);
 
 KCP_PORT int32_t kcp_recv(struct KcpContext *kcp_ctx, void *data, size_t size);
-
-/**
- * @brief 获取kcp上下文的用户数据
- *
- * @param kcp_ctx kcp上下文
- * @return void* 用户数据
- */
-KCP_PORT void *kcp_get_user_data(struct KcpContext *kcp_ctx);
 
 EXTERN_C_END
 

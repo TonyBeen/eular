@@ -45,6 +45,24 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
                 syn_node->sn = kcp_header.sn;
                 list_add_tail(&kcp_ctx->syn_queue, syn_node);
                 kcp_ctx->callback.on_syn_received(kcp_ctx, addr);
+            } else { // 发送rst
+                kcp_proto_header_t kcp_rst_header;
+                kcp_rst_header.conv = kcp_connection->conv;
+                kcp_rst_header.cmd = KCP_CMD_RST;
+                kcp_rst_header.frg = 0;
+                kcp_rst_header.wnd = 0;
+                kcp_rst_header.ts = time(NULL);
+                kcp_rst_header.sn = 0;
+                kcp_rst_header.una = 0;
+                kcp_rst_header.len = 0;
+                kcp_rst_header.data = NULL;
+
+                char buffer[KCP_HEADER_SIZE] = {0};
+                kcp_proto_header_encode(&kcp_rst_header, buffer, KCP_HEADER_SIZE);
+                struct iovec data[1];
+                data[0].iov_base = buffer;
+                data[0].iov_len = KCP_HEADER_SIZE;
+                kcp_send_packet_raw(kcp_ctx->sock, addr, &data, sizeof(data));
             }
             return;
         }
@@ -202,7 +220,7 @@ static void kcp_write_cb(int fd, short ev, void *arg)
     }
 }
 
-struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *user)
+struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb, void *user)
 {
     if (base == NULL || cb == NULL) {
         return NULL;
@@ -237,7 +255,7 @@ struct KcpContext *kcp_create(struct event_base *base, on_kcp_error_t cb, void *
     return ctx;
 }
 
-void kcp_destroy(struct KcpContext *kcp_ctx)
+void kcp_context_destroy(struct KcpContext *kcp_ctx)
 {
     if (kcp_ctx == NULL) {
         return;

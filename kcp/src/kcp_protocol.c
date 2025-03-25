@@ -35,6 +35,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 
     bool send_rst = false;
+    int32_t kcp_state = kcp_connection->state;
     switch (kcp_connection->state) {
     case KCP_STATE_DISCONNECTED:
         KCP_LOGE("KCP_STATE_DISCONNECTED state, ignore packet");
@@ -61,13 +62,38 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
     case KCP_STATE_FIN_SENT: {
         if (kcp_header->cmd == KCP_CMD_FIN) {
-            // TODO 关闭连接
+            // TODO 回复ACK, 并关闭连接
+            kcp_proto_header_t kcp_ack_header;
+            kcp_ack_header.conv = kcp_connection->conv;
+            kcp_ack_header.cmd = KCP_CMD_ACK;
+            kcp_ack_header.frg = 0;
+            kcp_ack_header.wnd = 0;
+            kcp_ack_header.ts = time(NULL);
+            kcp_ack_header.sn = 0;
+            kcp_ack_header.una = 0;
+            kcp_ack_header.len = 0;
+            kcp_ack_header.data = NULL;
+
+            char buffer[KCP_HEADER_SIZE] = {0};
+            kcp_proto_header_encode(&kcp_ack_header, buffer, KCP_HEADER_SIZE);
+            struct iovec data[1];
+            data[0].iov_base = buffer;
+            data[0].iov_len = KCP_HEADER_SIZE;
+
+            kcp_send_packet(kcp_connection, &data, sizeof(data));
+            kcp_connection->state = KCP_STATE_DISCONNECTED;
+            if (kcp_connection->kcp_ctx->callback.on_closed) {
+                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
+            }
         } // 其他包忽略
         break;
     }
     case KCP_STATE_FIN_RECEIVED: {
         if (kcp_header->cmd == KCP_CMD_ACK) {
-            // TODO 关闭连接
+            kcp_connection->state = KCP_STATE_DISCONNECTED;
+            if (kcp_connection->kcp_ctx->callback.on_closed) {
+                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
+            }
         }
         break;
     }
@@ -76,8 +102,41 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 
     if (send_rst) {
-        // TODO 发送RST包
+        kcp_proto_header_t kcp_rst_header;
+        kcp_rst_header.conv = kcp_connection->conv;
+        kcp_rst_header.cmd = KCP_CMD_RST;
+        kcp_rst_header.frg = 0;
+        kcp_rst_header.wnd = 0;
+        kcp_rst_header.ts = time(NULL);
+        kcp_rst_header.sn = 0;
+        kcp_rst_header.una = 0;
+        kcp_rst_header.len = 0;
+        kcp_rst_header.data = NULL;
+
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_rst_header, buffer, KCP_HEADER_SIZE);
+        struct iovec data[1];
+        data[0].iov_base = buffer;
+        data[0].iov_len = KCP_HEADER_SIZE;
+        kcp_send_packet(kcp_connection, &data, sizeof(data));
+
         kcp_connection->state = KCP_STATE_DISCONNECTED;
+
+        // 回调用户
+        switch (kcp_state) {
+        case KCP_STATE_SYN_SENT: // client
+            if (kcp_connection->kcp_ctx->callback.on_connected) {
+                kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, CONNECTION_REFUSED);
+            }
+            break;
+        case KCP_STATE_SYN_RECEIVED: // server
+            if (kcp_connection->kcp_ctx->callback.on_accepted) {
+                kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, CONNECTION_RESET);
+            }
+            break;
+        default:
+            break;
+        }
     }
 }
 
