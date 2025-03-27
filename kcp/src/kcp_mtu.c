@@ -234,10 +234,20 @@ void kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buff
 
 void kcp_process_icmp_unreach(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
 {
-    // TODO 处理
+    kcp_connection_t *kcp_conn = parse_icmp_payload(kcp_ctx, buffer, len, remote_addr);
+    if (kcp_conn == NULL) {
+        return;
+    }
+
+    kcp_conn->kcp_ctx->callback.on_error(kcp_conn, UDP_UNREACH);
 }
 
 void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
 {
-    // TODO 处理
+    kcp_connection_t *kcp_conn = parse_icmp_payload(kcp_ctx, buffer, len, remote_addr);
+    if (kcp_conn == NULL) {
+        return;
+    }
+
+    kcp_conn->kcp_ctx->callback.on_error(kcp_conn, ICMP_ERROR);
 }

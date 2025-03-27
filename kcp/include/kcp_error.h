@@ -55,6 +55,8 @@ enum KcpError {
     CONNECTION_RESET,
     CONNECTION_ABORTED,
     CONNECTION_REFUSED,
+    UDP_UNREACH,
+    ICMP_ERROR,
 
     // proto error
     INVALID_KCP_HEADER = -120000,
