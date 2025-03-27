@@ -62,7 +62,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
     case KCP_STATE_FIN_SENT: {
         if (kcp_header->cmd == KCP_CMD_FIN) {
-            // TODO 回复ACK, 并关闭连接
             kcp_proto_header_t kcp_ack_header;
             kcp_ack_header.conv = kcp_connection->conv;
             kcp_ack_header.cmd = KCP_CMD_ACK;
@@ -141,7 +140,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 }
 
 // kcp写事件回调, 主要用于EAGAIN错误
-static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection)
+static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
     assert(kcp_connection != NULL);
     if (kcp_connection == NULL) {
@@ -224,26 +223,39 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection)
     }
 }
 
-static void on_write_timeout_event()
-{
-
-}
-
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
 {
     memset(&kcp_conn->node_rbtree, 0, sizeof(struct rb_node));
     list_init(&kcp_conn->node_list);
 
     kcp_conn->conv = 0;
+    kcp_conn->mss_min = kcp_conn->mss = kcp_get_min_mss(remote_host->sa.sa_family == AF_INET6);
     kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
-    kcp_conn->mss = kcp_get_mss(remote_host->sa.sa_family == AF_INET6);
 
     kcp_conn->snd_una = 0;
     kcp_conn->snd_nxt = 0;
     kcp_conn->rcv_nxt = 0;
     kcp_conn->ts_recent = 0;
     kcp_conn->ts_lastack = 0;
-
+    kcp_conn->ssthresh = IKCP_THRESH_INIT;
+    kcp_conn->rx_rttval = 0;
+    kcp_conn->rx_srtt = 0;
+    kcp_conn->rx_rto = IKCP_RTO_DEF;
+    kcp_conn->rx_minrto = IKCP_RTO_MIN;
+    kcp_conn->snd_wnd = IKCP_WND_SND;
+    kcp_conn->rcv_wnd = IKCP_WND_RCV;
+    kcp_conn->rmt_wnd = IKCP_WND_RCV;
+    kcp_conn->cwnd = 0;
+    kcp_conn->probe = 0;
+    kcp_conn->current = 0;
+    kcp_conn->interval = IKCP_INTERVAL;
+    kcp_conn->ts_flush = IKCP_INTERVAL;
+    kcp_conn->nrcv_buf = 0;
+    kcp_conn->nsnd_buf = 0;
+    kcp_conn->nrcv_que = 0;
+    kcp_conn->nsnd_que = 0;
+    kcp_conn->ts_probe = 0;
+    kcp_conn->probe_wait = 0;
 
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timer_event = NULL;
@@ -259,8 +271,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
     kcp_conn->nodelay = 0;      // 关闭nodelay
-    kcp_conn->rx_minrto = IKCP_RTO_MIN;
-    kcp_conn->interval = 40;    // 发送间隔 40ms
+    kcp_conn->interval = 30;    // 发送间隔 30ms
     kcp_conn->fastresend = 0;   // 关闭快速重传
     kcp_conn->nocwnd = 0;       // 开启拥塞控制
 

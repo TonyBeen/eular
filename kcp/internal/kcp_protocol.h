@@ -79,7 +79,8 @@ typedef struct KcpAck {
 } kcp_ack_t;
 
 typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *, const sockaddr_t *);
-typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *);
+// NOTE timestamp == 0 表示写事件触发, 否则表示超时事件触发
+typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *, uint64_t timestamp);
 
 /// @brief KCP控制块
 typedef struct KcpConnection {
@@ -89,7 +90,8 @@ typedef struct KcpConnection {
     // 基础配置
     uint32_t conv;          // 会话ID，用于标识一个会话
     uint32_t mtu;           // 最大传输单元
-    uint32_t mss;           // 最大报文段大小
+    uint32_t mss;           // 报文段大小
+    uint32_t mss_min;       // 最小报文段大小
 
     // 发送和接收序号
     uint32_t snd_una;       // 第一个未确认的包序号
@@ -118,7 +120,6 @@ typedef struct KcpConnection {
     uint32_t current;       // 当前时间
     uint32_t interval;      // 内部更新时间间隔，默认100ms
     uint32_t ts_flush;      // 下次刷新时间
-    uint32_t xmit;          // 总重传次数
 
     // 队列计数器
     uint32_t nrcv_buf;      // 接收缓存中的包数量
@@ -133,9 +134,6 @@ typedef struct KcpConnection {
     // 探测相关
     uint32_t ts_probe;     // 下次探测时间
     uint32_t probe_wait;   // 探测等待时间
-
-    // 链路控制
-    uint32_t incr;         // 可发送的最大数据量
 
     // 数据队列
     struct list_head    snd_queue;      // 发送队列
@@ -181,6 +179,12 @@ typedef struct KcpConnection {
     // socket callback
     kcp_read_cb_t           read_cb;
     kcp_write_cb_t          write_cb;
+
+    // statistics
+    uint64_t                ping_count; // ping次数
+    uint64_t                pong_count; // pong次数
+    uint64_t                tx_bytes;   // 发送字节数
+    uint64_t                rtx_bytes;  // 重传字节数
 } kcp_connection_t;
 
 typedef struct KcpFunctionCallback {
@@ -242,7 +246,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn);
 
-int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char *data, size_t data_size);
+int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_t data_size);
 
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
 

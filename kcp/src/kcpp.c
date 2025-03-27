@@ -201,7 +201,7 @@ static void kcp_write_cb(int fd, short ev, void *arg)
     kcp_connection_t *next = NULL;
     list_for_each_entry_safe(pos, next, &kcp_ctx->conn_write_event_queue, node_list) {
         if (pos->write_cb) {
-            int32_t status = pos->write_cb(pos);
+            int32_t status = pos->write_cb(pos, 0);
             if (status == NO_ERROR) {
                 list_del_init(&pos->node_list);
             } else if (status == OP_TRY_AGAIN) { // 缓存区已满
@@ -606,6 +606,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
     return status;
 }
 
+// kcp_connect syn callback
 static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 {
     if (kcp_ctx == NULL || addr == NULL) {
@@ -645,6 +646,7 @@ static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *ad
             // NOTE 此处不会触发 EAGAIN
             int32_t code = get_last_errno();
             KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
+            kcp_connection->state = KCP_STATE_DISCONNECTED;
             kcp_ctx->callback.on_connected(kcp_connection, WRITE_ERROR);
             kcp_connection_destroy(kcp_connection);
         } else {
