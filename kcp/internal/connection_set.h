@@ -22,6 +22,8 @@ kcp_connection_t *connection_set_erase(connection_set_t *root, int32_t conv);
 void connection_set_erase_node(connection_set_t *root, kcp_connection_t *node);
 
 kcp_connection_t *connection_first(connection_set_t *root);
+kcp_connection_t *connection_next(connection_set_t *node);
+kcp_connection_t *connection_last(connection_set_t *node);
 
 typedef void (*connection_set_destroy_cb_t)(kcp_connection_t *node);
 

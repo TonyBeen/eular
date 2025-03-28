@@ -189,7 +189,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         // TODO 正常发送数据
         break;
     }
-    case KCP_STATE_FIN_SENT:
+    case KCP_STATE_FIN_SENT: // EAGAIN 重传
     case KCP_STATE_FIN_RECEIVED: {
         kcp_proto_header_t kcp_header;
         kcp_header.conv = kcp_connection->conv;
@@ -260,8 +260,8 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timer_event = NULL;
     kcp_conn->fin_timer_event = NULL;
-    kcp_conn->write_timer_event = NULL;
     kcp_conn->ping_timer_event = NULL;
+    kcp_conn->need_write_timer_event = false;
     kcp_conn->syn_retries = DEFAULT_SYN_FIN_RETRIES;
     kcp_conn->fin_retries = DEFAULT_SYN_FIN_RETRIES;
     kcp_conn->state = KCP_STATE_DISCONNECTED;

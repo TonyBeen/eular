@@ -86,6 +86,29 @@ kcp_connection_t *connection_first(connection_set_t *root)
     return NULL;
 }
 
+kcp_connection_t *connection_next(connection_set_t *node)
+{
+    if (node == NULL) {
+        return NULL;
+    }
+
+    struct rb_node *next = rb_next(node);
+}
+
+kcp_connection_t *connection_last(connection_set_t *node)
+{
+    if (node == NULL) {
+        return NULL;
+    }
+
+    struct rb_node *last = rb_last(node);
+    if (last) {
+        return rb_entry(last, kcp_connection_t, node_rbtree);
+    }
+
+    return NULL;
+}
+
 void connection_set_clear(connection_set_t *root, connection_set_destroy_cb_t cb)
 {
     if (root == NULL) {

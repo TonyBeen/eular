@@ -152,18 +152,18 @@ typedef struct KcpConnection {
     char *buffer; // 存放ACK或PING等数据
 
     // 快速重传相关
-    int fastresend;     // 触发快速重传的重复ACK个数
-    int fastlimit;      // 快速重传次数限制，默认 KCP_FASTACK_LIMIT(5)
+    int32_t fastresend; // 触发快速重传的重复ACK个数
+    int32_t fastlimit;  // 快速重传次数限制，默认 KCP_FASTACK_LIMIT(5)
 
     // 其他配置
-    int nocwnd;         // 是否关闭拥塞控制，0=不关闭
+    int32_t nocwnd;     // 是否关闭拥塞控制，0=不关闭
 
     // base
     struct KcpContext*      kcp_ctx;
     struct event*           syn_timer_event;
     struct event*           fin_timer_event;
-    struct event*           write_timer_event;
     struct event*           ping_timer_event;
+    bool                    need_write_timer_event;
     kcp_connection_state_t  state;
     uint32_t                receive_timeout;
     uint32_t                syn_fin_sn;
@@ -214,6 +214,7 @@ typedef struct KcpContext {
     struct event_base*          event_loop;
     struct event*               read_event;
     struct event*               write_event;
+    struct event*               write_timer_event;
     struct list_head            conn_write_event_queue;
     void*                       user_data;
     char*                       read_buffer;

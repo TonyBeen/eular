@@ -195,6 +195,9 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
         msgvec[i].msg_len = 1;
     }
     send_packet = sendmmsg(sock, msgvec, size, MSG_NOSIGNAL);
+    if (send_packet <= 0) {
+        send_packet = WRITE_ERROR;
+    }
 
 #endif
 
