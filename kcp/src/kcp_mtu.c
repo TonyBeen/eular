@@ -71,12 +71,12 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         header.cmd = KCP_CMD_MTU_PROBE;
         header.frg = 0;
         header.wnd = 0;
-        header.ts = time(NULL);
-        header.sn = header.ts;
-        probe_ctx->prev_sn = header.sn;
-        header.una = 0;
-        header.len = data_length;
-        header.data = probe_ctx->probe_buf + KCP_HEADER_SIZE;
+        header.packet_data.ts = time(NULL);
+        header.packet_data.sn = header.packet_data.ts;
+        probe_ctx->prev_sn = header.packet_data.sn;
+        header.packet_data.una = 0;
+        header.packet_data.len = data_length;
+        header.packet_data.data = probe_ctx->probe_buf + KCP_HEADER_SIZE;
 
         char *buffer_offset = probe_ctx->probe_buf;
         *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
@@ -87,13 +87,13 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         buffer_offset += 1;
         *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
         buffer_offset += 2;
-        *(uint32_t *)buffer_offset = htole32(kcp_header->ts);
+        *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.ts);
         buffer_offset += 4;
-        *(uint32_t *)buffer_offset = htole32(kcp_header->sn);
+        *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.sn);
         buffer_offset += 4;
-        *(uint32_t *)buffer_offset = htole32(kcp_header->una);
+        *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.una);
         buffer_offset += 4;
-        *(uint32_t *)buffer_offset = htole32(kcp_header->len);
+        *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.len);
         buffer_offset += 4;
 
         int32_t status = kcp_send_packet(kcp_conn, probe_ctx->probe_buf, KCP_HEADER_SIZE + data_length);

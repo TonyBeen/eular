@@ -12,14 +12,29 @@ The KCP packet (aka. segment) structure is as following:
 +---------------+---+---+-------+
 |     conv      |cmd|frg|  wnd  |
 +---------------+---+---+-------+   8
-|     ts        |     sn        |
-+---------------+---------------+  16
+|               ts              |
++---------------+---+---+-------+   16
+|      sn       |     psn       |
++---------------+---------------+   24
 |     una       |     len       |
-+---------------+---------------+  24
++---------------+---------------+   32
 |                               |
 |        DATA (optional)        |
 |                               |
 +-------------------------------+
+
+ack packet structure
+
+0               4   5   6       8 (BYTE)
++---------------+---+---+-------+
+|     conv      |cmd|frg|  wnd  |
++---------------+---+---+-------+   8
+|               ts              |
++---------------+---+---+-------+   16
+|            ack_ts             |
++---------------+---+---+-------+   24
+|      sn       |     una       |
++---------------+---------------+   32
 
 
 - conv: conversation id (32 bits integer)
@@ -57,6 +72,8 @@ connection can be find out from your map or array.
 - ts: timestamp
 
 - sn: serial number
+
+- psn: packet serial number
 
 - una: un-acknowledged serial number
 

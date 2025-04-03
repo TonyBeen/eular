@@ -122,7 +122,7 @@ KCP_PORT int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, co
  * @param cb syn连接回调
  * @return int32_t 成功返回0, 否则返回负值
  */
-KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, int32_t backlog, on_kcp_syn_received_t cb);
+KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_syn_received_t cb);
 
 /**
  * @brief set accept callback

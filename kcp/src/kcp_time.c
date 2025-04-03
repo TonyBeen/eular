@@ -55,6 +55,32 @@ uint64_t kcp_time_monotonic_ms()
 #endif
 }
 
+uint64_t kcp_time_monotonic_us()
+{
+#if defined(OS_WINDOWS)
+
+#ifdef USE_C11_ATOMICS
+    static atomic_int_fast64_t g_frequency = ATOMIC_VAR_INIT(0);
+    if (0 == atomic_load(&g_frequency)) {
+        atomic_store(&g_frequency, _Query_perf_frequency()); // doesn't change after system boot
+    }
+    int64_t frequency = atomic_load(&g_frequency);
+#else
+    static int64_t frequency = 0;
+    if (0 == frequency) {
+        frequency = _Query_perf_frequency(); // doesn't change after system boot
+    }
+#endif
+
+    int64_t now = _Query_perf_counter();
+    return (uint64_t)(now * 1000 * 1000 / frequency);
+#else // Linux Mac
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)(ts.tv_sec * 1000 * 1000 + ts.tv_nsec / 1000);
+#endif
+}
+
 uint64_t kcp_time_realtime_ms()
 {
 #if defined(OS_WINDOWS)

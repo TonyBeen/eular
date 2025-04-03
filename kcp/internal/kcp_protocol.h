@@ -47,11 +47,22 @@ typedef struct KcpProtoHeader {
     uint8_t     cmd;        // 命令
     uint8_t     frg;        // 分片序号
     uint16_t    wnd;        // 窗口大小
-    uint32_t    ts;         // 时间戳
-    uint32_t    sn;         // 序号
-    uint32_t    una;        // 未确认序号
-    uint32_t    len;        // 数据长度
-    char*       data;       // 数据
+
+    union {
+        uint64_t    ts;     // 时间戳
+        uint32_t    sn;     // 序号
+        uint32_t    psn;    // packet 序号
+        uint32_t    una;    // 未确认序号
+        uint32_t    len;    // 数据长度
+        char*       data;   // 数据
+    } packet_data;
+
+    union {
+        uint64_t    packet_ts;  // packet携带的时间戳
+        uint64_t    ack_ts;     // 发送ack的时间戳
+        uint32_t    sn;         // 序号
+        uint32_t    una;        // 未确认序号
+    } ack_data;
 } kcp_proto_header_t;
 
 /// @brief KCP报文段
@@ -208,7 +219,6 @@ typedef struct KcpContext {
     kcp_function_callback_t     callback;
 
     bitmap_t                    conv_bitmap;
-    int32_t                     backlog;
     struct list_head            syn_queue;
     connection_set_t            connection_set;
     struct event_base*          event_loop;
@@ -250,6 +260,8 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn);
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_t data_size);
 
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
+
+int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header);
 
 EXTERN_C_END
 

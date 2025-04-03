@@ -10,12 +10,17 @@ EXTERN_C_BEGIN
 /**
  * @brief 获取绝对时间, 单位为毫秒
  */
-uint64_t kcp_time_monotonic_ms();
+KCP_PORT uint64_t kcp_time_monotonic_ms();
+
+/**
+ * @brief 获取绝对时间, 单位为微秒
+ */
+KCP_PORT uint64_t kcp_time_monotonic_us();
 
 /**
  * @brief 获取UNIX毫秒时间戳
  */
-uint64_t kcp_time_realtime_ms();
+KCP_PORT uint64_t kcp_time_realtime_ms();
 
 /**
  * @brief 获取当前地区的时区
@@ -24,7 +29,7 @@ uint64_t kcp_time_realtime_ms();
  *
  * @return int32_t 时区
  */
-int32_t kcp_time_zone();
+KCP_PORT int32_t kcp_time_zone();
 
 EXTERN_C_END
 
