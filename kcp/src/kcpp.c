@@ -494,7 +494,6 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
         list_init(&kcp_syn_header->node_list);
         list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_syn_header);
 
-        // TODO 分析因为网络问题导致的超时重发需不需要更新packet_ts
         kcp_syn_header->syn_data.packet_ts = kcp_time_monotonic_us();
         kcp_syn_header->syn_data.syn_ts = kcp_syn_header->syn_data.packet_ts;
         kcp_syn_header->syn_data.rand_sn++;
@@ -589,8 +588,8 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         kcp_header.cmd = KCP_CMD_SYN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.syn_data.packet_ts = syn_packet->syn_ts;
-        kcp_header.syn_data.syn_ts = kcp_time_monotonic_us();
+        kcp_header.syn_data.packet_ts = kcp_time_monotonic_us();
+        kcp_header.syn_data.syn_ts = kcp_header.syn_data.packet_ts;
         kcp_header.syn_data.packet_sn = syn_packet->rand_sn; // client发送的序列
         kcp_header.syn_data.rand_sn = XXH32(&kcp_header.syn_data.syn_ts, sizeof(kcp_header.syn_data.syn_ts), 0); // server响应的序列
         memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
