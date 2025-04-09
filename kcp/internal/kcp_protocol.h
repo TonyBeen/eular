@@ -14,7 +14,7 @@
 #include "kcpp.h"
 #include "bitmap.h"
 
-#define KCP_HEADER_SIZE (24)
+#define KCP_HEADER_SIZE (32)
 
 /// @brief KCP协议命令类型
 enum KcpCommand {
@@ -43,6 +43,8 @@ enum KcpConnectionState {
 typedef int32_t kcp_connection_state_t;
 
 typedef struct KcpProtoHeader {
+    struct list_head node_list;  // 链表节点
+
     uint32_t    conv;       // 会话ID
     uint8_t     cmd;        // 命令
     uint8_t     frg;        // 分片序号
@@ -57,8 +59,15 @@ typedef struct KcpProtoHeader {
         char*       data;   // 数据
     } packet_data;
 
+    union { // NOTE 用于在三次握手阶段建立连接计算rtt
+        uint64_t    packet_ts;  // 接收此packet的时间戳
+        uint64_t    syn_ts;     // 发送syn的时间戳
+        uint32_t    packet_sn;  // 包序列
+        uint32_t    rand_sn;    // 随机序列
+    } syn_data;
+
     union {
-        uint64_t    packet_ts;  // packet携带的时间戳
+        uint64_t    packet_ts;  // 接收此packet的时间戳
         uint64_t    ack_ts;     // 发送ack的时间戳
         uint32_t    sn;         // 序号
         uint32_t    una;        // 未确认序号
@@ -116,7 +125,7 @@ typedef struct KcpConnection {
 
     // RTT相关
     int32_t rx_rttval;      // RTT 的偏差, 用于计算 RTT 的波动
-    int32_t rx_srtt;        // 平滑的 RTT 值, 用于计算平均 RTT
+    int32_t rx_srtt;        // 平滑的 RTT 值, 用于计算平均 RTT(us)
     int32_t rx_rto;         // 超时重传时间，初始为 IKCP_RTO_DEF(200ms)
     int32_t rx_minrto;      // 最小重传超时时间，默认为 IKCP_RTO_MIN(100ms)
 
@@ -184,6 +193,10 @@ typedef struct KcpConnection {
     uint32_t                keepalive_interval; // keepalive间隔时间
     sockaddr_t              remote_host;
 
+    // syn
+    struct KcpSYNNode*      syn_node;
+    struct list_node        kcp_proto_header_list; // for syn fin
+
     // mtu
     struct KcpMtuProbeCtx*  mtu_probe_ctx;
 
@@ -200,7 +213,7 @@ typedef struct KcpConnection {
 
 typedef struct KcpFunctionCallback {
     on_kcp_connected_t      on_connected;
-    on_kcp_syn_received_t   on_syn_received;
+    on_kcp_connect_t        on_connect; // 收到syn包回调
     on_kcp_accepted_t       on_accepted;
     on_kcp_closed_t         on_closed;
     on_kcp_error_t          on_error;
@@ -209,7 +222,10 @@ typedef struct KcpFunctionCallback {
 typedef struct KcpSYNNode {
     struct list_head    node;
     uint32_t            conv;
-    uint32_t            sn;
+    uint32_t            rand_sn;    // 本机发送的sn
+    uint32_t            packet_sn;  // 对端sn
+    uint64_t            packet_ts;  // 对端时间戳
+    uint64_t            syn_ts;     // 发送syn的时间戳
     sockaddr_t          remote_host;
 } kcp_syn_node_t;
 
@@ -262,6 +278,8 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
 
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header);
+
+void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 
 EXTERN_C_END
 

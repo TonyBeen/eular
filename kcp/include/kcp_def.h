@@ -113,4 +113,8 @@ typedef int socket_t;
 // 让x介于min和max之间, x ∈ [min, max]
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
+#ifndef UNUSED_PARAM
+#define UNUSED_PARAM(x) (void)(x)
+#endif // !UNUSED_PARAM
+
 #endif // __KCP_DEF_H__

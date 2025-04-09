@@ -6,6 +6,8 @@
 #include <event2/event.h>
 #include <event2/buffer.h>
 
+#include <xxhash.h>
+
 #include "kcp_inc.h"
 #include "kcp_error.h"
 #include "kcp_endian.h"
@@ -39,14 +41,18 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
                 kcp_ctx->callback.on_error(kcp_ctx, NO_MEMORY);
                 return;
             }
+            list_init(&syn_node->node);
+
             syn_node->conv = kcp_header.conv;
             memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
-            syn_node->sn = kcp_header.packet_data.sn;
+            syn_node->packet_sn = kcp_header.syn_data.packet_sn;
+            syn_node->rand_sn = kcp_header.syn_data.rand_sn;
+            syn_node->packet_ts = kcp_header.syn_data.packet_ts;
+            syn_node->syn_ts = kcp_header.syn_data.syn_ts;
             list_add_tail(&kcp_ctx->syn_queue, syn_node);
-            kcp_ctx->callback.on_syn_received(kcp_ctx, addr);
-        }
 
-        if (kcp_connection == NULL && kcp_header.cmd != KCP_CMD_SYN) { // 发送rst
+            on_kcp_syn_received(kcp_ctx, syn_node);
+        } else if (kcp_connection == NULL) { // 发送rst
             kcp_proto_header_t kcp_rst_header;
             kcp_rst_header.conv = kcp_connection->conv;
             kcp_rst_header.cmd = KCP_CMD_RST;
@@ -64,6 +70,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
             kcp_send_packet_raw(kcp_ctx->sock, addr, &data, sizeof(data));
+            continue;
         }
 
         kcp_connection->read_cb(kcp_connection, &kcp_header, addr);
@@ -439,13 +446,13 @@ _error:
     return status;
 }
 
-int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_syn_received_t cb)
+int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_connect_t cb)
 {
     if (kcp_ctx == NULL || cb == NULL) {
         return INVALID_PARAM;
     }
 
-    kcp_ctx->callback.on_syn_received = cb;
+    kcp_ctx->callback.on_connect = cb;
 
     event_add(kcp_ctx->read_event, NULL);
     struct timeval tv = {0, 1000}; // 1ms
@@ -460,25 +467,40 @@ void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb)
     }
 }
 
+/**
+ * @brief 发送SYN给客户端, 在指定时间内未收到ACK时重发
+ * 
+ * @param fd 文件描述符
+ * @param ev 事件
+ * @param arg 用户数据
+ */
 static void kcp_accept_timeout(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
     kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
     if (kcp_connection->syn_retries--) {
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = kcp_connection->conv;
-        kcp_header.cmd = KCP_CMD_SYN;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = (uint32_t)time(NULL);
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
+        kcp_proto_header_t *kcp_header_last = list_last_entry(&kcp_connection->kcp_proto_header_list, kcp_proto_header_t, node_list);
+        kcp_proto_header_t *kcp_syn_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        if (kcp_syn_header == NULL) {
+            uint32_t timeout_ms = kcp_connection->receive_timeout;
+            struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+            evtimer_add(kcp_connection->syn_timer_event, &tv);
+            return;
+        }
+        memcpy(kcp_syn_header, kcp_header_last, sizeof(kcp_proto_header_t));
+        list_init(&kcp_syn_header->node_list);
+        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_syn_header);
+
+        // TODO 分析因为网络问题导致的超时重发需不需要更新packet_ts
+        kcp_syn_header->syn_data.packet_ts = kcp_time_monotonic_us();
+        kcp_syn_header->syn_data.syn_ts = kcp_syn_header->syn_data.packet_ts;
+        kcp_syn_header->syn_data.rand_sn++;
 
         char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_connection, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(kcp_syn_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
@@ -500,6 +522,10 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
     }
 
     if (kcp_ctx->callback.on_accepted) {
+        bitmap_set(&kcp_ctx->conv_bitmap, kcp_connection->conv & ~KCP_CONV_FLAG, false);
+        evtimer_free(kcp_connection->syn_timer_event);
+        kcp_connection->syn_timer_event = NULL;
+        kcp_connection->state = KCP_STATE_DISCONNECTED;
         kcp_ctx->callback.on_accepted(kcp_ctx, kcp_connection, TIMED_OUT);
     }
 }
@@ -510,20 +536,19 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         return INVALID_PARAM;
     }
 
+    if (list_empty(&kcp_ctx->syn_queue)) {
+        return NO_PENDING_CONNECTION;
+    }
+    int32_t status = NO_ERROR;
+    kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
+
     kcp_connection_t *kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
     if (kcp_connection == NULL) {
         return NO_MEMORY;
     }
     memset(kcp_connection, 0, sizeof(kcp_connection_t));
-
-    if (list_empty(&kcp_ctx->syn_queue)) {
-        free(kcp_connection);
-        return NO_PENDING_CONNECTION;
-    }
-
-    int32_t status = NO_ERROR;
-    kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
     kcp_connection_init(kcp_connection, &syn_packet->remote_host, kcp_ctx);
+
     do {
         if (bitmap_count(&kcp_ctx->conv_bitmap) == kcp_ctx->conv_bitmap.size) {
             status = NO_MORE_CONV;
@@ -553,22 +578,29 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         connection_set_insert(&kcp_ctx->connection_set, kcp_connection);
         kcp_connection->receive_timeout = timeout_ms;
 
+        kcp_proto_header_t *kcp_syn_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        if (kcp_syn_header == NULL) {
+            status = NO_MEMORY;
+            break;
+        }
+        list_init(&kcp_syn_header->node_list);
         kcp_proto_header_t kcp_header;
         kcp_header.conv = conv;
         kcp_header.cmd = KCP_CMD_SYN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = time(NULL);
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
+        kcp_header.syn_data.packet_ts = syn_packet->syn_ts;
+        kcp_header.syn_data.syn_ts = kcp_time_monotonic_us();
+        kcp_header.syn_data.packet_sn = syn_packet->rand_sn; // client发送的序列
+        kcp_header.syn_data.rand_sn = XXH32(&kcp_header.syn_data.syn_ts, sizeof(kcp_header.syn_data.syn_ts), 0); // server响应的序列
+        memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
+        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_syn_header);
+
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
 
         list_del_init(&syn_packet->node);
-        free(syn_packet);
-        syn_packet = NULL;
+        kcp_connection->syn_node = syn_packet;
 
         struct iovec data[1];
         data->iov_base = buffer;
@@ -592,97 +624,10 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         return status;
     } while (false);
 
-    // 发送FIN
-    kcp_proto_header_t kcp_header;
-    kcp_header.conv = KCP_CONV_FLAG;
-    kcp_header.cmd = KCP_CMD_FIN;
-    kcp_header.frg = 0;
-    kcp_header.wnd = 0;
-    kcp_header.packet_data.ts = time(NULL);
-    kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-    kcp_header.packet_data.una = 0;
-    kcp_header.packet_data.len = 0;
-    kcp_header.packet_data.data = NULL;
-    char buffer[KCP_HEADER_SIZE] = {0};
-    kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
-
-    struct iovec data[1];
-    data->iov_base = buffer;
-    data->iov_len = KCP_HEADER_SIZE;
-    kcp_send_packet(kcp_connection, &data, 1);
+    // NOTE kcp_accept调用时机在on_connect, kcp_accept返回失败时on_connect返回false, 由on_kcp_syn_received发送RST
     kcp_connection_destroy(kcp_connection);
 
-    // 删除SYN节点
-    if (syn_packet) {
-        list_del_init(&syn_packet->node);
-        free(syn_packet);
-    }
-    return status;
-}
-
-// kcp_connect syn callback
-static bool on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
-{
-    if (kcp_ctx == NULL || addr == NULL) {
-        return false;
-    }
-
-    kcp_connection_t *kcp_connection = connection_first(&kcp_ctx->connection_set);
-    if (kcp_connection == NULL) {
-        return false;
-    }
-
-    bool status = false;
-    kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
-    if (syn_packet->sn == kcp_connection->syn_fin_sn) {
-        kcp_connection->conv = syn_packet->conv;
-        memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
-
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = syn_packet->conv;
-        kcp_header.cmd = KCP_CMD_ACK;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = time(NULL);
-        kcp_header.packet_data.sn = 0;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
-
-        char buffer[KCP_HEADER_SIZE] = { 0 };
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
-
-        struct iovec data[1];
-        data[0].iov_base = buffer;
-        data[0].iov_len = KCP_HEADER_SIZE;
-
-        if (kcp_send_packet(kcp_connection, &data, sizeof(data)) < 0) {
-            // NOTE 此处不会触发 EAGAIN
-            int32_t code = get_last_errno();
-            KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
-            kcp_connection->state = KCP_STATE_DISCONNECTED;
-            kcp_ctx->callback.on_connected(kcp_connection, WRITE_ERROR);
-            kcp_connection_destroy(kcp_connection);
-        } else {
-            // NOTE 对端未收到ACK, 会重发SYN
-            if (kcp_connection->syn_timer_event) {
-                evtimer_del(kcp_connection->syn_timer_event);
-                evtimer_free(kcp_connection->syn_timer_event);
-                kcp_connection->syn_timer_event = NULL;
-            }
-
-            if (kcp_connection->state == KCP_STATE_SYN_SENT) {
-                kcp_connection->state = KCP_STATE_CONNECTED;
-                status = true;
-                kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-                kcp_connection->need_write_timer_event = true;
-            }
-        }
-    }
-
-    // 检验序号不通过时依靠超时处理异常场景, 客户端不接受SYN
-    list_del(&syn_packet->node);
-    free(syn_packet);
+    // 在on_kcp_syn_received清理节点
     return status;
 }
 
@@ -690,20 +635,20 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
 {
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
     if (kcp_connection->syn_retries--) {
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = KCP_CONV_FLAG;
-        kcp_header.cmd = KCP_CMD_SYN;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = (uint32_t)time(NULL);
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
+        kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        list_init(&kcp_header->node_list);
+        kcp_header->conv = KCP_CONV_FLAG;
+        kcp_header->cmd = KCP_CMD_SYN;
+        kcp_header->frg = 0;
+        kcp_header->wnd = 0;
+        kcp_header->syn_data.packet_ts = 0;
+        kcp_header->syn_data.syn_ts = kcp_time_monotonic_us();
+        kcp_header->syn_data.packet_sn = 0;
+        kcp_header->syn_data.rand_sn = XXH32(&kcp_header->syn_data.syn_ts, sizeof(kcp_header->syn_data.syn_ts), 0);
+        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_header);
 
         char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_connection, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
@@ -748,11 +693,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         }
     }
 
-    // 调用connect前此回调函数必须为空
-    if (kcp_ctx->callback.on_syn_received != NULL) {
-        return INVALID_OPERATION;
-    }
-
     struct timeval tv = {0, 1000}; // 1ms
     evtimer_add(kcp_ctx->write_timer_event, &tv);
 
@@ -765,20 +705,20 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         return UNKNOWN_ERROR;
     }
 
-    kcp_proto_header_t kcp_header;
-    kcp_header.conv = KCP_CONV_FLAG;
-    kcp_header.cmd = KCP_CMD_SYN;
-    kcp_header.frg = 0;
-    kcp_header.wnd = 0;
-    kcp_header.packet_data.ts = (uint32_t)time(NULL);
-    kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-    kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
-    kcp_header.packet_data.una = 0;
-    kcp_header.packet_data.len = 0;
-    kcp_header.packet_data.data = NULL;
+    kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+    list_init(&kcp_header->node_list);
+    kcp_header->conv = KCP_CONV_FLAG;
+    kcp_header->cmd = KCP_CMD_SYN;
+    kcp_header->frg = 0;
+    kcp_header->wnd = 0;
+    kcp_header->syn_data.packet_ts = 0;
+    kcp_header->syn_data.syn_ts = kcp_time_monotonic_us();
+    kcp_header->syn_data.packet_sn = 0;
+    kcp_header->syn_data.rand_sn = XXH32(&kcp_header->syn_data.syn_ts, sizeof(kcp_header->syn_data.syn_ts), 0);
+    list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_header);
 
     char buffer[KCP_HEADER_SIZE] = {0};
-    kcp_proto_header_encode(&kcp_connection, buffer, KCP_HEADER_SIZE);
+    kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
     struct iovec data[1];
     data[0].iov_base = buffer;
     data[0].iov_len = KCP_HEADER_SIZE;
@@ -789,7 +729,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
 
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;
-    kcp_ctx->callback.on_syn_received = on_kcp_syn_received;
+    kcp_ctx->callback.on_connect = NULL;
     kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
     if (kcp_connection->syn_timer_event == NULL) {
         return NO_MEMORY;

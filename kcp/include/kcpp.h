@@ -38,14 +38,14 @@ typedef void (*on_kcp_connected_t)(struct KcpConnection *kcp_connection, int32_t
 typedef void (*on_kcp_closed_t)(struct KcpConnection *kcp_connection, int32_t code);
 
 /**
- * @brief SYN连接请求回调函数
+ * @brief 客户端连接请求回调函数
  *
  * @param kcp_ctx kcp上下文
  * @param addr 连接请求地址
  *
  * @return bool 返回true表示接受连接, false表示拒绝连接
  */
-typedef bool (*on_kcp_syn_received_t)(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
+typedef bool (*on_kcp_connect_t)(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 
 /**
  * @brief KCP connection callback function
@@ -122,7 +122,7 @@ KCP_PORT int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, co
  * @param cb syn连接回调
  * @return int32_t 成功返回0, 否则返回负值
  */
-KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_syn_received_t cb);
+KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_connect_t cb);
 
 /**
  * @brief set accept callback
