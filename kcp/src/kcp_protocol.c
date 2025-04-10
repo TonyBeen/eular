@@ -13,6 +13,7 @@
 #include "kcp_config.h"
 #include "kcp_endian.h"
 #include "kcp_error.h"
+#include "kcp_time.h"
 #include "kcp_mtu.h"
 #include "kcp_net_utils.h"
 #include "kcp_log.h"
@@ -66,7 +67,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     case KCP_STATE_DISCONNECTED:
         KCP_LOGE("KCP_STATE_DISCONNECTED state, ignore packet");
         break;
-    case KCP_STATE_SYN_SENT: // client
     case KCP_STATE_SYN_RECEIVED: { // server
         if (kcp_header->cmd == KCP_CMD_ACK || kcp_header->cmd == KCP_CMD_PUSH) {
             kcp_connection->state = KCP_STATE_CONNECTED;
@@ -122,7 +122,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             kcp_fin_header.cmd = KCP_CMD_FIN;
             kcp_fin_header.frg = 0;
             kcp_fin_header.wnd = 0;
-            kcp_fin_header.packet_data.ts = time(NULL);
+            kcp_fin_header.packet_data.ts = kcp_time_monotonic_us();
             kcp_fin_header.packet_data.sn = kcp_fin_header.packet_data.ts;
             kcp_connection->syn_fin_sn = kcp_fin_header.packet_data.sn;
             kcp_fin_header.packet_data.una = 0;
@@ -159,7 +159,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         kcp_rst_header.cmd = KCP_CMD_RST;
         kcp_rst_header.frg = 0;
         kcp_rst_header.wnd = 0;
-        kcp_rst_header.packet_data.ts = time(NULL);
+        kcp_rst_header.packet_data.ts = kcp_time_monotonic_us();
         kcp_rst_header.packet_data.sn = 0;
         kcp_rst_header.packet_data.una = 0;
         kcp_rst_header.packet_data.len = 0;
@@ -252,7 +252,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         kcp_header.cmd = KCP_CMD_FIN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = time(NULL);
+        kcp_header.packet_data.ts = kcp_time_monotonic_us();
         kcp_header.packet_data.sn = kcp_header.packet_data.ts;
         kcp_header.packet_data.una = 0;
         kcp_header.packet_data.len = 0;

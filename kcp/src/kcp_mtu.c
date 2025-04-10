@@ -5,6 +5,7 @@
 #include <event2/event.h>
 
 #include "kcp_error.h"
+#include "kcp_time.h"
 #include "kcp_net_utils.h"
 #include "kcp_log.h"
 
@@ -71,7 +72,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         header.cmd = KCP_CMD_MTU_PROBE;
         header.frg = 0;
         header.wnd = 0;
-        header.packet_data.ts = time(NULL);
+        header.packet_data.ts = kcp_time_monotonic_ms();
         header.packet_data.sn = header.packet_data.ts;
         probe_ctx->prev_sn = header.packet_data.sn;
         header.packet_data.una = 0;

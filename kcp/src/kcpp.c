@@ -58,7 +58,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             kcp_rst_header.cmd = KCP_CMD_RST;
             kcp_rst_header.frg = 0;
             kcp_rst_header.wnd = 0;
-            kcp_rst_header.packet_data.ts = time(NULL);
+            kcp_rst_header.packet_data.ts = kcp_time_monotonic_us();
             kcp_rst_header.packet_data.sn = 0;
             kcp_rst_header.packet_data.una = 0;
             kcp_rst_header.packet_data.len = 0;
@@ -758,7 +758,7 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
         kcp_header.cmd = KCP_CMD_FIN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = (uint32_t)time(NULL);
+        kcp_header.packet_data.ts = kcp_time_monotonic_us();
         kcp_header.packet_data.sn = kcp_header.packet_data.ts;
         kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
         kcp_header.packet_data.una = 0;
@@ -815,7 +815,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_header.cmd = KCP_CMD_FIN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = (uint32_t)time(NULL);
+        kcp_header.packet_data.ts = kcp_time_monotonic_us();
         kcp_header.packet_data.sn = kcp_header.packet_data.ts;
         kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
         kcp_header.packet_data.una = 0;
