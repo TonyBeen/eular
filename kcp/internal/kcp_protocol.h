@@ -53,7 +53,7 @@ typedef struct KcpProtoHeader {
     union {
         uint64_t    ts;     // 时间戳
         uint32_t    sn;     // 序号
-        uint32_t    psn;    // packet 序号
+        uint32_t    _unused;// unused
         uint32_t    una;    // 未确认序号
         uint32_t    len;    // 数据长度
         char*       data;   // 数据
@@ -81,12 +81,12 @@ typedef struct KcpSengment {
     uint32_t cmd;       // 命令
     uint32_t frg;       // 分片序号
     uint32_t wnd;       // 窗口大小
-    uint32_t ts;        // 时间戳
+    uint64_t ts;        // 时间戳
     uint32_t sn;        // 序号
     uint32_t una;       // 未确认序号
     uint32_t len;       // 数据长度
-    uint32_t resendts;  // 重传时间戳
     uint32_t rto;       // 超时重传时间
+    uint64_t resendts;  // 重传时间戳
     uint32_t fastack;   // 快速重传
     uint32_t xmit;      // 重传次数
     char     data[1];   // 数据
@@ -278,6 +278,8 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
 
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header);
+
+int32_t kcp_flush(kcp_connection_t *kcp_conn);
 
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 

@@ -49,6 +49,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, CONNECTION_RESET);
             }
             break;
+        case KCP_STATE_DISCONNECTED:
+            break;
         default:
             kcp_connection->state = KCP_STATE_DISCONNECTED;
             if (kcp_connection->kcp_ctx->callback.on_closed) {
@@ -189,6 +191,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         default:
             break;
         }
+
         kcp_connection_destroy(kcp_connection);
     }
 }
@@ -196,7 +199,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 // KCP 写超时回调
 static int32_t on_kcp_connection_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
-
     return NO_ERROR;
 }
 
@@ -247,18 +249,9 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     }
     case KCP_STATE_FIN_SENT: // EAGAIN 重传
     case KCP_STATE_FIN_RECEIVED: {
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = kcp_connection->conv;
-        kcp_header.cmd = KCP_CMD_FIN;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = kcp_time_monotonic_us();
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
+        kcp_proto_header_t *kcp_fin_header = list_last_entry(&kcp_connection->node_list, kcp_proto_header_t, node_list);
         char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
 
         struct iovec data[1];
         data->iov_base = buffer;
@@ -477,10 +470,15 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
 
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header)
 {
-    uint64_t timestamp = kcp_time_realtime_ms();
+    uint64_t timestamp = kcp_time_monotonic_us();
     switch (kcp_header->cmd) {
     case KCP_CMD_ACK: {
-        
+        // uint64_t rtt = (timestamp - ) - kcp_header->ack_data.packet_ts;
+        kcp_sengment_t *pos = NULL;
+        kcp_sengment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
+            
+        }
 
         break;
     }
@@ -507,6 +505,12 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
     }
 
     return NO_ERROR;
+}
+
+int32_t kcp_flush(kcp_connection_t *kcp_conn)
+{
+
+    return 0;
 }
 
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)

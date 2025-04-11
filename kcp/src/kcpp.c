@@ -810,6 +810,9 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         return;
     case KCP_STATE_CONNECTED:
     {
+        kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        list_init(&kcp_fin_header->node_list);
+
         kcp_proto_header_t kcp_header;
         kcp_header.conv = kcp_connection->conv;
         kcp_header.cmd = KCP_CMD_FIN;
@@ -817,17 +820,28 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_header.wnd = 0;
         kcp_header.packet_data.ts = kcp_time_monotonic_us();
         kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
         kcp_header.packet_data.una = 0;
         kcp_header.packet_data.len = 0;
         kcp_header.packet_data.data = NULL;
+        memcpy(kcp_fin_header, &kcp_header, sizeof(kcp_proto_header_t));
+        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_fin_header);
+
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_connection, data, 1);
+        int32_t packet = kcp_send_packet(kcp_connection, data, 1);
         kcp_connection->state = KCP_STATE_FIN_SENT;
+        if (packet <= 0) {
+            int32_t code = get_last_errno();
+            if (code == EAGAIN || code == EWOULDBLOCK) {
+                kcp_add_write_event(kcp_connection);
+            } else {
+                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, WRITE_ERROR);
+                return;
+            }
+        }
 
         if (kcp_connection->fin_timer_event == NULL) {
             kcp_connection->fin_timer_event = evtimer_new(kcp_connection->kcp_ctx->event_loop, kcp_close_timeout, kcp_connection);

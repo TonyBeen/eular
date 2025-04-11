@@ -14,7 +14,7 @@ The KCP packet (aka. segment) structure is as following:
 +---------------+---+---+-------+   8
 |               ts              |
 +---------------+---+---+-------+   16
-|      sn       |     psn       |
+|      sn       |    unused     |
 +---------------+---------------+   24
 |     una       |     len       |
 +---------------+---------------+   32
@@ -73,7 +73,7 @@ connection can be find out from your map or array.
 
 - sn: serial number
 
-- psn: packet serial number
+- unused: packet serial number
 
 - una: un-acknowledged serial number
 
