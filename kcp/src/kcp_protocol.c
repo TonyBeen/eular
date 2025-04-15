@@ -18,6 +18,9 @@
 #include "kcp_net_utils.h"
 #include "kcp_log.h"
 
+static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
     if (code == NO_ERROR) {
@@ -309,7 +312,6 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->kcp_ctx = kcp_ctx;
     kcp_conn->syn_timer_event = NULL;
     kcp_conn->fin_timer_event = NULL;
-    kcp_conn->ping_timer_event = NULL;
     kcp_conn->need_write_timer_event = false;
     kcp_conn->syn_retries = DEFAULT_SYN_FIN_RETRIES;
     kcp_conn->fin_retries = DEFAULT_SYN_FIN_RETRIES;
@@ -348,6 +350,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
     kcp_conn->read_cb = on_kcp_read_event;
     kcp_conn->write_cb = on_kcp_write_event;
+    kcp_conn->read_event_cb = NULL;
 }
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
@@ -472,23 +475,18 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
 {
     uint64_t timestamp = kcp_time_monotonic_us();
     switch (kcp_header->cmd) {
-    case KCP_CMD_ACK: {
-        // uint64_t rtt = (timestamp - ) - kcp_header->ack_data.packet_ts;
-        kcp_sengment_t *pos = NULL;
-        kcp_sengment_t *next = NULL;
-        list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
-            
-        }
-
-        break;
-    }
+    case KCP_CMD_ACK:
+        return on_kcp_ack_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_PUSH:
-        break;
+        return on_kcp_push_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_WASK:
+        kcp_conn->probe |= KCP_ASK_TELL;
         break;
     case KCP_CMD_WINS:
+        kcp_conn->rmt_wnd = kcp_header->wnd;
         break;
     case KCP_CMD_PING:
+        kcp_conn->probe |= KCP_PING_RECV;
         break;
     case KCP_CMD_PONG:
         break;
@@ -556,6 +554,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
                     uint64_t current_ts = kcp_time_monotonic_us();
                     kcp_connection->rx_srtt = (current_ts - pos->syn_data.syn_ts) - (syn_packet->syn_ts - syn_packet->packet_ts);
+                    kcp_connection->rx_rttval = kcp_connection->rx_srtt / 2;
 
                     kcp_proto_header_t kcp_header;
                     kcp_header.conv = syn_packet->conv;
@@ -617,4 +616,194 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
         list_del_init(&syn_node->node);
         free(syn_node);
     }
+}
+
+#define HANDLE_SND_BUF(kcp_conn) \
+    do { \
+        list_add_tail(&pos->node, &kcp_conn->snd_buf_unused); \
+        ++kcp_conn->nsnd_buf_unused; \
+        --kcp_conn->nsnd_buf; \
+    } while (false)
+
+static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
+{
+    kcp_segment_t *pos = NULL;
+    kcp_segment_t *next = NULL;
+    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
+        if (pos->sn == kcp_header->ack_data.sn) {
+            int32_t timestamp_tmp = timestamp;
+            int32_t ts_tmp = pos->ts;
+            int32_t ack_ts_tmp = kcp_header->ack_data.ack_ts;
+            int32_t packet_ts_tmp = kcp_header->ack_data.packet_ts;
+
+            // 计算RTT
+            if (kcp_conn->rx_srtt == 0) {
+                kcp_conn->rx_srtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
+                kcp_conn->rx_rttval = kcp_conn->rx_srtt / 2;
+            } else {
+                int32_t rtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
+                int64_t delta = ABS(rtt - kcp_conn->rx_srtt);
+                kcp_conn->rx_rttval = (3 * kcp_conn->rx_rttval + delta) / 4;
+                kcp_conn->rx_srtt = (kcp_conn->rx_srtt * 7 + rtt) / 8;
+            }
+
+            // 计算RTO
+            int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
+            kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto * 1000, KCP_RTO_MAX * 1000);
+
+            HANDLE_SND_BUF(kcp_conn);
+            break;
+        }
+    }
+
+    // 解析una
+    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
+        if (pos->sn < kcp_header->ack_data.una) {
+            HANDLE_SND_BUF(kcp_conn);
+        } else {
+            break;
+        }
+    }
+
+    // 收缩snd_buf_unused空间
+    int32_t nsnd_buf_diff = (int32_t)kcp_conn->nsnd_buf_unused - (int32_t)kcp_conn->snd_wnd;
+    for (int32_t i = 0; i < nsnd_buf_diff; ++i) {
+        if (list_empty(&kcp_conn->snd_buf_unused)) {
+            break;
+        }
+
+        pos = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node);
+        list_del_init(&pos->node);
+        free(pos);
+    }
+    return NO_ERROR;
+}
+
+int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
+{
+    if (kcp_header->packet_data.sn >= (kcp_conn->rcv_nxt + kcp_conn->rcv_wnd)) {
+        // NOTE 如果收到PUSH包的序号超过接收窗口大小时, 发送可接收包大小, 并丢弃此包
+        kcp_conn->probe |= KCP_ASK_TELL;
+        return NO_ERROR;
+    }
+
+    if (kcp_header->packet_data.sn < kcp_conn->rcv_nxt) { // 此包已被接收过
+        return NO_ERROR;
+    }
+
+    // push ack
+    kcp_ack_t *ack_item = (kcp_ack_t *)malloc(sizeof(kcp_ack_t));
+    if (ack_item == NULL) {
+        return NO_MEMORY;
+    }
+    list_init(&ack_item->node);
+    kcp_segment_t *kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
+    if (kcp_segment == NULL) {
+        free(ack_item);
+        return NO_MEMORY;
+    }
+    list_init(&kcp_segment->node);
+
+    ack_item->sn = kcp_header->packet_data.sn;
+    ack_item->psn = kcp_header->packet_data.psn;
+    ack_item->ts = timestamp;
+    list_add_tail(&ack_item->node, &kcp_conn->ack_item);
+
+    // push data
+    kcp_segment->conv = kcp_header->conv;
+    kcp_segment->cmd = kcp_header->cmd;
+    kcp_segment->frg = kcp_header->frg;
+    kcp_segment->wnd = kcp_header->wnd;
+    kcp_segment->ts = kcp_header->packet_data.ts;
+    kcp_segment->sn = kcp_header->packet_data.sn;
+    kcp_segment->psn = kcp_header->packet_data.psn;
+    kcp_segment->una = kcp_header->packet_data.una;
+    kcp_segment->len = kcp_header->packet_data.len;
+    if (kcp_segment->len > 0) {
+        memcpy(kcp_segment->data, kcp_header->packet_data.data, kcp_segment->len);
+    }
+
+    bool repeat = false;
+    kcp_segment_t *pos = NULL;
+    kcp_segment_t *next = NULL;
+    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node) {
+        if (pos->psn == kcp_segment->psn && pos->frg == kcp_segment->frg) { // 相同包
+            repeat = true;
+            break;
+        }
+
+        if (kcp_segment->sn > pos->sn) {
+            break;
+        }
+    }
+
+    if (repeat) {
+        free(kcp_segment);
+        list_del_init(&ack_item->node);
+        free(ack_item);
+        return NO_ERROR;
+    }
+
+    kcp_segment_t *last = NULL;
+    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node) {
+        if (pos->psn == kcp_segment->psn) {
+            last = pos;
+            break;
+        }
+    }
+    if (last) { // 属于同一包
+        pos = last;
+        list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+            if (pos->psn != kcp_segment->psn) { // 同一个包的最后一个节点
+                break;
+            }
+            if (pos->frg > kcp_segment->frg) { // 同一包的不同分片
+                break;
+            }
+
+            last = pos;
+        }
+
+        list_add(&last->node, &kcp_segment->node);
+    } else { // 新包
+        list_add_tail(&kcp_segment->node, &kcp_conn->rcv_buf);
+    }
+    ++kcp_conn->nrcv_buf;
+
+    // 解析rcv_buf, 组成完整数据包
+    kcp_segment_t *first = NULL;
+    uint16_t packet_count = 0;
+    list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node) {
+        if (first->frg == 0) {
+            packet_count = (uint16_t)first->wnd; // NOTE 起始packet, 表示packet个数
+            pos = first;
+            uint16_t count = 0;
+            list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+                if (first->psn != pos->psn) { // 下一个包
+                    break;
+                }
+                ++count;
+            }
+
+            if (packet_count == count) { // 完整的一包
+                pos = first;
+                int32_t size = 0;
+                list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+                    if (first->psn != pos->psn) { // 下一个包
+                        break;
+                    }
+                    size += pos->len;
+                    list_add_tail(&pos->node, &kcp_conn->rcv_queue);
+                    --kcp_conn->nrcv_buf;
+                }
+
+                if (kcp_conn->read_event_cb) {
+                    kcp_conn->read_event_cb(kcp_conn, size);
+                }
+                break;
+            }
+        }
+    }
+
+    return NO_ERROR;
 }

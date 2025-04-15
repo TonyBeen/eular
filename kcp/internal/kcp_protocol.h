@@ -14,8 +14,6 @@
 #include "kcpp.h"
 #include "bitmap.h"
 
-#define KCP_HEADER_SIZE (32)
-
 /// @brief KCP协议命令类型
 enum KcpCommand {
     KCP_CMD_SYN = 1,    // SYN
@@ -51,9 +49,9 @@ typedef struct KcpProtoHeader {
     uint16_t    wnd;        // 窗口大小
 
     union {
-        uint64_t    ts;     // 时间戳
+        uint64_t    ts;     // packet发送时间戳
         uint32_t    sn;     // 序号
-        uint32_t    _unused;// unused
+        uint32_t    psn;    // 包序列
         uint32_t    una;    // 未确认序号
         uint32_t    len;    // 数据长度
         char*       data;   // 数据
@@ -83,6 +81,7 @@ typedef struct KcpSengment {
     uint32_t wnd;       // 窗口大小
     uint64_t ts;        // 时间戳
     uint32_t sn;        // 序号
+    uint32_t psn;       // 包序列
     uint32_t una;       // 未确认序号
     uint32_t len;       // 数据长度
     uint32_t rto;       // 超时重传时间
@@ -90,12 +89,13 @@ typedef struct KcpSengment {
     uint32_t fastack;   // 快速重传
     uint32_t xmit;      // 重传次数
     char     data[1];   // 数据
-} kcp_sengment_t;
+} kcp_segment_t;
 
 typedef struct KcpAck {
     struct list_head node;
     uint32_t sn;    // 序号
-    uint32_t ts;    // 时间戳
+    uint32_t psn;   // 包序列
+    uint64_t ts;    // 接收包的时间戳
 } kcp_ack_t;
 
 typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *, const sockaddr_t *);
@@ -136,17 +136,6 @@ typedef struct KcpConnection {
     uint32_t cwnd;          // 拥塞窗口大小，初始为0
     uint32_t probe;         // 探测标志，用于窗口探测
 
-    // 时间相关
-    uint32_t current;       // 当前时间
-    uint32_t interval;      // 内部更新时间间隔，默认100ms
-    uint32_t ts_flush;      // 下次刷新时间
-
-    // 队列计数器
-    uint32_t nrcv_buf;      // 接收缓存中的包数量
-    uint32_t nsnd_buf;      // 发送缓存中的包数量
-    uint32_t nrcv_que;      // 接收队列中的包数量
-    uint32_t nsnd_que;      // 发送队列中的包数量
-
     // 配置标志
     uint32_t nodelay;      // 是否启用nodelay模式，0=不启用
     uint32_t updated;      // 是否调用过update
@@ -154,6 +143,19 @@ typedef struct KcpConnection {
     // 探测相关
     uint32_t ts_probe;     // 下次探测时间
     uint32_t probe_wait;   // 探测等待时间
+
+    // 时间相关
+    uint32_t current;       // 当前时间
+    uint32_t interval;      // 内部更新时间间隔，默认100ms
+    uint32_t ts_flush;      // 下次刷新时间
+
+    // 队列计数器
+    uint32_t nrcv_buf;          // 接收缓存中的包数量
+    uint32_t nsnd_buf;          // 发送缓存中的包数量
+    uint32_t nsnd_buf_unused;   // 未使用的发送缓存数量
+    uint32_t nrcv_que;          // 接收队列中的包数量
+    uint32_t nsnd_que;          // 发送队列中的包数量
+    uint32_t nrcv_que_unused;   // 未使用的接收队列数量
 
     // 数据队列
     struct list_head    snd_queue;      // 发送队列
@@ -182,7 +184,6 @@ typedef struct KcpConnection {
     struct KcpContext*      kcp_ctx;
     struct event*           syn_timer_event;
     struct event*           fin_timer_event;
-    struct event*           ping_timer_event;
     bool                    need_write_timer_event;
     kcp_connection_state_t  state;
     uint32_t                receive_timeout;
@@ -203,6 +204,9 @@ typedef struct KcpConnection {
     // socket callback
     kcp_read_cb_t           read_cb;
     kcp_write_cb_t          write_cb;
+
+    // user callback
+    on_kcp_read_event_t     read_event_cb;
 
     // statistics
     uint64_t                ping_count; // ping次数
@@ -266,6 +270,11 @@ typedef struct KcpMtuProbeCtx {
     uint32_t                prev_sn;                // 上一个序号
     char*                   probe_buf;              // 探测数据
 } mtu_probe_ctx_t;
+
+typedef struct KcpPingCtx {
+    uint64_t        ping_timeout;   // ping 超时时间
+} ping_ctx_t;
+
 
 EXTERN_C_BEGIN
 

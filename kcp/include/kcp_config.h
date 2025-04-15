@@ -7,6 +7,8 @@
 #define KCP_CONV_FLAG       0xFFFF0000
 #define KCP_BITMAP_SIZE     65535
 
+#define KCP_HEADER_SIZE     (32)
+
 enum ConfigKey {
     CONFIG_KEY_NODELAY  = 0b0001,
     CONFIG_KEY_INTERVAL = 0b0010,
@@ -42,10 +44,8 @@ typedef struct KcpConfig {
 static const uint32_t IKCP_RTO_NDL = 30;    // no delay min rto
 static const uint32_t IKCP_RTO_MIN = 100;   // normal min rto
 static const uint32_t IKCP_RTO_DEF = 200;
-static const uint32_t IKCP_RTO_MAX = 60000;
 
 static const uint32_t IKCP_ASK_SEND = 1;            // need to send IKCP_CMD_WASK
-static const uint32_t IKCP_ASK_TELL = 2;            // need to send IKCP_CMD_WINS
 static const uint32_t IKCP_WND_SND = 32;
 static const uint32_t IKCP_WND_RCV = 128;           // must >= max fragment size
 static const uint32_t IKCP_MTU_DEF = 1400;
@@ -59,8 +59,12 @@ static const uint32_t IKCP_PROBE_INIT = 7000;       // 7 secs to probe window si
 static const uint32_t IKCP_PROBE_LIMIT = 120000;    // up to 120 secs to probe window
 
 /////////////////
+static const uint32_t   KCP_RTO_MAX     = 6000;     // ms
+static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
+static const uint32_t   KCP_PING_RECV   = 0b0100;   // 
+
 #define PACKET_COUNT_PER_SENT   32
-static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - 24) * PACKET_COUNT_PER_SENT; // 一次发送的最大字节数
+static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - KCP_HEADER_SIZE) * PACKET_COUNT_PER_SENT; // 一次发送的最大字节数
 
 static const uint32_t   KCP_INTERVAL_MAX        = 500;  // 协议内部发送数据的最大间隔
 static const uint32_t   KCP_INTERVAL_MIN        = 10;   // 协议内部发送数据的最小间隔

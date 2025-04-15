@@ -64,6 +64,14 @@ typedef void (*on_kcp_accepted_t)(struct KcpContext *kcp_ctx, struct KcpConnecti
  */
 typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, int32_t code);
 
+/**
+ * @brief read event callback
+ *
+ * @param kcp_connection KCP connection
+ * @param size The size of data
+ */
+typedef void (*on_kcp_read_event_t)(struct KcpConnection *kcp_connection, int32_t size);
+
 /// kcp function
 
 /**
@@ -175,6 +183,8 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
  * @return int32_t Return the byte size written to the sending queue.
  */
 KCP_PORT int32_t kcp_send(struct KcpContext *kcp_ctx, const void *data, size_t size);
+
+KCP_PORT void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
 
 KCP_PORT int32_t kcp_recv(struct KcpContext *kcp_ctx, void *data, size_t size);
 

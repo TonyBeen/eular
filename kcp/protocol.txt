@@ -14,7 +14,7 @@ The KCP packet (aka. segment) structure is as following:
 +---------------+---+---+-------+   8
 |               ts              |
 +---------------+---+---+-------+   16
-|      sn       |    unused     |
+|      sn       |     psn       |
 +---------------+---------------+   24
 |     una       |     len       |
 +---------------+---------------+   32
@@ -67,13 +67,13 @@ connection can be find out from your map or array.
 
 - frg: fragment count
 
-- wnd: window size
+- wnd: (cmd != PUSH && frg != 0) ? window size : packet count
 
 - ts: timestamp
 
 - sn: serial number
 
-- unused: packet serial number
+- psn: packet serial number
 
 - una: un-acknowledged serial number
 

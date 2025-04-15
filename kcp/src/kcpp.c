@@ -894,3 +894,10 @@ void kcp_shutdown(struct KcpConnection *kcp_connection)
 
     kcp_connection_destroy(kcp_connection);
 }
+
+void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb)
+{
+    if (kcp_connection != NULL) {
+        kcp_connection->read_event_cb = cb;
+    }
+}
