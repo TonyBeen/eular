@@ -361,10 +361,10 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
         kcp_connection->mtu_probe_ctx->timeout = *(uint32_t *)data;
         break;
     case IOCTL_KEEPALIVE_TIMEOUT:
-        kcp_connection->keepalive_timeout = *(uint32_t *)data;
+        kcp_connection->ping_ctx->keepalive_timeout = *(uint32_t *)data;
         break;
     case IOCTL_KEEPALIVE_INTERVAL:
-        kcp_connection->keepalive_interval = *(uint32_t *)data;
+        kcp_connection->ping_ctx->keepalive_interval = *(uint32_t *)data;
         break;
     case IOCTL_SYN_RETRIES:
         kcp_connection->syn_retries = *(uint32_t *)data;

@@ -70,6 +70,12 @@ typedef struct KcpProtoHeader {
         uint32_t    sn;         // 序号
         uint32_t    una;        // 未确认序号
     } ack_data;
+
+    union {
+        uint64_t    packet_ts;  // 接收此packet的时间戳
+        uint64_t    ping_ts;    // 发送ping的时间戳
+        uint64_t    sn;         // 随机序列
+    } ping_data;
 } kcp_proto_header_t;
 
 /// @brief KCP报文段
@@ -190,8 +196,6 @@ typedef struct KcpConnection {
     uint32_t                syn_fin_sn;
     uint32_t                syn_retries;
     uint32_t                fin_retries;
-    uint32_t                keepalive_timeout;  // keepalive超时时间
-    uint32_t                keepalive_interval; // keepalive间隔时间
     sockaddr_t              remote_host;
 
     // syn
@@ -200,6 +204,9 @@ typedef struct KcpConnection {
 
     // mtu
     struct KcpMtuProbeCtx*  mtu_probe_ctx;
+
+    // ping
+    struct KcpPingCtx*      ping_ctx;
 
     // socket callback
     kcp_read_cb_t           read_cb;
@@ -272,7 +279,14 @@ typedef struct KcpMtuProbeCtx {
 } mtu_probe_ctx_t;
 
 typedef struct KcpPingCtx {
-    uint64_t        ping_timeout;   // ping 超时时间
+    uint32_t                keepalive_timeout;      // keepalive超时时间
+    uint32_t                keepalive_interval;     // keepalive间隔时间
+    uint64_t                keepalive_next_ts;      // 下次需要发送ping包的时间戳
+    uint16_t                keepalive_retries;      // keepalive 配置的重试次数
+    uint16_t                keepalive_xretries;     // keepalive 重试次数
+    uint32_t                keepalive_rtt;          // keepalive RTT
+    uint64_t                keepalive_sn;           // keepalive序号
+    uint64_t                keepalive_packet_ts;    // keepalive packet时间戳
 } ping_ctx_t;
 
 

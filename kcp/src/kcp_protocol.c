@@ -318,7 +318,6 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->state = KCP_STATE_DISCONNECTED;
     kcp_conn->syn_fin_sn = 0;
     kcp_conn->receive_timeout = DEFAULT_RECEIVE_TIMEOUT;
-    kcp_conn->keepalive_timeout = DEFAULT_KEEPALIVE_TIMEOUT;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
 
     kcp_conn->nodelay = 0;      // 关闭nodelay
@@ -347,6 +346,12 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->mtu_probe_ctx->mtu_last = ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
     kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
+
+    kcp_conn->ping_ctx = (ping_ctx_t *)malloc(sizeof(ping_ctx_t));
+    memset(kcp_conn->ping_ctx, 0, sizeof(ping_ctx_t));
+    kcp_conn->ping_ctx->keepalive_timeout = DEFAULT_KEEPALIVE_TIMEOUT;
+    kcp_conn->ping_ctx->keepalive_interval = DEFAULT_KEEPALIVE_INTERVAL;
+    kcp_conn->ping_ctx->keepalive_retries = DEFAULT_KEEPALIVE_RETRIES;
 
     kcp_conn->read_cb = on_kcp_read_event;
     kcp_conn->write_cb = on_kcp_write_event;
@@ -486,9 +491,25 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         kcp_conn->rmt_wnd = kcp_header->wnd;
         break;
     case KCP_CMD_PING:
+        /*
+         * @note ping包由server发送, client接收
+         * 故, keepalive_sn在serve侧是记录的发送的随机序列, 在client侧记录是server发送的ping包的sn
+         * 用以响应ping包
+         */
+        kcp_conn->ping_ctx->keepalive_packet_ts = timestamp;
+        kcp_conn->ping_ctx->keepalive_sn = kcp_header->ping_data.sn;
         kcp_conn->probe |= KCP_PING_RECV;
         break;
-    case KCP_CMD_PONG:
+    case KCP_CMD_PONG: // 计算RTT
+        if (kcp_conn->ping_ctx->keepalive_sn == kcp_header->ping_data.sn) {
+            uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
+                           (kcp_header->ping_data.ping_ts - kcp_header->ping_data.packet_ts);
+            kcp_conn->ping_ctx->keepalive_rtt = rtt;
+            kcp_conn->ping_ctx->keepalive_sn = 0;
+            kcp_conn->ping_ctx->keepalive_packet_ts = 0;
+            kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
+            kcp_conn->ping_ctx->keepalive_xretries = 0;
+        }
         break;
     case KCP_CMD_MTU_PROBE:
         break;
