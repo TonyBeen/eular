@@ -76,12 +76,14 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         header.cmd = KCP_CMD_MTU_PROBE;
         header.frg = 0;
         header.wnd = 0;
-        header.packet_data.ts = kcp_time_monotonic_ms();
+        header.packet_data.ts = kcp_time_monotonic_us();
         header.packet_data.sn = header.packet_data.ts;
         probe_ctx->prev_sn = header.packet_data.sn;
         header.packet_data.una = 0;
         header.packet_data.len = data_length;
         header.packet_data.data = probe_ctx->probe_buf + KCP_HEADER_SIZE;
+
+        probe_ctx->hash = XXH64(header.packet_data.data, header.packet_data.len, 0);
 
         char *buffer_offset = probe_ctx->probe_buf;
         *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
