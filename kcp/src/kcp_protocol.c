@@ -84,7 +84,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 
             // NOTE 服务端开启MTU后, 客户端无须开启
             kcp_connection->need_write_timer_event = true;
-            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 1);
         } else {
             send_rst = true;
         }
@@ -393,6 +392,16 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         kcp_conn->syn_timer_event = NULL;
     }
 
+    // 清理SYN包
+    if (!list_empty(&kcp_conn->kcp_proto_header_list)) {
+        kcp_proto_header_t *pos = NULL;
+        kcp_proto_header_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->kcp_proto_header_list, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
     free(kcp_conn);
 }
 
@@ -568,7 +577,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             bool found = false;
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
-            list_for_each_entry_safe(pos, next, &kcp_connection->node_list, node_list) {
+            list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
                 if (pos->syn_data.rand_sn == syn_packet->packet_sn) { // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
@@ -610,22 +619,18 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                         }
 
                         if (kcp_connection->state == KCP_STATE_SYN_SENT) {
+                            list_del_init(&pos->node_list); // 其余的由server发送SYN包来删除或者destroy的时候删除
+                            free(pos);
+
                             kcp_connection->state = KCP_STATE_CONNECTED;
                             status = true;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->need_write_timer_event = true;
+                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
                     }
 
-                    found = true;
                     break;
-                }
-            }
-
-            if (found) {
-                list_for_each_entry_safe(pos, next, &kcp_connection->node_list, node_list) {
-                    list_del_init(&pos->node_list);
-                    free(pos);
                 }
             }
         }
