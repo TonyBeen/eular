@@ -30,7 +30,9 @@ int32_t kcp_get_localhost_mss(bool ipv6);
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry);
 
-int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, size_t len);
+int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+
+int32_t kcp_mtu_ack_received(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
 
 /**
  * @brief 当收到 ICMP Fragmentation Needed 错误时，调用此函数处理

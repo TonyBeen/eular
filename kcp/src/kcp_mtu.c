@@ -4,6 +4,8 @@
 
 #include <event2/event.h>
 
+#include <xxhash.h>
+
 #include "kcp_error.h"
 #include "kcp_time.h"
 #include "kcp_net_utils.h"
@@ -52,6 +54,8 @@ int32_t kcp_get_localhost_mss(bool ipv6)
     }
 }
 
+static void mtu_probe_update(kcp_connection_t *kcp_conn);
+
 static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 {
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
@@ -97,8 +101,15 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.len);
         buffer_offset += 4;
 
-        int32_t status = kcp_send_packet(kcp_conn, probe_ctx->probe_buf, KCP_HEADER_SIZE + data_length);
-        if (status == NO_ERROR) {
+        struct iovec iov[5];
+        int32_t count = kcp_conn->mtu_probe_ctx->retries < 5 ? kcp_conn->mtu_probe_ctx->retries : 5;
+        for (int32_t i = 0; count; ++i) {
+            iov[i].iov_base = probe_ctx->probe_buf;
+            iov[i].iov_len = KCP_HEADER_SIZE + data_length;
+        }
+
+        int32_t status = kcp_send_packet(kcp_conn, iov, count);
+        if (status == count) {
             break;
         }
 
@@ -119,23 +130,19 @@ static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
         return;
     }
 
-    if (probe_ctx->retries == 0) {
-        evtimer_del(probe_ctx->probe_timeout_event);
-        return;
-    }
-
-    probe_ctx->retries--;
-
-    kcp_send_mtu_probe_packet(kcp_conn);
-    struct timeval tv = {probe_ctx->timeout / 1000, (probe_ctx->timeout % 1000) * 1000};
-    evtimer_add(probe_ctx->probe_timeout_event, &tv);
+    --probe_ctx->mtu_ubound;
+    mtu_probe_update(kcp_conn);
 }
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry)
 {
+    if (timeout == 0) {
+        timeout = 2 * kcp_conn->rx_srtt;
+    }
+
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     kcp_conn->mtu_probe_ctx = probe_ctx;
-    probe_ctx->mtu_lbound = probe_ctx->mtu_last; // 下一次探测从上一次的MTU最小值开始
+    probe_ctx->mtu_lbound = probe_ctx->mtu_current; // 下一次探测从上一次的MTU最小值开始
     probe_ctx->mtu_ubound = ETHERNET_MTU;
     probe_ctx->timeout = timeout;
     probe_ctx->retries = retry;
@@ -153,10 +160,54 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
     return evtimer_add(probe_ctx->probe_timeout_event, &tv);
 }
 
-int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const void *buffer, size_t len)
+int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
+{
+    uint64_t hash = 0;
+    kcp_proto_header_t mtu_ack_header;
+    mtu_ack_header.conv = kcp_header->conv;
+    mtu_ack_header.cmd = KCP_CMD_MTU_ACK;
+    mtu_ack_header.frg = 0;
+    mtu_ack_header.wnd = 0;
+    mtu_ack_header.packet_data.ts = timestamp;
+    mtu_ack_header.packet_data.sn = kcp_header->packet_data.sn;
+    mtu_ack_header.packet_data.una = 0;
+    mtu_ack_header.packet_data.len = sizeof(uint64_t);
+    mtu_ack_header.packet_data.data = (char *)&hash;
+    hash = XXH64(kcp_header->packet_data.data, kcp_header->packet_data.len, 0);
+    hash = htole64(hash);
+
+    char buffer[KCP_HEADER_SIZE + sizeof(uint64_t)];
+    kcp_proto_header_encode(&mtu_ack_header, buffer, sizeof(buffer));
+    struct iovec iov[3];
+    for (int32_t i = 0; i < 3; ++i) {
+        iov[i].iov_base = buffer;
+        iov[i].iov_len = sizeof(buffer);
+    }
+
+    kcp_send_packet(kcp_conn, iov, 3);
+}
+
+int32_t kcp_mtu_ack_received(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
-    evtimer_del(probe_ctx->probe_timeout_event);
+    if (kcp_header->packet_data.sn != probe_ctx->prev_sn) {
+        return NO_ERROR;
+    }
+
+    uint64_t hash = le64toh(*(uint64_t *)kcp_header->packet_data.data);
+    if (hash != probe_ctx->hash) {
+        return NO_ERROR;
+    }
+
+    if (probe_ctx->mtu_lbound >= probe_ctx->mtu_ubound) {
+        if (kcp_conn->mtu_probe_ctx->on_probe_completed != NULL) {
+            kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_current, NO_ERROR);
+        }
+        return;
+    }
+
+    probe_ctx->mtu_lbound = probe_ctx->mtu_current + 1;
+    mtu_probe_update(kcp_conn);
 }
 
 /////////ICMP/////////
@@ -188,18 +239,18 @@ static void mtu_probe_update(kcp_connection_t *kcp_conn)
     assert(probe_ctx->mtu_lbound <= probe_ctx->mtu_ubound);
 
     // 二分法
-    probe_ctx->mtu_last = (probe_ctx->mtu_lbound + probe_ctx->mtu_ubound) / 2;
+    probe_ctx->mtu_current = (probe_ctx->mtu_lbound + probe_ctx->mtu_ubound) / 2;
 
     // 如果二者相近, 则认为找到了最佳的MTU
     if (probe_ctx->mtu_ubound - probe_ctx->mtu_lbound <= 16) {
-        probe_ctx->mtu_last = probe_ctx->mtu_lbound;
+        probe_ctx->mtu_current = probe_ctx->mtu_lbound;
         probe_ctx->mtu_ubound = probe_ctx->mtu_lbound;
 
         // 结束探测
         event_del(probe_ctx->probe_timeout_event);
 
         if (kcp_conn->mtu_probe_ctx->on_probe_completed != NULL) {
-            kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_last, NO_ERROR);
+            kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_current, NO_ERROR);
         }
     } else {
         kcp_mtu_probe(kcp_conn, probe_ctx->timeout, probe_ctx->retries);
@@ -216,12 +267,12 @@ void kcp_process_icmp_fragmentation(struct KcpContext *kcp_ctx, const void *buff
     if (next_hop_mtu >= 576 && next_hop_mtu < 0x2000) {
         kcp_conn->mtu_probe_ctx->mtu_ubound = MIN(next_hop_mtu, kcp_conn->mtu_probe_ctx->mtu_ubound);
         mtu_probe_update(kcp_conn);
-        // this is something of a speecial case, where we don't set mtu_last
+        // this is something of a speecial case, where we don't set mtu_current
         // to the value in between the floor and the ceiling. We can update the
         // floor, because there might be more network segments after the one
         // that sent this ICMP with smaller MTUs. But we want to test this
         // MTU size first. If the next probe gets through, mtu_floor is updated
-        kcp_conn->mtu_probe_ctx->mtu_last = kcp_conn->mtu_probe_ctx->mtu_ubound;
+        kcp_conn->mtu_probe_ctx->mtu_current = kcp_conn->mtu_probe_ctx->mtu_ubound;
     } else {
         // Otherwise, binary search. At this point we don't actually know
         // what size the packet that failed was, and apparently we can't

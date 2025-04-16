@@ -511,10 +511,10 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
             kcp_conn->ping_ctx->keepalive_xretries = 0;
         }
         break;
-    case KCP_CMD_MTU_PROBE:
-        break;
-    case KCP_CMD_MTU_ACK:
-        break;
+    case KCP_CMD_MTU_PROBE: // NOTE client发送的MTU探测包
+        return kcp_mtu_probe_received(kcp_conn, kcp_header, timestamp);
+    case KCP_CMD_MTU_ACK: // NOTE server响应的MTU探测包
+        return kcp_mtu_ack_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_FIN:
         break;
     case KCP_CMD_RST:

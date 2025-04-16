@@ -269,12 +269,14 @@ typedef struct KcpMtuProbeCtx {
     struct event*           probe_timeout_event;    // MTU探测超时事件
     on_probe_completed_t    on_probe_completed;     // MTU探测完成回调
     on_probe_response_t     on_probe_response;      // MTU响应回调, 用以下一步探测
-    uint32_t                mtu_last;               // 最佳MTU
+    uint32_t                mtu_best;               // 最佳MTU
+    uint32_t                mtu_current;            // 当前MTU
     uint32_t                mtu_lbound;             // MTU下限
     uint32_t                mtu_ubound;             // MTU上限
     uint32_t                timeout;                // 超时时间
     uint16_t                retries;                // 重试次数
     uint32_t                prev_sn;                // 上一个序号
+    uint64_t                hash;                   // hash值
     char*                   probe_buf;              // 探测数据
 } mtu_probe_ctx_t;
 
