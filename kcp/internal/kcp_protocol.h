@@ -59,10 +59,10 @@ typedef struct KcpProtoHeader {
 
     union { // NOTE 用于在三次握手阶段建立连接计算rtt
         uint64_t    packet_ts;  // 接收此packet的时间戳
-        uint64_t    syn_ts;     // 发送syn的时间戳
+        uint64_t    ts;         // 发送当前packet的时间戳
         uint32_t    packet_sn;  // 包序列
         uint32_t    rand_sn;    // 随机序列
-    } syn_data;
+    } syn_fin_data;
 
     union {
         uint64_t    packet_ts;  // 接收此packet的时间戳
@@ -236,7 +236,7 @@ typedef struct KcpSYNNode {
     uint32_t            rand_sn;    // 本机发送的sn
     uint32_t            packet_sn;  // 对端sn
     uint64_t            packet_ts;  // 对端时间戳
-    uint64_t            syn_ts;     // 发送syn的时间戳
+    uint64_t            ts;     // 发送syn的时间戳
     sockaddr_t          remote_host;
 } kcp_syn_node_t;
 

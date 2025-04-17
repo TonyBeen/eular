@@ -20,6 +20,7 @@
 
 static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
 static int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
@@ -222,7 +223,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     case KCP_STATE_SYN_SENT: // client
     case KCP_STATE_SYN_RECEIVED: { // server
         kcp_proto_header_t *kcp_header_last = list_last_entry(&kcp_connection->node_list, kcp_proto_header_t, node_list);
-        kcp_header_last->syn_data.syn_ts = kcp_time_monotonic_us(); // 由于EAGAIN错误不能算到rtt中, 故只更新发送时间戳
+        kcp_header_last->syn_fin_data.ts = kcp_time_monotonic_us(); // 由于EAGAIN错误不能算到rtt中, 故只更新发送时间戳
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_header_last, buffer, KCP_HEADER_SIZE);
@@ -485,6 +486,13 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     return (KCP_HEADER_SIZE + lengeth);
 }
 
+/**
+ * @brief 连接状态下收包回调
+ * 
+ * @param kcp_conn 
+ * @param kcp_header 
+ * @return int32_t 
+ */
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header)
 {
     uint64_t timestamp = kcp_time_monotonic_us();
@@ -525,7 +533,7 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
     case KCP_CMD_MTU_ACK: // NOTE server响应的MTU探测包
         return kcp_mtu_ack_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_FIN:
-        break;
+        return on_kcp_fin_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_RST:
         break;
     default:
@@ -578,12 +586,13 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
-                if (pos->syn_data.rand_sn == syn_packet->packet_sn) { // 检验发送的sn与server响应的sn是否一致
+                if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
+                    // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
 
                     uint64_t current_ts = kcp_time_monotonic_us();
-                    kcp_connection->rx_srtt = (current_ts - pos->syn_data.syn_ts) - (syn_packet->syn_ts - syn_packet->packet_ts);
+                    kcp_connection->rx_srtt = (current_ts - pos->syn_fin_data.ts) - (syn_packet->ts - syn_packet->packet_ts);
                     kcp_connection->rx_rttval = kcp_connection->rx_srtt / 2;
 
                     kcp_proto_header_t kcp_header;
@@ -653,6 +662,10 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
 static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
+    if (kcp_conn->state == KCP_STATE_DISCONNECTED) {
+        return NO_ERROR;
+    }
+
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
     list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
@@ -832,4 +845,74 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     }
 
     return NO_ERROR;
+}
+
+int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
+{
+    assert(kcp_conn->state == KCP_STATE_CONNECTED);
+
+    // 1、响应FIN包, 修改状态
+    kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+    kcp_fin_header->conv = kcp_conn->conv;
+    kcp_fin_header->cmd = KCP_CMD_FIN;
+    kcp_fin_header->frg = 0;
+    kcp_fin_header->wnd = 0;
+    kcp_fin_header->packet_data.ts = timestamp;
+    kcp_fin_header->packet_data.sn = kcp_fin_header->packet_data.ts;
+    kcp_fin_header->packet_data.una = kcp_header->packet_data.sn;
+    kcp_fin_header->packet_data.len = 0;
+    kcp_fin_header->packet_data.data = NULL;
+
+    list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
+
+    char buffer[KCP_HEADER_SIZE] = {0};
+    kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
+    struct iovec data[1];
+    data[0].iov_base = buffer;
+    data[0].iov_len = KCP_HEADER_SIZE;
+
+    // 发送失败或丢包靠超时重传
+    kcp_send_packet(kcp_conn, &data, sizeof(data));
+    kcp_conn->state = KCP_STATE_FIN_RECEIVED;
+
+    // 2、创建超时定时器
+
+
+    // switch (kcp_conn->state) {
+    // case KCP_STATE_CONNECTED: {
+    //     if (kcp_header->cmd == KCP_CMD_FIN) { // 对端未收到FIN包
+    //         kcp_proto_header_t kcp_ack_header;
+    //         kcp_ack_header.conv = kcp_conn->conv;
+    //         kcp_ack_header.cmd = KCP_CMD_ACK;
+    //         kcp_ack_header.frg = 0;
+    //         kcp_ack_header.wnd = 0;
+    //         kcp_ack_header.packet_data.ts = kcp_time_monotonic_us();
+    //         kcp_ack_header.packet_data.sn = kcp_header->packet_data.sn;
+    //         kcp_ack_header.packet_data.una = 0;
+    //         kcp_ack_header.packet_data.len = 0;
+    //         kcp_ack_header.packet_data.data = NULL;
+
+    //         kcp_ack_header.ack_data.packet_ts = kcp_header->packet_data.ts;
+    //         kcp_ack_header.ack_data.ack_ts = kcp_time_monotonic_us();
+    //         kcp_ack_header.ack_data.sn = kcp_header->packet_data.sn;
+    //         kcp_ack_header.ack_data.una = 0;
+
+    //         char buffer[KCP_HEADER_SIZE] = {0};
+    //         kcp_proto_header_encode(&kcp_ack_header, buffer, KCP_HEADER_SIZE);
+    //         struct iovec data[1];
+    //         data[0].iov_base = buffer;
+    //         data[0].iov_len = KCP_HEADER_SIZE;
+
+    //         kcp_send_packet(kcp_conn, &data, sizeof(data));
+    //         kcp_conn->state = KCP_STATE_FIN_RECEIVED;
+    //     } else if (kcp_header->cmd == KCP_CMD_ACK) {
+    //         kcp_conn->state = KCP_STATE_DISCONNECTED;
+    //         if (kcp_conn->kcp_ctx->callback.on_closed) {
+    //             kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, NO_ERROR);
+    //         }
+    //     } else if (kcp_header->cmd == KCP_CMD_RST) {
+    //         kcp_conn->state = KCP_STATE_DISCONNECTED;
+    //         if (kcp_conn->kcp_ctx->callback.on_closed) {
+    //             kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, CONNECTION_RESET);
+    //         }
 }

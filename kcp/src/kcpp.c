@@ -45,11 +45,11 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
 
             syn_node->conv = kcp_header.conv;
             memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
-            syn_node->packet_sn = kcp_header.syn_data.packet_sn;
-            syn_node->rand_sn = kcp_header.syn_data.rand_sn;
-            syn_node->packet_ts = kcp_header.syn_data.packet_ts;
-            syn_node->syn_ts = kcp_header.syn_data.syn_ts;
-            list_add_tail(&kcp_ctx->syn_queue, syn_node);
+            syn_node->packet_sn = kcp_header.syn_fin_data.packet_sn;
+            syn_node->rand_sn = kcp_header.syn_fin_data.rand_sn;
+            syn_node->packet_ts = kcp_header.syn_fin_data.packet_ts;
+            syn_node->ts = kcp_header.syn_fin_data.ts;
+            list_add_tail(syn_node, &kcp_ctx->syn_queue);
 
             on_kcp_syn_received(kcp_ctx, syn_node);
         } else if (kcp_connection == NULL) { // 发送rst
@@ -492,11 +492,11 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
         }
         memcpy(kcp_syn_header, kcp_header_last, sizeof(kcp_proto_header_t));
         list_init(&kcp_syn_header->node_list);
-        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_syn_header);
+        list_add_tail(kcp_syn_header, &kcp_connection->kcp_proto_header_list);
 
-        kcp_syn_header->syn_data.packet_ts = kcp_time_monotonic_us();
-        kcp_syn_header->syn_data.syn_ts = kcp_syn_header->syn_data.packet_ts;
-        kcp_syn_header->syn_data.rand_sn++;
+        kcp_syn_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
+        kcp_syn_header->syn_fin_data.ts = kcp_syn_header->syn_fin_data.packet_ts;
+        kcp_syn_header->syn_fin_data.rand_sn++;
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_syn_header, buffer, KCP_HEADER_SIZE);
@@ -588,12 +588,12 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeou
         kcp_header.cmd = KCP_CMD_SYN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.syn_data.packet_ts = kcp_time_monotonic_us();
-        kcp_header.syn_data.syn_ts = kcp_header.syn_data.packet_ts;
-        kcp_header.syn_data.packet_sn = syn_packet->rand_sn; // client发送的序列
-        kcp_header.syn_data.rand_sn = XXH32(&kcp_header.syn_data.syn_ts, sizeof(kcp_header.syn_data.syn_ts), 0); // server响应的序列
+        kcp_header.syn_fin_data.packet_ts = kcp_time_monotonic_us();
+        kcp_header.syn_fin_data.ts = kcp_header.syn_fin_data.packet_ts;
+        kcp_header.syn_fin_data.packet_sn = syn_packet->rand_sn; // client发送的序列
+        kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0); // server响应的序列
         memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
-        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_syn_header);
+        list_add_tail(kcp_syn_header, &kcp_connection->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
@@ -640,11 +640,11 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         kcp_header->cmd = KCP_CMD_SYN;
         kcp_header->frg = 0;
         kcp_header->wnd = 0;
-        kcp_header->syn_data.packet_ts = 0;
-        kcp_header->syn_data.syn_ts = kcp_time_monotonic_us();
-        kcp_header->syn_data.packet_sn = 0;
-        kcp_header->syn_data.rand_sn = XXH32(&kcp_header->syn_data.syn_ts, sizeof(kcp_header->syn_data.syn_ts), 0);
-        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_header);
+        kcp_header->syn_fin_data.packet_ts = 0;
+        kcp_header->syn_fin_data.ts = kcp_time_monotonic_us();
+        kcp_header->syn_fin_data.packet_sn = 0;
+        kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
+        list_add_tail(kcp_header, &kcp_connection->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
@@ -710,11 +710,11 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     kcp_header->cmd = KCP_CMD_SYN;
     kcp_header->frg = 0;
     kcp_header->wnd = 0;
-    kcp_header->syn_data.packet_ts = 0;
-    kcp_header->syn_data.syn_ts = kcp_time_monotonic_us();
-    kcp_header->syn_data.packet_sn = 0;
-    kcp_header->syn_data.rand_sn = XXH32(&kcp_header->syn_data.syn_ts, sizeof(kcp_header->syn_data.syn_ts), 0);
-    list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_header);
+    kcp_header->syn_fin_data.packet_ts = 0;
+    kcp_header->syn_fin_data.ts = kcp_time_monotonic_us();
+    kcp_header->syn_fin_data.packet_sn = 0;
+    kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
+    list_add_tail(kcp_header, &kcp_connection->kcp_proto_header_list);
 
     char buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
@@ -824,7 +824,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_header.packet_data.len = 0;
         kcp_header.packet_data.data = NULL;
         memcpy(kcp_fin_header, &kcp_header, sizeof(kcp_proto_header_t));
-        list_add_tail(&kcp_connection->kcp_proto_header_list, kcp_fin_header);
+        list_add_tail(kcp_fin_header, &kcp_connection->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
