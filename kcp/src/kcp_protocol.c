@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <assert.h>
+#include <event2/event.h>
 
 #include "kcp_config.h"
 #include "kcp_endian.h"
@@ -83,7 +84,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                 kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
             }
 
-            // NOTE 服务端开启MTU后, 客户端无须开启
             kcp_connection->need_write_timer_event = true;
         } else {
             send_rst = true;
@@ -146,11 +146,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
             }
-        } else if (kcp_header->cmd == KCP_CMD_RST) {
-            kcp_connection->state = KCP_STATE_DISCONNECTED;
-            if (kcp_connection->kcp_ctx->callback.on_closed) {
-                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, CONNECTION_RESET);
-            }
         }
         break;
     }
@@ -202,6 +197,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 // KCP 写超时回调
 static int32_t on_kcp_connection_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
+    // TODO 完善写超时回调
     return NO_ERROR;
 }
 
@@ -534,8 +530,8 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         return kcp_mtu_ack_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_FIN:
         return on_kcp_fin_pcaket(kcp_conn, kcp_header, timestamp);
-    case KCP_CMD_RST:
-        break;
+    // case KCP_CMD_RST:
+    //     break;
     default:
         break;
     }
@@ -847,6 +843,53 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     return NO_ERROR;
 }
 
+static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
+{
+    kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
+    assert(kcp_conn->state == KCP_STATE_FIN_RECEIVED);
+
+    if (kcp_conn->fin_retries--) {
+        kcp_proto_header_t *pos = NULL;
+        kcp_proto_header_t *next = NULL;
+        uint32_t packet_sn = 0;
+        list_for_each_entry_safe(pos, next, &kcp_conn->kcp_proto_header_list, node_list) {
+            if (pos->cmd == KCP_CMD_FIN) {
+                packet_sn = pos->syn_fin_data.packet_sn;
+                break;
+            }
+        }
+
+        kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        kcp_fin_header->conv = kcp_conn->conv;
+        kcp_fin_header->cmd = KCP_CMD_FIN;
+        kcp_fin_header->frg = 0;
+        kcp_fin_header->wnd = 0;
+        kcp_fin_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
+        kcp_fin_header->syn_fin_data.ts = kcp_fin_header->syn_fin_data.packet_ts;
+        kcp_fin_header->syn_fin_data.packet_sn = packet_sn;
+        kcp_fin_header->syn_fin_data.rand_sn = kcp_fin_header->syn_fin_data.packet_ts;
+
+        list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
+
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
+        struct iovec data[1];
+        data[0].iov_base = buffer;
+        data[0].iov_len = KCP_HEADER_SIZE;
+        kcp_send_packet(kcp_conn, &data, sizeof(data));
+
+        evtimer_del(kcp_conn->fin_timer_event);
+        uint32_t timeout_ms = kcp_conn->receive_timeout;
+        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        evtimer_add(kcp_conn->fin_timer_event, &tv);
+        return;
+    }
+
+    if (kcp_conn->kcp_ctx->callback.on_closed) {
+        kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, TIMED_OUT);
+    }
+}
+
 int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
     assert(kcp_conn->state == KCP_STATE_CONNECTED);
@@ -857,11 +900,10 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     kcp_fin_header->cmd = KCP_CMD_FIN;
     kcp_fin_header->frg = 0;
     kcp_fin_header->wnd = 0;
-    kcp_fin_header->packet_data.ts = timestamp;
-    kcp_fin_header->packet_data.sn = kcp_fin_header->packet_data.ts;
-    kcp_fin_header->packet_data.una = kcp_header->packet_data.sn;
-    kcp_fin_header->packet_data.len = 0;
-    kcp_fin_header->packet_data.data = NULL;
+    kcp_fin_header->syn_fin_data.packet_ts = timestamp;
+    kcp_fin_header->syn_fin_data.ts = timestamp;
+    kcp_fin_header->syn_fin_data.packet_sn = kcp_header->packet_data.sn;
+    kcp_fin_header->syn_fin_data.rand_sn = timestamp;
 
     list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
 
@@ -875,44 +917,13 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     kcp_send_packet(kcp_conn, &data, sizeof(data));
     kcp_conn->state = KCP_STATE_FIN_RECEIVED;
 
-    // 2、创建超时定时器
-
-
-    // switch (kcp_conn->state) {
-    // case KCP_STATE_CONNECTED: {
-    //     if (kcp_header->cmd == KCP_CMD_FIN) { // 对端未收到FIN包
-    //         kcp_proto_header_t kcp_ack_header;
-    //         kcp_ack_header.conv = kcp_conn->conv;
-    //         kcp_ack_header.cmd = KCP_CMD_ACK;
-    //         kcp_ack_header.frg = 0;
-    //         kcp_ack_header.wnd = 0;
-    //         kcp_ack_header.packet_data.ts = kcp_time_monotonic_us();
-    //         kcp_ack_header.packet_data.sn = kcp_header->packet_data.sn;
-    //         kcp_ack_header.packet_data.una = 0;
-    //         kcp_ack_header.packet_data.len = 0;
-    //         kcp_ack_header.packet_data.data = NULL;
-
-    //         kcp_ack_header.ack_data.packet_ts = kcp_header->packet_data.ts;
-    //         kcp_ack_header.ack_data.ack_ts = kcp_time_monotonic_us();
-    //         kcp_ack_header.ack_data.sn = kcp_header->packet_data.sn;
-    //         kcp_ack_header.ack_data.una = 0;
-
-    //         char buffer[KCP_HEADER_SIZE] = {0};
-    //         kcp_proto_header_encode(&kcp_ack_header, buffer, KCP_HEADER_SIZE);
-    //         struct iovec data[1];
-    //         data[0].iov_base = buffer;
-    //         data[0].iov_len = KCP_HEADER_SIZE;
-
-    //         kcp_send_packet(kcp_conn, &data, sizeof(data));
-    //         kcp_conn->state = KCP_STATE_FIN_RECEIVED;
-    //     } else if (kcp_header->cmd == KCP_CMD_ACK) {
-    //         kcp_conn->state = KCP_STATE_DISCONNECTED;
-    //         if (kcp_conn->kcp_ctx->callback.on_closed) {
-    //             kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, NO_ERROR);
-    //         }
-    //     } else if (kcp_header->cmd == KCP_CMD_RST) {
-    //         kcp_conn->state = KCP_STATE_DISCONNECTED;
-    //         if (kcp_conn->kcp_ctx->callback.on_closed) {
-    //             kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, CONNECTION_RESET);
-    //         }
+    if (kcp_conn->fin_timer_event == NULL) {
+        kcp_conn->fin_timer_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, on_fin_packet_timeout_cb, kcp_conn);
+        if (kcp_conn->fin_timer_event == NULL) {
+            return NO_MEMORY;
+        }
+    }
+    uint32_t timeout_ms = kcp_conn->receive_timeout;
+    struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    evtimer_add(kcp_conn->fin_timer_event, &tv);
 }
