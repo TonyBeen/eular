@@ -112,12 +112,12 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
 
-            kcp_send_packet(kcp_connection, &data, sizeof(data));
+            kcp_send_packet(kcp_connection, &data, 1);
             kcp_connection->state = KCP_STATE_DISCONNECTED;
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
             }
-        } else 
+        }
         break;
     }
     case KCP_STATE_FIN_RECEIVED: {
@@ -140,7 +140,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
 
-            kcp_send_packet(kcp_connection, &data, sizeof(data));
+            kcp_send_packet(kcp_connection, &data, 1);
         } else if (kcp_header->cmd == KCP_CMD_ACK) {
             kcp_connection->state = KCP_STATE_DISCONNECTED;
             if (kcp_connection->kcp_ctx->callback.on_closed) {
@@ -170,7 +170,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_connection, &data, sizeof(data));
+        kcp_send_packet(kcp_connection, &data, 1);
 
         kcp_connection->state = KCP_STATE_DISCONNECTED;
 
@@ -197,6 +197,10 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 // KCP 写超时回调
 static int32_t on_kcp_connection_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
+    if (kcp_connection->state != KCP_STATE_CONNECTED) {
+        return NO_ERROR;
+    }
+
     // TODO 完善写超时回调
     return NO_ERROR;
 }
@@ -226,7 +230,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
         if (status != 1) {
             int32_t code = get_last_errno();
             if (code == EAGAIN || code == EWOULDBLOCK) {
@@ -243,8 +247,8 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         break;
     }
     case KCP_STATE_CONNECTED: {
-        // TODO 正常发送数据
-        break;
+        timestamp = kcp_time_monotonic_us();
+        return on_kcp_connection_timeout(kcp_connection, timestamp);
     }
     case KCP_STATE_FIN_SENT: // EAGAIN 重传
     case KCP_STATE_FIN_RECEIVED: {
@@ -255,7 +259,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         struct iovec data[1];
         data->iov_base = buffer;
         data->iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
         if (status != 1) {
             int32_t code = get_last_errno();
             if (code == EAGAIN || code == EWOULDBLOCK) {
@@ -608,7 +612,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     data[0].iov_base = buffer;
                     data[0].iov_len = KCP_HEADER_SIZE;
 
-                    if (kcp_send_packet(kcp_connection, &data, sizeof(data)) < 0) {
+                    if (kcp_send_packet(kcp_connection, &data, 1) < 0) {
                         // NOTE 此处不会触发 EAGAIN
                         int32_t code = get_last_errno();
                         KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
@@ -876,7 +880,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_conn, &data, sizeof(data));
+        kcp_send_packet(kcp_conn, &data, 1);
 
         evtimer_del(kcp_conn->fin_timer_event);
         uint32_t timeout_ms = kcp_conn->receive_timeout;
@@ -914,7 +918,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     data[0].iov_len = KCP_HEADER_SIZE;
 
     // 发送失败或丢包靠超时重传
-    kcp_send_packet(kcp_conn, &data, sizeof(data));
+    kcp_send_packet(kcp_conn, &data, 1);
     kcp_conn->state = KCP_STATE_FIN_RECEIVED;
 
     if (kcp_conn->fin_timer_event == NULL) {

@@ -503,7 +503,7 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
         if (status <= 0) {
             // Linux EAGAIN, Windows EWOULDBLOCK (WSAEWOULDBLOCK)
             if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
@@ -651,7 +651,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
         if (status <= 0) {
             evtimer_free(kcp_connection->syn_timer_event);
             kcp_connection->syn_timer_event = NULL;
@@ -721,7 +721,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     struct iovec data[1];
     data[0].iov_base = buffer;
     data[0].iov_len = KCP_HEADER_SIZE;
-    int32_t status = kcp_send_packet(kcp_connection, &data, sizeof(data));
+    int32_t status = kcp_send_packet(kcp_connection, &data, 1);
     if (status <= 0) {
         return status;
     }
