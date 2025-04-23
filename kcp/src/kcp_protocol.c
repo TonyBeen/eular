@@ -201,6 +201,9 @@ static int32_t on_kcp_connection_timeout(struct KcpConnection *kcp_connection, u
         return NO_ERROR;
     }
 
+    // 1、回复ACK
+
+
     // TODO 完善写超时回调
     return NO_ERROR;
 }
@@ -469,6 +472,22 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->ack_data.una);
         buffer_offset += 4;
+    } else if (kcp_header->cmd == KCP_CMD_SYN || kcp_header->cmd == KCP_CMD_FIN) {
+        *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.packet_ts);
+        buffer_offset += 8;
+        *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.ts);
+        buffer_offset += 8;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.packet_sn);
+        buffer_offset += 4;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
+        buffer_offset += 4;
+    } else if (kcp_header->cmd == KCP_CMD_PING || kcp_header->cmd == KCP_CMD_PONG) {
+        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.packet_ts);
+        buffer_offset += 8;
+        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ping_ts);
+        buffer_offset += 8;
+        *(uint32_t *)buffer_offset = htole64(kcp_header->ping_data.sn);
+        buffer_offset += 8;
     } else {
         *(uint64_t *)buffer_offset = htole64(kcp_header->packet_data.ts);
         buffer_offset += 8;
