@@ -481,13 +481,6 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
         buffer_offset += 4;
-    } else if (kcp_header->cmd == KCP_CMD_PING || kcp_header->cmd == KCP_CMD_PONG) {
-        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.packet_ts);
-        buffer_offset += 8;
-        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ping_ts);
-        buffer_offset += 8;
-        *(uint32_t *)buffer_offset = htole64(kcp_header->ping_data.sn);
-        buffer_offset += 8;
     } else {
         *(uint64_t *)buffer_offset = htole64(kcp_header->packet_data.ts);
         buffer_offset += 8;
