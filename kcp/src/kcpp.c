@@ -923,12 +923,12 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
     list_init(&buffer_list);
     for (int32_t i = 0; i < fragmentation; ++i) {
         uint32_t packet_size  = (uint32_t)size > kcp_connection->mss ? kcp_connection->mss : (uint32_t)size;
-        kcp_segment_t *segment = kcp_segment_get(kcp_connection);
+        kcp_segment_t *segment = kcp_segment_send_get(kcp_connection);
         if (segment == NULL) {
             while (!list_empty(&buffer_list)) {
                 kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node_list);
                 list_del_init(&seg->node_list);
-                kcp_segment_put(kcp_connection, seg);
+                kcp_segment_send_put(kcp_connection, seg);
             }
 
             return NO_MEMORY;
@@ -969,7 +969,7 @@ void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_eve
 
 int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size)
 {
-    if (kcp_connection == NULL) {
+    if (kcp_connection == NULL || data == NULL || size == 0) {
         return INVALID_PARAM;
     }
 
@@ -981,8 +981,40 @@ int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size)
         return INVALID_STATE;
     }
 
-    if (list_empty(&kcp_connection->rcv_buf)) {
+    if (list_empty(&kcp_connection->rcv_queue)) {
         return OP_TRY_AGAIN;
     }
 
+    int32_t peek_size = 0;
+    kcp_segment_t *pos = NULL;
+    list_for_each_entry(pos, &kcp_connection->rcv_queue, node_list) {
+        peek_size += (int32_t)pos->len;
+    }
+
+    if (peek_size > (int32_t)size) {
+        return BUFFER_TOO_SMALL;
+    }
+
+    bool recover = false;
+    if (kcp_connection->nrcv_que >= kcp_connection->rcv_wnd) {
+        recover = true;
+    }
+
+    peek_size = 0;
+    kcp_segment_t *next = NULL;
+    char *buffer = (char *)data;
+    list_for_each_entry_safe(pos, next, &kcp_connection->rcv_queue, node_list) {
+        memcpy(buffer + peek_size, pos->data, pos->len);
+        peek_size += (int32_t)pos->len;
+
+        list_del_init(&pos->node_list);
+        kcp_segment_recv_put(kcp_connection, pos);
+        --kcp_connection->nrcv_que;
+    }
+
+    if (recover && kcp_connection->nrcv_que < kcp_connection->rcv_wnd) {
+        kcp_connection->probe |= KCP_ASK_TELL;
+    }
+
+    return peek_size;
 }

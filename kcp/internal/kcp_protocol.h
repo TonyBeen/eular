@@ -80,7 +80,9 @@ typedef struct KcpProtoHeader {
 
 /// @brief KCP报文段
 typedef struct KcpSengment {
-    struct list_head node_list;
+    struct list_head    node_list;
+    struct rb_node      node_rbtree;
+
     uint32_t conv;      // 会话ID
     uint32_t cmd;       // 命令
     uint32_t frg;       // 分片序号
@@ -159,9 +161,9 @@ typedef struct KcpConnection {
     uint32_t nrcv_buf;          // 接收缓存中的包数量
     uint32_t nsnd_buf;          // 发送缓存中的包数量
     uint32_t nsnd_buf_unused;   // 未使用的发送缓存数量
+    uint32_t nrcv_buf_unused;   // 未使用的接收队列数量
     uint32_t nrcv_que;          // 接收队列中的包数量
     uint32_t nsnd_que;          // 发送队列中的包数量
-    uint32_t nrcv_que_unused;   // 未使用的接收队列数量
 
     // packet 计数
     uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号
@@ -312,8 +314,11 @@ int32_t kcp_flush(kcp_connection_t *kcp_conn);
 
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 
-kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn);
-void kcp_segment_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment);
+kcp_segment_t *kcp_segment_send_get(kcp_connection_t *kcp_conn);
+void kcp_segment_send_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment);
+
+kcp_segment_t *kcp_segment_recv_get(kcp_connection_t *kcp_conn);
+void kcp_segment_recv_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment);
 
 EXTERN_C_END
 

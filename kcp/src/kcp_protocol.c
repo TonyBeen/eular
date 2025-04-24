@@ -415,9 +415,9 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->nrcv_buf = 0;
     kcp_conn->nsnd_buf = 0;
     kcp_conn->nsnd_buf_unused = 0;
+    kcp_conn->nrcv_buf_unused = 0;
     kcp_conn->nrcv_que = 0;
     kcp_conn->nsnd_que = 0;
-    kcp_conn->nrcv_que_unused = 0;
     kcp_conn->nsnd_pkt_next = 0;
     kcp_conn->ts_probe = 0;
     kcp_conn->probe_wait = 0;
@@ -1059,7 +1059,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     evtimer_add(kcp_conn->fin_timer_event, &tv);
 }
 
-kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn)
+kcp_segment_t *kcp_segment_send_get(kcp_connection_t *kcp_conn)
 {
     kcp_segment_t *kcp_segment = NULL;
     if (!list_empty(&kcp_conn->snd_buf_unused)) {
@@ -1076,15 +1076,38 @@ kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn)
     return kcp_segment;
 }
 
-void kcp_segment_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
+void kcp_segment_send_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
 {
-    if (segment == NULL) {
-        return;
-    }
-
     if (kcp_conn->nsnd_buf_unused < kcp_conn->snd_wnd) {
         list_add_tail(&segment->node_list, &kcp_conn->snd_buf_unused);
         ++kcp_conn->nsnd_buf_unused;
+    } else {
+        free(segment);
+    }
+}
+
+kcp_segment_t *kcp_segment_recv_get(kcp_connection_t *kcp_conn)
+{
+    kcp_segment_t *kcp_segment = NULL;
+    if (!list_empty(&kcp_conn->rcv_buf_unused)) {
+        kcp_segment = list_first_entry(&kcp_conn->rcv_buf_unused, kcp_segment_t, node_list);
+        list_del_init(&kcp_segment->node_list);
+        --kcp_conn->nrcv_buf_unused;
+    } else {
+        kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
+        if (kcp_segment != NULL) {
+            list_init(&kcp_segment->node_list);
+        }
+    }
+
+    return kcp_segment;
+}
+
+void kcp_segment_recv_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
+{
+    if (kcp_conn->nrcv_buf_unused < kcp_conn->rcv_wnd) {
+        list_add_tail(&segment->node_list, &kcp_conn->rcv_buf_unused);
+        ++kcp_conn->nrcv_buf_unused;
     } else {
         free(segment);
     }
