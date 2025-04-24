@@ -194,14 +194,121 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 }
 
+static int kcp_wnd_unused(struct KcpConnection *kcp_connection)
+{
+    if (kcp_connection->nrcv_buf < kcp_connection->rcv_wnd) {
+        return kcp_connection->rcv_wnd - kcp_connection->nrcv_buf;
+    }
+
+    return 0;
+}
+
+
 // KCP 写超时回调
-static int32_t on_kcp_connection_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
+static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
     if (kcp_connection->state != KCP_STATE_CONNECTED) {
         return NO_ERROR;
     }
 
-    // 1、回复ACK
+    if (kcp_connection->next_timeout > timestamp) {
+        // 如果当前时间戳小于下次超时时间戳, 则不处理
+        return NO_ERROR;
+    }
+
+    char *ptr = kcp_connection->buffer;
+    char buffer[KCP_HEADER_SIZE] = {0};
+    kcp_proto_header_t kcp_ack_header;
+    kcp_ack_header.conv = kcp_connection->conv;
+    kcp_ack_header.cmd = KCP_CMD_ACK;
+    kcp_ack_header.frg = 0;
+    kcp_ack_header.wnd = kcp_wnd_unused(kcp_connection);
+    kcp_ack_header.ack_data.una = kcp_connection->rcv_nxt;
+    {
+        // 1、回复ACK
+        kcp_ack_t *pos = NULL;
+        kcp_ack_t *next = NULL;
+        while (!list_empty(&kcp_connection->ack_item)) {
+            pos = list_first_entry(&kcp_connection->ack_item, kcp_ack_t, node);
+            kcp_ack_header.ack_data.packet_ts = pos->ts;
+            kcp_ack_header.ack_data.ack_ts = timestamp;
+            kcp_ack_header.ack_data.sn = pos->sn;
+
+            kcp_proto_header_encode(&kcp_ack_header, buffer, KCP_HEADER_SIZE);
+            memcpy(ptr, buffer, KCP_HEADER_SIZE);
+            ptr += KCP_HEADER_SIZE;
+            list_del_init(&pos->node);
+
+            if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
+                // 如果当前缓冲区大小超过了MTU, 则发送数据包
+                struct iovec data[1];
+                data[0].iov_base = buffer;
+                data[0].iov_len = ptr - buffer;
+
+                kcp_send_packet(kcp_connection, &data, 1);
+                ptr = kcp_connection->buffer; // 重置指针
+            }
+        }
+    }
+
+    if (kcp_connection->rmt_wnd == 0) {
+        if (kcp_connection->probe_wait == 0) {
+            kcp_connection->probe_wait = 1; // 开始探测
+            kcp_connection->ts_probe = timestamp + KCP_PROBE_INIT;
+        } else {
+            if (timestamp >= kcp_connection->ts_probe) {
+                if (kcp_connection->probe_wait < KCP_PROBE_INIT) {
+                    kcp_connection->ts_probe = timestamp + KCP_PROBE_INIT;
+                }
+                kcp_connection->probe_wait += kcp_connection->probe_wait / 2;
+                if (kcp_connection->probe_wait > KCP_PROBE_LIMIT) {
+                    kcp_connection->probe_wait = KCP_PROBE_LIMIT; // 最大探测时间
+                }
+                kcp_connection->ts_probe = timestamp + kcp_connection->probe_wait;
+                kcp_connection->probe |= KCP_ASK_SEND; // 设置探测标志
+            }
+        }
+    } else {
+        kcp_connection->ts_probe = 0;
+        kcp_connection->probe_wait = 0;
+    }
+
+    kcp_proto_header_t kcp_wask_header;
+    if (kcp_connection->probe & KCP_ASK_SEND) {
+        kcp_wask_header.cmd = KCP_CMD_WASK;
+        if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
+            struct iovec data[1];
+            data[0].iov_base = buffer;
+            data[0].iov_len = ptr - buffer;
+
+            kcp_send_packet(kcp_connection, &data, 1);
+            ptr = kcp_connection->buffer; // 重置指针
+        }
+        kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, buffer, KCP_HEADER_SIZE);
+        ptr += KCP_HEADER_SIZE;
+    }
+
+    if (kcp_connection->probe & KCP_ASK_TELL) {
+        kcp_wask_header.cmd = KCP_CMD_WINS;
+        if (ptr - kcp_connection->buffer + KCP_HEADER_SIZE > kcp_connection->mtu) {
+            struct iovec data[1];
+            data[0].iov_base = buffer;
+            data[0].iov_len = ptr - buffer;
+
+            kcp_send_packet(kcp_connection, &data, 1);
+            ptr = kcp_connection->buffer; // 重置指针
+        }
+        kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, buffer, KCP_HEADER_SIZE);
+        ptr += KCP_HEADER_SIZE;
+    }
+    kcp_connection->probe = 0; // 清除探测标志
+
+    int32_t cwnd = MIN(kcp_connection->snd_wnd, kcp_connection->rmt_wnd);
+    if (kcp_connection->nocwnd == 0) {
+        cwnd = MIN(cwnd, kcp_connection->cwnd);
+    }
 
 
     // TODO 完善写超时回调
@@ -217,7 +324,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     }
 
     if (timestamp > 0) {
-        return on_kcp_connection_timeout(kcp_connection, timestamp);
+        return on_kcp_write_timeout(kcp_connection, timestamp);
     }
 
     switch (kcp_connection->state) {
@@ -307,8 +414,11 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->ts_flush = IKCP_INTERVAL;
     kcp_conn->nrcv_buf = 0;
     kcp_conn->nsnd_buf = 0;
+    kcp_conn->nsnd_buf_unused = 0;
     kcp_conn->nrcv_que = 0;
     kcp_conn->nsnd_que = 0;
+    kcp_conn->nrcv_que_unused = 0;
+    kcp_conn->nsnd_pkt_next = 0;
     kcp_conn->ts_probe = 0;
     kcp_conn->probe_wait = 0;
 
@@ -738,6 +848,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         return NO_ERROR;
     }
 
+    // TODO 解决序号溢出导致的回环问题
     if (kcp_header->packet_data.sn < kcp_conn->rcv_nxt) { // 此包已被接收过
         return NO_ERROR;
     }
@@ -819,7 +930,11 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     } else { // 新包
         list_add_tail(&kcp_segment->node, &kcp_conn->rcv_buf);
     }
+
     ++kcp_conn->nrcv_buf;
+    if (kcp_segment->sn == kcp_conn->rcv_nxt) {
+        kcp_conn->rcv_nxt++;
+    }
 
     // 解析rcv_buf, 组成完整数据包
     kcp_segment_t *first = NULL;
@@ -942,4 +1057,35 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     uint32_t timeout_ms = kcp_conn->receive_timeout;
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     evtimer_add(kcp_conn->fin_timer_event, &tv);
+}
+
+kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn)
+{
+    kcp_segment_t *kcp_segment = NULL;
+    if (!list_empty(&kcp_conn->snd_buf_unused)) {
+        kcp_segment = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node);
+        list_del_init(&kcp_segment->node);
+        --kcp_conn->nsnd_buf_unused;
+    } else {
+        kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
+        if (kcp_segment != NULL) {
+            list_init(&kcp_segment->node);
+        }
+    }
+
+    return kcp_segment;
+}
+
+void kcp_segment_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
+{
+    if (segment == NULL) {
+        return;
+    }
+
+    if (kcp_conn->nsnd_buf_unused < kcp_conn->snd_wnd) {
+        list_add_tail(&segment->node, &kcp_conn->snd_buf_unused);
+        ++kcp_conn->nsnd_buf_unused;
+    } else {
+        free(segment);
+    }
 }

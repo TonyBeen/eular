@@ -45,7 +45,6 @@ static const uint32_t IKCP_RTO_NDL = 30;    // no delay min rto
 static const uint32_t IKCP_RTO_MIN = 100;   // normal min rto
 static const uint32_t IKCP_RTO_DEF = 200;
 
-static const uint32_t IKCP_ASK_SEND = 1;            // need to send IKCP_CMD_WASK
 static const uint32_t IKCP_WND_SND = 32;
 static const uint32_t IKCP_WND_RCV = 128;           // must >= max fragment size
 static const uint32_t IKCP_MTU_DEF = 1400;
@@ -55,16 +54,15 @@ static const uint32_t IKCP_OVERHEAD = 24;
 static const uint32_t IKCP_DEADLINK = 20;
 static const uint32_t IKCP_THRESH_INIT = 2;
 static const uint32_t IKCP_THRESH_MIN = 2;
-static const uint32_t IKCP_PROBE_INIT = 7000;       // 7 secs to probe window size
-static const uint32_t IKCP_PROBE_LIMIT = 120000;    // up to 120 secs to probe window
 
 /////////////////
 static const uint32_t   KCP_RTO_MAX     = 6000;     // ms
+static const uint32_t   KCP_ASK_SEND    = 0b0001;   // need to send IKCP_CMD_WASK
 static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
 static const uint32_t   KCP_PING_RECV   = 0b0100;   // 
 
-#define PACKET_COUNT_PER_SENT   32
-static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - KCP_HEADER_SIZE) * PACKET_COUNT_PER_SENT; // 一次发送的最大字节数
+static const uint32_t   KCP_WND_RCV     = 255;      // must >= max fragment size
+static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_WND_RCV; // 一次发送的最大字节数, frg [0, KCP_WND_RCV - 1]
 
 static const uint32_t   KCP_INTERVAL_MAX        = 500;  // 协议内部发送数据的最大间隔
 static const uint32_t   KCP_INTERVAL_MIN        = 10;   // 协议内部发送数据的最小间隔
@@ -73,6 +71,8 @@ static const uint32_t   KCP_RETRANSMISSION_MAX  = 5;    // 最大重传次数
 static const uint32_t   KCP_KEEPALIVE_TIMEOUT   = 10;   // 心跳超时时间 10 * rtt
 static const uint32_t   KCP_KEEPALIVE_INTERVAL  = 10000;// 心跳间隔时间
 static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次数
+static const uint32_t   KCP_PROBE_INIT          = 7000; // 探测窗口大小的初始时间
+static const uint32_t   KCP_PROBE_LIMIT         = 120000; // 探测窗口大小的最大时间
 
 #define DEFAULT_RECEIVE_TIMEOUT     1000
 #define DEFAULT_KEEPALIVE_TIMEOUT   5000

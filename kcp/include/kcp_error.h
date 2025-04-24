@@ -31,6 +31,7 @@ enum KcpError {
     CANCELED            = -ECANCELED,   /* Operation canceled */
     INVALID_STATE       = -EILSEQ,      /* Invalid state */
     BUFFER_TOO_SMALL    = -ENOSPC,      /* Buffer too small */
+    PACKET_TOO_LARGE    = -EMSGSIZE,    /* Packet too large */
     NO_MORE_CONV,                       /* No more conversation */
 
     // I/O errors

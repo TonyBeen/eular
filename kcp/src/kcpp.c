@@ -895,6 +895,49 @@ void kcp_shutdown(struct KcpConnection *kcp_connection)
     kcp_connection_destroy(kcp_connection);
 }
 
+int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size)
+{
+    if (kcp_connection == NULL || data == NULL || size == 0) {
+        return INVALID_PARAM;
+    }
+
+    if (size > KCP_MAX_PACKET_SIZE) {
+        return PACKET_TOO_LARGE;
+    }
+
+    if (kcp_connection->kcp_ctx->sock == INVALID_SOCKET) {
+        return SOCKET_CLOSED;
+    }
+
+    if (kcp_connection->state != KCP_STATE_CONNECTED) {
+        return INVALID_STATE;
+    }
+
+    int32_t fragmentation = (size + kcp_connection->mss - 1) / kcp_connection->mss;
+    if (fragmentation > KCP_WND_RCV) {
+        return PACKET_TOO_LARGE;
+    }
+
+    struct list_head buffer_list;
+    list_init(&buffer_list);
+    for (int32_t i = 0; i < fragmentation; ++i) {
+        kcp_segment_t *segment = kcp_segment_get(kcp_connection);
+        if (segment == NULL) {
+            while (!list_empty(&buffer_list)) {
+                kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node);
+                list_del_init(&seg->node);
+                kcp_segment_put(kcp_connection, seg);
+            }
+
+            return NO_MEMORY;
+        }
+
+        
+    }
+
+    return NO_ERROR;
+}
+
 void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb)
 {
     if (kcp_connection != NULL) {

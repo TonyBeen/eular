@@ -182,7 +182,7 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
  *
  * @return int32_t Return the byte size written to the sending queue.
  */
-KCP_PORT int32_t kcp_send(struct KcpContext *kcp_ctx, const void *data, size_t size);
+KCP_PORT int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size);
 
 KCP_PORT void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
 

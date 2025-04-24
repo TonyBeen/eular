@@ -163,6 +163,9 @@ typedef struct KcpConnection {
     uint32_t nsnd_que;          // 发送队列中的包数量
     uint32_t nrcv_que_unused;   // 未使用的接收队列数量
 
+    // packet 计数
+    uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号
+
     // 数据队列
     struct list_head    snd_queue;      // 发送队列
     struct list_head    snd_buf;        // 发送缓存
@@ -196,6 +199,7 @@ typedef struct KcpConnection {
     uint32_t                syn_fin_sn;
     uint32_t                syn_retries;
     uint32_t                fin_retries;
+    uint64_t                next_timeout;
     sockaddr_t              remote_host;
 
     // syn
@@ -307,6 +311,9 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
 int32_t kcp_flush(kcp_connection_t *kcp_conn);
 
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
+
+kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn);
+void kcp_segment_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment);
 
 EXTERN_C_END
 
