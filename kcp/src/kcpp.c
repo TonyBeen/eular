@@ -926,8 +926,8 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         kcp_segment_t *segment = kcp_segment_get(kcp_connection);
         if (segment == NULL) {
             while (!list_empty(&buffer_list)) {
-                kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node);
-                list_del_init(&seg->node);
+                kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node_list);
+                list_del_init(&seg->node_list);
                 kcp_segment_put(kcp_connection, seg);
             }
 
@@ -945,15 +945,16 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         segment->conv = kcp_connection->conv;
         segment->len = packet_size;
 
-        list_init(&segment->node);
-        list_add_tail(&segment->node, &buffer_list);
+        list_init(&segment->node_list);
+        list_add_tail(&segment->node_list, &buffer_list);
         buffer_offset += packet_size;
         size -= packet_size;
     }
 
     while (!list_empty(&buffer_list)) {
-        kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node);
-        list_move_tail(&seg->node, &kcp_connection->snd_buf);
+        kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node_list);
+        list_move_tail(&seg->node_list, &kcp_connection->snd_buf);
+        ++kcp_connection->nsnd_que;
     }
 
     return NO_ERROR;
@@ -964,4 +965,24 @@ void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_eve
     if (kcp_connection != NULL) {
         kcp_connection->read_event_cb = cb;
     }
+}
+
+int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size)
+{
+    if (kcp_connection == NULL) {
+        return INVALID_PARAM;
+    }
+
+    if (kcp_connection->kcp_ctx->sock == INVALID_SOCKET) {
+        return SOCKET_CLOSED;
+    }
+
+    if (kcp_connection->state != KCP_STATE_CONNECTED) {
+        return INVALID_STATE;
+    }
+
+    if (list_empty(&kcp_connection->rcv_buf)) {
+        return OP_TRY_AGAIN;
+    }
+
 }

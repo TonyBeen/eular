@@ -777,7 +777,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
 #define HANDLE_SND_BUF(kcp_conn) \
     do { \
-        list_add_tail(&pos->node, &kcp_conn->snd_buf_unused); \
+        list_add_tail(&pos->node_list, &kcp_conn->snd_buf_unused); \
         ++kcp_conn->nsnd_buf_unused; \
         --kcp_conn->nsnd_buf; \
     } while (false)
@@ -790,7 +790,7 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
-    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
+    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
         if (pos->sn == kcp_header->ack_data.sn) {
             int32_t timestamp_tmp = timestamp;
             int32_t ts_tmp = pos->ts;
@@ -818,7 +818,7 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
     }
 
     // 解析una
-    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node) {
+    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
         if (pos->sn < kcp_header->ack_data.una) {
             HANDLE_SND_BUF(kcp_conn);
         } else {
@@ -833,8 +833,8 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
             break;
         }
 
-        pos = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node);
-        list_del_init(&pos->node);
+        pos = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node_list);
+        list_del_init(&pos->node_list);
         free(pos);
     }
     return NO_ERROR;
@@ -864,7 +864,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         free(ack_item);
         return NO_MEMORY;
     }
-    list_init(&kcp_segment->node);
+    list_init(&kcp_segment->node_list);
 
     ack_item->sn = kcp_header->packet_data.sn;
     ack_item->psn = kcp_header->packet_data.psn;
@@ -888,7 +888,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     bool repeat = false;
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
-    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node) {
+    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
         if (pos->psn == kcp_segment->psn && pos->frg == kcp_segment->frg) { // 相同包
             repeat = true;
             break;
@@ -907,7 +907,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     }
 
     kcp_segment_t *last = NULL;
-    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node) {
+    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
         if (pos->psn == kcp_segment->psn) {
             last = pos;
             break;
@@ -915,7 +915,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     }
     if (last) { // 属于同一包
         pos = last;
-        list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+        list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
             if (pos->psn != kcp_segment->psn) { // 同一个包的最后一个节点
                 break;
             }
@@ -926,9 +926,9 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             last = pos;
         }
 
-        list_add(&last->node, &kcp_segment->node);
+        list_add(&last->node_list, &kcp_segment->node_list);
     } else { // 新包
-        list_add_tail(&kcp_segment->node, &kcp_conn->rcv_buf);
+        list_add_tail(&kcp_segment->node_list, &kcp_conn->rcv_buf);
     }
 
     ++kcp_conn->nrcv_buf;
@@ -939,12 +939,12 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     // 解析rcv_buf, 组成完整数据包
     kcp_segment_t *first = NULL;
     uint16_t packet_count = 0;
-    list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node) {
+    list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node_list) {
         if (first->frg == 0) {
             packet_count = (uint16_t)first->wnd; // NOTE 起始packet, 表示packet个数
             pos = first;
             uint16_t count = 0;
-            list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+            list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
                 if (first->psn != pos->psn) { // 下一个包
                     break;
                 }
@@ -954,12 +954,12 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             if (packet_count == count) { // 完整的一包
                 pos = first;
                 int32_t size = 0;
-                list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node) {
+                list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
                     if (first->psn != pos->psn) { // 下一个包
                         break;
                     }
                     size += pos->len;
-                    list_add_tail(&pos->node, &kcp_conn->rcv_queue);
+                    list_add_tail(&pos->node_list, &kcp_conn->rcv_queue);
                     --kcp_conn->nrcv_buf;
                 }
 
@@ -1063,13 +1063,13 @@ kcp_segment_t *kcp_segment_get(kcp_connection_t *kcp_conn)
 {
     kcp_segment_t *kcp_segment = NULL;
     if (!list_empty(&kcp_conn->snd_buf_unused)) {
-        kcp_segment = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node);
-        list_del_init(&kcp_segment->node);
+        kcp_segment = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node_list);
+        list_del_init(&kcp_segment->node_list);
         --kcp_conn->nsnd_buf_unused;
     } else {
         kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
         if (kcp_segment != NULL) {
-            list_init(&kcp_segment->node);
+            list_init(&kcp_segment->node_list);
         }
     }
 
@@ -1083,7 +1083,7 @@ void kcp_segment_put(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
     }
 
     if (kcp_conn->nsnd_buf_unused < kcp_conn->snd_wnd) {
-        list_add_tail(&segment->node, &kcp_conn->snd_buf_unused);
+        list_add_tail(&segment->node_list, &kcp_conn->snd_buf_unused);
         ++kcp_conn->nsnd_buf_unused;
     } else {
         free(segment);

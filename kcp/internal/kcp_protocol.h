@@ -80,7 +80,7 @@ typedef struct KcpProtoHeader {
 
 /// @brief KCP报文段
 typedef struct KcpSengment {
-    struct list_head node; // 链表节点
+    struct list_head node_list;
     uint32_t conv;      // 会话ID
     uint32_t cmd;       // 命令
     uint32_t frg;       // 分片序号

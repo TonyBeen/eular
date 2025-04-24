@@ -176,17 +176,17 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
 
 /**
  * @brief send data to peer.
- * @param kcp The kcp control block.
- * @param data The data to send.
- * @param size The size of data.
+ * @param kcp_connection kcp connection
+ * @param data the data to send.
+ * @param size the size of data.
  *
- * @return int32_t Return the byte size written to the sending queue.
+ * @return int32_t return NO_ERROR if success, otherwise < 0.
  */
 KCP_PORT int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size);
 
 KCP_PORT void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
 
-KCP_PORT int32_t kcp_recv(struct KcpContext *kcp_ctx, void *data, size_t size);
+KCP_PORT int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size);
 
 EXTERN_C_END
 
