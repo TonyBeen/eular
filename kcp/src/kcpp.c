@@ -913,6 +913,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         return INVALID_STATE;
     }
 
+    const char *buffer_offset = (const char *)data;
     int32_t fragmentation = (size + kcp_connection->mss - 1) / kcp_connection->mss;
     if (fragmentation > KCP_WND_RCV) {
         return PACKET_TOO_LARGE;
@@ -921,6 +922,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
     struct list_head buffer_list;
     list_init(&buffer_list);
     for (int32_t i = 0; i < fragmentation; ++i) {
+        uint32_t packet_size  = (uint32_t)size > kcp_connection->mss ? kcp_connection->mss : (uint32_t)size;
         kcp_segment_t *segment = kcp_segment_get(kcp_connection);
         if (segment == NULL) {
             while (!list_empty(&buffer_list)) {
@@ -931,8 +933,27 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
             return NO_MEMORY;
         }
+        if (packet_size > 0) {
+            memcpy(segment->data, buffer_offset, packet_size);
+        }
 
-        
+        segment->wnd = 0;
+        if (i == 0) {
+            segment->wnd = fragmentation;
+        }
+        segment->frg = i;
+        segment->conv = kcp_connection->conv;
+        segment->len = packet_size;
+
+        list_init(&segment->node);
+        list_add_tail(&segment->node, &buffer_list);
+        buffer_offset += packet_size;
+        size -= packet_size;
+    }
+
+    while (!list_empty(&buffer_list)) {
+        kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node);
+        list_move_tail(&seg->node, &kcp_connection->snd_buf);
     }
 
     return NO_ERROR;

@@ -61,9 +61,41 @@ void test_list_del()
     free(test_list);
 }
 
+void test_list_move_tail()
+{
+    test_list_t *test_list = (test_list_t *)malloc(sizeof(test_list_t));
+    list_init(&test_list->node);
+    for (int32_t i = 0; i < 10; i++) {
+        test_list_t *tmp = (test_list_t *)malloc(sizeof(test_list_t));
+        tmp->a = i + 1;
+        list_add_tail(&tmp->node, &test_list->node);
+    }
+
+    test_list_t *test_list_2 = (test_list_t *)malloc(sizeof(test_list_t));
+    list_init(&test_list_2->node);
+    for (int32_t i = 0; i < 10; i++) {
+        test_list_t *tmp = (test_list_t *)malloc(sizeof(test_list_t));
+        tmp->a = i + 1;
+        list_add_tail(&tmp->node, &test_list_2->node);
+    }
+
+    while (!list_empty(&test_list->node)) {
+        test_list_t *pos = list_first_entry(&test_list->node, test_list_t, node);
+        list_move_tail(&pos->node, &test_list_2->node);
+    }
+
+    test_list_t *pos = NULL;
+    test_list_t *next = NULL;
+    list_for_each_entry_safe(pos, next, &test_list_2->node, node) {
+        printf("test_list a = %d\n", pos->a);
+        free(pos);
+    }
+}
+
 int main(int argc, char **argv)
 {
-    test_list_del();
+    test_list_move_tail();
+    // test_list_del();
     // test_list_t *test_list = (test_list_t *)malloc(sizeof(test_list_t));
     // list_init(&test_list->node);
     // for (int32_t i = 0; i < 10; i++) {
