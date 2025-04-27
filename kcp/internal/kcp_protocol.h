@@ -95,7 +95,7 @@ typedef struct KcpSengment {
     uint32_t rto;       // 超时重传时间
     uint64_t resendts;  // 重传时间戳
     uint32_t fastack;   // 快速重传
-    uint32_t xmit;      // 重传次数
+    uint32_t xmit;      // 传输次数
     char     data[1];   // 数据
 } kcp_segment_t;
 

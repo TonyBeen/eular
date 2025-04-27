@@ -338,6 +338,42 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         list_move_tail(&segment->node_list, &kcp_connection->snd_buf);
     }
 
+    bool packet_lost = false;
+    bool change_ssthresh = false;
+    uint32_t resent = kcp_connection->fastresend > 0 ? kcp_connection->fastresend : UINT32_MAX;
+    uint32_t rtomin = (kcp_connection->nodelay == 0) ? (kcp_connection->rx_rto >> 3) : 0;
+    {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_connection->snd_buf, node_list) {
+            bool need_send = false;
+            if (pos->xmit == 0) {
+                need_send = true;
+                pos->xmit++;
+                pos->rto = kcp_connection->rx_rto;
+                pos->resendts = timestamp + pos->rto + rtomin;
+            } else if (timestamp >= pos->resendts) {
+                need_send = true; // 超时重传
+                pos->xmit++;
+                if (kcp_connection->nodelay == 0) {
+                    pos->rto = MAX(pos->rto , kcp_connection->rx_rto);
+                } else {
+                    int32_t step = (kcp_connection->nodelay < 2) ? pos->rto : kcp_connection->rx_rto;
+                    pos->rto += step / 2;
+                }
+                pos->resendts = timestamp + pos->rto;
+                packet_lost = true;
+            } else if (pos->fastack >= resent) {
+                if (pos->xmit <= kcp_connection->fastlimit || kcp_connection->fastlimit <= 0) {
+                    need_send = true; // 快速重传
+                    pos->xmit++;
+                    pos->resendts = timestamp + pos->rto;
+                    pos->fastack = 0;
+                }
+            }
+        }
+    }
+
     // TODO 完善写超时回调
     kcp_connection->next_timeout += kcp_connection->interval;
     return NO_ERROR;
@@ -497,6 +533,12 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->read_cb = on_kcp_read_event;
     kcp_conn->write_cb = on_kcp_write_event;
     kcp_conn->read_event_cb = NULL;
+
+    // statistics
+    kcp_conn->ping_count = 0;
+    kcp_conn->pong_count = 0;
+    kcp_conn->tx_bytes = 0;
+    kcp_conn->rtx_bytes = 0;
 }
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
@@ -816,31 +858,57 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
         return NO_ERROR;
     }
 
+    if (kcp_header->ack_data.sn < kcp_conn->snd_una) {
+        // 如果ack的序号小于snd_una, 则忽略此ack
+        return NO_ERROR;
+    }
+
+    if (kcp_header->ack_data.sn > kcp_conn->snd_nxt) {
+        // 如果ack的序号大于snd_nxt, 则说明此ack是无效的
+        return NO_ERROR;
+    }
+
+    uint32_t max_ack = 0;
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
     list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
-        if (pos->sn == kcp_header->ack_data.sn) {
+        if (pos->sn < kcp_header->ack_data.sn) {
+            // 当前包的序号小于ack的序号, 表示当前包被跳过
+            pos->fastack++;
+        } else if (pos->sn == kcp_header->ack_data.sn) {
+            max_ack = pos->sn;
             int32_t timestamp_tmp = timestamp;
             int32_t ts_tmp = pos->ts;
             int32_t ack_ts_tmp = kcp_header->ack_data.ack_ts;
             int32_t packet_ts_tmp = kcp_header->ack_data.packet_ts;
 
-            // 计算RTT
-            if (kcp_conn->rx_srtt == 0) {
-                kcp_conn->rx_srtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
-                kcp_conn->rx_rttval = kcp_conn->rx_srtt / 2;
-            } else {
-                int32_t rtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
-                int64_t delta = ABS(rtt - kcp_conn->rx_srtt);
-                kcp_conn->rx_rttval = (3 * kcp_conn->rx_rttval + delta) / 4;
-                kcp_conn->rx_srtt = (kcp_conn->rx_srtt * 7 + rtt) / 8;
+            // NOTE 发送重传时无法确认ACK是哪次重传包的ACK, 故计算出的RTT和RTO会不准确, 一般情况会偏高
+            if (pos->xmit == 1) { // 如果未发生重传, 则计算RTT和RTO
+                // 计算RTT
+                if (kcp_conn->rx_srtt == 0) {
+                    kcp_conn->rx_srtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
+                    kcp_conn->rx_rttval = kcp_conn->rx_srtt / 2;
+                } else {
+                    int32_t rtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
+                    int64_t delta = ABS(rtt - kcp_conn->rx_srtt);
+                    kcp_conn->rx_rttval = (3 * kcp_conn->rx_rttval + delta) / 4;
+                    kcp_conn->rx_srtt = (kcp_conn->rx_srtt * 7 + rtt) / 8;
+                }
+
+                // 计算RTO
+                int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
+                kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto * 1000, KCP_RTO_MAX * 1000);
             }
 
-            // 计算RTO
-            int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
-            kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto * 1000, KCP_RTO_MAX * 1000);
+            kcp_conn->tx_bytes += pos->len; // 累加发送的字节数
+            if (pos->xmit > 1) { // 本包是重传包
+                kcp_conn->rtx_bytes += pos->len; // 累加重传的字节数
+            }
 
             HANDLE_SND_BUF(kcp_conn);
+            break;
+        } else {
+            // 序号是顺序排列的, 当前包的序号大于ack的序号, 则说明此ack是已被确认的
             break;
         }
     }
