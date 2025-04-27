@@ -27,6 +27,12 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
 {
     if (code == NO_ERROR) {
         int32_t ip_header_size = kcp_conn->remote_host.sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
+        if (kcp_conn->mtu > mtu) {
+            KCP_LOGW("MTU reduced from %d to %d", kcp_conn->mtu, mtu);
+            kcp_conn->kcp_ctx->callback.on_error(kcp_conn->kcp_ctx, kcp_conn, MTU_REDUCTION);
+            return;
+        }
+
         kcp_conn->mtu = mtu - ip_header_size - UDP_HEADER_SIZE;
         kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
     }
@@ -238,15 +244,16 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             memcpy(ptr, buffer, KCP_HEADER_SIZE);
             ptr += KCP_HEADER_SIZE;
             list_del_init(&pos->node);
+            free(pos);
 
             if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
                 // 如果当前缓冲区大小超过了MTU, 则发送数据包
                 struct iovec data[1];
-                data[0].iov_base = buffer;
-                data[0].iov_len = ptr - buffer;
+                data[0].iov_base = kcp_connection->buffer;
+                data[0].iov_len = ptr - kcp_connection->buffer;
 
                 kcp_send_packet(kcp_connection, &data, 1);
-                ptr = kcp_connection->buffer; // 重置指针
+                ptr = kcp_connection->buffer;
             }
         }
     }
@@ -278,11 +285,11 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_wask_header.cmd = KCP_CMD_WASK;
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
             struct iovec data[1];
-            data[0].iov_base = buffer;
-            data[0].iov_len = ptr - buffer;
+            data[0].iov_base = kcp_connection->buffer;
+            data[0].iov_len = ptr - kcp_connection->buffer;
 
             kcp_send_packet(kcp_connection, &data, 1);
-            ptr = kcp_connection->buffer; // 重置指针
+            ptr = kcp_connection->buffer;
         }
         kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
         memcpy(ptr, buffer, KCP_HEADER_SIZE);
@@ -293,11 +300,11 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_wask_header.cmd = KCP_CMD_WINS;
         if (ptr - kcp_connection->buffer + KCP_HEADER_SIZE > kcp_connection->mtu) {
             struct iovec data[1];
-            data[0].iov_base = buffer;
-            data[0].iov_len = ptr - buffer;
+            data[0].iov_base = kcp_connection->buffer;
+            data[0].iov_len = ptr - kcp_connection->buffer;
 
             kcp_send_packet(kcp_connection, &data, 1);
-            ptr = kcp_connection->buffer; // 重置指针
+            ptr = kcp_connection->buffer;
         }
         kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
         memcpy(ptr, buffer, KCP_HEADER_SIZE);
@@ -310,8 +317,29 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         cwnd = MIN(cwnd, kcp_connection->cwnd);
     }
 
+    // 将 snd_queue 数据移动到 snd_buf
+    while ((kcp_connection->snd_nxt - (kcp_connection->snd_una + cwnd)) < 0) {
+        if (list_empty(&kcp_connection->snd_queue)) {
+            break; // 如果发送队列为空, 则退出
+        }
+
+        kcp_segment_t *segment = list_first_entry(&kcp_connection->snd_queue, kcp_segment_t, node_list);
+        list_del_init(&segment->node_list);
+        segment->conv = kcp_connection->conv;
+        segment->cmd = KCP_CMD_PUSH;
+        segment->wnd = kcp_wnd_unused(kcp_connection);
+        segment->ts = timestamp;
+        segment->sn = kcp_connection->snd_nxt++;
+        segment->una = kcp_connection->rcv_nxt;
+        segment->rto = kcp_connection->rx_rto;
+        segment->resendts = timestamp;
+        segment->fastack = 0;
+        segment->xmit = 0;
+        list_move_tail(&segment->node_list, &kcp_connection->snd_buf);
+    }
 
     // TODO 完善写超时回调
+    kcp_connection->next_timeout += kcp_connection->interval;
     return NO_ERROR;
 }
 
@@ -391,8 +419,8 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     list_init(&kcp_conn->node_list);
 
     kcp_conn->conv = 0;
-    kcp_conn->mss_min = kcp_conn->mss = kcp_get_min_mss(remote_host->sa.sa_family == AF_INET6);
-    kcp_conn->mtu = kcp_conn->mss + KCP_HEADER_SIZE;
+    kcp_conn->mtu = kcp_get_min_mss(remote_host->sa.sa_family == AF_INET6);
+    kcp_conn->mss_min = kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
 
     kcp_conn->snd_una = 0;
     kcp_conn->snd_nxt = 0;
@@ -836,6 +864,13 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
         pos = list_first_entry(&kcp_conn->snd_buf_unused, kcp_segment_t, node_list);
         list_del_init(&pos->node_list);
         free(pos);
+    }
+
+    if (list_empty(&kcp_conn->snd_buf)) {
+        kcp_conn->snd_una = kcp_conn->snd_nxt; // 如果snd_buf为空, 则snd_una等于snd_nxt
+    } else {
+        kcp_segment_t *first = list_first_entry(&kcp_conn->snd_buf, kcp_segment_t, node_list);
+        kcp_conn->snd_una = first->sn; // snd_una为snd_buf的第一个包的序号
     }
     return NO_ERROR;
 }

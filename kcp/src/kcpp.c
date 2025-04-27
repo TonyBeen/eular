@@ -38,7 +38,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         if (kcp_header.cmd == KCP_CMD_SYN) {
             kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
             if (syn_node == NULL) {
-                kcp_ctx->callback.on_error(kcp_ctx, NO_MEMORY);
+                kcp_ctx->callback.on_error(kcp_ctx, NULL, NO_MEMORY);
                 return;
             }
             list_init(&syn_node->node);
@@ -116,7 +116,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
             if (code == EAGAIN || code == EWOULDBLOCK) {
                 break;
             } else {
-                kcp_ctx->callback.on_error(kcp_ctx, READ_ERROR);
+                kcp_ctx->callback.on_error(kcp_ctx, NULL, READ_ERROR);
                 break;
             }
         }
@@ -213,7 +213,7 @@ static void kcp_write_cb(int fd, short ev, void *arg)
             } else if (status == OP_TRY_AGAIN) { // 缓存区已满
                 break;
             } else {
-                kcp_ctx->callback.on_error(kcp_ctx, status);
+                kcp_ctx->callback.on_error(kcp_ctx, NULL, status);
                 break;
             }
         } else {
@@ -953,7 +953,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
     while (!list_empty(&buffer_list)) {
         kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node_list);
-        list_move_tail(&seg->node_list, &kcp_connection->snd_buf);
+        list_move_tail(&seg->node_list, &kcp_connection->snd_queue);
         ++kcp_connection->nsnd_que;
     }
 

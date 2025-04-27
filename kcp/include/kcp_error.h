@@ -58,6 +58,7 @@ enum KcpError {
     CONNECTION_REFUSED,
     UDP_UNREACH,
     ICMP_ERROR,
+    MTU_REDUCTION,  // MTU reduction
 
     // proto error
     INVALID_KCP_HEADER = -120000,

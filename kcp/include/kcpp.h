@@ -60,9 +60,10 @@ typedef void (*on_kcp_accepted_t)(struct KcpContext *kcp_ctx, struct KcpConnecti
  * @brief Error callback
  *
  * @param kcp_ctx KCP context
+ * @param kcp_connection KCP connection(can be NULL)
  * @param code error code
  */
-typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, int32_t code);
+typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code);
 
 /**
  * @brief read event callback

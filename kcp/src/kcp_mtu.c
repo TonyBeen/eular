@@ -293,7 +293,7 @@ void kcp_process_icmp_unreach(struct KcpContext *kcp_ctx, const void *buffer, si
         return;
     }
 
-    kcp_conn->kcp_ctx->callback.on_error(kcp_conn, UDP_UNREACH);
+    kcp_conn->kcp_ctx->callback.on_error(kcp_ctx, kcp_conn, UDP_UNREACH);
 }
 
 void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size_t len, const sockaddr_t *remote_addr)
@@ -303,5 +303,5 @@ void kcp_process_icmp_error(struct KcpContext *kcp_ctx, const void *buffer, size
         return;
     }
 
-    kcp_conn->kcp_ctx->callback.on_error(kcp_conn, ICMP_ERROR);
+    kcp_conn->kcp_ctx->callback.on_error(kcp_ctx, kcp_conn, ICMP_ERROR);
 }

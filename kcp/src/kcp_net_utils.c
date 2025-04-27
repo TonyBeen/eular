@@ -155,7 +155,7 @@ int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data
 
 int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
 {
-    if (size > PACKET_COUNT_PER_SENT) {
+    if (size > KCP_WND_RCV) {
         return INVALID_PARAM;
     }
 
@@ -184,7 +184,7 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
         ++send_packet;
     }
 #else
-    struct mmsghdr msgvec[PACKET_COUNT_PER_SENT];
+    struct mmsghdr msgvec[KCP_WND_RCV];
     for (int32_t i = 0; i < size; ++i) {
         struct msghdr *msg = &msgvec[i].msg_hdr;
         msg->msg_name = remote_addr;
