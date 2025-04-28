@@ -36,7 +36,7 @@ void default_log_cb(int32_t level, const char *log, int32_t size)
     printf("[%s]: %.*s\n", str_level, size, log);
 }
 
-kcp_log_callback_t  g_log_callback = NULL;
+kcp_log_callback_t  g_log_callback = default_log_cb;
 int32_t             g_log_level = LOG_LEVEL_SILENT;
 
 int32_t kcp_log_format(int32_t level, const char *file_name, const char *func_name, int32_t line, const char* fmt, ...)
