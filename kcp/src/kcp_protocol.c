@@ -484,7 +484,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     }
     case KCP_STATE_CONNECTED: {
         timestamp = kcp_time_monotonic_us();
-        return on_kcp_connection_timeout(kcp_connection, timestamp);
+        return on_kcp_write_timeout(kcp_connection, timestamp);
     }
     case KCP_STATE_FIN_SENT: // EAGAIN 重传
     case KCP_STATE_FIN_RECEIVED: {
@@ -606,7 +606,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
     // 从红黑树中移除连接
-    connection_set_erase(kcp_conn->kcp_ctx, kcp_conn->conv);
+    connection_set_erase(&kcp_conn->kcp_ctx->connection_set, kcp_conn->conv);
     int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
     bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, index, false);
 
@@ -689,7 +689,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     data_offset += 4;
     kcp_header->packet_data.data = NULL;
     if (kcp_header->packet_data.len > 0) {
-        kcp_header->packet_data.data = data_offset; // 数据
+        kcp_header->packet_data.data = (char *)data_offset; // 数据
     }
     data_offset += kcp_header->packet_data.len;
     *data = data_offset;
@@ -871,7 +871,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                 struct iovec data[1];
                 data[0].iov_base = buffer;
                 data[0].iov_len = KCP_HEADER_SIZE;
-                kcp_send_packet_raw(kcp_ctx->sock, addr, &data, sizeof(data));
+                kcp_send_packet_raw(kcp_ctx->sock, addr, data, 1);
             }
         } else {
             kcp_connection_t *kcp_connection = connection_first(&kcp_ctx->connection_set);
@@ -911,8 +911,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     struct iovec data[1];
                     data[0].iov_base = buffer;
                     data[0].iov_len = KCP_HEADER_SIZE;
-
-                    if (kcp_send_packet(kcp_connection, &data, 1) < 0) {
+                    if (kcp_send_packet(kcp_connection, data, 1) < 0) {
                         // NOTE 此处不会触发 EAGAIN
                         int32_t code = get_last_errno();
                         KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
@@ -922,8 +921,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     } else {
                         // NOTE 对端未收到ACK, 会重发SYN
                         if (kcp_connection->syn_timer_event) {
-                            evtimer_del(kcp_connection->syn_timer_event);
-                            evtimer_free(kcp_connection->syn_timer_event);
+                            event_free(kcp_connection->syn_timer_event);
                             kcp_connection->syn_timer_event = NULL;
                         }
 
@@ -1218,7 +1216,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_conn, &data, 1);
+        kcp_send_packet(kcp_conn, data, 1);
 
         evtimer_del(kcp_conn->fin_timer_event);
         uint32_t timeout_ms = kcp_conn->receive_timeout;
@@ -1256,7 +1254,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     data[0].iov_len = KCP_HEADER_SIZE;
 
     // 发送失败或丢包靠超时重传
-    kcp_send_packet(kcp_conn, &data, 1);
+    kcp_send_packet(kcp_conn, data, 1);
     kcp_conn->state = KCP_STATE_FIN_RECEIVED;
 
     if (kcp_conn->fin_timer_event == NULL) {
