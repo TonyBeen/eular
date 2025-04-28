@@ -135,7 +135,7 @@ KCP_PORT int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_connect_t cb);
 
 /**
  * @brief set accept callback
- * 
+ *
  * @param kcp_ctx kcp context
  * @param cb callback
  * @return void
@@ -150,7 +150,7 @@ KCP_PORT void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb
  * @param timeout_ms timeout in milliseconds
  * @return int32_t 0 if success, otherwise < 0
  */
-KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeout_ms);
+KCP_PORT int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms);
 
 /**
  * @brief 

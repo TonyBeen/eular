@@ -572,7 +572,7 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
     }
 }
 
-int32_t kcp_accept(struct KcpContext *kcp_ctx, sockaddr_t *addr, uint32_t timeout_ms)
+int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 {
     if (kcp_ctx == NULL) {
         return INVALID_PARAM;
