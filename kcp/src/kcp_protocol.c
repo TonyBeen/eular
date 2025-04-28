@@ -87,6 +87,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
             } else if (kcp_connection->kcp_ctx->callback.on_connected) {
+                kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
             }
 
@@ -217,7 +218,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         return NO_ERROR;
     }
 
-    if (kcp_connection->next_timeout > timestamp) {
+    if (kcp_connection->ts_flush > timestamp) {
         // 如果当前时间戳小于下次超时时间戳, 则不处理
         return NO_ERROR;
     }
@@ -437,7 +438,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         }
     }
 
-    kcp_connection->next_timeout += kcp_connection->interval;
+    kcp_connection->ts_flush += kcp_connection->interval;
     return NO_ERROR;
 }
 
@@ -525,19 +526,18 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->rcv_nxt = 0;
     kcp_conn->ts_recent = 0;
     kcp_conn->ts_lastack = 0;
-    kcp_conn->ssthresh = IKCP_THRESH_INIT;
+    kcp_conn->ssthresh = KCP_THRESH_INIT;
     kcp_conn->rx_rttval = 0;
     kcp_conn->rx_srtt = 0;
-    kcp_conn->rx_rto = IKCP_RTO_DEF;
-    kcp_conn->rx_minrto = IKCP_RTO_MIN;
-    kcp_conn->snd_wnd = IKCP_WND_SND;
-    kcp_conn->rcv_wnd = IKCP_WND_RCV;
-    kcp_conn->rmt_wnd = IKCP_WND_RCV;
+    kcp_conn->rx_rto = KCP_RTO_DEF;
+    kcp_conn->rx_minrto = KCP_RTO_MIN;
+    kcp_conn->snd_wnd = KCP_WND_SND;
+    kcp_conn->rcv_wnd = KCP_WND_RCV;
+    kcp_conn->rmt_wnd = KCP_WND_RCV;
     kcp_conn->cwnd = 0;
     kcp_conn->probe = 0;
     kcp_conn->current = 0;
-    kcp_conn->interval = IKCP_INTERVAL;
-    kcp_conn->ts_flush = IKCP_INTERVAL;
+    kcp_conn->ts_flush = 0;
     kcp_conn->nrcv_buf = 0;
     kcp_conn->nsnd_buf = 0;
     kcp_conn->nsnd_buf_unused = 0;
@@ -582,9 +582,10 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
     kcp_conn->mtu_probe_ctx = (mtu_probe_ctx_t *)malloc(sizeof(mtu_probe_ctx_t));
     kcp_conn->mtu_probe_ctx->probe_buf = (char *)malloc(KCP_HEADER_SIZE + ETHERNET_MTU);
-    kcp_conn->mtu_probe_ctx->mtu_current = ETHERNET_MTU_V4_MIN;
+    kcp_conn->mtu_probe_ctx->mtu_current = (remote_host->sa.sa_family == AF_INET6) ? ETHERNET_MTU_V6_MIN : ETHERNET_MTU_V4_MIN;
     kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
     kcp_conn->mtu_probe_ctx->on_probe_completed = on_mtu_probe_completed;
+    kcp_conn->mtu_probe_ctx->timeout = DEFAULT_MTU_PROBE_TIMEOUT;
 
     kcp_conn->ping_ctx = (ping_ctx_t *)malloc(sizeof(ping_ctx_t));
     memset(kcp_conn->ping_ctx, 0, sizeof(ping_ctx_t));
@@ -931,6 +932,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
                             kcp_connection->state = KCP_STATE_CONNECTED;
                             status = true;
+                            kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->need_write_timer_event = true;
                             kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);

@@ -346,7 +346,7 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flag
         if (kcp_connection->nodelay) {
             kcp_connection->rx_minrto = IKCP_RTO_NDL;
         } else {
-            kcp_connection->rx_minrto = IKCP_RTO_MIN;
+            kcp_connection->rx_minrto = KCP_RTO_MIN;
         }
     }
 
@@ -416,8 +416,8 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
         kcp_connection->fin_retries = *(uint32_t *)data;
         break;
     case IOCTL_WINDOW_SIZE:
-        kcp_connection->rcv_wnd = MAX(IKCP_WND_RCV, *(uint32_t *)data);
-        kcp_connection->snd_wnd = *(uint32_t *)data;
+        kcp_connection->rcv_wnd = MAX(KCP_WND_RCV, *(uint32_t *)data);
+        kcp_connection->snd_wnd = MAX(KCP_WND_SND, *(uint32_t *)data);
         break;
     default:
         return INVALID_PARAM;

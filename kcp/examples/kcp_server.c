@@ -16,7 +16,13 @@
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
+    if (kcp_connection) {
+        printf("KCP error on connection %p: %d\n", kcp_connection, code);
+    } else {
+        printf("KCP error on context %p: %d\n", kcp_ctx, code);
+    }
 
+    fprintf(stderr, "Unhandled KCP error code: %d\n", code);
 }
 
 bool on_kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
@@ -52,6 +58,7 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
     if (code == NO_ERROR) {
         printf("KCP connection accepted\n");
         set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
+        // kcp_ioctl(kcp_connection, KCP_IOCTLS_SET_READ_EVENT, 1); // Enable read events
     } else {
         fprintf(stderr, "Failed to accept KCP connection: %d\n", code);
     }
