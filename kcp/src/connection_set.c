@@ -1,6 +1,8 @@
 #include "connection_set.h"
 #include <assert.h>
 
+#include "kcp_protocol.h"
+
 void connection_set_init(connection_set_t *root)
 {
     if (root != NULL) {
@@ -8,11 +10,11 @@ void connection_set_init(connection_set_t *root)
     }
 }
 
-kcp_connection_t *connection_set_search(connection_set_t *root, int32_t conv)
+struct KcpConnection *connection_set_search(connection_set_t *root, int32_t conv)
 {
     struct rb_node *node = root->rb_node;
   	while (node) {
-  		kcp_connection_t *pthis = container_of(node, kcp_connection_t, node_rbtree);
+  		struct KcpConnection *pthis = container_of(node, struct KcpConnection, node_rbtree);
 
 		if (conv < pthis->conv) {
             node = node->rb_left;
@@ -26,7 +28,7 @@ kcp_connection_t *connection_set_search(connection_set_t *root, int32_t conv)
 	return NULL;
 }
 
-bool connection_set_insert(connection_set_t *root, kcp_connection_t *data)
+bool connection_set_insert(connection_set_t *root, struct KcpConnection *data)
 {
     if (root == NULL || data == NULL) {
         return false;
@@ -34,7 +36,7 @@ bool connection_set_insert(connection_set_t *root, kcp_connection_t *data)
 
     struct rb_node **new = &(root->rb_node), *parent = NULL;
     while (*new) {
-        kcp_connection_t *pthis = container_of(*new, kcp_connection_t, node_rbtree);
+        struct KcpConnection *pthis = container_of(*new, struct KcpConnection, node_rbtree);
 
         parent = *new;
         if (data->conv < pthis->conv) {
@@ -51,13 +53,13 @@ bool connection_set_insert(connection_set_t *root, kcp_connection_t *data)
     return true;
 }
 
-kcp_connection_t *connection_set_erase(connection_set_t *root, int32_t conv)
+struct KcpConnection *connection_set_erase(connection_set_t *root, int32_t conv)
 {
     if (root == NULL) {
         return NULL;
     }
 
-    kcp_connection_t *pthis = connection_set_search(root, conv);
+    struct KcpConnection *pthis = connection_set_search(root, conv);
     if (pthis) {
         rb_erase(&pthis->node_rbtree, root);
     }
@@ -65,14 +67,14 @@ kcp_connection_t *connection_set_erase(connection_set_t *root, int32_t conv)
     return pthis;
 }
 
-void connection_set_erase_node(connection_set_t *root, kcp_connection_t *node)
+void connection_set_erase_node(connection_set_t *root, struct KcpConnection *node)
 {
     if (root != NULL && node != NULL) {
         rb_erase(&node->node_rbtree, root);
     }
 }
 
-kcp_connection_t *connection_first(connection_set_t *root)
+struct KcpConnection *connection_first(connection_set_t *root)
 {
     if (root == NULL) {
         return NULL;
@@ -80,13 +82,13 @@ kcp_connection_t *connection_first(connection_set_t *root)
 
     struct rb_node *node = rb_first(root);
     if (node) {
-        return rb_entry(node, kcp_connection_t, node_rbtree);
+        return rb_entry(node, struct KcpConnection, node_rbtree);
     }
 
     return NULL;
 }
 
-kcp_connection_t *connection_next(connection_set_t *node)
+struct KcpConnection *connection_next(connection_set_t *node)
 {
     if (node == NULL) {
         return NULL;
@@ -95,7 +97,7 @@ kcp_connection_t *connection_next(connection_set_t *node)
     struct rb_node *next = rb_next(node);
 }
 
-kcp_connection_t *connection_last(connection_set_t *node)
+struct KcpConnection *connection_last(connection_set_t *node)
 {
     if (node == NULL) {
         return NULL;
@@ -103,7 +105,7 @@ kcp_connection_t *connection_last(connection_set_t *node)
 
     struct rb_node *last = rb_last(node);
     if (last) {
-        return rb_entry(last, kcp_connection_t, node_rbtree);
+        return rb_entry(last, struct KcpConnection, node_rbtree);
     }
 
     return NULL;
@@ -119,7 +121,7 @@ void connection_set_clear(connection_set_t *root, connection_set_destroy_cb_t cb
     while((node = rb_first(&root))) {
         rb_erase(node, &root);
         if (cb) {
-            kcp_connection_t *pthis = rb_entry(node, kcp_connection_t, node_rbtree);
+            struct KcpConnection *pthis = rb_entry(node, struct KcpConnection, node_rbtree);
             cb(pthis);
         }
     }

@@ -632,6 +632,12 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         kcp_conn->mtu_probe_ctx = NULL;
     }
 
+    // 释放ping上下文
+    if (kcp_conn->ping_ctx) {
+        free(kcp_conn->ping_ctx);
+        kcp_conn->ping_ctx = NULL;
+    }
+
     // 释放超时事件
     kcp_conn->need_write_timer_event = false;
     if (kcp_conn->syn_timer_event) {
@@ -654,6 +660,8 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         }
     }
 
+    // 从红黑树移除
+    connection_set_erase_node(&kcp_conn->kcp_ctx->connection_set, kcp_conn);
     free(kcp_conn);
 }
 
