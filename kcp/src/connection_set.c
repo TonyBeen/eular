@@ -88,13 +88,14 @@ struct KcpConnection *connection_first(connection_set_t *root)
     return NULL;
 }
 
-struct KcpConnection *connection_next(connection_set_t *node)
+struct KcpConnection *connection_next(struct KcpConnection *node)
 {
     if (node == NULL) {
         return NULL;
     }
 
-    struct rb_node *next = rb_next(node);
+    struct rb_node *next = rb_next(&node->node_rbtree);
+    return next ? rb_entry(next, struct KcpConnection, node_rbtree) : NULL;
 }
 
 struct KcpConnection *connection_last(connection_set_t *node)
@@ -118,8 +119,8 @@ void connection_set_clear(connection_set_t *root, connection_set_destroy_cb_t cb
     }
 
     struct rb_node* node = NULL;
-    while((node = rb_first(&root))) {
-        rb_erase(node, &root);
+    while((node = rb_first(root))) {
+        rb_erase(node, root);
         if (cb) {
             struct KcpConnection *pthis = rb_entry(node, struct KcpConnection, node_rbtree);
             cb(pthis);

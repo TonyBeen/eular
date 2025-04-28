@@ -118,7 +118,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
 
-            kcp_send_packet(kcp_connection, &data, 1);
+            kcp_send_packet(kcp_connection, data, 1);
             kcp_connection->state = KCP_STATE_DISCONNECTED;
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
@@ -146,7 +146,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
 
-            kcp_send_packet(kcp_connection, &data, 1);
+            kcp_send_packet(kcp_connection, data, 1);
         } else if (kcp_header->cmd == KCP_CMD_ACK) {
             kcp_connection->state = KCP_STATE_DISCONNECTED;
             if (kcp_connection->kcp_ctx->callback.on_closed) {
@@ -176,7 +176,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        kcp_send_packet(kcp_connection, &data, 1);
+        kcp_send_packet(kcp_connection, data, 1);
 
         kcp_connection->state = KCP_STATE_DISCONNECTED;
 
@@ -252,7 +252,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                 data[0].iov_base = kcp_connection->buffer;
                 data[0].iov_len = ptr - kcp_connection->buffer;
 
-                kcp_send_packet(kcp_connection, &data, 1);
+                kcp_send_packet(kcp_connection, data, 1);
                 ptr = kcp_connection->buffer;
             }
         }
@@ -288,7 +288,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             data[0].iov_base = kcp_connection->buffer;
             data[0].iov_len = ptr - kcp_connection->buffer;
 
-            kcp_send_packet(kcp_connection, &data, 1);
+            kcp_send_packet(kcp_connection, data, 1);
             ptr = kcp_connection->buffer;
         }
         kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
@@ -303,7 +303,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             data[0].iov_base = kcp_connection->buffer;
             data[0].iov_len = ptr - kcp_connection->buffer;
 
-            kcp_send_packet(kcp_connection, &data, 1);
+            kcp_send_packet(kcp_connection, data, 1);
             ptr = kcp_connection->buffer;
         }
         kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
@@ -313,7 +313,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         struct iovec data[1];
         data[0].iov_base = kcp_connection->buffer;
         data[0].iov_len = ptr - kcp_connection->buffer;
-        kcp_send_packet(kcp_connection, &data, 1);
+        kcp_send_packet(kcp_connection, data, 1);
     }
     kcp_connection->probe = 0; // 清除探测标志
 
@@ -348,10 +348,9 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     uint32_t resent = kcp_connection->fastresend > 0 ? kcp_connection->fastresend : UINT32_MAX;
     uint32_t rtomin = (kcp_connection->nodelay == 0) ? (kcp_connection->rx_rto >> 3) : 0;
     {
-        static const uint32_t KCP_PACKET_COUNT = 32;
         bool need_flush = false;
         int32_t buffer_index = 0;
-        char *packet_cache[KCP_PACKET_COUNT + 1][ETHERNET_MTU] = {0};
+        char packet_cache[KCP_PACKET_COUNT + 1][ETHERNET_MTU];
         size_t packet_cache_size[KCP_PACKET_COUNT + 1] = {0};
         char *buffer_offset = packet_cache[buffer_index];
         kcp_segment_t *pos = NULL;
@@ -467,7 +466,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
+        int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status != 1) {
             int32_t code = get_last_errno();
             if (code == EAGAIN || code == EWOULDBLOCK) {
@@ -496,7 +495,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         struct iovec data[1];
         data->iov_base = buffer;
         data->iov_len = KCP_HEADER_SIZE;
-        int32_t status = kcp_send_packet(kcp_connection, &data, 1);
+        int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status != 1) {
             int32_t code = get_last_errno();
             if (code == EAGAIN || code == EWOULDBLOCK) {

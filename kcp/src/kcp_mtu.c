@@ -205,7 +205,7 @@ int32_t kcp_mtu_ack_received(kcp_connection_t *kcp_conn, const kcp_proto_header_
         if (kcp_conn->mtu_probe_ctx->on_probe_completed != NULL) {
             kcp_conn->mtu_probe_ctx->on_probe_completed(kcp_conn, probe_ctx->mtu_current, NO_ERROR);
         }
-        return;
+        return NO_ERROR;
     }
 
     probe_ctx->mtu_lbound = probe_ctx->mtu_current + 1;

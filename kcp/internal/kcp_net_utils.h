@@ -9,6 +9,8 @@
 
 #define SOCKADDR_STRING_LEN 128
 
+struct KcpConnection;
+
 EXTERN_C_BEGIN
 
 int32_t set_socket_nonblock(socket_t fd);

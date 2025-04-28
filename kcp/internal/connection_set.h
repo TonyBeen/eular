@@ -2,6 +2,7 @@
 #define __KCP_INTERNAL_SOCKET_SET_H__
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "kcp_def.h"
 #include "rbtree.h"
@@ -21,7 +22,7 @@ struct KcpConnection *connection_set_erase(connection_set_t *root, int32_t conv)
 void connection_set_erase_node(connection_set_t *root, struct KcpConnection *node);
 
 struct KcpConnection *connection_first(connection_set_t *root);
-struct KcpConnection *connection_next(connection_set_t *node);
+struct KcpConnection *connection_next(struct KcpConnection *node);
 struct KcpConnection *connection_last(connection_set_t *node);
 
 typedef void (*connection_set_destroy_cb_t)(struct KcpConnection *node);

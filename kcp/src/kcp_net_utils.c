@@ -1,4 +1,7 @@
 #include "kcp_net_utils.h"
+
+#include <string.h>
+
 #include "kcp_inc.h"
 #include "kcp_error.h"
 #include "kcp_protocol.h"
@@ -167,9 +170,9 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
     for (int32_t i = 0; i < size; ++i) {
         struct msghdr msg;
         memset(&msg, 0, sizeof(msg));
-        msg.msg_name = remote_addr;
+        msg.msg_name = (void *)remote_addr;
         msg.msg_namelen = sizeof(sockaddr_t);
-        msg.msg_iov = &data[i];
+        msg.msg_iov = (struct iovec *)&data[i];
         msg.msg_iovlen = 1;
         send_size = sendmsg(sock, &msg, MSG_NOSIGNAL);
         if (send_size <= 0) {

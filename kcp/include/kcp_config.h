@@ -7,7 +7,8 @@
 #define KCP_CONV_FLAG       0xFFFF0000
 #define KCP_BITMAP_SIZE     65535
 
-#define KCP_HEADER_SIZE     (32)
+#define KCP_HEADER_SIZE     32
+#define KCP_PACKET_COUNT    32
 
 enum ConfigKey {
     CONFIG_KEY_NODELAY  = 0b0001,
@@ -62,7 +63,7 @@ static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
 static const uint32_t   KCP_PING_RECV   = 0b0100;   // 
 
 static const uint32_t   KCP_WND_RCV     = 128;      // must >= max fragment size
-static const uint32_t   KCP_MAX_PACKET_SIZE     = (576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_WND_RCV; // 一次发送的最大字节数, frg [0, KCP_WND_RCV - 1]
+#define                 KCP_MAX_PACKET_SIZE     ((576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_WND_RCV) // 一次发送的最大字节数, frg [0, KCP_WND_RCV - 1]
 
 static const uint32_t   KCP_INTERVAL_MAX        = 500;  // 协议内部发送数据的最大间隔
 static const uint32_t   KCP_INTERVAL_MIN        = 10;   // 协议内部发送数据的最小间隔

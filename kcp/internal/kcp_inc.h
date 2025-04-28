@@ -54,7 +54,6 @@ struct iovec {
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <net/if.h>
-#include <linux/time.h>
 #include <linux/errqueue.h>
 #include <netinet/ip_icmp.h>
 
