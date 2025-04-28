@@ -309,6 +309,11 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
         memcpy(ptr, buffer, KCP_HEADER_SIZE);
         ptr += KCP_HEADER_SIZE;
+
+        struct iovec data[1];
+        data[0].iov_base = kcp_connection->buffer;
+        data[0].iov_len = ptr - kcp_connection->buffer;
+        kcp_send_packet(kcp_connection, &data, 1);
     }
     kcp_connection->probe = 0; // 清除探测标志
 
@@ -343,6 +348,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     uint32_t resent = kcp_connection->fastresend > 0 ? kcp_connection->fastresend : UINT32_MAX;
     uint32_t rtomin = (kcp_connection->nodelay == 0) ? (kcp_connection->rx_rto >> 3) : 0;
     {
+        static const uint32_t KCP_PACKET_COUNT = 32;
+        bool need_flush = false;
+        int32_t buffer_index = 0;
+        char *packet_cache[KCP_PACKET_COUNT + 1][ETHERNET_MTU] = {0};
+        size_t packet_cache_size[KCP_PACKET_COUNT + 1] = {0};
+        char *buffer_offset = packet_cache[buffer_index];
         kcp_segment_t *pos = NULL;
         kcp_segment_t *next = NULL;
         list_for_each_entry_safe(pos, next, &kcp_connection->snd_buf, node_list) {
@@ -371,10 +382,62 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                     pos->fastack = 0;
                 }
             }
+
+            if (need_send) {
+                need_flush = true;
+                int32_t segment_size = 0;
+            label_send:
+                if (buffer_index == KCP_PACKET_COUNT) {
+                    // 如果缓存区已满, 则发送数据包
+                    struct iovec data[KCP_PACKET_COUNT];
+                    for (int i = 0; i < KCP_PACKET_COUNT; i++) {
+                        data[i].iov_base = packet_cache[i];
+                        data[i].iov_len = packet_cache_size[i];
+                    }
+
+                    int32_t status = kcp_send_packet(kcp_connection, data, KCP_PACKET_COUNT);
+                    if (status < 0) {
+                        int32_t code = get_last_errno();
+                        if (code == EAGAIN || code == EWOULDBLOCK) {
+                            return OP_TRY_AGAIN;
+                        } else {
+                            return WRITE_ERROR;
+                        }
+                    }
+
+                    buffer_index = 0;
+                    buffer_offset = packet_cache[buffer_index];
+                }
+                segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - (buffer_offset - packet_cache[buffer_index]));
+                if (segment_size == BUFFER_TOO_SMALL) {
+                    packet_cache_size[buffer_index] = buffer_offset - packet_cache[buffer_index];
+                    ++buffer_index;
+                    buffer_offset = packet_cache[buffer_index];
+                    goto label_send; // 缓冲区不足, 切换到下一个缓存区
+                }
+            }
+        }
+
+        // 发送剩余数据包
+        if (need_flush) {
+            struct iovec data[KCP_PACKET_COUNT];
+            for (int i = 0; i < (buffer_index + 1); i++) {
+                data[i].iov_base = packet_cache[i];
+                data[i].iov_len = packet_cache_size[i];
+            }
+
+            int32_t status = kcp_send_packet(kcp_connection, data, buffer_index + 1);
+            if (status < 0) {
+                int32_t code = get_last_errno();
+                if (code == EAGAIN || code == EWOULDBLOCK) {
+                    return OP_TRY_AGAIN;
+                } else {
+                    return WRITE_ERROR;
+                }
+            }
         }
     }
 
-    // TODO 完善写超时回调
     kcp_connection->next_timeout += kcp_connection->interval;
     return NO_ERROR;
 }
@@ -676,6 +739,39 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     }
 
     return (KCP_HEADER_SIZE + lengeth);
+}
+
+int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t buffer_size)
+{
+    if (buffer_size < (KCP_HEADER_SIZE + segment->len)) {
+        return BUFFER_TOO_SMALL;
+    }
+
+    char *buffer_offset = buffer;
+    *(uint32_t *)buffer_offset = htole32(segment->conv);
+    buffer_offset += 4;
+    *(uint8_t *)buffer_offset = segment->cmd;
+    buffer_offset += 1;
+    *(uint8_t *)buffer_offset = segment->frg;
+    buffer_offset += 1;
+    *(uint16_t *)buffer_offset = htole16(segment->wnd);
+    buffer_offset += 2;
+
+    *(uint64_t *)buffer_offset = htole64(segment->ts);
+    buffer_offset += 8;
+    *(uint32_t *)buffer_offset = htole32(segment->sn);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(segment->una);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(segment->len);
+    buffer_offset += 4;
+
+    if (segment->data && segment->len > 0) {
+        memcpy(buffer_offset, segment->data, segment->len);
+        buffer_offset += segment->len;
+    }
+
+    return (KCP_HEADER_SIZE + segment->len);
 }
 
 /**

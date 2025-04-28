@@ -308,6 +308,8 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
 
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size);
 
+int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t buffer_size);
+
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header);
 
 int32_t kcp_flush(kcp_connection_t *kcp_conn);
