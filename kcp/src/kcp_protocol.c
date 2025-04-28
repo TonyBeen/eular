@@ -633,10 +633,15 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     }
 
     // 释放超时事件
+    kcp_conn->need_write_timer_event = false;
     if (kcp_conn->syn_timer_event) {
-        event_del(kcp_conn->syn_timer_event);
         event_free(kcp_conn->syn_timer_event);
         kcp_conn->syn_timer_event = NULL;
+    }
+
+    if (kcp_conn->fin_timer_event) {
+        event_free(kcp_conn->fin_timer_event);
+        kcp_conn->fin_timer_event = NULL;
     }
 
     // 清理SYN包
@@ -1047,7 +1052,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         return NO_ERROR;
     }
 
-    // TODO 解决序号溢出导致的回环问题
+    // FIXME 解决序号溢出导致的回环问题
     if (kcp_header->packet_data.sn < kcp_conn->rcv_nxt) { // 此包已被接收过
         return NO_ERROR;
     }

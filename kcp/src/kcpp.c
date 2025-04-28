@@ -281,7 +281,50 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         return;
     }
 
-    // TODO 释放资源
+    {
+        kcp_connection_t *it = NULL;
+        for (it = connection_first(&kcp_ctx->connection_set); it != NULL; it = connection_next(it)) {
+            if (it->state != KCP_STATE_DISCONNECTED) {
+                kcp_shutdown(it);
+            }
+            kcp_connection_destroy(it);
+        }
+    }
+
+    if (!list_empty(&kcp_ctx->syn_queue)) { // 清理SYN队列
+        kcp_syn_node_t *pos = NULL;
+        kcp_syn_node_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_ctx->syn_queue, node) {
+            list_del_init(&pos->node);
+            free(pos);
+        }
+    }
+
+    if (kcp_ctx->read_event) {
+        event_free(kcp_ctx->read_event);
+        kcp_ctx->read_event = NULL;
+    }
+
+    if (kcp_ctx->write_event) {
+        event_free(kcp_ctx->write_event);
+        kcp_ctx->write_event = NULL;
+    }
+
+    if (kcp_ctx->write_timer_event) {
+        evtimer_free(kcp_ctx->write_timer_event);
+        kcp_ctx->write_timer_event = NULL;
+    }
+
+    if (kcp_ctx->read_buffer) {
+        free(kcp_ctx->read_buffer);
+        kcp_ctx->read_buffer = NULL;
+        kcp_ctx->read_buffer_size = 0;
+    }
+
+    if (kcp_ctx->event_loop) {
+        event_base_free(kcp_ctx->event_loop);
+        kcp_ctx->event_loop = NULL;
+    }
 
 #if defined(OS_LINUX)
     close(kcp_ctx->sock);
