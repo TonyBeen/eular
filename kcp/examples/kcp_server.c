@@ -18,6 +18,10 @@
 #error "This example requires a Linux environment."
 #endif
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
     if (kcp_connection) {
@@ -51,7 +55,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
     if (bytes_read > 0) {
         printf("Received %d bytes: %.*s\n", bytes_read, bytes_read, buffer);
         // Echo back the data
-        kcp_write(kcp_connection, buffer, bytes_read);
+        kcp_send(kcp_connection, buffer, bytes_read);
     } else if (bytes_read < 0) {
         fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
     }

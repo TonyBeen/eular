@@ -94,9 +94,9 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
 int main(int argc, char **argv)
 {
-    char command = 0;
+    int32_t command = 0;
     const char *remote_host = "127.0.0.1";
-    while (command = getopt(argc, argv, "s:h")) {
+    while ((command = getopt(argc, argv, "s:h")) != -1) {
         switch (command) {
             case 's':
                 remote_host = optarg;
@@ -104,8 +104,11 @@ int main(int argc, char **argv)
             case 'h':
                 fprintf(stderr, "Usage: %s [-s command]\n", argv[0]);
                 return 0;
+            case '?':
+                fprintf(stderr, "Unknown option: %d\n", optopt);
+                return -1;
             default:
-                fprintf(stderr, "Usage: %s [-s command]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-s command] %d\n", argv[0], command);
                 return -1;
         }
     }
@@ -160,10 +163,11 @@ int main(int argc, char **argv)
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
     local_addr.sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    local_addr.sin.sin_port = htons(54321);
+    local_addr.sin.sin_port = htons(65432);
 
-    if (NO_ERROR != kcp_bind(ctx, &local_addr, NULL)) {
-        fprintf(stderr, "Failed to bind KCP context\n");
+    int32_t status = kcp_bind(ctx, &local_addr, NULL);
+    if (NO_ERROR != status) {
+        fprintf(stderr, "Failed to bind KCP context. %d\n", status);
         kcp_context_destroy(ctx);
         return -1;
     }
