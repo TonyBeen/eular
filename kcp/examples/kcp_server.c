@@ -13,6 +13,7 @@
 
 #include <kcpp.h>
 #include <kcp_error.h>
+#include <kcp_log.h>
 
 #ifndef OS_LINUX
 #error "This example requires a Linux environment."
@@ -74,6 +75,8 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
 
 int main(int argc, char **argv)
 {
+    kcp_log_level(LOG_LEVEL_DEBUG);
+
     struct event_base *base = event_base_new();
     struct KcpContext *ctx = NULL;
     ctx = kcp_context_create(base, on_kcp_error, NULL);
@@ -85,10 +88,10 @@ int main(int argc, char **argv)
     sockaddr_t local_addr;
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
-    local_addr.sin.sin_addr.s_addr = htonl(INADDR_ANY);
+    local_addr.sin.sin_addr.s_addr = inet_addr("192.168.3.10");
     local_addr.sin.sin_port = htons(54321);
 
-    int32_t statuc = kcp_bind(ctx, &local_addr, "eno1");
+    int32_t statuc = kcp_bind(ctx, &local_addr, NULL);
     if (statuc != NO_ERROR) {
         fprintf(stderr, "Failed to bind KCP context: %d\n", statuc);
         kcp_context_destroy(ctx);

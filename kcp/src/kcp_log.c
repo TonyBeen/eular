@@ -14,8 +14,11 @@
 
 void default_log_cb(int32_t level, const char *log, int32_t size)
 {
-    const char *str_level = "DEBUG";
+    const char *str_level = "UNKNOW";
     switch (level) {
+    case LOG_LEVEL_DEBUG:
+        str_level = "DEBUG";
+        break;
     case LOG_LEVEL_INFO:
         str_level = "INFO";
         break;
@@ -29,7 +32,6 @@ void default_log_cb(int32_t level, const char *log, int32_t size)
         str_level = "FATAL";
         break;
     default:
-        str_level = "UNKNOW";
         break;
     }
 
@@ -57,7 +59,7 @@ int32_t kcp_log_format(int32_t level, const char *file_name, const char *func_na
     va_end(ap);
 
     if (len > 0 && g_log_callback != NULL) {
-        g_log_callback(level, log_buffer, len);
+        g_log_callback(level, log_buffer, offset + len);
     }
 
     return len;

@@ -183,6 +183,8 @@ static void kcp_read_cb(int fd, short ev, void *arg)
             }
         }
 
+        char buffer[INET6_ADDRSTRLEN] = {0};
+        KCP_LOGD("kcp read %zd bytes from %s", nreads, sockaddr_to_string(&remote_addr, buffer, sizeof(buffer)));
         kcp_parse_packet(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr);
     }
 #else
@@ -699,6 +701,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
             event_free(kcp_connection->syn_timer_event);
             kcp_connection->syn_timer_event = NULL;
             kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, status);
+            kcp_connection_destroy(kcp_connection);
             return;
         }
 
@@ -711,6 +714,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
     event_free(kcp_connection->syn_timer_event);
     kcp_connection->syn_timer_event = NULL;
     kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, TIMED_OUT);
+    kcp_connection_destroy(kcp_connection);
 }
 
 int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t timeout_ms, on_kcp_connected_t cb)
@@ -768,6 +772,8 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     if (status <= 0) {
         return status;
     }
+    char log_buffer[SOCKADDR_STRING_LEN] = {0};
+    KCP_LOGD("kcp connect to %s, status: %u", sockaddr_to_string(addr, log_buffer, sizeof(log_buffer)), status);
 
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;

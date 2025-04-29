@@ -13,6 +13,7 @@
 
 #include <kcpp.h>
 #include <kcp_error.h>
+#include <kcp_log.h>
 
 #ifndef OS_LINUX
 #error "This example requires a Linux environment."
@@ -94,6 +95,8 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
 int main(int argc, char **argv)
 {
+    kcp_log_level(LOG_LEVEL_DEBUG);
+
     int32_t command = 0;
     const char *remote_host = "127.0.0.1";
     while ((command = getopt(argc, argv, "s:h")) != -1) {
