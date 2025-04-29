@@ -13,7 +13,7 @@ endif()
 
 option(KCPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(KCPP_STATIC_LIB "Build static library" ON)
-option(BUILD_EXAMPLES "Compile sample program" OFF)
+option(BUILD_EXAMPLES "Compile sample program" ON)
 option(BUILD_TEST "Compile sample program" OFF)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 
@@ -32,16 +32,20 @@ configure_file(
 file(GLOB HEADER_LIST           "include/*.h")
 file(GLOB INTERNAL_HEADER_LIST  "internal/*.h")
 file(GLOB 3RD_HEADER_LIST       "3rd_party/*.h")
-list(APPEND HEADER_LIST ${INTERNAL_HEADER_LIST})
-list(APPEND HEADER_LIST ${3RD_HEADER_LIST})
-message(STATUS "Header files: ${HEADER_LIST}")
+list(APPEND HEADER_LIST         ${INTERNAL_HEADER_LIST})
+list(APPEND HEADER_LIST         ${3RD_HEADER_LIST})
+
 file(GLOB SRC_LIST              "src/*.c")
 file(GLOB 3RD_SRC_LIST          "3rd_party/*.c")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(STATUS "Linux")
     add_definitions(-D_GNU_SOURCE -DXXH_INLINE_ALL -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
     # add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+endif()
+
+if(BUILD_EXAMPLES MATCHES "ON")
+    message(STATUS "Build examples")
+    add_subdirectory(examples)
 endif()
 
 # 生成静态库
@@ -71,6 +75,8 @@ if(KCPP_STATIC_LIB MATCHES "ON")
         LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
     )
     set_property(TARGET kcpp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+    set(KCPP_LIBRARIE kcpp_static CACHE INTERNAL "link kcpp librarie")
 
     if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
         install(TARGETS kcpp_static
