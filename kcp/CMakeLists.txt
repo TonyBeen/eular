@@ -67,7 +67,7 @@ if(KCPP_STATIC_LIB MATCHES "ON")
             ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party
     )
 
-    target_link_libraries(kcpp_static PUBLIC ${Libevent_LIBRARIES} pthread)
+    target_link_libraries(kcpp_static PUBLIC ${LIBEVENT_STATIC_LIBRARIES})
 
     target_compile_options(
         kcpp_static PRIVATE
