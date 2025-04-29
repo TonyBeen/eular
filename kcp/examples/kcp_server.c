@@ -14,6 +14,10 @@
 #include <kcpp.h>
 #include <kcp_error.h>
 
+#ifndef OS_LINUX
+#error "This example requires a Linux environment."
+#endif
+
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
     if (kcp_connection) {
@@ -42,8 +46,8 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 
 void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 {
-    char buffer[1024];
-    int32_t bytes_read = kcp_read(kcp_connection, buffer, sizeof(buffer));
+    char *buffer = (char *)malloc(size);
+    int32_t bytes_read = kcp_recv(kcp_connection, buffer, size);
     if (bytes_read > 0) {
         printf("Received %d bytes: %.*s\n", bytes_read, bytes_read, buffer);
         // Echo back the data

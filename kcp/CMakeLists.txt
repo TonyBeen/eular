@@ -31,8 +31,10 @@ configure_file(
 
 file(GLOB HEADER_LIST           "include/*.h")
 file(GLOB INTERNAL_HEADER_LIST  "internal/*.h")
-list(APPEND HEADER_LIST ${INTERNAL_HEADER_LIST})
+file(GLOB 3RD_HEADER_LIST       "3rd_party/*.h")
+list(APPEND HEADER_LIST ${INTERNAL_HEADER_LIST} ${3RD_HEADER_LIST})
 file(GLOB SRC_LIST              "src/*.c")
+file(GLOB 3RD_SRC_LIST          "3rd_party/*.c")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "Linux")
@@ -42,7 +44,7 @@ endif()
 
 # 生成静态库
 if(KCPP_STATIC_LIB MATCHES "ON")
-    add_library(kcpp_static STATIC ${SRC_LIST} ${HEADER_LIST})
+    add_library(kcpp_static STATIC ${SRC_LIST} ${3RD_SRC_LIST} ${HEADER_LIST})
     add_library(eular::kcpp_static ALIAS kcpp_static)
 
     target_include_directories(kcpp_static
@@ -50,7 +52,6 @@ if(KCPP_STATIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/internal
             ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party
     )

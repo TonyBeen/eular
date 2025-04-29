@@ -7,6 +7,8 @@
 
 #include "bitmap.h"
 
+#include <string.h>
+
 #ifdef __CHAR_BIT__
 #define BITS_PEER_BYTE      __CHAR_BIT__
 #else

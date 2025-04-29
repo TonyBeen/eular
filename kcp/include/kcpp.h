@@ -73,6 +73,14 @@ typedef void (*on_kcp_error_t)(struct KcpContext *kcp_ctx, struct KcpConnection 
  */
 typedef void (*on_kcp_read_event_t)(struct KcpConnection *kcp_connection, int32_t size);
 
+/**
+ * @brief write event callback
+ *
+ * @param kcp_connection KCP connection
+ * @param wnd The size of the send window
+ */
+typedef void (*on_kcp_write_event_t)(struct KcpConnection *kcp_connection, int32_t wnd);
+
 /// kcp function
 
 /**
