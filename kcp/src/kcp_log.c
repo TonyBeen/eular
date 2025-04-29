@@ -51,7 +51,7 @@ int32_t kcp_log_format(int32_t level, const char *file_name, const char *func_na
     int32_t offset = 0;
     char log_buffer[LOG_BUFFER_SIZE] = {0};
 
-    offset = sprintf(log_buffer, "[%s:%s:%d] ->", file_name, func_name, line);
+    offset = sprintf(log_buffer, "[%s:%s:%d] -> ", file_name, func_name, line);
 
     va_list ap;
     va_start(ap, fmt);

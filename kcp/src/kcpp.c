@@ -89,6 +89,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         return;
     }
 
+    KCP_LOGD("kcp read event triggered, fd: %d", fd);
 #if defined(OS_LINUX)
     // process icmp error
     while (true) {
@@ -176,6 +177,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         msg.msg_flags = 0;
         ssize_t nreads = recvmsg(kcp_ctx->sock, &msg, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (nreads < 0) {
+            KCP_LOGE("kcp read error, errno: %d", errno);
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             } else {
@@ -268,8 +270,8 @@ struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb
     list_init(&ctx->syn_queue);
     connection_set_init(&ctx->connection_set);
     ctx->event_loop = base;
-    ctx->read_event = event_new(base, -1, EV_READ | EV_PERSIST, kcp_read_cb, ctx);
-    ctx->write_event = event_new(base, -1, EV_WRITE | EV_PERSIST, kcp_write_cb, ctx);
+    ctx->read_event = NULL;
+    ctx->write_event = NULL;
     ctx->write_timer_event = evtimer_new(base, kcp_write_timeout, ctx);
     ctx->read_buffer = (char *)malloc(ETHERNET_MTU);
     ctx->read_buffer_size = ETHERNET_MTU;
@@ -442,6 +444,9 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
     if (status != NO_ERROR) {
         return status;
     }
+
+    kcp_ctx->read_event = event_new(kcp_ctx->event_loop, kcp_ctx->sock, EV_READ | EV_PERSIST, kcp_read_cb, kcp_ctx);
+    kcp_ctx->write_event = event_new(kcp_ctx->event_loop, kcp_ctx->sock, EV_WRITE | EV_PERSIST, kcp_write_cb, kcp_ctx);
 
     status = set_socket_sendbuf(kcp_ctx->sock, 128 * 1024); // 128KB
     if (status != NO_ERROR) {
