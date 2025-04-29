@@ -22,6 +22,11 @@ if(ENABLE_DEBUG MATCHES "ON")
 endif()
 
 find_package(Libevent REQUIRED)
+# message(STATUS "libevent found: ${Libevent_FOUND}")
+# message(STATUS "libevent:")
+# message(STATUS "  version: ${Libevent_VERSION}")
+# message(STATUS "  libraries: ${LIBEVENT_INCLUDE_DIRS}")
+# message(STATUS "  include path: ${LIBEVENT_STATIC_LIBRARIES} ${LIBEVENT_SHARED_LIBRARIES}")
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/kcp_version.h.in
