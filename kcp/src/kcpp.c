@@ -50,6 +50,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             syn_node->rand_sn = kcp_header.syn_fin_data.rand_sn;
             syn_node->packet_ts = kcp_header.syn_fin_data.packet_ts;
             syn_node->ts = kcp_header.syn_fin_data.ts;
+            KCP_LOGD("recv syn packet, packet_sn: %X, ts: %lu rand_sn: %X", syn_node->packet_sn, syn_node->ts, syn_node->rand_sn);
             list_add_tail(&syn_node->node, &kcp_ctx->syn_queue);
 
             on_kcp_syn_received(kcp_ctx, addr);
@@ -93,7 +94,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             kcp_connection_destroy(kcp_connection);
             break;
         }
-    } while (buffer_offset <= (buffer + buffer_size)); // ACK 包可能会有多个
+    } while (buffer_offset < (buffer + buffer_size)); // ACK 包可能会有多个
 }
 
 static void kcp_read_cb(int fd, short ev, void *arg)
@@ -191,7 +192,6 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         msg.msg_flags = 0;
         ssize_t nreads = recvmsg(kcp_ctx->sock, &msg, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (nreads < 0) {
-            KCP_LOGW("kcp read error, errno: %d", errno);
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             } else {
@@ -634,7 +634,6 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
             KCP_LOGE("bitmap count = %d, no more conversation", bitmap_count(&kcp_ctx->conv_bitmap));
             abort();
         }
-        KCP_LOGD("kcp accept conversation: %u", conv);
 
         kcp_connection->conv = conv;
         kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_accept_timeout, kcp_connection);
@@ -664,6 +663,8 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
 
+        KCP_LOGD("kcp accept conversation: %X, packet_sn: %X, rand_sn: %X", conv, kcp_header.syn_fin_data.packet_sn, kcp_header.syn_fin_data.rand_sn);
+
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
 
@@ -675,7 +676,6 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         // 添加SYN超时事件
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
         evtimer_add(kcp_connection->syn_timer_event, &tv);
-
         if (status != 1) {
             int32_t code = get_last_errno();
             KCP_LOGW("kcp accept send syn packet error, status: %d, errno: %d", status, code);
@@ -700,8 +700,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 static void kcp_connect_timeout(int fd, short ev, void *arg)
 {
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
-    if (kcp_connection->syn_retries-- > 0) {
-        KCP_LOGD("kcp connect timeout, retry: %d", kcp_connection->syn_retries);
+    if (kcp_connection->syn_retries--) {
         kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
         list_init(&kcp_header->node_list);
         kcp_header->conv = KCP_CONV_FLAG;
@@ -713,6 +712,8 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         kcp_header->syn_fin_data.packet_sn = 0;
         kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
         list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
+
+        KCP_LOGD("kcp connect timeout, retry: %d, ts: %lu, rand_sn: %X", kcp_connection->syn_retries, kcp_header->syn_fin_data.ts, kcp_header->syn_fin_data.rand_sn);
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
@@ -786,8 +787,18 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
     list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
 
+    KCP_LOGE("===> SYN packet: packet_ts: %X, ts: %X, packet_sn: %X, rand_sn: %X <===",
+                 kcp_header->syn_fin_data.packet_ts, kcp_header->syn_fin_data.ts,
+                 kcp_header->syn_fin_data.packet_sn, kcp_header->syn_fin_data.rand_sn);
+
     char buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
+
+    char hex_log_buffer[4096] = {0};
+    for (int32_t i = 0; i < KCP_HEADER_SIZE; ++i) {
+        snprintf(hex_log_buffer + i * 2, sizeof(hex_log_buffer) - i * 2, "%02X", (uint8_t)buffer[i]);
+    }
+
     struct iovec data[1];
     data[0].iov_base = buffer;
     data[0].iov_len = KCP_HEADER_SIZE;
@@ -796,7 +807,8 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         return status;
     }
     char log_buffer[SOCKADDR_STRING_LEN] = {0};
-    KCP_LOGD("kcp connect to %s, status: %u", sockaddr_to_string(addr, log_buffer, sizeof(log_buffer)), status);
+    KCP_LOGD("kcp connect to %s, status: %u, ts: %lu rand_sn: %X, \n\t%s", sockaddr_to_string(addr, log_buffer, sizeof(log_buffer)), status,
+        kcp_header->syn_fin_data.ts, kcp_header->syn_fin_data.rand_sn, hex_log_buffer);
 
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;

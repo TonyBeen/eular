@@ -49,33 +49,35 @@ typedef struct KcpProtoHeader {
     uint16_t    wnd;        // 窗口大小
 
     union {
-        uint64_t    ts;     // packet发送时间戳
-        uint32_t    sn;     // 序号
-        uint32_t    psn;    // 包序列
-        uint32_t    una;    // 未确认序号
-        uint32_t    len;    // 数据长度
-        char*       data;   // 数据
-    } packet_data;
+        struct {
+            uint64_t    ts;     // packet发送时间戳
+            uint32_t    sn;     // 序号
+            uint32_t    psn;    // 包序列
+            uint32_t    una;    // 未确认序号
+            uint32_t    len;    // 数据长度
+            char*       data;   // 数据
+        } packet_data;
 
-    union { // NOTE 用于在三次握手阶段建立连接计算rtt
-        uint64_t    packet_ts;  // 接收此packet的时间戳
-        uint64_t    ts;         // 发送当前packet的时间戳
-        uint32_t    packet_sn;  // 包序列
-        uint32_t    rand_sn;    // 随机序列
-    } syn_fin_data;
+        struct { // NOTE 用于在三次握手阶段建立连接计算rtt
+            uint64_t    packet_ts;  // 接收此packet的时间戳
+            uint64_t    ts;         // 发送当前packet的时间戳
+            uint32_t    packet_sn;  // 包序列
+            uint32_t    rand_sn;    // 随机序列
+        } syn_fin_data;
 
-    union {
-        uint64_t    packet_ts;  // 接收此packet的时间戳
-        uint64_t    ack_ts;     // 发送ack的时间戳
-        uint32_t    sn;         // 序号
-        uint32_t    una;        // 未确认序号
-    } ack_data;
+        struct {
+            uint64_t    packet_ts;  // 接收此packet的时间戳
+            uint64_t    ack_ts;     // 发送ack的时间戳
+            uint32_t    sn;         // 序号
+            uint32_t    una;        // 未确认序号
+        } ack_data;
 
-    union {
-        uint64_t    packet_ts;  // 接收此packet的时间戳
-        uint64_t    ts;         // 发送 PING/PONG 的时间戳
-        uint64_t    sn;         // 随机序列
-    } ping_data;
+        struct {
+            uint64_t    packet_ts;  // 接收此packet的时间戳
+            uint64_t    ts;         // 发送 PING/PONG 的时间戳
+            uint64_t    sn;         // 随机序列
+        } ping_data;
+    };
 } kcp_proto_header_t;
 
 /// @brief KCP报文段

@@ -83,6 +83,10 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     case KCP_STATE_SYN_RECEIVED: { // server
         if (kcp_header->cmd == KCP_CMD_ACK || kcp_header->cmd == KCP_CMD_PUSH) {
             kcp_connection->state = KCP_STATE_CONNECTED;
+            if (kcp_connection->syn_timer_event) {
+                event_free(kcp_connection->syn_timer_event);
+                kcp_connection->syn_timer_event = NULL;
+            }
             // 通知连接建立
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
@@ -779,6 +783,9 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         *(uint32_t *)buffer_offset = htole32(kcp_header->ack_data.una);
         buffer_offset += 4;
     } else if (kcp_header->cmd == KCP_CMD_SYN || kcp_header->cmd == KCP_CMD_FIN) {
+        KCP_LOGE("SYN packet: packet_ts: %X, ts: %X, packet_sn: %X, rand_sn: %X",
+                 kcp_header->syn_fin_data.packet_ts, kcp_header->syn_fin_data.ts,
+                 kcp_header->syn_fin_data.packet_sn, kcp_header->syn_fin_data.rand_sn);
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.packet_ts);
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.ts);
@@ -939,6 +946,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                 break;
             }
 
+            KCP_LOGD("kcp connection: %X", kcp_connection->conv);
             bool status = false;
             kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
 
@@ -946,6 +954,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
+                KCP_LOGD("syn packet sn: %X, recv packet sn: %X", pos->syn_fin_data.rand_sn, syn_packet->packet_sn);
                 if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
                     // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
@@ -981,6 +990,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     } else {
                         // NOTE 对端未收到ACK, 会重发SYN
                         if (kcp_connection->syn_timer_event) {
+                            event_del(kcp_connection->syn_timer_event);
                             event_free(kcp_connection->syn_timer_event);
                             kcp_connection->syn_timer_event = NULL;
                         }
@@ -989,6 +999,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             list_del_init(&pos->node_list); // 其余的由server发送SYN包来删除或者destroy的时候删除
                             free(pos);
 
+                            KCP_LOGI("kcp connection established. conv: %X", kcp_connection->conv);
                             kcp_connection->state = KCP_STATE_CONNECTED;
                             status = true;
                             kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
