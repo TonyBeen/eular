@@ -670,6 +670,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     const char *data_offset = *data;
     kcp_header->conv = le32toh(*(uint32_t *)data_offset); // 会话ID
     if (!(kcp_header->conv & KCP_CONV_FLAG)) {
+        KCP_LOGD("invalid conv: %u", kcp_header->conv);
         return INVALID_KCP_HEADER;
     }
 
@@ -680,6 +681,37 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     data_offset += 1;
     kcp_header->wnd = le16toh(*(uint16_t *)(data_offset)); // 窗口大小
     data_offset += 2;
+
+    switch (kcp_header->cmd) {
+    case KCP_CMD_ACK: {
+        kcp_header->ack_data.packet_ts = le64toh(*(uint64_t *)(data_offset)); // 时间戳
+        data_offset += 8;
+        kcp_header->ack_data.ack_ts = le64toh(*(uint64_t *)(data_offset)); // ACK时间戳
+        data_offset += 8;
+        kcp_header->ack_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
+        data_offset += 4;
+        kcp_header->ack_data.una = le32toh(*(uint32_t *)(data_offset)); // 未确认序列号
+        data_offset += 4;
+        *data = data_offset;
+        break;
+    }
+    case KCP_CMD_SYN:
+    case KCP_CMD_FIN: {
+        kcp_header->syn_fin_data.packet_ts = le64toh(*(uint64_t *)data_offset);
+        data_offset += 8;
+        kcp_header->syn_fin_data.ts = le64toh(*(uint64_t *)data_offset);
+        data_offset += 8;
+        kcp_header->syn_fin_data.packet_sn = le32toh(*(uint32_t *)data_offset);
+        data_offset += 4;
+        kcp_header->syn_fin_data.rand_sn = le32toh(*(uint32_t *)data_offset);
+        data_offset += 4;
+        *data = data_offset;
+        break;
+    }
+    default:
+        break;
+    }
+
     kcp_header->packet_data.ts = le32toh(*(uint32_t *)(data_offset)); // 时间戳
     data_offset += 4;
     kcp_header->packet_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
@@ -696,6 +728,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     *data = data_offset;
 
     if (kcp_header->packet_data.len > (data_size - KCP_HEADER_SIZE)) {
+        KCP_LOGE("invalid packet data length: %u, data_size: %zu", kcp_header->packet_data.len, data_size);
         return INVALID_KCP_HEADER;
     }
 
@@ -704,7 +737,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
 
 int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buffer, size_t buffer_size)
 {
-    if (buffer_size < (KCP_HEADER_SIZE + kcp_header->packet_data.len)) {
+    if (buffer_size < KCP_HEADER_SIZE) {
         return BUFFER_TOO_SMALL;
     }
 
@@ -738,15 +771,24 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
         buffer_offset += 4;
     } else {
+        if (buffer_size < (KCP_HEADER_SIZE + kcp_header->packet_data.len)) {
+            KCP_LOGD("buffer size is too small: %zu, need: %zu", buffer_size, (KCP_HEADER_SIZE + kcp_header->packet_data.len));
+            return BUFFER_TOO_SMALL;
+        }
+
         *(uint64_t *)buffer_offset = htole64(kcp_header->packet_data.ts);
         buffer_offset += 8;
         *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.sn);
+        buffer_offset += 4;
+        *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.psn);
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.una);
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.len);
         buffer_offset += 4;
-        memcpy(buffer_offset, kcp_header->packet_data.data, kcp_header->packet_data.len);
+        if (kcp_header->packet_data.len > 0) {
+            memcpy(buffer_offset, kcp_header->packet_data.data, kcp_header->packet_data.len);
+        }
 
         lengeth = kcp_header->packet_data.len;
     }

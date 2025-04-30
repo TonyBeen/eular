@@ -5,6 +5,7 @@
 #include "kcp_inc.h"
 #include "kcp_error.h"
 #include "kcp_protocol.h"
+#include "kcp_log.h"
 
 int32_t set_socket_nonblock(socket_t fd)
 {
@@ -260,6 +261,7 @@ int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
 {
     if (list_empty(&kcp_conn->node_list)) {
         kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
+        KCP_LOGD("kcp_add_write_event: fd=%d, conn=%p", kcp_ctx->sock, kcp_conn);
         return event_add(kcp_ctx->write_event, NULL);
     }
 
