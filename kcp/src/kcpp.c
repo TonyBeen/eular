@@ -50,7 +50,6 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             syn_node->rand_sn = kcp_header.syn_fin_data.rand_sn;
             syn_node->packet_ts = kcp_header.syn_fin_data.packet_ts;
             syn_node->ts = kcp_header.syn_fin_data.ts;
-            KCP_LOGD("recv syn packet, packet_sn: %X, ts: %lu rand_sn: %X", syn_node->packet_sn, syn_node->ts, syn_node->rand_sn);
             list_add_tail(&syn_node->node, &kcp_ctx->syn_queue);
 
             on_kcp_syn_received(kcp_ctx, addr);
@@ -787,10 +786,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
     list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
 
-    KCP_LOGE("===> SYN packet: packet_ts: %X, ts: %X, packet_sn: %X, rand_sn: %X <===",
-                 kcp_header->syn_fin_data.packet_ts, kcp_header->syn_fin_data.ts,
-                 kcp_header->syn_fin_data.packet_sn, kcp_header->syn_fin_data.rand_sn);
-
     char buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
 
@@ -807,8 +802,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         return status;
     }
     char log_buffer[SOCKADDR_STRING_LEN] = {0};
-    KCP_LOGD("kcp connect to %s, status: %u, ts: %lu rand_sn: %X, \n\t%s", sockaddr_to_string(addr, log_buffer, sizeof(log_buffer)), status,
-        kcp_header->syn_fin_data.ts, kcp_header->syn_fin_data.rand_sn, hex_log_buffer);
 
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;

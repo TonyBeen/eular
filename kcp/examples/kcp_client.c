@@ -63,17 +63,19 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 void kcp_timer(int fd, short ev, void *user)
 {
     struct KcpConnection *kcp_connection = (struct KcpConnection *)user;
-    if (kcp_connection == NULL) {
-        fprintf(stderr, "KCP connection is NULL in timer callback\n");
-        return;
-    }
 
     // 定时发送数据
     const char *message = "Hello, KCP!";
-    kcp_send(kcp_connection, message, strlen(message));
+    int32_t status = kcp_send(kcp_connection, message, strlen(message));
+    if (status != NO_ERROR) {
+        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+        kcp_close(kcp_connection, 1000);
+        return;
+    }
+
     printf("TX: %s\n", message);
 
-    struct timeval timer_interval = {0, 500000}; // 500ms
+    struct timeval timer_interval = {1, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 
@@ -86,10 +88,19 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     printf("KCP connection established: %p\n", kcp_connection);
     set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
 
-    // 创建定时器, 定时发送
-    struct event *g_timer_event = event_new(g_ev_base, -1, EV_PERSIST, kcp_timer, kcp_connection);
-    struct timeval timer_interval = {0, 500000}; // 500ms
+    const char *message = "Hello, KCP!";
+    int32_t status = kcp_send(kcp_connection, message, strlen(message));
+    if (status != NO_ERROR) {
+        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+        kcp_close(kcp_connection, 1000);
+        return;
+    }
 
+    printf("TX: %s\n", message);
+
+    // 创建定时器, 定时发送
+    g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);
+    struct timeval timer_interval = {1, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 
@@ -180,6 +191,8 @@ int main(int argc, char **argv)
         kcp_context_destroy(ctx);
         return -1;
     }
+
+    kcp_set_close_cb(ctx, on_kcp_closed);
 
     printf("KCP client started, connecting to %s:%d\n", remote_host, ntohs(remote_addr.sin.sin_port));
     if (event_base_dispatch(g_ev_base) < 0) {
