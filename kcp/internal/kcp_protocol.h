@@ -73,7 +73,7 @@ typedef struct KcpProtoHeader {
 
     union {
         uint64_t    packet_ts;  // 接收此packet的时间戳
-        uint64_t    ping_ts;    // 发送ping的时间戳
+        uint64_t    ts;         // 发送 PING/PONG 的时间戳
         uint64_t    sn;         // 随机序列
     } ping_data;
 } kcp_proto_header_t;

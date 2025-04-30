@@ -316,6 +316,11 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         data[0].iov_len = ptr - kcp_connection->buffer;
         kcp_send_packet(kcp_connection, data, 1);
     }
+
+    // TODO 检验是否需要发送PING
+    if (kcp_connection->probe & KCP_PING_RECV) {
+        // TODO 发送PONG响应
+    }
     kcp_connection->probe = 0; // 清除探测标志
 
     int32_t cwnd = MIN(kcp_connection->snd_wnd, kcp_connection->rmt_wnd);
@@ -708,28 +713,40 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         *data = data_offset;
         break;
     }
-    default:
+    case KCP_CMD_PING:
+    case KCP_CMD_PONG: {
+        kcp_header->ping_data.packet_ts = le64toh(*(uint64_t *)data_offset); // 时间戳
+        data_offset += 8;
+        kcp_header->ping_data.ts = le64toh(*(uint64_t *)data_offset); // PING/PONG时间戳
+        data_offset += 8;
+        kcp_header->ping_data.sn = le64toh(*(uint64_t *)data_offset); // PONG时间戳
+        data_offset += 8;
         break;
     }
+    default: {
+        kcp_header->packet_data.ts = le32toh(*(uint32_t *)(data_offset)); // 时间戳
+        data_offset += 4;
+        kcp_header->packet_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
+        data_offset += 4;
+        kcp_header->packet_data.psn = le32toh(*(uint32_t *)(data_offset)); // 包序列号
+        data_offset += 4;
+        kcp_header->packet_data.una = le32toh(*(uint32_t *)(data_offset)); // 未确认序列号
+        data_offset += 4;
+        kcp_header->packet_data.len = le32toh(*(uint32_t *)(data_offset)); // 数据长度
+        data_offset += 4;
+        kcp_header->packet_data.data = NULL;
+        if (kcp_header->packet_data.len > 0) {
+            kcp_header->packet_data.data = (char *)data_offset; // 数据
+        }
+        data_offset += kcp_header->packet_data.len;
+        *data = data_offset;
 
-    kcp_header->packet_data.ts = le32toh(*(uint32_t *)(data_offset)); // 时间戳
-    data_offset += 4;
-    kcp_header->packet_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
-    data_offset += 4;
-    kcp_header->packet_data.una = le32toh(*(uint32_t *)(data_offset)); // 未确认序列号
-    data_offset += 4;
-    kcp_header->packet_data.len = le32toh(*(uint32_t *)(data_offset)); // 数据长度
-    data_offset += 4;
-    kcp_header->packet_data.data = NULL;
-    if (kcp_header->packet_data.len > 0) {
-        kcp_header->packet_data.data = (char *)data_offset; // 数据
-    }
-    data_offset += kcp_header->packet_data.len;
-    *data = data_offset;
-
-    if (kcp_header->packet_data.len > (data_size - KCP_HEADER_SIZE)) {
-        KCP_LOGE("invalid packet data length: %u, data_size: %zu", kcp_header->packet_data.len, data_size);
-        return INVALID_KCP_HEADER;
+        if (kcp_header->packet_data.len > (data_size - KCP_HEADER_SIZE)) {
+            KCP_LOGE("invalid packet data length: %u, data_size: %zu", kcp_header->packet_data.len, data_size);
+            return INVALID_KCP_HEADER;
+        }
+        break;
+    }   
     }
 
     return NO_ERROR;
@@ -863,7 +880,7 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
     case KCP_CMD_PONG: // 计算RTT
         if (kcp_conn->ping_ctx->keepalive_sn == kcp_header->ping_data.sn) {
             uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
-                           (kcp_header->ping_data.ping_ts - kcp_header->ping_data.packet_ts);
+                           (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
             kcp_conn->ping_ctx->keepalive_rtt = rtt;
             kcp_conn->ping_ctx->keepalive_sn = 0;
             kcp_conn->ping_ctx->keepalive_packet_ts = 0;
