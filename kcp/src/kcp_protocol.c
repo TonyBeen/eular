@@ -64,6 +64,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             break;
         default:
             kcp_connection->state = KCP_STATE_DISCONNECTED;
+            KCP_LOGW("KCP_CMD_RST received, call on_closed");
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, CONNECTION_RESET);
             }
@@ -89,6 +90,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             }
             // 通知连接建立
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
+                kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
             } else if (kcp_connection->kcp_ctx->callback.on_connected) {
                 kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
@@ -165,6 +167,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 
     if (send_rst) {
+        KCP_LOGD("=============> send rst packet");
         kcp_proto_header_t kcp_rst_header;
         kcp_rst_header.conv = kcp_connection->conv;
         kcp_rst_header.cmd = KCP_CMD_RST;
@@ -228,10 +231,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     if (kcp_connection->ts_flush > (timestamp / 1000)) {
+        KCP_LOGD("on_kcp_write_timeout: ts_flush: %llu, timestamp: %llu", kcp_connection->ts_flush, timestamp / 1000);
         // 如果当前时间戳小于下次超时时间戳, 则不处理
         return NO_ERROR;
     }
 
+    KCP_LOGD("--> on_kcp_write_timeout: ts_flush: %llu, timestamp: %llu", kcp_connection->ts_flush, timestamp / 1000);
     char *ptr = kcp_connection->buffer;
     char buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_t kcp_ack_header;
@@ -451,7 +456,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         }
     }
 
-    kcp_connection->ts_flush += kcp_connection->interval;
+    kcp_connection->ts_flush = timestamp / 1000 + kcp_connection->interval;
     return NO_ERROR;
 }
 
@@ -923,6 +928,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
     do {
         if (is_sever) {
             if (!kcp_ctx->callback.on_connect(kcp_ctx, addr)) { // 拒绝连接
+                KCP_LOGW("kcp connection refused");
                 kcp_proto_header_t kcp_rst_header;
                 kcp_rst_header.conv = KCP_CONV_FLAG;
                 kcp_rst_header.cmd = KCP_CMD_RST;

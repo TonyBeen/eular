@@ -251,13 +251,17 @@ static void kcp_write_timeout(int fd, short ev, void *arg)
 {
     kcp_context_t *kcp_ctx = (kcp_context_t *)arg;
     // 遍历所有连接, 超时未发送数据则触发写事件
-    uint64_t current_time_ms = kcp_time_monotonic_ms();
+    uint64_t current_time_us = kcp_time_monotonic_us();
     kcp_connection_t *pos = NULL;
     for (pos = connection_first(&kcp_ctx->connection_set); pos != NULL; pos = connection_next(pos)) {
         if (pos->need_write_timer_event) {
-            pos->write_cb(pos, current_time_ms);
+            pos->write_cb(pos, current_time_us);
         }
     }
+
+    // 重新添加超时事件
+    struct timeval tv = {0, 1000}; // 1ms
+    evtimer_add(kcp_ctx->write_timer_event, &tv);
 }
 
 struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb, void *user)
@@ -945,6 +949,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
 void kcp_shutdown(struct KcpConnection *kcp_connection)
 {
     // 发送RST
+    KCP_LOGI("kcp shutdown, conversation: %X", kcp_connection->conv);
     kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
 
     kcp_proto_header_t kcp_header;

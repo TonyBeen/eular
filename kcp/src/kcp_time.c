@@ -77,7 +77,7 @@ uint64_t kcp_time_monotonic_us()
 #else // Linux Mac
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)(ts.tv_sec * 1000 * 1000 + ts.tv_nsec / 1000);
+    return (uint64_t)(ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
 #endif
 }
 
