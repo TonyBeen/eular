@@ -313,8 +313,6 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
 
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header);
 
-int32_t kcp_flush(kcp_connection_t *kcp_conn);
-
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr);
 
 kcp_segment_t *kcp_segment_send_get(kcp_connection_t *kcp_conn);

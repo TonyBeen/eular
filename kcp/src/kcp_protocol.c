@@ -214,15 +214,20 @@ static int kcp_wnd_unused(struct KcpConnection *kcp_connection)
     return 0;
 }
 
-
-// KCP 写超时回调
+/**
+ * @brief kcp 写超时回调
+ * 
+ * @param kcp_connection kcp connection 
+ * @param timestamp 微秒时间戳 (timestamp > 0)
+ * @return int32_t 成功返回NO_ERROR, 失败返回错误码
+ */
 static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
     if (kcp_connection->state != KCP_STATE_CONNECTED) {
         return NO_ERROR;
     }
 
-    if (kcp_connection->ts_flush > timestamp) {
+    if (kcp_connection->ts_flush > (timestamp / 1000)) {
         // 如果当前时间戳小于下次超时时间戳, 则不处理
         return NO_ERROR;
     }
@@ -321,7 +326,6 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_send_packet(kcp_connection, data, 1);
     }
 
-    // TODO 检验是否需要发送PING
     if (kcp_connection->probe & KCP_PING_RECV) {
         // TODO 发送PONG响应
     }
@@ -451,7 +455,13 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     return NO_ERROR;
 }
 
-// kcp写事件回调, 主要用于EAGAIN错误
+/**
+ * @brief kcp写事件回调
+ * 
+ * @param kcp_connection kcp connection 
+ * @param timestamp 微秒时间戳, > 0 表示超时, == 0 表示正常写事件
+ * @return int32_t 成功返回NO_ERROR, 失败返回错误码
+ */
 static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t timestamp)
 {
     assert(kcp_connection != NULL);
@@ -905,12 +915,6 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
     }
 
     return NO_ERROR;
-}
-
-int32_t kcp_flush(kcp_connection_t *kcp_conn)
-{
-
-    return 0;
 }
 
 void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
