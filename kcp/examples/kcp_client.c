@@ -88,15 +88,15 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     printf("KCP connection established: %p\n", kcp_connection);
     set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
 
-    const char *message = "Hello, KCP!";
-    int32_t status = kcp_send(kcp_connection, message, strlen(message));
-    if (status != NO_ERROR) {
-        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
-        kcp_close(kcp_connection, 1000);
-        return;
-    }
+    // const char *message = "Hello, KCP!";
+    // int32_t status = kcp_send(kcp_connection, message, strlen(message));
+    // if (status != NO_ERROR) {
+    //     fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+    //     kcp_close(kcp_connection, 1000);
+    //     return;
+    // }
 
-    printf("TX: %s\n", message);
+    // printf("TX: %s\n", message);
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);

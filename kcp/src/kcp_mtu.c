@@ -105,20 +105,22 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 
         struct iovec iov[5];
         int32_t count = kcp_conn->mtu_probe_ctx->retries < 5 ? kcp_conn->mtu_probe_ctx->retries : 5;
-        for (int32_t i = 0; count; ++i) {
+        for (int32_t i = 0; i < count; ++i) {
             iov[i].iov_base = probe_ctx->probe_buf;
             iov[i].iov_len = KCP_HEADER_SIZE + data_length;
         }
 
         int32_t status = kcp_send_packet(kcp_conn, iov, count);
+        KCP_LOGD("send mtu probe packet. mtu_current: %d, status: %d, count = %d", mtu_current, status, count);
         if (status == count) {
             break;
         }
 
         if (get_last_errno() == EMSGSIZE) {
+            KCP_LOGW("packet too large. %u", mtu_current);
             probe_ctx->mtu_ubound = mtu_current - 1;
         } else {
-            KCP_LOGD("[%s:%d:%s] -> send packet error. [%d, %s]", __FILENAME__, __LINE__, __FUNCTION__, errno, strerror(errno));
+            KCP_LOGE("send packet error. [%d, %s]", errno, strerror(errno));
             break;
         }
     } while (true);
@@ -142,6 +144,7 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
         timeout = 2 * kcp_conn->rx_srtt;
     }
 
+    KCP_LOGD("kcp_mtu_probe 1");
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     kcp_conn->mtu_probe_ctx = probe_ctx;
     probe_ctx->mtu_lbound = probe_ctx->mtu_current; // 下一次探测从上一次的MTU最小值开始
@@ -156,7 +159,10 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
     }
     evtimer_del(probe_ctx->probe_timeout_event);
 
+    KCP_LOGD("kcp_mtu_probe 2");
     kcp_send_mtu_probe_packet(kcp_conn);
+
+    KCP_LOGD("kcp_mtu_probe 3");
 
     struct timeval tv = {timeout / 1000, (timeout % 1000) * 1000};
     return evtimer_add(probe_ctx->probe_timeout_event, &tv);

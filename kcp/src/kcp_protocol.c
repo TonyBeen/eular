@@ -47,6 +47,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 
     if (kcp_header->cmd == KCP_CMD_RST) {
+        KCP_LOGW("KCP_CMD_RST received, close connection");
         switch (kcp_connection->state) {
         case KCP_STATE_SYN_SENT: // client
             kcp_connection->state = KCP_STATE_DISCONNECTED;
@@ -92,10 +93,11 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
                 kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
-            } else if (kcp_connection->kcp_ctx->callback.on_connected) {
-                kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
-                kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
             }
+            // else if (kcp_connection->kcp_ctx->callback.on_connected) {
+            //     kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
+            //     kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
+            // }
 
             kcp_connection->need_write_timer_event = true;
         } else {
@@ -231,12 +233,10 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     if (kcp_connection->ts_flush > (timestamp / 1000)) {
-        KCP_LOGD("on_kcp_write_timeout: ts_flush: %llu, timestamp: %llu", kcp_connection->ts_flush, timestamp / 1000);
         // 如果当前时间戳小于下次超时时间戳, 则不处理
         return NO_ERROR;
     }
 
-    KCP_LOGD("--> on_kcp_write_timeout: ts_flush: %llu, timestamp: %llu", kcp_connection->ts_flush, timestamp / 1000);
     char *ptr = kcp_connection->buffer;
     char buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_t kcp_ack_header;
@@ -630,6 +630,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
+    KCP_LOGD("kcp_connection_destroy: %u", kcp_conn->conv);
     // 从红黑树中移除连接
     connection_set_erase(&kcp_conn->kcp_ctx->connection_set, kcp_conn->conv);
     int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
@@ -960,7 +961,9 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
+                KCP_LOGD("kcp syn packet: %u, %u", pos->cmd, pos->syn_fin_data.rand_sn);
                 if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
+                    KCP_LOGD("kcp syn packet found: %u, %u", pos->cmd, pos->syn_fin_data.rand_sn);
                     // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
@@ -1004,9 +1007,9 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             kcp_connection->state = KCP_STATE_CONNECTED;
                             status = true;
                             kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
-                            kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->need_write_timer_event = true;
-                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
+                            kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
+                            // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2); // TODO
                         }
                     }
 

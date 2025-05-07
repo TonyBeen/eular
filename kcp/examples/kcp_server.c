@@ -36,8 +36,9 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
 
 bool on_kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 {
-    printf("New KCP connection from %s:%d\n", inet_ntoa(addr->sin.sin_addr), ntohs(addr->sin.sin_port));
-    return NO_ERROR == kcp_accept(kcp_ctx, 1000); // Accept the connection
+    int32_t status = kcp_accept(kcp_ctx, 1000);
+    printf("New KCP connection from %s:%d, status = %d\n", inet_ntoa(addr->sin.sin_addr), ntohs(addr->sin.sin_port), status);
+    return NO_ERROR == status; // Accept the connection
 }
 
 void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)

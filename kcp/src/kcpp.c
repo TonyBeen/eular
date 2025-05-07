@@ -690,7 +690,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
             break;
         }
 
-        return status;
+        return NO_ERROR;
     } while (false);
 
     // NOTE kcp_accept调用时机在on_connect, kcp_accept返回失败时on_connect返回false, 由on_kcp_syn_received发送RST
@@ -768,6 +768,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
 
     struct timeval tv = {0, 1000}; // 1ms
     evtimer_add(kcp_ctx->write_timer_event, &tv);
+    KCP_LOGD("evtimer_pending(%p) = %d", kcp_ctx->write_timer_event, evtimer_pending(kcp_ctx->write_timer_event, NULL));
 
     kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
     if (kcp_connection == NULL) {
