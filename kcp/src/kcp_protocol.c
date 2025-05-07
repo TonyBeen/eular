@@ -25,6 +25,7 @@ static int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
+    KCP_LOGD("on_mtu_probe_completed: %u, mtu: %u, code: %d", kcp_conn->conv, mtu, code);
     if (code == NO_ERROR) {
         int32_t ip_header_size = kcp_conn->remote_host.sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
         if (kcp_conn->mtu > mtu) {
