@@ -745,7 +745,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     }
     default: {
         kcp_header->packet_data.ts = le32toh(*(uint32_t *)(data_offset)); // 时间戳
-        data_offset += 4;
+        data_offset += 8;
         kcp_header->packet_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
         data_offset += 4;
         kcp_header->packet_data.psn = le32toh(*(uint32_t *)(data_offset)); // 包序列号
@@ -1009,7 +1009,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-                            // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2); // TODO
+                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2); // TODO
                         }
                     }
 
