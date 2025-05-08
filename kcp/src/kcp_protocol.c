@@ -344,7 +344,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     // 将 snd_queue 数据移动到 snd_buf
-    while ((kcp_connection->snd_nxt - (kcp_connection->snd_una + cwnd)) < 0) {
+    while (((int64_t)kcp_connection->snd_nxt - ((int64_t)kcp_connection->snd_una + cwnd)) < 0) {
         if (list_empty(&kcp_connection->snd_queue)) {
             break; // 如果发送队列为空, 则退出
         }
@@ -353,7 +353,10 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         list_del_init(&segment->node_list);
         segment->conv = kcp_connection->conv;
         segment->cmd = KCP_CMD_PUSH;
-        segment->wnd = kcp_wnd_unused(kcp_connection);
+        if (segment->frg > 0) {
+            // NOTE frg == 0 时wnd表示分片个数
+            segment->wnd = kcp_wnd_unused(kcp_connection);
+        }
         segment->ts = timestamp;
         segment->sn = kcp_connection->snd_nxt++;
         segment->una = kcp_connection->rcv_nxt;
@@ -400,6 +403,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                     pos->xmit++;
                     pos->resendts = timestamp + pos->rto;
                     pos->fastack = 0;
+                    change_ssthresh = true;
                 }
             }
 
@@ -407,7 +411,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                 need_flush = true;
                 int32_t segment_size = 0;
             label_send:
-                if (buffer_index == KCP_PACKET_COUNT) {
+                if (buffer_index >= KCP_PACKET_COUNT) {
                     // 如果缓存区已满, 则发送数据包
                     struct iovec data[KCP_PACKET_COUNT];
                     for (int i = 0; i < KCP_PACKET_COUNT; i++) {
@@ -428,12 +432,14 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                     buffer_index = 0;
                     buffer_offset = packet_cache[buffer_index];
                 }
-                segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - (buffer_offset - packet_cache[buffer_index]));
+                segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - packet_cache_size[buffer_index]);
                 if (segment_size == BUFFER_TOO_SMALL) {
-                    packet_cache_size[buffer_index] = buffer_offset - packet_cache[buffer_index];
                     ++buffer_index;
                     buffer_offset = packet_cache[buffer_index];
                     goto label_send; // 缓冲区不足, 切换到下一个缓存区
+                } else {
+                    packet_cache_size[buffer_index] += segment_size;
+                    buffer_offset += segment_size;
                 }
             }
         }
@@ -456,6 +462,30 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                 }
             }
         }
+    }
+
+    if (change_ssthresh) {
+        uint32_t inflight = kcp_connection->snd_nxt - kcp_connection->snd_una;
+        kcp_connection->ssthresh = inflight / 2;
+        if (kcp_connection->ssthresh < KCP_THRESH_MIN) {
+            kcp_connection->ssthresh = KCP_THRESH_MIN;
+        }
+        kcp_connection->cwnd = kcp_connection->ssthresh + resent;
+        kcp_connection->incr = kcp_connection->cwnd * kcp_connection->mss;
+    }
+
+    if (packet_lost) {
+        kcp_connection->ssthresh = cwnd / 2;
+        if (kcp_connection->ssthresh < KCP_THRESH_MIN) {
+            kcp_connection->ssthresh = KCP_THRESH_MIN;
+        }
+        kcp_connection->cwnd = 1;
+        kcp_connection->incr = kcp_connection->mss;
+    }
+
+    if (kcp_connection->cwnd < 1) {
+        kcp_connection->cwnd = 1;
+        kcp_connection->incr = kcp_connection->mss;
     }
 
     kcp_connection->ts_flush = timestamp / 1000 + kcp_connection->interval;
@@ -550,6 +580,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->snd_una = 0;
     kcp_conn->snd_nxt = 0;
     kcp_conn->rcv_nxt = 0;
+    kcp_conn->psn_nxt = 0;
     kcp_conn->ts_recent = 0;
     kcp_conn->ts_lastack = 0;
     kcp_conn->ssthresh = KCP_THRESH_INIT;
@@ -571,6 +602,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->nrcv_que = 0;
     kcp_conn->nsnd_que = 0;
     kcp_conn->nsnd_pkt_next = 0;
+    kcp_conn->incr = 0;
     kcp_conn->win_ts_probe = 0;
     kcp_conn->probe_wait = 0;
 
@@ -840,8 +872,8 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
     if (buffer_size < (KCP_HEADER_SIZE + segment->len)) {
         return BUFFER_TOO_SMALL;
     }
-
     char *buffer_offset = buffer;
+
     *(uint32_t *)buffer_offset = htole32(segment->conv);
     buffer_offset += 4;
     *(uint8_t *)buffer_offset = segment->cmd;
@@ -854,6 +886,8 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
     *(uint64_t *)buffer_offset = htole64(segment->ts);
     buffer_offset += 8;
     *(uint32_t *)buffer_offset = htole32(segment->sn);
+    buffer_offset += 4;
+    *(uint32_t *)buffer_offset = htole32(segment->psn);
     buffer_offset += 4;
     *(uint32_t *)buffer_offset = htole32(segment->una);
     buffer_offset += 4;
@@ -878,10 +912,16 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header)
 {
     uint64_t timestamp = kcp_time_monotonic_us();
+    int32_t prev_una = kcp_conn->snd_una;
     switch (kcp_header->cmd) {
     case KCP_CMD_ACK:
+        kcp_conn->rmt_wnd = kcp_header->wnd;
         return on_kcp_ack_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_PUSH:
+        if (kcp_header->frg > 0) {
+            kcp_conn->rmt_wnd = kcp_header->wnd;
+        }
+        kcp_conn->rmt_wnd = kcp_header->wnd;
         return on_kcp_push_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_WASK:
         kcp_conn->probe |= KCP_ASK_TELL;
@@ -918,6 +958,26 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         return on_kcp_fin_pcaket(kcp_conn, kcp_header, timestamp);
     default:
         break;
+    }
+
+    if (kcp_conn->snd_una > prev_una && kcp_conn->cwnd < kcp_conn->rmt_wnd) {
+        uint32_t mss = kcp_conn->mss;
+        if (kcp_conn->cwnd < kcp_conn->ssthresh) {
+            kcp_conn->cwnd++;
+            kcp_conn->incr += mss;
+        } else {
+            if (kcp_conn->incr < mss) {
+                kcp_conn->incr = mss;
+            }
+            kcp_conn->incr += (mss * mss) / kcp_conn->incr + (mss / 16);
+            if ((kcp_conn->cwnd + 1) * mss <= kcp_conn->incr) {
+                kcp_conn->cwnd = (kcp_conn->incr + mss - 1) / ((mss > 0)? mss : 1);
+            }
+        }
+        if (kcp_conn->cwnd > kcp_conn->rmt_wnd) {
+            kcp_conn->cwnd = kcp_conn->rmt_wnd;
+            kcp_conn->incr = kcp_conn->rmt_wnd * mss;
+        }
     }
 
     return NO_ERROR;

@@ -234,7 +234,7 @@ static void kcp_write_cb(int fd, short ev, void *arg)
             } else if (status == OP_TRY_AGAIN) { // 缓存区已满
                 break;
             } else {
-                kcp_ctx->callback.on_error(kcp_ctx, NULL, status);
+                kcp_ctx->callback.on_error(kcp_ctx, pos, status);
                 break;
             }
         } else {
@@ -1005,6 +1005,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
     struct list_head buffer_list;
     list_init(&buffer_list);
+    uint32_t packet_sn = kcp_connection->psn_nxt;
     for (int32_t i = 0; i < fragmentation; ++i) {
         uint32_t packet_size  = (uint32_t)size > kcp_connection->mss ? kcp_connection->mss : (uint32_t)size;
         kcp_segment_t *segment = kcp_segment_send_get(kcp_connection);
@@ -1028,6 +1029,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         segment->frg = i;
         segment->conv = kcp_connection->conv;
         segment->len = packet_size;
+        segment->psn = packet_sn;
 
         list_init(&segment->node_list);
         list_add_tail(&segment->node_list, &buffer_list);
@@ -1041,6 +1043,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         ++kcp_connection->nsnd_que;
     }
 
+    ++kcp_connection->psn_nxt;
     return NO_ERROR;
 }
 

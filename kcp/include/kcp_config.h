@@ -60,6 +60,7 @@ static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
 static const uint32_t   KCP_PING_RECV   = 0b0100;   // 
 
 static const uint32_t   KCP_THRESH_INIT = 2;        // ssthresh
+static const uint32_t   KCP_THRESH_MIN  = 2;        // min ssthresh
 static const uint32_t   KCP_RTO_DEF     = 200;      // default rto, 200ms
 static const uint32_t   KCP_RTO_MIN     = 100;      // normal min rto
 static const uint32_t   KCP_WND_SND     = 128;      // 发送窗口大小

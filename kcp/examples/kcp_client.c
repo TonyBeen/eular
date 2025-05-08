@@ -75,7 +75,7 @@ void kcp_timer(int fd, short ev, void *user)
 
     printf("TX: %s\n", message);
 
-    struct timeval timer_interval = {1, 0}; // 1s
+    struct timeval timer_interval = {5, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 

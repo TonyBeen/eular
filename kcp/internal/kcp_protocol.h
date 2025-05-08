@@ -127,6 +127,7 @@ typedef struct KcpConnection {
     uint32_t snd_una;       // 第一个未确认的包序号
     uint32_t snd_nxt;       // 下一个待发送的包序号
     uint32_t rcv_nxt;       // 待接收的下一个包序号
+    uint32_t psn_nxt;       // 下一个待发送的包序号
 
     // 时间戳相关
     uint32_t ts_recent;     // 最近一次收到包的时间戳
@@ -140,9 +141,9 @@ typedef struct KcpConnection {
     int32_t rx_minrto;      // 最小重传超时时间，默认为 KCP_RTO_MIN(100ms)
 
     // 窗口相关
-    uint32_t snd_wnd;       // 发送窗口大小，默认32
-    uint32_t rcv_wnd;       // 接收窗口大小，默认128
-    uint32_t rmt_wnd;       // 远端窗口大小，默认128
+    uint32_t snd_wnd;       // 发送窗口大小，默认128
+    uint32_t rcv_wnd;       // 接收窗口大小，默认256
+    uint32_t rmt_wnd;       // 远端窗口大小，默认256
     uint32_t cwnd;          // 拥塞窗口大小，初始为0
     uint32_t probe;         // 探测标志，用于窗口探测
 
@@ -168,6 +169,7 @@ typedef struct KcpConnection {
 
     // packet 计数
     uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号
+    uint32_t incr;              // 可发送的最大数据量
 
     // 数据队列
     struct list_head    snd_queue;      // 发送队列
