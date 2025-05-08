@@ -94,6 +94,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
                 kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
+                // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
             // else if (kcp_connection->kcp_ctx->callback.on_connected) {
             //     kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
@@ -909,14 +910,12 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
             kcp_conn->ping_ctx->keepalive_xretries = 0;
         }
         break;
-    case KCP_CMD_MTU_PROBE: // NOTE client发送的MTU探测包
+    case KCP_CMD_MTU_PROBE: // NOTE MTU探测包
         return kcp_mtu_probe_received(kcp_conn, kcp_header, timestamp);
-    case KCP_CMD_MTU_ACK: // NOTE server响应的MTU探测包
+    case KCP_CMD_MTU_ACK: // NOTE MTU探测响应包
         return kcp_mtu_ack_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_FIN:
         return on_kcp_fin_pcaket(kcp_conn, kcp_header, timestamp);
-    // case KCP_CMD_RST:
-    //     break;
     default:
         break;
     }
@@ -1010,7 +1009,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2); // TODO
+                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
                     }
 

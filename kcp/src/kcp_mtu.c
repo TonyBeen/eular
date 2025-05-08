@@ -183,8 +183,8 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_heade
 
     char buffer[KCP_HEADER_SIZE + sizeof(uint64_t)];
     kcp_proto_header_encode(&mtu_ack_header, buffer, sizeof(buffer));
-    struct iovec iov[3];
-    for (int32_t i = 0; i < 3; ++i) {
+    struct iovec iov[1];
+    for (int32_t i = 0; i < 1; ++i) {
         iov[i].iov_base = buffer;
         iov[i].iov_len = sizeof(buffer);
     }
