@@ -147,12 +147,12 @@ typedef struct KcpConnection {
     uint32_t probe;         // 探测标志，用于窗口探测
 
     // 配置标志
-    uint32_t nodelay;      // 是否启用nodelay模式，0=不启用
-    uint32_t updated;      // 是否调用过update
+    uint32_t nodelay;       // 是否启用nodelay模式，0=不启用
+    uint32_t updated;       // 是否调用过update
 
     // 探测相关
-    uint32_t ts_probe;     // 下次探测时间
-    uint32_t probe_wait;   // 探测等待时间
+    uint32_t win_ts_probe;  // 下次widnow size探测时间
+    uint32_t probe_wait;    // 探测等待时间
 
     // 时间相关
     uint32_t current;       // 当前时间

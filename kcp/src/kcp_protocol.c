@@ -278,22 +278,22 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     if (kcp_connection->rmt_wnd == 0) {
         if (kcp_connection->probe_wait == 0) {
             kcp_connection->probe_wait = 1; // 开始探测
-            kcp_connection->ts_probe = timestamp + KCP_PROBE_INIT;
+            kcp_connection->win_ts_probe = timestamp + KCP_PROBE_INIT;
         } else {
-            if (timestamp >= kcp_connection->ts_probe) {
+            if (timestamp >= kcp_connection->win_ts_probe) {
                 if (kcp_connection->probe_wait < KCP_PROBE_INIT) {
-                    kcp_connection->ts_probe = timestamp + KCP_PROBE_INIT;
+                    kcp_connection->win_ts_probe = timestamp + KCP_PROBE_INIT;
                 }
                 kcp_connection->probe_wait += kcp_connection->probe_wait / 2;
                 if (kcp_connection->probe_wait > KCP_PROBE_LIMIT) {
                     kcp_connection->probe_wait = KCP_PROBE_LIMIT; // 最大探测时间
                 }
-                kcp_connection->ts_probe = timestamp + kcp_connection->probe_wait;
+                kcp_connection->win_ts_probe = timestamp + kcp_connection->probe_wait;
                 kcp_connection->probe |= KCP_ASK_SEND; // 设置探测标志
             }
         }
     } else {
-        kcp_connection->ts_probe = 0;
+        kcp_connection->win_ts_probe = 0;
         kcp_connection->probe_wait = 0;
     }
 
@@ -571,7 +571,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->nrcv_que = 0;
     kcp_conn->nsnd_que = 0;
     kcp_conn->nsnd_pkt_next = 0;
-    kcp_conn->ts_probe = 0;
+    kcp_conn->win_ts_probe = 0;
     kcp_conn->probe_wait = 0;
 
     kcp_conn->kcp_ctx = kcp_ctx;
