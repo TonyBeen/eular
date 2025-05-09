@@ -160,12 +160,12 @@ typedef struct KcpConnection {
     uint32_t interval;      // 内部更新时间间隔，默认100ms
 
     // 队列计数器
-    uint32_t nrcv_buf;          // 接收缓存中的包数量
-    uint32_t nsnd_buf;          // 发送缓存中的包数量
-    uint32_t nsnd_buf_unused;   // 未使用的发送缓存数量
-    uint32_t nrcv_buf_unused;   // 未使用的接收队列数量
-    uint32_t nrcv_que;          // 接收队列中的包数量
-    uint32_t nsnd_que;          // 发送队列中的包数量
+    int32_t nrcv_buf;           // 接收缓存中的包数量
+    int32_t nsnd_buf;           // 发送缓存中的包数量
+    int32_t nsnd_buf_unused;    // 未使用的发送缓存数量
+    int32_t nrcv_buf_unused;    // 未使用的接收队列数量
+    int32_t nrcv_que;           // 接收队列中的包数量
+    int32_t nsnd_que;           // 发送队列中的包数量
 
     // packet 计数
     uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号

@@ -173,6 +173,8 @@ static inline void list_move_tail(struct list_head *list,
 				  struct list_head *head)
 {
 	__list_del_entry(list);
+	INIT_LIST_HEAD(list);
+
 	list_add_tail(list, head);
 }
 

@@ -35,7 +35,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         buffer_remain = buffer + buffer_size - buffer_offset;
 
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
-        KCP_LOGI("recv kcp packet, conv: %X, cmd: %u", kcp_header.conv, kcp_header.cmd);
+        KCP_LOGI("recv kcp packet, conv: %X, cmd: %u, connection: %p", kcp_header.conv, kcp_header.cmd, kcp_connection);
         if (kcp_header.cmd == KCP_CMD_SYN) {
             kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
             if (syn_node == NULL) {
@@ -1039,7 +1039,8 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
     while (!list_empty(&buffer_list)) {
         kcp_segment_t *seg = list_first_entry(&buffer_list, kcp_segment_t, node_list);
-        list_move_tail(&seg->node_list, &kcp_connection->snd_queue);
+        list_del_init(&seg->node_list);
+        list_add_tail(&seg->node_list, &kcp_connection->snd_queue);
         ++kcp_connection->nsnd_que;
     }
 

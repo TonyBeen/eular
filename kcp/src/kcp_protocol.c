@@ -248,7 +248,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     kcp_ack_header.wnd = kcp_wnd_unused(kcp_connection);
     kcp_ack_header.ack_data.una = kcp_connection->rcv_nxt;
     {
-        // 1、回复ACK
+        // 回复ACK
         kcp_ack_t *pos = NULL;
         kcp_ack_t *next = NULL;
         while (!list_empty(&kcp_connection->ack_item)) {
@@ -338,6 +338,16 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
     kcp_connection->probe = 0; // 清除探测标志
 
+    // 发送数据包
+    if (ptr > kcp_connection->buffer) {
+        struct iovec data[1];
+        data[0].iov_base = kcp_connection->buffer;
+        data[0].iov_len = ptr - kcp_connection->buffer;
+
+        kcp_send_packet(kcp_connection, data, 1);
+        ptr = kcp_connection->buffer;
+    }
+
     int32_t cwnd = MIN(kcp_connection->snd_wnd, kcp_connection->rmt_wnd);
     if (kcp_connection->nocwnd == 0) {
         cwnd = MIN(cwnd, kcp_connection->cwnd);
@@ -364,7 +374,10 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         segment->resendts = timestamp;
         segment->fastack = 0;
         segment->xmit = 0;
-        list_move_tail(&segment->node_list, &kcp_connection->snd_buf);
+        list_del_init(&segment->node_list);
+        list_add_tail(&segment->node_list, &kcp_connection->snd_buf);
+        --kcp_connection->nsnd_que;
+        ++kcp_connection->nsnd_buf;
     }
 
     bool packet_lost = false;
@@ -378,68 +391,69 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         size_t packet_cache_size[KCP_PACKET_COUNT + 1] = {0};
         char *buffer_offset = packet_cache[buffer_index];
         kcp_segment_t *pos = NULL;
-        kcp_segment_t *next = NULL;
-        list_for_each_entry_safe(pos, next, &kcp_connection->snd_buf, node_list) {
-            bool need_send = false;
-            if (pos->xmit == 0) {
-                need_send = true;
-                pos->xmit++;
-                pos->rto = kcp_connection->rx_rto;
-                pos->resendts = timestamp + pos->rto + rtomin;
-            } else if (timestamp >= pos->resendts) {
-                need_send = true; // 超时重传
-                pos->xmit++;
-                if (kcp_connection->nodelay == 0) {
-                    pos->rto = MAX(pos->rto , kcp_connection->rx_rto);
-                } else {
-                    int32_t step = (kcp_connection->nodelay < 2) ? pos->rto : kcp_connection->rx_rto;
-                    pos->rto += step / 2;
-                }
-                pos->resendts = timestamp + pos->rto;
-                packet_lost = true;
-            } else if (pos->fastack >= resent) {
-                if (pos->xmit <= kcp_connection->fastlimit || kcp_connection->fastlimit <= 0) {
-                    need_send = true; // 快速重传
+        if (!list_empty(&kcp_connection->snd_buf)) {
+            list_for_each_entry(pos, &kcp_connection->snd_buf, node_list) {
+                bool need_send = false;
+                if (pos->xmit == 0) {
+                    need_send = true;
                     pos->xmit++;
+                    pos->rto = kcp_connection->rx_rto;
+                    pos->resendts = timestamp + pos->rto + rtomin;
+                } else if (timestamp >= pos->resendts) {
+                    need_send = true; // 超时重传
+                    pos->xmit++;
+                    if (kcp_connection->nodelay == 0) {
+                        pos->rto = MAX(pos->rto , kcp_connection->rx_rto);
+                    } else {
+                        int32_t step = (kcp_connection->nodelay < 2) ? pos->rto : kcp_connection->rx_rto;
+                        pos->rto += step / 2;
+                    }
                     pos->resendts = timestamp + pos->rto;
-                    pos->fastack = 0;
-                    change_ssthresh = true;
-                }
-            }
-
-            if (need_send) {
-                need_flush = true;
-                int32_t segment_size = 0;
-            label_send:
-                if (buffer_index >= KCP_PACKET_COUNT) {
-                    // 如果缓存区已满, 则发送数据包
-                    struct iovec data[KCP_PACKET_COUNT];
-                    for (int i = 0; i < KCP_PACKET_COUNT; i++) {
-                        data[i].iov_base = packet_cache[i];
-                        data[i].iov_len = packet_cache_size[i];
+                    packet_lost = true;
+                } else if (pos->fastack >= resent) {
+                    if (pos->xmit <= kcp_connection->fastlimit || kcp_connection->fastlimit <= 0) {
+                        need_send = true; // 快速重传
+                        pos->xmit++;
+                        pos->resendts = timestamp + pos->rto;
+                        pos->fastack = 0;
+                        change_ssthresh = true;
                     }
+                }
 
-                    int32_t status = kcp_send_packet(kcp_connection, data, KCP_PACKET_COUNT);
-                    if (status < 0) {
-                        int32_t code = get_last_errno();
-                        if (code == EAGAIN || code == EWOULDBLOCK) {
-                            return OP_TRY_AGAIN;
-                        } else {
-                            return WRITE_ERROR;
+                if (need_send) {
+                    need_flush = true;
+                    int32_t segment_size = 0;
+                label_send:
+                    if (buffer_index >= KCP_PACKET_COUNT) {
+                        // 如果缓存区已满, 则发送数据包
+                        struct iovec data[KCP_PACKET_COUNT];
+                        for (int i = 0; i < KCP_PACKET_COUNT; i++) {
+                            data[i].iov_base = packet_cache[i];
+                            data[i].iov_len = packet_cache_size[i];
                         }
-                    }
 
-                    buffer_index = 0;
-                    buffer_offset = packet_cache[buffer_index];
-                }
-                segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - packet_cache_size[buffer_index]);
-                if (segment_size == BUFFER_TOO_SMALL) {
-                    ++buffer_index;
-                    buffer_offset = packet_cache[buffer_index];
-                    goto label_send; // 缓冲区不足, 切换到下一个缓存区
-                } else {
-                    packet_cache_size[buffer_index] += segment_size;
-                    buffer_offset += segment_size;
+                        int32_t status = kcp_send_packet(kcp_connection, data, KCP_PACKET_COUNT);
+                        if (status < 0) {
+                            int32_t code = get_last_errno();
+                            if (code == EAGAIN || code == EWOULDBLOCK) {
+                                return OP_TRY_AGAIN;
+                            } else {
+                                return WRITE_ERROR;
+                            }
+                        }
+
+                        buffer_index = 0;
+                        buffer_offset = packet_cache[buffer_index];
+                    }
+                    segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - packet_cache_size[buffer_index]);
+                    if (segment_size == BUFFER_TOO_SMALL) {
+                        ++buffer_index;
+                        buffer_offset = packet_cache[buffer_index];
+                        goto label_send; // 缓冲区不足, 切换到下一个缓存区
+                    } else {
+                        packet_cache_size[buffer_index] += segment_size;
+                        buffer_offset += segment_size;
+                    }
                 }
             }
         }
@@ -1089,6 +1103,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
 #define HANDLE_SND_BUF(kcp_conn) \
     do { \
+        list_del_init(&pos->node_list); \
         list_add_tail(&pos->node_list, &kcp_conn->snd_buf_unused); \
         ++kcp_conn->nsnd_buf_unused; \
         --kcp_conn->nsnd_buf; \
@@ -1156,11 +1171,16 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
     }
 
     // 解析una
-    list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
-        if (pos->sn < kcp_header->ack_data.una) {
-            HANDLE_SND_BUF(kcp_conn);
-        } else {
-            break;
+    if (!list_empty(&kcp_conn->snd_buf)) {
+        pos = NULL;
+        next = NULL;
+
+        list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
+            if (pos->sn < kcp_header->ack_data.una) {
+                HANDLE_SND_BUF(kcp_conn);
+            } else {
+                break;
+            }
         }
     }
 
@@ -1182,6 +1202,7 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
         kcp_segment_t *first = list_first_entry(&kcp_conn->snd_buf, kcp_segment_t, node_list);
         kcp_conn->snd_una = first->sn; // snd_una为snd_buf的第一个包的序号
     }
+
     return NO_ERROR;
 }
 
@@ -1195,6 +1216,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
 
     // FIXME 解决序号溢出导致的回环问题
     if (kcp_header->packet_data.sn < kcp_conn->rcv_nxt) { // 此包已被接收过
+        KCP_LOGW("packet is received: %u, %u", kcp_header->packet_data.sn, kcp_conn->rcv_nxt);
         return NO_ERROR;
     }
 
