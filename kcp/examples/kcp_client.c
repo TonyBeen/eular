@@ -27,6 +27,7 @@
 
 struct event_base*  g_ev_base = NULL;
 struct event*       g_timer_event = NULL;
+static int32_t      g_packet_count = 0;
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
@@ -65,7 +66,14 @@ void kcp_timer(int fd, short ev, void *user)
     struct KcpConnection *kcp_connection = (struct KcpConnection *)user;
 
     // 定时发送数据
-    const char *message = "Hello, KCP!";
+    char message[64] = {0};
+    sprintf(message, "Hello, KCP! %d", g_packet_count++);
+    if (g_packet_count > 10) {
+        printf("Closing KCP connection after sending 10 packets\n");
+        kcp_close(kcp_connection, 1000);
+        return;
+    }
+
     int32_t status = kcp_send(kcp_connection, message, strlen(message));
     if (status != NO_ERROR) {
         fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
@@ -75,7 +83,7 @@ void kcp_timer(int fd, short ev, void *user)
 
     printf("TX: %s\n", message);
 
-    struct timeval timer_interval = {5, 0}; // 1s
+    struct timeval timer_interval = {1, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 
@@ -87,16 +95,6 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     }
     printf("KCP connection established: %p\n", kcp_connection);
     set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
-
-    // const char *message = "Hello, KCP!";
-    // int32_t status = kcp_send(kcp_connection, message, strlen(message));
-    // if (status != NO_ERROR) {
-    //     fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
-    //     kcp_close(kcp_connection, 1000);
-    //     return;
-    // }
-
-    // printf("TX: %s\n", message);
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);

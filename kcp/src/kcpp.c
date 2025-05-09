@@ -79,7 +79,6 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             for (int32_t i = 0; i < KCP_HEADER_SIZE; ++i) {
                 snprintf(log_buffer + i * 2, sizeof(log_buffer) - i * 2, "%02x", (unsigned char)buffer[i]);
             }
-            KCP_LOGD("kcp rst packet: %s", log_buffer);
 
             struct iovec data[1];
             data[0].iov_base = buffer;

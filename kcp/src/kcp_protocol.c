@@ -171,7 +171,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
 
     if (send_rst) {
-        KCP_LOGD("=============> send rst packet");
         kcp_proto_header_t kcp_rst_header;
         kcp_rst_header.conv = kcp_connection->conv;
         kcp_rst_header.cmd = KCP_CMD_RST;
@@ -678,7 +677,6 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
-    KCP_LOGD("kcp_connection_destroy: %u", kcp_conn->conv);
     // 从红黑树中移除连接
     connection_set_erase(&kcp_conn->kcp_ctx->connection_set, kcp_conn->conv);
     int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
@@ -1035,9 +1033,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
-                KCP_LOGD("kcp syn packet: %u, %u", pos->cmd, pos->syn_fin_data.rand_sn);
                 if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
-                    KCP_LOGD("kcp syn packet found: %u, %u", pos->cmd, pos->syn_fin_data.rand_sn);
                     // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
@@ -1226,6 +1222,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         return NO_MEMORY;
     }
     list_init(&ack_item->node);
+    // TODO 优化malloc
     kcp_segment_t *kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
     if (kcp_segment == NULL) {
         free(ack_item);
@@ -1280,6 +1277,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             break;
         }
     }
+
     if (last) { // 属于同一包
         pos = last;
         list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
@@ -1326,6 +1324,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
                         break;
                     }
                     size += pos->len;
+                    list_del_init(&pos->node_list);
                     list_add_tail(&pos->node_list, &kcp_conn->rcv_queue);
                     --kcp_conn->nrcv_buf;
                 }
