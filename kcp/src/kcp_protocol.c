@@ -695,7 +695,8 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         }
 
         if (kcp_conn->mtu_probe_ctx->probe_timeout_event) {
-            free(kcp_conn->mtu_probe_ctx->probe_timeout_event);
+            KCP_LOGI("del probe timeout event: %p", kcp_conn->mtu_probe_ctx->probe_timeout_event);
+            event_free(kcp_conn->mtu_probe_ctx->probe_timeout_event);
             kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
         }
 
@@ -712,16 +713,18 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     // 释放超时事件
     kcp_conn->need_write_timer_event = false;
     if (kcp_conn->syn_timer_event) {
+        KCP_LOGD("del syn timer event: %p", kcp_conn->syn_timer_event);
         event_free(kcp_conn->syn_timer_event);
         kcp_conn->syn_timer_event = NULL;
     }
 
     if (kcp_conn->fin_timer_event) {
+        KCP_LOGD("del fin timer event: %p", kcp_conn->fin_timer_event);
         event_free(kcp_conn->fin_timer_event);
         kcp_conn->fin_timer_event = NULL;
     }
 
-    // 清理SYN包
+    // 清理SYN/FIN包
     if (!list_empty(&kcp_conn->kcp_proto_header_list)) {
         kcp_proto_header_t *pos = NULL;
         kcp_proto_header_t *next = NULL;
@@ -731,8 +734,6 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         }
     }
 
-    // 从红黑树移除
-    connection_set_erase_node(&kcp_conn->kcp_ctx->connection_set, kcp_conn);
     free(kcp_conn);
 }
 
@@ -1063,12 +1064,11 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                         int32_t code = get_last_errno();
                         KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
                         kcp_connection->state = KCP_STATE_DISCONNECTED;
-                        kcp_ctx->callback.on_connected(kcp_connection, WRITE_ERROR);
+                        kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
                         kcp_connection_destroy(kcp_connection);
                     } else {
                         // NOTE 对端未收到ACK, 会重发SYN
                         if (kcp_connection->syn_timer_event) {
-                            event_del(kcp_connection->syn_timer_event);
                             event_free(kcp_connection->syn_timer_event);
                             kcp_connection->syn_timer_event = NULL;
                         }

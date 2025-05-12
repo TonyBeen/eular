@@ -64,8 +64,10 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
 void kcp_exit_timer(int fd, short ev, void *user)
 {
-    event_base_loopexit(g_ev_base, NULL);
-    printf("KCP exiting...\n");
+    event_base_loopbreak(g_ev_base);
+    event_free(g_exit_timer_event);
+    g_exit_timer_event = NULL;
+    // event_base_loopexit(g_ev_base, NULL);
 }
 
 void kcp_timer(int fd, short ev, void *user)
@@ -119,6 +121,7 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
 int main(int argc, char **argv)
 {
+    printf("Libevent Version: %s\n", event_get_version());
     kcp_log_level(LOG_LEVEL_DEBUG);
 
     int32_t command = 0;
@@ -214,8 +217,8 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    printf("KCP client exiting...\n");
     kcp_context_destroy(ctx);
-    event_free(g_exit_timer_event);
     event_base_free(g_ev_base);
     return 0;
 }

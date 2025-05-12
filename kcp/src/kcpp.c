@@ -327,16 +327,19 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
     }
 
     if (kcp_ctx->read_event) {
+        KCP_LOGI("del kcp read event: %p", kcp_ctx->read_event);
         event_free(kcp_ctx->read_event);
         kcp_ctx->read_event = NULL;
     }
 
     if (kcp_ctx->write_event) {
+        KCP_LOGI("del kcp write event: %p", kcp_ctx->write_event);
         event_free(kcp_ctx->write_event);
         kcp_ctx->write_event = NULL;
     }
 
     if (kcp_ctx->write_timer_event) {
+        KCP_LOGI("del kcp write timer event: %p", kcp_ctx->write_timer_event);
         event_free(kcp_ctx->write_timer_event);
         kcp_ctx->write_timer_event = NULL;
     }
@@ -581,7 +584,8 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
             if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_ctx->callback.on_accepted(kcp_ctx, kcp_connection, status);
+                kcp_ctx->callback.on_error(kcp_ctx, kcp_connection, status);
+                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }
@@ -593,11 +597,9 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
     }
 
     if (kcp_ctx->callback.on_accepted) {
-        bitmap_set(&kcp_ctx->conv_bitmap, kcp_connection->conv & ~KCP_CONV_FLAG, false);
-        event_free(kcp_connection->syn_timer_event);
-        kcp_connection->syn_timer_event = NULL;
         kcp_connection->state = KCP_STATE_DISCONNECTED;
         kcp_ctx->callback.on_accepted(kcp_ctx, kcp_connection, TIMED_OUT);
+        kcp_connection_destroy(kcp_connection);
     }
 }
 
@@ -726,9 +728,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         data[0].iov_len = KCP_HEADER_SIZE;
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status <= 0) {
-            event_free(kcp_connection->syn_timer_event);
-            kcp_connection->syn_timer_event = NULL;
-            kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, status);
+            kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, status);
             kcp_connection_destroy(kcp_connection);
             return;
         }
@@ -739,8 +739,6 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         return;
     }
 
-    event_free(kcp_connection->syn_timer_event);
-    kcp_connection->syn_timer_event = NULL;
     kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, TIMED_OUT);
     kcp_connection_destroy(kcp_connection);
 }
