@@ -305,14 +305,12 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         return;
     }
 
-    {
-        kcp_connection_t *it = NULL;
-        for (it = connection_first(&kcp_ctx->connection_set); it != NULL; it = connection_next(it)) {
-            if (it->state != KCP_STATE_DISCONNECTED) {
-                kcp_shutdown(it);
-            }
-            kcp_connection_destroy(it);
+    kcp_connection_t *it = NULL;
+    for (it = connection_first(&kcp_ctx->connection_set); it != NULL; it = connection_next(it)) {
+        if (it->state != KCP_STATE_DISCONNECTED) {
+            kcp_shutdown(it);
         }
+        kcp_connection_destroy(it);
     }
 
     if (!list_empty(&kcp_ctx->syn_queue)) { // 清理SYN队列
