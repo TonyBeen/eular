@@ -306,11 +306,15 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
     }
 
     kcp_connection_t *it = NULL;
-    for (it = connection_first(&kcp_ctx->connection_set); it != NULL; it = connection_next(it)) {
+    for (it = connection_first(&kcp_ctx->connection_set); it != NULL; ) {
+        // 保存下一个节点, kcp_connection_destroy会从rbtree删除it节点
+        kcp_connection_t *next = connection_next(it);
         if (it->state != KCP_STATE_DISCONNECTED) {
             kcp_shutdown(it);
         }
+
         kcp_connection_destroy(it);
+        it = next;
     }
 
     if (!list_empty(&kcp_ctx->syn_queue)) { // 清理SYN队列

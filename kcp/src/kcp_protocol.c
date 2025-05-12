@@ -678,7 +678,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
     // 从红黑树中移除连接
-    connection_set_erase(&kcp_conn->kcp_ctx->connection_set, kcp_conn->conv);
+    connection_set_erase_node(&kcp_conn->kcp_ctx->connection_set, kcp_conn);
     int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
     bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, index, false);
 

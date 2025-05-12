@@ -11,20 +11,20 @@
 
 #include "rbtree.h"
 
-struct mytype {
+struct RBTreeType {
     struct rb_node rbnode;
     int data;
 };
 
 static int mytype_cmp(struct rb_node *node, struct rb_node *other)
 {
-    struct mytype *a = rb_entry(node, struct mytype, rbnode);
-    struct mytype *b = rb_entry(other, struct mytype, rbnode);
+    struct RBTreeType *a = rb_entry(node, struct RBTreeType, rbnode);
+    struct RBTreeType *b = rb_entry(other, struct RBTreeType, rbnode);
 
     return a->data - b->data;
 }
 
-static void mytype_insert(struct rb_root *root, struct mytype *data)
+static void mytype_insert(struct rb_root *root, struct RBTreeType *data)
 {
     struct rb_node **new_place = &(root->rb_node);
     struct rb_node *parent = NULL;
@@ -44,21 +44,53 @@ static void mytype_insert(struct rb_root *root, struct mytype *data)
     rb_insert_color(&data->rbnode, root);
 }
 
-int main(int argc, char **argv)
+void test_foreach()
 {
     struct rb_root mytree = RB_ROOT;
     struct rb_node *node;
 
     for (int i = 0; i < 10; i++) {
-        struct mytype *data = (struct mytype *)malloc(sizeof(struct mytype));
+        struct RBTreeType *data = (struct RBTreeType *)malloc(sizeof(struct RBTreeType));
         data->data = i;
         mytype_insert(&mytree, data);
     }
 
     for (node = rb_first(&mytree); node; node = rb_next(node)) {
-        struct mytype *data = rb_entry(node, struct mytype, rbnode);
+        struct RBTreeType *data = rb_entry(node, struct RBTreeType, rbnode);
         printf("%d\n", data->data);
     }
+}
 
+void test_foreach_erase()
+{
+    struct rb_root mytree = RB_ROOT;
+    struct rb_node *node;
+
+    for (int i = 0; i < 10; i++) {
+        struct RBTreeType *data = (struct RBTreeType *)malloc(sizeof(struct RBTreeType));
+        data->data = i;
+        mytype_insert(&mytree, data);
+    }
+
+    struct rb_node *next = NULL;
+    for (node = rb_first(&mytree); node;) {
+        struct RBTreeType *data = rb_entry(node, struct RBTreeType, rbnode);
+        next = rb_next(node);
+        printf("%d\n", data->data);
+        rb_erase(node, &mytree);
+        free(data);
+        node = next;
+    }
+
+    printf("After erase:\n");
+    for (node = rb_first(&mytree); node; node = rb_next(node)) {
+        struct RBTreeType *data = rb_entry(node, struct RBTreeType, rbnode);
+        printf("%d\n", data->data);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    test_foreach_erase();
     return 0;
 }
