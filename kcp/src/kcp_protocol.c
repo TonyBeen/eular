@@ -31,6 +31,7 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
         if (kcp_conn->mtu > mtu) {
             KCP_LOGW("MTU reduced from %d to %d", kcp_conn->mtu, mtu);
             kcp_conn->kcp_ctx->callback.on_error(kcp_conn->kcp_ctx, kcp_conn, MTU_REDUCTION);
+            kcp_shutdown(kcp_conn);
             return;
         }
 

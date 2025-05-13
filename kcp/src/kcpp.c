@@ -234,6 +234,7 @@ static void kcp_write_cb(int fd, short ev, void *arg)
                 break;
             } else {
                 kcp_ctx->callback.on_error(kcp_ctx, pos, status);
+                kcp_connection_destroy(pos);
                 break;
             }
         } else {
@@ -859,7 +860,8 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
             if (code == EAGAIN || code == EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, WRITE_ERROR);
+                kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
+                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }
