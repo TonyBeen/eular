@@ -64,10 +64,10 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
 void kcp_exit_timer(int fd, short ev, void *user)
 {
-    event_base_loopbreak(g_ev_base);
+    // event_base_loopbreak(g_ev_base);
+    event_base_loopexit(g_ev_base, NULL);
     event_free(g_exit_timer_event);
     g_exit_timer_event = NULL;
-    // event_base_loopexit(g_ev_base, NULL);
 }
 
 void kcp_timer(int fd, short ev, void *user)
