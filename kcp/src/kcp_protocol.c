@@ -1417,6 +1417,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
 
     if (kcp_conn->fin_timer_event == NULL) {
         kcp_conn->fin_timer_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, on_fin_packet_timeout_cb, kcp_conn);
+        KCP_LOGD("on_fin_packet_timeout_cb = %p", on_fin_packet_timeout_cb);
         if (kcp_conn->fin_timer_event == NULL) {
             return NO_MEMORY;
         }
