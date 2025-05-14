@@ -14,7 +14,6 @@ endif()
 option(KCPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(KCPP_STATIC_LIB "Build static library" ON)
 option(BUILD_EXAMPLES "Compile sample program" ON)
-option(BUILD_TEST "Compile sample program" OFF)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 
 if(ENABLE_DEBUG MATCHES "ON")
@@ -50,7 +49,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(BUILD_EXAMPLES MATCHES "ON")
-    message(STATUS "Build examples")
     add_subdirectory(examples)
 endif()
 
@@ -86,6 +84,45 @@ if(KCPP_STATIC_LIB MATCHES "ON")
 
     if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
         install(TARGETS kcpp_static
+            RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
+            ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+    endif()
+endif()
+
+# 动态库
+if(KCPP_DYNAMIC_LIB MATCHES "ON")
+    add_library(kcpp SHARED ${SRC_LIST} ${3RD_SRC_LIST} ${HEADER_LIST})
+    add_library(eular::kcpp ALIAS kcpp)
+
+    target_include_directories(kcpp
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/internal
+            ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party
+    )
+
+    target_link_libraries(kcpp PUBLIC ${LIBEVENT_STATIC_LIBRARIES})
+
+    target_compile_options(
+        kcpp PRIVATE
+        ${CXX_COMPILER_FLAGS}
+    )
+
+    set_target_properties (
+        kcpp
+        PROPERTIES
+        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+    )
+    set_property(TARGET kcpp PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+    unset(KCPP_LIBRARIE)
+    set(KCPP_LIBRARIE kcpp CACHE INTERNAL "link kcpp librarie")
+
+    if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
+        install(TARGETS kcpp
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
             LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
