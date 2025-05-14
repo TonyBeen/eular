@@ -714,7 +714,6 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         }
 
         if (kcp_conn->mtu_probe_ctx->probe_timeout_event) {
-            KCP_LOGI("del probe timeout event: %p", kcp_conn->mtu_probe_ctx->probe_timeout_event);
             event_free(kcp_conn->mtu_probe_ctx->probe_timeout_event);
             kcp_conn->mtu_probe_ctx->probe_timeout_event = NULL;
         }
@@ -1399,8 +1398,10 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
     }
 
     if (kcp_conn->kcp_ctx->callback.on_closed) {
+        kcp_conn->state = KCP_STATE_DISCONNECTED;
         kcp_conn->kcp_ctx->callback.on_closed(kcp_conn, TIMED_OUT);
     }
+    kcp_connection_destroy(kcp_conn);
 }
 
 int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)

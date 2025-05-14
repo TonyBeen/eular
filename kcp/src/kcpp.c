@@ -909,7 +909,8 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
             if (code == EAGAIN || code == EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, WRITE_ERROR);
+                kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
+                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }

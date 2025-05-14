@@ -50,6 +50,8 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
         printf("KCP connection closed with error code: %d, %s\n", code, addr_str);
     }
 
+    printf("KCP connection %p closed\n", kcp_connection);
+
     kcp_statistic_t stat;
     kcp_connection_get_statistic(kcp_connection, &stat);
     printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
