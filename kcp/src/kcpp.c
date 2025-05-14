@@ -294,7 +294,6 @@ struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb
     ctx->read_event = NULL;
     ctx->write_event = NULL;
     ctx->write_timer_event = evtimer_new(base, kcp_write_timeout, ctx);
-    KCP_LOGD("kcp_write_timeout = %p", kcp_write_timeout);
     ctx->read_buffer = (char *)malloc(ETHERNET_MTU);
     ctx->read_buffer_size = ETHERNET_MTU;
     ctx->user_data = user;
@@ -329,19 +328,16 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
     }
 
     if (kcp_ctx->read_event) {
-        KCP_LOGI("del kcp read event: %p", kcp_ctx->read_event);
         event_free(kcp_ctx->read_event);
         kcp_ctx->read_event = NULL;
     }
 
     if (kcp_ctx->write_event) {
-        KCP_LOGI("del kcp write event: %p", kcp_ctx->write_event);
         event_free(kcp_ctx->write_event);
         kcp_ctx->write_event = NULL;
     }
 
     if (kcp_ctx->write_timer_event) {
-        KCP_LOGI("del kcp write timer event: %p", kcp_ctx->write_timer_event);
         event_free(kcp_ctx->write_timer_event);
         kcp_ctx->write_timer_event = NULL;
     }
@@ -469,7 +465,6 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
 
     kcp_ctx->read_event = event_new(kcp_ctx->event_loop, kcp_ctx->sock, EV_READ | EV_PERSIST, kcp_read_cb, kcp_ctx);
     kcp_ctx->write_event = event_new(kcp_ctx->event_loop, kcp_ctx->sock, EV_WRITE | EV_PERSIST, kcp_write_cb, kcp_ctx);
-    KCP_LOGD("kcp_read_cb = %p, kcp_write_cb = %p", kcp_read_cb, kcp_write_cb);
 
     status = set_socket_sendbuf(kcp_ctx->sock, 128 * 1024); // 128KB
     if (status != NO_ERROR) {
@@ -641,7 +636,6 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 
         kcp_connection->conv = conv;
         kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_accept_timeout, kcp_connection);
-        KCP_LOGD("kcp_accept_timeout = %p", kcp_accept_timeout);
         if (kcp_connection->syn_timer_event == NULL) {
             status = NO_MEMORY;
             break;
@@ -667,8 +661,6 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0); // server响应的序列
         memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
-
-        KCP_LOGD("kcp accept conversation: %X, packet_sn: %X, rand_sn: %X", conv, kcp_header.syn_fin_data.packet_sn, kcp_header.syn_fin_data.rand_sn);
 
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
@@ -718,8 +710,6 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
         list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
 
-        KCP_LOGD("kcp connect timeout, retry: %d, ts: %lu, rand_sn: %X", kcp_connection->syn_retries, kcp_header->syn_fin_data.ts, kcp_header->syn_fin_data.rand_sn);
-
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
@@ -766,7 +756,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
 
     struct timeval tv = {0, 1000}; // 1ms
     evtimer_add(kcp_ctx->write_timer_event, &tv);
-    KCP_LOGD("evtimer_pending(%p) = %d", kcp_ctx->write_timer_event, evtimer_pending(kcp_ctx->write_timer_event, NULL));
 
     kcp_connection = (kcp_connection_t *)malloc(sizeof(kcp_connection_t));
     if (kcp_connection == NULL) {
@@ -810,7 +799,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     kcp_ctx->callback.on_connected = cb;
     kcp_ctx->callback.on_connect = NULL;
     kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
-    KCP_LOGD("kcp_connect_timeout = %p", kcp_connect_timeout);
     if (kcp_connection->syn_timer_event == NULL) {
         return NO_MEMORY;
     }
@@ -928,7 +916,6 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
 
         if (kcp_connection->fin_timer_event == NULL) {
             kcp_connection->fin_timer_event = evtimer_new(kcp_connection->kcp_ctx->event_loop, kcp_close_timeout, kcp_connection);
-            KCP_LOGD("kcp_close_timeout = %p", kcp_close_timeout);
         }
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
         evtimer_add(kcp_connection->fin_timer_event, &tv);

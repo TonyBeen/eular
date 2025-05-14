@@ -25,7 +25,7 @@ static int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
-    KCP_LOGD("on_mtu_probe_completed: %u, mtu: %u, code: %d", kcp_conn->conv, mtu, code);
+    KCP_LOGI("on_mtu_probe_completed: %u, mtu: %u, code: %d", kcp_conn->conv, mtu, code);
     if (code == NO_ERROR) {
         int32_t ip_header_size = kcp_conn->remote_host.sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
         if (kcp_conn->mtu > mtu) {
@@ -714,13 +714,11 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     // 释放超时事件
     kcp_conn->need_write_timer_event = false;
     if (kcp_conn->syn_timer_event) {
-        KCP_LOGD("del syn timer event: %p", kcp_conn->syn_timer_event);
         event_free(kcp_conn->syn_timer_event);
         kcp_conn->syn_timer_event = NULL;
     }
 
     if (kcp_conn->fin_timer_event) {
-        KCP_LOGD("del fin timer event: %p", kcp_conn->fin_timer_event);
         event_free(kcp_conn->fin_timer_event);
         kcp_conn->fin_timer_event = NULL;
     }
@@ -743,7 +741,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     const char *data_offset = *data;
     kcp_header->conv = le32toh(*(uint32_t *)data_offset); // 会话ID
     if (!(kcp_header->conv & KCP_CONV_FLAG)) {
-        KCP_LOGD("invalid conv: %u", kcp_header->conv);
+        KCP_LOGW("invalid conv: %u", kcp_header->conv);
         return INVALID_KCP_HEADER;
     }
 
@@ -857,7 +855,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
     } else {
         if (buffer_size < (KCP_HEADER_SIZE + kcp_header->packet_data.len)) {
-            KCP_LOGD("buffer size is too small: %zu, need: %zu", buffer_size, (KCP_HEADER_SIZE + kcp_header->packet_data.len));
+            KCP_LOGE("buffer size is too small: %zu, need: %zu", buffer_size, (KCP_HEADER_SIZE + kcp_header->packet_data.len));
             return BUFFER_TOO_SMALL;
         }
 
@@ -1417,7 +1415,6 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
 
     if (kcp_conn->fin_timer_event == NULL) {
         kcp_conn->fin_timer_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, on_fin_packet_timeout_cb, kcp_conn);
-        KCP_LOGD("on_fin_packet_timeout_cb = %p", on_fin_packet_timeout_cb);
         if (kcp_conn->fin_timer_event == NULL) {
             return NO_MEMORY;
         }
