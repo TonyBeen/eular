@@ -28,8 +28,6 @@ find_package(Libevent REQUIRED)
 # message(STATUS "  include path: ${LIBEVENT_INCLUDE_DIRS}")
 # message(STATUS "  static libraries : ${LIBEVENT_STATIC_LIBRARIES}")
 # message(STATUS "  shared libraries : ${LIBEVENT_SHARED_LIBRARIES}")
-set(LIBEVENT_STATIC_LIBRARIES event)
-set(LIBEVENT_SHARED_LIBRARIES event)
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/kcp_version.h.in
