@@ -240,7 +240,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     char *ptr = kcp_connection->buffer;
-    char buffer[KCP_HEADER_SIZE] = {0};
+    char kcp_header_buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_t kcp_ack_header;
     kcp_ack_header.conv = kcp_connection->conv;
     kcp_ack_header.cmd = KCP_CMD_ACK;
@@ -257,8 +257,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             kcp_ack_header.ack_data.ack_ts = timestamp;
             kcp_ack_header.ack_data.sn = pos->sn;
 
-            kcp_proto_header_encode(&kcp_ack_header, buffer, KCP_HEADER_SIZE);
-            memcpy(ptr, buffer, KCP_HEADER_SIZE);
+            kcp_proto_header_encode(&kcp_ack_header, kcp_header_buffer, KCP_HEADER_SIZE);
+            memcpy(ptr, kcp_header_buffer, KCP_HEADER_SIZE);
             ptr += KCP_HEADER_SIZE;
             list_del_init(&pos->node);
             free(pos);
@@ -297,9 +297,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_connection->probe_wait = 0;
     }
 
-    kcp_proto_header_t kcp_wask_header;
+    kcp_proto_header_t kcp_window_header;
+    memset(&kcp_window_header, 0, sizeof(kcp_proto_header_t));
+    kcp_window_header.conv = kcp_connection->conv;
+    kcp_window_header.packet_data.ts = timestamp;
     if (kcp_connection->probe & KCP_ASK_SEND) {
-        kcp_wask_header.cmd = KCP_CMD_WASK;
+        kcp_window_header.cmd = KCP_CMD_WASK;
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
             struct iovec data[1];
             data[0].iov_base = kcp_connection->buffer;
@@ -308,14 +311,15 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             kcp_send_packet(kcp_connection, data, 1);
             ptr = kcp_connection->buffer;
         }
-        kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
-        memcpy(ptr, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(&kcp_window_header, kcp_header_buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, kcp_header_buffer, KCP_HEADER_SIZE);
         ptr += KCP_HEADER_SIZE;
     }
 
     if (kcp_connection->probe & KCP_ASK_TELL) {
-        kcp_wask_header.cmd = KCP_CMD_WINS;
-        if (ptr - kcp_connection->buffer + KCP_HEADER_SIZE > kcp_connection->mtu) {
+        kcp_window_header.cmd = KCP_CMD_WINS;
+        kcp_window_header.wnd = kcp_wnd_unused(kcp_connection);
+        if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
             struct iovec data[1];
             data[0].iov_base = kcp_connection->buffer;
             data[0].iov_len = ptr - kcp_connection->buffer;
@@ -323,18 +327,32 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
             kcp_send_packet(kcp_connection, data, 1);
             ptr = kcp_connection->buffer;
         }
-        kcp_proto_header_encode(&kcp_wask_header, buffer, KCP_HEADER_SIZE);
-        memcpy(ptr, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(&kcp_window_header, kcp_header_buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, kcp_header_buffer, KCP_HEADER_SIZE);
         ptr += KCP_HEADER_SIZE;
-
-        struct iovec data[1];
-        data[0].iov_base = kcp_connection->buffer;
-        data[0].iov_len = ptr - kcp_connection->buffer;
-        kcp_send_packet(kcp_connection, data, 1);
     }
 
     if (kcp_connection->probe & KCP_PING_RECV) {
-        // TODO 发送PONG响应
+        kcp_proto_header_t pong_header;
+        memset(&pong_header, 0, sizeof(kcp_proto_header_t));
+        pong_header.conv = kcp_connection->conv;
+        pong_header.cmd = KCP_CMD_PONG;
+        pong_header.ping_data.packet_ts = kcp_connection->ping_ctx->keepalive_packet_ts;
+        pong_header.ping_data.ts = timestamp;
+        pong_header.ping_data.sn = kcp_connection->ping_ctx->keepalive_sn;
+
+        if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
+            struct iovec data[1];
+            data[0].iov_base = kcp_connection->buffer;
+            data[0].iov_len = ptr - kcp_connection->buffer;
+
+            kcp_send_packet(kcp_connection, data, 1);
+            ptr = kcp_connection->buffer;
+        }
+
+        kcp_proto_header_encode(&pong_header, kcp_header_buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, kcp_header_buffer, KCP_HEADER_SIZE);
+        ptr += KCP_HEADER_SIZE;
     }
     kcp_connection->probe = 0; // 清除探测标志
 
@@ -1221,8 +1239,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         return NO_MEMORY;
     }
     list_init(&ack_item->node);
-    // TODO 优化malloc
-    kcp_segment_t *kcp_segment = (kcp_segment_t *)malloc(sizeof(kcp_segment_t) + ETHERNET_MTU);
+    kcp_segment_t *kcp_segment = kcp_segment_recv_get(kcp_conn);
     if (kcp_segment == NULL) {
         free(ack_item);
         return NO_MEMORY;
@@ -1263,7 +1280,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     }
 
     if (repeat) {
-        free(kcp_segment);
+        kcp_segment_recv_put(kcp_conn, kcp_segment);
         list_del_init(&ack_item->node);
         free(ack_item);
         return NO_ERROR;
