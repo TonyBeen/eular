@@ -352,11 +352,6 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         kcp_ctx->read_buffer_size = 0;
     }
 
-    if (kcp_ctx->event_loop) {
-        event_base_free(kcp_ctx->event_loop);
-        kcp_ctx->event_loop = NULL;
-    }
-
 #if defined(OS_LINUX)
     close(kcp_ctx->sock);
 #else
