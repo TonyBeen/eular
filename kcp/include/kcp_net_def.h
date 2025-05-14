@@ -18,6 +18,8 @@
 #include <netinet/in.h>
 #endif
 
+#define SOCKADDR_STRING_LEN 128
+
 typedef union {
     struct sockaddr     sa;
     struct sockaddr_in  sin;

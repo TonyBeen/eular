@@ -7,8 +7,6 @@
 #include <kcp_def.h>
 #include <kcp_net_def.h>
 
-#define SOCKADDR_STRING_LEN 128
-
 struct KcpConnection;
 
 EXTERN_C_BEGIN

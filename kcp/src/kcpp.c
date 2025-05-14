@@ -1094,3 +1094,45 @@ int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size)
 
     return peek_size;
 }
+
+const char *kcp_connection_remote_address(struct KcpConnection *kcp_connection, char *buf, size_t len)
+{
+    if (kcp_connection == NULL) {
+        return NULL;
+    }
+
+    return sockaddr_to_string(&kcp_connection->remote_host, buf, len);
+}
+
+int32_t kcp_connection_get_fd(struct KcpConnection *kcp_connection)
+{
+    if (kcp_connection == NULL) {
+        return INVALID_PARAM;
+    }
+
+    return kcp_connection->kcp_ctx->sock;
+}
+
+int32_t kcp_connection_get_mtu(struct KcpConnection *kcp_connection)
+{
+    if (kcp_connection == NULL) {
+        return INVALID_PARAM;
+    }
+
+    return kcp_connection->mtu;
+}
+
+void kcp_connection_get_statistic(struct KcpConnection *kcp_connection, kcp_statistic_t *statistic)
+{
+    if (kcp_connection == NULL || statistic == NULL) {
+        return;
+    }
+
+    statistic->ping_count = kcp_connection->ping_count;
+    statistic->pong_count = kcp_connection->pong_count;
+    statistic->tx_bytes = kcp_connection->tx_bytes;
+    statistic->rtx_bytes = kcp_connection->rtx_bytes;
+    statistic->srtt = kcp_connection->rx_srtt;
+    statistic->rttvar = kcp_connection->rx_rttval;
+    statistic->rto = kcp_connection->rx_rto;
+}

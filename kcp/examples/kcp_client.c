@@ -27,7 +27,6 @@
 
 struct event_base*  g_ev_base = NULL;
 struct event*       g_timer_event = NULL;
-struct event*       g_exit_timer_event = NULL;
 static int32_t      g_packet_count = 0;
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
@@ -43,11 +42,22 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
 
 void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 {
+    char address[SOCKADDR_STRING_LEN] = {0};
+    const char *addr_str = kcp_connection_remote_address(kcp_connection, address, sizeof(address));
     if (code == NO_ERROR) {
-        printf("KCP connection closed gracefully\n");
+        printf("KCP connection closed gracefully. %s\n", addr_str);
     } else {
-        printf("KCP connection closed with error code: %d\n", code);
+        printf("KCP connection closed with error code: %d, %s\n", code, addr_str);
     }
+
+    kcp_statistic_t stat;
+    kcp_connection_get_statistic(kcp_connection, &stat);
+    printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
+           "srtt: %d us, rttvar: %d us, rto: %d us\n",
+           stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, stat.rtx_bytes / (double)stat.tx_bytes,
+           stat.srtt, stat.rttvar, stat.rto);
+
+    event_base_loopbreak(g_ev_base);
 }
 
 void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
@@ -60,14 +70,6 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
         kcp_close(kcp_connection, 1000);
     }
-}
-
-void kcp_exit_timer(int fd, short ev, void *user)
-{
-    // event_base_loopbreak(g_ev_base);
-    event_base_loopexit(g_ev_base, NULL);
-    event_free(g_exit_timer_event);
-    g_exit_timer_event = NULL;
 }
 
 void kcp_timer(int fd, short ev, void *user)
@@ -83,10 +85,6 @@ void kcp_timer(int fd, short ev, void *user)
 
         event_free(g_timer_event);
         g_timer_event = NULL;
-        g_exit_timer_event = evtimer_new(g_ev_base, kcp_exit_timer, NULL);
-
-        struct timeval exit_timer_interval = {1, 0}; // 1s
-        evtimer_add(g_exit_timer_event, &exit_timer_interval);
         return;
     }
 

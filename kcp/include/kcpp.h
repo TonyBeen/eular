@@ -17,6 +17,18 @@ struct event;
 struct event_base;
 struct iovec;
 
+// 重传率计算公式
+// retransmission rate = rtx_bytes / (double)tx_bytes
+typedef struct KcpStatistic {
+    uint32_t        ping_count; // ping times
+    uint32_t        pong_count; // pong times
+    uint64_t        tx_bytes;   // transmit bytes
+    uint64_t        rtx_bytes;  // retransmit bytes
+    int32_t         srtt;       // smoothed round trip time (us)
+    int32_t         rttvar;     // round trip time variance (us)
+    int32_t         rto;        // retransmission timeout (us)
+} kcp_statistic_t;
+
 /// kcp callback
 
 /**
@@ -196,6 +208,23 @@ KCP_PORT int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data
 KCP_PORT void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
 
 KCP_PORT int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size);
+
+// --------------------------------------------------------------------------
+/**
+ * @brief get the kcp connection remote address.
+ *
+ * @param kcp_connection kcp connection
+ * @param buf buffer
+ * @param len buffer size
+ * @return const char* return buf
+ */
+const char *kcp_connection_remote_address(struct KcpConnection *kcp_connection, char *buf, size_t len);
+
+int32_t kcp_connection_get_fd(struct KcpConnection *kcp_connection);
+
+int32_t kcp_connection_get_mtu(struct KcpConnection *kcp_connection);
+
+void kcp_connection_get_statistic(struct KcpConnection *kcp_connection, kcp_statistic_t *statistic);
 
 EXTERN_C_END
 

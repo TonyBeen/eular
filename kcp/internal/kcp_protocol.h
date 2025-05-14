@@ -225,8 +225,8 @@ typedef struct KcpConnection {
     on_kcp_read_event_t     read_event_cb;
 
     // statistics
-    uint64_t                ping_count; // ping次数
-    uint64_t                pong_count; // pong次数
+    uint32_t                ping_count; // ping次数
+    uint32_t                pong_count; // pong次数
     uint64_t                tx_bytes;   // 发送字节数
     uint64_t                rtx_bytes;  // 重传字节数
 } kcp_connection_t;
