@@ -107,7 +107,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 
         struct iovec iov[3];
         int32_t count = kcp_conn->mtu_probe_ctx->retries < 3 ? kcp_conn->mtu_probe_ctx->retries : 3;
-        for (int32_t i = 0; i < count; ++i) {
+        for (int32_t i = 0; i < 1; ++i) {
             iov[i].iov_base = probe_ctx->probe_buf;
             iov[i].iov_len = KCP_HEADER_SIZE + data_length;
         }
@@ -152,7 +152,6 @@ int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t ret
     probe_ctx->retries = retry;
     if (probe_ctx->probe_timeout_event == NULL) {
         probe_ctx->probe_timeout_event = evtimer_new(kcp_conn->kcp_ctx->event_loop, kcp_mtu_probe_timeout_cb, kcp_conn);
-        KCP_LOGD("kcp_mtu_probe_timeout_cb = %p", kcp_mtu_probe_timeout_cb);
     }
     if (probe_ctx->probe_timeout_event == NULL) {
         return NO_MEMORY;
