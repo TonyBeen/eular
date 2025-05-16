@@ -11,6 +11,8 @@
 #include <assert.h>
 #include <event2/event.h>
 
+#include <xxhash.h>
+
 #include "kcp_config.h"
 #include "kcp_endian.h"
 #include "kcp_error.h"
