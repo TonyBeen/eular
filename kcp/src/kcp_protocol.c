@@ -827,6 +827,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         data_offset += 8;
         kcp_header->ping_data.sn = le64toh(*(uint64_t *)data_offset); // PONG时间戳
         data_offset += 8;
+        *data = data_offset;
         break;
     }
     default: {
