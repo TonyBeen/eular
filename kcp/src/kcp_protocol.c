@@ -803,7 +803,6 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         data_offset += 4;
         kcp_header->ack_data.una = le32toh(*(uint32_t *)(data_offset)); // 未确认序列号
         data_offset += 4;
-        *data = data_offset;
         break;
     }
     case KCP_CMD_SYN:
@@ -816,7 +815,6 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         data_offset += 4;
         kcp_header->syn_fin_data.rand_sn = le32toh(*(uint32_t *)data_offset);
         data_offset += 4;
-        *data = data_offset;
         break;
     }
     case KCP_CMD_PING:
@@ -827,7 +825,6 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         data_offset += 8;
         kcp_header->ping_data.sn = le64toh(*(uint64_t *)data_offset); // PONG时间戳
         data_offset += 8;
-        *data = data_offset;
         break;
     }
     default: {
@@ -846,16 +843,16 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
             kcp_header->packet_data.data = (char *)data_offset; // 数据
         }
         data_offset += kcp_header->packet_data.len;
-        *data = data_offset;
 
         if (kcp_header->packet_data.len > (data_size - KCP_HEADER_SIZE)) {
             KCP_LOGE("invalid packet data length: %u, data_size: %zu", kcp_header->packet_data.len, data_size);
             return INVALID_KCP_HEADER;
         }
         break;
-    }   
+    }
     }
 
+    *data = data_offset;
     return NO_ERROR;
 }
 
