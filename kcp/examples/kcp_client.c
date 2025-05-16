@@ -108,6 +108,7 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 {
     if (code != NO_ERROR) {
         fprintf(stderr, "Failed to connect KCP connection: %d\n", code);
+        event_base_loopbreak(g_ev_base);
         return;
     }
     printf("KCP connection established: %p\n", kcp_connection);

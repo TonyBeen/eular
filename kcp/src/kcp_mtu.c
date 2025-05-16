@@ -106,8 +106,8 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         buffer_offset += 4;
 
         struct iovec iov[3];
-        int32_t count = kcp_conn->mtu_probe_ctx->retries < 3 ? kcp_conn->mtu_probe_ctx->retries : 3;
-        for (int32_t i = 0; i < 1; ++i) {
+        int32_t count = kcp_conn->mtu_probe_ctx->retries < 2 ? kcp_conn->mtu_probe_ctx->retries : 1;
+        for (int32_t i = 0; i < count; ++i) {
             iov[i].iov_base = probe_ctx->probe_buf;
             iov[i].iov_len = KCP_HEADER_SIZE + data_length;
         }

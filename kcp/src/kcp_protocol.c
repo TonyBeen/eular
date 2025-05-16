@@ -53,9 +53,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         switch (kcp_connection->state) {
         case KCP_STATE_SYN_SENT: // client
             kcp_connection->state = KCP_STATE_DISCONNECTED;
-            if (kcp_connection->kcp_ctx->callback.on_connected) {
-                kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, CONNECTION_REFUSED);
-            }
+            kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, CONNECTION_REFUSED);
             break;
         case KCP_STATE_SYN_RECEIVED: // server
             kcp_connection->state = KCP_STATE_DISCONNECTED;
@@ -97,10 +95,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
                 // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
-            // else if (kcp_connection->kcp_ctx->callback.on_connected) {
-            //     kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
-            //     kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-            // }
 
             kcp_connection->need_write_timer_event = true;
         } else {
@@ -195,9 +189,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         // 回调用户
         switch (kcp_state) {
         case KCP_STATE_SYN_SENT: // client
-            if (kcp_connection->kcp_ctx->callback.on_connected) {
-                kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, CONNECTION_REFUSED);
-            }
+            kcp_connection->kcp_ctx->callback.on_connected(kcp_connection, CONNECTION_REFUSED);
             break;
         case KCP_STATE_SYN_RECEIVED: // server
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
