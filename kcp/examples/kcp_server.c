@@ -68,7 +68,17 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
     if (code == NO_ERROR) {
         printf("KCP connection accepted\n");
         set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
-        // kcp_ioctl(kcp_connection, KCP_IOCTLS_SET_READ_EVENT, 1); // Enable read events
+        struct KcpConfig config = KCP_CONFIG_FAST_3;
+        kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
+
+        uint32_t timeout = 1000;
+        kcp_ioctl(kcp_connection, IOCTL_RECEIVE_TIMEOUT, &timeout);
+        timeout = 5000; // 5s
+        kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
+        timeout = 2000; // 2s
+        kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
+        timeout = 30000; // 30s
+        kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
     } else {
         fprintf(stderr, "Failed to accept KCP connection: %d\n", code);
     }

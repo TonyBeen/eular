@@ -429,7 +429,7 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
         kcp_connection->ping_ctx->keepalive_timeout = *(uint32_t *)data;
         break;
     case IOCTL_KEEPALIVE_INTERVAL:
-        kcp_connection->ping_ctx->keepalive_interval = *(uint32_t *)data;
+        kcp_connection->ping_ctx->keepalive_interval = *(uint32_t *)data * 1000;
         break;
     case IOCTL_SYN_RETRIES:
         kcp_connection->syn_retries = *(uint32_t *)data;
@@ -909,7 +909,8 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
             if (code == EAGAIN || code == EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, WRITE_ERROR);
+                kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
+                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }

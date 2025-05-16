@@ -50,6 +50,8 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
         printf("KCP connection closed with error code: %d, %s\n", code, addr_str);
     }
 
+    printf("mtu = %d\n", kcp_connection_get_mtu(kcp_connection));
+
     kcp_statistic_t stat;
     kcp_connection_get_statistic(kcp_connection, &stat);
     printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
@@ -106,10 +108,18 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 {
     if (code != NO_ERROR) {
         fprintf(stderr, "Failed to connect KCP connection: %d\n", code);
+        event_base_loopbreak(g_ev_base);
         return;
     }
     printf("KCP connection established: %p\n", kcp_connection);
     set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
+    struct KcpConfig config = KCP_CONFIG_FAST_3;
+    kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
+
+    kcp_ioctl(kcp_connection, IOCTL_RECEIVE_TIMEOUT, 1000);
+    kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, 5000);
+    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, 2000);
+    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, 5000);
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);
