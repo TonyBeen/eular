@@ -116,10 +116,14 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     struct KcpConfig config = KCP_CONFIG_FAST_3;
     kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
 
-    kcp_ioctl(kcp_connection, IOCTL_RECEIVE_TIMEOUT, 1000);
-    kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, 5000);
-    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, 2000);
-    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, 5000);
+    uint32_t timeout = 1000;
+    kcp_ioctl(kcp_connection, IOCTL_RECEIVE_TIMEOUT, &timeout);
+    timeout = 5000;
+    kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
+    timeout = 2000;
+    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
+    timeout = 5000;
+    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);
