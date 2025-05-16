@@ -89,10 +89,10 @@ int main(int argc, char **argv)
     sockaddr_t local_addr;
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
-    local_addr.sin.sin_addr.s_addr = inet_addr("192.168.3.10");
+    local_addr.sin.sin_addr.s_addr = inet_addr("0.0.0.0");
     local_addr.sin.sin_port = htons(54321);
 
-    int32_t statuc = kcp_bind(ctx, &local_addr, NULL);
+    int32_t statuc = kcp_bind(ctx, &local_addr, "eth0");
     if (statuc != NO_ERROR) {
         fprintf(stderr, "Failed to bind KCP context: %d\n", statuc);
         kcp_context_destroy(ctx);
