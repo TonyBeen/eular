@@ -324,6 +324,32 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ptr += KCP_HEADER_SIZE;
     }
 
+    // 检验是否需要发送ping
+    if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
+        kcp_proto_header_t ping_header;
+        memset(&ping_header, 0, sizeof(kcp_proto_header_t));
+        ping_header.conv = kcp_connection->conv;
+        ping_header.cmd = KCP_CMD_PING;
+        ping_header.ping_data.packet_ts = 0;
+        ping_header.ping_data.ts = timestamp;
+        ping_header.ping_data.sn = XXH64(&timestamp, sizeof(timestamp), 0);
+
+        if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
+            struct iovec data[1];
+            data[0].iov_base = kcp_connection->buffer;
+            data[0].iov_len = ptr - kcp_connection->buffer;
+
+            kcp_send_packet(kcp_connection, data, 1);
+            ptr = kcp_connection->buffer;
+        }
+
+        kcp_proto_header_encode(&ping_header, kcp_header_buffer, KCP_HEADER_SIZE);
+        memcpy(ptr, kcp_header_buffer, KCP_HEADER_SIZE);
+        ptr += KCP_HEADER_SIZE;
+
+        kcp_connection->ping_ctx->keepalive_next_ts = timestamp + kcp_connection->ping_ctx->keepalive_interval;
+    }
+
     if (kcp_connection->probe & KCP_PING_RECV) {
         kcp_proto_header_t pong_header;
         memset(&pong_header, 0, sizeof(kcp_proto_header_t));
@@ -959,9 +985,12 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         kcp_conn->ping_ctx->keepalive_packet_ts = timestamp;
         kcp_conn->ping_ctx->keepalive_sn = kcp_header->ping_data.sn;
         kcp_conn->probe |= KCP_PING_RECV;
+        kcp_conn->ping_count++;
+        kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
         break;
     case KCP_CMD_PONG: // 计算RTT
         if (kcp_conn->ping_ctx->keepalive_sn == kcp_header->ping_data.sn) {
+            kcp_conn->pong_count++;
             uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
                            (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
             kcp_conn->ping_ctx->keepalive_rtt = rtt;
@@ -1119,6 +1148,9 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
         return NO_ERROR;
     }
 
+    // update ping ts
+    kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
+
     if (kcp_header->ack_data.sn < kcp_conn->snd_una) {
         // 如果ack的序号小于snd_una, 则忽略此ack
         return NO_ERROR;
@@ -1212,6 +1244,9 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
 int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
+    // update ping ts
+    kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
+
     if (kcp_header->packet_data.sn >= (kcp_conn->rcv_nxt + kcp_conn->rcv_wnd)) {
         // NOTE 如果收到PUSH包的序号超过接收窗口大小时, 发送可接收包大小, 并丢弃此包
         kcp_conn->probe |= KCP_ASK_TELL;

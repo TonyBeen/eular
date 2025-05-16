@@ -77,9 +77,9 @@ static const uint32_t   KCP_PROBE_INIT          = 7000; // 探测窗口大小的
 static const uint32_t   KCP_PROBE_LIMIT         = 120000; // 探测窗口大小的最大时间
 
 #define KCP_MAX_PACKET_SIZE         ((576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_PACKET_COUNT) // 一次发送的最大字节数, frg [0, KCP_PACKET_COUNT - 1]
-#define DEFAULT_RECEIVE_TIMEOUT     1000
-#define DEFAULT_KEEPALIVE_TIMEOUT   5000
-#define DEFAULT_KEEPALIVE_INTERVAL  10000
+#define DEFAULT_RECEIVE_TIMEOUT     1000        // ms
+#define DEFAULT_KEEPALIVE_TIMEOUT   5000        // ms
+#define DEFAULT_KEEPALIVE_INTERVAL  10000000    // us
 #define DEFAULT_KEEPALIVE_RETRIES   3
 #define DEFAULT_SYN_FIN_RETRIES     2
 #define DEFAULT_MTU_PROBE_TIMEOUT   1500
