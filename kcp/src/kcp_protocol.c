@@ -93,8 +93,10 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             }
             // 通知连接建立
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
-                kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
+                uint64_t ts = kcp_time_monotonic_ms();
+                kcp_connection->ts_flush = ts + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
+                kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                 // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
 
@@ -328,6 +330,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
     // 检验是否需要发送ping
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
+        KCP_LOGD("send ping, next ts: %llu", kcp_connection->ping_ctx->keepalive_next_ts, timestamp);
         kcp_proto_header_t ping_header;
         memset(&ping_header, 0, sizeof(kcp_proto_header_t));
         ping_header.conv = kcp_connection->conv;
@@ -890,6 +893,13 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
         buffer_offset += 4;
+    } else if (kcp_header->cmd == KCP_CMD_PING || kcp_header->cmd == KCP_CMD_PONG) {
+        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.packet_ts);
+        buffer_offset += 8;
+        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ts);
+        buffer_offset += 8;
+        *(uint32_t *)buffer_offset = htole64(kcp_header->ping_data.sn);
+        buffer_offset += 8;
     } else {
         if (buffer_size < (KCP_HEADER_SIZE + kcp_header->packet_data.len)) {
             KCP_LOGE("buffer size is too small: %zu, need: %zu", buffer_size, (KCP_HEADER_SIZE + kcp_header->packet_data.len));
@@ -1115,9 +1125,11 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                         if (kcp_connection->state == KCP_STATE_SYN_SENT) {
                             kcp_connection->state = KCP_STATE_CONNECTED;
                             status = true;
-                            kcp_connection->ts_flush = kcp_time_monotonic_ms() + kcp_connection->interval;
+                            uint64_t ts = kcp_time_monotonic_ms();
+                            kcp_connection->ts_flush = ts + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
+                            kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                             kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
                     }
