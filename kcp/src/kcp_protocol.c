@@ -21,9 +21,10 @@
 #include "kcp_net_utils.h"
 #include "kcp_log.h"
 
-static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
-static int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
-static int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static int32_t  on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static int32_t  on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static int32_t  on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
+static void     on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp);
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
@@ -33,7 +34,6 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
         if (kcp_conn->mtu > mtu) {
             KCP_LOGW("MTU reduced from %d to %d", kcp_conn->mtu, mtu);
             kcp_conn->kcp_ctx->callback.on_error(kcp_conn->kcp_ctx, kcp_conn, MTU_REDUCTION);
-            kcp_shutdown(kcp_conn);
             return;
         }
 
@@ -297,6 +297,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     memset(&kcp_window_header, 0, sizeof(kcp_proto_header_t));
     kcp_window_header.conv = kcp_connection->conv;
     kcp_window_header.packet_data.ts = timestamp;
+    // window size ask
     if (kcp_connection->probe & KCP_ASK_SEND) {
         kcp_window_header.cmd = KCP_CMD_WASK;
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
@@ -312,6 +313,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ptr += KCP_HEADER_SIZE;
     }
 
+    // windows size tell
     if (kcp_connection->probe & KCP_ASK_TELL) {
         kcp_window_header.cmd = KCP_CMD_WINS;
         kcp_window_header.wnd = kcp_wnd_unused(kcp_connection);
@@ -328,7 +330,9 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ptr += KCP_HEADER_SIZE;
     }
 
-    // 检验是否需要发送ping
+    // NOTE 此函数必须在 ping request 之前调用
+    on_kcp_ping_timeout(kcp_connection, timestamp);
+    // ping request
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
         KCP_LOGD("send ping, next ts: %llu", kcp_connection->ping_ctx->keepalive_next_ts, timestamp);
         kcp_proto_header_t ping_header;
@@ -338,6 +342,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ping_header.ping_data.packet_ts = 0;
         ping_header.ping_data.ts = timestamp;
         ping_header.ping_data.sn = XXH64(&timestamp, sizeof(timestamp), 0);
+
+        ping_session_t *ping_session = (ping_session_t *)malloc(sizeof(ping_session_t));
+        list_init(&ping_session->node);
+        ping_session->packet_ts = timestamp;
+        ping_session->packet_sn = ping_header.ping_data.sn;
+        list_add_tail(&ping_session->node, &kcp_connection->ping_ctx->ping_request_queue);
 
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
             struct iovec data[1];
@@ -355,6 +365,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_connection->ping_ctx->keepalive_next_ts = timestamp + kcp_connection->ping_ctx->keepalive_interval;
     }
 
+    // pong response
     if (kcp_connection->probe & KCP_PING_RECV) {
         kcp_proto_header_t pong_header;
         memset(&pong_header, 0, sizeof(kcp_proto_header_t));
@@ -998,18 +1009,30 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         kcp_conn->ping_count++;
         kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
         break;
-    case KCP_CMD_PONG: // 计算RTT
-        if (kcp_conn->ping_ctx->keepalive_sn == kcp_header->ping_data.sn) {
-            kcp_conn->pong_count++;
-            uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
-                           (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
-            kcp_conn->ping_ctx->keepalive_rtt = rtt;
-            kcp_conn->ping_ctx->keepalive_sn = 0;
-            kcp_conn->ping_ctx->keepalive_packet_ts = 0;
-            kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
-            kcp_conn->ping_ctx->keepalive_xretries = 0;
+    case KCP_CMD_PONG: { // 计算RTT
+        ping_session_t *pos = NULL;
+        ping_session_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->ping_ctx->ping_request_queue, node) {
+            if (pos->packet_sn == kcp_header->ping_data.sn) {
+                kcp_conn->pong_count++;
+                uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
+                            (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
+                kcp_conn->ping_ctx->keepalive_rtt = rtt;
+                kcp_conn->ping_ctx->keepalive_sn = 0;
+                kcp_conn->ping_ctx->keepalive_packet_ts = 0;
+                kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
+                kcp_conn->ping_ctx->keepalive_xretries = 0;
+                list_del_init(&pos->node);
+                free(pos);
+            } else if (pos->packet_ts + 2 * kcp_conn->ping_ctx->keepalive_timeout < timestamp) {
+                // 超时删除
+                list_del_init(&pos->node);
+                free(pos);
+            }
         }
+
         break;
+    }
     case KCP_CMD_MTU_PROBE: // NOTE MTU探测包
         return kcp_mtu_probe_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_MTU_ACK: // NOTE MTU探测响应包
@@ -1112,7 +1135,6 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                         KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
                         kcp_connection->state = KCP_STATE_DISCONNECTED;
                         kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
-                        kcp_connection_destroy(kcp_connection);
                     } else {
                         // NOTE 对端未收到ACK, 会重发SYN
                         if (kcp_connection->syn_timer_event) {
@@ -1479,6 +1501,26 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     uint32_t timeout_ms = kcp_conn->receive_timeout;
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     evtimer_add(kcp_conn->fin_timer_event, &tv);
+}
+
+void on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp)
+{
+    if (list_empty(&kcp_conn->ping_ctx->ping_request_queue)) {
+        return;
+    }
+
+    ping_session_t *ping_session = list_last_entry(&kcp_conn->ping_ctx->ping_request_queue, ping_session_t, node);
+    if (timestamp >= (kcp_conn->ping_ctx->keepalive_timeout + ping_session->packet_ts)) {
+        kcp_conn->ping_ctx->keepalive_next_ts = timestamp - 1;
+        list_del_init(&ping_session->node);
+        free(ping_session);
+        kcp_conn->ping_ctx->keepalive_xretries++;
+
+        if (kcp_conn->ping_ctx->keepalive_xretries >= kcp_conn->ping_ctx->keepalive_retries) {
+            kcp_conn->state = KCP_STATE_DISCONNECTED;
+            kcp_conn->kcp_ctx->callback.on_error(kcp_conn->kcp_ctx, kcp_conn, KEEPALIVE_ERROR);
+        }
+    }
 }
 
 kcp_segment_t *kcp_segment_send_get(kcp_connection_t *kcp_conn)

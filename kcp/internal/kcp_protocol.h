@@ -289,15 +289,22 @@ typedef struct KcpMtuProbeCtx {
     char*                   probe_buf;              // 探测数据
 } mtu_probe_ctx_t;
 
+typedef struct PingSession {
+    struct list_head node;
+    uint64_t packet_sn; // ping packet's sn
+    uint64_t packet_ts; // ping packet's timestamp
+} ping_session_t;
+
 typedef struct KcpPingCtx {
-    uint32_t                keepalive_timeout;      // keepalive超时时间
-    uint32_t                keepalive_interval;     // keepalive间隔时间
-    uint64_t                keepalive_next_ts;      // 下次需要发送ping包的时间戳
+    uint32_t                keepalive_timeout;      // keepalive超时时间 (us)
+    uint32_t                keepalive_interval;     // keepalive间隔时间 (us)
+    uint64_t                keepalive_next_ts;      // 下次需要发送ping包的时间戳 (us)
     uint16_t                keepalive_retries;      // keepalive 配置的重试次数
     uint16_t                keepalive_xretries;     // keepalive 重试次数
     uint32_t                keepalive_rtt;          // keepalive RTT
     uint64_t                keepalive_sn;           // keepalive序号
     uint64_t                keepalive_packet_ts;    // keepalive packet时间戳
+    struct list_head        ping_request_queue;     // ping队列
 } ping_ctx_t;
 
 

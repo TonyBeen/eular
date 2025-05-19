@@ -23,15 +23,38 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+struct event_base *g_event_base = NULL;
+
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
-    if (kcp_connection) {
-        printf("KCP error on connection %p: %d\n", kcp_connection, code);
-    } else {
-        printf("KCP error on context %p: %d\n", kcp_ctx, code);
+    switch (code) {
+    case MTU_REDUCTION:
+        if (kcp_connection) {
+            printf("KCP connection %p: MTU reduction\n", kcp_connection);
+            kcp_close(kcp_connection, 1000);
+        }
+        break;
+    case UDP_UNREACH:
+    case ICMP_ERROR:
+        if (kcp_connection) {
+            printf("KCP connection %p: UDP unreachable or ICMP error\n", kcp_connection);
+            kcp_shutdown(kcp_connection);
+        }
+        break;
+    case KEEPALIVE_ERROR:
+        if (kcp_connection) {
+            printf("KCP connection %p: Keepalive error\n", kcp_connection);
+            kcp_shutdown(kcp_connection);
+        }
+        break;
+    case READ_ERROR: // system error
+    case WRITE_ERROR:
+    case NO_MEMORY:
+        event_base_loopbreak(g_event_base);
+        break;
+    default:
+        break;
     }
-
-    fprintf(stderr, "Unhandled KCP error code: %d\n", code);
 }
 
 bool on_kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
@@ -88,7 +111,8 @@ int main(int argc, char **argv)
 {
     kcp_log_level(LOG_LEVEL_DEBUG);
 
-    struct event_base *base = event_base_new();
+    g_event_base = event_base_new();
+    struct event_base *base = g_event_base;
     struct KcpContext *ctx = NULL;
     ctx = kcp_context_create(base, on_kcp_error, NULL);
     if (ctx == NULL) {

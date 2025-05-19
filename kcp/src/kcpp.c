@@ -234,7 +234,6 @@ static void kcp_write_cb(int fd, short ev, void *arg)
                 break;
             } else {
                 kcp_ctx->callback.on_error(kcp_ctx, pos, status);
-                kcp_connection_destroy(pos);
                 break;
             }
         } else {
@@ -426,10 +425,13 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
         kcp_connection->mtu_probe_ctx->timeout = *(uint32_t *)data;
         break;
     case IOCTL_KEEPALIVE_TIMEOUT:
-        kcp_connection->ping_ctx->keepalive_timeout = *(uint32_t *)data;
+        kcp_connection->ping_ctx->keepalive_timeout = *(uint32_t *)data * 1000;
         break;
     case IOCTL_KEEPALIVE_INTERVAL:
         kcp_connection->ping_ctx->keepalive_interval = *(uint32_t *)data * 1000;
+        break;
+    case IOCTL_KEEPALIVE_RETRIES:
+        kcp_connection->ping_ctx->keepalive_retries = *(uint32_t *)data;
         break;
     case IOCTL_SYN_RETRIES:
         kcp_connection->syn_retries = *(uint32_t *)data;
@@ -577,8 +579,7 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
             if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
-                kcp_ctx->callback.on_error(kcp_ctx, kcp_connection, status);
-                kcp_connection_destroy(kcp_connection);
+                kcp_ctx->callback.on_error(kcp_ctx, kcp_connection, WRITE_ERROR);
                 return;
             }
         }
@@ -717,8 +718,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         data[0].iov_len = KCP_HEADER_SIZE;
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status <= 0) {
-            kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, status);
-            kcp_connection_destroy(kcp_connection);
+            kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
             return;
         }
 
@@ -848,7 +848,6 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
                 kcp_add_write_event(kcp_connection);
             } else {
                 kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
-                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }
@@ -910,7 +909,6 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
                 kcp_add_write_event(kcp_connection);
             } else {
                 kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
-                kcp_connection_destroy(kcp_connection);
                 return;
             }
         }
@@ -939,27 +937,28 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
 void kcp_shutdown(struct KcpConnection *kcp_connection)
 {
     // 发送RST
-    KCP_LOGI("kcp shutdown, conversation: %X", kcp_connection->conv);
     kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
 
-    kcp_proto_header_t kcp_header;
-    kcp_header.conv = kcp_connection->conv;
-    kcp_header.cmd = KCP_CMD_RST;
-    kcp_header.frg = 0;
-    kcp_header.wnd = 0;
-    kcp_header.packet_data.ts = (uint32_t)time(NULL);
-    kcp_header.packet_data.sn = 0;
-    kcp_header.packet_data.una = 0;
-    kcp_header.packet_data.len = 0;
-    kcp_header.packet_data.data = NULL;
-    char buffer[KCP_HEADER_SIZE] = {0};
-    kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+    if (kcp_connection->state != KCP_STATE_DISCONNECTED) {
+        kcp_proto_header_t kcp_header;
+        kcp_header.conv = kcp_connection->conv;
+        kcp_header.cmd = KCP_CMD_RST;
+        kcp_header.frg = 0;
+        kcp_header.wnd = 0;
+        kcp_header.packet_data.ts = (uint32_t)time(NULL);
+        kcp_header.packet_data.sn = 0;
+        kcp_header.packet_data.una = 0;
+        kcp_header.packet_data.len = 0;
+        kcp_header.packet_data.data = NULL;
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
 
-    struct iovec data[1];
-    data[0].iov_base = buffer;
-    data[0].iov_len = KCP_HEADER_SIZE;
-    kcp_send_packet(kcp_connection, data, 1);
-    kcp_connection->state = KCP_STATE_DISCONNECTED;
+        struct iovec data[1];
+        data[0].iov_base = buffer;
+        data[0].iov_len = KCP_HEADER_SIZE;
+        kcp_send_packet(kcp_connection, data, 1);
+        kcp_connection->state = KCP_STATE_DISCONNECTED;
+    }
 
     if (kcp_ctx->callback.on_closed) {
         kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
