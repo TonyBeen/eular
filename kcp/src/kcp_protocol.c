@@ -343,6 +343,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ping_header.ping_data.ts = timestamp;
         ping_header.ping_data.sn = XXH64(&timestamp, sizeof(timestamp), 0);
 
+        ping_session_t *ping_session = (ping_session_t *)malloc(sizeof(ping_session_t));
+        list_init(&ping_session->node);
+        ping_session->packet_ts = timestamp;
+        ping_session->packet_sn = ping_header.ping_data.sn;
+        list_add_tail(&ping_session->node, &kcp_connection->ping_ctx->ping_request_queue);
+
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
             struct iovec data[1];
             data[0].iov_base = kcp_connection->buffer;
@@ -1003,18 +1009,30 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         kcp_conn->ping_count++;
         kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
         break;
-    case KCP_CMD_PONG: // 计算RTT
-        if (kcp_conn->ping_ctx->keepalive_sn == kcp_header->ping_data.sn) {
-            kcp_conn->pong_count++;
-            uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
-                           (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
-            kcp_conn->ping_ctx->keepalive_rtt = rtt;
-            kcp_conn->ping_ctx->keepalive_sn = 0;
-            kcp_conn->ping_ctx->keepalive_packet_ts = 0;
-            kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
-            kcp_conn->ping_ctx->keepalive_xretries = 0;
+    case KCP_CMD_PONG: { // 计算RTT
+        ping_session_t *pos = NULL;
+        ping_session_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->ping_ctx->ping_request_queue, node) {
+            if (pos->packet_sn == kcp_header->ping_data.sn) {
+                kcp_conn->pong_count++;
+                uint64_t rtt = (timestamp - kcp_conn->ping_ctx->keepalive_packet_ts) -
+                            (kcp_header->ping_data.ts - kcp_header->ping_data.packet_ts);
+                kcp_conn->ping_ctx->keepalive_rtt = rtt;
+                kcp_conn->ping_ctx->keepalive_sn = 0;
+                kcp_conn->ping_ctx->keepalive_packet_ts = 0;
+                kcp_conn->ping_ctx->keepalive_next_ts = timestamp + kcp_conn->ping_ctx->keepalive_interval;
+                kcp_conn->ping_ctx->keepalive_xretries = 0;
+                list_del_init(&pos->node);
+                free(pos);
+            } else if (pos->packet_ts + 2 * kcp_conn->ping_ctx->keepalive_timeout < timestamp) {
+                // 超时删除
+                list_del_init(&pos->node);
+                free(pos);
+            }
         }
+
         break;
+    }
     case KCP_CMD_MTU_PROBE: // NOTE MTU探测包
         return kcp_mtu_probe_received(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_MTU_ACK: // NOTE MTU探测响应包
