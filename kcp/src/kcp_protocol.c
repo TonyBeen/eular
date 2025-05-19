@@ -716,6 +716,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->ping_ctx->keepalive_timeout = DEFAULT_KEEPALIVE_TIMEOUT;
     kcp_conn->ping_ctx->keepalive_interval = DEFAULT_KEEPALIVE_INTERVAL;
     kcp_conn->ping_ctx->keepalive_retries = DEFAULT_KEEPALIVE_RETRIES;
+    list_init(&kcp_conn->ping_ctx->ping_request_queue);
 
     kcp_conn->read_cb = on_kcp_read_event;
     kcp_conn->write_cb = on_kcp_write_event;
