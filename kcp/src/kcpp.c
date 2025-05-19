@@ -253,7 +253,7 @@ static void kcp_write_timeout(int fd, short ev, void *arg)
     uint64_t current_time_us = kcp_time_monotonic_us();
     kcp_connection_t *pos = NULL;
     for (pos = connection_first(&kcp_ctx->connection_set); pos != NULL; pos = connection_next(pos)) {
-        if (pos->need_write_timer_event) {
+        if (pos->need_write_timer_event && pos->state != KCP_STATE_DISCONNECTED) {
             pos->write_cb(pos, current_time_us);
         }
     }
@@ -937,8 +937,6 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
 void kcp_shutdown(struct KcpConnection *kcp_connection)
 {
     // 发送RST
-    kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
-
     if (kcp_connection->state != KCP_STATE_DISCONNECTED) {
         kcp_proto_header_t kcp_header;
         kcp_header.conv = kcp_connection->conv;
@@ -960,6 +958,7 @@ void kcp_shutdown(struct KcpConnection *kcp_connection)
         kcp_connection->state = KCP_STATE_DISCONNECTED;
     }
 
+    kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
     if (kcp_ctx->callback.on_closed) {
         kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
     }
