@@ -759,6 +759,16 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 
     // 释放ping上下文
     if (kcp_conn->ping_ctx) {
+        // 清理ping请求队列
+        if (!list_empty(&kcp_conn->ping_ctx->ping_request_queue)) {
+            ping_session_t *pos = NULL;
+            ping_session_t *next = NULL;
+            list_for_each_entry_safe(pos, next, &kcp_conn->ping_ctx->ping_request_queue, node) {
+                list_del_init(&pos->node);
+                free(pos);
+            }
+        }
+
         free(kcp_conn->ping_ctx);
         kcp_conn->ping_ctx = NULL;
     }
@@ -780,6 +790,76 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         kcp_proto_header_t *pos = NULL;
         kcp_proto_header_t *next = NULL;
         list_for_each_entry_safe(pos, next, &kcp_conn->kcp_proto_header_list, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理ACK包
+    if (!list_empty(&kcp_conn->ack_item)) {
+        kcp_ack_t *pos = NULL;
+        kcp_ack_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->ack_item, node) {
+            list_del_init(&pos->node);
+            free(pos);
+        }
+    }
+
+    // 清理发送队列
+    if (!list_empty(&kcp_conn->snd_queue)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->snd_queue, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理发送缓冲区
+    if (!list_empty(&kcp_conn->snd_buf)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理发送缓冲区
+    if (!list_empty(&kcp_conn->snd_buf_unused)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf_unused, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理接收队列
+    if (!list_empty(&kcp_conn->rcv_queue)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->rcv_queue, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理接收缓冲区
+    if (!list_empty(&kcp_conn->rcv_buf)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
+            list_del_init(&pos->node_list);
+            free(pos);
+        }
+    }
+
+    // 清理接收缓冲区
+    if (!list_empty(&kcp_conn->rcv_buf_unused)) {
+        kcp_segment_t *pos = NULL;
+        kcp_segment_t *next = NULL;
+        list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf_unused, node_list) {
             list_del_init(&pos->node_list);
             free(pos);
         }
