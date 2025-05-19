@@ -297,6 +297,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     memset(&kcp_window_header, 0, sizeof(kcp_proto_header_t));
     kcp_window_header.conv = kcp_connection->conv;
     kcp_window_header.packet_data.ts = timestamp;
+    // window size ask
     if (kcp_connection->probe & KCP_ASK_SEND) {
         kcp_window_header.cmd = KCP_CMD_WASK;
         if ((ptr - kcp_connection->buffer + KCP_HEADER_SIZE) > kcp_connection->mtu) {
@@ -312,6 +313,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ptr += KCP_HEADER_SIZE;
     }
 
+    // windows size tell
     if (kcp_connection->probe & KCP_ASK_TELL) {
         kcp_window_header.cmd = KCP_CMD_WINS;
         kcp_window_header.wnd = kcp_wnd_unused(kcp_connection);
@@ -328,7 +330,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         ptr += KCP_HEADER_SIZE;
     }
 
-    // 检验是否需要发送ping
+    // ping request
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
         KCP_LOGD("send ping, next ts: %llu", kcp_connection->ping_ctx->keepalive_next_ts, timestamp);
         kcp_proto_header_t ping_header;
@@ -355,6 +357,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
         kcp_connection->ping_ctx->keepalive_next_ts = timestamp + kcp_connection->ping_ctx->keepalive_interval;
     }
 
+    // pong response
     if (kcp_connection->probe & KCP_PING_RECV) {
         kcp_proto_header_t pong_header;
         memset(&pong_header, 0, sizeof(kcp_proto_header_t));
