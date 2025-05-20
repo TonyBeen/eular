@@ -113,17 +113,19 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     }
     printf("KCP connection established: %p\n", kcp_connection);
     set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
-    struct KcpConfig config = KCP_CONFIG_FAST_3;
+    struct KcpConfig config = KCP_CONFIG_FAST;
     kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
 
     uint32_t timeout = 1000;
     kcp_ioctl(kcp_connection, IOCTL_RECEIVE_TIMEOUT, &timeout);
-    timeout = 5000;
+    timeout = 5000; // 5s
     kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
-    timeout = 2000;
+    timeout = 2000; // 2s
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
-    timeout = 5000;
+    timeout = 10000; // 10s
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
+    uint32_t retries = 3;
+    kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);

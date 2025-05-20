@@ -91,7 +91,7 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
     if (code == NO_ERROR) {
         printf("KCP connection accepted\n");
         set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);
-        struct KcpConfig config = KCP_CONFIG_FAST_3;
+        struct KcpConfig config = KCP_CONFIG_FAST;
         kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
 
         uint32_t timeout = 1000;
@@ -100,8 +100,10 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
         kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
         timeout = 2000; // 2s
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
-        timeout = 5000; // 5s
+        timeout = 10000; // 10s
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
+        uint32_t retries = 3;
+        kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
     } else {
         fprintf(stderr, "Failed to accept KCP connection: %d\n", code);
     }
