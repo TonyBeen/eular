@@ -100,7 +100,7 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
         kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
         timeout = 2000; // 2s
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
-        timeout = 30000; // 30s
+        timeout = 5000; // 5s
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
     } else {
         fprintf(stderr, "Failed to accept KCP connection: %d\n", code);

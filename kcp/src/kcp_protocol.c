@@ -24,7 +24,7 @@
 static int32_t  on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
 static int32_t  on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
 static int32_t  on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp);
-static void     on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp);
+static int32_t  on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp);
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
@@ -331,7 +331,9 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     // NOTE 此函数必须在 ping request 之前调用
-    on_kcp_ping_timeout(kcp_connection, timestamp);
+    if (on_kcp_ping_timeout(kcp_connection, timestamp)) { // 资源已被释放
+        return NO_ERROR;
+    }
     // ping request
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
         KCP_LOGD("send ping, next ts: %llu", kcp_connection->ping_ctx->keepalive_next_ts, timestamp);
@@ -1584,10 +1586,10 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     evtimer_add(kcp_conn->fin_timer_event, &tv);
 }
 
-void on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp)
+int32_t on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp)
 {
     if (list_empty(&kcp_conn->ping_ctx->ping_request_queue)) {
-        return;
+        return 0;
     }
 
     ping_session_t *ping_session = list_last_entry(&kcp_conn->ping_ctx->ping_request_queue, ping_session_t, node);
@@ -1600,8 +1602,11 @@ void on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp)
         if (kcp_conn->ping_ctx->keepalive_xretries >= kcp_conn->ping_ctx->keepalive_retries) {
             kcp_conn->state = KCP_STATE_DISCONNECTED;
             kcp_conn->kcp_ctx->callback.on_error(kcp_conn->kcp_ctx, kcp_conn, KEEPALIVE_ERROR);
+            return 1;
         }
     }
+
+    return 0;
 }
 
 kcp_segment_t *kcp_segment_send_get(kcp_connection_t *kcp_conn)

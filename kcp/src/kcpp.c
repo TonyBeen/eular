@@ -252,7 +252,10 @@ static void kcp_write_timeout(int fd, short ev, void *arg)
     // 遍历所有连接, 超时未发送数据则触发写事件
     uint64_t current_time_us = kcp_time_monotonic_us();
     kcp_connection_t *pos = NULL;
-    for (pos = connection_first(&kcp_ctx->connection_set); pos != NULL; pos = connection_next(pos)) {
+    kcp_connection_t *next = NULL;
+    for (pos = connection_first(&kcp_ctx->connection_set); pos != NULL; pos = next) {
+        // NOTE write_cb回调可能会删除当前节点
+        next = connection_next(pos);
         if (pos->need_write_timer_event && pos->state != KCP_STATE_DISCONNECTED) {
             pos->write_cb(pos, current_time_us);
         }
