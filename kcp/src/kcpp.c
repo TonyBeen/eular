@@ -368,9 +368,9 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flag
     if (flags & CONFIG_KEY_NODELAY) {
         kcp_connection->nodelay = config->nodelay ? 1 : 0;
         if (kcp_connection->nodelay) {
-            kcp_connection->rx_minrto = IKCP_RTO_NDL;
+            kcp_connection->rx_minrto = IKCP_RTO_NDL * 1000;
         } else {
-            kcp_connection->rx_minrto = KCP_RTO_MIN;
+            kcp_connection->rx_minrto = KCP_RTO_MIN * 1000;
         }
     }
 

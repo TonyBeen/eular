@@ -654,8 +654,8 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->ssthresh = KCP_THRESH_INIT;
     kcp_conn->rx_rttval = 0;
     kcp_conn->rx_srtt = 0;
-    kcp_conn->rx_rto = KCP_RTO_DEF;
-    kcp_conn->rx_minrto = KCP_RTO_MIN;
+    kcp_conn->rx_rto = KCP_RTO_DEF * 1000;
+    kcp_conn->rx_minrto = KCP_RTO_MIN * 1000;
     kcp_conn->snd_wnd = KCP_WND_SND;
     kcp_conn->rcv_wnd = KCP_WND_RCV;
     kcp_conn->rmt_wnd = KCP_WND_RCV;
@@ -1307,7 +1307,8 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
                 // 计算RTO
                 int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
-                kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto * 1000, KCP_RTO_MAX * 1000);
+                kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto, KCP_RTO_MAX * 1000);
+                KCP_LOGI("RTT: %u, RTO: %u", kcp_conn->rx_srtt, kcp_conn->rx_rto);
             }
 
             kcp_conn->tx_bytes += pos->len; // 累加发送的字节数
