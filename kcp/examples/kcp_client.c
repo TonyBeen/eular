@@ -79,7 +79,7 @@ void kcp_timer(int fd, short ev, void *user)
     struct KcpConnection *kcp_connection = (struct KcpConnection *)user;
 
     // 定时发送数据
-    char message[1024] = {0};
+    char message[4096] = {0};
     sprintf(message, "Hello, KCP! %d", g_packet_count++);
     if (g_packet_count > 3) {
         printf("Closing KCP connection\n");
