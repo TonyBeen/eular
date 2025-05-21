@@ -50,7 +50,7 @@ kcp_proto.fields = {
     s_ping_packet_ts, s_ping_ts, s_ping_sn
 }
 
-function ParsePacket(tvb, offset, length, pinfo, tree)
+function ParsePacket(tvb, offset, length, pinfo, tree, cmd_string)
     -- ts
     local ts = tvb(offset, 8)
     tree:add_le(s_packet_ts, ts)
@@ -58,11 +58,13 @@ function ParsePacket(tvb, offset, length, pinfo, tree)
 
     -- sn
     local sn = tvb(offset, 4)
+    local sn_value = tvb(offset, 4):le_uint()
     tree:add_le(s_packet_sn, sn)
     offset = offset + 4
 
     -- psn
     local psn = tvb(offset, 4)
+    local psn_value = tvb(offset, 4):le_uint()
     tree:add_le(s_packet_psn, psn)
     offset = offset + 4
 
@@ -84,10 +86,13 @@ function ParsePacket(tvb, offset, length, pinfo, tree)
         offset = offset + n_length
     end
 
+    local append_info = cmd_string .. " SN=" .. sn_value .. ", PSN=" .. psn_value .. ", Len=" .. n_length
+    pinfo.cols.info:append(append_info)
+
     return offset
 end
 
-function ParseAck(tvb, offset, length, pinfo, tree)
+function ParseAck(tvb, offset, length, pinfo, tree, cmd_string)
     -- packet ts
     local packet_ts = tvb(offset, 8)
     tree:add_le(s_ack_packet_ts, packet_ts)
@@ -100,18 +105,23 @@ function ParseAck(tvb, offset, length, pinfo, tree)
 
     -- sn
     local sn = tvb(offset, 4)
+    local sn_value = tvb(offset, 4):le_uint()
     tree:add_le(s_ack_sn, sn)
     offset = offset + 4
 
     -- una
     local una = tvb(offset, 4)
+    local una_value = tvb(offset, 4):le_uint()
     tree:add_le(s_ack_una, una)
     offset = offset + 4
+
+    local append_info = cmd_string .. " SN=" .. sn_value .. ", UNA=" .. una_value .. "; "
+    pinfo.cols.info:append(append_info)
 
     return offset
 end
 
-function ParsePing(tvb, offset, length, pinfo, tree)
+function ParsePing(tvb, offset, length, pinfo, tree, cmd_string)
     -- packet ts
     local packet_ts = tvb(offset, 8)
     tree:add_le(s_ping_packet_ts, packet_ts)
@@ -124,13 +134,17 @@ function ParsePing(tvb, offset, length, pinfo, tree)
 
     -- sn
     local sn = tvb(offset, 8)
+    local sn_value = tvb(offset, 8):le_uint64()
     tree:add_le(s_ping_sn, sn)
     offset = offset + 8
+
+    local append_info = cmd_string .. " SN=" .. sn_value .. "; "
+    pinfo.cols.info:append(append_info)
 
     return offset
 end
 
-function ParseSyn(tvb, offset, length, pinfo, tree)
+function ParseSyn(tvb, offset, length, pinfo, tree, cmd_string)
     -- packet ts
     local packet_ts = tvb(offset, 8)
     tree:add_le(s_syn_packet_ts, packet_ts)
@@ -143,13 +157,18 @@ function ParseSyn(tvb, offset, length, pinfo, tree)
 
     -- packet sn
     local sn = tvb(offset, 4)
+    local packet_sn_value = tvb(offset, 4):le_uint()
     tree:add_le(s_syn_packet_sn, sn)
     offset = offset + 4
 
     -- rand sn
     local rand_sn = tvb(offset, 4)
+    local rand_sn_value = tvb(offset, 4):le_uint()
     tree:add_le(s_syn_rand_sn, rand_sn)
     offset = offset + 4
+
+    local append_info = cmd_string .. " Packet SN=" .. packet_sn_value .. ", Rand SN=" .. rand_sn_value
+    pinfo.cols.info:append(append_info)
 
     return offset
 end
@@ -162,6 +181,11 @@ function kcp_proto.dissector(buf, pkt, root)
 
     pkt.cols.protocol = kcp_proto.name
     pkt.cols.info = ""
+
+    local src_port = pkt.src_port
+    local dst_port = pkt.dst_port
+
+    pkt.cols.info = tostring(src_port) .. " -> " .. tostring(dst_port)
 
     local total_len = buf:len()
     local size_offset = 0
@@ -182,6 +206,7 @@ function kcp_proto.dissector(buf, pkt, root)
         local offset = size_offset
         local parse_size = 0
         -- conversation
+        local conversation_value = buf(offset, 4):le_uint()
         kcp_tree:add_le(s_conversation, buf(offset, 4))
         offset = offset + 4
 
@@ -203,19 +228,19 @@ function kcp_proto.dissector(buf, pkt, root)
         if not cmd_string then
             cmd_string = string.format("UNKNOWN(0x%02X)", command)
         end
+        cmd_string = string.format(" [%s] Conv=0x%04X,", cmd_string, conversation_value)
 
-        pkt.cols.info:append(" [" .. cmd_string .. "]")
         local payload_len = total_len - offset
 
         local payload_value_tree = kcp_tree:add(s_payload_value, buf(offset, payload_len), "")
         if command == 0x01 or command == 0x0a then -- SYN/FIN
-            parse_size = ParseSyn(buf, offset, payload_len, pkt, payload_value_tree)
+            parse_size = ParseSyn(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
         elseif command == 0x02 then -- ACK
-            parse_size = ParseAck(buf, offset, payload_len, pkt, payload_value_tree)
+            parse_size = ParseAck(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
         elseif command == 0x06 or command == 0x07 then -- PING/PONG
-            parse_size = ParsePing(buf, offset, payload_len, pkt, payload_value_tree)
+            parse_size = ParsePing(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
         else -- push, wask, wins, mtu probe, mtu ack, rst
-            parse_size = ParsePacket(buf, offset, payload_len, pkt, payload_value_tree)
+            parse_size = ParsePacket(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
         end
 
         size_offset = parse_size

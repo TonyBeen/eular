@@ -891,11 +891,10 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_header.cmd = KCP_CMD_FIN;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = kcp_time_monotonic_us();
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
+        kcp_header.syn_fin_data.packet_ts = 0;
+        kcp_header.syn_fin_data.ts = kcp_time_monotonic_us();
+        kcp_header.syn_fin_data.packet_sn = 0;
+        kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0);
         memcpy(kcp_fin_header, &kcp_header, sizeof(kcp_proto_header_t));
         list_add_tail(&kcp_fin_header->node_list, &kcp_connection->kcp_proto_header_list);
 
