@@ -1072,7 +1072,6 @@ int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *k
         if (kcp_header->frg > 0) {
             kcp_conn->rmt_wnd = kcp_header->wnd;
         }
-        kcp_conn->rmt_wnd = kcp_header->wnd;
         return on_kcp_push_pcaket(kcp_conn, kcp_header, timestamp);
     case KCP_CMD_WASK:
         kcp_conn->probe |= KCP_ASK_TELL;
@@ -1451,7 +1450,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             last = pos;
         }
 
-        list_add(&last->node_list, &kcp_segment->node_list);
+        list_add(&kcp_segment->node_list, &last->node_list);
     } else { // 新包
         list_add_tail(&kcp_segment->node_list, &kcp_conn->rcv_buf);
     }
@@ -1469,7 +1468,8 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             packet_count = (uint16_t)first->wnd; // NOTE 起始packet, 表示packet个数
             pos = first;
             uint16_t count = 0;
-            list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
+            kcp_segment_t *temp_next = NULL;
+            list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
                 if (first->psn != pos->psn) { // 下一个包
                     break;
                 }
@@ -1479,7 +1479,7 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
             if (packet_count == count) { // 完整的一包
                 pos = first;
                 int32_t size = 0;
-                list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
+                list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
                     if (first->psn != pos->psn) { // 下一个包
                         break;
                     }
