@@ -22,9 +22,9 @@
 
 EXTERN_C_BEGIN
 
-int32_t kcp_get_min_mss(bool ipv6);
+int32_t kcp_get_min_mtu(bool ipv6);
 
-int32_t kcp_get_mss(bool ipv6);
+int32_t kcp_get_mtu(bool ipv6);
 
 int32_t kcp_get_localhost_mss(bool ipv6);
 

@@ -642,7 +642,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     list_init(&kcp_conn->node_list);
 
     kcp_conn->conv = 0;
-    kcp_conn->mtu = kcp_get_min_mss(remote_host->sa.sa_family == AF_INET6);
+    kcp_conn->mtu = kcp_get_min_mtu(remote_host->sa.sa_family == AF_INET6);
     kcp_conn->mss_min = kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
 
     kcp_conn->snd_una = 0;
