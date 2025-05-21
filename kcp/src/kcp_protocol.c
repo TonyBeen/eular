@@ -67,7 +67,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             break;
         default:
             kcp_connection->state = KCP_STATE_DISCONNECTED;
-            KCP_LOGW("KCP_CMD_RST received, call on_closed");
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, CONNECTION_RESET);
             }
@@ -112,6 +111,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     }
     case KCP_STATE_FIN_SENT: {
         if (kcp_header->cmd == KCP_CMD_FIN) {
+            // TODO 遍历 kcp_fin_header
             kcp_proto_header_t kcp_ack_header;
             kcp_ack_header.conv = kcp_connection->conv;
             kcp_ack_header.cmd = KCP_CMD_ACK;
@@ -119,7 +119,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             kcp_ack_header.wnd = 0;
             kcp_ack_header.ack_data.packet_ts = kcp_header->packet_data.ts;
             kcp_ack_header.ack_data.ack_ts = kcp_time_monotonic_us();
-            kcp_ack_header.ack_data.sn = kcp_header->packet_data.sn;
+            kcp_ack_header.ack_data.sn = kcp_header->syn_fin_data.rand_sn;
             kcp_ack_header.ack_data.una = 0;
 
             char buffer[KCP_HEADER_SIZE] = {0};
@@ -133,6 +133,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
             }
+            kcp_connection_destroy(kcp_connection);
         }
         break;
     }
@@ -162,6 +163,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_closed) {
                 kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
             }
+            kcp_connection_destroy(kcp_connection);
         }
         break;
     }

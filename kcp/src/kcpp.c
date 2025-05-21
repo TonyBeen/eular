@@ -826,20 +826,20 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
 {
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
     if (kcp_connection->fin_retries--) {
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = kcp_connection->conv;
-        kcp_header.cmd = KCP_CMD_FIN;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.packet_data.ts = kcp_time_monotonic_us();
-        kcp_header.packet_data.sn = kcp_header.packet_data.ts;
-        kcp_connection->syn_fin_sn = kcp_header.packet_data.sn;
-        kcp_header.packet_data.una = 0;
-        kcp_header.packet_data.len = 0;
-        kcp_header.packet_data.data = NULL;
-        char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        list_init(&kcp_fin_header->node_list);
+        kcp_fin_header->conv = kcp_connection->conv;
+        kcp_fin_header->cmd = KCP_CMD_FIN;
+        kcp_fin_header->frg = 0;
+        kcp_fin_header->wnd = 0;
+        kcp_fin_header->syn_fin_data.packet_ts = 0;
+        kcp_fin_header->syn_fin_data.ts = kcp_time_monotonic_us();
+        kcp_fin_header->syn_fin_data.packet_sn = 0;
+        kcp_fin_header->syn_fin_data.rand_sn = XXH32(&kcp_fin_header->syn_fin_data.ts, sizeof(kcp_fin_header->syn_fin_data.ts), 0);
+        list_add_tail(&kcp_fin_header->node_list, &kcp_connection->kcp_proto_header_list);
 
+        char buffer[KCP_HEADER_SIZE] = {0};
+        kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
