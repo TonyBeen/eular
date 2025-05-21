@@ -201,7 +201,7 @@ typedef struct KcpConnection {
     bool                    need_write_timer_event;
     kcp_connection_state_t  state;
     uint32_t                receive_timeout;
-    uint32_t                syn_fin_sn;
+    uint32_t                syn_fin_sn; // unused
     int32_t                 syn_retries;
     uint32_t                fin_retries;
     uint64_t                ts_flush;
