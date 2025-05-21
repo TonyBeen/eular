@@ -178,7 +178,7 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
         send_size = sendmsg(sock, &msg, MSG_NOSIGNAL);
         if (send_size <= 0) {
             int32_t code = get_last_errno();
-            if (code != EAGAIN) {
+            if (code != EAGAIN || code != EWOULDBLOCK) {
                 return WRITE_ERROR;
             } else {
                 break;

@@ -97,7 +97,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                 kcp_connection->ts_flush = ts + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
                 kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
-                // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
+                kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
 
             kcp_connection->need_write_timer_event = true;
