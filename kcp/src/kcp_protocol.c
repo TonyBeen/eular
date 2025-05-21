@@ -73,7 +73,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             break;
         }
 
-        kcp_connection_destroy(kcp_connection);
+        // NOTE 由 kcp_parse_packet 释放
+        // kcp_connection_destroy(kcp_connection);
         return;
     }
 
@@ -113,7 +114,6 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         if (kcp_header->cmd == KCP_CMD_FIN) {
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
-            bool destroy_connection = false;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
                 if (pos->cmd == KCP_CMD_FIN && pos->syn_fin_data.rand_sn == kcp_header->syn_fin_data.packet_sn) {
                     kcp_proto_header_t kcp_ack_header;
@@ -137,14 +137,11 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                     if (kcp_connection->kcp_ctx->callback.on_closed) {
                         kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
                     }
-                    destroy_connection = true;
                     break;
                 }
             }
 
-            if (destroy_connection) {
-                kcp_connection_destroy(kcp_connection);
-            }
+            // NOTE 由 kcp_parse_packet 释放
         }
         break;
     }
@@ -172,20 +169,16 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         } else if (kcp_header->cmd == KCP_CMD_ACK) {
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
-            bool destroy_connection = false;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
                 if (pos->cmd == KCP_CMD_FIN && pos->syn_fin_data.rand_sn == kcp_header->ack_data.sn) {
                     kcp_connection->state = KCP_STATE_DISCONNECTED;
                     if (kcp_connection->kcp_ctx->callback.on_closed) {
                         kcp_connection->kcp_ctx->callback.on_closed(kcp_connection, NO_ERROR);
                     }
-                    destroy_connection = true;
                     break;
                 }
             }
-            if (destroy_connection) {
-                kcp_connection_destroy(kcp_connection);
-            }
+            // NOTE 由 kcp_parse_packet 释放
         }
         break;
     }
