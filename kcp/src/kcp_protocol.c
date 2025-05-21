@@ -163,7 +163,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             list_add_tail(&kcp_fin_header->node_list, &kcp_connection->kcp_proto_header_list);
 
             char buffer[KCP_HEADER_SIZE] = { 0 };
-            kcp_proto_header_encode(&kcp_fin_header, buffer, KCP_HEADER_SIZE);
+            kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
             struct iovec data[1];
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
