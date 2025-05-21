@@ -1541,7 +1541,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         kcp_fin_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
         kcp_fin_header->syn_fin_data.ts = kcp_fin_header->syn_fin_data.packet_ts;
         kcp_fin_header->syn_fin_data.packet_sn = packet_sn;
-        kcp_fin_header->syn_fin_data.rand_sn = kcp_fin_header->syn_fin_data.packet_ts;
+        kcp_fin_header->syn_fin_data.rand_sn = XXH32(&kcp_fin_header->syn_fin_data.packet_ts, sizeof(kcp_fin_header->syn_fin_data.packet_ts), 0);
 
         list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
 
@@ -1578,8 +1578,8 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     kcp_fin_header->wnd = 0;
     kcp_fin_header->syn_fin_data.packet_ts = timestamp;
     kcp_fin_header->syn_fin_data.ts = timestamp;
-    kcp_fin_header->syn_fin_data.packet_sn = kcp_header->packet_data.sn;
-    kcp_fin_header->syn_fin_data.rand_sn = timestamp;
+    kcp_fin_header->syn_fin_data.packet_sn = kcp_header->syn_fin_data.rand_sn;
+    kcp_fin_header->syn_fin_data.rand_sn = XXH32(&timestamp, sizeof(timestamp), 0);
 
     list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
 
