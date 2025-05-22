@@ -1534,6 +1534,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         }
 
         kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+        list_init(&kcp_fin_header->node_list);
         kcp_fin_header->conv = kcp_conn->conv;
         kcp_fin_header->cmd = KCP_CMD_FIN;
         kcp_fin_header->frg = 0;
@@ -1541,8 +1542,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         kcp_fin_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
         kcp_fin_header->syn_fin_data.ts = kcp_fin_header->syn_fin_data.packet_ts;
         kcp_fin_header->syn_fin_data.packet_sn = packet_sn;
-        kcp_fin_header->syn_fin_data.rand_sn = XXH32(&kcp_fin_header->syn_fin_data.packet_ts, sizeof(kcp_fin_header->syn_fin_data.packet_ts), 0);
-
+        kcp_fin_header->syn_fin_data.rand_sn = XXH32(&kcp_fin_header->syn_fin_data.ts, sizeof(kcp_fin_header->syn_fin_data.ts), 0);
         list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE] = {0};
@@ -1572,6 +1572,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
 
     // 1、响应FIN包, 修改状态
     kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
+    list_init(&kcp_fin_header->node_list);
     kcp_fin_header->conv = kcp_conn->conv;
     kcp_fin_header->cmd = KCP_CMD_FIN;
     kcp_fin_header->frg = 0;
@@ -1580,7 +1581,6 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     kcp_fin_header->syn_fin_data.ts = timestamp;
     kcp_fin_header->syn_fin_data.packet_sn = kcp_header->syn_fin_data.rand_sn;
     kcp_fin_header->syn_fin_data.rand_sn = XXH32(&timestamp, sizeof(timestamp), 0);
-
     list_add_tail(&kcp_fin_header->node_list, &kcp_conn->kcp_proto_header_list);
 
     char buffer[KCP_HEADER_SIZE] = {0};
