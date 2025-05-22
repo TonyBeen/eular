@@ -66,8 +66,10 @@ bool on_kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
 void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 {
+    char address[SOCKADDR_STRING_LEN] = {0};
+    const char *addr_str = kcp_connection_remote_address(kcp_connection, address, sizeof(address));
     if (code == NO_ERROR) {
-        printf("KCP connection closed gracefully\n");
+        printf("KCP connection closed gracefully. %s\n", addr_str);
     } else {
         printf("KCP connection closed with error code: %d\n", code);
     }
