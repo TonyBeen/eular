@@ -1568,8 +1568,6 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
 
 int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
-    assert(kcp_conn->state == KCP_STATE_CONNECTED);
-
     // 1、响应FIN包, 修改状态
     kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
     list_init(&kcp_fin_header->node_list);
