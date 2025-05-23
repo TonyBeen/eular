@@ -499,11 +499,28 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
     if (status != NO_ERROR) {
         goto _error;
     }
+
+    int32_t ip_header_size = addr->sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
     if (nic != NULL) {
+        kcp_ctx->nic_mtu = get_mtu_by_nic(kcp_ctx->sock, nic);
+        if (kcp_ctx->nic_mtu < 0) {
+            KCP_LOGE("get nic mtu error");
+            goto _error;
+        }
+        kcp_ctx->nic_mtu = kcp_ctx->nic_mtu - ip_header_size - UDP_HEADER_SIZE;
+
         status = set_socket_bind_nic(kcp_ctx->sock, nic);
         if (status != NO_ERROR) {
             goto _error;
         }
+    } else {
+        kcp_ctx->nic_mtu = get_mtu_by_ip(kcp_ctx->sock, addr);
+        if (kcp_ctx->nic_mtu < 0) {
+            KCP_LOGE("get nic mtu error");
+            goto _error;
+        }
+
+        kcp_ctx->nic_mtu = kcp_ctx->nic_mtu - ip_header_size - UDP_HEADER_SIZE;
     }
 
     if (bind(kcp_ctx->sock, (const struct sockaddr *)addr, sizeof(sockaddr_t)) == SOCKET_ERROR) {

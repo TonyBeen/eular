@@ -19,6 +19,8 @@ int32_t set_socket_bind_nic(socket_t fd, const char *nic);
 int32_t set_socket_recverr(socket_t fd, const sockaddr_t *addr);
 int32_t set_socket_sendbuf(socket_t fd, int32_t size);
 int32_t set_socket_recvbuf(socket_t fd, int32_t size);
+int32_t get_mtu_by_nic(socket_t fd, const char *nic);
+int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr);
 
 bool    sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b);
 const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, uint32_t len);

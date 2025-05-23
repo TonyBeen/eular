@@ -52,8 +52,10 @@ struct iovec {
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <net/if.h>
+#include <ifaddrs.h>
 #include <linux/errqueue.h>
 #include <netinet/ip_icmp.h>
 

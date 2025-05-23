@@ -16,17 +16,19 @@
 
 /// @brief KCP协议命令类型
 enum KcpCommand {
-    KCP_CMD_SYN = 1,    // SYN
-    KCP_CMD_ACK,        // ACK
-    KCP_CMD_PUSH,       // PUSH
-    KCP_CMD_WASK,       // Window Probe (ask)
-    KCP_CMD_WINS,       // Window Size (tell)
-    KCP_CMD_PING,       // PING
-    KCP_CMD_PONG,       // PONG
-    KCP_CMD_MTU_PROBE,  // MTU probe
-    KCP_CMD_MTU_ACK,    // MTU probe
-    KCP_CMD_FIN,        // FIN
-    KCP_CMD_RST,        // RST
+    KCP_CMD_SYN = 1,        // SYN
+    KCP_CMD_ACK,            // ACK
+    KCP_CMD_PUSH,           // PUSH
+    KCP_CMD_WASK,           // Window Probe (ask)
+    KCP_CMD_WINS,           // Window Size (tell)
+    KCP_CMD_PING,           // PING
+    KCP_CMD_PONG,           // PONG
+    KCP_CMD_MTU_PROBE,      // MTU probe
+    KCP_CMD_MTU_ACK,        // MTU probe
+    KCP_CMD_FIN,            // FIN
+    KCP_CMD_RST,            // RST
+
+    KCP_CMD_OPT = 1 << 5,   // KCP_OPTION_TAG
 };
 typedef int32_t kcp_command_t;
 
@@ -39,6 +41,17 @@ enum KcpConnectionState {
     KCP_STATE_FIN_RECEIVED,
 };
 typedef int32_t kcp_connection_state_t;
+
+enum KcpOptionTag {
+    KCP_OPTION_TAG_MTU = 1,
+};
+typedef int32_t kcp_option_tag_t;
+
+typedef struct KcpOption {
+    int8_t  tag;
+    int8_t  length;
+    char*   value;
+} kcp_option_t;
 
 typedef struct KcpProtoHeader {
     struct list_head node_list;  // 链表节点
@@ -245,7 +258,7 @@ typedef struct KcpSYNNode {
     uint32_t            rand_sn;    // 本机发送的sn
     uint32_t            packet_sn;  // 对端sn
     uint64_t            packet_ts;  // 对端时间戳
-    uint64_t            ts;     // 发送syn的时间戳
+    uint64_t            ts;         // 发送syn的时间戳
     sockaddr_t          remote_host;
 } kcp_syn_node_t;
 
@@ -254,6 +267,7 @@ typedef struct KcpContext {
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
 
+    uint32_t                    nic_mtu;
     bitmap_t                    conv_bitmap;
     struct list_head            syn_queue;
     connection_set_t            connection_set;

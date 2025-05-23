@@ -5,6 +5,7 @@
 #include "kcp_inc.h"
 #include "kcp_error.h"
 #include "kcp_protocol.h"
+#include "kcp_mtu.h"
 #include "kcp_log.h"
 
 int32_t set_socket_nonblock(socket_t fd)
@@ -112,6 +113,126 @@ int32_t set_socket_recvbuf(socket_t fd, int32_t size)
     return status;
 }
 
+int32_t get_mtu_by_nic(socket_t fd, const char *nic)
+{
+    if (nic == NULL) {
+        return INVALID_PARAM;
+    }
+
+#if defined(OS_LINUX) || defined(OS_MAC)
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, nic, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFMTU, &ifr) < 0) {
+        return IOCTL_ERROR;
+    }
+
+    return ifr.ifr_mtu;
+#else
+    DWORD dwRetVal = 0;
+    ULONG outBufLen = sizeof(IP_ADAPTER_ADDRESSES);
+    IP_ADAPTER_ADDRESSES *pAddresses = NULL, *pCurr = NULL;
+    int mtu = -1;
+
+    // Allocate a 15KB buffer to start with.
+    outBufLen = 15 * 1024;
+    pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
+
+    if (pAddresses == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return -1;
+    }
+
+    dwRetVal = GetAdaptersAddresses(AF_UNSPEC, 0, NULL, pAddresses, &outBufLen);
+    if (dwRetVal == NO_ERROR) {
+        pCurr = pAddresses;
+        while (pCurr) {
+            if (strcmp(pCurr->AdapterName, ifname) == 0 || 
+                (pCurr->FriendlyName && wcscmp(pCurr->FriendlyName, (const wchar_t*)ifname) == 0)) {
+                mtu = (int)pCurr->Mtu;
+                break;
+            }
+            pCurr = pCurr->Next;
+        }
+    } else {
+        fprintf(stderr, "GetAdaptersAddresses() failed with error: %d\n", dwRetVal);
+    }
+
+    free(pAddresses);
+    return mtu;
+#endif
+}
+
+int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
+{
+    int32_t mtu = ETHERNET_MTU;
+    if (addr == NULL) {
+        return INVALID_PARAM;
+    }
+
+#if defined(OS_LINUX) || defined(OS_MAC)
+    struct ifaddrs *interfaces = NULL;
+    struct ifaddrs *ifa = NULL;
+
+    int32_t status = getifaddrs(&interfaces);
+    if (status != 0) {
+        return IOCTL_ERROR;
+    }
+
+    const char *ifa_name = NULL;
+    for (ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) {
+            continue;
+        }
+
+        // if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_RUNNING)) {
+        //     continue;
+        // }
+
+        switch (ifa->ifa_addr->sa_family) {
+        case AF_INET: {
+            struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+            struct sockaddr_in *ifa_addr = (struct sockaddr_in *)ifa->ifa_addr;
+            if (addr_in->sin_addr.s_addr == ifa_addr->sin_addr.s_addr) {
+                ifa_name = ifa->ifa_name;
+            }
+
+            break;
+        }
+        case AF_INET6: {
+            struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)addr;
+            struct sockaddr_in6 *ifa_addr = (struct sockaddr_in6 *)ifa->ifa_addr;
+            if (memcmp(&addr_in6->sin6_addr, &ifa_addr->sin6_addr, sizeof(addr_in6->sin6_addr)) == 0) {
+                ifa_name = ifa->ifa_name;
+            }
+
+            break;
+        }
+        default:
+            break;
+        }
+
+        if (ifa_name != NULL) {
+            break;
+        }
+    }
+
+    if (ifa_name != NULL) {
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, ifa_name, IFNAMSIZ - 1);
+        if (ioctl(fd, SIOCGIFMTU, &ifr) < 0) {
+            mtu = IOCTL_ERROR;
+        } else {
+            mtu = ifr.ifr_mtu;
+        }
+    }
+#else // OS_WINDOWS
+
+#endif
+    return mtu;
+}
+
 bool sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b)
 {
     if (a->sa.sa_family != b->sa.sa_family) {
@@ -175,13 +296,15 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
         msg.msg_namelen = sizeof(sockaddr_t);
         msg.msg_iov = (struct iovec *)&data[i];
         msg.msg_iovlen = 1;
-        send_size = sendmsg(sock, &msg, MSG_NOSIGNAL);
+        send_size = TEMP_FAILURE_RETRY(sendmsg(sock, &msg, MSG_NOSIGNAL));
         if (send_size <= 0) {
             int32_t code = get_last_errno();
-            if (code != EAGAIN || code != EWOULDBLOCK) {
-                return WRITE_ERROR;
-            } else {
+            if (code == EAGAIN || code == EWOULDBLOCK) {
                 break;
+            } else if (code == EMSGSIZE) {
+                return PACKET_TOO_LARGE;
+            } else {
+                return WRITE_ERROR;
             }
         }
 
@@ -198,7 +321,7 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
 
         msgvec[i].msg_len = 1;
     }
-    send_packet = sendmmsg(sock, msgvec, size, MSG_NOSIGNAL);
+    send_size = TEMP_FAILURE_RETRY(sendmmsg(sock, msgvec, size, MSG_NOSIGNAL));
     if (send_packet <= 0) {
         send_packet = WRITE_ERROR;
     }

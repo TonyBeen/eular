@@ -97,7 +97,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                 kcp_connection->ts_flush = ts + kcp_connection->interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
                 kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
-                kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
+                // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
 
             kcp_connection->need_write_timer_event = true;
@@ -659,8 +659,9 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     list_init(&kcp_conn->node_list);
 
     kcp_conn->conv = 0;
-    kcp_conn->mtu = kcp_get_min_mtu(remote_host->sa.sa_family == AF_INET6);
-    kcp_conn->mss_min = kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
+    kcp_conn->mtu = kcp_ctx->nic_mtu;
+    kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
+    kcp_conn->mss_min = kcp_get_min_mtu(remote_host->sa.sa_family == AF_INET6) - KCP_HEADER_SIZE;
 
     kcp_conn->snd_una = 0;
     kcp_conn->snd_nxt = 0;
@@ -1249,7 +1250,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             kcp_connection->need_write_timer_event = true;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
-                            kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
+                            // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
                     }
 

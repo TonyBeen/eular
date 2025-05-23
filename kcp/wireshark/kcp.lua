@@ -185,7 +185,7 @@ function kcp_proto.dissector(buf, pkt, root)
     local src_port = pkt.src_port
     local dst_port = pkt.dst_port
 
-    pkt.cols.info = tostring(src_port) .. " -> " .. tostring(dst_port)
+    pkt.cols.info = tostring(src_port) .. " → " .. tostring(dst_port)
 
     local total_len = buf:len()
     local size_offset = 0
