@@ -981,6 +981,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     }
 
     if (kcp_header->cmd & KCP_CMD_OPT) {
+        list_init(&kcp_header->options);
         // 解析选项
         while (data_offset < (*data + data_size)) {
             if ((data_size - (data_offset - *data)) < 2) {
@@ -1006,6 +1007,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
             switch (tag) {
             case KCP_OPTION_TAG_MTU:
                 option->u64_value = le32toh(*(uint32_t *)data_offset);
+                KCP_LOGI("kcp option tag: %u, length: %u, value: %lu", option->tag, option->length, option->u64_value);
                 break;
             default:
                 KCP_LOGE("unknown option tag: %u", tag);
@@ -1083,6 +1085,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
             memcpy(buffer_offset, kcp_header->packet_data.data, kcp_header->packet_data.len);
         }
 
+        buffer_offset += kcp_header->packet_data.len;
         lengeth = kcp_header->packet_data.len;
     }
 
@@ -1103,13 +1106,14 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
             case KCP_OPTION_TAG_MTU:
                 *(uint32_t *)buffer_offset = htole32((uint32_t)pos->u64_value);
                 buffer_offset += 4;
+                KCP_LOGI("kcp option tag: %u, length: %u, value: %lu", pos->tag, pos->length, pos->u64_value);
                 break;
             default:
                 return INVALID_PARAM;
             }
 
             // 2字节tag和length, 加上实际数据长度
-            lengeth += 2 + pos->length;
+            lengeth += (2 + pos->length);
         }
     }
 

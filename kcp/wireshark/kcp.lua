@@ -47,6 +47,8 @@ local s_ping_packet_ts  = ProtoField.uint64("kcp.ping.packet_ts", "Packet TS", b
 local s_ping_ts         = ProtoField.uint64("kcp.ping.ts", "TS", base.DEC)
 local s_ping_sn         = ProtoField.uint64("kcp.ping.sn", "SN", base.DEC)
 
+local s_option_tag      = ProtoField.uint8("kcp.option.tag", "Options")
+
 kcp_proto.fields = {
     s_conversation, s_command, s_fragmentation, s_window,
     s_payload_value,
@@ -261,12 +263,13 @@ function kcp_proto.dissector(buf, pkt, root)
             local opt_len = buf(parse_size, 1):le_uint()
             parse_size = parse_size + 1
 
+            local option_tree = kcp_tree:add(s_option_tag, buf(parse_size, 2 + opt_len), "Options:")
             if opt_tag == 0x01 then -- MTU
                 local mtu_value = buf(parse_size, opt_len):le_uint()
-                payload_value_tree:add(s_payload_value, buf(parse_size, opt_len), "MTU: " .. mtu_value)
+                option_tree:add(s_option_tag, buf(parse_size, opt_len), "MTU: " .. mtu_value)
                 parse_size = parse_size + opt_len
             else
-                payload_value_tree:add(s_payload_value, buf(parse_size - 2, opt_len + 2), "Unknown Option Tag: " .. opt_tag)
+                option_tree:add(s_option_tag, buf(parse_size - 2, opt_len + 2), "Unknown Option Tag: " .. opt_tag)
             end
         end
 
