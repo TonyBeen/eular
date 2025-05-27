@@ -165,7 +165,7 @@ int32_t get_mtu_by_nic(socket_t fd, const char *nic)
 
 int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
 {
-    int32_t mtu = ETHERNET_MTU;
+    int32_t mtu = kcp_get_mtu(addr->sa.sa_family == AF_INET6);
     if (addr == NULL) {
         return INVALID_PARAM;
     }
@@ -222,6 +222,7 @@ int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
         memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, ifa_name, IFNAMSIZ - 1);
         if (ioctl(fd, SIOCGIFMTU, &ifr) < 0) {
+            KCP_LOGE("Failed to get MTU for interface %s. [%d, %s]", ifa_name, errno, strerror(errno));
             mtu = IOCTL_ERROR;
         } else {
             mtu = ifr.ifr_mtu;

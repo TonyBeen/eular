@@ -7,6 +7,12 @@ local kcp_payload_type = {
     [0x0a] = "FIN",  [0x0b] = "RST"
 }
 
+local kcp_option_tag = {
+    [0x01] = "MTU",
+}
+
+local kcp_cmd_opt = 1 << 5 -- 0x20
+
 local n_kcp_header_size = 32
 
 local s_conversation    = ProtoField.uint32("kcp.conversation", "Conversation", base.HEX)
@@ -214,6 +220,8 @@ function kcp_proto.dissector(buf, pkt, root)
         kcp_tree:add(s_command, buf(offset, 1))
         local command = buf(offset, 1):le_uint()
         offset = offset + 1
+        local has_opt = bit32.band(command, kcp_cmd_opt) ~= 0
+        command = bit32.band(command, 0x1f) -- 只取低5位
 
         -- frg
         kcp_tree:add(s_fragmentation, buf(offset, 1))
@@ -228,6 +236,9 @@ function kcp_proto.dissector(buf, pkt, root)
         if not cmd_string then
             cmd_string = string.format("UNKNOWN(0x%02X)", command)
         end
+        if has_opt then
+            cmd_string = cmd_string .. " | OPT"
+        end
         cmd_string = string.format(" [%s] Conv=0x%04X,", cmd_string, conversation_value)
 
         local payload_len = total_len - offset
@@ -241,6 +252,22 @@ function kcp_proto.dissector(buf, pkt, root)
             parse_size = ParsePing(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
         else -- push, wask, wins, mtu probe, mtu ack, rst
             parse_size = ParsePacket(buf, offset, payload_len, pkt, payload_value_tree, cmd_string)
+        end
+
+        if has_opt then
+            -- 解析选项
+            local opt_tag = buf(parse_size, 1):le_uint()
+            parse_size = parse_size + 1
+            local opt_len = buf(parse_size, 1):le_uint()
+            parse_size = parse_size + 1
+
+            if opt_tag == 0x01 then -- MTU
+                local mtu_value = buf(parse_size, opt_len):le_uint()
+                payload_value_tree:add(s_payload_value, buf(parse_size, opt_len), "MTU: " .. mtu_value)
+                parse_size = parse_size + opt_len
+            else
+                payload_value_tree:add(s_payload_value, buf(parse_size - 2, opt_len + 2), "Unknown Option Tag: " .. opt_tag)
+            end
         end
 
         size_offset = parse_size

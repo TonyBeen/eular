@@ -811,6 +811,21 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         kcp_proto_header_t *next = NULL;
         list_for_each_entry_safe(pos, next, &kcp_conn->kcp_proto_header_list, node_list) {
             list_del_init(&pos->node_list);
+
+            if ((pos->cmd & KCP_CMD_OPT) && !list_empty(&pos->options)) {
+                kcp_option_t *opt_pos = NULL;
+                kcp_option_t *opt_next = NULL;
+                list_for_each_entry_safe(opt_pos, opt_next, &pos->options, node) {
+                    list_del_init(&opt_pos->node);
+                    if (opt_pos->tag == KCP_OPTION_TAG_MTU) {
+                        // do nothing
+                    } else {
+                        free(opt_pos->buf_value);
+                    }
+                    free(opt_pos);
+                }
+            }
+
             free(pos);
         }
     }
@@ -905,7 +920,8 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     kcp_header->wnd = le16toh(*(uint16_t *)(data_offset)); // 窗口大小
     data_offset += 2;
 
-    switch (kcp_header->cmd) {
+    uint8_t cmd = kcp_header->cmd ^ KCP_CMD_OPT;
+    switch (cmd) {
     case KCP_CMD_ACK: {
         kcp_header->ack_data.packet_ts = le64toh(*(uint64_t *)(data_offset)); // 时间戳
         data_offset += 8;
@@ -962,6 +978,43 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         }
         break;
     }
+    }
+
+    if (kcp_header->cmd & KCP_CMD_OPT) {
+        // 解析选项
+        while (data_offset < (*data + data_size)) {
+            if ((data_size - (data_offset - *data)) < 2) {
+                KCP_LOGE("invalid option data size: %zu", data_size - (data_offset - *data));
+                return INVALID_KCP_HEADER;
+            }
+
+            uint8_t tag = *(uint8_t *)data_offset; // 选项标签
+            data_offset += 1;
+            uint8_t length = *(uint8_t *)data_offset; // 选项长度
+            data_offset += 1;
+
+            if (length > (data_size - (data_offset - *data))) {
+                KCP_LOGE("invalid option length: %u, data_size: %zu", length, data_size - (data_offset - *data));
+                return INVALID_KCP_HEADER;
+            }
+
+            kcp_option_t *option = (kcp_option_t *)malloc(sizeof(kcp_option_t));
+            list_init(&option->node);
+            option->tag = tag;
+            option->length = length;
+
+            switch (tag) {
+            case KCP_OPTION_TAG_MTU:
+                option->u64_value = le32toh(*(uint32_t *)data_offset);
+                break;
+            default:
+                KCP_LOGE("unknown option tag: %u", tag);
+                return INVALID_KCP_HEADER;
+            }
+
+            data_offset += length;
+            list_add_tail(&option->node, &kcp_header->options);
+        }
     }
 
     *data = data_offset;
@@ -1031,6 +1084,33 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         }
 
         lengeth = kcp_header->packet_data.len;
+    }
+
+    if ((kcp_header->cmd & KCP_CMD_OPT) && !list_empty(&kcp_header->options)) {
+        kcp_option_t *pos = NULL;
+
+        list_for_each_entry(pos, &kcp_header->options, node) {
+            if (buffer_size < (KCP_HEADER_SIZE + lengeth + pos->length)) {
+                KCP_LOGE("buffer size is too small: %zu, need: %zu", buffer_size, (KCP_HEADER_SIZE + lengeth + pos->length));
+                return BUFFER_TOO_SMALL;
+            }
+
+            *buffer_offset = pos->tag;
+            buffer_offset += 1;
+            *buffer_offset = pos->length;
+            buffer_offset += 1;
+            switch (pos->tag) {
+            case KCP_OPTION_TAG_MTU:
+                *(uint32_t *)buffer_offset = htole32((uint32_t)pos->u64_value);
+                buffer_offset += 4;
+                break;
+            default:
+                return INVALID_PARAM;
+            }
+
+            // 2字节tag和length, 加上实际数据长度
+            lengeth += 2 + pos->length;
+        }
     }
 
     return (KCP_HEADER_SIZE + lengeth);
@@ -1172,7 +1252,6 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
     do {
         if (is_sever) {
             if (!kcp_ctx->callback.on_connect(kcp_ctx, addr)) { // 拒绝连接
-                KCP_LOGW("kcp connection refused");
                 kcp_proto_header_t kcp_rst_header;
                 kcp_rst_header.conv = KCP_CONV_FLAG;
                 kcp_rst_header.cmd = KCP_CMD_RST;
@@ -1223,6 +1302,15 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     kcp_header.ack_data.sn = syn_packet->rand_sn;
                     kcp_header.ack_data.una = 0;
 
+                    kcp_option_t *option = NULL;
+                    uint32_t mtu = kcp_connection->kcp_ctx->nic_mtu;
+                    list_for_each_entry(option, &syn_packet->options, node) {
+                        if (option->tag == KCP_OPTION_TAG_MTU) {
+                            mtu = (uint32_t)option->u64_value;
+                            break;
+                        }
+                    }
+
                     char buffer[KCP_HEADER_SIZE] = { 0 };
                     kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
 
@@ -1248,6 +1336,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             uint64_t ts = kcp_time_monotonic_ms();
                             kcp_connection->ts_flush = ts + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
+                            kcp_connection->mtu = mtu;
+                            kcp_connection->mss = mtu - KCP_HEADER_SIZE;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                             // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);

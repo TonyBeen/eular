@@ -46,11 +46,17 @@ enum KcpOptionTag {
     KCP_OPTION_TAG_MTU = 1,
 };
 typedef int32_t kcp_option_tag_t;
+static const uint32_t KCP_OPTION_TAG_MTU_LEN = 6;
 
 typedef struct KcpOption {
+    struct list_head node; // 链表节点
     int8_t  tag;
     int8_t  length;
-    char*   value;
+
+    union {
+        uint64_t    u64_value; // 64位整数值
+        char*       buf_value; // 缓冲区值
+    };
 } kcp_option_t;
 
 typedef struct KcpProtoHeader {
@@ -91,6 +97,8 @@ typedef struct KcpProtoHeader {
             uint64_t    sn;         // 随机序列
         } ping_data;
     };
+
+    struct list_head options;
 } kcp_proto_header_t;
 
 /// @brief KCP报文段
@@ -260,6 +268,7 @@ typedef struct KcpSYNNode {
     uint64_t            packet_ts;  // 对端时间戳
     uint64_t            ts;         // 发送syn的时间戳
     sockaddr_t          remote_host;
+    struct list_head    options;    // 选项列表
 } kcp_syn_node_t;
 
 typedef struct KcpContext {

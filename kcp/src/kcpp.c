@@ -43,6 +43,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
                 return;
             }
             list_init(&syn_node->node);
+            list_init(&syn_node->options);
 
             syn_node->conv = kcp_header.conv;
             memcpy(&syn_node->remote_host, addr, sizeof(sockaddr_t));
@@ -50,6 +51,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             syn_node->rand_sn = kcp_header.syn_fin_data.rand_sn;
             syn_node->packet_ts = kcp_header.syn_fin_data.packet_ts;
             syn_node->ts = kcp_header.syn_fin_data.ts;
+            list_splice_tail_init(&kcp_header.options, &syn_node->options);
             list_add_tail(&syn_node->node, &kcp_ctx->syn_queue);
 
             on_kcp_syn_received(kcp_ctx, addr);
@@ -325,6 +327,19 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         kcp_syn_node_t *next = NULL;
         list_for_each_entry_safe(pos, next, &kcp_ctx->syn_queue, node) {
             list_del_init(&pos->node);
+            if (!list_empty(&pos->options)) {
+                kcp_option_t *opt_pos = NULL;
+                kcp_option_t *opt_next = NULL;
+                list_for_each_entry_safe(opt_pos, opt_next, &pos->options, node) {
+                    list_del_init(&opt_pos->node);
+                    if (opt_pos->tag == KCP_OPTION_TAG_MTU) {
+                        // do nothing, MTU option is a simple value
+                    } else {
+                        free(opt_pos->buf_value);
+                    }
+                    free(opt_pos);
+                }
+            }
             free(pos);
         }
     }
@@ -582,17 +597,21 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
         }
         memcpy(kcp_syn_header, kcp_header_last, sizeof(kcp_proto_header_t));
         list_init(&kcp_syn_header->node_list);
-        list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
+        list_init(&kcp_syn_header->options);
 
         kcp_syn_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
         kcp_syn_header->syn_fin_data.ts = kcp_syn_header->syn_fin_data.packet_ts;
         kcp_syn_header->syn_fin_data.rand_sn++;
 
-        char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(kcp_syn_header, buffer, KCP_HEADER_SIZE);
+        list_splice_tail_init(&kcp_header_last->options, &kcp_syn_header->options);
+        list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
+
+        // NOTE kcp_accept 发送SYN包携带KCP_OPTION_TAG_MTU
+        char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
+        kcp_proto_header_encode(kcp_syn_header, buffer, sizeof(buffer));
         struct iovec data[1];
         data[0].iov_base = buffer;
-        data[0].iov_len = KCP_HEADER_SIZE;
+        data[0].iov_len = sizeof(buffer);
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status <= 0) {
             // Linux EAGAIN, Windows EWOULDBLOCK (WSAEWOULDBLOCK)
@@ -671,6 +690,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
             break;
         }
         list_init(&kcp_syn_header->node_list);
+        list_init(&kcp_syn_header->options);
         kcp_proto_header_t kcp_header;
         kcp_header.conv = conv;
         kcp_header.cmd = KCP_CMD_SYN;
@@ -681,14 +701,26 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         kcp_header.syn_fin_data.packet_sn = syn_packet->rand_sn; // client发送的序列
         kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0); // server响应的序列
         memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
+
+        kcp_option_t *kcp_option = (kcp_option_t *)malloc(sizeof(kcp_option_t));
+        if (kcp_option == NULL) {
+            free(kcp_syn_header);
+            status = NO_MEMORY;
+            break;
+        }
+        list_init(&kcp_option->node);
+        kcp_option->tag = KCP_OPTION_TAG_MTU;
+        kcp_option->length = sizeof(uint32_t);
+        kcp_option->u64_value = kcp_ctx->nic_mtu;
+        list_add_tail(&kcp_syn_header->options, &kcp_option->node);
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
 
-        char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+        char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
+        kcp_proto_header_encode(&kcp_header, buffer, sizeof(buffer));
 
         struct iovec data[1];
         data->iov_base = buffer;
-        data->iov_len = KCP_HEADER_SIZE;
+        data->iov_len = sizeof(buffer);
         status = kcp_send_packet(kcp_connection, data, 1);
 
         // 添加SYN超时事件
@@ -721,8 +753,9 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
     if (kcp_connection->syn_retries--) {
         kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
         list_init(&kcp_header->node_list);
+        list_init(&kcp_header->options);
         kcp_header->conv = KCP_CONV_FLAG;
-        kcp_header->cmd = KCP_CMD_SYN;
+        kcp_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
         kcp_header->frg = 0;
         kcp_header->wnd = 0;
         kcp_header->syn_fin_data.packet_ts = 0;
@@ -731,11 +764,18 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
         list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
 
-        char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
+        kcp_option_t *kcp_option = (kcp_option_t *)malloc(sizeof(kcp_option_t));
+        list_init(&kcp_option->node);
+        kcp_option->tag = KCP_OPTION_TAG_MTU;
+        kcp_option->length = sizeof(uint32_t);
+        kcp_option->u64_value = kcp_connection->kcp_ctx->nic_mtu;
+        list_add_tail(&kcp_header->options, &kcp_option->node);
+
+        char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
+        kcp_proto_header_encode(kcp_header, buffer, sizeof(buffer));
         struct iovec data[1];
         data[0].iov_base = buffer;
-        data[0].iov_len = KCP_HEADER_SIZE;
+        data[0].iov_len = sizeof(buffer);
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status <= 0) {
             kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
@@ -788,8 +828,9 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
 
     kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
     list_init(&kcp_header->node_list);
+    list_init(&kcp_header->options);
     kcp_header->conv = KCP_CONV_FLAG;
-    kcp_header->cmd = KCP_CMD_SYN;
+    kcp_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
     kcp_header->frg = 0;
     kcp_header->wnd = 0;
     kcp_header->syn_fin_data.packet_ts = 0;
@@ -798,17 +839,19 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     kcp_header->syn_fin_data.rand_sn = XXH32(&kcp_header->syn_fin_data.ts, sizeof(kcp_header->syn_fin_data.ts), 0);
     list_add_tail(&kcp_header->node_list, &kcp_connection->kcp_proto_header_list);
 
-    char buffer[KCP_HEADER_SIZE] = {0};
-    kcp_proto_header_encode(kcp_header, buffer, KCP_HEADER_SIZE);
+    kcp_option_t *kcp_option = (kcp_option_t *)malloc(sizeof(kcp_option_t));
+    list_init(&kcp_option->node);
+    kcp_option->tag = KCP_OPTION_TAG_MTU;
+    kcp_option->length = sizeof(uint32_t);
+    kcp_option->u64_value = kcp_ctx->nic_mtu;
+    list_add_tail(&kcp_header->options, &kcp_option->node);
 
-    char hex_log_buffer[4096] = {0};
-    for (int32_t i = 0; i < KCP_HEADER_SIZE; ++i) {
-        snprintf(hex_log_buffer + i * 2, sizeof(hex_log_buffer) - i * 2, "%02X", (uint8_t)buffer[i]);
-    }
+    char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
+    kcp_proto_header_encode(kcp_header, buffer, sizeof(buffer));
 
     struct iovec data[1];
     data[0].iov_base = buffer;
-    data[0].iov_len = KCP_HEADER_SIZE;
+    data[0].iov_len = sizeof(buffer);
     int32_t status = kcp_send_packet(kcp_connection, data, 1);
     if (status <= 0) {
         return status;

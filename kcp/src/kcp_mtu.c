@@ -39,7 +39,7 @@ int32_t kcp_get_min_mtu(bool ipv6)
 int32_t kcp_get_mtu(bool ipv6)
 {
     if (ipv6) {
-        return UDP_TEREDO_MTU;
+        return UDP_IPV6_MTU;
     } else {
         return UDP_IPV4_MTU;
     }
