@@ -1039,8 +1039,9 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
     buffer_offset += 2;
 
+    uint8_t cmd = kcp_header->cmd ^ KCP_CMD_OPT;
     uint32_t lengeth = 0;
-    if (kcp_header->cmd == KCP_CMD_ACK) {
+    if (cmd == KCP_CMD_ACK) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->ack_data.packet_ts);
         buffer_offset += sizeof(uint64_t);
         *(uint64_t *)buffer_offset = htole64(kcp_header->ack_data.ack_ts);
@@ -1049,7 +1050,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->ack_data.una);
         buffer_offset += 4;
-    } else if (kcp_header->cmd == KCP_CMD_SYN || kcp_header->cmd == KCP_CMD_FIN) {
+    } else if (cmd == KCP_CMD_SYN || cmd == KCP_CMD_FIN) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.packet_ts);
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.ts);
@@ -1058,7 +1059,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
         buffer_offset += 4;
-    } else if (kcp_header->cmd == KCP_CMD_PING || kcp_header->cmd == KCP_CMD_PONG) {
+    } else if (cmd == KCP_CMD_PING || cmd == KCP_CMD_PONG) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.packet_ts);
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ts);
