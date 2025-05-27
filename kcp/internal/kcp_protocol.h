@@ -46,7 +46,7 @@ enum KcpOptionTag {
     KCP_OPTION_TAG_MTU = 1,
 };
 typedef int32_t kcp_option_tag_t;
-static const uint32_t KCP_OPTION_TAG_MTU_LEN = 6;
+#define KCP_OPTION_TAG_MTU_LEN 6
 
 typedef struct KcpOption {
     struct list_head node; // 链表节点
