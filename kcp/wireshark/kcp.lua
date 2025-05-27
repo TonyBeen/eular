@@ -220,8 +220,8 @@ function kcp_proto.dissector(buf, pkt, root)
         kcp_tree:add(s_command, buf(offset, 1))
         local command = buf(offset, 1):le_uint()
         offset = offset + 1
-        local has_opt = bit32.band(command, kcp_cmd_opt) ~= 0
-        command = bit32.band(command, 0x1f) -- 只取低5位
+        local has_opt = (command & kcp_cmd_opt) ~= 0
+        command = command & 0x1f -- 只取低5位
 
         -- frg
         kcp_tree:add(s_fragmentation, buf(offset, 1))
