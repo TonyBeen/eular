@@ -119,6 +119,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
                     kcp_proto_header_t kcp_ack_header;
                     kcp_ack_header.conv = kcp_connection->conv;
                     kcp_ack_header.cmd = KCP_CMD_ACK;
+                    kcp_ack_header.opt = 0;
                     kcp_ack_header.frg = 0;
                     kcp_ack_header.wnd = 0;
                     kcp_ack_header.ack_data.packet_ts = kcp_header->packet_data.ts;
@@ -151,6 +152,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             list_init(&kcp_fin_header->node_list);
             kcp_fin_header->conv = kcp_connection->conv;
             kcp_fin_header->cmd = KCP_CMD_FIN;
+            kcp_fin_header->opt = 0;
             kcp_fin_header->frg = 0;
             kcp_fin_header->wnd = 0;
             kcp_fin_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
@@ -190,6 +192,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         kcp_proto_header_t kcp_rst_header;
         kcp_rst_header.conv = kcp_connection->conv;
         kcp_rst_header.cmd = KCP_CMD_RST;
+        kcp_rst_header.opt = 0;
         kcp_rst_header.frg = 0;
         kcp_rst_header.wnd = 0;
         kcp_rst_header.packet_data.ts = kcp_time_monotonic_us();
@@ -257,6 +260,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     kcp_proto_header_t kcp_ack_header;
     kcp_ack_header.conv = kcp_connection->conv;
     kcp_ack_header.cmd = KCP_CMD_ACK;
+    kcp_ack_header.opt = 0;
     kcp_ack_header.frg = 0;
     kcp_ack_header.wnd = kcp_wnd_unused(kcp_connection);
     kcp_ack_header.ack_data.una = kcp_connection->rcv_nxt;
@@ -915,11 +919,15 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     data_offset += 4;
     kcp_header->cmd = *(uint8_t *)(data_offset) & 0x0F; // 命令
     kcp_header->opt = (*(uint8_t *)(data_offset) >> 4) & 0x0F; // 选项标志
+    KCP_LOGE("kcp opt | cmd = 0x%X", *(uint8_t *)(data_offset));
     data_offset += 1;
     kcp_header->frg = *(uint8_t *)(data_offset); // 分片
     data_offset += 1;
     kcp_header->wnd = le16toh(*(uint16_t *)(data_offset)); // 窗口大小
     data_offset += 2;
+
+    KCP_LOGW("kcp conv: %u, cmd: %u, opt: %u, frg: %u, wnd: %u",
+        kcp_header->conv, kcp_header->cmd, kcp_header->opt, kcp_header->frg, kcp_header->wnd);
 
     switch (kcp_header->cmd) {
     case KCP_CMD_ACK: {
@@ -1031,7 +1039,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     char *buffer_offset = buffer;
     *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
     buffer_offset += 4;
-    *(uint8_t *)buffer_offset &= kcp_header->cmd;
+    *(uint8_t *)buffer_offset |= kcp_header->cmd;
     *(uint8_t *)buffer_offset |= (kcp_header->opt << 4);
     buffer_offset += 1;
     *(uint8_t *)buffer_offset = kcp_header->frg;
@@ -1258,6 +1266,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                 kcp_proto_header_t kcp_rst_header;
                 kcp_rst_header.conv = KCP_CONV_FLAG;
                 kcp_rst_header.cmd = KCP_CMD_RST;
+                kcp_rst_header.opt = 0;
                 kcp_rst_header.frg = 0;
                 kcp_rst_header.wnd = 0;
                 kcp_rst_header.packet_data.ts = kcp_time_monotonic_us();
@@ -1299,6 +1308,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     kcp_proto_header_t kcp_header;
                     kcp_header.conv = syn_packet->conv;
                     kcp_header.cmd = KCP_CMD_ACK;
+                    kcp_header.opt = 0;
                     kcp_header.frg = 0;
                     kcp_header.wnd = 0;
                     kcp_header.ack_data.packet_ts = kcp_time_monotonic_us();
@@ -1632,6 +1642,7 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
         list_init(&kcp_fin_header->node_list);
         kcp_fin_header->conv = kcp_conn->conv;
         kcp_fin_header->cmd = KCP_CMD_FIN;
+        kcp_fin_header->opt = 0;
         kcp_fin_header->frg = 0;
         kcp_fin_header->wnd = 0;
         kcp_fin_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
@@ -1668,6 +1679,7 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     list_init(&kcp_fin_header->node_list);
     kcp_fin_header->conv = kcp_conn->conv;
     kcp_fin_header->cmd = KCP_CMD_FIN;
+    kcp_fin_header->opt = 0;
     kcp_fin_header->frg = 0;
     kcp_fin_header->wnd = 0;
     kcp_fin_header->syn_fin_data.packet_ts = timestamp;

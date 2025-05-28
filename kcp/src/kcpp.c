@@ -37,7 +37,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
 
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
         KCP_LOGI("recv kcp packet, conv: %X, cmd: %u, connection: %p", kcp_header.conv, kcp_header.cmd, kcp_connection);
-        if (kcp_header.cmd & KCP_CMD_SYN) {
+        if (kcp_header.cmd == KCP_CMD_SYN) {
             kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
             if (syn_node == NULL) {
                 kcp_ctx->callback.on_error(kcp_ctx, NULL, NO_MEMORY);
@@ -66,6 +66,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             kcp_proto_header_t kcp_rst_header;
             kcp_rst_header.conv = KCP_CONV_FLAG;
             kcp_rst_header.cmd = KCP_CMD_RST;
+            kcp_rst_header.opt = 0;
             kcp_rst_header.frg = 0;
             kcp_rst_header.wnd = 0;
             kcp_rst_header.packet_data.ts = kcp_time_monotonic_us();
@@ -892,6 +893,7 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
         list_init(&kcp_fin_header->node_list);
         kcp_fin_header->conv = kcp_connection->conv;
         kcp_fin_header->cmd = KCP_CMD_FIN;
+        kcp_fin_header->opt = 0;
         kcp_fin_header->frg = 0;
         kcp_fin_header->wnd = 0;
         kcp_fin_header->syn_fin_data.packet_ts = 0;
@@ -951,6 +953,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_proto_header_t kcp_header;
         kcp_header.conv = kcp_connection->conv;
         kcp_header.cmd = KCP_CMD_FIN;
+        kcp_header.opt = 0;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
         kcp_header.syn_fin_data.packet_ts = 0;
@@ -1005,6 +1008,7 @@ void kcp_shutdown(struct KcpConnection *kcp_connection)
         kcp_proto_header_t kcp_header;
         kcp_header.conv = kcp_connection->conv;
         kcp_header.cmd = KCP_CMD_RST;
+        kcp_header.opt = 0;
         kcp_header.frg = 0;
         kcp_header.wnd = 0;
         kcp_header.packet_data.ts = (uint32_t)time(NULL);

@@ -33,13 +33,13 @@
 
 #define CLR_MAX_SIZE    (12)
 
-#define COLOR_MAP(XXX)                        \
-    XXX(LOG_LEVEL_DEBUG,        CLR_CLR)      \
-    XXX(LOG_LEVEL_INFO,         CLR_SKYBLUE)  \
-    XXX(LOG_LEVEL_WARN,         CLR_GREEN)    \
-    XXX(LOG_LEVEL_ERROR,        CLR_YELLOW)   \
-    XXX(LOG_LEVEL_FATAL,        CLR_RED)      \
-    XXX(LOG_LEVEL_SILENT,       CLR_PURPLE)   \
+#define COLOR_MAP(XXX)                          \
+    XXX(LOG_LEVEL_DEBUG,        CLR_SKYBLUE)    \
+    XXX(LOG_LEVEL_INFO,         CLR_GREEN)      \
+    XXX(LOG_LEVEL_WARN,         CLR_YELLOW)     \
+    XXX(LOG_LEVEL_ERROR,        CLR_RED)        \
+    XXX(LOG_LEVEL_FATAL,        CLR_PURPLE)     \
+    XXX(LOG_LEVEL_SILENT,       CLR_CLR)        \
 
 bool                g_log_enable_color  = true;
 

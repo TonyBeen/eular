@@ -74,6 +74,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         kcp_proto_header_t *kcp_header = &header;
         header.conv = kcp_conn->conv;
         header.cmd = KCP_CMD_MTU_PROBE;
+        header.opt = 0;
         header.frg = 0;
         header.wnd = 0;
         header.packet_data.ts = kcp_time_monotonic_us();
@@ -170,6 +171,7 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_heade
     kcp_proto_header_t mtu_ack_header;
     mtu_ack_header.conv = kcp_header->conv;
     mtu_ack_header.cmd = KCP_CMD_MTU_ACK;
+    mtu_ack_header.opt = 0;
     mtu_ack_header.frg = 0;
     mtu_ack_header.wnd = 0;
     mtu_ack_header.packet_data.ts = timestamp;
