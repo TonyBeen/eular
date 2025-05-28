@@ -716,6 +716,15 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         list_add_tail(&kcp_syn_header->options, &kcp_option->node);
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
 
+        kcp_option_t *option = NULL;
+        uint32_t mtu = kcp_connection->kcp_ctx->nic_mtu;
+        list_for_each_entry(option, &syn_packet->options, node) {
+            if (option->tag == KCP_OPTION_TAG_MTU) {
+                mtu = (uint32_t)option->u64_value;
+                break;
+            }
+        }
+
         char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
         kcp_proto_header_encode(kcp_syn_header, buffer, sizeof(buffer));
 
@@ -738,6 +747,8 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
             break;
         }
 
+        // 更新 MTU
+        kcp_connection->mtu = MIN(kcp_connection->mtu, mtu);
         return NO_ERROR;
     } while (false);
 
