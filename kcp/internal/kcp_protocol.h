@@ -28,6 +28,7 @@ enum KcpCommand {
     KCP_CMD_FIN,            // FIN
     KCP_CMD_RST,            // RST
 
+    // 扩展命令, command 高四位为标志位, 低四位是命令
     KCP_CMD_OPT = 1 << 5,   // KCP_OPTION_TAG
 };
 typedef int32_t kcp_command_t;
@@ -63,7 +64,13 @@ typedef struct KcpProtoHeader {
     struct list_head node_list;  // 链表节点
 
     uint32_t    conv;       // 会话ID
-    uint8_t     cmd;        // 命令
+#if defined(BYTE_ORDER) && BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t     cmd:4;      // 命令类型 (low 4 bit)
+    uint8_t     opt:4;      // 分片序号 (high 4 bit)
+#else
+    uint8_t     opt:4;      // 分片序号
+    uint8_t     cmd:4;      // 命令类型
+#endif
     uint8_t     frg;        // 分片序号
     uint16_t    wnd;        // 窗口大小
 

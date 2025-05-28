@@ -9,6 +9,7 @@
 #define __KCP_LOG_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -53,6 +54,8 @@ KCP_PORT void    kcp_log_callback(kcp_log_callback_t cb);
 
 // thread unsafe, default LOG_LEVEL_SILENT
 KCP_PORT void    kcp_log_level(int32_t level);
+
+KCP_PORT void    kcp_log_enable_color(bool enable);
 
 EXTERN_C_END
 

@@ -693,7 +693,8 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         list_init(&kcp_syn_header->node_list);
         list_init(&kcp_syn_header->options);
         kcp_syn_header->conv = conv;
-        kcp_syn_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
+        kcp_syn_header->cmd = KCP_CMD_SYN;
+        kcp_syn_header->opt = KCP_CMD_OPT;
         kcp_syn_header->frg = 0;
         kcp_syn_header->wnd = 0;
         kcp_syn_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
@@ -754,7 +755,8 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         list_init(&kcp_header->node_list);
         list_init(&kcp_header->options);
         kcp_header->conv = KCP_CONV_FLAG;
-        kcp_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
+        kcp_header->cmd = KCP_CMD_SYN;
+        kcp_header->opt = KCP_CMD_OPT;
         kcp_header->frg = 0;
         kcp_header->wnd = 0;
         kcp_header->syn_fin_data.packet_ts = 0;
@@ -829,7 +831,8 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     list_init(&kcp_header->node_list);
     list_init(&kcp_header->options);
     kcp_header->conv = KCP_CONV_FLAG;
-    kcp_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
+    kcp_header->cmd = KCP_CMD_SYN;
+    kcp_header->opt = KCP_CMD_OPT;
     kcp_header->frg = 0;
     kcp_header->wnd = 0;
     kcp_header->syn_fin_data.packet_ts = 0;

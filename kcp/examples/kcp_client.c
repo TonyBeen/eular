@@ -179,8 +179,8 @@ int main(int argc, char **argv)
     }
 
     // 遍历所有返回的地址信息
+    char ipstr[INET6_ADDRSTRLEN];
     for (rp = result; rp != NULL; rp = rp->ai_next) {
-        char ipstr[INET6_ADDRSTRLEN];
         void *addr;
 
         // 根据地址类型获取 IP 字符串
@@ -188,11 +188,13 @@ int main(int argc, char **argv)
             struct sockaddr_in *ipv4 = (struct sockaddr_in *)rp->ai_addr;
             remote_addr.sin.sin_addr.s_addr = ipv4->sin_addr.s_addr;
             addr = &(ipv4->sin_addr);
-        }
 
-        // 将二进制地址转换为可读字符串
-        inet_ntop(rp->ai_family, addr, ipstr, sizeof(ipstr));
-        printf("IP: %s\n", ipstr);
+            // 将二进制地址转换为可读字符串
+            inet_ntop(rp->ai_family, addr, ipstr, sizeof(ipstr));
+            remote_host = ipstr;
+            printf("IP: %s\n", ipstr);
+            break;
+        }
     }
 
     g_ev_base = event_base_new();

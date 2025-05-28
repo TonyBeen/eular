@@ -812,7 +812,7 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
         list_for_each_entry_safe(pos, next, &kcp_conn->kcp_proto_header_list, node_list) {
             list_del_init(&pos->node_list);
 
-            if ((pos->cmd & KCP_CMD_OPT) && !list_empty(&pos->options)) {
+            if ((pos->opt & KCP_CMD_OPT) && !list_empty(&pos->options)) {
                 kcp_option_t *opt_pos = NULL;
                 kcp_option_t *opt_next = NULL;
                 list_for_each_entry_safe(opt_pos, opt_next, &pos->options, node) {
@@ -913,15 +913,15 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     }
 
     data_offset += 4;
-    kcp_header->cmd = *(uint8_t *)(data_offset); // 命令
+    kcp_header->cmd = *(uint8_t *)(data_offset) & 0x0F; // 命令
+    kcp_header->opt = (*(uint8_t *)(data_offset) >> 4) & 0x0F; // 选项标志
     data_offset += 1;
     kcp_header->frg = *(uint8_t *)(data_offset); // 分片
     data_offset += 1;
     kcp_header->wnd = le16toh(*(uint16_t *)(data_offset)); // 窗口大小
     data_offset += 2;
 
-    uint8_t cmd = kcp_header->cmd ^ KCP_CMD_OPT;
-    switch (cmd) {
+    switch (kcp_header->cmd) {
     case KCP_CMD_ACK: {
         kcp_header->ack_data.packet_ts = le64toh(*(uint64_t *)(data_offset)); // 时间戳
         data_offset += 8;
@@ -980,7 +980,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     }
     }
 
-    if (kcp_header->cmd & KCP_CMD_OPT) {
+    if (kcp_header->opt & KCP_CMD_OPT) {
         // 解析选项
         while (data_offset < (*data + data_size)) {
             if ((data_size - (data_offset - *data)) < 2) {
@@ -1031,16 +1031,16 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     char *buffer_offset = buffer;
     *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
     buffer_offset += 4;
-    *(uint8_t *)buffer_offset = kcp_header->cmd;
+    *(uint8_t *)buffer_offset &= kcp_header->cmd;
+    *(uint8_t *)buffer_offset |= (kcp_header->opt << 4);
     buffer_offset += 1;
     *(uint8_t *)buffer_offset = kcp_header->frg;
     buffer_offset += 1;
     *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
     buffer_offset += 2;
 
-    uint8_t cmd = kcp_header->cmd ^ KCP_CMD_OPT;
     uint32_t lengeth = 0;
-    if (cmd == KCP_CMD_ACK) {
+    if (kcp_header->cmd == KCP_CMD_ACK) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->ack_data.packet_ts);
         buffer_offset += sizeof(uint64_t);
         *(uint64_t *)buffer_offset = htole64(kcp_header->ack_data.ack_ts);
@@ -1049,7 +1049,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->ack_data.una);
         buffer_offset += 4;
-    } else if (cmd == KCP_CMD_SYN || cmd == KCP_CMD_FIN) {
+    } else if (kcp_header->cmd == KCP_CMD_SYN || kcp_header->cmd == KCP_CMD_FIN) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.packet_ts);
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->syn_fin_data.ts);
@@ -1058,7 +1058,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 4;
         *(uint32_t *)buffer_offset = htole32(kcp_header->syn_fin_data.rand_sn);
         buffer_offset += 4;
-    } else if (cmd == KCP_CMD_PING || cmd == KCP_CMD_PONG) {
+    } else if (kcp_header->cmd == KCP_CMD_PING || kcp_header->cmd == KCP_CMD_PONG) {
         *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.packet_ts);
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ts);
@@ -1089,7 +1089,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         lengeth = kcp_header->packet_data.len;
     }
 
-    if ((kcp_header->cmd & KCP_CMD_OPT) && !list_empty(&kcp_header->options)) {
+    if ((kcp_header->opt & KCP_CMD_OPT) && !list_empty(&kcp_header->options)) {
         kcp_option_t *pos = NULL;
 
         list_for_each_entry(pos, &kcp_header->options, node) {
@@ -1106,7 +1106,6 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
             case KCP_OPTION_TAG_MTU:
                 *(uint32_t *)buffer_offset = htole32((uint32_t)pos->u64_value);
                 buffer_offset += 4;
-                KCP_LOGI("kcp option tag: %u, length: %u, value: %lu", pos->tag, pos->length, pos->u64_value);
                 break;
             default:
                 return INVALID_PARAM;
@@ -1287,7 +1286,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
-                if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
+                if (pos->cmd & KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
+                    KCP_LOGE("kcp syn packet found, conv: %u, rand_sn: %u", pos->conv, pos->syn_fin_data.rand_sn);
                     // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
@@ -1340,8 +1340,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             uint64_t ts = kcp_time_monotonic_ms();
                             kcp_connection->ts_flush = ts + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
-                            kcp_connection->mtu = mtu;
-                            kcp_connection->mss = mtu - KCP_HEADER_SIZE;
+                            kcp_connection->mtu = MIN(mtu, kcp_connection->mtu);
+                            kcp_connection->mss = kcp_connection->mtu - KCP_HEADER_SIZE;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                             // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
