@@ -27,11 +27,12 @@ enum KcpCommand {
     KCP_CMD_MTU_ACK,        // MTU probe
     KCP_CMD_FIN,            // FIN
     KCP_CMD_RST,            // RST
-
-    // 扩展命令, command 高四位为标志位, 低四位是命令
-    KCP_CMD_OPT = 1 << 5,   // KCP_OPTION_TAG
 };
-typedef int32_t kcp_command_t;
+
+// 扩展命令
+enum KcpExtendedCommand {
+    KCP_CMD_OPT = 0b0001,
+};
 
 enum KcpConnectionState {
     KCP_STATE_DISCONNECTED = 1,
