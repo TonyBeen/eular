@@ -11,7 +11,7 @@ local kcp_option_tag = {
     [0x01] = "MTU",
 }
 
-local kcp_cmd_opt = 1 << 5 -- 0x20
+local kcp_cmd_opt = 1 << 4 -- 0x20
 
 local n_kcp_header_size = 32
 
@@ -223,7 +223,7 @@ function kcp_proto.dissector(buf, pkt, root)
         local command = buf(offset, 1):le_uint()
         offset = offset + 1
         local has_opt = (command & kcp_cmd_opt) ~= 0
-        command = command & 0x1f -- 只取低5位
+        command = command & 0x0f -- 只取低4位
 
         -- frg
         kcp_tree:add(s_fragmentation, buf(offset, 1))
