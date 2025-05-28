@@ -749,6 +749,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 
         // 更新 MTU
         kcp_connection->mtu = MIN(kcp_connection->mtu, mtu);
+        kcp_connection->mss = kcp_connection->mtu - KCP_HEADER_SIZE;
         return NO_ERROR;
     } while (false);
 
