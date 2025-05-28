@@ -100,7 +100,7 @@ void kcp_timer(int fd, short ev, void *user)
 
     printf("TX: %s\n", message);
 
-    struct timeval timer_interval = {0, 100}; // 1s
+    struct timeval timer_interval = {1, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 
@@ -129,7 +129,7 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
     // 创建定时器, 定时发送
     g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);
-    struct timeval timer_interval = {0, 50}; // 1s
+    struct timeval timer_interval = {1, 0}; // 1s
     evtimer_add(g_timer_event, &timer_interval);
 }
 
