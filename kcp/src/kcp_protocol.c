@@ -357,7 +357,6 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
     // ping request
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
-        KCP_LOGD("send ping, next ts: %llu", kcp_connection->ping_ctx->keepalive_next_ts, timestamp);
         kcp_proto_header_t ping_header;
         memset(&ping_header, 0, sizeof(kcp_proto_header_t));
         ping_header.conv = kcp_connection->conv;
@@ -919,15 +918,11 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     data_offset += 4;
     kcp_header->cmd = *(uint8_t *)(data_offset) & 0x0F; // 命令
     kcp_header->opt = (*(uint8_t *)(data_offset) >> 4) & 0x0F; // 选项标志
-    KCP_LOGE("kcp opt | cmd = 0x%X", *(uint8_t *)(data_offset));
     data_offset += 1;
     kcp_header->frg = *(uint8_t *)(data_offset); // 分片
     data_offset += 1;
     kcp_header->wnd = le16toh(*(uint16_t *)(data_offset)); // 窗口大小
     data_offset += 2;
-
-    KCP_LOGW("kcp conv: %u, cmd: %u, opt: %u, frg: %u, wnd: %u",
-        kcp_header->conv, kcp_header->cmd, kcp_header->opt, kcp_header->frg, kcp_header->wnd);
 
     switch (kcp_header->cmd) {
     case KCP_CMD_ACK: {
@@ -1014,7 +1009,6 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
             switch (tag) {
             case KCP_OPTION_TAG_MTU:
                 option->u64_value = le32toh(*(uint32_t *)data_offset);
-                KCP_LOGI("kcp option tag: %u, length: %u, value: %lu", option->tag, option->length, option->u64_value);
                 break;
             default:
                 KCP_LOGE("unknown option tag: %u", tag);
