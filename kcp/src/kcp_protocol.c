@@ -1295,7 +1295,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
-                if (pos->cmd & KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
+                if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
                     KCP_LOGE("kcp syn packet found, conv: %u, rand_sn: %u", pos->conv, pos->syn_fin_data.rand_sn);
                     // 检验发送的sn与server响应的sn是否一致
                     kcp_connection->conv = syn_packet->conv;
