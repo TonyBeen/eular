@@ -28,6 +28,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
     size_t buffer_remain = buffer_size;
     do {
         kcp_proto_header_t kcp_header;
+        list_init(&kcp_header.options);
         if (NO_ERROR != kcp_proto_parse(&kcp_header, &buffer_offset, buffer_remain)) {
             KCP_LOGW("kcp parse packet error");
             break;

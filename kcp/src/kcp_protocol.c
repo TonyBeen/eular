@@ -981,7 +981,6 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
     }
 
     if (kcp_header->cmd & KCP_CMD_OPT) {
-        list_init(&kcp_header->options);
         // 解析选项
         while (data_offset < (*data + data_size)) {
             if ((data_size - (data_offset - *data)) < 2) {
