@@ -692,16 +692,14 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         }
         list_init(&kcp_syn_header->node_list);
         list_init(&kcp_syn_header->options);
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = conv;
-        kcp_header.cmd = KCP_CMD_SYN;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.syn_fin_data.packet_ts = kcp_time_monotonic_us();
-        kcp_header.syn_fin_data.ts = kcp_header.syn_fin_data.packet_ts;
-        kcp_header.syn_fin_data.packet_sn = syn_packet->rand_sn; // client发送的序列
-        kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0); // server响应的序列
-        memcpy(kcp_syn_header, &kcp_header, sizeof(kcp_proto_header_t));
+        kcp_syn_header->conv = conv;
+        kcp_syn_header->cmd = KCP_CMD_SYN | KCP_CMD_OPT;
+        kcp_syn_header->frg = 0;
+        kcp_syn_header->wnd = 0;
+        kcp_syn_header->syn_fin_data.packet_ts = kcp_time_monotonic_us();
+        kcp_syn_header->syn_fin_data.ts = kcp_syn_header->syn_fin_data.packet_ts;
+        kcp_syn_header->syn_fin_data.packet_sn = syn_packet->rand_sn; // client发送的序列
+        kcp_syn_header->syn_fin_data.rand_sn = XXH32(&kcp_syn_header->syn_fin_data.ts, sizeof(kcp_syn_header->syn_fin_data.ts), 0); // server响应的序列
 
         kcp_option_t *kcp_option = (kcp_option_t *)malloc(sizeof(kcp_option_t));
         if (kcp_option == NULL) {
@@ -717,7 +715,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, sizeof(buffer));
+        kcp_proto_header_encode(kcp_syn_header, buffer, sizeof(buffer));
 
         struct iovec data[1];
         data->iov_base = buffer;
