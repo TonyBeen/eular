@@ -1604,7 +1604,6 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
                 ++count;
             }
 
-            KCP_LOGD("receive a complete packet, psn: %u, packet_count = %u == count = %u", first->psn, packet_count, count);
             if (packet_count == count) { // 完整的一包
                 pos = first;
                 int32_t size = 0;
