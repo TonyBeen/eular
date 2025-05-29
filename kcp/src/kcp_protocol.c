@@ -495,6 +495,12 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                     }
                 }
 
+                if (pos->xmit > KCP_RETRANSMISSION_MAX) {
+                    KCP_LOGE("Retransmission limit exceeded for segment SN: %u, XMIT: %u", pos->sn, pos->xmit);
+                    kcp_connection->state = KCP_STATE_DISCONNECTED;
+                    goto _end; // 重传次数超过限制, 断开连接
+                }
+
                 if (need_send) {
                     need_flush = true;
                     int32_t segment_size = 0;
@@ -578,6 +584,11 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     kcp_connection->ts_flush = timestamp / 1000 + kcp_connection->interval;
+
+_end:
+    if (kcp_connection->state == KCP_STATE_DISCONNECTED) {
+        kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, TOO_MANY_RETRANS);
+    }
     return NO_ERROR;
 }
 

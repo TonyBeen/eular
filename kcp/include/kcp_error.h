@@ -60,6 +60,7 @@ enum KcpError {
     ICMP_ERROR,
     MTU_REDUCTION,  // MTU reduction
     KEEPALIVE_ERROR,
+    TOO_MANY_RETRANS, // Too many retransmissions
 
     // proto error
     INVALID_KCP_HEADER = -120000,

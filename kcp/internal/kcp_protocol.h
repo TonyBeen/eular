@@ -139,7 +139,7 @@ typedef struct KcpAck {
 
 typedef void (*kcp_read_cb_t)(struct KcpConnection *, const kcp_proto_header_t *, const sockaddr_t *);
 // NOTE timestamp == 0 表示写事件触发, 否则表示超时事件触发
-typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *, uint64_t timestamp);
+typedef int32_t (*kcp_write_cb_t)(struct KcpConnection *, uint64_t);
 
 /// @brief KCP控制块
 typedef struct KcpConnection {
