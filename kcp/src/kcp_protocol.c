@@ -461,6 +461,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     {
         bool need_flush = false;
         int32_t buffer_index = 0;
+        uint32_t max_mtu = kcp_connection->mtu;
         char packet_cache[KCP_PACKET_COUNT + 1][ETHERNET_MTU];
         size_t packet_cache_size[KCP_PACKET_COUNT + 1] = {0};
         char *buffer_offset = packet_cache[buffer_index];
@@ -519,7 +520,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                         buffer_index = 0;
                         buffer_offset = packet_cache[buffer_index];
                     }
-                    segment_size = kcp_segment_encode(pos, buffer_offset, ETHERNET_MTU - packet_cache_size[buffer_index]);
+                    segment_size = kcp_segment_encode(pos, buffer_offset, max_mtu - packet_cache_size[buffer_index]);
                     if (segment_size == BUFFER_TOO_SMALL) {
                         ++buffer_index;
                         buffer_offset = packet_cache[buffer_index];

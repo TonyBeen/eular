@@ -43,23 +43,21 @@ typedef struct KcpConfig {
 #define KCP_CONFIG_FAST_2   (kcp_config_t){1, 20, 2, 1}
 #define KCP_CONFIG_FAST_3   (kcp_config_t){1, 10, 2, 1}
 
-static const uint32_t IKCP_RTO_NDL = 30;    // no delay min rto
-
-
-
-static const uint32_t IKCP_MTU_DEF = 1400;
-static const uint32_t IKCP_ACK_FAST = 3;
-static const uint32_t IKCP_INTERVAL = 100;
-static const uint32_t IKCP_OVERHEAD = 24;
-static const uint32_t IKCP_DEADLINK = 20;
-static const uint32_t IKCP_THRESH_MIN = 2;
+#define KCP_MAX_PACKET_SIZE         ((576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_PACKET_COUNT) // 一次发送的最大字节数, frg [0, KCP_PACKET_COUNT - 1]
+#define DEFAULT_RECEIVE_TIMEOUT     1000        // ms
+#define DEFAULT_KEEPALIVE_TIMEOUT   5000        // ms
+#define DEFAULT_KEEPALIVE_INTERVAL  10000000    // us
+#define DEFAULT_KEEPALIVE_RETRIES   5
+#define DEFAULT_SYN_FIN_RETRIES     2
+#define DEFAULT_MTU_PROBE_TIMEOUT   1500
 
 /////////////////
 static const uint32_t   KCP_RTO_MAX     = 6000;     // ms
 static const uint32_t   KCP_ASK_SEND    = 0b0001;   // need to send IKCP_CMD_WASK
 static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
-static const uint32_t   KCP_PING_RECV   = 0b0100;   // 
+static const uint32_t   KCP_PING_RECV   = 0b0100;   // ping receive flag
 
+static const uint32_t   KCP_RTO_NDL     = 30;       // no delay min rto(ms)
 static const uint32_t   KCP_THRESH_INIT = 2;        // ssthresh
 static const uint32_t   KCP_THRESH_MIN  = 2;        // min ssthresh
 static const uint32_t   KCP_RTO_DEF     = 200;      // default rto, 200ms
@@ -76,13 +74,5 @@ static const uint32_t   KCP_KEEPALIVE_INTERVAL  = 10000;// 心跳间隔时间
 static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次数
 static const uint32_t   KCP_PROBE_INIT          = 7000; // 探测窗口大小的初始时间
 static const uint32_t   KCP_PROBE_LIMIT         = 120000; // 探测窗口大小的最大时间
-
-#define KCP_MAX_PACKET_SIZE         ((576 - 20 - 8 - KCP_HEADER_SIZE) * KCP_PACKET_COUNT) // 一次发送的最大字节数, frg [0, KCP_PACKET_COUNT - 1]
-#define DEFAULT_RECEIVE_TIMEOUT     1000        // ms
-#define DEFAULT_KEEPALIVE_TIMEOUT   5000        // ms
-#define DEFAULT_KEEPALIVE_INTERVAL  10000000    // us
-#define DEFAULT_KEEPALIVE_RETRIES   5
-#define DEFAULT_SYN_FIN_RETRIES     2
-#define DEFAULT_MTU_PROBE_TIMEOUT   1500
 
 #endif // __KCP_CONFIG_H__

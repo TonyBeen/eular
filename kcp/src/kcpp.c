@@ -385,7 +385,7 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flag
     if (flags & CONFIG_KEY_NODELAY) {
         kcp_connection->nodelay = config->nodelay ? 1 : 0;
         if (kcp_connection->nodelay) {
-            kcp_connection->rx_minrto = IKCP_RTO_NDL * 1000;
+            kcp_connection->rx_minrto = KCP_RTO_NDL * 1000;
         } else {
             kcp_connection->rx_minrto = KCP_RTO_MIN * 1000;
         }
@@ -1073,6 +1073,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
     struct list_head buffer_list;
     list_init(&buffer_list);
     uint32_t packet_sn = kcp_connection->psn_nxt;
+    KCP_LOGD("kcp_send, conv: %u, size: %zu, fragmentation: %d, packet_sn: %u, mss = %u", kcp_connection->conv, size, fragmentation, packet_sn, kcp_connection->mss);
     for (int32_t i = 0; i < fragmentation; ++i) {
         uint32_t packet_size  = (uint32_t)size > kcp_connection->mss ? kcp_connection->mss : (uint32_t)size;
         kcp_segment_t *segment = kcp_segment_send_get(kcp_connection);
