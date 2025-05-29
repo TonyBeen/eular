@@ -1433,7 +1433,7 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
                 }
 
                 // 计算RTO
-                int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
+                int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval * 1000, 4 * kcp_conn->rx_rttval);
                 kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto, KCP_RTO_MAX * 1000);
                 KCP_LOGD("RTT: %u, RTO: %u", kcp_conn->rx_srtt, kcp_conn->rx_rto);
             }
