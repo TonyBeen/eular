@@ -36,7 +36,9 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         buffer_remain = buffer + buffer_size - buffer_offset;
 
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.conv);
-        KCP_LOGI("recv kcp packet, conv: %X, cmd: %u, connection: %p", kcp_header.conv, kcp_header.cmd, kcp_connection);
+        KCP_LOGI("recv kcp packet: connection(%p). conv: %X, cmd: %s, frg: %u, wnd: %u",
+            kcp_connection, kcp_header.conv, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
+
         if (kcp_header.cmd == KCP_CMD_SYN) {
             kcp_syn_node_t *syn_node = (kcp_syn_node_t *)malloc(sizeof(kcp_syn_node_t));
             if (syn_node == NULL) {

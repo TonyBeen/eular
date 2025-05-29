@@ -29,6 +29,19 @@ enum KcpCommand {
     KCP_CMD_RST,            // RST
 };
 
+#define COMMAND_TO_STRING(cmd)  \
+    ((cmd) == KCP_CMD_SYN ? "SYN" : \
+     (cmd) == KCP_CMD_ACK ? "ACK" : \
+     (cmd) == KCP_CMD_PUSH ? "PUSH" : \
+     (cmd) == KCP_CMD_WASK ? "WASK" : \
+     (cmd) == KCP_CMD_WINS ? "WINS" : \
+     (cmd) == KCP_CMD_PING ? "PING" : \
+     (cmd) == KCP_CMD_PONG ? "PONG" : \
+     (cmd) == KCP_CMD_MTU_PROBE ? "MTU Probe" : \
+     (cmd) == KCP_CMD_MTU_ACK ? "MTU Ack" : \
+     (cmd) == KCP_CMD_FIN ? "FIN" : \
+     (cmd) == KCP_CMD_RST ? "RST" : "UNKNOWN")
+
 // 扩展命令
 enum KcpExtendedCommand {
     KCP_CMD_OPT = 0b0001,
