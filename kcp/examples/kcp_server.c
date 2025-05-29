@@ -160,7 +160,7 @@ int main(int argc, char **argv)
 
     statuc = kcp_listen(ctx, on_kcp_connect);
     if (statuc != NO_ERROR) {
-        fprintf(stderr, "Failed to listen on KCP context: %d\n", statuc);
+        perror("Failed to bind KCP context");
         kcp_context_destroy(ctx);
         return -1;
     }
