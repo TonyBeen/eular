@@ -95,8 +95,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             if (kcp_connection->kcp_ctx->callback.on_accepted) {
                 uint64_t ts = kcp_time_monotonic_ms();
                 kcp_connection->ts_flush = ts + kcp_connection->interval;
+                kcp_connection->ping_ctx->keepalive_next_ts = ts * 1000 + kcp_connection->ping_ctx->keepalive_interval;
                 kcp_connection->kcp_ctx->callback.on_accepted(kcp_connection->kcp_ctx, kcp_connection, NO_ERROR);
-                kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                 // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
             }
 
@@ -1312,10 +1312,10 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     kcp_header.ack_data.una = 0;
 
                     kcp_option_t *option = NULL;
-                    uint32_t mtu = kcp_connection->kcp_ctx->nic_mtu;
+                    uint32_t remote_mtu = kcp_connection->kcp_ctx->nic_mtu;
                     list_for_each_entry(option, &syn_packet->options, node) {
                         if (option->tag == KCP_OPTION_TAG_MTU) {
-                            mtu = (uint32_t)option->u64_value;
+                            remote_mtu = (uint32_t)option->u64_value;
                             break;
                         }
                     }
@@ -1345,10 +1345,10 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             uint64_t ts = kcp_time_monotonic_ms();
                             kcp_connection->ts_flush = ts + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
-                            kcp_connection->mtu = MIN(mtu, kcp_connection->mtu);
+                            kcp_connection->mtu = MIN(remote_mtu, kcp_connection->mtu);
                             kcp_connection->mss = kcp_connection->mtu - KCP_HEADER_SIZE;
+                            kcp_connection->ping_ctx->keepalive_next_ts = ts * 1000 + kcp_connection->ping_ctx->keepalive_interval;
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
-                            kcp_connection->ping_ctx->keepalive_next_ts = ts + kcp_connection->ping_ctx->keepalive_interval;
                             // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
                     }

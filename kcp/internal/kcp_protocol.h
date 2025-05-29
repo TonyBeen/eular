@@ -161,6 +161,7 @@ typedef struct KcpConnection {
     // 时间戳相关
     uint32_t ts_recent;     // 最近一次收到包的时间戳
     uint32_t ts_lastack;    // 最近一次收到ACK的时间戳
+    uint64_t ts_flush;      // 下次刷新时间戳(ms)
     uint32_t ssthresh;      // 慢启动阈值，默认为IKCP_THRESH_INIT(2)
 
     // RTT相关
@@ -233,7 +234,6 @@ typedef struct KcpConnection {
     uint32_t                syn_fin_sn; // unused
     int32_t                 syn_retries;
     uint32_t                fin_retries;
-    uint64_t                ts_flush;
     sockaddr_t              remote_host;
 
     // syn
