@@ -140,10 +140,14 @@ int main(int argc, char **argv)
 
     int32_t command = 0;
     const char *remote_host = "127.0.0.1";
-    while ((command = getopt(argc, argv, "s:h")) != -1) {
+    const char *nic = NULL;
+    while ((command = getopt(argc, argv, "s:n:h")) != -1) {
         switch (command) {
             case 's':
                 remote_host = optarg;
+                break;
+            case 'n':
+                nic = optarg;
                 break;
             case 'h':
                 fprintf(stderr, "Usage: %s [-s command]\n", argv[0]);
@@ -211,7 +215,7 @@ int main(int argc, char **argv)
     local_addr.sin.sin_addr.s_addr = htonl(INADDR_ANY);
     local_addr.sin.sin_port = htons(65432);
 
-    int32_t status = kcp_bind(ctx, &local_addr, NULL);
+    int32_t status = kcp_bind(ctx, &local_addr, nic);
     if (NO_ERROR != status) {
         fprintf(stderr, "Failed to bind KCP context. %d\n", status);
         kcp_context_destroy(ctx);

@@ -19,6 +19,7 @@
 #error "This example requires a Linux environment."
 #endif
 
+#include <getopt.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -115,6 +116,26 @@ int main(int argc, char **argv)
 {
     kcp_log_level(LOG_LEVEL_DEBUG);
 
+    int32_t command = 0;
+    const char *nic = NULL;
+    while ((command = getopt(argc, argv, "n:h")) != -1) {
+        switch (command) {
+            case 'n':
+                nic = optarg;
+                break;
+            case 'h':
+                fprintf(stderr, "Usage: %s [-n nic]\n", argv[0]);
+                return 0;
+            case '?':
+                fprintf(stderr, "Unknown option: %d\n", optopt);
+                return -1;
+            default:
+                fprintf(stderr, "Usage: %s [-n nic] %d\n", argv[0], command);
+                return -1;
+        }
+    }
+
+
     g_event_base = event_base_new();
     struct event_base *base = g_event_base;
     struct KcpContext *ctx = NULL;
@@ -130,7 +151,7 @@ int main(int argc, char **argv)
     local_addr.sin.sin_addr.s_addr = inet_addr("0.0.0.0");
     local_addr.sin.sin_port = htons(54321);
 
-    int32_t statuc = kcp_bind(ctx, &local_addr, "eth0");
+    int32_t statuc = kcp_bind(ctx, &local_addr, nic);
     if (statuc != NO_ERROR) {
         fprintf(stderr, "Failed to bind KCP context: %d\n", statuc);
         kcp_context_destroy(ctx);
