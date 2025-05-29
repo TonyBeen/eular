@@ -1421,21 +1421,21 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
             // NOTE 发送重传时无法确认ACK是哪次重传包的ACK, 故计算出的RTT和RTO会不准确, 一般情况会偏高
             if (pos->xmit == 1) { // 如果未发生重传, 则计算RTT和RTO
-                // 计算RTT
+                // 计算RTT RFC 6298
                 if (kcp_conn->rx_srtt == 0) {
                     kcp_conn->rx_srtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
                     kcp_conn->rx_rttval = kcp_conn->rx_srtt / 2;
                 } else {
                     int32_t rtt = (timestamp_tmp - ts_tmp) - (ack_ts_tmp - packet_ts_tmp);
                     int64_t delta = ABS(rtt - kcp_conn->rx_srtt);
-                    kcp_conn->rx_rttval = (3 * kcp_conn->rx_rttval + delta) / 4;
                     kcp_conn->rx_srtt = (kcp_conn->rx_srtt * 7 + rtt) / 8;
+                    kcp_conn->rx_rttval = (3 * kcp_conn->rx_rttval + delta) / 4;
                 }
 
                 // 计算RTO
                 int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval, 4 * kcp_conn->rx_rttval);
                 kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto, KCP_RTO_MAX * 1000);
-                KCP_LOGI("RTT: %u, RTO: %u", kcp_conn->rx_srtt, kcp_conn->rx_rto);
+                KCP_LOGD("RTT: %u, RTO: %u", kcp_conn->rx_srtt, kcp_conn->rx_rto);
             }
 
             kcp_conn->tx_bytes += pos->len; // 累加发送的字节数
