@@ -45,6 +45,15 @@ int32_t kcp_get_mtu(bool ipv6)
     }
 }
 
+int32_t kcp_get_mtu_by_param(int32_t mtu, bool ipv6)
+{
+    if (ipv6) {
+        return (mtu - IPV6_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE);
+    } else {
+        return (mtu - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE);
+    }
+}
+
 int32_t kcp_get_localhost_mss(bool ipv6)
 {
     if (ipv6) {

@@ -519,14 +519,8 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
         goto _error;
     }
 
-    int32_t ip_header_size = addr->sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
     if (nic != NULL) {
         kcp_ctx->nic_mtu = get_mtu_by_nic(kcp_ctx->sock, nic);
-        if (kcp_ctx->nic_mtu < 0) {
-            KCP_LOGE("get nic mtu error");
-            goto _error;
-        }
-        kcp_ctx->nic_mtu = kcp_ctx->nic_mtu - ip_header_size - UDP_HEADER_SIZE;
 
         status = set_socket_bind_nic(kcp_ctx->sock, nic);
         if (status != NO_ERROR) {
@@ -534,14 +528,13 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
         }
     } else {
         kcp_ctx->nic_mtu = get_mtu_by_ip(kcp_ctx->sock, addr);
-        if (kcp_ctx->nic_mtu < 0) {
-            KCP_LOGE("get nic mtu error");
-            goto _error;
-        }
-
-        kcp_ctx->nic_mtu = kcp_ctx->nic_mtu - ip_header_size - UDP_HEADER_SIZE;
     }
 
+    if (kcp_ctx->nic_mtu < 0) {
+        KCP_LOGE("get nic mtu error");
+        goto _error;
+    }
+    kcp_ctx->nic_mtu = kcp_get_mtu_by_param(kcp_ctx->nic_mtu, addr->sa.sa_family == AF_INET6);
     if (bind(kcp_ctx->sock, (const struct sockaddr *)addr, sizeof(sockaddr_t)) == SOCKET_ERROR) {
         status = BIND_ERROR;
         goto _error;

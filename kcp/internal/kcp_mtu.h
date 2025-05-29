@@ -26,6 +26,8 @@ int32_t kcp_get_min_mtu(bool ipv6);
 
 int32_t kcp_get_mtu(bool ipv6);
 
+int32_t kcp_get_mtu_by_param(int32_t mtu, bool ipv6);
+
 int32_t kcp_get_localhost_mss(bool ipv6);
 
 int32_t kcp_mtu_probe(kcp_connection_t *kcp_conn, uint32_t timeout, uint16_t retry);
