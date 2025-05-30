@@ -72,7 +72,7 @@
 #if defined(__i386) || defined(__i386__) || defined(_M_IX86)
     #define ARCH_X86
     #define ARCH_X86_32
-#elif defined(__x86_64) || defined(__x86_64__) || defined(__amd64) || defined(_M_X64)
+#elif defined(__x86_64) || defined(__x86_64__) || defined(__amd64) || defined(_M_X64) || defined(_M_AMD64)
     #define ARCH_X64
     #define ARCH_X86_64
 #elif defined(__arm__)

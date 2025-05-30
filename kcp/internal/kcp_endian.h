@@ -9,6 +9,10 @@
 
 #if defined(OS_WIN)
 #define UINT_IDENTIFY(X) (X)
+#elif defined(OS_BSD)
+#include <sys/endian.h>
+#elif defined(OS_DARWIN)
+#include <machine/endian.h>
 #else
 #include <endian.h>
 #endif
@@ -24,12 +28,17 @@
 #endif
 
 #ifndef BYTE_ORDER
-#if defined(ARCH_X86) || defined(ARCH_X86_64) || defined(__ARMEL__) || defined(__AARCH64EL__)
-#define BYTE_ORDER      LITTLE_ENDIAN
+#if defined(_X86_) || defined(__x86_64__) || defined(__i386__) || \
+    defined(__i486__) || defined(__i586__) || defined(__i686__) || \
+    defined(__ARMEL__) || defined(__AARCH64EL__) || \
+    defined(_M_ARM) || defined(_M_ARM64) || \ // microsoft ARM64
+    defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64)
+    #define BYTE_ORDER      LITTLE_ENDIAN
 #elif defined(__ARMEB__) || defined(__AARCH64EB__)
-#define BYTE_ORDER      BIG_ENDIAN
+    #define BYTE_ORDER      BIG_ENDIA
+#else
+    #error "Unsupported byte order"
 #endif
-#error "Unsupported byte order"
 #endif
 
 EXTERN_C_BEGIN
