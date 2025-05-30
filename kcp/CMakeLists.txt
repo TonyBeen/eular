@@ -45,7 +45,8 @@ file(GLOB 3RD_SRC_LIST          "3rd_party/*.c")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_definitions(-D_GNU_SOURCE -DXXH_INLINE_ALL -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
-    # add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated)
+    # -Wno-unused-result -Wno-unused-function -Wno-unused-parameter
 endif()
 
 if(BUILD_EXAMPLES MATCHES "ON")

@@ -175,7 +175,7 @@ typedef struct KcpConnection {
     uint32_t ts_recent;     // 最近一次收到包的时间戳
     uint32_t ts_lastack;    // 最近一次收到ACK的时间戳
     uint64_t ts_flush;      // 下次刷新时间戳(ms)
-    uint32_t ssthresh;      // 慢启动阈值，默认为IKCP_THRESH_INIT(2)
+    int32_t ssthresh;       // 慢启动阈值，默认为IKCP_THRESH_INIT(2)
 
     // RTT相关
     int32_t rx_rttval;      // RTT 的偏差, 用于计算 RTT 的波动
@@ -184,10 +184,10 @@ typedef struct KcpConnection {
     int32_t rx_minrto;      // 最小重传超时时间，默认为 KCP_RTO_MIN(100ms)
 
     // 窗口相关
-    uint32_t snd_wnd;       // 发送窗口大小，默认128
-    uint32_t rcv_wnd;       // 接收窗口大小，默认256
-    uint32_t rmt_wnd;       // 远端窗口大小，默认256
-    uint32_t cwnd;          // 拥塞窗口大小，初始为0
+    int32_t snd_wnd;        // 发送窗口大小，默认128
+    int32_t rcv_wnd;        // 接收窗口大小，默认256
+    int32_t rmt_wnd;        // 远端窗口大小，默认256
+    int32_t cwnd;           // 拥塞窗口大小，初始为0
     uint32_t probe;         // 探测标志，用于窗口探测
 
     // 配置标志
@@ -200,7 +200,7 @@ typedef struct KcpConnection {
 
     // 时间相关
     uint32_t current;       // 当前时间
-    uint32_t interval;      // 内部更新时间间隔，默认100ms
+    int32_t interval;       // 内部更新时间间隔，默认100ms
 
     // 队列计数器
     int32_t nrcv_buf;           // 接收缓存中的包数量
@@ -297,7 +297,7 @@ typedef struct KcpContext {
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
 
-    uint32_t                    nic_mtu;
+    int32_t                     nic_mtu;
     bitmap_t                    conv_bitmap;
     struct list_head            syn_queue;
     connection_set_t            connection_set;

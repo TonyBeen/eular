@@ -103,6 +103,9 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
 
 static void kcp_read_cb(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     assert(arg != NULL);
     struct KcpContext *kcp_ctx = (struct KcpContext *)arg;
     if (kcp_ctx == NULL) {
@@ -181,7 +184,6 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         sockaddr_t remote_addr;
         socklen_t addr_len = sizeof(sockaddr_t);
         struct msghdr msg;
-        struct cmsghdr *cmsg = NULL;
         char cmsgbuf[1024] = {0};
         struct iovec iov;
         iov.iov_base = kcp_ctx->read_buffer;
@@ -223,6 +225,9 @@ static void kcp_read_cb(int fd, short ev, void *arg)
 
 static void kcp_write_cb(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     assert(arg != NULL);
     struct KcpContext *kcp_ctx = (struct KcpContext *)arg;
     if (kcp_ctx == NULL) {
@@ -254,6 +259,9 @@ static void kcp_write_cb(int fd, short ev, void *arg)
 
 static void kcp_write_timeout(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     kcp_context_t *kcp_ctx = (kcp_context_t *)arg;
     // 遍历所有连接, 超时未发送数据则触发写事件
     uint64_t current_time_us = kcp_time_monotonic_us();
@@ -394,7 +402,7 @@ int32_t kcp_configure(struct KcpConnection *kcp_connection, em_config_key_t flag
     }
 
     if (flags & CONFIG_KEY_INTERVAL) {
-        if (config->interval < KCP_INTERVAL_MIN || config->interval > KCP_INTERVAL_MAX) {
+        if (config->interval < (int32_t)KCP_INTERVAL_MIN || config->interval > (int32_t)KCP_INTERVAL_MAX) {
             return INVALID_PARAM;
         }
 
@@ -659,7 +667,7 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         }
 
         uint32_t conv = 0;
-        for (int32_t i = 1; i < kcp_ctx->conv_bitmap.size; ++i) {
+        for (uint32_t i = 1; i < kcp_ctx->conv_bitmap.size; ++i) {
             if (!bitmap_get(&kcp_ctx->conv_bitmap, i)) {
                 conv = KCP_CONV_FLAG | i;
                 bitmap_set(&kcp_ctx->conv_bitmap, i, true);
@@ -757,6 +765,9 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 
 static void kcp_connect_timeout(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
     if (kcp_connection->syn_retries--) {
         kcp_proto_header_t *kcp_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
@@ -866,7 +877,6 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     if (status <= 0) {
         return status;
     }
-    char log_buffer[SOCKADDR_STRING_LEN] = {0};
 
     kcp_connection->state = KCP_STATE_SYN_SENT;
     kcp_ctx->callback.on_connected = cb;
@@ -894,6 +904,9 @@ void kcp_set_close_cb(struct KcpContext *kcp_ctx, on_kcp_closed_t cb)
 
 static void kcp_close_timeout(int fd, short ev, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(ev);
+
     kcp_connection_t *kcp_connection = (kcp_connection_t *)arg;
     if (kcp_connection->fin_retries--) {
         kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
@@ -1061,7 +1074,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
     const char *buffer_offset = (const char *)data;
     int32_t fragmentation = (size + kcp_connection->mss - 1) / kcp_connection->mss;
-    if (fragmentation > KCP_WND_RCV) {
+    if (fragmentation > (int32_t)KCP_WND_RCV) {
         return PACKET_TOO_LARGE;
     }
 

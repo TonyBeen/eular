@@ -28,6 +28,8 @@ struct event_base *g_event_base = NULL;
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
+    (void)kcp_ctx; // Unused parameter
+
     switch (code) {
     case MTU_REDUCTION:
         if (kcp_connection) {
@@ -91,6 +93,8 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
 void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
+    (void)kcp_ctx; // Unused parameter
+
     if (code == NO_ERROR) {
         printf("KCP connection accepted\n");
         set_kcp_read_event_cb(kcp_connection, on_kcp_read_event);

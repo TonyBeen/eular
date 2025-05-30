@@ -13,7 +13,7 @@ EXTERN_C_BEGIN
 
 void connection_set_init(connection_set_t *root);
 
-struct KcpConnection *connection_set_search(connection_set_t *root, int32_t conv);
+struct KcpConnection *connection_set_search(connection_set_t *root, uint32_t conv);
 
 bool connection_set_insert(connection_set_t *root, struct KcpConnection *node);
 

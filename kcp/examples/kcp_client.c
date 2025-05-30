@@ -76,6 +76,9 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
 void kcp_timer(int fd, short ev, void *user)
 {
+    (void)fd; // Unused parameter
+    (void)ev; // Unused parameter
+
     struct KcpConnection *kcp_connection = (struct KcpConnection *)user;
 
     // 定时发送数据

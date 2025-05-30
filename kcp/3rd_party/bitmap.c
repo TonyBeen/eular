@@ -124,7 +124,7 @@ static inline uint64_t count_bits8(uint8_t v)
     return popcount(v);
 }
 
-int32_t bitmap_count(bitmap_t *bitmap)
+uint32_t bitmap_count(bitmap_t *bitmap)
 {
     uint32_t bytes =  bitmap->size / BITS_PEER_BYTE;
     uint32_t len = bytes / sizeof(uint64_t);

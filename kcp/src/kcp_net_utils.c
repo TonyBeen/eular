@@ -290,7 +290,7 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
 #if defined(OS_LINUX) || defined(OS_MAC)
 
 #if !defined(USE_SENDMMSG)
-    for (int32_t i = 0; i < size; ++i) {
+    for (int32_t i = 0; i < (int32_t)size; ++i) {
         struct msghdr msg;
         memset(&msg, 0, sizeof(msg));
         msg.msg_name = (void *)remote_addr;

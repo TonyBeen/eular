@@ -10,7 +10,7 @@ void connection_set_init(connection_set_t *root)
     }
 }
 
-struct KcpConnection *connection_set_search(connection_set_t *root, int32_t conv)
+struct KcpConnection *connection_set_search(connection_set_t *root, uint32_t conv)
 {
     struct rb_node *node = root->rb_node;
   	while (node) {

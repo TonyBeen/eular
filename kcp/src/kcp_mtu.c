@@ -89,6 +89,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         header.packet_data.ts = kcp_time_monotonic_us();
         header.packet_data.sn = header.packet_data.ts;
         probe_ctx->prev_sn = header.packet_data.sn;
+        header.packet_data.psn = 0;
         header.packet_data.una = 0;
         header.packet_data.len = data_length;
         header.packet_data.data = probe_ctx->probe_buf + KCP_HEADER_SIZE;
@@ -138,6 +139,9 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 
 static void kcp_mtu_probe_timeout_cb(evutil_socket_t fd, short event, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(event);
+
     kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     if (probe_ctx == NULL) {
@@ -200,11 +204,14 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_heade
         iov[i].iov_len = sizeof(buffer);
     }
 
-    kcp_send_packet(kcp_conn, iov, 3);
+    kcp_send_packet(kcp_conn, iov, 1);
+    return NO_ERROR;
 }
 
 int32_t kcp_mtu_ack_received(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header, uint64_t timestamp)
 {
+    UNUSED_PARAM(timestamp);
+
     mtu_probe_ctx_t *probe_ctx = kcp_conn->mtu_probe_ctx;
     if (kcp_header->packet_data.sn != probe_ctx->prev_sn) {
         return NO_ERROR;
@@ -222,6 +229,8 @@ int32_t kcp_mtu_ack_received(kcp_connection_t *kcp_conn, const kcp_proto_header_
 
     probe_ctx->mtu_lbound = probe_ctx->mtu_current + 1;
     mtu_probe_update(kcp_conn);
+
+    return NO_ERROR;
 }
 
 /////////ICMP/////////

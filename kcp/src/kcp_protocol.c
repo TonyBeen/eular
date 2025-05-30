@@ -267,7 +267,6 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     {
         // 回复ACK
         kcp_ack_t *pos = NULL;
-        kcp_ack_t *next = NULL;
         while (!list_empty(&kcp_connection->ack_item)) {
             pos = list_first_entry(&kcp_connection->ack_item, kcp_ack_t, node);
             kcp_ack_header.ack_data.packet_ts = pos->ts;
@@ -456,7 +455,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
     bool packet_lost = false;
     bool change_ssthresh = false;
-    uint32_t resent = kcp_connection->fastresend > 0 ? kcp_connection->fastresend : UINT32_MAX;
+    uint32_t resent = kcp_connection->fastresend > 0 ? (uint32_t)kcp_connection->fastresend : UINT32_MAX;
     uint32_t rtomin = (kcp_connection->nodelay == 0) ? (kcp_connection->rx_rto >> 3) : 0;
     {
         bool need_flush = false;
@@ -478,15 +477,15 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                     need_send = true; // 超时重传
                     pos->xmit++;
                     if (kcp_connection->nodelay == 0) {
-                        pos->rto = MAX(pos->rto , kcp_connection->rx_rto);
+                        pos->rto = MAX(pos->rto , (uint32_t)kcp_connection->rx_rto);
                     } else {
-                        int32_t step = (kcp_connection->nodelay < 2) ? pos->rto : kcp_connection->rx_rto;
+                        int32_t step = (kcp_connection->nodelay < 2) ? (int32_t)pos->rto : kcp_connection->rx_rto;
                         pos->rto += step / 2;
                     }
                     pos->resendts = timestamp + pos->rto;
                     packet_lost = true;
                 } else if (pos->fastack >= resent) {
-                    if (pos->xmit <= kcp_connection->fastlimit || kcp_connection->fastlimit <= 0) {
+                    if (pos->xmit <= (uint32_t)kcp_connection->fastlimit || kcp_connection->fastlimit <= 0) {
                         need_send = true; // 快速重传
                         pos->xmit++;
                         pos->resendts = timestamp + pos->rto;
@@ -562,7 +561,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     if (change_ssthresh) {
         uint32_t inflight = kcp_connection->snd_nxt - kcp_connection->snd_una;
         kcp_connection->ssthresh = inflight / 2;
-        if (kcp_connection->ssthresh < KCP_THRESH_MIN) {
+        if (kcp_connection->ssthresh < (int32_t)KCP_THRESH_MIN) {
             kcp_connection->ssthresh = KCP_THRESH_MIN;
         }
         kcp_connection->cwnd = kcp_connection->ssthresh + resent;
@@ -571,7 +570,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
     if (packet_lost) {
         kcp_connection->ssthresh = cwnd / 2;
-        if (kcp_connection->ssthresh < KCP_THRESH_MIN) {
+        if (kcp_connection->ssthresh < (int32_t)KCP_THRESH_MIN) {
             kcp_connection->ssthresh = KCP_THRESH_MIN;
         }
         kcp_connection->cwnd = 1;
@@ -666,6 +665,8 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     default:
         break;
     }
+
+    return NO_ERROR;
 }
 
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx)
@@ -1178,7 +1179,7 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
 int32_t kcp_input_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *kcp_header)
 {
     uint64_t timestamp = kcp_time_monotonic_us();
-    int32_t prev_una = kcp_conn->snd_una;
+    uint32_t prev_una = kcp_conn->snd_una;
     switch (kcp_header->cmd) {
     case KCP_CMD_ACK:
         kcp_conn->rmt_wnd = kcp_header->wnd;
@@ -1294,10 +1295,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                 break;
             }
 
-            bool status = false;
             kcp_syn_node_t *syn_packet = list_first_entry(&kcp_ctx->syn_queue, kcp_syn_node_t, node);
 
-            bool found = false;
             kcp_proto_header_t *pos = NULL;
             kcp_proto_header_t *next = NULL;
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
@@ -1352,7 +1351,6 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
                         if (kcp_connection->state == KCP_STATE_SYN_SENT) {
                             kcp_connection->state = KCP_STATE_CONNECTED;
-                            status = true;
                             uint64_t ts = kcp_time_monotonic_ms();
                             kcp_connection->ts_flush = ts + kcp_connection->interval;
                             kcp_connection->need_write_timer_event = true;
@@ -1405,7 +1403,6 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
         return NO_ERROR;
     }
 
-    uint32_t max_ack = 0;
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
     list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
@@ -1413,7 +1410,6 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
             // 当前包的序号小于ack的序号, 表示当前包被跳过
             pos->fastack++;
         } else if (pos->sn == kcp_header->ack_data.sn) {
-            max_ack = pos->sn;
             int32_t timestamp_tmp = timestamp;
             int32_t ts_tmp = pos->ts;
             int32_t ack_ts_tmp = kcp_header->ack_data.ack_ts;
@@ -1434,7 +1430,7 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
                 // 计算RTO
                 int32_t rto = kcp_conn->rx_srtt + MAX(kcp_conn->interval * 1000, 4 * kcp_conn->rx_rttval);
-                kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto, KCP_RTO_MAX * 1000);
+                kcp_conn->rx_rto = CLAMP(rto, kcp_conn->rx_minrto, (int32_t)KCP_RTO_MAX * 1000);
                 KCP_LOGD("RTT: %u, RTO: %u", kcp_conn->rx_srtt, kcp_conn->rx_rto);
             }
 
@@ -1630,6 +1626,9 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
 
 static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
 {
+    UNUSED_PARAM(fd);
+    UNUSED_PARAM(event);
+
     kcp_connection_t *kcp_conn = (kcp_connection_t *)arg;
     assert(kcp_conn->state == KCP_STATE_FIN_RECEIVED);
 
@@ -1713,6 +1712,8 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     uint32_t timeout_ms = kcp_conn->receive_timeout;
     struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     evtimer_add(kcp_conn->fin_timer_event, &tv);
+
+    return NO_ERROR;
 }
 
 int32_t on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timestamp)
