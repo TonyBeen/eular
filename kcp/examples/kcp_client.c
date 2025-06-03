@@ -36,8 +36,6 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
     } else {
         printf("KCP error on context %p: %d\n", kcp_ctx, code);
     }
-
-    fprintf(stderr, "Unhandled KCP error code: %d\n", code);
 }
 
 void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)

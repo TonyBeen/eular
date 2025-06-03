@@ -970,21 +970,19 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
         list_init(&kcp_fin_header->node_list);
 
-        kcp_proto_header_t kcp_header;
-        kcp_header.conv = kcp_connection->conv;
-        kcp_header.cmd = KCP_CMD_FIN;
-        kcp_header.opt = 0;
-        kcp_header.frg = 0;
-        kcp_header.wnd = 0;
-        kcp_header.syn_fin_data.packet_ts = 0;
-        kcp_header.syn_fin_data.ts = kcp_time_monotonic_us();
-        kcp_header.syn_fin_data.packet_sn = 0;
-        kcp_header.syn_fin_data.rand_sn = XXH32(&kcp_header.syn_fin_data.ts, sizeof(kcp_header.syn_fin_data.ts), 0);
-        memcpy(kcp_fin_header, &kcp_header, sizeof(kcp_proto_header_t));
+        kcp_fin_header->conv = kcp_connection->conv;
+        kcp_fin_header->cmd = KCP_CMD_FIN;
+        kcp_fin_header->opt = 0;
+        kcp_fin_header->frg = 0;
+        kcp_fin_header->wnd = 0;
+        kcp_fin_header->syn_fin_data.packet_ts = 0;
+        kcp_fin_header->syn_fin_data.ts = kcp_time_monotonic_us();
+        kcp_fin_header->syn_fin_data.packet_sn = 0;
+        kcp_fin_header->syn_fin_data.rand_sn = XXH32(&kcp_fin_header->syn_fin_data.ts, sizeof(kcp_fin_header->syn_fin_data.ts), 0);
         list_add_tail(&kcp_fin_header->node_list, &kcp_connection->kcp_proto_header_list);
 
         char buffer[KCP_HEADER_SIZE] = {0};
-        kcp_proto_header_encode(&kcp_header, buffer, KCP_HEADER_SIZE);
+        kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
@@ -1074,7 +1072,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
 
     const char *buffer_offset = (const char *)data;
     int32_t fragmentation = (size + kcp_connection->mss - 1) / kcp_connection->mss;
-    if (fragmentation > (int32_t)KCP_WND_RCV) {
+    if (fragmentation > (int32_t)KCP_PACKET_SIZE) {
         return PACKET_TOO_LARGE;
     }
 

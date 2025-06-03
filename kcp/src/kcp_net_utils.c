@@ -281,15 +281,15 @@ int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data
 
 int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
 {
-    if (size > KCP_WND_RCV) {
+    if (size > KCP_PACKET_SIZE) {
         return INVALID_PARAM;
     }
 
     int32_t send_packet = 0;
-    int32_t send_size = 0;
 #if defined(OS_LINUX) || defined(OS_MAC)
 
 #if !defined(USE_SENDMMSG)
+    int32_t send_size = 0;
     for (int32_t i = 0; i < (int32_t)size; ++i) {
         struct msghdr msg;
         memset(&msg, 0, sizeof(msg));
@@ -312,18 +312,19 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
         ++send_packet;
     }
 #else
-    struct mmsghdr msgvec[KCP_WND_RCV];
-    for (int32_t i = 0; i < size; ++i) {
+    struct mmsghdr msgvec[KCP_PACKET_SIZE];
+    memset(msgvec, 0, sizeof(msgvec));
+    for (int32_t i = 0; i < (int32_t)size; ++i) {
         struct msghdr *msg = &msgvec[i].msg_hdr;
-        msg->msg_name = remote_addr;
+        msg->msg_name = (void *)remote_addr;
         msg->msg_namelen = sizeof(sockaddr_t);
-        msg->msg_iov = &data[i];
+        msg->msg_iov = (struct iovec *)&data[i];
         msg->msg_iovlen = 1;
-
-        msgvec[i].msg_len = 1;
     }
-    send_size = TEMP_FAILURE_RETRY(sendmmsg(sock, msgvec, size, MSG_NOSIGNAL));
+    send_packet = TEMP_FAILURE_RETRY(sendmmsg(sock, msgvec, size, 0));
     if (send_packet <= 0) {
+        int32_t code = get_last_errno();
+        KCP_LOGE("sendmmsg failed, code: %d, %s", code, errno_string(code));
         send_packet = WRITE_ERROR;
     }
 
