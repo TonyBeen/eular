@@ -12,7 +12,7 @@
 
 #define STUN_TRX_ID_SIZE    12  /* size of the STUN transaction ID */
 
-enum StunMsgType {
+enum class StunMsgType {
     /* Type                                | Value    | Reference */
     STUN_BINDING_REQUEST                   = 0x0001, /* RFC 5389  */
     STUN_BINDING_RESPONSE                  = 0x0101, /* RFC 5389  */
@@ -46,7 +46,7 @@ enum StunMsgType {
     STUN_CONNECTION_ATTEMPT_ERROR_RESPONSE = 0x011C, /* RFC 6062  */
 };
 
-enum StunAttrType {
+enum class StunAttrType {
     /* Attribute                  | Value   | Type                  | Reference */
     STUN_ATTR_MAPPED_ADDRESS      = 0x0001, /* SocketAddress        | RFC 5389  */
     STUN_ATTR_RESPONSE_ADDRESS    = 0x0002, /* SocketAddress        | RFC 5389  */
@@ -88,7 +88,7 @@ enum StunAttrType {
     STUN_ATTR_OTHER_ADDRESS       = 0x802C, /* SocketAddress        | RFC 5780  */
 };
 
-enum StunErrorCodeType {
+enum class StunErrorCodeType {
     /* Code                              | Value | Reference */
     STUN_ERROR_TRY_ALTERNATE             = 300, /* RFC 5389  */
     STUN_ERROR_BAD_REQUEST               = 400, /* RFC 5389  */
@@ -109,7 +109,7 @@ enum StunErrorCodeType {
     STUN_ERROR_INSUFFICIENT_CAPACITY     = 508, /* RFC 5766  */
 };
 
-enum StunAddrFamily {
+enum class StunAddrFamily {
     STUN_IPV4 = 0x01,
     STUN_IPV6 = 0x02
 };

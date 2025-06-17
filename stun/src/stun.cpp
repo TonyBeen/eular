@@ -8,14 +8,11 @@
 #include "stun.h"
 #include "stun/msg.h"
 
-#define STUN_MAGIC_COOKIE       0x2112A442U
-#define STUN_XOR_FINGERPRINT    0x5354554eU
 #define STUN_IPV4_LENGTH        4
 #define STUN_IPV6_LENGTH        16
 
 #define STUN_MSG_HDR_SIZE   (20)    /* size of the STUN message header */
 #define STUN_ATTR_HDR_SIZE  (4)     /* size of the STUN attribute header */
-#define STUN_TRX_ID_SIZE    (12)    /* size of the STUN transaction ID */
 
 /* Retrieve the STUN method from the message-type field of the STUN message */
 #define STUN_GET_METHOD(msg_type) ((msg_type) & 0xFEEF)

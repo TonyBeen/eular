@@ -97,7 +97,7 @@ static const char *method_map[] = {
 const char *stun_err_reason(int err_code) {
   int i;
   const char *msg = NULL;
-  for (i = 0; i < sizeof(err_msg_map) / sizeof(err_msg_map[0]); i++) {
+  for (i = 0; i < (int)(sizeof(err_msg_map) / sizeof(err_msg_map[0])); i++) {
     if (err_msg_map[i].err_code == err_code) {
       msg = err_msg_map[i].err_msg;
       break;
@@ -111,7 +111,7 @@ const char *stun_method_name(uint16_t type)
 {
   const char *name = NULL;
   int method = STUN_GET_METHOD(type);
-  if (method < sizeof(method_map)/sizeof(method_map[0]))
+  if (method < (int)(sizeof(method_map)/sizeof(method_map[0])))
     name = method_map[method];
   return (name == NULL) ? "???" : name;
 }
