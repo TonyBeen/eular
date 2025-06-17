@@ -273,5 +273,19 @@ void StunMsgBuilder::clearAttributes()
     m_impl->msg_buf.reserve(BUFFER_SIZE);
 }
 
+const std::vector<uint8_t> &StunMsgBuilder::message() const
+{
+    if (m_impl->msg_buf.empty()) {
+        // Build message header
+        m_impl->msg_buf.resize(STUN_MSG_HDR_SIZE);
+        m_impl->msg_hdr.type = htobe16(m_impl->msg_hdr.type);
+        m_impl->msg_hdr.length = htobe16(m_impl->msg_hdr.length);
+        m_impl->msg_hdr.magic = htobe32(m_impl->msg_hdr.magic);
+
+        memcpy(m_impl->msg_buf.data(), &m_impl->msg_hdr, STUN_MSG_HDR_SIZE);
+    }
+    return m_impl->msg_buf;
+}
+
 } // namespace stun
 } // namespace eular

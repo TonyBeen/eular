@@ -47,7 +47,6 @@ private:
     std::unique_ptr<StunMsgBuilderPrivate> m_impl;
 };
 
-
 } // namespace stun
 } // namespace eular
 
