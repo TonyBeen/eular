@@ -7,7 +7,7 @@ project(stun
 )
 
 # Options
-option(BUILD_TESTING "Build tests" OFF)
+option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_SHARED_LIBS "Build shared library" OFF)
 
 # C++ standard
@@ -35,8 +35,10 @@ set(SOURCES
 # Add library/executable
 if(BUILD_SHARED_LIBS)
     add_library(${PROJECT_NAME} SHARED ${SOURCES})
+    target_link_libraries(${PROJECT_NAME} PRIVATE stunmsg utils)
 else()
     add_library(${PROJECT_NAME} STATIC ${SOURCES})
+    target_link_libraries(${PROJECT_NAME} PRIVATE stunmsg)
 endif()
 
 # Include directories
@@ -45,14 +47,12 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE stunmsg)
-
 # 3rd party
 add_subdirectory(3rd_party)
 
 # Testing
-if(BUILD_TESTING)
-    add_subdirectory(tests)
+if(BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
 
 # Install

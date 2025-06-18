@@ -23,16 +23,16 @@ SocketAddress::SocketAddress()
     memset(&this->m_address, 0, sizeof(socket_address_t));
 }
 
-SocketAddress::SocketAddress(const sockaddr &addr)
+SocketAddress::SocketAddress(const sockaddr *addr)
 {
     memset(&this->m_address, 0, sizeof(socket_address_t));
-    assert(addr.sa_family == AF_INET || addr.sa_family == AF_INET6);
-    if (addr.sa_family == AF_INET) {
-        this->m_address.addr4 = *(sockaddr_in *)&addr;
-    } else if (addr.sa_family == AF_INET6) {
-        this->m_address.addr6 = *(sockaddr_in6 *)&addr;
+    assert(addr->sa_family == AF_INET || addr->sa_family == AF_INET6);
+    if (addr->sa_family == AF_INET) {
+        this->m_address.addr4 = *(sockaddr_in *)addr;
+    } else if (addr->sa_family == AF_INET6) {
+        this->m_address.addr6 = *(sockaddr_in6 *)addr;
     } else {
-        this->m_address.addr = addr;
+        this->m_address.addr = *addr;
     }
 }
 

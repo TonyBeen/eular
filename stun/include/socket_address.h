@@ -30,7 +30,7 @@ class SocketAddress
 {
 public:
     SocketAddress();
-    SocketAddress(const sockaddr &addr);
+    SocketAddress(const sockaddr *addr);
     SocketAddress(const std::string &ip, uint16_t port);
     SocketAddress(const SocketAddress &other);
     ~SocketAddress();
@@ -66,6 +66,7 @@ private:
         struct sockaddr addr;
         struct sockaddr_in addr4;
         struct sockaddr_in6 addr6;
+        struct sockaddr_storage addr_storage;
     } socket_address_t;
 
     socket_address_t m_address;

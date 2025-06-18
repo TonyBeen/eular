@@ -6,6 +6,11 @@
  ************************************************************************/
 
 #include "stun.h"
+
+#include <map>
+#include <exception>
+#include <stdexcept>
+
 #include "stun/msg.h"
 
 #define STUN_IPV4_LENGTH        4
@@ -103,8 +108,8 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
         m_impl->msg_hdr.type = htobe16(m_impl->msg_hdr.type);
         m_impl->msg_hdr.length = htobe16(m_impl->msg_hdr.length);
         m_impl->msg_hdr.magic = htobe32(m_impl->msg_hdr.magic);
-        memcpy(m_impl->msg_buf.data(), &m_impl->msg_hdr, STUN_MSG_HDR_SIZE);
         m_impl->msg_buf.resize(STUN_MSG_HDR_SIZE);
+        memcpy(m_impl->msg_buf.data(), &m_impl->msg_hdr, STUN_MSG_HDR_SIZE);
     }
 
     int32_t attr_length = be16toh(m_impl->msg_hdr.length) - STUN_MSG_HDR_SIZE;
@@ -126,8 +131,8 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
                 m_impl->msg_buf.reserve(m_impl->msg_buf.capacity() * 1.5);
             }
             auto size = m_impl->msg_buf.size();
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
             m_impl->msg_buf.resize(size + sizeof(stun_attr));
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
             attr_length += sizeof(stun_attr);
         }
         break;
@@ -149,9 +154,9 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + sizeof(stun_attr)) {
                 m_impl->msg_buf.reserve(m_impl->msg_buf.capacity() * 1.5);
             }
-            auto size = m_impl->msg_buf.size();
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
+            size_t size = m_impl->msg_buf.size();
             m_impl->msg_buf.resize(size + sizeof(stun_attr));
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
             attr_length += sizeof(stun_attr);
         }
         break;
@@ -171,13 +176,15 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
             if (stun_attr == nullptr) {
                 return;
             }
+
             stun_attr_varsize_init(stun_attr, type, val->value.data(), val->value.size(), 0);
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + attrLength) {
                 m_impl->msg_buf.reserve((m_impl->msg_buf.size() + attrLength) * 1.5);
             }
 
-            memcpy(m_impl->msg_buf.data() + m_impl->msg_buf.size(), stun_attr, attrLength);
-            m_impl->msg_buf.resize(m_impl->msg_buf.size() + attrLength);
+            size_t size = m_impl->msg_buf.size();
+            m_impl->msg_buf.resize(size + attrLength);
+            memcpy(m_impl->msg_buf.data() + size, stun_attr, attrLength);
             free(stun_attr);
             attr_length += attrLength;
         }
@@ -193,9 +200,9 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + sizeof(stun_attr)) {
                 m_impl->msg_buf.reserve(m_impl->msg_buf.capacity() * 1.5);
             }
-            auto size = m_impl->msg_buf.size();
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
+            size_t size = m_impl->msg_buf.size();
             m_impl->msg_buf.resize(size + sizeof(stun_attr));
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
             attr_length += sizeof(stun_attr);
         }
 
@@ -214,9 +221,9 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + attrLength) {
                 m_impl->msg_buf.reserve((m_impl->msg_buf.size() + attrLength) * 1.5);
             }
-            auto size = m_impl->msg_buf.size();
-            memcpy(m_impl->msg_buf.data() + size, stun_attr, attrLength);
+            size_t size = m_impl->msg_buf.size();
             m_impl->msg_buf.resize(m_impl->msg_buf.size() + attrLength);
+            memcpy(m_impl->msg_buf.data() + size, stun_attr, attrLength);
             free(stun_attr);
             attr_length += attrLength;
         }
@@ -235,9 +242,9 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + sizeof(stun_attr)) {
                 m_impl->msg_buf.reserve(m_impl->msg_buf.capacity() * 1.5);
             }
-            auto size = m_impl->msg_buf.size();
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
+            size_t size = m_impl->msg_buf.size();
             m_impl->msg_buf.resize(size + sizeof(stun_attr));
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
             attr_length += sizeof(stun_attr);
         }
         break;
@@ -282,6 +289,221 @@ const std::vector<uint8_t> &StunMsgBuilder::message() const
         memcpy(m_impl->msg_buf.data(), &m_impl->msg_hdr, STUN_MSG_HDR_SIZE);
     }
     return m_impl->msg_buf;
+}
+
+////////////////////////////////////StunMsgParser////////////////////////////////////
+struct StunMsgParserPrivate {
+    stun_msg_hdr                    msg_hdr; // STUN message header
+    std::vector<uint8_t>            msg_buf; // message buf
+    std::map<uint16_t, eular::any>  attributes; // Attributes map
+};
+
+StunMsgParser::StunMsgParser()
+{
+    m_impl = std::unique_ptr<StunMsgParserPrivate>(new StunMsgParserPrivate());
+    m_impl->msg_buf.reserve(BUFFER_SIZE);
+}
+
+StunMsgParser::StunMsgParser(const void *data, size_t size)
+{
+    m_impl = std::unique_ptr<StunMsgParserPrivate>(new StunMsgParserPrivate());
+    m_impl->msg_buf.reserve(BUFFER_SIZE);
+
+    if (parse(data, size) == false) {
+        throw std::runtime_error("Failed to parse STUN message");
+    }
+}
+
+StunMsgParser::StunMsgParser(const std::vector<uint8_t>& data)
+{
+    m_impl = std::unique_ptr<StunMsgParserPrivate>(new StunMsgParserPrivate());
+    m_impl->msg_buf.reserve(BUFFER_SIZE);
+
+    if (parse(data.data(), data.size()) == false) {
+        throw std::runtime_error("Failed to parse STUN message");
+    }
+}
+
+StunMsgParser::StunMsgParser(StunMsgParser &&other)
+{
+    if (this == &other) {
+        return;
+    }
+
+    m_impl = std::move(other.m_impl);
+}
+
+StunMsgParser &StunMsgParser::operator=(StunMsgParser &&other)
+{
+    if (this != &other) {
+        m_impl = std::move(other.m_impl);
+    }
+
+    return *this;
+}
+
+bool StunMsgParser::parse(const void *data, size_t size)
+{
+    if (data == nullptr || size < STUN_MSG_HDR_SIZE) {
+        return false; // Invalid data or size
+    }
+
+    if (size < STUN_MSG_HDR_SIZE) {
+        return false; // Not enough data for header
+    }
+
+    const stun_msg_hdr *msg_hdr = (const stun_msg_hdr *)data;
+    const stun_attr_hdr *attr_hdr = nullptr;
+    if (!stun_msg_verify(msg_hdr, size)) {
+        return false; // Invalid STUN message header
+    }
+
+    m_impl->msg_hdr.type = stun_msg_type(msg_hdr);
+    m_impl->msg_hdr.length = be16toh(msg_hdr->length);
+    memcpy(m_impl->msg_hdr.tsx_id, msg_hdr->tsx_id, STUN_TRX_ID_SIZE);
+
+    while ((attr_hdr = stun_msg_next_attr(msg_hdr, attr_hdr)) != nullptr) {
+        uint16_t attr_type = be16toh(attr_hdr->type);
+        uint16_t attr_length = be16toh(attr_hdr->length);
+        printf("Parsing attribute type: %u, length: %u\n", attr_type, attr_length);
+
+        switch (attr_type) {
+        case STUN_ATTR_MAPPED_ADDRESS:      /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_RESPONSE_ADDRESS:    /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_CHANGED_ADDRESS:     /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_SOURCE_ADDRESS:      /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_REFLECTED_FROM:      /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_ALTERNATE_SERVER:    /* stun_attr_sockaddr     | RFC 5389  */
+        case STUN_ATTR_OTHER_ADDRESS:       /* stun_attr_sockaddr     | RFC 5780  */
+        case STUN_ATTR_RESPONSE_ORIGIN:     /* stun_attr_sockaddr     | RFC 5780  */
+        {
+            const stun_attr_sockaddr *attr_sock_addr = (const stun_attr_sockaddr *)attr_hdr;
+            struct sockaddr_storage sock_addr;
+            stun_attr_sockaddr_read(attr_sock_addr, (struct sockaddr *)&sock_addr);
+            SocketAddress address((struct sockaddr *)&sock_addr);
+            m_impl->attributes[attr_type] = address;
+            break;
+        }
+        case STUN_ATTR_CHANGE_REQUEST:      /* stun_attr_uint32       | RFC 5780  */
+        case STUN_ATTR_CHANNEL_NUMBER:      /* stun_attr_uint32       | RFC 5766  */
+        case STUN_ATTR_LIFETIME:            /* stun_attr_uint32       | RFC 5766  */
+        case STUN_ATTR_BANDWIDTH:           /* stun_attr_uint32       | RFC 5766  */
+        case STUN_ATTR_REQUESTED_TRANSPORT: /* stun_attr_uint32       | RFC 5766  */
+        case STUN_ATTR_TIMER_VAL:           /* stun_attr_uint32       | RFC 5766  */
+        case STUN_ATTR_PRIORITY:            /* stun_attr_uint32       | RFC 5245  */
+        case STUN_ATTR_CONNECTION_ID:       /* stun_attr_uint32       | RFC 6062  */
+        case STUN_ATTR_FINGERPRINT:         /* stun_attr_uint32       | RFC 5389  */
+        {
+            const stun_attr_uint32 *attr_uint32 = (const stun_attr_uint32 *)attr_hdr;
+            m_impl->attributes[attr_type] = stun_attr_uint32_read(attr_uint32);
+            break;
+        }
+        case STUN_ATTR_USERNAME:            /* stun_attr_varsize      | RFC 5389  */
+        case STUN_ATTR_PASSWORD:            /* stun_attr_varsize      | RFC 5389  */
+        case STUN_ATTR_DATA:                /* stun_attr_varsize      | RFC 5766  */
+        case STUN_ATTR_REALM:               /* stun_attr_varsize      | RFC 5389  */
+        case STUN_ATTR_NONCE:               /* stun_attr_varsize      | RFC 5389  */
+        case STUN_ATTR_PADDING:             /* stun_attr_varsize      | RFC 5780  */
+        case STUN_ATTR_SOFTWARE:            /* stun_attr_varsize      | RFC 5389  */
+        {
+            const stun_attr_varsize *attr_varsize = (const stun_attr_varsize *)attr_hdr;
+            if (attr_length > 0) {
+                std::vector<uint8_t> value(attr_varsize->value, attr_varsize->value + attr_length);
+                StunAttrVarSize stun_attr_varsize;
+                stun_attr_varsize.value = std::move(value);
+                m_impl->attributes[attr_type] = std::move(stun_attr_varsize);
+                printf("Parsed attribute type: %u, value size: %zu\n", attr_type, value.size());
+            } else {
+                m_impl->attributes[attr_type] = StunAttrVarSize();
+            }
+            break;
+        }
+        case STUN_ATTR_MESSAGE_INTEGRITY:   /* stun_attr_msgint       | RFC 5389  */
+        {
+            const stun_attr_msgint *attr_msgint = (const stun_attr_msgint *)attr_hdr;
+            std::vector<uint8_t> value(attr_msgint->hmac, attr_msgint->hmac + attr_length);
+            StunAttrVarSize stun_attr_varsize;
+            stun_attr_varsize.value = std::move(value);
+            m_impl->attributes[attr_type] = std::move(stun_attr_varsize);
+
+            break;
+        }
+        case STUN_ATTR_ERROR_CODE:          /* stun_attr_errcode      | RFC 5389  */
+        {
+            const stun_attr_errcode *attr_errcode = (const stun_attr_errcode *)attr_hdr;
+            StunAttrErrorCode stun_attr_error_code;
+            stun_attr_error_code.error_code = stun_attr_errcode_status(attr_errcode);
+            stun_attr_error_code.error_reason.assign(attr_errcode->err_reason, attr_errcode->err_reason + attr_length - 1);
+            m_impl->attributes[attr_type] = std::move(stun_attr_error_code);
+            break;
+        }
+        case STUN_ATTR_UNKNOWN_ATTRIBUTES:  /* stun_attr_unknown      | RFC 5389  */
+        {
+            const stun_attr_unknown *attr_unknown = (const stun_attr_unknown *)attr_hdr;
+            std::vector<uint16_t> unknown_attrs(attr_unknown->attrs, attr_unknown->attrs + attr_length / sizeof(uint16_t));
+            m_impl->attributes[attr_type] = std::move(unknown_attrs);
+            break;
+        }
+        case STUN_ATTR_XOR_PEER_ADDRESS:    /* stun_attr_xor_sockaddr | RFC 5766  */
+        case STUN_ATTR_XOR_RELAYED_ADDRESS: /* stun_attr_xor_sockaddr | RFC 5766  */
+        case STUN_ATTR_XOR_MAPPED_ADDRESS:  /* stun_attr_xor_sockaddr | RFC 5389  */
+        {
+            const stun_attr_xor_sockaddr *attr_xor_sockaddr = (const stun_attr_xor_sockaddr *)attr_hdr;
+            struct sockaddr_storage sock_addr;
+            stun_attr_xor_sockaddr_read(attr_xor_sockaddr, msg_hdr, (struct sockaddr *)&sock_addr);
+            SocketAddress address((struct sockaddr *)&sock_addr);
+            m_impl->attributes[attr_type] = std::move(address);
+            break;
+        }
+        case STUN_ATTR_REQ_ADDRESS_FAMILY:  /* stun_attr_uint8        | RFC 6156  */
+        case STUN_ATTR_EVEN_PORT:           /* stun_attr_uint8_pad    | RFC 5766  */
+        case STUN_ATTR_DONT_FRAGMENT:       /* empty                  | RFC 5766  */
+        case STUN_ATTR_USE_CANDIDATE:       /* empty                  | RFC 5245  */
+        case STUN_ATTR_RESERVATION_TOKEN:   /* stun_attr_uint64       | RFC 5766  */
+        case STUN_ATTR_ICE_CONTROLLED:      /* stun_attr_uint64       | RFC 5245  */
+        case STUN_ATTR_ICE_CONTROLLING:     /* stun_attr_uint64       | RFC 5245  */
+        case STUN_ATTR_RESPONSE_PORT:       /* stun_attr_uint16_pad   | RFC 5780  */
+        default:
+            break;
+        }
+    }
+
+    return true;
+}
+
+bool StunMsgParser::parse(const std::vector<uint8_t>& data)
+{
+    return parse(data.data(), data.size());
+}
+
+uint16_t StunMsgParser::msgType() const
+{
+    return m_impl->msg_hdr.type;
+}
+
+const uint8_t* StunMsgParser::transactionId() const
+{
+    return m_impl->msg_hdr.tsx_id;
+}
+
+const eular::any *StunMsgParser::getAttribute(uint16_t type) const
+{
+    auto it = m_impl->attributes.find(type);
+    if (it != m_impl->attributes.end()) {
+        return &it->second;
+    }
+
+    return nullptr; // Attribute not found
+}
+
+std::vector<uint16_t> StunMsgParser::getAttributeTypes() const
+{
+    std::vector<uint16_t> types(m_impl->attributes.size());
+    for (const auto &pair : m_impl->attributes) {
+        types.push_back(pair.first);
+    }
+
+    return types;
 }
 
 } // namespace stun
