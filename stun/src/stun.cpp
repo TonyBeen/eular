@@ -92,6 +92,14 @@ void StunMsgBuilder::setTransactionId(const uint8_t transactionId[STUN_TRX_ID_SI
     clearAttributes();
 }
 
+void StunMsgBuilder::setTransactionId(const std::array<uint8_t, STUN_TRX_ID_SIZE>& transactionId)
+{
+    m_impl->tsx_id_set = true;
+    memcpy(m_impl->msg_hdr.tsx_id, transactionId.data(), STUN_TRX_ID_SIZE);
+
+    clearAttributes();
+}
+
 void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
 {
     if (m_impl->tsx_id_set == false) {
@@ -112,7 +120,7 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
         memcpy(m_impl->msg_buf.data(), &m_impl->msg_hdr, STUN_MSG_HDR_SIZE);
     }
 
-    int32_t attr_length = be16toh(m_impl->msg_hdr.length) - STUN_MSG_HDR_SIZE;
+    int32_t attr_length = be16toh(m_impl->msg_hdr.length);
     switch (type) {
     case STUN_ATTR_MAPPED_ADDRESS:      /* stun_attr_sockaddr     | RFC 5389  */
     case STUN_ATTR_RESPONSE_ADDRESS:    /* stun_attr_sockaddr     | RFC 5389  */
@@ -272,7 +280,7 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
 
 void StunMsgBuilder::clearAttributes()
 {
-    m_impl->msg_hdr.length = STUN_MSG_HDR_SIZE;
+    m_impl->msg_hdr.length = 0;
     m_impl->msg_buf.clear();
     m_impl->msg_buf.reserve(BUFFER_SIZE);
 }

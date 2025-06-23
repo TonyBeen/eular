@@ -13,7 +13,12 @@
 #define STUN_TRX_ID_SIZE    12  /* size of the STUN transaction ID */
 #define ENUM_CLASS(em)      (uint32_t)(em)
 
-enum class StunMsgType {
+#define CHANGE_IP   0x04
+#define CHANGE_PORT 0x02
+
+namespace eular {
+namespace stun {
+enum StunMsgType {
     /* Type                                | Value    | Reference */
     STUN_BINDING_REQUEST                   = 0x0001, /* RFC 5389  */
     STUN_BINDING_RESPONSE                  = 0x0101, /* RFC 5389  */
@@ -47,7 +52,7 @@ enum class StunMsgType {
     STUN_CONNECTION_ATTEMPT_ERROR_RESPONSE = 0x011C, /* RFC 6062  */
 };
 
-enum class StunAttributeType {
+enum StunAttributeType {
     /* Attribute                  | Value   | Type                  | Reference */
     STUN_ATTR_MAPPED_ADDRESS      = 0x0001, /* SocketAddress        | RFC 5389  */
     STUN_ATTR_RESPONSE_ADDRESS    = 0x0002, /* SocketAddress        | RFC 5389  */
@@ -89,7 +94,7 @@ enum class StunAttributeType {
     STUN_ATTR_OTHER_ADDRESS       = 0x802C, /* SocketAddress        | RFC 5780  */
 };
 
-enum class StunErrorType {
+enum StunErrorType {
     /* Code                              | Value | Reference */
     STUN_ERROR_TRY_ALTERNATE             = 300, /* RFC 5389  */
     STUN_ERROR_BAD_REQUEST               = 400, /* RFC 5389  */
@@ -110,7 +115,7 @@ enum class StunErrorType {
     STUN_ERROR_INSUFFICIENT_CAPACITY     = 508, /* RFC 5766  */
 };
 
-enum class StunAddrFamily {
+enum StunAddrFamily {
     STUN_IPV4 = 0x01,
     STUN_IPV6 = 0x02
 };
@@ -123,5 +128,8 @@ struct StunAttrErrorCode {
     uint16_t    error_code;
     std::string error_reason;
 };
+
+} // namespace stun
+} // namespace eular
 
 #endif // __STUN_TYPES_H__

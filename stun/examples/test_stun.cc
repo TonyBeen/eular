@@ -14,15 +14,15 @@
 int main()
 {
     eular::stun::StunMsgBuilder builder;
-    builder.setMsgType(ENUM_CLASS(StunMsgType::STUN_BINDING_REQUEST));
+    builder.setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
     uint8_t trx_id[STUN_TRX_ID_SIZE] = {0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67};
     builder.setTransactionId(trx_id);
 
-    StunAttrVarSize username;
+    eular::stun::StunAttrVarSize username;
     const char *name = "testuser";
     username.value.resize(strlen(name));
     memcpy(username.value.data(), name, username.value.size());
-    builder.addAttribute(ENUM_CLASS(StunAttributeType::STUN_ATTR_USERNAME), username);
+    builder.addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_USERNAME), username);
     auto vec = builder.message();
 
     printf("STUN Message(%zu): ", vec.size());
@@ -48,9 +48,9 @@ int main()
     std::cout << std::dec << std::endl;
 
     const auto &attr_types = parser.getAttributeTypes();
-    auto attr = parser.getAttribute(ENUM_CLASS(StunAttributeType::STUN_ATTR_USERNAME));
+    auto attr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_USERNAME));
     if (attr) {
-        const StunAttrVarSize *username_attr = eular::any_cast<StunAttrVarSize>(attr);
+        const eular::stun::StunAttrVarSize *username_attr = eular::any_cast<eular::stun::StunAttrVarSize>(attr);
         if (username_attr) {
             std::cout << "Username: " << std::string(username_attr->value.begin(), username_attr->value.end()) << std::endl;
         } else {

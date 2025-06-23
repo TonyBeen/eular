@@ -37,6 +37,7 @@ public:
 
     void setMsgType(uint16_t msgType);
     void setTransactionId(const uint8_t transactionId[STUN_TRX_ID_SIZE]);
+    void setTransactionId(const std::array<uint8_t, STUN_TRX_ID_SIZE>& transactionId);
 
     void addAttribute(uint16_t type, const eular::any& value);
     void clearAttributes();
