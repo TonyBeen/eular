@@ -163,7 +163,7 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
         return;
     }
     event_del(config->timeout_event);
-    LOGD("Received STUN message of type: %u\n", parser.msgType());
+    LOGD("Received STUN message of type: 0x%02x\n", parser.msgType());
 
     if (parser.msgType() == ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_RESPONSE)) {
         if (config->state == StunState::BINDING_REQUEST_SENT) {
@@ -180,9 +180,23 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
             }
 
             const eular::any *mappedAddr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_MAPPED_ADDRESS));
+            const eular::stun::SocketAddress *mapped_address = nullptr;
             if (mappedAddr) {
-                const eular::stun::SocketAddress *mapped_address = eular::any_cast<eular::stun::SocketAddress>(mappedAddr);
+                mapped_address = eular::any_cast<eular::stun::SocketAddress>(mappedAddr);
                 LOGD("Mapped Address: %s:%d\n", mapped_address->getIp().c_str(), mapped_address->getPort());
+            } else {
+                printf("Received STUN Binding Response without Mapped Address attribute.\n");
+            }
+
+            const eular::any *xorMappedAddr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_XOR_MAPPED_ADDRESS));
+            if (xorMappedAddr) {
+                mapped_address = eular::any_cast<eular::stun::SocketAddress>(xorMappedAddr);
+                LOGD("XOR-Mapped Address: %s:%d\n", mapped_address->getIp().c_str(), mapped_address->getPort());
+            } else {
+                LOGD("Received STUN Binding Response without XOR-Mapped Address attribute.\n");
+            }
+
+            if (mapped_address) {
                 // 获取本地地址
                 struct sockaddr_storage local_addr;
                 socklen_t local_addr_len = sizeof(local_addr);
@@ -205,7 +219,7 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
 
                 config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
                 config->msg_builder->setTransactionId(parser.transactionId());
-                config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), CHANGE_IP | CHANGE_PORT);
+                config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), static_cast<uint32_t>(CHANGE_IP | CHANGE_PORT));
                 if (mapped_address->getIp() == local_ip && mapped_address->getPort() == local_port) {
                     config->open_public = true;
                     // 测试是否带有防火墙
@@ -218,8 +232,12 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
                 config->retries = config->max_retries;
                 sendto_peer(config);
             } else {
-                printf("Received STUN Binding Response without Mapped Address attribute.\n");
-                exit(EXIT_FAILURE);
+                config->state = StunState::FAILED;
+                event_base_loopbreak(config->base);
+                event_free(config->read_event);
+                event_free(config->timeout_event);
+                close(config->sock);
+                return;
             }
         } else if (config->state == StunState::BINDING_REQUEST_FOR_SYMMETRIC) {
             const eular::any *mappedAddr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_MAPPED_ADDRESS));
@@ -231,7 +249,7 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
                     // 锥形NAT, 发送Test III
                     config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
                     config->msg_builder->setTransactionId(parser.transactionId());
-                    config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), CHANGE_PORT);
+                    config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), static_cast<uint32_t>(CHANGE_PORT));
                     LOGD("Sending STUN Binding Request with CHANGE-REQUEST (change port) to test for cone NAT...\n");
                     config->state = StunState::CHANGE_PORT_FOR_RESTRICTED;
                     config->retries = config->max_retries;
@@ -343,7 +361,7 @@ void stun_nat_detect(StunClientConfig *config)
             } else if (config->state == StunState::CHANGE_REQUEST_FOR_CONE) {
                 config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
                 config->msg_builder->setTransactionId(GenerateTransactionTd());
-                config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), CHANGE_PORT);
+                config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), static_cast<uint32_t>(CHANGE_PORT));
                 LOGD("Sending STUN Binding Request with CHANGE-REQUEST (change port) to test for cone NAT...\n");
 
                 // 发送Test I到CHANGED-ADDRESS
@@ -430,7 +448,7 @@ int main(int argc, char **argv)
             }
         },
         &g_config);
-    
+
     if (!request) {
         printf("Could not create DNS request!\n");
         evdns_base_free(dns_base, 0);

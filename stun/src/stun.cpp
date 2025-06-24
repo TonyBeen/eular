@@ -157,8 +157,8 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
     {
         const uint32_t *val = eular::any_cast<uint32_t>(&value);
         if (val != nullptr) {
-            stun_attr_uint8 stun_attr;
-            stun_attr_uint8_init(&stun_attr, type, *val);
+            stun_attr_uint32 stun_attr;
+            stun_attr_uint32_init(&stun_attr, type, *val);
             if (m_impl->msg_buf.capacity() < m_impl->msg_buf.size() + sizeof(stun_attr)) {
                 m_impl->msg_buf.reserve(m_impl->msg_buf.capacity() * 1.5);
             }
@@ -373,7 +373,6 @@ bool StunMsgParser::parse(const void *data, size_t size)
     while ((attr_hdr = stun_msg_next_attr(msg_hdr, attr_hdr)) != nullptr) {
         uint16_t attr_type = be16toh(attr_hdr->type);
         uint16_t attr_length = be16toh(attr_hdr->length);
-        printf("Parsing attribute type: %u, length: %u\n", attr_type, attr_length);
 
         switch (attr_type) {
         case STUN_ATTR_MAPPED_ADDRESS:      /* stun_attr_sockaddr     | RFC 5389  */
