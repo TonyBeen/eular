@@ -109,6 +109,26 @@
     #error "Unknown compiler."
 #endif
 
+#if COMPILER_TYPE == COMPILER_MSVC
+    #ifndef UTILS_STATIC
+        #ifdef UTILS_EXPORTS
+            #define UTILS_API __declspec(dllexport)
+        #else
+            #define UTILS_API __declspec(dllimport)
+        #endif
+    #else
+        #define UTILS_API
+    #endif
+#elif COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG || COMPILER_TYPE == COMPILER_APPLECLANG
+    #ifndef UTILS_STATIC
+        #define UTILS_API __attribute__((visibility("default")))
+    #else
+        #define UTILS_API
+    #endif
+#else
+    #error "Unknown compiler type."
+#endif
+
 // COMPILER
 #if defined (_MSC_VER)
 #define COMPILER_MSVC
@@ -227,6 +247,5 @@
 #else
 #define EULAR_HAVE_FEATURE(f) 0
 #endif
-
 
 #endif // __SYSDEF_H__

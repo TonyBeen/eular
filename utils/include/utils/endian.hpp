@@ -47,7 +47,6 @@ namespace runtime {
 static inline bool IsLittleEngine();
 } // namespace runtime
 
-
 static inline uint64_t byteswap_64(uint64_t host_int)
 {
 #if EULAR_HAVE_BUILTIN(__builtin_bswap64) || (COMPILER_TYPE == COMPILER_GNUC)
@@ -66,7 +65,8 @@ static inline uint64_t byteswap_64(uint64_t host_int)
 #endif
 }
 
-static inline uint32_t byteswap_32(uint32_t host_int) {
+static inline uint32_t byteswap_32(uint32_t host_int)
+{
 #if EULAR_HAVE_BUILTIN(__builtin_bswap64) || (COMPILER_TYPE == COMPILER_GNUC)
   return __builtin_bswap32(host_int);
 #elif (COMPILER_TYPE == COMPILER_MSVC)
@@ -79,7 +79,8 @@ static inline uint32_t byteswap_32(uint32_t host_int) {
 #endif
 }
 
-static inline uint16_t byteswap_16(uint16_t host_int) {
+static inline uint16_t byteswap_16(uint16_t host_int)
+{
 #if EULAR_HAVE_BUILTIN(__builtin_bswap64) || (COMPILER_TYPE == COMPILER_GNUC)
   return __builtin_bswap16(host_int);
 #elif (COMPILER_TYPE == COMPILER_MSVC)

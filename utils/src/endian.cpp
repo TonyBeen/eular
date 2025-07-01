@@ -9,6 +9,8 @@
 
 #include "utils/mutex.h"
 
+static bool g_isLittleEngine = false;
+
 #ifndef BYTE_ORDER
 static eular::once_flag g_endianOnceFlag;
 
@@ -25,8 +27,6 @@ static inline void __IsLittleEngine()
     g_isLittleEngine = (container.oneByte == FIRST_BYTE);
 }
 #endif
-
-static bool g_isLittleEngine = false;
 
 namespace runtime {
 static inline bool IsLittleEngine()
