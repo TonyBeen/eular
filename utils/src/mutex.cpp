@@ -65,7 +65,7 @@ int32_t Mutex::lock()
     do {
         ret = pthread_mutex_lock(&mMutex);
         if (ret == EDEADLK) { // already locked
-            throw Exception(String8::format("deadlock detected: tid = %d mutex: %s", (int32_t)gettid(), mName.c_str()));
+            throw Exception(String8::Format("deadlock detected: tid = %d mutex: %s", (int32_t)gettid(), mName.c_str()));
         } else if (ret == EOWNERDEAD) { // other threads exited abnormally without unlocking the mutex
             pthread_mutex_consistent(&mMutex); // will lock the mutex
             ret = 0;
@@ -79,7 +79,7 @@ void Mutex::unlock()
 {
     int32_t ret = pthread_mutex_unlock(&mMutex);
     if (ret != 0 && ret != EPERM) { // EPERM: the calling thread does not own the mutex
-        throw Exception(String8::format("pthread_mutex_unlock error. return %d", ret));
+        throw Exception(String8::Format("pthread_mutex_unlock error. return %d", ret));
     }
 }
 
@@ -131,7 +131,7 @@ void RecursiveMutex::unlock()
 {
     int32_t ret = pthread_mutex_unlock(&mMutex);
     if (ret != 0 && ret != EPERM) { // EPERM: the calling thread does not own the mutex
-        throw Exception(String8::format("pthread_mutex_unlock error. return %d", ret));
+        throw Exception(String8::Format("pthread_mutex_unlock error. return %d", ret));
     }
 }
 
@@ -203,7 +203,7 @@ Sem::Sem(const char *semPath, uint8_t val)
     // 如果信号量已存在，则后两个参数会忽略，详见man sem_open
     mSem = sem_open(semPath, O_CREAT | O_RDWR, 0664, val);
     if (mSem == SEM_FAILED) {
-        String8 erorMsg = String8::format("sem_open failed. %d %s", errno, strerror(errno));
+        String8 erorMsg = String8::Format("sem_open failed. %d %s", errno, strerror(errno));
         throw Exception(erorMsg);
     }
 
@@ -218,7 +218,7 @@ Sem::Sem(uint8_t valBase)
     }
 
     if (sem_init(mSem, false, valBase)) {
-        throw Exception(String8::format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
+        throw Exception(String8::Format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
     }
     isNamedSemaphore = false;
 }

@@ -622,7 +622,7 @@ int String8::stringcompare(const char *other) const
     return strcmp(mString, other);
 }
 
-int String8::getNext(String8 key, int n)
+int String8::GetNext(String8 key, int n)
 {
     if (n < 2) {
         return 0;
@@ -826,7 +826,7 @@ void String8::toUpper(size_t start, size_t numChars)
     }
 }
 
-int32_t String8::kmp_strstr(const char *val, const char *key)
+int32_t String8::KMP_strstr(const char *val, const char *key)
 {
     if (val == nullptr || key == nullptr) {
         return INVALID_PARAM;
@@ -842,7 +842,7 @@ int32_t String8::kmp_strstr(const char *val, const char *key)
             }
             // j > 0: 表示当前存在匹配上的一段字符串，但是不完全匹配，所以需要偏移
             if (j > 0) {
-                i += (j - getNext(String8(key, j), j));
+                i += (j - GetNext(String8(key, j), j));
             } else { // 没有匹配到一个字符则只移动一个位置
                 ++i;
             }
@@ -855,23 +855,23 @@ int32_t String8::kmp_strstr(const char *val, const char *key)
     return -1;
 }
 
-size_t String8::hash(const String8 &obj)
+size_t String8::Hash(const String8 &obj)
 {
     return std::_Hash_impl::hash(obj.c_str(), obj.length());
 }
 
-String8 String8::format(const char* fmt, ...)
+String8 String8::Format(const char* fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
 
-    String8 result = formatV(fmt, args);
+    String8 result = FormatV(fmt, args);
 
     va_end(args);
     return result;
 }
 
-String8 String8::formatV(const char* fmt, va_list args)
+String8 String8::FormatV(const char* fmt, va_list args)
 {
     String8 result;
     int len = 0;

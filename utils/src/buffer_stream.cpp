@@ -133,7 +133,7 @@ BufferStream &BufferStream::operator<<(const std::string &item)
 BufferStream &BufferStream::operator>>(bool &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -142,7 +142,7 @@ BufferStream &BufferStream::operator>>(bool &item)
 BufferStream &BufferStream::operator>>(int8_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -151,7 +151,7 @@ BufferStream &BufferStream::operator>>(int8_t &item)
 BufferStream &BufferStream::operator>>(uint8_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -160,7 +160,7 @@ BufferStream &BufferStream::operator>>(uint8_t &item)
 BufferStream &BufferStream::operator>>(wchar_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -169,7 +169,7 @@ BufferStream &BufferStream::operator>>(wchar_t &item)
 BufferStream &BufferStream::operator>>(int16_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -178,7 +178,7 @@ BufferStream &BufferStream::operator>>(int16_t &item)
 BufferStream &BufferStream::operator>>(uint16_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -187,7 +187,7 @@ BufferStream &BufferStream::operator>>(uint16_t &item)
 BufferStream &BufferStream::operator>>(float &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -196,7 +196,7 @@ BufferStream &BufferStream::operator>>(float &item)
 BufferStream &BufferStream::operator>>(int32_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -205,7 +205,7 @@ BufferStream &BufferStream::operator>>(int32_t &item)
 BufferStream &BufferStream::operator>>(uint32_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -214,7 +214,7 @@ BufferStream &BufferStream::operator>>(uint32_t &item)
 BufferStream &BufferStream::operator>>(double &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -223,7 +223,7 @@ BufferStream &BufferStream::operator>>(double &item)
 BufferStream &BufferStream::operator>>(int64_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -232,7 +232,7 @@ BufferStream &BufferStream::operator>>(int64_t &item)
 BufferStream &BufferStream::operator>>(uint64_t &item)
 {
     if (!read(&item, sizeof(item))) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return *this;
@@ -245,7 +245,7 @@ BufferStream &BufferStream::operator>>(std::string &item)
     char ch = 1;
     do {
         if (!read(&ch, sizeof(ch))) {
-            throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+            throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
         }
         temp.push_back(ch);
     } while (ch != '\0');
@@ -268,7 +268,7 @@ void BufferStream::write(const void *data, uint32_t size)
 
         size_t realCopySize = m_buffer->set(pBegin, copySize);
         if (eular_unlikely(realCopySize != copySize)) {
-            throw Exception(String8::format("Not enough memory. [%s:%d]", __FILE__, __LINE__));
+            throw Exception(String8::Format("Not enough memory. [%s:%d]", __FILE__, __LINE__));
         }
 
         m_rpos = 0;

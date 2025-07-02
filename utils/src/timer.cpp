@@ -253,7 +253,7 @@ int TimerManager::threadWorkFunction(void *arg)
         }
 
         if (n < 0) {
-            throw Exception(String8::format("epoll_wait error. [%d, %s]", errno, strerror(errno)));
+            throw Exception(String8::Format("epoll_wait error. [%d, %s]", errno, strerror(errno)));
             break;
         }
     }

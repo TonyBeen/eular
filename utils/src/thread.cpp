@@ -63,7 +63,7 @@ bool ThreadBase::forceExit()
     pthread_cancel(mTid);
     int ret = pthread_join(mTid, nullptr);
     if (ret) {
-        String8 msg = String8::format("pthread_join error. [%d,%s]", errno, strerror(errno));
+        String8 msg = String8::Format("pthread_join error. [%d,%s]", errno, strerror(errno));
         throw eular::Exception(msg);
     }
 
@@ -91,7 +91,7 @@ int ThreadBase::run(size_t stackSize)
     int ret = pthread_create(&mTid, &attr, threadloop, this);
     pthread_attr_destroy(&attr);
     if (ret != 0) {
-        throw Exception(String8::format("pthread_create error %s\n", strerror(ret)));
+        throw Exception(String8::Format("pthread_create error %s\n", strerror(ret)));
     }
     mSemWait.timedwait(1000); // 等待线程启动完毕
 
@@ -156,7 +156,7 @@ Thread::Thread(std::function<void()> callback, const String8 &threadName) :
     int ret = pthread_create(&mTid, &attr, &Thread::entrance, this);
     pthread_attr_destroy(&attr);
     if (ret) {
-        String8 msg = String8::format("pthread_create error. [%d,%s]", errno, strerror(errno));
+        String8 msg = String8::Format("pthread_create error. [%d,%s]", errno, strerror(errno));
         throw eular::Exception(msg);
     }
     mSemaphore.timedwait(1000);
@@ -204,7 +204,7 @@ void Thread::join()
     if (mShouldJoin && mTid) {
         int ret = pthread_join(mTid, nullptr);
         if (ret) {
-            String8 msg = String8::format("pthread_join error. [%d,%s]", errno, strerror(errno));
+            String8 msg = String8::Format("pthread_join error. [%d,%s]", errno, strerror(errno));
             throw eular::Exception(msg);
         }
         mTid = 0;

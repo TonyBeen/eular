@@ -372,8 +372,8 @@ std::unordered_map<std::string, std::string> getargopt(int argc, char **argv, co
     while ((c = ::getopt(argc, argv, opt)) > 0) {
         uint8_t index = static_cast<uint8_t>(c);
         if (charMap[index]) {
-            result.emplace(eular::String8::format("-%c", c).c_str(), optarg ? optarg : "");
-            //result.insert(std::make_pair(eular::String8::format("-%c", c).c_str(), optarg ? optarg : "null"));
+            result.emplace(eular::String8::Format("-%c", c).c_str(), optarg ? optarg : "");
+            //result.insert(std::make_pair(eular::String8::Format("-%c", c).c_str(), optarg ? optarg : "null"));
         }
     }
 

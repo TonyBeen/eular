@@ -55,7 +55,7 @@ public:
     int                 append(const char* other);
     int                 append(const char* other, size_t numChars);
 
-    static String8      format(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+    static String8      Format(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
     int                 appendFormat(const char* fmt, ...) __attribute__((format (printf, 2, 3)));
 
     String8&            operator=(const String8& other);
@@ -122,21 +122,21 @@ public:
     void                toUpper();
     void                toUpper(size_t start, size_t numChars);
     // 未匹配到或参数错误返回负值，否则返回匹配到的字符串位置
-    static int32_t      kmp_strstr(const char *val, const char *key);
-    static size_t       hash(const String8 &obj);
+    static int32_t      KMP_strstr(const char *val, const char *key);
+    static size_t       Hash(const String8 &obj);
 
 private:
-    friend std::ostream&   operator<<(std::ostream &out, const String8& in);
+    friend std::ostream&operator<<(std::ostream &out, const String8& in);
     char*               getBuffer(size_t numChars = 0);
     void                release();
-    static String8      formatV(const char* fmt, va_list args);
+    static String8      FormatV(const char* fmt, va_list args);
     int                 appendFormatV(const char* fmt, va_list args);
     void                setTo(const String8& other);
     int                 setTo(const char* other);
     int                 setTo(const char* other, size_t numChars);
     int                 stringcompare(const char *other) const;
     // kmp next数组获取，非-1版本
-    static int          getNext(String8 key, int n);
+    static int          GetNext(String8 key, int n);
     void                detach();
     bool                removeOne(const char *str);
 
@@ -154,7 +154,7 @@ namespace std {
     template<>
     struct hash<eular::String8> : public __hash_base<size_t, eular::String8> {
         size_t operator()(const eular::String8 &obj) const {
-            return eular::String8::hash(obj);
+            return eular::String8::Hash(obj);
         }
     };
 }

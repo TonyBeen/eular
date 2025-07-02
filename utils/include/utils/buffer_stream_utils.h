@@ -34,7 +34,7 @@ BufferStream &operator>>(BufferStream &stream, T (&item)[size])
     static_assert(!std::is_same<T, nullptr_t>::value, "no support nullptr_t");
     if (std::is_fundamental<T>::value) {
         if (!stream.read(item, sizeof(T) * size)) {
-            throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+            throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
         }
     } else {
         for (size_t i = 0; i < size; ++i) {
@@ -57,7 +57,7 @@ template<size_t size>
 BufferStream &operator>>(BufferStream &stream, char (&buffer)[size])
 {
     if (!stream.read(buffer, size)) {
-        throw Exception(String8::format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
+        throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
     }
 
     return stream;
