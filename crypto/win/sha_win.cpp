@@ -7,9 +7,7 @@
 
 #include "sha.h"
 
-// #if defined(HAVE_WINDOWS_CRYPTO)
-#if 1
-
+#if defined(HAVE_WINDOWS_CRYPTO)
 
 namespace eular {
 namespace crypto {

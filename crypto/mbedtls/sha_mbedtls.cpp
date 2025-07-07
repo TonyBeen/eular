@@ -14,6 +14,8 @@
 #include <mbedtls/sha256.h>
 #include <mbedtls/sha512.h>
 
+#include "crypto_utils.h"
+
 namespace eular {
 namespace crypto {
 class SHAContext {
@@ -80,14 +82,7 @@ std::string SHA::Hash(int32_t type, const void *data, int32_t bytes)
         return std::string();
     }
 
-    std::string hash;
-    hash.reserve(2 * digest_length);
-    for (int i = 0; i < digest_length; i++) {
-        static const char dec2hex[16+1] = "0123456789abcdef";
-        hash += dec2hex[(digest[i] >> 4) & 15];
-        hash += dec2hex[ digest[i]       & 15];
-    }
-    return hash;
+    return utils::Hex2String(digest, digest_length);
 }
 
 int32_t SHA::init(int32_t type)
@@ -178,13 +173,7 @@ int32_t SHA::finalize(std::string &hash)
         return result;
     }
 
-    int32_t digest_length = hashSize();
-    hash.reserve(2 * digest_length);
-    for (int i = 0; i < digest_length; i++) {
-        static const char dec2hex[16+1] = "0123456789abcdef";
-        hash += dec2hex[(digest[i] >> 4) & 15];
-        hash += dec2hex[ digest[i]       & 15];
-    }
+    hash = utils::Hex2String(digest, hashSize());
     return 0;
 }
 

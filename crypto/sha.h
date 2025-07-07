@@ -5,8 +5,8 @@
     > Created Time: 2025年07月04日 星期五 15时02分54秒
  ************************************************************************/
 
-#ifndef __SHA_H__
-#define __SHA_H__
+#ifndef __CRYPTO_SHA_H__
+#define __CRYPTO_SHA_H__
 
 #include <stdint.h>
 #include <string>
@@ -93,4 +93,4 @@ private:
 
 } // namespace crypto
 } // namespace eular
-#endif // __SHA_H__
+#endif // __CRYPTO_SHA_H__

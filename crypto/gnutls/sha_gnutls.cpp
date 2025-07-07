@@ -14,6 +14,8 @@
 #include <nettle/sha1.h>
 #include <nettle/sha2.h>
 
+#include "crypto_utils.h"
+
 namespace eular {
 namespace crypto {
 class SHAContext {
@@ -39,16 +41,18 @@ std::string SHA::Hash(int32_t type, const void *data, int32_t bytes)
     }
 
     SHA sha;
-    if (sha.init(type) != 0) {
-        return std::string();
-    }
-    if (sha.update(data, bytes) != 0) {
-        return std::string();
-    }
     std::string hash;
-    if (sha.finalize(hash) != 0) {
-        return std::string();
-    }
+    do {
+        if (sha.init(type) != 0) {
+            break;
+        }
+        if (sha.update(data, bytes) != 0) {
+            break;
+        }
+        if (sha.finalize(hash) != 0) {
+            break;
+        }
+    } while (0);
     return hash;
 }
 
@@ -138,13 +142,7 @@ int32_t SHA::finalize(std::string &hash)
         return result;
     }
 
-    int32_t digest_length = hashSize();
-    hash.reserve(2 * digest_length);
-    for (int i = 0; i < digest_length; i++) {
-        static const char dec2hex[16+1] = "0123456789abcdef";
-        hash += dec2hex[(digest[i] >> 4) & 15];
-        hash += dec2hex[ digest[i]       & 15];
-    }
+    hash = utils::Hex2String(digest, hashSize());
     return 0;
 }
 
