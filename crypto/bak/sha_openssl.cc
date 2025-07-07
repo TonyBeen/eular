@@ -29,7 +29,7 @@ bool Sha::reinit(SHA_TYPE whichType)
         SHA512_Init(&mSha512Ctx);
         break;
     default:
-        throw Exception(String8::format("Invalid SHA_TYPE type: %d", (int)whichType));
+        throw Exception(String8::Format("Invalid SHA_TYPE type: %d", (int)whichType));
         break;
     }
 
