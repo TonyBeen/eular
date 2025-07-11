@@ -24,8 +24,8 @@ class Base64
     Base64(const Base64&) = delete;
     Base64& operator=(const Base64&) = delete;
 public:
-    Base64();
-    ~Base64();
+    Base64() = default;
+    ~Base64() = default;
 
     Base64(Base64 &&other);
     Base64& operator=(Base64 &&other);
@@ -47,6 +47,7 @@ public:
 
     std::string encrypt(const void *data, size_t len);
     std::string encryptFinal();
+
 private:
     std::unique_ptr<Base64Context>  m_context;
 };

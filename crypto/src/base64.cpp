@@ -16,15 +16,6 @@ public:
     struct base64_state  _ctx;
 };
 
-Base64::Base64()
-{
-}
-
-Base64::~Base64()
-{
-    m_context.reset();
-}
-
 Base64::Base64(Base64 &&other)
 {
     std::swap(m_context, other.m_context);
