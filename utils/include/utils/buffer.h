@@ -49,10 +49,10 @@ public:
     void        resize(size_t sz);
 
     std::string dump()  const;
-    static size_t hash(const ByteBuffer &buf);
+    static size_t Hash(const ByteBuffer &buf);
     bool        operator==(const ByteBuffer &other) const;
 
-    static void *glibc_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len);
+    static void *GLIBC_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len);
 
 private:
     size_t      calculate(size_t);
@@ -73,7 +73,7 @@ namespace std {
     template<>
     struct hash<eular::ByteBuffer> : public __hash_base<size_t, eular::ByteBuffer> {
         size_t operator()(const eular::ByteBuffer &obj) const {
-            return eular::ByteBuffer::hash(obj);
+            return eular::ByteBuffer::Hash(obj);
         }
     };
 }

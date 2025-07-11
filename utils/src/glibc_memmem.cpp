@@ -317,7 +317,7 @@ static void *__glibc_memmem(const void *haystack, size_t hs_len, const void *nee
 }
 
 namespace eular {
-void *ByteBuffer::glibc_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len)
+void *ByteBuffer::GLIBC_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len)
 {
     return __glibc_memmem(haystack, hs_len, needle, ne_len);
 }

@@ -294,7 +294,7 @@ std::string ByteBuffer::dump() const
     return ret;
 }
 
-size_t ByteBuffer::hash(const ByteBuffer &buf)
+size_t ByteBuffer::Hash(const ByteBuffer &buf)
 {
     return std::_Hash_impl::hash(buf.const_data(), buf.size());
 }
