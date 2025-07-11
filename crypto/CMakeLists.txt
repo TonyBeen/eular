@@ -1,12 +1,17 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 
-project(utils VERSION 1.0.0)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+if (${CMAKE_VERSION} VERSION_LESS "3.17.0")
+    list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake-compat)
+endif()
+
+project(cryptopp VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 11)
 
-option(UTILS_STATIC_LIB "Build static library" ON)
-option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
+option(CRYPTOPP_STATIS_LIB "Build static library" ON)
+option(CRYPTOPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" ON)
 
 option(ENABLE_GNUTLS "Enable use of GnuTLS" ON)
@@ -22,14 +27,41 @@ if(ENABLE_DEBUG MATCHES "ON")
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
+include(CheckFunctionExists)
+include(CheckIncludeFiles)
+include(CheckLibraryExists)
+include(CheckSymbolExists)
+include(CheckTypeSize)
+include(CheckCSourceRuns)
+include(CheckCSourceCompiles)
+include(CheckStructHasMember)
+include(TestBigEndian)
+include(GNUInstallDirs)
+
 if(ENABLE_GNUTLS)
-    find_package(Nettle 3.0)
-    find_package(GnuTLS)
+    find_package(Nettle)
+
+    # if (NOT NETTLE_FOUND)
+    #     check_library_exists(nettle nettle_version_major "" NETTLE_FOUND)
+    #     if(NETTLE_FOUND)
+    #         find_library(NETTLE_LIB nettle)
+    #         if(NETTLE_LIB)
+    #             add_library(nettle SHARED IMPORTED GLOBAL) # GLOBAL 使目标全局可见
+    #             set_target_properties(nettle PROPERTIES
+    #                 IMPORTED_LOCATION "${NETTLE_LIB}"
+    #                 INTERFACE_INCLUDE_DIRECTORIES "${NETTLE_INCLUDE_DIR}"
+    #             )
+    #             add_library(Nettle::Nettle ALIAS nettle)
+    #         endif()
+    #     endif()
+    # endif()
 endif()
 
 if(ENABLE_MBEDTLS)
-    find_package(MbedTLS 1.0)
+    find_package(MbedTLS)
 endif()
+
+message(STATUS "MBEDTLS_FOUND: ${MBEDTLS_FOUND}")
 
 if(ENABLE_OPENSSL)
     find_package(OpenSSL)
@@ -51,7 +83,7 @@ elseif (OPENSSL_FOUND)
     set(HAVE_CRYPTO 1)
     set(HAVE_OPENSSL 1)
     add_compile_definitions(HAVE_OPENSSL)
-elseif (GNUTLS_FOUND AND NETTLE_FOUND)
+elseif (NETTLE_FOUND)
     set(HAVE_CRYPTO 1)
     set(HAVE_GNUTLS 1)
     add_compile_definitions(HAVE_GNUTLS)
@@ -77,49 +109,62 @@ message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
 
-file(GLOB HEADER_LIST       "include/utils/*.h")
-file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
-list(APPEND HEADER_LIST ${HPP_HEADER_LIST})
+file(GLOB HEADER_LIST       "${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/*.h")
 
-file(GLOB SRC_LIST          "src/*.cpp")
+set(SRC_LIST
+)
+file(GLOB SRC_OPENSSL_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/*.cpp")
+file(GLOB SRC_GNUTLS_LIST   "${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/*.cpp")
+file(GLOB SRC_MBEDTLS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/*.cpp")
+file(GLOB SRC_WINDOWS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/win/*.cpp")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "Linux")
     add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
-    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-error=deprecated-declarations -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
 endif()
 
-# link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
-
 # build the static library
-if(UTILS_STATIC_LIB MATCHES "ON")
-    add_library(utils_static STATIC ${SRC_LIST} ${HEADER_LIST})
-    add_library(eular::utils_static ALIAS utils_static)
+if(CRYPTOPP_STATIS_LIB MATCHES "ON")
+    add_library(cryptopp_static STATIC ${SRC_LIST})
+    add_library(eular::cryptopp_static ALIAS cryptopp_static)
 
-    target_include_directories(utils_static
+    if(HAVE_WINDOWS_CRYPTO)
+        target_sources(cryptopp_static PUBLIC ${SRC_WINDOWS_LIST})
+        target_link_libraries(cryptopp_static PUBLIC bcrypt)
+    elseif(HAVE_GNUTLS)
+        target_sources(cryptopp_static PUBLIC ${SRC_GNUTLS_LIST})
+        target_link_libraries(cryptopp_static PUBLIC Nettle::Nettle)
+    elseif(HAVE_OPENSSL)
+        target_sources(cryptopp_static PUBLIC ${SRC_OPENSSL_LIST})
+        target_link_libraries(cryptopp_static PUBLIC OpenSSL::Crypto)
+    elseif(HAVE_MBEDTLS)
+        target_sources(cryptopp_static PUBLIC ${SRC_MBEDTLS_LIST})
+        target_link_libraries(cryptopp_static PUBLIC MbedTLS::MbedTLS)
+    endif()
+
+    target_include_directories(cryptopp_static
         PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/crypto>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
     )
 
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libiconv.a pthread)
-
     target_compile_options(
-        utils_static PRIVATE
+        cryptopp_static PRIVATE
         ${CXX_COMPILER_FLAGS}
     )
 
     set_target_properties (
-        utils_static
+        cryptopp_static
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
     )
-    set_property(TARGET utils_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+    set_property(TARGET cryptopp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
     if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
-        install(TARGETS utils_static
+        install(TARGETS cryptopp_static
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
             LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
@@ -127,35 +172,47 @@ if(UTILS_STATIC_LIB MATCHES "ON")
 endif()
 
 #build dynamic library
-if(UTILS_DYNAMIC_LIB MATCHES "ON")
-    add_library(utils SHARED ${SRC_LIST} ${HEADER_LIST})
-    add_library(eular::utils ALIAS utils)
+if(CRYPTOPP_DYNAMIC_LIB MATCHES "ON")
+    add_library(cryptopp SHARED ${SRC_LIST})
+    add_library(eular::cryptopp ALIAS cryptopp)
 
-    target_include_directories(utils
+    target_include_directories(cryptopp
         PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/crypto>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
     )
 
-    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libiconv.a pthread)
+    if(HAVE_WINDOWS_CRYPTO)
+        target_sources(cryptopp PUBLIC ${SRC_WINDOWS_LIST})
+        target_link_libraries(cryptopp PUBLIC bcrypt)
+    elseif(HAVE_GNUTLS)
+        target_sources(cryptopp PUBLIC ${SRC_GNUTLS_LIST})
+        target_link_libraries(cryptopp PUBLIC Nettle::Nettle)
+    elseif(HAVE_OPENSSL)
+        target_sources(cryptopp PUBLIC ${SRC_OPENSSL_LIST})
+        target_link_libraries(cryptopp PUBLIC OpenSSL::Crypto)
+    elseif(HAVE_MBEDTLS)
+        target_sources(cryptopp PUBLIC ${SRC_MBEDTLS_LIST})
+        target_link_libraries(cryptopp PUBLIC MbedTLS::MbedTLS)
+    endif()
 
     target_compile_options(
-        utils PRIVATE
+        cryptopp PRIVATE
         ${CXX_COMPILER_FLAGS}
     )
 
     set_target_properties (
-        utils
+        cryptopp
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
 
-    set_property(TARGET utils PROPERTY LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+    set_property(TARGET cryptopp PROPERTY LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
     if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
-        install(TARGETS utils
+        install(TARGETS cryptopp
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
             LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
@@ -163,16 +220,16 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
 endif()
 
 if(NOT SKIP_INSTALL_HEADERS AND NOT SKIP_INSTALL_ALL)
-    install(FILES ${HEADER_LIST} DESTINATION "${INSTALL_INC_DIR}/utils")
+    install(FILES ${HEADER_LIST} DESTINATION "${INSTALL_INC_DIR}/crypto")
 endif()
 
 # uninstall target
 if(NOT TARGET uninstall)
-  configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake"
-    IMMEDIATE @ONLY)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake"
+        IMMEDIATE @ONLY)
 
-  add_custom_target(uninstall
-    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake)
+    add_custom_target(uninstall
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake)
 endif()

@@ -45,7 +45,7 @@ bool Aes::reinit(const uint8_t *userKey, uint32_t userKeyLen, Aes::KeyType userK
     case Aes::KeyType::AES256:
         break;
     default:
-        throw(Exception(String8::format("Invalid AES Key Type: %d", userKeytype)));
+        throw(Exception(String8::Format("Invalid AES Key Type: %d", userKeytype)));
     }
 
     switch (encodeType) {
@@ -53,7 +53,7 @@ bool Aes::reinit(const uint8_t *userKey, uint32_t userKeyLen, Aes::KeyType userK
     case EncodeType::AESECB:
         break;
     default:
-        throw(Exception(String8::format("Invalid AES Encode Type: %d", encodeType)));
+        throw(Exception(String8::Format("Invalid AES Encode Type: %d", encodeType)));
     }
 
     if (userKeyLen == 0 || userKeyLen > userKeytype) {
