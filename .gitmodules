@@ -1,0 +1,3 @@
+[submodule "crypto/3rd_party/base64"]
+	path = crypto/3rd_party/base64
+	url = git@github.com:aklomp/base64.git
