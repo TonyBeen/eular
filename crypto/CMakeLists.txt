@@ -10,7 +10,7 @@ project(cryptopp VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 11)
 
-option(CRYPTOPP_STATIS_LIB "Build static library" ON)
+option(CRYPTOPP_STATIS_LIB "Build static library" OFF)
 option(CRYPTOPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" ON)
 
@@ -38,30 +38,15 @@ include(CheckStructHasMember)
 include(TestBigEndian)
 include(GNUInstallDirs)
 
+add_subdirectory(3rd_party/base64)
+
 if(ENABLE_GNUTLS)
     find_package(Nettle)
-
-    # if (NOT NETTLE_FOUND)
-    #     check_library_exists(nettle nettle_version_major "" NETTLE_FOUND)
-    #     if(NETTLE_FOUND)
-    #         find_library(NETTLE_LIB nettle)
-    #         if(NETTLE_LIB)
-    #             add_library(nettle SHARED IMPORTED GLOBAL) # GLOBAL 使目标全局可见
-    #             set_target_properties(nettle PROPERTIES
-    #                 IMPORTED_LOCATION "${NETTLE_LIB}"
-    #                 INTERFACE_INCLUDE_DIRECTORIES "${NETTLE_INCLUDE_DIR}"
-    #             )
-    #             add_library(Nettle::Nettle ALIAS nettle)
-    #         endif()
-    #     endif()
-    # endif()
 endif()
 
 if(ENABLE_MBEDTLS)
     find_package(MbedTLS)
 endif()
-
-message(STATUS "MBEDTLS_FOUND: ${MBEDTLS_FOUND}")
 
 if(ENABLE_OPENSSL)
     find_package(OpenSSL)
@@ -111,8 +96,7 @@ set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation 
 
 file(GLOB HEADER_LIST       "${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/*.h")
 
-set(SRC_LIST
-)
+file(GLOB SRC_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB SRC_OPENSSL_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/*.cpp")
 file(GLOB SRC_GNUTLS_LIST   "${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/*.cpp")
 file(GLOB SRC_MBEDTLS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/*.cpp")
@@ -142,6 +126,7 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
         target_sources(cryptopp_static PUBLIC ${SRC_MBEDTLS_LIST})
         target_link_libraries(cryptopp_static PUBLIC MbedTLS::MbedTLS)
     endif()
+    target_link_libraries(cryptopp_static PUBLIC base64)
 
     target_include_directories(cryptopp_static
         PUBLIC
@@ -197,6 +182,7 @@ if(CRYPTOPP_DYNAMIC_LIB MATCHES "ON")
         target_sources(cryptopp PUBLIC ${SRC_MBEDTLS_LIST})
         target_link_libraries(cryptopp PUBLIC MbedTLS::MbedTLS)
     endif()
+    target_link_libraries(cryptopp PUBLIC base64)
 
     target_compile_options(
         cryptopp PRIVATE
