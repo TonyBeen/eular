@@ -12,11 +12,12 @@ set(CMAKE_C_STANDARD 11)
 
 option(CRYPTOPP_STATIS_LIB "Build static library" OFF)
 option(CRYPTOPP_DYNAMIC_LIB "Build dynamic library" ON)
+option(BUILD_EXAMPLE "Build example" ON)
 option(ENABLE_DEBUG "Enable debug symbol" ON)
 
-option(ENABLE_GNUTLS "Enable use of GnuTLS" ON)
+option(ENABLE_GNUTLS "Enable use of GnuTLS" OFF)
 option(ENABLE_MBEDTLS "Enable use of mbed TLS" ON)
-option(ENABLE_OPENSSL "Enable use of OpenSSL" ON)
+option(ENABLE_OPENSSL "Enable use of OpenSSL" OFF)
 option(ENABLE_WINDOWS_CRYPTO "Enable use of Windows cryptography libraries" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -106,6 +107,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "Linux")
     add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
     add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-error=deprecated-declarations -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+endif()
+
+if(BUILD_EXAMPLE MATCHES "ON")
+    add_subdirectory(examples)
 endif()
 
 # build the static library

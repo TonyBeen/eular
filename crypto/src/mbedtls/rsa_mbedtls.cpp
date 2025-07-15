@@ -204,7 +204,7 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     encryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_encrypt(m_context->_publicRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    static_cast<int32_t>(blockLen), &ptr[i], blockVec.data());
         if (status != 0) {
@@ -234,7 +234,7 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN(keySize, dataSize - i);
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_publicRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    &blockLen, &ptr[i], blockVec.data(), keySize);
         if (status != 0) {
@@ -264,7 +264,7 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::string &decry
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN(keySize, dataSize - i);
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_publicRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    &blockLen, &ptr[i], blockVec.data(), keySize);
         if (status != 0) {
@@ -294,7 +294,7 @@ int32_t Rsa::privateEncrypt(const void *data, size_t dataSize, std::vector<uint8
     encryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_encrypt(m_context->_privateRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    static_cast<int32_t>(blockLen), &ptr[i], blockVec.data());
         if (status != 0) {
@@ -324,7 +324,7 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN(keySize, dataSize - i);
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_privateRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    &blockLen, &ptr[i], blockVec.data(), keySize);
         if (status < 0) {
@@ -354,7 +354,7 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::string &decr
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN(keySize, dataSize - i);
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_privateRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
                                                    &blockLen, &ptr[i], blockVec.data(), keySize);
         if (status < 0) {
