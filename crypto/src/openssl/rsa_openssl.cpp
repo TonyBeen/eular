@@ -216,7 +216,7 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     encryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t encryptedSize = RSA_public_encrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                    blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
         if (encryptedSize < 0) {
@@ -245,7 +245,7 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                    blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {
@@ -275,7 +275,7 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::string &decry
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                    blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {
@@ -305,7 +305,7 @@ int32_t Rsa::privateEncrypt(const void *data, size_t dataSize, std::vector<uint8
     encryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t encryptedSize = RSA_private_encrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
         if (encryptedSize < 0) {
@@ -335,7 +335,7 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t decryptedSize = RSA_private_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {
@@ -365,7 +365,7 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::string &decr
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN(blockSize, dataSize - i);
+        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
         int32_t decryptedSize = RSA_private_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {

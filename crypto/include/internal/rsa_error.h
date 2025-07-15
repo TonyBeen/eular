@@ -59,7 +59,7 @@ enum {
         m = "Unknown error";            \
         break;                          \
     default:                            \
-        m = NULL;                       \ 
+        m = NULL;                       \
         break;                          \
     };
 
