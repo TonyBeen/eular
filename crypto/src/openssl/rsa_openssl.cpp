@@ -270,7 +270,7 @@ int32_t Rsa::verifySignature(const void *signatureData, size_t signatureSize, co
     if (blockSize < 0) {
         return blockSize; // Error in calculating padding size
     }
-    if (signatureSize != keySize) {
+    if (signatureSize != (uint32_t)keySize) {
         return RSA_ERROR_INVALID_PARAMETER;
     }
 
@@ -302,7 +302,7 @@ int32_t Rsa::sign(const std::vector<uint8_t> &hashVec, std::vector<uint8_t> &sig
     if (status != 1) {
         return (int32_t)ERR_get_error();
     }
-    assert(siglen == keySize);
+    assert(siglen == (uint32_t)keySize);
     signatureVec.resize(siglen);
     return RSA_ERROR_NONE;
 }
