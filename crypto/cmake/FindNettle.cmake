@@ -74,36 +74,44 @@ find_package(PkgConfig)
 pkg_check_modules(PC_Nettle QUIET nettle)
 
 find_path(Nettle_INCLUDE_DIR
-  NAMES nettle/aes.h nettle/md5.h nettle/pbkdf2.h nettle/ripemd160.h nettle/sha.h
-  PATHS ${PC_Nettle_INCLUDE_DIRS}
+    NAMES nettle/aes.h nettle/md5.h nettle/pbkdf2.h nettle/ripemd160.h nettle/sha.h
+    PATHS ${PC_Nettle_INCLUDE_DIRS}
 )
 find_library(Nettle_LIBRARY
-  NAMES nettle
-  PATHS ${PC_Nettle_LIBRARY_DIRS}
+    NAMES nettle
+    PATHS ${PC_Nettle_LIBRARY_DIRS}
+)
+find_library(Hogweed_LIBRARY
+    NAMES hogweed
+    PATHS ${PC_Hogweed_LIBRARY_DIRS}
+)
+find_library(Gmp_LIBRARY
+    NAMES gmp
+    PATHS ${PC_Gmp_LIBRARY_DIRS}
 )
 
 if(Nettle_INCLUDE_DIR)
-  if(PC_Nettle_VERSION)
-    set(Nettle_VERSION ${PC_Nettle_VERSION})
-  elseif(EXISTS ${Nettle_INCLUDE_DIR}/nettle/version.h)
-    # Extract version information from the header file
-    # This file only exists in nettle>=3.0
-    file(STRINGS ${Nettle_INCLUDE_DIR}/nettle/version.h _ver_major_line
-         REGEX "^#define NETTLE_VERSION_MAJOR  *[0-9]+"
-         LIMIT_COUNT 1)
-    string(REGEX MATCH "[0-9]+"
-           Nettle_MAJOR_VERSION "${_ver_major_line}")
-    file(STRINGS ${Nettle_INCLUDE_DIR}/nettle/version.h _ver_minor_line
-         REGEX "^#define NETTLE_VERSION_MINOR  *[0-9]+"
-         LIMIT_COUNT 1)
-    string(REGEX MATCH "[0-9]+"
-           Nettle_MINOR_VERSION "${_ver_minor_line}")
-    set(Nettle_VERSION "${Nettle_MAJOR_VERSION}.${Nettle_MINOR_VERSION}")
-    unset(_ver_major_line)
-    unset(_ver_minor_line)
-  else()
-    set(Nettle_VERSION "1.0")
-  endif()
+    if(PC_Nettle_VERSION)
+        set(Nettle_VERSION ${PC_Nettle_VERSION})
+    elseif(EXISTS ${Nettle_INCLUDE_DIR}/nettle/version.h)
+        # Extract version information from the header file
+        # This file only exists in nettle>=3.0
+        file(STRINGS ${Nettle_INCLUDE_DIR}/nettle/version.h _ver_major_line
+            REGEX "^#define NETTLE_VERSION_MAJOR  *[0-9]+"
+            LIMIT_COUNT 1)
+        string(REGEX MATCH "[0-9]+"
+                Nettle_MAJOR_VERSION "${_ver_major_line}")
+        file(STRINGS ${Nettle_INCLUDE_DIR}/nettle/version.h _ver_minor_line
+            REGEX "^#define NETTLE_VERSION_MINOR  *[0-9]+"
+            LIMIT_COUNT 1)
+        string(REGEX MATCH "[0-9]+"
+                Nettle_MINOR_VERSION "${_ver_minor_line}")
+        set(Nettle_VERSION "${Nettle_MAJOR_VERSION}.${Nettle_MINOR_VERSION}")
+        unset(_ver_major_line)
+        unset(_ver_minor_line)
+    else()
+        set(Nettle_VERSION "1.0")
+    endif()
 endif()
 
 include(FindPackageHandleStandardArgs)
@@ -116,23 +124,35 @@ find_package_handle_standard_args(Nettle
 )
 
 if(Nettle_FOUND)
-  set(Nettle_LIBRARIES ${Nettle_LIBRARY})
-  set(Nettle_INCLUDE_DIRS ${Nettle_INCLUDE_DIR})
-  set(Nettle_DEFINITIONS ${PC_Nettle_CFLAGS_OTHER})
+    set(Nettle_LIBRARIES ${Nettle_LIBRARY} ${Hogweed_LIBRARY})
+    set(Nettle_INCLUDE_DIRS ${Nettle_INCLUDE_DIR})
+    set(Nettle_DEFINITIONS ${PC_Nettle_CFLAGS_OTHER})
 endif()
 
 if(Nettle_FOUND AND NOT TARGET Nettle::Nettle)
-  add_library(Nettle::Nettle UNKNOWN IMPORTED)
-  set_target_properties(Nettle::Nettle PROPERTIES
-    IMPORTED_LOCATION "${Nettle_LIBRARY}"
-    INTERFACE_COMPILE_OPTIONS "${PC_Nettle_CFLAGS_OTHER}"
-    INTERFACE_INCLUDE_DIRECTORIES "${Nettle_INCLUDE_DIR}"
-  )
+    add_library(Nettle::Nettle UNKNOWN IMPORTED)
+    set_target_properties(Nettle::Nettle PROPERTIES
+        IMPORTED_LOCATION "${Nettle_LIBRARY}"
+        INTERFACE_COMPILE_OPTIONS "${PC_Nettle_CFLAGS_OTHER}"
+        INTERFACE_INCLUDE_DIRECTORIES "${Nettle_INCLUDE_DIR}"
+    )
+
+    add_library(Nettle::Hogweed UNKNOWN IMPORTED)
+    set_target_properties(Nettle::Hogweed PROPERTIES
+        IMPORTED_LOCATION "${Hogweed_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${Nettle_INCLUDE_DIR}"
+    )
+
+    add_library(Nettle::Gmp UNKNOWN IMPORTED)
+    set_target_properties(Nettle::Gmp PROPERTIES
+        IMPORTED_LOCATION "${Gmp_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${Nettle_INCLUDE_DIR}"
+    )
 endif()
 
 mark_as_advanced(
-  Nettle_INCLUDE_DIR
-  Nettle_LIBRARY
+    Nettle_INCLUDE_DIR
+    Nettle_LIBRARY
 )
 
 # compatibility variables

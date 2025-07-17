@@ -26,7 +26,7 @@ public:
     mbedtls_md5_context ctx;
 };
 
-std::string Hash(const void *data, int32_t bytes)
+std::string MD5::Hash(const void *data, int32_t bytes)
 {
     if (data == nullptr || bytes <= 0) {
         return std::string();
@@ -60,9 +60,9 @@ int32_t MD5::update(const void *data, int32_t len)
     return mbedtls_md5_update(&m_context->ctx, (const uint8_t *)data, len);
 }
 
-int32_t MD5::finalize(void *digest)
+int32_t MD5::finalize(std::array<uint8_t, MD5_DIGEST_LENGTH> &digest)
 {
-    if (m_context == nullptr || digest == nullptr) {
+    if (m_context == nullptr) {
         return -1;
     }
 
@@ -71,7 +71,23 @@ int32_t MD5::finalize(void *digest)
         return -1;
     }
 
-    memcpy(digest, md, MD5_DIGEST_LENGTH);
+    memcpy(&digest[0], md, MD5_DIGEST_LENGTH);
+    return 0;
+}
+
+int32_t MD5::finalize(std::vector<uint8_t> &digest)
+{
+    if (m_context == nullptr) {
+        return -1;
+    }
+
+    uint8_t md[MD5_DIGEST_LENGTH];
+    if (!mbedtls_md5_finish(&m_context->ctx, md)) {
+        return -1;
+    }
+
+    digest.resize(MD5_DIGEST_LENGTH);
+    memcpy(&digest[0], md, MD5_DIGEST_LENGTH);
     return 0;
 }
 
@@ -85,6 +101,7 @@ std::string MD5::finalize()
     if (!mbedtls_md5_finish(&m_context->ctx, md)) {
         return std::string();
     }
+
     return utils::Hex2String(md, MD5_DIGEST_LENGTH);
 }
 

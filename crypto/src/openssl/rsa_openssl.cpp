@@ -7,6 +7,8 @@
 
 #include "rsa.h"
 
+#include <assert.h>
+
 #include "rsa_error.h"
 
 #if defined(HAVE_OPENSSL)
@@ -29,8 +31,13 @@ public:
     RSA*            _privateRsaKey{nullptr};
     std::string     _publicKey;
     std::string     _privateKey;
+    int32_t         _md;
 
-    RSAContex() = default;
+    RSAContex() :
+        _md(NID_sha256)
+    {
+    }
+
     ~RSAContex()
     {
         clean();
@@ -198,6 +205,28 @@ int32_t Rsa::initRSAKey(const std::string &publicKey, const std::string &private
     return status;
 }
 
+void Rsa::setHashMode(HashMethod md)
+{
+    if (m_context) {
+        switch (md) {
+        case MT_MD5:
+            m_context->_md = NID_md5;
+            break;
+        case MT_SHA1:
+            m_context->_md = NID_sha1;
+            break;
+        case MT_SHA256:
+            m_context->_md = NID_sha256;
+            break;
+        case MT_SHA512:
+            m_context->_md = NID_sha512;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_t> &encryptedData)
 {
     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
@@ -228,12 +257,12 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     return RSA_ERROR_NONE;
 }
 
-int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_t> &decryptedData)
+int32_t Rsa::verifySignature(const void *signatureData, size_t signatureSize, const std::vector<uint8_t> &hashVec)
 {
     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
-    if (data == nullptr || dataSize == 0) {
+    if (signatureData == nullptr || signatureSize == 0) {
         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
     }
     int32_t keySize = 0;
@@ -241,81 +270,131 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_
     if (blockSize < 0) {
         return blockSize; // Error in calculating padding size
     }
-    const uint8_t *ptr = (const uint8_t *)data;
-    decryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
-        int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
-                                                   blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
-        if (decryptedSize < 0) {
-            return (int32_t)ERR_get_error();
-        }
-        decryptedData.insert(decryptedData.end(), blockVec.begin(), blockVec.begin() + decryptedSize);
+    if (signatureSize != keySize) {
+        return RSA_ERROR_INVALID_PARAMETER;
     }
 
-    return RSA_ERROR_NONE;
+    const uint8_t *signaturePtr = (const uint8_t *)signatureData;
+    int32_t status = RSA_verify(m_context->_md, hashVec.data(), hashVec.size(),
+                                signaturePtr, signatureSize,
+                                m_context->_publicRsaKey);
+    return status == 1 ? RSA_ERROR_NONE : (int32_t)ERR_get_error();
 }
 
-int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::string &decryptedData)
-{
-    if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
-        return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
-    }
-    if (data == nullptr || dataSize == 0) {
-        return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
-    }
-    int32_t keySize = 0;
-    int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
-    if (blockSize < 0) {
-        return blockSize; // Error in calculating padding size
-    }
-
-    const uint8_t *ptr = (const uint8_t *)data;
-    decryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
-        int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
-                                                   blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
-        if (decryptedSize < 0) {
-            return (int32_t)ERR_get_error();
-        }
-        decryptedData.append(reinterpret_cast<const char *>(blockVec.data()), decryptedSize);
-    }
-
-    return RSA_ERROR_NONE;
-}
-
-int32_t Rsa::privateEncrypt(const void *data, size_t dataSize, std::vector<uint8_t> &encryptedData)
+int32_t Rsa::sign(const std::vector<uint8_t> &hashVec, std::vector<uint8_t> &signatureVec)
 {
     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
-        return RSA_ERROR_NOT_INITIALIZED; // RSA context or private key not initialized
+        return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
-    if (data == nullptr || dataSize == 0) {
-        return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
-    }
+
     int32_t keySize = 0;
-    int32_t blockSize = rsaPaddingSize(m_context->_privateRsaKey, keySize);
+    int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
     if (blockSize < 0) {
         return blockSize; // Error in calculating padding size
     }
 
-    const uint8_t *ptr = (const uint8_t *)data;
-    encryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
-        int32_t encryptedSize = RSA_private_encrypt(static_cast<int32_t>(blockLen), &ptr[i],
-                                                    blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
-        if (encryptedSize < 0) {
-            return (int32_t)ERR_get_error();
-        }
-        encryptedData.insert(encryptedData.end(), blockVec.begin(), blockVec.begin() + encryptedSize);
+    signatureVec.resize(keySize);
+    uint32_t siglen = 0;
+    int32_t status = RSA_sign(m_context->_md,
+                              hashVec.data(), hashVec.size(),
+                              signatureVec.data(), &siglen,
+                              m_context->_privateRsaKey);
+    if (status != 1) {
+        return (int32_t)ERR_get_error();
     }
-
+    assert(siglen == keySize);
+    signatureVec.resize(siglen);
     return RSA_ERROR_NONE;
 }
+
+// int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_t> &decryptedData)
+// {
+//     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
+//         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
+//     }
+//     if (data == nullptr || dataSize == 0) {
+//         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
+//     }
+//     int32_t keySize = 0;
+//     int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
+//     if (blockSize < 0) {
+//         return blockSize; // Error in calculating padding size
+//     }
+//     const uint8_t *ptr = (const uint8_t *)data;
+//     decryptedData.reserve(dataSize);
+//     std::vector<uint8_t> blockVec(keySize);
+//     for (size_t i = 0; i < dataSize; i += keySize) {
+//         size_t blockLen = MIN((size_t)keySize, dataSize - i);
+//         int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
+//                                                    blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
+//         if (decryptedSize < 0) {
+//             return (int32_t)ERR_get_error();
+//         }
+//         decryptedData.insert(decryptedData.end(), blockVec.begin(), blockVec.begin() + decryptedSize);
+//     }
+
+//     return RSA_ERROR_NONE;
+// }
+
+// int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::string &decryptedData)
+// {
+//     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
+//         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
+//     }
+//     if (data == nullptr || dataSize == 0) {
+//         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
+//     }
+//     int32_t keySize = 0;
+//     int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
+//     if (blockSize < 0) {
+//         return blockSize; // Error in calculating padding size
+//     }
+
+//     const uint8_t *ptr = (const uint8_t *)data;
+//     decryptedData.reserve(dataSize);
+//     std::vector<uint8_t> blockVec(keySize);
+//     for (size_t i = 0; i < dataSize; i += keySize) {
+//         size_t blockLen = MIN((size_t)keySize, dataSize - i);
+//         int32_t decryptedSize = RSA_public_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
+//                                                    blockVec.data(), m_context->_publicRsaKey, RSA_PADDING);
+//         if (decryptedSize < 0) {
+//             return (int32_t)ERR_get_error();
+//         }
+//         decryptedData.append(reinterpret_cast<const char *>(blockVec.data()), decryptedSize);
+//     }
+
+//     return RSA_ERROR_NONE;
+// }
+
+// int32_t Rsa::privateEncrypt(const void *data, size_t dataSize, std::vector<uint8_t> &encryptedData)
+// {
+//     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
+//         return RSA_ERROR_NOT_INITIALIZED; // RSA context or private key not initialized
+//     }
+//     if (data == nullptr || dataSize == 0) {
+//         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
+//     }
+//     int32_t keySize = 0;
+//     int32_t blockSize = rsaPaddingSize(m_context->_privateRsaKey, keySize);
+//     if (blockSize < 0) {
+//         return blockSize; // Error in calculating padding size
+//     }
+
+//     const uint8_t *ptr = (const uint8_t *)data;
+//     encryptedData.reserve(dataSize);
+//     std::vector<uint8_t> blockVec(keySize);
+//     for (size_t i = 0; i < dataSize; i += blockSize) {
+//         size_t blockLen = MIN((size_t)blockSize, dataSize - i);
+//         int32_t encryptedSize = RSA_private_encrypt(static_cast<int32_t>(blockLen), &ptr[i],
+//                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
+//         if (encryptedSize < 0) {
+//             return (int32_t)ERR_get_error();
+//         }
+//         encryptedData.insert(encryptedData.end(), blockVec.begin(), blockVec.begin() + encryptedSize);
+//     }
+
+//     return RSA_ERROR_NONE;
+// }
 
 int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8_t> &decryptedData)
 {
@@ -334,8 +413,8 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8
     const uint8_t *ptr = (const uint8_t *)data;
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
+    for (size_t i = 0; i < dataSize; i += keySize) {
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t decryptedSize = RSA_private_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {
@@ -364,8 +443,8 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::string &decr
     const uint8_t *ptr = (const uint8_t *)data;
     decryptedData.reserve(dataSize);
     std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
+    for (size_t i = 0; i < dataSize; i += keySize) {
+        size_t blockLen = MIN((size_t)keySize, dataSize - i);
         int32_t decryptedSize = RSA_private_decrypt(static_cast<int32_t>(blockLen), &ptr[i],
                                                     blockVec.data(), m_context->_privateRsaKey, RSA_PADDING);
         if (decryptedSize < 0) {

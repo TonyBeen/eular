@@ -20,7 +20,7 @@ public:
     md5_ctx     ctx;
 };
 
-std::string Hash(const void *data, int32_t bytes)
+std::string MD5::Hash(const void *data, int32_t bytes)
 {
     if (data == nullptr || bytes <= 0) {
         return std::string();
@@ -38,7 +38,7 @@ int32_t MD5::init()
         m_context = std::unique_ptr<MD5Context>(new MD5Context());
     }
 
-    md5_init(&m_context->ctx);
+    nettle_md5_init(&m_context->ctx);
     return 0;
 }
 
@@ -48,19 +48,32 @@ int32_t MD5::update(const void *data, int32_t len)
         return -1;
     }
 
-    md5_update(&m_context->ctx, len, (const uint8_t *)data);
+    nettle_md5_update(&m_context->ctx, len, (const uint8_t *)data);
     return 0;
 }
 
-int32_t MD5::finalize(void *digest)
+int32_t MD5::finalize(std::array<uint8_t, MD5_DIGEST_LENGTH> &digest)
 {
-    if (m_context == nullptr || digest == nullptr) {
+    if (m_context == nullptr) {
         return -1;
     }
 
     uint8_t md[MD5_DIGEST_LENGTH];
-    md5_digest(&m_context->ctx, MD5_DIGEST_LENGTH, md);
-    memcpy(digest, md, MD5_DIGEST_LENGTH);
+    nettle_md5_digest(&m_context->ctx, MD5_DIGEST_LENGTH, md);
+    memcpy(&digest[0], md, MD5_DIGEST_LENGTH);
+    return 0;
+}
+
+int32_t MD5::finalize(std::vector<uint8_t> &digest)
+{
+    if (m_context == nullptr) {
+        return -1;
+    }
+
+    uint8_t md[MD5_DIGEST_LENGTH];
+    nettle_md5_digest(&m_context->ctx, MD5_DIGEST_LENGTH, md);
+    digest.resize(MD5_DIGEST_LENGTH);
+    memcpy(&digest[0], md, MD5_DIGEST_LENGTH);
     return 0;
 }
 

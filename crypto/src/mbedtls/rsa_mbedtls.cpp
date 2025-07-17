@@ -36,12 +36,16 @@ public:
     mbedtls_rsa_context*        _privateRsaKey{};
     std::string                 _publicKey;
     std::string                 _privateKey;
+    int32_t                     _md;
 
-    RSAContex() {
+    RSAContex() :
+        _md(MBEDTLS_MD_SHA256)
+    {
         mbedtls_ctr_drbg_init(&_ctrDrbg);
     }
 
-    ~RSAContex() {
+    ~RSAContex()
+    {
         mbedtls_ctr_drbg_free(&_ctrDrbg);
         clean();
     }
@@ -186,6 +190,28 @@ int32_t Rsa::initRSAKey(const std::string &publicKey, const std::string &private
     return status;
 }
 
+void eular::crypto::Rsa::setHashMode(HashMethod md)
+{
+    if (m_context) {
+        switch (md) {
+        case MT_MD5:
+            m_context->_md = MBEDTLS_MD_MD5;
+            break;
+        case MT_SHA1:
+            m_context->_md = MBEDTLS_MD_SHA1;
+            break;
+        case MT_SHA256:
+            m_context->_md = MBEDTLS_MD_SHA256;
+            break;
+        case MT_SHA512:
+            m_context->_md = MBEDTLS_MD_SHA512;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_t> &encryptedData)
 {
     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
@@ -216,12 +242,12 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     return RSA_ERROR_NONE;
 }
 
-int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_t> &decryptedData)
+int32_t Rsa::verifySignature(const void *signatureData, size_t signatureSize, const std::vector<uint8_t> &hashVec)
 {
     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
-    if (data == nullptr || dataSize == 0) {
+    if (signatureData == nullptr || signatureSize == 0) {
         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
     }
     int32_t keySize = 0;
@@ -229,81 +255,35 @@ int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::vector<uint8_
     if (blockSize < 0) {
         return blockSize; // Error in calculating padding size
     }
-
-    const uint8_t *ptr = (const uint8_t *)data;
-    decryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN((size_t)keySize, dataSize - i);
-        int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_publicRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
-                                                   &blockLen, &ptr[i], blockVec.data(), keySize);
-        if (status != 0) {
-            return status;
-        }
-        decryptedData.insert(decryptedData.end(), blockVec.begin(), blockVec.begin() + blockLen);
+    if (signatureSize != (uint32_t)keySize) {
+        return RSA_ERROR_INVALID_PARAMETER;
     }
 
-    return RSA_ERROR_NONE;
+    const uint8_t *signaturePtr = (const uint8_t *)signatureData;
+    int32_t status = mbedtls_rsa_pkcs1_verify(m_context->_publicRsaKey, (mbedtls_md_type_t)m_context->_md,
+                                                hashVec.size(), hashVec.data(), signaturePtr);
+    return status;
 }
 
-int32_t Rsa::publicDecrypt(const void *data, size_t dataSize, std::string &decryptedData)
-{
-    if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
-        return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
-    }
-    if (data == nullptr || dataSize == 0) {
-        return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
-    }
-    int32_t keySize = 0;
-    int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
-    if (blockSize < 0) {
-        return blockSize; // Error in calculating padding size
-    }
-
-    const uint8_t *ptr = (const uint8_t *)data;
-    decryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += keySize) {
-        size_t blockLen = MIN((size_t)keySize, dataSize - i);
-        int32_t status = mbedtls_rsa_pkcs1_decrypt(m_context->_publicRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
-                                                   &blockLen, &ptr[i], blockVec.data(), keySize);
-        if (status != 0) {
-            return status;
-        }
-        decryptedData.append(reinterpret_cast<const char *>(blockVec.data()), blockLen);
-    }
-
-    return RSA_ERROR_NONE;
-}
-
-int32_t Rsa::privateEncrypt(const void *data, size_t dataSize, std::vector<uint8_t> &encryptedData)
+int32_t Rsa::sign(const std::vector<uint8_t> &hashVec, std::vector<uint8_t> &signatureVec)
 {
     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
-        return RSA_ERROR_NOT_INITIALIZED; // RSA context or private key not initialized
+        return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
-    if (data == nullptr || dataSize == 0) {
-        return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
-    }
+
     int32_t keySize = 0;
-    int32_t blockSize = rsaPaddingSize(m_context->_privateRsaKey, keySize);
+    int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
     if (blockSize < 0) {
         return blockSize; // Error in calculating padding size
     }
 
-    const uint8_t *ptr = (const uint8_t *)data;
-    encryptedData.reserve(dataSize);
-    std::vector<uint8_t> blockVec(keySize);
-    for (size_t i = 0; i < dataSize; i += blockSize) {
-        size_t blockLen = MIN((size_t)blockSize, dataSize - i);
-        int32_t status = mbedtls_rsa_pkcs1_encrypt(m_context->_privateRsaKey, mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
-                                                   static_cast<int32_t>(blockLen), &ptr[i], blockVec.data());
-        if (status != 0) {
-            return status;
-        }
-        encryptedData.insert(encryptedData.end(), blockVec.begin(), blockVec.begin() + keySize);
-    }
-
-    return RSA_ERROR_NONE;
+    signatureVec.resize(keySize);
+    int32_t status = mbedtls_rsa_pkcs1_sign(m_context->_privateRsaKey,
+                                            mbedtls_ctr_drbg_random, &m_context->_ctrDrbg,
+                                            (mbedtls_md_type_t)m_context->_md,
+                                            hashVec.size(), hashVec.data(),
+                                            signatureVec.data());
+    return status;
 }
 
 int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8_t> &decryptedData)

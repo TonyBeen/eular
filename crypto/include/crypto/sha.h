@@ -31,7 +31,7 @@ class SHAContext;
 class SHA {
 public:
     enum {
-        SHA_1,
+        SHA_1 = 1,
         SHA_256,
         SHA_512
     };
@@ -75,12 +75,10 @@ public:
     // Finalize the SHA computation and return the hash
     int32_t finalize(void *hash, int32_t length);
     int32_t finalize(std::string &hash);
-    template <typename T>
-    int32_t finalize(std::vector<T> &hash) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+    int32_t finalize(std::vector<uint8_t> &hash) {
         int32_t bytes = hashSize();
-        hash.resize(hashSize() / sizeof(T));
-        int32_t result = finalize(hash.data(), static_cast<int32_t>(hash.size() * sizeof(T)));
+        hash.resize(bytes);
+        int32_t result = finalize(hash.data(), bytes);
         return result;
     }
 

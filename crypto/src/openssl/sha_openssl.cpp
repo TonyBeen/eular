@@ -7,28 +7,26 @@
 
 #include "sha.h"
 
+#include <string.h>
+
 #if defined(HAVE_OPENSSL)
 #undef SHA_DIGEST_LENGTH
 #undef SHA256_DIGEST_LENGTH
 #undef SHA512_DIGEST_LENGTH
 
 #include <openssl/sha.h>
-#include <utils/exception.h>
 
 #include "crypto_utils.h"
 
 namespace eular {
 namespace crypto {
-
 class SHAContext {
 public:
-
     SHAContext() {
-        /* Initialize the context */
         memset(&ctx, 0, sizeof(ctx));
     }
 
-    int32_t type = 0; // SHA_1, SHA_256, SHA_512
+    int32_t type = 0;
     union {
         SHA_CTX     sha1;
         SHA256_CTX  sha256;

@@ -85,7 +85,8 @@ public:
      * @param digest 长度为 MD5_DIGEST_LENGTH 的缓冲区，用于存储MD5结果
      * @return int32_t 成功返回0，失败返回负数
      */
-    int32_t finalize(void *digest);
+    int32_t finalize(std::array<uint8_t, MD5_DIGEST_LENGTH> &digest);
+    int32_t finalize(std::vector<uint8_t> &digest);
     std::string finalize();
 
 private:

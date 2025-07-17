@@ -20,13 +20,11 @@ namespace eular {
 namespace crypto {
 class SHAContext {
 public:
-
     SHAContext() {
-        /* Initialize the context */
         memset(&ctx, 0, sizeof(ctx));
     }
 
-    int32_t type = -1; // SHA_1, SHA_256, SHA_512
+    int32_t type = 0;
     union {
         sha1_ctx    sha1;
         sha256_ctx  sha256;

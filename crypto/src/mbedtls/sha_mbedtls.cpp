@@ -20,9 +20,7 @@ namespace eular {
 namespace crypto {
 class SHAContext {
 public:
-
     SHAContext() {
-        /* Initialize the context */
         memset(&ctx, 0, sizeof(ctx));
     }
 
@@ -42,7 +40,7 @@ public:
         }
     }
 
-    int32_t type = 0; // SHA_1, SHA_256, SHA_512
+    int32_t type = 0;
     union {
         mbedtls_sha1_context    sha1;
         mbedtls_sha256_context  sha256;
