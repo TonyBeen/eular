@@ -86,7 +86,7 @@ public:
     int32_t hashSize() const;
 
 private:
-    std::unique_ptr<SHAContext>     m_context{};
+    std::shared_ptr<SHAContext>     m_context{};
 };
 
 } // namespace crypto

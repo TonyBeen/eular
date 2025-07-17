@@ -99,7 +99,7 @@ set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation 
 
 file(GLOB HEADER_LIST       "${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/*.h")
 
-file(GLOB SRC_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+file(GLOB SRC_LIST          "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB SRC_OPENSSL_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/*.cpp")
 file(GLOB SRC_GNUTLS_LIST   "${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/*.cpp")
 file(GLOB SRC_MBEDTLS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/*.cpp")
@@ -143,7 +143,7 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
             ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
     )
 
-    target_compile_options(
+    target_compile_options (
         cryptopp_static PRIVATE
         ${CXX_COMPILER_FLAGS}
     )
@@ -155,11 +155,11 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
     )
     set_property(TARGET cryptopp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-    if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
+    if (NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
         install(TARGETS cryptopp_static
-            RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
-            ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+                RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
+                ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
+                LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
     endif()
 endif()
 

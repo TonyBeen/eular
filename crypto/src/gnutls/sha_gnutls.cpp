@@ -56,7 +56,7 @@ std::string SHA::Hash(int32_t type, const void *data, int32_t bytes)
 
 int32_t SHA::init(int32_t type)
 {
-    m_context = std::unique_ptr<SHAContext>(new SHAContext());
+    m_context = std::make_shared<SHAContext>();
     int32_t status = 0;
     m_context->type = type;
     switch (type) {
