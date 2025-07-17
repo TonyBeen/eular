@@ -17,7 +17,7 @@ option(ENABLE_DEBUG "Enable debug symbol" ON)
 
 option(ENABLE_GNUTLS "Enable use of GnuTLS" OFF)
 option(ENABLE_MBEDTLS "Enable use of mbed TLS" ON)
-option(ENABLE_OPENSSL "Enable use of OpenSSL" ON)
+option(ENABLE_OPENSSL "Enable use of OpenSSL" OFF)
 option(ENABLE_WINDOWS_CRYPTO "Enable use of Windows cryptography libraries" ON)
 
 if(NOT CMAKE_BUILD_TYPE)

@@ -49,6 +49,7 @@ int main(int argc, char **argv)
     std::vector<uint8_t> hashVec;
     sha256.finalize(hashVec);
 
+    rsa.setHashMode(crypto::Rsa::MT_SHA256);
     std::vector<uint8_t> signatureVec;
     status = rsa.sign(hashVec, signatureVec);
     status = rsa.verifySignature(signatureVec, hashVec);
