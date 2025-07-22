@@ -13,38 +13,66 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <pwd.h>
-#include <unistd.h>
 
+#include "utils/code_convert.h"
 #include "utils/sysdef.h"
 #include "utils/debug.h"
 
+#if defined(OS_LINUX)
+#include <pwd.h>
+#include <unistd.h>
+#elif defined(OS_APPLE)
+#else
+#include <direct.h>
+#include <io.h>
+#endif
+
 namespace eular {
 namespace dir {
-bool exists(const String8 &path)
+bool exists(const std::string &path)
 {
+#if defined(OS_LINUX) || defined(OS_APPLE)
     if (path.empty()) {
         return false;
     }
 
     struct stat lst;
-    int32_t ret = lstat(path.c_str(), &lst);
+    int32_t ret = ::lstat(path.c_str(), &lst);
     return ret == 0;
+#else
+    std::wstring wpath;
+    CodeConvert::UTF8ToUTF16LE(path, wpath);
+
+    struct _stat lst;
+    int32_t ret = ::_wstat(wpath.c_str(), &lst);
+    return ret == 0;
+#endif
 }
 
 bool __mkdir(const char *path)
 {
+#if defined(OS_LINUX) || defined(OS_APPLE)
     if (access(path, F_OK) == 0) {
         return true;
     }
 
     return 0 == ::mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+#else
+    std::wstring wpath;
+    CodeConvert::UTF8ToUTF16LE(path, wpath);
+
+    if (::_waccess(wpath.c_str(), 0) == 0) {
+        return true;
+    }
+
+    return 0 == ::_wmkdir(wpath.c_str());
+#endif
 }
 
-std::vector<String8> _splitPath(const String8& path) {
-    std::vector<String8> result;
+std::vector<std::string> _splitPath(const std::string& path) {
+    std::vector<std::string> result;
     std::stringstream ss(path.c_str());
-    
+
     std::string segment;
     while (std::getline(ss, segment, DIR_SEPARATOR)) {
         if (!segment.empty()) {
@@ -55,16 +83,16 @@ std::vector<String8> _splitPath(const String8& path) {
     return result;
 }
 
-bool absolute(const String8 &path, String8 &absPath)
+bool absolute(const std::string &path, std::string &absPath)
 {
     if (path.empty()) {
         return false;
     }
 
-    std::deque<String8> pathDeque;
+    std::deque<std::string> pathDeque;
     pathDeque.push_back("/");
 
-    String8 realPath = path;
+    std::string realPath = path;
     if (path.front() == '~') {
         struct passwd result;
         struct passwd *pw = nullptr;
@@ -83,12 +111,12 @@ bool absolute(const String8 &path, String8 &absPath)
         return false;
     }
 
-    if (realPath.find('.') < 0 && realPath.find("..") < 0) { // 不存在相对路径符号
+    if (realPath.find('.') == std::string::npos && realPath.find("..") == std::string::npos) { // 不存在相对路径符号
         absPath = realPath;
         return true;
     }
 
-    std::vector<String8> segments = _splitPath(realPath);
+    std::vector<std::string> segments = _splitPath(realPath);
     for (size_t i = 0; i < segments.size(); ++i) {
         if (segments[i] == ".") {
             // do nothing
@@ -105,7 +133,7 @@ bool absolute(const String8 &path, String8 &absPath)
     while (!pathDeque.empty()) {
         absPath += pathDeque.front();
         if (absPath.back() != DIR_SEPARATOR) {
-            absPath.append(DIR_SEPARATOR);
+            absPath.push_back(DIR_SEPARATOR);
         }
         pathDeque.pop_front();
     }
@@ -113,13 +141,13 @@ bool absolute(const String8 &path, String8 &absPath)
     return true;
 }
 
-bool mkdir(const String8 &path)
+bool mkdir(const std::string &path)
 {
     if (exists(path)) {
         return true;
     }
 
-    String8 realPath;
+    std::string realPath;
     if (!absolute(path, realPath)) {
         return false;
     }
@@ -133,11 +161,13 @@ bool mkdir(const String8 &path)
                 break;
             }
         }
+
         if (ptr != nullptr) {
             break;
         } else if (!__mkdir(filePath)) {
             break;
         }
+
         free(filePath);
         return true;
     } while(0);

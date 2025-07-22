@@ -81,7 +81,7 @@ public:
      * @param u16String 
      * @return int32_t
      */
-    static int32_t UTF8ToUTF16LE(const std::string &u8String, std::string &u16String);
+    static int32_t UTF8ToUTF16LE(const std::string &u8String, std::wstring &u16String);
 
     /**
      * @brief 将utf8转为gbk
@@ -90,7 +90,7 @@ public:
      * @param u8String 
      * @return int32_t
      */
-    static int32_t UTF16LEToUTF8(const std::string &u16String, std::string &u8String);
+    static int32_t UTF16LEToUTF8(const std::wstring &u16String, std::string &u8String);
 
     /**
      * @brief 判断字符串是否UTF8编码

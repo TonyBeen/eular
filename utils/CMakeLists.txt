@@ -36,6 +36,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
 endif()
 
+if(MSVC)
+    add_definitions(-D_UNICODE -DUNICODE)  # 启用UNICODE宏
+    add_compile_options("/utf-8")          # 支持源码中的宽字符常量
+endif()
+
 # link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
 
 # build the static library
@@ -48,10 +53,17 @@ if(UTILS_STATIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
+            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/include>
+            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/include>
     )
 
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libiconv.a pthread)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
+endif()
 
     target_compile_options(
         utils_static PRIVATE
@@ -83,10 +95,17 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
+            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/include>
+            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/include>
     )
 
-    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libiconv.a pthread)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
+endif()
 
     target_compile_options(
         utils PRIVATE

@@ -78,11 +78,11 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
-                printf("An incomplete multibyte sequence has been encountered in the input.\n");
+                // printf("An incomplete multibyte sequence has been encountered in the input.\n");
                 result = -EINVAL;
                 break;
             case EILSEQ:
-                printf("An invalid multibyte sequence has been encountered in the input.\n");
+                // printf("An invalid multibyte sequence has been encountered in the input.\n");
                 result = -EILSEQ;
                 break;
             case E2BIG:
@@ -142,11 +142,11 @@ int32_t CodeConvert::UTF8ToGBK(const std::string &u8String, std::string &gbkStri
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
-                printf("An incomplete multibyte sequence has been encountered in the input.\n");
+                // printf("An incomplete multibyte sequence has been encountered in the input.\n");
                 result = -EINVAL;
                 break;
             case EILSEQ:
-                printf("An invalid multibyte sequence has been encountered in the input.\n");
+                // printf("An invalid multibyte sequence has been encountered in the input.\n");
                 result = -EILSEQ;
                 break;
             case E2BIG:
@@ -200,11 +200,11 @@ int32_t CodeConvert::GBKToUTF8(const std::string &gbkString, std::string &u8Stri
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
-                printf("An incomplete multibyte sequence has been encountered in the input.\n");
+                // printf("An incomplete multibyte sequence has been encountered in the input.\n");
                 result = -EINVAL;
                 break;
             case EILSEQ:
-                printf("An invalid multibyte sequence has been encountered in the input.\n");
+                // printf("An invalid multibyte sequence has been encountered in the input.\n");
                 result = -EILSEQ;
                 break;
             case E2BIG:
@@ -228,7 +228,7 @@ int32_t CodeConvert::GBKToUTF8(const std::string &gbkString, std::string &u8Stri
     return result;
 }
 
-int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::string &u16String)
+int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::wstring &u16String)
 {
     if (u8String.empty()) {
         return Status::INVALID_PARAM;
@@ -237,7 +237,7 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::string &u16
     char *pU8Begin = (char *)u8String.c_str();
     size_t inputSize = u8String.size();
 
-    std::string outU16String;
+    std::wstring outU16String;
     outU16String.reserve(_ComputeOutSize(CodeFlag::UTF8, CodeFlag::UTF16LE, u8String.length()));
 
     iconv_t iconvHandle = iconv_open("UTF-16LE", "UTF-8");
@@ -258,11 +258,11 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::string &u16
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
-                printf("An incomplete multibyte sequence has been encountered in the input.\n");
+                // printf("An incomplete multibyte sequence has been encountered in the input.\n");
                 result = -EINVAL;
                 break;
             case EILSEQ:
-                printf("An invalid multibyte sequence has been encountered in the input.\n");
+                // printf("An invalid multibyte sequence has been encountered in the input.\n");
                 result = -EILSEQ;
                 break;
             case E2BIG:
@@ -277,7 +277,7 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::string &u16
             break;
         }
 
-        outU16String.append(outputBuf, (outputLen - leftOutputLen));
+        outU16String.append((wchar_t *)outputBuf, (outputLen - leftOutputLen) / sizeof(wchar_t));
     }
 
     u16String.append(outU16String);
@@ -285,14 +285,14 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::string &u16
     return result;
 }
 
-int32_t CodeConvert::UTF16LEToUTF8(const std::string &u16String, std::string &u8String)
+int32_t CodeConvert::UTF16LEToUTF8(const std::wstring &u16String, std::string &u8String)
 {
     if (u16String.empty()) {
         return Status::INVALID_PARAM;
     }
 
     char *pU8Begin = (char *)u16String.c_str();
-    size_t inputSize = u16String.size();
+    size_t inputSize = u16String.size() * sizeof(wchar_t);
 
     std::string outU8String;
     outU8String.reserve(_ComputeOutSize(CodeFlag::UTF16LE, CodeFlag::UTF8, u16String.size()));
@@ -315,11 +315,11 @@ int32_t CodeConvert::UTF16LEToUTF8(const std::string &u16String, std::string &u8
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
-                printf("An incomplete multibyte sequence has been encountered in the input.\n");
+                // printf("An incomplete multibyte sequence has been encountered in the input.\n");
                 result = -EINVAL;
                 break;
             case EILSEQ:
-                printf("An invalid multibyte sequence has been encountered in the input.\n");
+                // printf("An invalid multibyte sequence has been encountered in the input.\n");
                 result = -EILSEQ;
                 break;
             case E2BIG:

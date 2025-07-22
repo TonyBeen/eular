@@ -8,7 +8,7 @@
 #ifndef __UTILS_DIR_H__
 #define __UTILS_DIR_H__
 
-#include <utils/string8.h>
+#include <string>
 
 namespace eular {
 namespace dir {
@@ -20,7 +20,7 @@ namespace dir {
  * @return true 
  * @return false 
  */
-bool exists(const String8 &path);
+bool exists(const std::string &path);
 
 /**
  * @brief 根据给定的带有.或..路径返回绝对路径
@@ -35,7 +35,7 @@ bool exists(const String8 &path);
  * @return true 
  * @return false 
  */
-bool absolute(const String8 &path, String8 &absPath);
+bool absolute(const std::string &path, std::string &absPath);
 
 /**
  * @brief 创建路径, 类似 mkdir -p /path/to/non-existent
@@ -44,7 +44,7 @@ bool absolute(const String8 &path, String8 &absPath);
  * @return true 
  * @return false 
  */
-bool mkdir(const String8 &path);
+bool mkdir(const std::string &path);
 
 } // namespace dir
 } // namespace eular

@@ -8,7 +8,8 @@
 #ifndef __UTILS_FUNCTION_H__
 #define __UTILS_FUNCTION_H__
 
-#include "string8.h"
+#include <utils/sysdef.h>
+
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -19,6 +20,8 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+
+#include <utils/string8.h>
 
 #ifndef gettid
 #define gettid() syscall(__NR_gettid)
