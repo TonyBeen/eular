@@ -321,7 +321,7 @@
 #define USE_UNLOCKED_IO 0
 
 /* Version number of package */
-#define VERSION "1.12"
+#define VERSION "1.17"
 
 /* Define to l, ll, u, ul, ull, etc., as suitable for constants of type
    'wchar_t'. */
