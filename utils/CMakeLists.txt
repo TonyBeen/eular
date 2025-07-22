@@ -95,8 +95,8 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/include>
-            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/include>
+            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include>
+            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include>
     )
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
