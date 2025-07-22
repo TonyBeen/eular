@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.0)
 
+cmake_policy(SET CMP0054 NEW)
+
 project(utils VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 11)
@@ -24,22 +26,30 @@ message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
 
+message(STATUS "====> CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    set(CXX_COMPILER_FLAGS -fPIC -pthread)
+    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    add_definitions(-D_UNICODE -DUNICODE)  # 启用UNICODE宏
+    add_compile_options("/utf-8")          # 支持源码中的宽字符常量
+    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    set(CXX_COMPILER_FLAGS -fPIC -pthread)
+    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
+else()
+    message(STATUS "Unknown compiler: ${CMAKE_CXX_COMPILER_ID}")
+endif()
+
 file(GLOB HEADER_LIST       "include/utils/*.h")
 file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
 list(APPEND HEADER_LIST ${HPP_HEADER_LIST})
 
 file(GLOB SRC_LIST          "src/*.cpp")
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(STATUS "Linux")
-    add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
-    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
-endif()
-
-if(MSVC)
-    add_definitions(-D_UNICODE -DUNICODE)  # 启用UNICODE宏
-    add_compile_options("/utf-8")          # 支持源码中的宽字符常量
-endif()
 
 # link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
 
@@ -53,14 +63,13 @@ if(UTILS_STATIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include>
-            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include>
+            ${3RD_INC_DIR}
     )
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
 endif()
@@ -70,11 +79,14 @@ endif()
         ${CXX_COMPILER_FLAGS}
     )
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set_target_properties (
         utils_static
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
     )
+endif()
+
     set_property(TARGET utils_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
     if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
@@ -95,16 +107,15 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
         PRIVATE
-            $<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include>
-            $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include>
+            ${3RD_INC_DIR}
     )
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a pthread)
+    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
+    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
 endif()
 
     target_compile_options(
@@ -112,11 +123,13 @@ endif()
         ${CXX_COMPILER_FLAGS}
     )
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set_target_properties (
         utils
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
+endif()
 
     set_property(TARGET utils PROPERTY LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
