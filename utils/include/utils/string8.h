@@ -17,6 +17,17 @@
 #include <string>
 #include <iostream>
 
+#include <utils/sysdef.h>
+
+#if COMPILER_TYPE == COMPILER_MSVC
+  #include <sal.h>
+  #define PRINTF_FMT _Printf_format_string_
+  #define FORMAT_ATTR(...)
+#else
+  #define PRINTF_FMT
+  #define FORMAT_ATTR(...) __attribute__((format(__VA_ARGS__)))
+#endif
+
 namespace eular {
 class String8 {
 public:
@@ -55,8 +66,8 @@ public:
     int                 append(const char* other);
     int                 append(const char* other, size_t numChars);
 
-    static String8      Format(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-    int                 appendFormat(const char* fmt, ...) __attribute__((format (printf, 2, 3)));
+    static String8      Format(PRINTF_FMT const char* fmt, ...) FORMAT_ATTR(printf, 1, 2);
+    int                 appendFormat(PRINTF_FMT const char* fmt, ...) FORMAT_ATTR(printf, 2, 3);
 
     String8&            operator=(const String8& other);
     String8&            operator=(const char* other);
@@ -115,7 +126,7 @@ public:
     // return true if this string contains the specified substring
     bool                contains(const char* other) const;
     bool                removeAll(const char* other);
-    ssize_t             replaceAll(char o, char n);
+    int64_t             replaceAll(char o, char n);
 
     void                toLower();
     void                toLower(size_t start, size_t numChars);

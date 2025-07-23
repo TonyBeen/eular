@@ -777,15 +777,15 @@ bool String8::removeOne(const char *other)
  * 
  * @param o old char
  * @param n new char
- * @return ssize_t 
+ * @return int64_t 
  */
-ssize_t String8::replaceAll(char o, char n)
+int64_t String8::replaceAll(char o, char n)
 {
     if (n == o) {
         return 0;
     }
 
-    ssize_t count = 0;
+    int64_t count = 0;
     for (size_t i = 0; i < length(); ++i) {
         if (mString[i] == o) {
             mString[i] = n;
