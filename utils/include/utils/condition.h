@@ -23,7 +23,7 @@ public:
     ~Condition();
 
     int wait(Mutex& mutex);
-    int timedWait(Mutex& mutex, nsec_t ns);
+    int timedWait(Mutex& mutex, uint64_t ns);
 
     void signal();
     void broadcast();

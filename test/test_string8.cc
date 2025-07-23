@@ -203,7 +203,7 @@ TEST_F(String8Test, otherFunction) {
     {
         const char *val = "BBC ABCDAB ABCDABCDABDE";
         const char *key = "ABCDABD";
-        EXPECT_EQ(eular::String8::kmp_strstr(val, key), strstr(val, key) - val);
+        EXPECT_EQ(eular::String8::KMP_strstr(val, key), strstr(val, key) - val);
     }
 }
 
@@ -223,30 +223,30 @@ TEST_F(String8Test, copyAndAssign) {
     EXPECT_STREQ(str1.c_str(), "hello");
 }
 
-TEST_F(String8Test, format) {
+TEST_F(String8Test, Format) {
     {
         const char *str = "Hello World!";
-        const String8 &format = String8::format("%s", str);
-        EXPECT_TRUE(format == str);
+        const String8 &Format = String8::Format("%s", str);
+        EXPECT_TRUE(Format == str);
     }
-    
+
     {
         int num = 996;
-        const String8 &format = String8::format("%d", num);
-        int num_2 = atoi(format.c_str());
+        const String8 &Format = String8::Format("%d", num);
+        int num_2 = atoi(Format.c_str());
         EXPECT_EQ(num, num_2);
     }
 
     {
         uint8_t buffer[] = {0x01, 0x02, 0x03, 0x04};
-        String8 format;
+        String8 Format;
         for (int32_t i = 0; i < sizeof(buffer); ++i) {
-            format.appendFormat("0x%02x ", buffer[i]);
+            Format.appendFormat("0x%02x ", buffer[i]);
         }
 
-        format.clear();
+        Format.clear();
         for (int32_t i = 0; i < sizeof(buffer); ++i) {
-            format.appendFormat("0x%02x ", buffer[i]);
+            Format.appendFormat("0x%02x ", buffer[i]);
         }
     }
 }
@@ -259,8 +259,8 @@ TEST_F(String8Test, support_unordered_map_set) {
     String8 w = world;
 
     std::unordered_map<eular::String8, size_t> hashMap;
-    hashMap.insert(std::make_pair(h, String8::hash(h)));
-    hashMap.insert(std::make_pair(w, String8::hash(w)));
+    hashMap.insert(std::make_pair(h, String8::Hash(h)));
+    hashMap.insert(std::make_pair(w, String8::Hash(w)));
 
     EXPECT_EQ(hashMap.size(), 2);
 

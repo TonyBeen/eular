@@ -41,7 +41,7 @@ int Condition::wait(Mutex& mutex)
     return pthread_cond_wait(&mCond, &mutex.mMutex);
 }
 
-int Condition::timedWait(Mutex& mutex, nsec_t ns)
+int Condition::timedWait(Mutex& mutex, uint64_t ns)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

@@ -152,7 +152,7 @@ std::ostream&   operator<<(std::ostream &out, const String8& in);
 
 namespace std {
     template<>
-    struct hash<eular::String8> : public __hash_base<size_t, eular::String8> {
+    struct hash<eular::String8> {
         size_t operator()(const eular::String8 &obj) const {
             return eular::String8::Hash(obj);
         }
