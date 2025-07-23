@@ -7,7 +7,6 @@
 
 #include "utils/string8.h"
 
-#include <error.h>
 #include <assert.h>
 
 #include "utils/utils.h"
