@@ -10,6 +10,7 @@
 #include <sstream>
 #include <deque>
 #include <vector>
+#include <algorithm>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -29,6 +30,22 @@
 
 namespace eular {
 namespace dir {
+std::string AdjustPath(std::string path, char oldCh = '\\', char newCh = '/')
+{
+	if (path.empty()) {
+		return path;
+	}
+
+	std::replace(path.begin(), path.end(), oldCh, newCh);
+
+	// 去除路径中的多余分隔符
+    auto new_end = std::unique(path.begin(), path.end(), [](char a, char b) {
+		return a == b && a == '/';
+	});
+	path.erase(new_end, path.end());
+	return path;
+}
+
 bool exists(const std::string &path)
 {
 #if defined(OS_LINUX) || defined(OS_APPLE)
@@ -92,7 +109,8 @@ bool absolute(const std::string &path, std::string &absPath)
     std::deque<std::string> pathDeque;
     pathDeque.push_back("/");
 
-    std::string realPath = path;
+    std::string realPath = AdjustPath(path);
+#if defined(OS_LINUX) || defined(OS_APPLE)
     if (path.front() == '~') {
         struct passwd result;
         struct passwd *pw = nullptr;
@@ -106,7 +124,15 @@ bool absolute(const std::string &path, std::string &absPath)
         realPath = pw->pw_dir;
         realPath.append(path.c_str() + 1);
     }
-
+#else
+	char driveLetter[8] = { 0 };
+	if (realPath.length() > 2 && realPath[1] == ':') {
+		driveLetter[0] = realPath[0];
+		driveLetter[1] = ':';
+		driveLetter[2] = '\0';
+		realPath.erase(0, 2);
+	}
+#endif
     if (realPath.front() != '/') {
         return false;
     }
@@ -138,6 +164,10 @@ bool absolute(const std::string &path, std::string &absPath)
         pathDeque.pop_front();
     }
 
+#if defined(OS_WINDOWS)
+	// 在 Windows 上添加驱动器字母
+	absPath.insert(absPath.begin(), driveLetter, driveLetter + 2);
+#endif
     return true;
 }
 

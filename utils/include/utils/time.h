@@ -46,6 +46,16 @@ public:
      */
     static std::string Format(time_t time, const std::string &format = "%Y-%m-%d %H:%M:%S");
     static std::string Format(time_t time, const char *format = "%Y-%m-%d %H:%M:%S");
+
+    /**
+     * @brief 解析时间字符串
+     * 
+     * @param timeStr 时间字符串 eg. "2025-07-18 15:47:12"
+     * @param format 格式化字符串 eg. "%Y-%m-%d %H:%M:%S"
+     * @return time_t 返回解析后的时间 eg. 1721286432
+     */
+    static time_t Parse(const std::string &timeStr, const std::string &format = "%Y-%m-%d %H:%M:%S");
+    static time_t Parse(const char *timeStr, const char *format = "%Y-%m-%d %H:%M:%S");
 };
 
 } // namespace eular

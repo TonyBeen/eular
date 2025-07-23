@@ -10,27 +10,14 @@
 #include <utils/sysdef.h>
 #include <utils/string8.h>
 
-#if defined(OS_WINDOWS)
-#if !defined(_UNICODE) || !defined(UNICODE)
-#error "The project needs unicode configuration"
-#endif
-#endif
-
 #ifdef OS_WINDOWS
-#define file_stat_t    struct _stat 
-#ifdef PORT_API
-#define DLL_PORT __declspec(dllexport)
-#else
-#define DLL_PORT __declspec(dllimport)
-#endif // PORT_API
+#define file_stat_t    struct _stat
 #elif defined(OS_UNIX)
-#define file_stat_t    struct stat 
-#define DLL_PORT 
+#define file_stat_t    struct stat
 #endif
 
 namespace eular {
-
-class FileInfo final
+class UTILS_API FileInfo
 {
     friend class File;
 
@@ -65,7 +52,7 @@ private:
     file_stat_t mFileInfo;
 };
 
-class DLL_PORT FileOp
+class UTILS_API FileOp
 {
     FileOp(const FileOp& other) = delete;
     FileOp& operator=(const FileOp& other) = delete;

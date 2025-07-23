@@ -49,8 +49,8 @@ private:
 class ThreadLocalStorage
 {
 public:
-    ThreadLocalStorage();
-    ~ThreadLocalStorage();
+    ThreadLocalStorage() = default;
+    ~ThreadLocalStorage() = default;
 
     template <typename T>
     std::shared_ptr<TLSSlot<T>> get(const std::string &key)
