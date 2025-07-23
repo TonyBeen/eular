@@ -13,7 +13,7 @@
 
 #include <utils/sysdef.h>
 
-#if defined(OS_WIN)
+#if defined(OS_WINDOWS)
 #define UINT_IDENTIFY(X) (X)
 #else
 #include <endian.h>
@@ -30,10 +30,10 @@
 #endif
 
 #ifndef BYTE_ORDER
-#if defined(_X86_) || defined(__x86_64__) || defined(__i386__) || \
-    defined(__i486__) || defined(__i586__) || defined(__i686__) || \
-    defined(__ARMEL__) || defined(__AARCH64EL__) || \
-    defined(_M_ARM) || defined(_M_ARM64) || \ // microsoft ARM64
+#if defined(_X86_) || defined(__x86_64__) || defined(__i386__) ||   \
+    defined(__i486__) || defined(__i586__) || defined(__i686__) ||  \
+    defined(__ARMEL__) || defined(__AARCH64EL__) ||                 \
+    defined(_M_ARM) || defined(_M_ARM64) ||                         \
     defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64)
     #define BYTE_ORDER      LITTLE_ENDIAN
 #elif defined(__ARMEB__) || defined(__AARCH64EB__)
@@ -91,7 +91,7 @@ static inline uint16_t byteswap_16(uint16_t host_int)
 #endif
 }
 
-#if defined(OS_WIN)
+#if defined(OS_WINDOWS)
 # if BYTE_ORDER == LITTLE_ENDIAN
 #define htobe16(x) byteswap_16 (x)
 #define htole16(x) UINT_IDENTIFY (x)
