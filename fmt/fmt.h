@@ -15,7 +15,6 @@
 #include <fmt/color.h>
 #include <fmt/compile.h>
 #include <fmt/core.h>
-#include <fmt/fmt.h>
 #include <fmt/format.h>
 #include <fmt/format-inl.h>
 #include <fmt/os.h>
