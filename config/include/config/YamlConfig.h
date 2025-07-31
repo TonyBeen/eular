@@ -34,7 +34,7 @@
  *   sync: true
  *   int: 10
  *   double: 3.1415
- * 
+ *
  * 想要获取containers的数组, 可以通过 YamlReader->at("spec.volum.containers"); 获取
  * 具体操作请查看test_yaml_config.cpp
  *

@@ -1,6 +1,6 @@
 #### 通用配置接口
 其中包括yaml, xml, json, ini四种配置文件
-解析所用到的库包括: tinyxml2, jsoncpp, yaml-cpp
+解析所用到的库包括: tinyxml2, nlohmann-json, yaml-cpp
 三方库已内置在工程中, make && make install即可
 
 头文件和库的安装位置

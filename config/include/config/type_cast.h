@@ -14,8 +14,6 @@
 #include <exception>
 
 namespace eular {
-
-namespace TypeCast {
 template<typename T>
 T type_cast(const char *src)
 {
@@ -25,37 +23,49 @@ T type_cast(const char *src)
 template<>
 int type_cast<int>(const char *src)
 {
-    return atoi(src);
+    return std::stoi(src);
 }
 
 template<>
 unsigned int type_cast<unsigned int>(const char *src)
 {
-    return static_cast<unsigned int>(atoi(src));
+    return static_cast<unsigned int>(std::stoul(src));
 }
 
 template<>
 float type_cast<float>(const char *src)
 {
-    return atof(src);
+    return std::stof(src);
 }
 
 template<>
 double type_cast<double>(const char *src)
 {
-    return static_cast<double>(atof(src));
+    return std::stod(src);
 }
 
 template<>
 long type_cast<long>(const char *src)
 {
-    return atol(src);
+    return std::stol(src);
 }
 
 template<>
 unsigned long type_cast<unsigned long>(const char *src)
 {
-    return static_cast<unsigned long>(atol(src));
+    return std::stoul(src);
+}
+
+template<>
+long long type_cast<long long>(const char *src)
+{
+    return std::stoll(src);
+}
+
+template<>
+unsigned long long type_cast<unsigned long long>(const char *src)
+{
+    return std::stoull(src);
 }
 
 template<>
@@ -64,6 +74,8 @@ bool type_cast<bool>(const char *src)
     bool flag = false;
     if (src && strcasecmp(src, "true") == 0) {
         flag = true;
+    } else {
+        flag = atoi(src) != 0;
     }
 
     return flag;
@@ -78,9 +90,7 @@ const char *type_cast<const char *>(const char *src)
 template<>
 std::string type_cast<std::string>(const char *src)
 {
-    return std::move(std::string(src));
-}
-
+    return std::string(src);
 }
 
 } // namespace eular

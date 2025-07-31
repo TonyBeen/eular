@@ -8,8 +8,7 @@
 #ifndef __CONFIG_XML_CONFIG_H__
 #define __CONFIG_XML_CONFIG_H__
 
-#include "typecast.h"
-#include <boost/lexical_cast.hpp>
+#include <config/type_cast.h>
 #include <string>
 #include <map>
 
