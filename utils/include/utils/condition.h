@@ -8,8 +8,7 @@
 #ifndef __CONDITION_H__
 #define __CONDITION_H__
 
-#include "utils.h"
-#include "mutex.h"
+#include <utils/mutex.h>
 
 namespace eular {
 class Condition {
@@ -18,7 +17,7 @@ public:
     ~Condition();
 
     int wait(Mutex& mutex);
-    int timedWait(Mutex& mutex, uint64_t ns);
+    int timedWait(Mutex& mutex, uint64_t ms);
 
     void signal();
     void broadcast();

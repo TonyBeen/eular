@@ -53,6 +53,14 @@ file(GLOB SRC_LIST          "src/*.cpp")
 
 # link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
 
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(STATUS "X64")
+    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib)
+else()
+    message(STATUS "X86")
+    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x86/lib)
+endif()
+
 # build the static library
 if(UTILS_STATIC_LIB MATCHES "ON")
     add_library(utils_static STATIC ${SRC_LIST} ${HEADER_LIST})
@@ -67,26 +75,35 @@ if(UTILS_STATIC_LIB MATCHES "ON")
             ${3RD_INC_DIR}
     )
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
-endif()
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_include_directories(utils_static
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include/pthread4w
+        )
+        target_link_libraries(utils_static
+            PRIVATE
+                ${WIN_LINK_LIB_PATH}/libiconv.lib
+                $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
+                $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
+                ws2_32.lib)
+    endif()
 
     target_compile_options(
         utils_static PRIVATE
         ${CXX_COMPILER_FLAGS}
     )
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_target_properties (
-        utils_static
-        PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
-    )
-endif()
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set_target_properties (
+            utils_static
+            PROPERTIES
+            LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        )
+    endif()
 
     set_property(TARGET utils_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
@@ -112,26 +129,35 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             ${3RD_INC_DIR}
     )
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib/libiconv.lib ws2_32.lib)
-endif()
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_include_directories(utils
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include/pthread4w
+        )
+        target_link_libraries(utils
+            PRIVATE
+                ${WIN_LINK_LIB_PATH}/libiconv.lib
+                $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
+                $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
+                ws2_32.lib)
+    endif()
 
     target_compile_options(
         utils PRIVATE
         ${CXX_COMPILER_FLAGS}
     )
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_target_properties (
-        utils
-        PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro"
-    )
-endif()
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set_target_properties (
+            utils
+            PROPERTIES
+            LINK_FLAGS "-Wl,-z,now,-z,relro"
+        )
+    endif()
 
     set_property(TARGET utils PROPERTY LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
