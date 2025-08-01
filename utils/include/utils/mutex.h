@@ -15,8 +15,8 @@
 
 #include <utils/sysdef.h>
 
-#if defined(OS_LINUX)
 #include <pthread.h>
+#if defined(OS_LINUX)
 #include <semaphore.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
@@ -40,14 +40,17 @@ template<typename MutexType>
 class AutoLock final : public NonCopyAble
 {
 public:
-    AutoLock(MutexType& mutex) : mMutex(mutex)
+    AutoLock(MutexType& mutex) :
+        mMutex(mutex)
     {
         mMutex.lock();
     }
+
     ~AutoLock()
     {
         mMutex.unlock();
     }
+
 private:
     MutexType& mMutex;
 };
@@ -72,15 +75,10 @@ private:
     pthread_spinlock_t mSpinLock;
 };
 
-typedef enum class __MutexSharedAttr {
-    PRIVATE = 0,    // mutex can only be used within the same process
-    SHARED = 1      // mutex can be used between processes
-} MutexSharedAttr;
-
 class Mutex final : public NonCopyAble
 {
 public:
-    Mutex(int32_t type = static_cast<int32_t>(MutexSharedAttr::PRIVATE));
+    Mutex();
     ~Mutex();
 
     int32_t lock();
@@ -102,7 +100,7 @@ private:
 class RecursiveMutex final : public NonCopyAble
 {
 public:
-    RecursiveMutex(int32_t type = static_cast<int32_t>(MutexSharedAttr::PRIVATE));
+    RecursiveMutex();
     ~RecursiveMutex();
 
     int32_t lock();
@@ -111,9 +109,6 @@ public:
 
     void setMutexName(const String8 &name);
     const String8 &getMutexName() const { return mName; }
-
-    operator pthread_mutex_t *() { return &mMutex; }
-    pthread_mutex_t *mutex() { return &mMutex; }
 
 private:
     friend class Condition;

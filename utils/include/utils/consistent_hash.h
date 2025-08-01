@@ -86,7 +86,7 @@ public:
     }
 
 private:
-    std::map<uint32_t, T *> m_nodeMap; // 真实节点与虚拟节点混合Map hahs <--> node
+    std::map<uint32_t, T *> m_nodeMap;          // 真实节点与虚拟节点混合Map hahs <--> node
     uint32_t                m_virtualNodeCount; // 每个真实节点的虚拟节点
 
 #ifdef USE_FNV_HASH

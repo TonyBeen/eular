@@ -17,8 +17,8 @@
 #ifndef __SHARED_BUFFER_H__
 #define __SHARED_BUFFER_H__
 
-#include <atomic>
 #include <stdint.h>
+#include <atomic>
 #include <sys/types.h>
 
 namespace eular {

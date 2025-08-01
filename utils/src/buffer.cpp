@@ -8,6 +8,7 @@
 #include "utils/buffer.h"
 #include "utils/shared_buffer.h"
 #include "utils/exception.h"
+#include "utils/sysdef.h"
 
 #include <assert.h>
 
@@ -137,9 +138,13 @@ size_t ByteBuffer::set(const uint8_t *data, size_t dataSize, size_t offset)
     size_t real_offset = mDataSize >= offset ? offset : 0;
     size_t newSize = 0;
 
+#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
     if (__builtin_add_overflow(dataSize, real_offset, &newSize)) {
         return 0;
     }
+#else
+    newSize = real_offset + dataSize;
+#endif
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) { // capacity exceeded
@@ -191,9 +196,13 @@ size_t ByteBuffer::insert(const uint8_t *data, size_t dataSize, size_t offset)
     size_t newSize = 0;
     size_t copySize = mDataSize - offset;
     size_t oldDataSize = mDataSize;
+#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
     if (__builtin_add_overflow(dataSize, mDataSize, &newSize)) {
         return 0;
     }
+#else
+    newSize = dataSize + mDataSize;
+#endif
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) {

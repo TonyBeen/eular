@@ -29,15 +29,12 @@ void SpinLock::LockSlow() noexcept
     // } while (m_locked.exchange(true, std::memory_order_acquire));
 }
 
-Mutex::Mutex(int32_t type)
+Mutex::Mutex()
 {
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);  // for EDEADLK
-    if (type == static_cast<int32_t>(MutexSharedAttr::SHARED)) {
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-    }
     pthread_mutex_init(&mMutex, &attr);
     pthread_mutexattr_destroy(&attr);
 }
@@ -88,15 +85,12 @@ int32_t Mutex::trylock()
     return pthread_mutex_trylock(&mMutex);
 }
 
-RecursiveMutex::RecursiveMutex(int32_t type)
+RecursiveMutex::RecursiveMutex()
 {
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE_NP);   // for recursive
-    if (type == static_cast<int32_t>(MutexSharedAttr::SHARED)) {
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-    }
     pthread_mutex_init(&mMutex, &attr);
     pthread_mutexattr_destroy(&attr);
 }
@@ -196,6 +190,7 @@ void RWMutex::unlock()
 
 Sem::Sem(const char *semPath, uint8_t val)
 {
+#if defined(OS_LINUX) || defined(OS_MACOS)
     if (semPath == nullptr) {
         throw Exception("the first param can not be null");
     }
@@ -208,6 +203,9 @@ Sem::Sem(const char *semPath, uint8_t val)
     }
 
     isNamedSemaphore = true;
+#elif defined(OS_WINDOWS)
+    #error "Named semaphore is not supported on Windows"
+#endif
 }
 
 Sem::Sem(uint8_t valBase)
@@ -220,6 +218,7 @@ Sem::Sem(uint8_t valBase)
     if (sem_init(mSem, false, valBase)) {
         throw Exception(String8::Format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
     }
+
     isNamedSemaphore = false;
 }
 
@@ -267,6 +266,7 @@ bool Sem::trywait()
 bool Sem::timedwait(uint32_t ms)
 {
     struct timespec expire;
+#if defined(OS_LINUX) || defined(OS_MACOS)
     clock_gettime(CLOCK_REALTIME, &expire);
     expire.tv_sec += ms / 1000;
     expire.tv_nsec += (ms % 1000 * 1000 * 1000);
@@ -274,7 +274,12 @@ bool Sem::timedwait(uint32_t ms)
         ++expire.tv_sec;
         expire.tv_nsec -= 1000 * 1000 * 1000;
     }
-
+#elif defined(OS_WINDOWS)
+    struct timespec reltive;
+    reltive.tv_sec = ms / 1000;
+    reltive.tv_nsec = (ms % 1000) * 1000000; // convert to nanoseconds
+    pthread_win32_getabstime_np(&expire, &reltive)
+#endif
     int32_t rt = 0;
     do {
         rt = sem_timedwait(mSem, &expire);
