@@ -8,21 +8,13 @@
 #ifndef __UTILS_FUNCTION_H__
 #define __UTILS_FUNCTION_H__
 
-#include <utils/sysdef.h>
-
 #include <stdint.h>
-#include <string>
-#include <vector>
-#include <list>
-#include <unordered_map>
 
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <utils/sysdef.h>
 
 #if defined(OS_LINUX) || defined(OS_APPLE)
 #include <unistd.h>
 #include <sys/syscall.h>
-#include <dirent.h>
 #else
 #include <windows.h>
 #endif
@@ -51,16 +43,6 @@
     ClassName(ClassName&&) = delete; \
     ClassName& operator=(ClassName&&) = delete;
 
-#ifdef __cplusplus
-#define EXTERN_C_BEGIN extern "C" {
-#define EXTERN_C_END }
-#define DEFAULT(x) = x
-#else
-#define EXTERN_C_BEGIN
-#define EXTERN_C_END
-#define DEFAULT(x)
-#endif
-
 #if COMPILER_TYPE == COMPILER_MSVC
 #define eular_likely(cond)          (cond)
 #define eular_unlikely(cond)        (cond)
@@ -73,7 +55,9 @@
 
  // P: 地址 O: 旧值 N: 新值; if (O == *P) { *p = N; return O} else { return *P }
 #define cmpxchg(P, O, N)            InterlockedCompareExchange((volatile long*)(P), (N), (O))
+
 #else
+
 #define eular_likely(cond)          __builtin_expect(!!(cond), 1)       // 编译器优化，条件大概率成立
 #define eular_unlikely(cond)        __builtin_expect(!!(cond), 0)       // 编译器优化，条件大概率不成立
 

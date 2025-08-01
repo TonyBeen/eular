@@ -60,7 +60,7 @@ bool CodeConvert::convertBegin(CodeFlag from, CodeFlag to)
 int32_t CodeConvert::convert(const std::string &from, std::string &to)
 {
     if (from.empty()) {
-        return Status::INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
 
     char *pBegin = const_cast<char *>(from.c_str());
@@ -69,7 +69,7 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
     output.reserve(_ComputeOutSize(m_codeFrom, m_codeTo, from.size()));
     char outputBuf[CACHE_SIZE] = {0};
 
-    int32_t result = Status::OK;
+    int32_t result = STATUS(OK);
     do {
         char *pOutputBuf = outputBuf;
         size_t leftOutputLen = CACHE_SIZE;
@@ -115,7 +115,7 @@ void CodeConvert::convertEnd()
 int32_t CodeConvert::UTF8ToGBK(const std::string &u8String, std::string &gbkString)
 {
     if (u8String.empty()) {
-        return Status::INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
 
     iconv_t iconvHandle = iconv_open("GBK", "UTF-8");
@@ -130,7 +130,7 @@ int32_t CodeConvert::UTF8ToGBK(const std::string &u8String, std::string &gbkStri
     std::string gbkResult;
     gbkResult.reserve(_ComputeOutSize(UTF8, GBK, u8String.size()));
 
-    int32_t result = Status::OK;
+    int32_t result = STATUS(OK);
     do {
         char outputBuf[CACHE_SIZE] = {0};
         char *pOutputBuf = outputBuf;
@@ -173,7 +173,7 @@ int32_t CodeConvert::UTF8ToGBK(const std::string &u8String, std::string &gbkStri
 int32_t CodeConvert::GBKToUTF8(const std::string &gbkString, std::string &u8String)
 {
     if (gbkString.empty()) {
-        return Status::INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
 
     iconv_t iconvHandle = iconv_open("UTF-8", "GBK");
@@ -188,7 +188,7 @@ int32_t CodeConvert::GBKToUTF8(const std::string &gbkString, std::string &u8Stri
     std::string u8Result;
     u8Result.reserve(_ComputeOutSize(GBK, UTF8, gbkString.size()));
 
-    int32_t result = Status::OK;
+    int32_t result = STATUS(OK);
     do {
         char outputBuf[CACHE_SIZE] = {0};
         char *pOutputBuf = outputBuf;
@@ -231,7 +231,7 @@ int32_t CodeConvert::GBKToUTF8(const std::string &gbkString, std::string &u8Stri
 int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::wstring &u16String)
 {
     if (u8String.empty()) {
-        return Status::INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
 
     char *pU8Begin = (char *)u8String.c_str();
@@ -246,7 +246,7 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::wstring &u1
         return -errno;
     }
 
-    int32_t result = Status::OK;
+    int32_t result = STATUS(OK);
     while (inputSize > 0) {
         char outputBuf[CACHE_SIZE] = {0};
 
@@ -288,7 +288,7 @@ int32_t CodeConvert::UTF8ToUTF16LE(const std::string &u8String, std::wstring &u1
 int32_t CodeConvert::UTF16LEToUTF8(const std::wstring &u16String, std::string &u8String)
 {
     if (u16String.empty()) {
-        return Status::INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
 
     char *pU8Begin = (char *)u16String.c_str();
@@ -303,7 +303,7 @@ int32_t CodeConvert::UTF16LEToUTF8(const std::wstring &u16String, std::string &u
         return -errno;
     }
 
-    int32_t result = Status::OK;
+    int32_t result = STATUS(OK);
     while (inputSize > 0) {
         char outputBuf[CACHE_SIZE] = {0};
 

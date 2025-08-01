@@ -15,8 +15,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "utils/code_convert.h"
 #include "utils/sysdef.h"
+#include "utils/code_convert.h"
 #include "utils/debug.h"
 
 #if defined(OS_LINUX)

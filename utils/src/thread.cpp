@@ -79,7 +79,7 @@ bool ThreadBase::ShouldExit()
 int ThreadBase::run(size_t stackSize)
 {
     if (mThreadStatus != CAST2UINT(ThreadStatus::THREAD_EXIT)) {
-        return INVALID_OPERATION;
+        return STATUS(INVALID_OPERATION);
     }
 
     pthread_attr_t attr;

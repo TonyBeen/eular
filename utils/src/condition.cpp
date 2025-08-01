@@ -13,19 +13,11 @@
 #include <sys/time.h>
 
 namespace eular {
-Condition::Condition() : Condition(PRIVATE)
-{
-
-}
-Condition::Condition(int type)
+Condition::Condition()
 {
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);  // 绝对时间
-    if (SHARED == type) {
-        pthread_condattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-    }
-
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
     pthread_cond_init(&mCond, &attr);
     pthread_condattr_destroy(&attr);
 }

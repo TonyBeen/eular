@@ -655,7 +655,7 @@ int String8::setTo(const char* other)
 int String8::setTo(const char* other, size_t numChars)
 {
     if (other == nullptr || numChars == 0) {
-        return INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
     int ret = 0;
 
@@ -828,7 +828,7 @@ void String8::toUpper(size_t start, size_t numChars)
 int32_t String8::KMP_strstr(const char *val, const char *key)
 {
     if (val == nullptr || key == nullptr) {
-        return INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
     int valLen = strlen(val);
     int keyLen = strlen(key);

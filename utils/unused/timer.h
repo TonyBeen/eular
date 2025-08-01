@@ -13,14 +13,15 @@
 #ifndef __TIMER_H__
 #define __TIMER_H__
 
-#include "mutex.h"
-#include "thread.h"
-#include "singleton.h"
-#include <sys/epoll.h>
 #include <stdint.h>
 #include <set>
 #include <memory>
 #include <functional>
+
+#include <utils/sysdef.h>
+#include <utils/mutex.h>
+#include <utils/thread.h>
+#include <utils/singleton.h>
 
 using std::set;
 using std::function;
@@ -50,7 +51,7 @@ public:
      */
     void reset(uint64_t ms, CallBack cb, uint32_t recycle);
 
-    static uint64_t getCurrentTime(clockid_t type = CLOCK_MONOTONIC);
+    static uint64_t getCurrentTime(int32_t type = CLOCK_MONOTONIC);
 
 private:
     Timer();

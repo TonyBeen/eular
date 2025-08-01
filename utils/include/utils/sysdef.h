@@ -5,8 +5,8 @@
     > Created Time: Mon 27 Sep 2021 08:53:20 AM CST
  ************************************************************************/
 
-#ifndef __SYSDEF_H__
-#define __SYSDEF_H__
+#ifndef __UTILS_SYSDEF_H__
+#define __UTILS_SYSDEF_H__
 
 #include <stdint.h>
 #include <string.h>
@@ -173,6 +173,16 @@
     #error "Unknown compiler."
 #endif
 
+#ifdef __cplusplus
+#define EXTERN_C_BEGIN extern "C" {
+#define EXTERN_C_END }
+#define DEFAULT(x) = x
+#else
+#define EXTERN_C_BEGIN
+#define EXTERN_C_END
+#define DEFAULT(x)
+#endif
+
 #if COMPILER_TYPE == COMPILER_MSVC
     #ifndef UTILS_STATIC
         #ifdef UTILS_EXPORTS
@@ -225,4 +235,4 @@
 #define EULAR_HAVE_FEATURE(f) 0
 #endif
 
-#endif // __SYSDEF_H__
+#endif // __UTILS_SYSDEF_H__

@@ -14,12 +14,7 @@
 namespace eular {
 class Condition {
 public:
-    enum {
-        PRIVATE = 0,
-        SHARED = 1
-    };
     Condition();
-    Condition(int type);
     ~Condition();
 
     int wait(Mutex& mutex);

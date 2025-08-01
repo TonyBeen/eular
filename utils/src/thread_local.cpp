@@ -9,10 +9,6 @@
 #include "utils/sysdef.h"
 #include "utils/mutex.h"
 
-#if defined(OS_LINUX)
-#include <pthread.h>
-#endif
-
 namespace eular {
 
 static thread_local std::shared_ptr<ThreadLocalStorage> g_tls = nullptr;

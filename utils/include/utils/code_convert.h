@@ -12,7 +12,6 @@
 #include <string>
 
 namespace eular {
-
 class CodeConvert
 {
     CodeConvert(const CodeConvert &) = delete;
@@ -109,9 +108,7 @@ protected:
     static uint32_t _ComputeOutSizeToUTF8(CodeFlag from, CodeFlag to, uint32_t inputSize);
 
 private:
-    typedef void * iconv_t;
-
-    iconv_t     m_codeConvHandle;
+    void*       m_codeConvHandle;
     uint32_t    m_cacheSize;
     CodeFlag    m_codeFrom;
     CodeFlag    m_codeTo;

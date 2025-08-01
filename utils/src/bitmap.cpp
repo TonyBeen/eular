@@ -9,8 +9,8 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdexcept>
 
+#include "utils/exception.h"
 #include "utils/sysdef.h"
 
 #define DEFAULT_SIZE    (256)
@@ -241,7 +241,7 @@ void BitMap::release()
 void BitMap::nullThrow() const
 {
     if (mBitMap == nullptr) {
-        throw std::runtime_error("using null pointers");
+        throw Exception("using null pointers");
     }
 }
 

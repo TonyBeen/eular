@@ -5,16 +5,14 @@
     > Created Time: 2021年04月25日 星期日 21时24分54秒
  ************************************************************************/
 
-#ifndef __MUTEX_H__
-#define __MUTEX_H__
+#ifndef __UTILS_MUTEX_H__
+#define __UTILS_MUTEX_H__
 
 #include <stdint.h>
 #include <assert.h>
 #include <atomic>
 #include <functional>
 
-#include <utils/utils.h>
-#include <utils/string8.h>
 #include <utils/sysdef.h>
 
 #if defined(OS_LINUX)
@@ -24,6 +22,9 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #endif
+
+#include <utils/utils.h>
+#include <utils/string8.h>
 
 namespace eular {
 class NonCopyAble
@@ -233,4 +234,4 @@ void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args)
 
 } // namespace eular
 
-#endif // __MUTEX_H__
+#endif // __UTILS_MUTEX_H__
