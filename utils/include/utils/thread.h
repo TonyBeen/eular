@@ -19,7 +19,7 @@
 #include <utils/utils.h>
 
 namespace eular {
-class ThreadBase
+class UTILS_API ThreadBase
 {
     DISALLOW_COPY_AND_ASSIGN(ThreadBase);
 public:
@@ -62,7 +62,7 @@ protected:
     std::atomic<bool>       mExitStatus;
 };
 
-class Thread
+class UTILS_API Thread
 {
 public:
     using SP = std::shared_ptr<Thread>;

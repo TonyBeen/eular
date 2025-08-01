@@ -12,7 +12,6 @@
 #include <utils/refcount.h>
 
 namespace eular {
-
 template <typename T>
 class Singleton;
 

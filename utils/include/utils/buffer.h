@@ -14,8 +14,10 @@
 #include <string.h>
 #include <string>
 
+#include <utils/sysdef.h>
+
 namespace eular {
-class ByteBuffer final
+class UTILS_API ByteBuffer final
 {
 public:
     ByteBuffer();

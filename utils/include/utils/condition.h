@@ -11,7 +11,7 @@
 #include <utils/mutex.h>
 
 namespace eular {
-class Condition {
+class UTILS_API Condition {
 public:
     Condition();
     ~Condition();

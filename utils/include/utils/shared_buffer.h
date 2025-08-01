@@ -22,7 +22,6 @@
 #include <sys/types.h>
 
 namespace eular {
-
 class SharedBuffer
 {
 public:

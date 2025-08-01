@@ -11,8 +11,10 @@
 #include <stdint.h>
 #include <string>
 
+#include <utils/sysdef.h>
+
 namespace eular {
-class CodeConvert
+class UTILS_API CodeConvert
 {
     CodeConvert(const CodeConvert &) = delete;
     CodeConvert &operator=(const CodeConvert &) = delete;

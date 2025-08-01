@@ -18,6 +18,7 @@ class Map {
     typedef Val ValType;
     using Data = detail::MapData<KeyType, ValType>;
     using Node = detail::MapNode<KeyType, ValType>;
+
 public:
     Map() : mRBtree(Data::create()) {}
     Map(std::initializer_list<std::pair<KeyType, ValType>> initList) :

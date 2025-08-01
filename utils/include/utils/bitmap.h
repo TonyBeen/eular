@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <utils/sysdef.h>
+
 #ifdef __CHAR_BIT__
 #define BITS_PEER_BYTE      __CHAR_BIT__
 #else
@@ -18,8 +20,7 @@
 #endif
 
 namespace eular {
-
-class BitMap final
+class UTILS_API BitMap final
 {
 public:
     BitMap();

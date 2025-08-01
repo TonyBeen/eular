@@ -10,17 +10,19 @@
 
 #include <string>
 
+#include <utils/sysdef.h>
+
 namespace eular {
 namespace dir {
 
 /**
  * @brief 判断路径或文件是否存在
- * 
+ *
  * @param path 路径
  * @return true 
  * @return false 
  */
-bool exists(const std::string &path);
+UTILS_API bool exists(const std::string &path);
 
 /**
  * @brief 根据给定的带有.或..路径返回绝对路径
@@ -35,7 +37,7 @@ bool exists(const std::string &path);
  * @return true 
  * @return false 
  */
-bool absolute(const std::string &path, std::string &absPath);
+UTILS_API bool absolute(const std::string &path, std::string &absPath);
 
 /**
  * @brief 创建路径, 类似 mkdir -p /path/to/non-existent
@@ -44,7 +46,7 @@ bool absolute(const std::string &path, std::string &absPath);
  * @return true 
  * @return false 
  */
-bool mkdir(const std::string &path);
+UTILS_API bool mkdir(const std::string &path);
 
 } // namespace dir
 } // namespace eular

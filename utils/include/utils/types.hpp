@@ -8,23 +8,17 @@
 #ifndef __EULAR_TYPES_H__
 #define __EULAR_TYPES_H__
 
-#include "sysdef.h"
-#include <arpa/inet.h> // for htons htonl ntohs ntohl
-#include <byteswap.h>
 #include <type_traits>  // for enable_if
 
-#if defined(OS_UNIX)
-#define FORCEINLINE inline __attribute__((always_inline))
-#endif
+#include <utils/endian.hpp>
 
 namespace eular {
-
 // 8字节类型转换
 template<typename T>
 typename std::enable_if<sizeof(T) == sizeof(uint64_t), T>::type
 byteswap(T value)
 {
-    return (T)bswap_64((uint64_t)value);
+    return (T)byteswap_64((uint64_t)value);
 }
 
 // 4字节类型转换
@@ -32,7 +26,7 @@ template<typename T>
 typename std::enable_if<sizeof(T) == sizeof(uint32_t), T>::type
 byteswap(T value)
 {
-    return (T)bswap_32((uint32_t)value);
+    return (T)byteswap_32((uint32_t)value);
 }
 
 // 2字节类型转换
@@ -40,7 +34,7 @@ template<typename T>
 typename std::enable_if<sizeof(T) == sizeof(uint16_t), T>::type
 byteswap(T value)
 {
-    return (T)bswap_16((uint16_t)value);
+    return (T)byteswap_16((uint16_t)value);
 }
 
 #if BYTE_ORDER == BIG_ENDIAN
@@ -77,43 +71,38 @@ T toLittleEndian(T value)
 template<typename T>
 struct little_endian
 {
-    little_endian() { mData = 0; }
-    little_endian(const T &t) { mData = toLittleEndian(t); }
-    little_endian(const little_endian &other) { mData = other.mData; }
+    little_endian() = default;
+    little_endian(const T &t) { m_data = toLittleEndian(t); }
+    little_endian(const little_endian &other) { m_data = other.m_data; }
     little_endian &operator=(const little_endian &other) {
         if (&other != this) {
-            mData = other.mData;
+            m_data = other.m_data;
         }
         return *this;
     }
 
-    T operator=(const T &t) { mData = toLittleEndian(t); return t; }
+    T operator=(const T &t) { m_data = toLittleEndian(t); return t; }
 
     operator T() const {
     #if BYTE_ORDER == LITTLE_ENDIAN
-        return mData;
+        return m_data;
     #else
-        return toBigEndian(mData);
+        return toBigEndian(m_data);
     #endif
     }
 
 private:
-    T mData;
+    T   m_data{};
 };
 
-typedef little_endian<int16_t>  int16s;
-typedef little_endian<int32_t>  int32s;
-typedef little_endian<uint16_t> uint16s;
-typedef little_endian<uint32_t> uint32s;
-typedef little_endian<int64_t>  int64s;
-typedef little_endian<uint64_t> uint64s;
-
-// static_assert(sizeof(int16s)  == 2);
-// static_assert(sizeof(int32s)  == 4);
-// static_assert(sizeof(uint16s) == 2);
-// static_assert(sizeof(uint32s) == 4);
-// static_assert(sizeof(int64s)  == 8);
-// static_assert(sizeof(uint64s) == 8);
+typedef little_endian<int16_t>  int16_le_t;
+typedef little_endian<int32_t>  int32_le_t;
+typedef little_endian<uint16_t> uint16_le_t;
+typedef little_endian<uint32_t> uint32_le_t;
+typedef little_endian<int64_t>  int64_le_t;
+typedef little_endian<uint64_t> uint64_le_t;
+typedef little_endian<float>    float32_le_t;
+typedef little_endian<double>   float64_le_t;
 
 } // namespace eular
 

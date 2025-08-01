@@ -11,7 +11,6 @@
 #include <utils/buffer_stream.h>
 
 namespace eular {
-
 template<typename T, size_t size>
 BufferStream &operator<<(BufferStream &stream, const T (&item)[size])
 {

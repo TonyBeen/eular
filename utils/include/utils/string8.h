@@ -29,7 +29,7 @@
 #endif
 
 namespace eular {
-class String8 {
+class UTILS_API String8 {
 public:
                         String8();
     explicit            String8(uint32_t size);

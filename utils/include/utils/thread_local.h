@@ -46,7 +46,7 @@ private:
     T m_value;
 };
 
-class ThreadLocalStorage
+class UTILS_API ThreadLocalStorage
 {
 public:
     ThreadLocalStorage() = default;

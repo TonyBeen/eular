@@ -14,7 +14,6 @@
 #include <utils/singleton_object.h>
 
 namespace eular {
-
 template<typename T>
 class Singleton {
 public:
