@@ -9,13 +9,7 @@
 
 int32_t GetLastErrno()
 {
-#if defined(OS_LINUX) || defined(OS_MACOS)
     return errno;
-#elif defined(OS_WINDOWS)
-    return GetLastError();
-#else
-    return 0; // Unsupported platform
-#endif
 }
 
 #define XXX(code, msg) \
