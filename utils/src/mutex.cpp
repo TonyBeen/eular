@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include "utils/errors.h"
 #include "utils/utils.h"
 #include "utils/exception.h"
 
@@ -188,7 +189,9 @@ void RWMutex::unlock()
     }
 }
 
-Sem::Sem(const char *semPath, uint8_t val)
+Sem::Sem(const char *semPath, uint8_t val) :
+    mFilePath(semPath),
+    isNamedSemaphore(true)
 {
 #if defined(OS_LINUX) || defined(OS_MACOS)
     if (semPath == nullptr) {
@@ -198,18 +201,28 @@ Sem::Sem(const char *semPath, uint8_t val)
     // 如果信号量已存在，则后两个参数会忽略，详见man sem_open
     mSem = sem_open(semPath, O_CREAT | O_RDWR, 0664, val);
     if (mSem == SEM_FAILED) {
-        String8 erorMsg = String8::Format("sem_open failed. %d %s", errno, strerror(errno));
+        String8 erorMsg = String8::Format("sem_open failed. [%d, %s]", errno, strerror(errno));
         throw Exception(erorMsg);
     }
-
-    isNamedSemaphore = true;
 #elif defined(OS_WINDOWS)
-    #error "Named semaphore is not supported on Windows"
+    mSem = CreateSemaphoreA(
+        NULL,
+        val,
+        val,
+        semPath
+    );
+    if (mSem == nullptr) {
+        int32_t status = GetLastError();
+        String8 erorMsg = String8::Format("CreateSemaphoreA failed. [%d, %s]", status, FormatErrno(status));
+        throw Exception(erorMsg);
+    }
 #endif
 }
 
-Sem::Sem(uint8_t valBase)
+Sem::Sem(uint8_t valBase) :
+    isNamedSemaphore(false)
 {
+#if defined(OS_LINUX) || defined(OS_MACOS)
     mSem = new (std::nothrow)sem_t;
     if (mSem == nullptr) {
         throw Exception("new sem_t error. no more memory");
@@ -218,48 +231,91 @@ Sem::Sem(uint8_t valBase)
     if (sem_init(mSem, false, valBase)) {
         throw Exception(String8::Format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
     }
-
-    isNamedSemaphore = false;
+#else
+    mSem = CreateSemaphoreA(
+        NULL,
+        valBase,
+        valBase,
+        nullptr
+    );
+    if (mSem == nullptr) {
+        int32_t status = GetLastError();
+        String8 erorMsg = String8::Format("CreateSemaphoreA failed. [%d, %s]", status, FormatErrno(status));
+        throw Exception(erorMsg);
+    }
+#endif
 }
 
 Sem::~Sem()
 {
-    if (isNamedSemaphore) {
-        sem_close(mSem);
-        sem_unlink(mFilePath.c_str());
-    } else {
-        sem_destroy(mSem);
-        delete mSem;
+    if (mSem != nullptr) {
+#ifdef OS_WINDOWS
+         CloseHandle(mSem);
+#else
+        if (isNamedSemaphore) {
+            sem_close(mSem);
+            sem_unlink(mFilePath.c_str());
+        } else {
+            sem_destroy(mSem);
+            delete mSem;
+        }
+#endif // OS_WINDOWS
+        mSem = nullptr;
     }
 }
 
 // see https://stackoverflow.com/questions/2013181/gdb-causes-sem-wait-to-fail-with-eintr-error
-
 bool Sem::post()
 {
+#if defined(OS_WINDOWS)
+    BOOL state = ReleaseSemaphore(mSem, 1, nullptr);
+    if (!state) {
+        errno = GetLastError();
+    }
+    return state != 0;
+#else
     int32_t rt = 0;
     do {
         rt = sem_post(mSem);
     } while (rt == -1 && errno == EINTR);
     return 0 == rt;
+#endif
 }
 
 bool Sem::wait()
 {
+#if defined(OS_WINDOWS)
+    DWORD status = WaitForSingleObject(mSem, INFINITE);
+    if (status != WAIT_OBJECT_0) {
+        errno = GetLastError();
+        return false;
+    }
+    return true;
+#else
     int32_t rt = 0;
     do {
         rt = sem_wait(mSem);
     } while (rt == -1 && errno == EINTR);
     return 0 == rt;
+#endif
 }
 
 bool Sem::trywait()
 {
+#if defined(OS_WINDOWS)
+    DWORD status = WaitForSingleObject(mSem, 0);
+    if (status != WAIT_OBJECT_0) {
+        errno = GetLastError();
+        return false;
+    }
+    return true;
+#else
     int32_t rt = 0;
     do {
         rt = sem_trywait(mSem);
     } while (rt == -1 && errno == EINTR);
     return 0 == rt;
+#endif
 }
 
 #if _POSIX_C_SOURCE >= 200112L
@@ -294,8 +350,8 @@ bool Sem::timedwait(uint32_t ms)
 #endif
 
 namespace detail {
-__thread void* __once_callable;
-__thread void (*__once_call)();
+THREAD_LOCAL void* __once_callable;
+THREAD_LOCAL void (*__once_call)();
 
 extern "C" void __once_proxy(void)
 {

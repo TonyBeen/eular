@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 #include <assert.h>
+#include <stdbool.h>
+
 #include <atomic>
 #include <functional>
 
@@ -185,7 +187,12 @@ public:
     bool timedwait(uint32_t ms);
 
 private:
-    sem_t  *mSem;       // 信号量
+#ifdef OS_WINDOWS
+	HANDLE mSem;      // 信号量
+#else
+    sem_t* mSem;       // 信号量
+#endif // OS_WINDOWS
+
     String8 mFilePath;  // 有名信号量使用
     bool    isNamedSemaphore;
 };
@@ -205,8 +212,8 @@ public:
 };
 
 namespace detail {
-extern __thread void* __once_callable;
-extern __thread void (*__once_call)();
+extern THREAD_LOCAL void* __once_callable;
+extern THREAD_LOCAL void (*__once_call)();
 extern "C" void __once_proxy(void);
 } // namespace detail
 

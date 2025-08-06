@@ -203,8 +203,10 @@
 
 #if defined(OS_LINUX) || defined(OS_APPLE)
     #define PRETTY_FUNCTION     __PRETTY_FUNCTION__
+    #define THREAD_LOCAL        __thread
 #elif defined(OS_WINDOWS)
     #define PRETTY_FUNCTION     __FUNCSIG__
+    #define THREAD_LOCAL        __declspec(thread)
 #endif
 
 #if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ > 4)

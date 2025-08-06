@@ -24,6 +24,7 @@
 #include <sys/event.h>
 #elif defined(OS_WINDOWS)
 #include <winsock2.h>
+typedef int     socklen_t;
 #endif
 
 #include "utils/exception.h"
@@ -193,7 +194,7 @@ TimerManager::TimerManager() :
 {
     mSockPair[0] = -1;
     mSockPair[1] = -1;
-    int32_t status = SocketPair(AF_LOCAL, SOCK_STREAM, 0, mSockPair);
+    int32_t status = SocketPair(AF_INET, SOCK_STREAM, 0, mSockPair);
     if (status < 0) {
 #if defined(OS_WINDOWS)
         int32_t status = WSAGetLastError();
@@ -294,7 +295,7 @@ void TimerManager::addTimer(Timer *timer)
 
 void TimerManager::onNotify()
 {
-    write(mSockPair[WR_SOCK_IDX], "x", 1); // 唤醒 select
+    send(mSockPair[WR_SOCK_IDX], "x", 1, 0); // 唤醒 select
 }
 
 bool TimerManager::delTimer(uint64_t uniqueId)
@@ -360,7 +361,7 @@ int TimerManager::threadWorkFunction(void *arg)
             break;
         } else if (n > 0) {
             char buffer[64];
-            read(mSockPair[RD_SOCK_IDX], buffer, 64);
+            recv(mSockPair[RD_SOCK_IDX], buffer, 64, 0);
         }
 
         ListExpireTimer();

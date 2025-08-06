@@ -12,7 +12,6 @@
 typedef int32_t status_t;
 enum class Status : int32_t {
     OK                = 0,
-    NO_ERROR          = OK,
 
     UNKNOWN_ERROR       = (-0xFFFF),
 

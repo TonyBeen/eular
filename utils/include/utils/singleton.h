@@ -8,8 +8,6 @@
 #ifndef __SINGLETON_H__
 #define __SINGLETON_H__
 
-#include <bits/move.h>
-
 #include <utils/mutex.h>
 #include <utils/singleton_object.h>
 

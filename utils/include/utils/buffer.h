@@ -73,7 +73,7 @@ private:
 
 namespace std {
     template<>
-    struct hash<eular::ByteBuffer> : public __hash_base<size_t, eular::ByteBuffer> {
+    struct hash<eular::ByteBuffer> {
         size_t operator()(const eular::ByteBuffer &obj) const {
             return eular::ByteBuffer::Hash(obj);
         }

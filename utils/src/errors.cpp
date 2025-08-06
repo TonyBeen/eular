@@ -7,6 +7,12 @@
 
 #include "utils/errors.h"
 
+#if defined(OS_LINUX) || defined(OS_MACOS)
+#include <string.h>
+#elif defined(OS_WINDOWS)
+#include <windows.h>
+#endif
+
 int32_t GetLastErrno()
 {
     return errno;
