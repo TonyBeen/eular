@@ -167,6 +167,8 @@
     #pragma warning (disable: 4267) // size_t => int
     #pragma warning (disable: 4819) // Unicode
     #pragma warning (disable: 4996) // _CRT_SECURE_NO_WARNINGS
+    #pragma warning (disable: 4251) // STL dll
+    #pragma warning (disable: 4275) // dll-interface
 #else
     #error "Unknown compiler."
 #endif

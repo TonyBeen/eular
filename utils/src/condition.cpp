@@ -9,9 +9,7 @@
 #include "utils/sysdef.h"
 
 #include <time.h>
-#include <unistd.h>
 #include <pthread.h>
-#include <sys/time.h>
 
 namespace eular {
 Condition::Condition()
@@ -59,7 +57,7 @@ int Condition::timedWait(Mutex& mutex, uint64_t ms)
     ts.tv_sec = static_cast<long>(time_sec);
 #else
     struct timespec relative = {static_cast<long>(ms / 1000), static_cast<long>(ms * 1000000)};
-    pthread_win32_getabstime_np(&ts, &reltime);
+    pthread_win32_getabstime_np(&ts, &relative);
 #endif
     return pthread_cond_timedwait(&mCond, &mutex.mMutex, &ts);
 }

@@ -11,6 +11,8 @@
 #include <ctime>
 #include <string.h>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 
 namespace eular {
 uint64_t Time::SystemTime()
@@ -82,9 +84,8 @@ time_t Time::Parse(const char *timeStr, const char *format)
         return -1;
     }
 #else
-    if (strptime_s(timeStr, strlen(timeStr), format, &stm) != 0) {
-        return -1;
-    }
+    std::istringstream ss(timeStr);
+    ss >> std::get_time(&stm, format);
 #endif
     stm.tm_isdst = -1; // 让系统自动判断夏令时
     return mktime(&stm);

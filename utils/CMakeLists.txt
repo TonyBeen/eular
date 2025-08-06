@@ -55,10 +55,10 @@ file(GLOB SRC_LIST          "src/*.cpp")
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(STATUS "X64")
-    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/lib)
+    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/)
 else()
     message(STATUS "X86")
-    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x86/lib)
+    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x86/)
 endif()
 
 # build the static library
@@ -86,7 +86,7 @@ if(UTILS_STATIC_LIB MATCHES "ON")
         )
         target_link_libraries(utils_static
             PRIVATE
-                ${WIN_LINK_LIB_PATH}/libiconv.lib
+                ${WIN_LINK_LIB_PATH}/libiconv_a.lib
                 $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
                 $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
                 ws2_32.lib)
@@ -140,7 +140,7 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
         )
         target_link_libraries(utils
             PRIVATE
-                ${WIN_LINK_LIB_PATH}/libiconv.lib
+                ${WIN_LINK_LIB_PATH}/libiconv_a.lib
                 $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
                 $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
                 ws2_32.lib)

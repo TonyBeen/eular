@@ -48,8 +48,12 @@ public:
     static int32_t  GetFileUid(const String8 &path);
 
 private:
-    String8     mFilePath;
-    file_stat_t mFileInfo;
+#if defined(OS_WINDOWS)
+    std::wstring    mFilePath;
+#else
+    String8         mFilePath;
+#endif
+    file_stat_t     mFileInfo;
 };
 
 class UTILS_API FileOp

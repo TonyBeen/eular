@@ -15,7 +15,7 @@
 
 #include <utils/sysdef.h>
 
-static void log2stdout(const char *fileName, int32_t line, const char *format, ...);
+extern "C" UTILS_API void log2stdout(const char *fileName, int32_t line, const char *format, ...);
 #ifdef _DEBUG
     #ifndef LOG
         #define LOG(format, ...) log2stdout(__FILE_NAME__, __LINE__, format, ##__VA_ARGS__);

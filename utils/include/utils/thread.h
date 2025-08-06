@@ -54,7 +54,7 @@ private:
 
 protected:
     uint32_t            mKernalTid;
-    pthread_t           mTid;
+    pthread_t           mTid{};
     Sem                 mSem;
     Sem                 mSemWait; // 用于等待线程创建完毕
 
@@ -84,7 +84,7 @@ protected:
 
 private:
     pid_t                   mKernalTid;     // 内核tid
-    pthread_t               mTid;           // pthread线程ID
+    pthread_t               mTid{};         // pthread线程ID
     eular::String8          mThreadName;    // 线程名字
     std::function<void()>   mCallback;      // 线程执行函数
     uint8_t                 mShouldJoin;    // 1为由用户回收线程，0为自动回收

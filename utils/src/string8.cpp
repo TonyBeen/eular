@@ -18,6 +18,14 @@
 #define DEFAULT_STRING_SIZE 64
 #define MAXSIZE (1024 * 1024) // 1Mb
 
+#if defined(OS_WINDOWS)
+#define STRCASECMP  stricmp
+#define STRNCASECMP strnicmp
+#else
+#define STRCASECMP  strcasecmp
+#define STRNCASECMP strncasecmp
+#endif
+
 namespace eular {
 
 static inline char* getEmptyString()
@@ -522,7 +530,7 @@ int String8::ncompare(const char* other, size_t n) const
 int String8::strcasecmp(const String8& other) const
 {
     if (mString) {
-        return ::strcasecmp(mString, other.mString);
+        return ::STRCASECMP(mString, other.mString);
     }
 
     return -EPERM;
@@ -531,7 +539,7 @@ int String8::strcasecmp(const String8& other) const
 int String8::strcasecmp(const char* other) const
 {
     if (mString) {
-        return ::strcasecmp(mString, other);
+        return ::STRCASECMP(mString, other);
     }
     return -EPERM;
 }
@@ -856,7 +864,11 @@ int32_t String8::KMP_strstr(const char *val, const char *key)
 
 size_t String8::Hash(const String8 &obj)
 {
+#if defined(OS_WINDOWS)
+    return std::_Hash_array_representation(obj.c_str(), obj.length());
+#else
     return std::_Hash_impl::hash(obj.c_str(), obj.length());
+#endif
 }
 
 String8 String8::Format(const char* fmt, ...)

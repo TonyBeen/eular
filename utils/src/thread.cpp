@@ -21,7 +21,6 @@ ThreadBase::ThreadBase(const String8 &threadName) :
     userData(nullptr),
     mThreadName(threadName),
     mKernalTid(0),
-    mTid(0),
     mSem(0),
     mSemWait(0),
     mThreadStatus(CAST2UINT(ThreadStatus::THREAD_EXIT)),
@@ -145,7 +144,6 @@ static thread_local eular::String8 gThreadName;
 
 Thread::Thread(std::function<void()> callback, const String8 &threadName) :
     mKernalTid(0),
-    mTid(0),
     mThreadName(threadName.length() ? threadName : "Unknow"),
     mCallback(callback),
     mShouldJoin(true),
@@ -164,9 +162,7 @@ Thread::Thread(std::function<void()> callback, const String8 &threadName) :
 
 Thread::~Thread()
 {
-    if (mShouldJoin && mTid) {
-        pthread_detach(mTid);
-    }
+    join();
 }
 
 void Thread::SetName(const eular::String8 &name)
@@ -193,7 +189,7 @@ Thread *Thread::GetThis()
 
 void Thread::detach()
 {
-    if (mTid) {
+    if (mShouldJoin) {
         pthread_detach(mTid);
         mShouldJoin = false;
     }
@@ -201,13 +197,12 @@ void Thread::detach()
 
 void Thread::join()
 {
-    if (mShouldJoin && mTid) {
+    if (mShouldJoin) {
         int ret = pthread_join(mTid, nullptr);
         if (ret) {
-            String8 msg = String8::Format("pthread_join error. [%d,%s]", errno, strerror(errno));
+            String8 msg = String8::Format("pthread_join error. [%d,%s]", ret, strerror(ret));
             throw eular::Exception(msg);
         }
-        mTid = 0;
     }
     mShouldJoin = false;
 }

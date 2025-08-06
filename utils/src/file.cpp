@@ -8,6 +8,7 @@
 
 #include "utils/code_convert.h"
 #include "utils/debug.h"
+#include "utils/errors.h"
 
 #define INVLID_FILE_DESCRIPTOR (-1)
 
@@ -34,6 +35,9 @@
 #define EU_CLOSE        ::_close
 #define EU_STATF        ::_wstat
 #define EU_SEEK         ::_lseek
+
+#define ST_MTIME        st_mtime
+#define ST_CTIME        st_ctime
 
 #ifndef CP_UTF8
 #define CP_UTF8 65001
@@ -114,6 +118,10 @@
 #define EU_CLOSE        ::close
 #define EU_STATF        ::stat
 #define EU_SEEK         ::lseek
+
+#define ST_MTIME        st_mtim.tv_sec
+#define ST_CTIME        st_ctim.tv_sec
+
 #else
 #error "unsupport system"
 #endif
@@ -152,8 +160,16 @@ FileInfo &FileInfo::operator=(const FileInfo &other)
 
 bool FileInfo::execGetInfo(const String8 &path)
 {
+#if defined(OS_WINDOWS)
+    int32_t state = CodeConvert::UTF8ToUTF16LE(path.c_str(), mFilePath);
+    if (state != STATUS(OK)) {
+        return false;
+    }
+#else
     mFilePath = path;
-    int32_t ret = stat(mFilePath.c_str(), &mFileInfo);
+#endif
+
+    int32_t ret = EU_STATF(mFilePath.c_str(), &mFileInfo);
     if (ret) {
         LOG("get file(%s) state error: [%d:%s]", mFilePath.c_str(), errno, strerror(errno));
         return false;
@@ -169,12 +185,12 @@ int64_t FileInfo::getFileSize() const
 
 time_t FileInfo::getModifyTime() const
 {
-    return mFileInfo.st_mtim.tv_sec;
+    return mFileInfo.ST_MTIME;
 }
 
 time_t FileInfo::getCreateTime() const
 {
-    return mFileInfo.st_ctim.tv_sec;
+    return mFileInfo.ST_CTIME;
 }
 
 int32_t FileInfo::getFileUid() const
@@ -188,8 +204,15 @@ bool FileInfo::FileExist(const String8 &path)
         return false;
     }
 
+#if defined(OS_WINDOWS)
+    std::wstring filePath;
+    int32_t status = CodeConvert::UTF8ToUTF16LE(path.toStdString(), filePath);
+#else
+    const String8& filePath = path;
+#endif
+
     file_stat_t fileStat;
-    int32_t ret = ::stat(path.c_str(), &fileStat);
+    int32_t ret = EU_STATF(filePath.c_str(), &fileStat);
     return ret == 0;
 }
 
@@ -198,14 +221,19 @@ bool FileInfo::GetFileStat(const String8 &path, file_stat_t *fileStat)
     if (path.empty() || fileStat == nullptr) {
         return false;
     }
-
-    int32_t ret = ::stat(path.c_str(), fileStat);
+#if defined(OS_WINDOWS)
+    std::wstring filePath;
+    int32_t status = CodeConvert::UTF8ToUTF16LE(path.toStdString(), filePath);
+#else
+    const String8& filePath = path;
+#endif
+    int32_t ret = EU_STATF(filePath.c_str(), fileStat);
     return ret == 0;
 }
 
 int64_t FileInfo::GetFileSize(const String8 &path)
 {
-    struct stat fileStat;
+    file_stat_t fileStat;
     if (GetFileStat(path, &fileStat)) {
         return fileStat.st_size;
     }
@@ -215,9 +243,9 @@ int64_t FileInfo::GetFileSize(const String8 &path)
 
 time_t FileInfo::GetFileCreateTime(const String8 &path)
 {
-    struct stat fileStat;
+    file_stat_t fileStat;
     if (GetFileStat(path, &fileStat)) {
-        return fileStat.st_ctim.tv_sec;
+        return fileStat.ST_CTIME;
     }
 
     return -1;
@@ -225,9 +253,9 @@ time_t FileInfo::GetFileCreateTime(const String8 &path)
 
 time_t FileInfo::GetFileModifyTime(const String8 &path)
 {
-    struct stat fileStat;
+    file_stat_t fileStat;
     if (GetFileStat(path, &fileStat)) {
-        return fileStat.st_mtim.tv_sec;
+        return fileStat.ST_MTIME;
     }
 
     return -1;
@@ -235,7 +263,7 @@ time_t FileInfo::GetFileModifyTime(const String8 &path)
 
 int32_t FileInfo::GetFileUid(const String8 &path)
 {
-    struct stat fileStat;
+    file_stat_t fileStat;
     if (GetFileStat(path, &fileStat)) {
         return static_cast<int32_t>(fileStat.st_uid);
     }
@@ -253,14 +281,14 @@ FileOp::FileOp() :
 FileOp::FileOp(const std::string& fileName) :
     m_fileDesc(INVLID_FILE_DESCRIPTOR),
     m_openMode(OpenModeFlag::NotOpen),
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
     m_fileNameUTF8(fileName)
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#else
     m_fileName(fileName)
 #endif
 {
-#if defined(_WIN32) || defined(_WIN64)
-    m_fileName = CodeConvert::UTF8ToUTF16LE(fileName);
+#if defined(OS_WINDOWS)
+    CodeConvert::UTF8ToUTF16LE(fileName, m_fileName);
 #endif
     memset(&m_fileStat, 0, sizeof(file_stat_t));
     __stat(m_fileName, &m_fileStat);
@@ -269,14 +297,14 @@ FileOp::FileOp(const std::string& fileName) :
 FileOp::FileOp(const std::string& fileName, uint32_t emMode) :
     m_fileDesc(INVLID_FILE_DESCRIPTOR),
     m_openMode(OpenModeFlag::NotOpen),
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
     m_fileNameUTF8(fileName)
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#else
     m_fileName(fileName)
 #endif
 {
-#if defined(_WIN32) || defined(_WIN64)
-    m_fileName = CodeConvert::UTF8ToUTF16LE(fileName);
+#if defined(OS_WINDOWS)
+    CodeConvert::UTF8ToUTF16LE(fileName, m_fileName);
 #endif
     memset(&m_fileStat, 0, sizeof(file_stat_t));
     open(emMode);
@@ -293,9 +321,11 @@ FileOp::FileOp(FileOp&& other) :
 {
     std::swap(m_fileDesc, other.m_fileDesc);
     std::swap(m_fileName, other.m_fileName);
-#if defined(_WIN32) || defined(_WIN64)
+
+#if defined(OS_WINDOWS)
     std::swap(m_fileNameUTF8, other.m_fileNameUTF8);
 #endif
+
     std::swap(m_openMode, other.m_openMode);
     std::swap(m_fileStat, other.m_fileStat);
 }
@@ -306,9 +336,11 @@ FileOp& FileOp::operator=(FileOp&& other)
     {
         std::swap(m_fileDesc, other.m_fileDesc);
         std::swap(m_fileName, other.m_fileName);
-#if defined(_WIN32) || defined(_WIN64)
+
+#if defined(OS_WINDOWS)
         std::swap(m_fileNameUTF8, other.m_fileNameUTF8);
 #endif
+
         std::swap(m_openMode, other.m_openMode);
         std::swap(m_fileStat, other.m_fileStat);
     }
@@ -318,29 +350,26 @@ FileOp& FileOp::operator=(FileOp&& other)
 
 const std::string& FileOp::fileName() const
 {
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
     return m_fileNameUTF8;
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#else
     return m_fileName;
 #endif
 }
 
 void FileOp::setFileName(const std::string& name)
 {
-    if (name.empty())
-    {
+    if (name.empty()) {
         return;
     }
 
-#if defined(_WIN32) || defined(_WIN64)
-    if (m_fileNameUTF8 != name)
-    {
+#if defined(OS_WINDOWS)
+    if (m_fileNameUTF8 != name) {
         m_fileNameUTF8 = name;
-        m_fileName = CodeConvert::UTF8ToUTF16LE(name);
+        CodeConvert::UTF8ToUTF16LE(name, m_fileName);
     }
-#elif defined(linux) || defined(__linux) || defined(__linux__)
-    if (m_fileName != name)
-    {
+#else
+    if (m_fileName != name) {
         m_fileName = name;
     }
 #endif
@@ -348,12 +377,11 @@ void FileOp::setFileName(const std::string& name)
 
 bool FileOp::open(uint32_t emMode)
 {
-    if (isOpened())
-    {
+    if (isOpened()) {
         return true;
     }
 
-#if defined(linux) || defined(__linux) || defined(__linux__)
+#if defined(OS_LINUX) || defined(OS_MACOS)
     emMode = emMode & ~(uint32_t)FileOp::Binary;
 #endif
 
@@ -366,8 +394,7 @@ bool FileOp::open(uint32_t emMode)
 
     m_openMode = emMode;
     bool ret = true;
-    if (emMode != OpenModeFlag::NotOpen) // 不想打开文件, 只想获取文件信息
-    {
+    if (emMode != OpenModeFlag::NotOpen) { // 不想打开文件, 只想获取文件信息
         int32_t flag = __flags(emMode);
         m_fileDesc = EU_OPEN(m_fileName.c_str(), flag, EU_MODE);
         if (m_fileDesc < 0)
@@ -395,21 +422,18 @@ bool FileOp::open(const std::string& fileName, uint32_t emMode)
 
 int64_t FileOp::read(void* buf, int32_t size)
 {
-    if (nullptr == buf || 0 == size)
-    {
+    if (nullptr == buf || 0 == size) {
         return 0;
     }
 
-    if (!isOpened())
-    {
+    if (!isOpened()) {
         return -EBADF;
     }
 
     // readSize == 0 表示读取到结尾
     // readSize < 0  表示出现异常, 可通过判断errno检测错误
     auto readSize = EU_READ(m_fileDesc, buf, size);
-    if (readSize < 0)
-    {
+    if (readSize < 0) {
         LOG("read error: [%d:%s]", errno, strerror(errno));
     }
     return readSize;
@@ -417,15 +441,13 @@ int64_t FileOp::read(void* buf, int32_t size)
 
 std::string FileOp::readLine()
 {
-    if (!isOpened() || (m_openMode & OpenModeFlag::Binary))
-    {
+    if (!isOpened() || (m_openMode & OpenModeFlag::Binary)) {
         return std::string();
     }
 
     std::string line;
     char buf[2] = { 0 };  // buf[1]存放\0
-    while (true)
-    {
+    while (true) {
         int32_t n = EU_READ(m_fileDesc, buf, 1);    // 一次读取一个字符
         if (n <= 0) // 读取出错或到达结尾
         {
@@ -488,13 +510,11 @@ int64_t FileOp::pos() const
 
 bool FileOp::seek(int64_t offset, int32_t whence)
 {
-    if (!isOpened())
-    {
+    if (!isOpened()) {
         return false;
     }
 
-    switch (whence)
-    {
+    switch (whence) {
     case SEEK_SET:
     case SEEK_CUR:
     case SEEK_END:
@@ -513,8 +533,7 @@ bool FileOp::eof() const
     int32_t currentPos = pos();
     EU_SEEK(m_fileDesc, 0, SEEK_END);
     int32_t endPos = pos();
-    if (currentPos < endPos)
-    {
+    if (currentPos < endPos) {
         EU_SEEK(m_fileDesc, currentPos, SEEK_SET);
         return false;
     }
@@ -524,10 +543,10 @@ bool FileOp::eof() const
 
 bool FileOp::flush()
 {
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
     _flushall();
     return true;
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#else
     return (-1 != fsync(m_fileDesc));
 #endif
 }
@@ -539,8 +558,7 @@ int64_t FileOp::fileSize() const
 
 void FileOp::close()
 {
-    if (m_fileDesc != INVLID_FILE_DESCRIPTOR)
-    {
+    if (m_fileDesc != INVLID_FILE_DESCRIPTOR) {
         EU_CLOSE(m_fileDesc);
         m_fileDesc = INVLID_FILE_DESCRIPTOR;
     }
@@ -551,9 +569,9 @@ bool FileOp::isOpened() const
     return (INVLID_FILE_DESCRIPTOR != m_fileDesc);
 }
 
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
 bool FileOp::__stat(const std::wstring& file, file_stat_t* info)
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#else
 bool FileOp::__stat(const std::string& file, file_stat_t* info)
 #endif
 {

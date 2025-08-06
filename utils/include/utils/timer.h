@@ -57,7 +57,23 @@ private:
     friend class TimerManager;
     struct Comparator {
         // 传给set的比较器，从小到大排序
-        bool operator()(const Timer *l, const Timer *r) {
+        bool operator()(Timer* const &l, Timer* const &r) const {
+            if (l == nullptr && r == nullptr) {
+                return false;
+            }
+            if (l == nullptr) {
+                return true;
+            }
+            if (r == nullptr) {
+                return false;
+            }
+            if (l->mTime == r->mTime) { // 时间相同，比较ID
+                return l->mUniqueId < r->mUniqueId;
+            }
+            return l->mTime < r->mTime;
+        }
+
+        bool operator()(Timer* &l, Timer* &r) {
             if (l == nullptr && r == nullptr) {
                 return false;
             }
