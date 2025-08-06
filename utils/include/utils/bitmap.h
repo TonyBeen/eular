@@ -81,9 +81,6 @@ public:
      */
     bool resize(uint32_t bitSize);
 
-public:
-    static bool init();
-
 private:
     uint8_t *alloc(uint32_t bitSize);
     void release();
@@ -93,11 +90,6 @@ private:
     uint8_t*    mBitMap;
     uint32_t    mSize;
     uint32_t    mCapacity;
-
-private:
-    static const uint16_t POS_SIZE = sizeof(uint8_t) * BITS_PEER_BYTE;
-    static uint8_t POS[POS_SIZE];
-    static uint8_t NPOS[POS_SIZE];
 };
 
 } // namespace eular

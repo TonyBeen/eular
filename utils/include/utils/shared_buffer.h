@@ -85,22 +85,21 @@ public:
     //! returns wether or not we're the only owner
     inline          bool                    onlyOwner() const;
 
-
 private:
-        inline SharedBuffer() { }
-        inline ~SharedBuffer() { }
-        SharedBuffer(const SharedBuffer&);
-        SharedBuffer& operator = (const SharedBuffer&);
- 
-        // Must be sized to preserve correct alignment.
-        mutable std::atomic<int32_t>        mRefs;
-                size_t                      mSize;
-                uint32_t                    mReserved;
+    SharedBuffer() = default;
+    ~SharedBuffer() = default;
+    SharedBuffer(const SharedBuffer&) = delete;
+    SharedBuffer& operator = (const SharedBuffer&) = delete;
+
+    // Must be sized to preserve correct alignment.
+    mutable std::atomic<int32_t>        mRefs;
+            size_t                      mSize;
+            uint32_t                    mReserved;
 public:
-        // mClientMetadata is reserved for client use.  It is initialized to 0
-        // and the clients can do whatever they want with it.  Note that this is
-        // placed last so that it is adjcent to the buffer allocated.
-                uint32_t                    mClientMetadata;
+    // mClientMetadata is reserved for client use.  It is initialized to 0
+    // and the clients can do whatever they want with it.  Note that this is
+    // placed last so that it is adjcent to the buffer allocated.
+    uint32_t                    mClientMetadata;
 };
 
 static_assert(sizeof(SharedBuffer) % 8 == 0

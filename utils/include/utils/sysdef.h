@@ -48,22 +48,20 @@
     #undef  OS_UNIX
     #define OS_WINDOWS
 
-#define DIR_SEPARATOR       '\\'
-#define DIR_SEPARATOR_STR   "\\"
-
+    #define DIR_SEPARATOR       '\\'
+    #define DIR_SEPARATOR_STR   "\\"
 #else
-
-#define OS_UNIX
-#define DIR_SEPARATOR       '/'
-#define DIR_SEPARATOR_STR   "/"
+    #define OS_UNIX
+    #define DIR_SEPARATOR       '/'
+    #define DIR_SEPARATOR_STR   "/"
 #endif
 
 #ifndef __FILE_NAME__
-#ifdef __BASE_FILE__
-#define __FILE_NAME__   __BASE_FILE__
-#else
-#define __FILE_NAME__  (strrchr(DIR_SEPARATOR_STR __FILE__, DIR_SEPARATOR) + 1)
-#endif
+    #ifdef __BASE_FILE__
+        #define __FILE_NAME__   __BASE_FILE__
+    #else
+        #define __FILE_NAME__  (strrchr(DIR_SEPARATOR_STR __FILE__, DIR_SEPARATOR) + 1)
+    #endif
 #endif
 
 // #if defined(__x86_64__) || defined(_M_X64) || defined(__powerpc64__) || defined(__alpha__) ||
@@ -101,7 +99,7 @@
     #define _WINSOCK_DEPRECATED_NO_WARNINGS
     #endif
 
-    typedef SSIZE_T ssize_t
+    typedef long ssize_t;
 #endif
 
 #define COMPILER_MSVC       1
@@ -174,13 +172,13 @@
 #endif
 
 #ifdef __cplusplus
-#define EXTERN_C_BEGIN extern "C" {
-#define EXTERN_C_END }
-#define DEFAULT(x) = x
+    #define EXTERN_C_BEGIN extern "C" {
+    #define EXTERN_C_END }
+    #define DEFAULT(x) = x
 #else
-#define EXTERN_C_BEGIN
-#define EXTERN_C_END
-#define DEFAULT(x)
+    #define EXTERN_C_BEGIN
+    #define EXTERN_C_END
+    #define DEFAULT(x)
 #endif
 
 #if COMPILER_TYPE == COMPILER_MSVC
@@ -204,23 +202,22 @@
 #endif
 
 #if defined(OS_LINUX) || defined(OS_APPLE)
-#define PRETTY_FUNCTION     __PRETTY_FUNCTION__
+    #define PRETTY_FUNCTION     __PRETTY_FUNCTION__
 #elif defined(OS_WINDOWS)
-#define PRETTY_FUNCTION     __FUNCSIG__
+    #define PRETTY_FUNCTION     __FUNCSIG__
 #endif
 
 #if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ > 4)
-#ifndef WEAK_FUNCTION
-#define WEAK_FUNCTION __attribute__((weak))
-#endif
+    #ifndef WEAK_FUNCTION
+    #define WEAK_FUNCTION __attribute__((weak))
+    #endif
 
-#ifndef NORETURN
-#define NORETURN __attribute__((__noreturn__))
-#endif
-
+    #ifndef NORETURN
+    #define NORETURN __attribute__((__noreturn__))
+    #endif
 #else
-#define NORETURN
-#define WEAK_FUNCTION
+    #define NORETURN
+    #define WEAK_FUNCTION
 #endif
 
 #ifdef __has_builtin

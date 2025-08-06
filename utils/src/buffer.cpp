@@ -305,7 +305,11 @@ std::string ByteBuffer::dump() const
 
 size_t ByteBuffer::Hash(const ByteBuffer &buf)
 {
+#if defined(OS_WINDOWS)
+    return std::_Hash_array_representation(buf.const_data(), buf.size());
+#else
     return std::_Hash_impl::hash(buf.const_data(), buf.size());
+#endif
 }
 
 bool ByteBuffer::operator==(const ByteBuffer &other) const

@@ -15,7 +15,6 @@
 #include <exception>
 
 namespace eular {
-
 template <typename K, typename V, typename CompareK = std::less<K>, typename HashV = std::hash<V>>
 class BiMap
 {
