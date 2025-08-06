@@ -7,7 +7,7 @@ project(utils VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 11)
 
-option(UTILS_STATIC_LIB "Build static library" ON)
+option(UTILS_STATIC_LIB "Build static library" OFF)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" ON)
 
