@@ -5,7 +5,9 @@
     > Created Time: 2024年07月22日 星期一 09时38分44秒
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
 
 #include "catch/catch.hpp"
 #include "utils/code_convert.h"

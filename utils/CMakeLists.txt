@@ -10,6 +10,7 @@ set(CMAKE_C_STANDARD 11)
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" OFF)
 option(ENABLE_DEBUG "Enable debug symbol" ON)
+option(ENABLE_TEST "Enable test" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
@@ -26,7 +27,6 @@ message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
 
-message(STATUS "====> CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
     add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
@@ -47,7 +47,7 @@ endif()
 
 file(GLOB HEADER_LIST       "include/utils/*.h")
 file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
-list(APPEND HEADER_LIST ${HPP_HEADER_LIST})
+list(APPEND HEADER_LIST     ${HPP_HEADER_LIST})
 
 file(GLOB SRC_LIST          "src/*.cpp")
 
@@ -76,9 +76,11 @@ if(UTILS_STATIC_LIB MATCHES "ON")
     )
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
+        target_link_libraries(utils_static PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
+        target_link_libraries(utils_static PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils_static
             PRIVATE
@@ -130,9 +132,11 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
     )
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
+        target_link_libraries(utils PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
+        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
+        target_link_libraries(utils PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils
             PRIVATE
@@ -167,6 +171,11 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
             LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
     endif()
+endif()
+
+# build test
+if(ENABLE_TEST MATCHES "ON")
+    add_subdirectory(test)
 endif()
 
 if(NOT SKIP_INSTALL_HEADERS AND NOT SKIP_INSTALL_ALL)

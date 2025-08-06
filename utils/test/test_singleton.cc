@@ -5,8 +5,13 @@
     > Created Time: Fri 19 Nov 2021 04:38:34 PM CST
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
+
+#ifndef CATCH_CONFIG_ENABLE_BENCHMARKING
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
+#endif
 
 #include <string>
 #include <iostream>

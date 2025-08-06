@@ -5,7 +5,10 @@
     > Created Time: Thu 16 Feb 2023 05:08:44 PM CST
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
+
 #include "catch/catch.hpp"
 #include "utils/hash.h"
 

@@ -5,7 +5,9 @@
     > Created Time: 2024年12月18日 星期三 12时00分54秒
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
 
 #include <unordered_map>
 #include <thread>

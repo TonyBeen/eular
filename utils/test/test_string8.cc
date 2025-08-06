@@ -1,3 +1,7 @@
+#ifndef CATCH_CONFIG_MAIN
+#define CATCH_CONFIG_MAIN
+#endif
+
 #include <stdio.h>
 
 #include <iostream>
@@ -6,235 +10,228 @@
 
 #include <log/log.h>
 #include <utils/string8.h>
-#include <gtest/gtest.h>
+#include <catch/catch.hpp>
 
 #define LOG_TAG "String8-test"
 
 using namespace eular;
 using namespace std;
 
-class String8Test : public testing::Test {
-protected:
-    virtual void SetUp() {
-    }
-
-    virtual void TearDown() {
-    }
-};
-
-TEST_F(String8Test, Cstr) {
+TEST_CASE("test_cstr", "[string8]") {
     String8 tmp("Hello, world!");
-    EXPECT_STREQ(tmp.c_str(), "Hello, world!");
+    CHECK(std::string("Hello, world!") == tmp.c_str());
 }
 
-TEST_F(String8Test, OperatorPlus) {
+TEST_CASE("test_operator_plus", "[string8]") {
     String8 src1("Hello, ");
 
     const char* ccsrc2 = "world!";
     String8 dst1 = src1 + ccsrc2;
-    EXPECT_STREQ(dst1.c_str(), "Hello, world!");
-    EXPECT_STREQ(src1.c_str(), "Hello, ");
-    EXPECT_STREQ(ccsrc2, "world!");
+    CHECK(std::string("Hello, world!") == dst1.c_str());
+    CHECK(std::string("Hello, ") == src1.c_str());
+    CHECK(std::string("world!") == ccsrc2);
 
     String8 ssrc2("world!");
     String8 dst2 = src1 + ssrc2;
-    EXPECT_STREQ(dst2.c_str(), "Hello, world!");
-    EXPECT_STREQ(src1.c_str(), "Hello, ");
-    EXPECT_STREQ(ssrc2.c_str(), "world!");
+    CHECK(std::string("Hello, world!") == dst2.c_str());
+    CHECK(std::string("Hello, ") == src1.c_str());
+    CHECK(std::string("world!") == ssrc2.c_str());
 }
 
-TEST_F(String8Test, OperatorPlusEquals) {
+TEST_CASE("test_operator_plus_equals", "[string8]") {
     String8 src1("My voice");
 
     // Testing String8 += String8
     String8 src2(" is my passport.");
     src1 += src2;
-    EXPECT_STREQ(src1.c_str(), "My voice is my passport.");
-    EXPECT_STREQ(src2.c_str(), " is my passport.");
+    CHECK(std::string("My voice is my passport.") == src1.c_str());
+    CHECK(std::string(" is my passport.") == src2.c_str());
 
     // Adding const char* to the previous string.
     const char* src3 = " Verify me.";
     src1 += src3;
-    EXPECT_STREQ(src1.c_str(), "My voice is my passport. Verify me.");
-    EXPECT_STREQ(src2.c_str(), " is my passport.");
-    EXPECT_STREQ(src3, " Verify me.");
+    CHECK(std::string("My voice is my passport. Verify me.") == src1.c_str());
+    CHECK(std::string(" is my passport.") == src2.c_str());
+    CHECK(std::string(" Verify me.") == src3);
 }
 
-TEST_F(String8Test, stringAppend) {
+TEST_CASE("test_string_append", "[string8]") {
     String8 s;
-    EXPECT_EQ(3, s.append("foo"));
-    EXPECT_STREQ("foo", s.c_str());
-    EXPECT_EQ(3, s.append("bar"));
-    EXPECT_STREQ("foobar", s.c_str());
-    EXPECT_EQ(0, s.append("baz", 0));
-    EXPECT_STREQ("foobar", s.c_str());
+    CHECK(3 == s.append("foo"));
+    CHECK(std::string("foo") == s.c_str());
+    CHECK(3 == s.append("bar"));
+    CHECK(std::string("foobar") == s.c_str());
+    CHECK(0 == s.append("baz", 0));
+    CHECK(std::string("foobar") == s.c_str());
 }
 
-TEST_F(String8Test, appendFormat) {
+TEST_CASE("test_append_format", "[string8]") {
     const char *str1 = "Hello";
     const char *str2 = "World";
     String8 ret;
     ret.appendFormat("%s%s", str1, str2);
-    EXPECT_STREQ(ret.c_str(), "HelloWorld");
+    CHECK(std::string("HelloWorld") == ret.c_str());
 }
 
-TEST_F(String8Test, stringCompare) {
+TEST_CASE("test_string_compare", "[string8]") {
     String8 str1 = "hello";
     const char *str2 = "world";
 
-    EXPECT_EQ(str1.compare("hello"), 0);
-    EXPECT_LT(str1.compare(str2), 0);
+    CHECK(0 == str1.compare("hello"));
+    CHECK(str1.compare(str2) < 0);
 }
 
-TEST_F(String8Test, stringFind) {
+TEST_CASE("test_string_find", "[string8]") {
     eular::String8 str2 = "sssabcssdeabcss";
     int index = str2.find_last_of("abc");
-    EXPECT_EQ(index, 10);
+    CHECK(10 == index);
     index = str2.find("abc");
-    EXPECT_EQ(index, 3);
+    CHECK(3 == index);
 }
 
-TEST_F(String8Test, otherFunction) {
+TEST_CASE("test_other_function", "[string8]") {
     String8 str1 = "127.0.0.1:8000";
     int index = str1.find(":");
-    ASSERT_EQ(index, 9);
+    CHECK(9 == index);
     String8 left = str1.left(index);
     String8 right = str1.right(str1.length() - (index + 1));
-    EXPECT_STREQ(left.c_str(), "127.0.0.1");
-    EXPECT_STREQ(right.c_str(), "8000");
+    CHECK(std::string("127.0.0.1") == left.c_str());
+    CHECK(std::string("8000") == right.c_str());
 
-    EXPECT_EQ(str1[index], ':');
-    EXPECT_EQ(str1[str1.length()], '\0');
-    EXPECT_EQ(str1[1000], str1[str1.capacity()]);
+    CHECK(':' == str1[index]);
+    CHECK('\0' == str1[str1.length()]);
+    CHECK(str1[str1.length()] == str1[str1.capacity()]);
 
     // 测试去除\t
     {
         String8 str2 = "\t\t12345\t\t\t";
         str2.trim('\t');
-        EXPECT_STREQ(str2.c_str(), "12345");
+        CHECK(std::string("12345") == str2.c_str());
     }
 
     // 测试中间存在\t情况下trim
     {
         String8 str2 = "He\tllo";
         str2.trim('\t');
-        EXPECT_TRUE(6 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "He\tllo");
+        CHECK(6 == str2.length());
+        CHECK(std::string("He\tllo") == str2.c_str());
 
         str2 = "\t\tHe\tllo\t\t\t";
         str2.trim('\t');
-        EXPECT_TRUE(6 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "He\tllo");
+        CHECK(6 == str2.length());
+        CHECK(std::string("He\tllo") == str2.c_str());
     }
 
     // 测试全部不为\t情况下trim
     {
         String8 str2 = "Hello";
         str2.trim('\t');
-        EXPECT_TRUE(5 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "Hello");
+        CHECK(5 == str2.length());
+        CHECK(std::string("Hello") == str2.c_str());
     }
 
     // 测试全部为\t情况下trim
     {
         String8 str2 = "\t\t\t\t\t";
         str2.trim('\t');
-        EXPECT_TRUE(0 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "");
+        CHECK(0 == str2.length());
+        CHECK(std::string("") == str2.c_str());
     }
 
     // 测试只有一个不为\t情况下trim
     {
         String8 str2 = "\t\tc\t\t";
         str2.trim('\t');
-        EXPECT_TRUE(1 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "c");
+        CHECK(1 == str2.length());
+        CHECK(std::string("c") == str2.c_str());
     }
 
     // 测试只有左侧存在\t情况下trim
     {
         String8 str2 = "\t\tHello";
         str2.trim('\t');
-        EXPECT_TRUE(5 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "Hello");
+        CHECK(5 == str2.length());
+        CHECK(std::string("Hello") == str2.c_str());
     }
 
     // 测试只有右侧存在\t情况下trim
     {
         String8 str2 = "Hello\t\t";
         str2.trim('\t');
-        EXPECT_TRUE(5 == str2.length());
-        EXPECT_STREQ(str2.c_str(), "Hello");
+        CHECK(5 == str2.length());
+        CHECK(std::string("Hello") == str2.c_str());
     }
 
     {
         String8 str2 = "\t\t12345\t\t\t";
         str2.trimLeft('\t');
-        EXPECT_STREQ(str2.c_str(), "12345\t\t\t");
+        CHECK(5 == str2.length());
+        CHECK(std::string("12345\t\t\t") == str2.c_str());
     }
 
     {
         String8 str2 = "\t\t12345\t\t\t";
         str2.trimRight('\t');
-        EXPECT_STREQ(str2.c_str(), "\t\t12345");
+        CHECK(5 == str2.length());
+        CHECK(std::string("\t\t12345") == str2.c_str());
     }
     
     {
         String8 str2 = "123456789";
         String8 str3 = str2.reverse();
-        EXPECT_STREQ(str3.c_str(), "987654321");
+        CHECK(std::string("987654321") == str3.c_str());
     }
 
     {
         String8 str2 = "123abc456abc789";
         str2.removeAll("abc");
-        EXPECT_STREQ(str2.c_str(), "123456789");
+        CHECK(std::string("123456789") == str2.c_str());
     }
 
     {
         String8 str2 = "abcDEF";
-        EXPECT_EQ(str2.strcasecmp("abcDef"), 0);
+        CHECK(str2.strcasecmp("abcDef") == 0);
         str2.toUpper();
-        EXPECT_STREQ(str2.c_str(), "ABCDEF");
+        CHECK(std::string("ABCDEF") == str2.c_str());
         str2.toLower();
-        EXPECT_STREQ(str2.c_str(), "abcdef");
+        CHECK(std::string("abcdef") == str2.c_str());
     }
 
     {
         const char *val = "BBC ABCDAB ABCDABCDABDE";
         const char *key = "ABCDABD";
-        EXPECT_EQ(eular::String8::KMP_strstr(val, key), strstr(val, key) - val);
+        CHECK(eular::String8::KMP_strstr(val, key) == strstr(val, key) - val);
     }
 }
 
-TEST_F(String8Test, copyAndAssign) {
+TEST_CASE("test_copyAndAssign", "[string8]") {
     String8 str1 = "hello";
     String8 str2 = str1;
-    EXPECT_EQ(str1.c_str(), str2.c_str());
+    CHECK(str1.c_str() == str2.c_str());
     str2.append(" world");
-    EXPECT_STREQ(str2.c_str(), "hello world");
+    CHECK(std::string("hello world") == str2.c_str());
 
     String8 str3;
     str3 = str1;
-    EXPECT_STREQ(str3.c_str(), "hello");
+    CHECK(std::string("hello") == str3.c_str());
     str3.append(" world");
-    EXPECT_STREQ(str3.c_str(), "hello world");
+    CHECK(std::string("hello world") == str3.c_str());
 
-    EXPECT_STREQ(str1.c_str(), "hello");
+    CHECK(std::string("hello") == str1.c_str());
 }
 
-TEST_F(String8Test, Format) {
+TEST_CASE("test_format", "[string8]") {
     {
         const char *str = "Hello World!";
         const String8 &Format = String8::Format("%s", str);
-        EXPECT_TRUE(Format == str);
+        CHECK(Format == str);
     }
 
     {
         int num = 996;
         const String8 &Format = String8::Format("%d", num);
         int num_2 = atoi(Format.c_str());
-        EXPECT_EQ(num, num_2);
+        CHECK(num == num_2);
     }
 
     {
@@ -251,7 +248,7 @@ TEST_F(String8Test, Format) {
     }
 }
 
-TEST_F(String8Test, support_unordered_map_set) {
+TEST_CASE("test_support_unordered_map_set", "[string8]") {
     const char *hello = "Hello";
     const char *world = "World";
 
@@ -262,17 +259,11 @@ TEST_F(String8Test, support_unordered_map_set) {
     hashMap.insert(std::make_pair(h, String8::Hash(h)));
     hashMap.insert(std::make_pair(w, String8::Hash(w)));
 
-    EXPECT_EQ(hashMap.size(), 2);
+    CHECK(hashMap.size() == 2);
 
     std::unordered_set<eular::String8> hashSet;
     hashSet.insert(h);
     hashSet.insert(w);
 
-    EXPECT_EQ(hashSet.size(), 2);
-}
-
-int main(int argc, char* argv[])
-{
-    testing::InitGoogleTest(&argc, argv); 
-    return RUN_ALL_TESTS();
+    CHECK(hashSet.size() == 2);
 }

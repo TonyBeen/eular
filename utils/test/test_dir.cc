@@ -5,7 +5,10 @@
     > Created Time: 2024年11月22日 星期五 15时19分44秒
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
+
 #include <stdio.h>
 #include <iostream>
 

@@ -1,4 +1,7 @@
+#ifndef CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_MAIN
+#endif
+
 #include <bits/move.h>
 
 #include <unordered_map>

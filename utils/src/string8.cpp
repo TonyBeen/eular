@@ -9,6 +9,7 @@
 
 #include <assert.h>
 
+#include "utils/platform.h"
 #include "utils/utils.h"
 #include "utils/shared_buffer.h"
 #include "utils/debug.h"
@@ -17,14 +18,6 @@
 
 #define DEFAULT_STRING_SIZE 64
 #define MAXSIZE (1024 * 1024) // 1Mb
-
-#if defined(OS_WINDOWS)
-#define STRCASECMP  stricmp
-#define STRNCASECMP strnicmp
-#else
-#define STRCASECMP  strcasecmp
-#define STRNCASECMP strncasecmp
-#endif
 
 namespace eular {
 
@@ -530,7 +523,7 @@ int String8::ncompare(const char* other, size_t n) const
 int String8::strcasecmp(const String8& other) const
 {
     if (mString) {
-        return ::STRCASECMP(mString, other.mString);
+        return ::strcasecmp(mString, other.mString);
     }
 
     return -EPERM;
@@ -539,7 +532,7 @@ int String8::strcasecmp(const String8& other) const
 int String8::strcasecmp(const char* other) const
 {
     if (mString) {
-        return ::STRCASECMP(mString, other);
+        return ::strcasecmp(mString, other);
     }
     return -EPERM;
 }

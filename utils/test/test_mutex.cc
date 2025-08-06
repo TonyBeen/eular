@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <utils/thread.h>
 #include <utils/mutex.h>
+#include <utils/platform.h>
 
 eular::Mutex gMutex;
 int count = 0;
@@ -33,16 +34,16 @@ void thread_1()
         eular::call_once(g_runOnce, fnPrint);
         gMutex.lock();
         ++count;
-        printf("tid = %ld, ++count = %d\n", gettid(), count);
+        printf("tid = %d, ++count = %d\n", gettid(), count);
         gMutex.unlock();
-        msleep(500);
+        eular_msleep(500);
     }
 }
 
 void thread_2()
 {
     gMutex.lock();
-    printf("%s() thread %ld exit without unlocking\n", __func__, gettid());
+    printf("%s() thread %d exit without unlocking\n", __func__, gettid());
 }
 
 void thread_3()
@@ -53,9 +54,9 @@ void thread_3()
         if (count > 0) {
             --count;
         }
-        printf("tid = %ld, --count = %d\n", gettid(), count);
+        printf("tid = %d, --count = %d\n", gettid(), count);
         gMutex.unlock();
-        msleep(400);
+        eular_msleep(400);
     }
 }
 
