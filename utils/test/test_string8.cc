@@ -237,12 +237,12 @@ TEST_CASE("test_format", "[string8]") {
     {
         uint8_t buffer[] = {0x01, 0x02, 0x03, 0x04};
         String8 Format;
-        for (int32_t i = 0; i < sizeof(buffer); ++i) {
+        for (size_t i = 0; i < sizeof(buffer); ++i) {
             Format.appendFormat("0x%02x ", buffer[i]);
         }
 
         Format.clear();
-        for (int32_t i = 0; i < sizeof(buffer); ++i) {
+        for (size_t i = 0; i < sizeof(buffer); ++i) {
             Format.appendFormat("0x%02x ", buffer[i]);
         }
     }

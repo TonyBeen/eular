@@ -2,6 +2,8 @@
 #include <utils/utils.h>
 #include <utils/string8.h>
 #include <utils/thread.h>
+#include <utils/platform.h>
+
 #include <assert.h>
 #include <stdio.h>
 #include <atomic>
@@ -18,10 +20,12 @@ int read_func(void *)
     while (gExit == false) {
         {
             RDAutoLock<RWMutex> lock(gRwMutex);
-            printf("[%ld]buf: %s\n", gettid(), buf);
+            printf("[%d]buf: %s\n", gettid(), buf);
         }
-        usleep(100 * 1000);
+        eular_usleep(100 * 1000);
     }
+
+    return 0;
 }
 
 int write_func(void *)
@@ -32,8 +36,10 @@ int write_func(void *)
             WRAutoLock<RWMutex> lock(gRwMutex);
             snprintf(buf, 127, "num = %d", ++num);
         }
-        usleep(50 * 1000);
+        eular_usleep(50 * 1000);
     }
+
+    return 0;
 }
 
 int main()

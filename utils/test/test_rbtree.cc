@@ -26,7 +26,6 @@ rb_node *insert(rb_root *root, int d)
     struct rb_node **node = &(root->rb_node);
     struct rb_node *parent = nullptr;
     bool exists = false;
-    int compareResult = 0;
     while (nullptr != (*node)) {
         parent = *node;
         rbtree_node *curr = rbtree_node_entry(parent);

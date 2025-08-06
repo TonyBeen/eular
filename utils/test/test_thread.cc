@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <stdio.h>
+#include <utils/platform.h>
 #include <utils/thread.h>
 #include <utils/string8.h>
 
@@ -44,8 +45,8 @@ int function(void *arg)
         printf("data[%d, %s]\n", data->num, data->str.c_str());
     }
     int ms = 10;
-    printf("--- sleep %d ms tid = %ld\n", ms, gettid());
-    msleep(ms);
+    printf("--- sleep %d ms tid = %d\n", ms, gettid());
+    eular_msleep(ms);
     return -1;
 }
 

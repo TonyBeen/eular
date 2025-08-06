@@ -68,7 +68,7 @@ int compare_node(rb_node *left, rb_node *right)
     return 0;
 }
 
-int main(int argc, char **argv)
+TEST_CASE("test_rbtree_api", "[rbtree]")
 {
     rbtree_init(&root);
     rbtree_foreach(&root, processData);
@@ -118,5 +118,4 @@ int main(int argc, char **argv)
     printf("\nclear rbtree\n");
     rbtree_clear(&root, free_node);
     printf("\n--->rbtree size = %zu\n", rbtree_size(&root));
-    return 0;
 }
