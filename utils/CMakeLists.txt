@@ -74,7 +74,6 @@ if(UTILS_STATIC_LIB MATCHES "ON")
             # ${CMAKE_CURRENT_SOURCE_DIR}/include/utils
             ${3RD_INC_DIR}
     )
-    target_compile_options()
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/lib/libiconv.a)
