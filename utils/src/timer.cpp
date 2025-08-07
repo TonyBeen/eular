@@ -239,9 +239,11 @@ TimerManager::~TimerManager()
 
 int TimerManager::startTimer(bool useCallerThread)
 {
+    mUseCallerThread = useCallerThread;
     if (useCallerThread) {
         return threadWorkFunction(this);
     }
+
     return start();
 }
 
@@ -249,8 +251,13 @@ void TimerManager::stopTimer()
 {
     mShouldExit = true;
     mSignal.post();
+    stop();
 
     onNotify();
+
+    if (!mUseCallerThread) {
+        join();
+    }
 }
 
 /**

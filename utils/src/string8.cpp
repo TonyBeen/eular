@@ -520,7 +520,7 @@ int String8::ncompare(const char* other, size_t n) const
     return strncmp(mString, other, n);
 }
 
-int String8::strcasecmp(const String8& other) const
+int String8::casecmp(const String8& other) const
 {
     if (mString) {
         return ::strcasecmp(mString, other.mString);
@@ -529,7 +529,7 @@ int String8::strcasecmp(const String8& other) const
     return -EPERM;
 }
 
-int String8::strcasecmp(const char* other) const
+int String8::casecmp(const char* other) const
 {
     if (mString) {
         return ::strcasecmp(mString, other);

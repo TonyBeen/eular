@@ -39,8 +39,10 @@ public:
     void            stop();
     bool            forceExit();
     const String8&  threadName() const { return mThreadName; }
-    uint32_t        getKernalTid() const { return mKernalTid; }
-    pthread_t       getTid() const { return mTid; }
+    int32_t         getTid() const;
+
+    void            detach();
+    void            join();
 
 protected:
     int             run(size_t stackSize);
@@ -52,14 +54,9 @@ private:
     static  void*   threadloop(void *user);
             bool    ShouldExit();
 
-protected:
-    uint32_t            mKernalTid;
-    pthread_t           mTid{};
-    Sem                 mSem;
-    Sem                 mSemWait; // 用于等待线程创建完毕
-
-    std::atomic<uint32_t>   mThreadStatus;
-    std::atomic<bool>       mExitStatus;
+private:
+    struct ThreadImpl;
+    std::unique_ptr<ThreadImpl>     mImpl;
 };
 
 class UTILS_API Thread
@@ -74,7 +71,7 @@ public:
     static String8      GetName();
     static Thread *     GetThis();
     eular::String8      getName() const { return mThreadName; }
-    pid_t               getTid() const { return mKernalTid; };
+    int32_t             getTid() const;
 
     void detach();
     void join();
@@ -83,12 +80,12 @@ protected:
     static void *entrance(void *arg);
 
 private:
-    pid_t                   mKernalTid;     // 内核tid
-    pthread_t               mTid{};         // pthread线程ID
-    eular::String8          mThreadName;    // 线程名字
-    std::function<void()>   mCallback;      // 线程执行函数
-    uint8_t                 mShouldJoin;    // 1为由用户回收线程，0为自动回收
-    eular::Sem              mSemaphore;
+    struct ThreadImpl;
+    std::unique_ptr<ThreadImpl>     mImpl;
+    eular::String8                  mThreadName;    // 线程名字
+    std::function<void()>           mCallback;      // 线程执行函数
+    uint8_t                         mShouldJoin;    // 1为由用户回收线程，0为自动回收
+    eular::Sem                      mSemaphore;
 };
 
 } // namespace eular

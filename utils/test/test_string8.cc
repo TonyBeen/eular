@@ -190,7 +190,7 @@ TEST_CASE("test_other_function", "[string8]") {
 
     {
         String8 str2 = "abcDEF";
-        CHECK(str2.strcasecmp("abcDef") == 0);
+        CHECK(str2.casecmp("abcDef") == 0);
         str2.toUpper();
         CHECK(std::string("ABCDEF") == str2.c_str());
         str2.toLower();

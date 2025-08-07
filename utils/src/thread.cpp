@@ -11,20 +11,38 @@
 
 #include <string.h>
 
+#include <pthread.h>
+
 #include "utils/errors.h"
 #include "utils/exception.h"
+#include "thread.h"
 
 #define CAST2UINT(x) static_cast<uint32_t>(x)
 
 namespace eular {
+struct ThreadBase::ThreadImpl {
+    uint32_t            _tid{};
+    pthread_t           _pthread_tid{};
+    Sem                 _sem_block; // 阻塞线程结束
+    Sem                 _sem_wait;  // 用于等待线程创建完毕
+
+    std::atomic<uint32_t>   _th_status{};
+    std::atomic<bool>       _exit_status{};
+
+    ThreadImpl() :
+        _tid(0),
+        _sem_block(0),
+        _sem_wait(0),
+        _th_status(CAST2UINT(ThreadStatus::THREAD_EXIT)),
+        _exit_status(false)
+    {
+    }
+};
+
 ThreadBase::ThreadBase(const String8 &threadName) :
     userData(nullptr),
     mThreadName(threadName),
-    mKernalTid(0),
-    mSem(0),
-    mSemWait(0),
-    mThreadStatus(CAST2UINT(ThreadStatus::THREAD_EXIT)),
-    mExitStatus(false)
+    mImpl(std::unique_ptr<ThreadImpl>(new ThreadImpl))
 {
 }
 
@@ -37,47 +55,62 @@ ThreadBase::~ThreadBase()
 
 uint32_t ThreadBase::threadStatus() const
 {
-    return mThreadStatus;
+    return mImpl->_th_status;
 }
 
 void ThreadBase::stop()
 {
-    if (mThreadStatus == CAST2UINT(ThreadStatus::THREAD_EXIT)) {
+    if (mImpl->_th_status == CAST2UINT(ThreadStatus::THREAD_EXIT)) {
         return;
     }
 
-    mExitStatus = true;
-    if (mThreadStatus == CAST2UINT(ThreadStatus::THREAD_WAITING)) { // 如果线程处于等待用户状态，则需要通知线程
-        mSem.post();
+    mImpl->_exit_status = true;
+    if (mImpl->_th_status == CAST2UINT(ThreadStatus::THREAD_WAITING)) { // 如果线程处于等待用户状态，则需要通知线程
+        mImpl->_sem_block.post();
     }
 }
 
 bool ThreadBase::forceExit()
 {
-    if (mThreadStatus == CAST2UINT(ThreadStatus::THREAD_EXIT)) {
+    if (mImpl->_th_status == CAST2UINT(ThreadStatus::THREAD_EXIT)) {
         return true;
     }
 
-    mExitStatus = true;
-    pthread_cancel(mTid);
-    int ret = pthread_join(mTid, nullptr);
-    if (ret) {
-        String8 msg = String8::Format("pthread_join error. [%d,%s]", errno, strerror(errno));
+    mImpl->_exit_status = true;
+    pthread_cancel(mImpl->_pthread_tid);
+    int status = pthread_join(mImpl->_pthread_tid, nullptr);
+    if (status) {
+        String8 msg = String8::Format("pthread_join error. [%d,%s]", status, strerror(status));
         throw eular::Exception(msg);
     }
 
-    mThreadStatus = CAST2UINT(ThreadStatus::THREAD_EXIT);
-    return ret == 0;
+    mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_EXIT);
+    return status == 0;
+}
+
+int32_t ThreadBase::getTid() const
+{
+    return mImpl->_tid;
+}
+
+void ThreadBase::detach()
+{
+    pthread_detach(mImpl->_pthread_tid);
+}
+
+void ThreadBase::join()
+{
+    pthread_join(mImpl->_pthread_tid, nullptr);
 }
 
 bool ThreadBase::ShouldExit()
 {
-    return mExitStatus;
+    return mImpl->_exit_status;
 }
 
 int ThreadBase::run(size_t stackSize)
 {
-    if (mThreadStatus != CAST2UINT(ThreadStatus::THREAD_EXIT)) {
+    if (mImpl->_th_status != CAST2UINT(ThreadStatus::THREAD_EXIT)) {
         return STATUS(INVALID_OPERATION);
     }
 
@@ -87,12 +120,12 @@ int ThreadBase::run(size_t stackSize)
         pthread_attr_setstacksize(&attr, stackSize);
     }
 
-    int ret = pthread_create(&mTid, &attr, threadloop, this);
+    int ret = pthread_create(&mImpl->_pthread_tid, &attr, threadloop, this);
     pthread_attr_destroy(&attr);
     if (ret != 0) {
         throw Exception(String8::Format("pthread_create error %s\n", strerror(ret)));
     }
-    mSemWait.timedwait(1000); // 等待线程启动完毕
+    mImpl->_sem_wait.timedwait(1000); // 等待线程启动完毕
 
     return ret;
 }
@@ -100,9 +133,9 @@ int ThreadBase::run(size_t stackSize)
 int32_t ThreadBase::start(size_t stackSize)
 {
     int32_t code = 0;
-    switch (mThreadStatus) {
+    switch (mImpl->_th_status) {
     case CAST2UINT(ThreadStatus::THREAD_WAITING):
-        mSem.post();
+        mImpl->_sem_block.post();
         break;
     case CAST2UINT(ThreadStatus::THREAD_RUNNING):
         break;
@@ -119,31 +152,36 @@ int32_t ThreadBase::start(size_t stackSize)
 void *ThreadBase::threadloop(void *user)
 {
     ThreadBase *threadBase = (ThreadBase *)user;
-    threadBase->mKernalTid = gettid();
-    threadBase->mSemWait.post();
+    threadBase->mImpl->_tid = gettid();
+    threadBase->mImpl->_sem_wait.post();
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr);    // 设置任何时间点都可以取消线程
 
     while (threadBase->ShouldExit() == false) {
-        threadBase->mThreadStatus = CAST2UINT(ThreadStatus::THREAD_RUNNING);
+        threadBase->mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_RUNNING);
         int result = threadBase->threadWorkFunction(threadBase->userData);
         if (result == CAST2UINT(ThreadStatus::THREAD_EXIT) || threadBase->ShouldExit()) {
             break;
         }
 
-        threadBase->mThreadStatus = CAST2UINT(ThreadStatus::THREAD_WAITING);
+        threadBase->mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_WAITING);
 
-        threadBase->mSem.wait();     // 阻塞线程，由用户决定下一次执行任务的时间
+        threadBase->mImpl->_sem_block.wait();     // 阻塞线程，由用户决定下一次执行任务的时间
     }
 
-    threadBase->mThreadStatus = CAST2UINT(ThreadStatus::THREAD_EXIT);
+    threadBase->mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_EXIT);
     return 0;
 }
 
-static thread_local Thread *gLocalThread = nullptr;
-static thread_local eular::String8 gThreadName;
+static thread_local Thread*         gLocalThread = nullptr;
+static thread_local eular::String8  gThreadName;
+
+struct Thread::ThreadImpl {
+    int32_t     _tid;
+    pthread_t   _pthread_tid{};
+};
 
 Thread::Thread(std::function<void()> callback, const String8 &threadName) :
-    mKernalTid(0),
+    mImpl(std::unique_ptr<ThreadImpl>(new ThreadImpl)),
     mThreadName(threadName.length() ? threadName : "Unknow"),
     mCallback(callback),
     mShouldJoin(true),
@@ -151,10 +189,10 @@ Thread::Thread(std::function<void()> callback, const String8 &threadName) :
 {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    int ret = pthread_create(&mTid, &attr, &Thread::entrance, this);
+    int status = pthread_create(&mImpl->_pthread_tid, &attr, &Thread::entrance, this);
     pthread_attr_destroy(&attr);
-    if (ret) {
-        String8 msg = String8::Format("pthread_create error. [%d,%s]", errno, strerror(errno));
+    if (status) {
+        String8 msg = String8::Format("pthread_create error. [%d,%s]", status, strerror(status));
         throw eular::Exception(msg);
     }
     mSemaphore.timedwait(1000);
@@ -172,7 +210,7 @@ void Thread::SetName(const eular::String8 &name)
     }
     if (gLocalThread) {
         gLocalThread->mThreadName = name;
-        pthread_setname_np(gLocalThread->mTid, name.c_str());
+        pthread_setname_np(gLocalThread->mImpl->_pthread_tid, name.c_str());
     }
     gThreadName = name;
 }
@@ -187,10 +225,15 @@ Thread *Thread::GetThis()
     return gLocalThread;
 }
 
+int32_t Thread::getTid() const
+{
+    return mImpl->_tid;
+}
+
 void Thread::detach()
 {
     if (mShouldJoin) {
-        pthread_detach(mTid);
+        pthread_detach(mImpl->_pthread_tid);
         mShouldJoin = false;
     }
 }
@@ -198,7 +241,7 @@ void Thread::detach()
 void Thread::join()
 {
     if (mShouldJoin) {
-        int ret = pthread_join(mTid, nullptr);
+        int ret = pthread_join(mImpl->_pthread_tid, nullptr);
         if (ret) {
             String8 msg = String8::Format("pthread_join error. [%d,%s]", ret, strerror(ret));
             throw eular::Exception(msg);
@@ -212,7 +255,7 @@ void *Thread::entrance(void *arg)
     Thread *th = static_cast<Thread *>(arg);
     gLocalThread = th;
     gThreadName = th->mThreadName;
-    gLocalThread->mKernalTid = gettid();
+    gLocalThread->mImpl->_tid = gettid();
     gLocalThread->mSemaphore.post();
 
     pthread_setname_np(pthread_self(), th->mThreadName.substr(0, 15).c_str());

@@ -83,8 +83,8 @@ public:
     int                 ncompare(const String8& other, size_t n) const;
     int                 ncompare(const char* other, size_t n) const;
 
-    int                 strcasecmp(const String8& other) const;
-    int                 strcasecmp(const char* other) const;
+    int                 casecmp(const String8& other) const;
+    int                 casecmp(const char* other) const;
 
     bool                operator<(const String8& other) const;
     bool                operator<=(const String8& other) const;

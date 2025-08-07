@@ -128,6 +128,7 @@ private:
     RWMutex mRWMutex;
     int32_t mSockPair[2];
 
+    bool mUseCallerThread;
     std::atomic<bool> mShouldExit;
     std::vector<Timer *> mExpireTimerVec;
     std::set<Timer *, Timer::Comparator>  mTimers;        // 定时器集合

@@ -63,7 +63,10 @@ std::string FormatErrno(int32_t status)
         NULL, status, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
         (LPSTR)&lpMsgBuf, 0, NULL);
     std::string msg(lpMsgBuf);
-    LocalFree(lpMsgBuf);
+    if (lpMsgBuf) {
+        LocalFree(lpMsgBuf);
+        lpMsgBuf = NULL;
+    }
     return msg;
 #else
     return "Unsupported platform";
