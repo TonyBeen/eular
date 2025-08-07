@@ -15,7 +15,6 @@
 
 #include "utils/errors.h"
 #include "utils/exception.h"
-#include "thread.h"
 
 #define CAST2UINT(x) static_cast<uint32_t>(x)
 
