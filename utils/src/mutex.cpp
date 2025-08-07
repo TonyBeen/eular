@@ -395,6 +395,11 @@ once_flag::once_flag() :
 {
 }
 
+once_flag::~once_flag()
+{
+    mImpl.reset();
+}
+
 namespace detail {
 THREAD_LOCAL void* __once_callable;
 THREAD_LOCAL void (*__once_call)();

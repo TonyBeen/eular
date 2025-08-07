@@ -195,6 +195,7 @@ struct once_flag
     DISALLOW_COPY_AND_ASSIGN(once_flag);
 public:
     once_flag();
+    ~once_flag();
 
 private:
     std::unique_ptr<once_flag_impl> mImpl;
@@ -211,7 +212,7 @@ template<typename Callable, typename... Args>
 void call_once(once_flag& once, Callable&& f, Args&&... args)
 {
     auto __callable = [&] () {
-        std::__invoke(std::forward<Callable>(f), std::forward<Args>(args)...);
+        std::forward<Callable>(f)(std::forward<Args>(args)...);
     };
     detail::__once_callable = std::addressof(__callable);
     detail::__once_call = [] () { (*(decltype(__callable)*)detail::__once_callable)(); };
