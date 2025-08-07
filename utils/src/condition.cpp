@@ -11,27 +11,35 @@
 #include <time.h>
 #include <pthread.h>
 
+#include "src/mutex.hpp"
+
 namespace eular {
+struct Condition::ConditionImpl
+{
+    pthread_cond_t cond;
+};
+
 Condition::Condition()
 {
+    m_impl = std::unique_ptr<ConditionImpl>(new ConditionImpl);
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
 #if defined(OS_LINUX) || defined(OS_MACOS)
     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
 #endif
-    pthread_cond_init(&mCond, &attr);
+    pthread_cond_init(&m_impl->cond, &attr);
     pthread_condattr_destroy(&attr);
 }
 
 Condition::~Condition()
 {
-    pthread_cond_destroy(&mCond);
+    pthread_cond_destroy(&m_impl->cond);
 }
 
 int Condition::wait(Mutex& mutex)
 {
     // 先解锁，等待条件，加锁
-    return pthread_cond_wait(&mCond, &mutex.mMutex);
+    return pthread_cond_wait(&m_impl->cond, &mutex.m_impl->_mutex);
 }
 
 int Condition::timedWait(Mutex& mutex, uint64_t ms)
@@ -59,17 +67,17 @@ int Condition::timedWait(Mutex& mutex, uint64_t ms)
     struct timespec relative = {static_cast<long>(ms / 1000), static_cast<long>(ms * 1000000)};
     pthread_win32_getabstime_np(&ts, &relative);
 #endif
-    return pthread_cond_timedwait(&mCond, &mutex.mMutex, &ts);
+    return pthread_cond_timedwait(&m_impl->cond, &mutex.m_impl->_mutex, &ts);
 }
 
 void Condition::signal()
 {
-    pthread_cond_signal(&mCond);
+    pthread_cond_signal(&m_impl->cond);
 }
 
 void Condition::broadcast()
 {
-    pthread_cond_broadcast(&mCond);
+    pthread_cond_broadcast(&m_impl->cond);
 }
 
 } // namespace eular

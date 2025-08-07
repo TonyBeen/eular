@@ -23,7 +23,8 @@ public:
     void broadcast();
 
 private:
-    pthread_cond_t mCond;
+    struct ConditionImpl;
+    std::unique_ptr<ConditionImpl> m_impl;
 };
 
 } // namespace eular

@@ -8,8 +8,6 @@
 #ifndef __UTILS_FUNCTION_H__
 #define __UTILS_FUNCTION_H__
 
-#include <stdint.h>
-
 #include <utils/sysdef.h>
 
 #if defined(OS_LINUX) || defined(OS_APPLE)
@@ -18,8 +16,6 @@
 #else
 #include <windows.h>
 #endif
-
-#include <utils/string8.h>
 
 #ifndef gettid
     #if defined(OS_LINUX) || defined(OS_APPLE)
@@ -44,8 +40,6 @@
     ClassName& operator=(ClassName&&) = delete;
 
 #if COMPILER_TYPE == COMPILER_MSVC
-#define eular_likely(cond)          (cond)
-#define eular_unlikely(cond)        (cond)
 
 #define eular_atomic_or(P, V)       InterlockedOr((volatile long*)(P), (V))             // p: 地址 V: 值，P指向的内容与V相或
 #define eular_atomic_and(P, V)      InterlockedAnd((volatile long*)(P), (V))
@@ -57,9 +51,6 @@
 #define cmpxchg(P, O, N)            InterlockedCompareExchange((volatile long*)(P), (N), (O))
 
 #else
-
-#define eular_likely(cond)          __builtin_expect(!!(cond), 1)       // 编译器优化，条件大概率成立
-#define eular_unlikely(cond)        __builtin_expect(!!(cond), 0)       // 编译器优化，条件大概率不成立
 
 #define eular_atomic_or(P, V)       __sync_or_and_fetch((P), (V))       // p: 地址 V: 值，P指向的内容与V相或
 #define eular_atomic_and(P, V)      __sync_and_and_fetch((P), (V))

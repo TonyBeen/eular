@@ -236,4 +236,12 @@
 #define EULAR_HAVE_FEATURE(f) 0
 #endif
 
+#if EULAR_HAVE_BUILTIN(__builtin_expect)
+    #define eular_likely(cond)          __builtin_expect(!!(cond), 1)   // 编译器优化，条件大概率成立
+    #define eular_unlikely(cond)        __builtin_expect(!!(cond), 0)   // 编译器优化，条件大概率不成立
+#else
+    #define eular_likely(cond)          (cond)
+    #define eular_unlikely(cond)        (cond)
+#endif
+
 #endif // __UTILS_SYSDEF_H__

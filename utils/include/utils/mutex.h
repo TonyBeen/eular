@@ -13,11 +13,11 @@
 #include <stdbool.h>
 
 #include <atomic>
+#include <memory>
 #include <functional>
 
 #include <utils/sysdef.h>
 
-#include <pthread.h>
 #if defined(OS_LINUX)
 #include <semaphore.h>
 #include <sys/types.h>
@@ -60,23 +60,18 @@ private:
 class SpinLock final : public NonCopyAble
 {
 public:
-    void lock() noexcept {
-        pthread_spin_lock(&mSpinLock); // No need to check the return value
-    }
+    SpinLock();
 
-    bool trylock() noexcept {
-        return 0 == pthread_spin_trylock(&mSpinLock);
-    }
-
-    void unlock() noexcept { pthread_spin_unlock(&mSpinLock); }
+    void lock() noexcept;
+    bool trylock() noexcept;
+    void unlock() noexcept;
 
 private:
-    void LockSlow() noexcept;
-
-private:
-    pthread_spinlock_t mSpinLock;
+    struct SpinLockImpl;
+    std::unique_ptr<SpinLockImpl>   m_impl;
 };
 
+struct MutexImpl;
 class Mutex final : public NonCopyAble
 {
 public:
@@ -88,15 +83,12 @@ public:
     void    unlock();
 
     void setMutexName(const String8 &name);
-    const String8 &getMutexName() const { return mName; }
-
-    operator pthread_mutex_t *() { return &mMutex; }
-    pthread_mutex_t *mutex() { return &mMutex; }
+    const String8 &getMutexName() const { return m_name; }
 
 private:
     friend class Condition;
-    mutable pthread_mutex_t mMutex;
-    String8 mName;
+    std::unique_ptr<MutexImpl>  m_impl;
+    String8                     m_name;
 };
 
 class RecursiveMutex final : public NonCopyAble
@@ -114,8 +106,8 @@ public:
 
 private:
     friend class Condition;
-    mutable pthread_mutex_t mMutex;
-    String8 mName;
+    String8                     mName;
+    std::unique_ptr<MutexImpl>  mImpl;
 };
 
 // 局部写锁
@@ -154,7 +146,6 @@ private:
     RDMutexType &mutex;
 };
 
-// 读写锁, 读共享, 写独享, 读上锁无法写, 写上锁无法读写
 class RWMutex final : public NonCopyAble {
 public:
     typedef RDAutoLock<RWMutex> ReadAutoLock;
@@ -167,7 +158,8 @@ public:
     void unlock();
 
 private:
-    mutable pthread_rwlock_t mRWMutex;
+    struct RWMutexImpl;
+    std::unique_ptr<RWMutexImpl> mImpl;
 #ifdef DEBUG
     std::atomic<bool> mReadLocked;
     std::atomic<bool> mWritLocked;
@@ -187,48 +179,47 @@ public:
     bool timedwait(uint32_t ms);
 
 private:
-#ifdef OS_WINDOWS
-	HANDLE mSem;      // 信号量
-#else
-    sem_t* mSem;       // 信号量
-#endif // OS_WINDOWS
+    struct SemImpl;
+    std::unique_ptr<SemImpl> mImpl;
 
     String8 mFilePath;  // 有名信号量使用
     bool    isNamedSemaphore;
 };
 
+struct once_flag_impl;
 struct once_flag
 {
-    template<typename _Callable, typename... _Args>
-    friend void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args);
+    template<typename Callable, typename... Args>
+    friend void call_once(once_flag& once, Callable&& f, Args&&... args);
+
+    DISALLOW_COPY_AND_ASSIGN(once_flag);
+public:
+    once_flag();
 
 private:
-    pthread_once_t m_once = PTHREAD_ONCE_INIT;
-
-public:
-    constexpr once_flag() noexcept = default;
-    once_flag(const once_flag&) = delete;
-    once_flag& operator=(const once_flag&) = delete;
+    std::unique_ptr<once_flag_impl> mImpl;
 };
 
 namespace detail {
 extern THREAD_LOCAL void* __once_callable;
 extern THREAD_LOCAL void (*__once_call)();
-extern "C" void __once_proxy(void);
+extern "C" void call_once_proxy(void);
+extern "C" int32_t call_once_internal(once_flag_impl *once, void (*callback)(void));
 } // namespace detail
 
-template<typename _Callable, typename... _Args>
-void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args)
+template<typename Callable, typename... Args>
+void call_once(once_flag& once, Callable&& f, Args&&... args)
 {
-    auto __callable = [&] {
-        std::__invoke(std::forward<_Callable>(__f), std::forward<_Args>(__args)...);
+    auto __callable = [&] () {
+        std::__invoke(std::forward<Callable>(f), std::forward<Args>(args)...);
     };
     detail::__once_callable = std::addressof(__callable);
-    detail::__once_call = []{ (*(decltype(__callable)*)detail::__once_callable)(); };
+    detail::__once_call = [] () { (*(decltype(__callable)*)detail::__once_callable)(); };
 
-    int __e = pthread_once(&__once.m_once, &detail::__once_proxy);
-    if (__e)
-        throw std::runtime_error("");
+    int code = detail::call_once_internal(once.mImpl.get(), &detail::call_once_proxy);
+    if (code) {
+        throw std::runtime_error("call_once_internal return error");
+    }
 
     detail::__once_callable = nullptr;
     detail::__once_call = nullptr;

@@ -11,6 +11,7 @@
 #include <exception>
 
 #include "utils/alloc.h"
+#include "utils/exception.h"
 
 #define ERROR_MSG(msg) \
     (std::string(__func__) + "() " + (msg)).c_str()
@@ -152,7 +153,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
     } catch (...) {
         d->numBuckets = 0;
         d->free_helper(node_delete);
-        throw std::runtime_error(ERROR_MSG("std::vector resize error."));
+        throw Exception(ERROR_MSG("std::vector resize error."));
     }
 
     if (numBuckets) {
@@ -169,7 +170,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
                         node_duplicate(oldNode, dup);
                     } catch (...) {
                         freeNode(dup);
-                        throw std::runtime_error(ERROR_MSG("node_duplicate error"));
+                        throw Exception(ERROR_MSG("node_duplicate error"));
                     }
                     *newNode = dup;
                     newNode = &dup->next;
@@ -178,7 +179,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
                     *newNode = end;
                     d->numBuckets = i + 1;
                     d->free_helper(node_delete);
-                    throw std::runtime_error(ERROR_MSG("unknow error"));
+                    throw Exception(ERROR_MSG("unknow error"));
                 }
             }
 
@@ -239,7 +240,7 @@ void HashData::rehash(int hint)
         try {
             newBuckets.resize(nb, end);
         } catch (...) {
-            throw std::runtime_error(ERROR_MSG("std::vector resize error."));
+            throw Exception(ERROR_MSG("std::vector resize error."));
         }
 
         for (int i = 0; i < oldNumBuckets; ++i) {
