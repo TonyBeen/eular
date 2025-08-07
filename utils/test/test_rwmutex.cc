@@ -48,10 +48,10 @@ int main()
     Thread t1(std::bind(read_func, nullptr), "read");
     Thread t2(std::bind(write_func, nullptr), "write");
 
-    t1.detach();
-    t2.detach();
-
     sleep(2);
     gExit = true;
+
+    t1.join();
+    t2.join();
     return 0;
 }

@@ -104,10 +104,10 @@ TEST_CASE("std_hash_", "[ByteBuffer]") {
 
     std::unordered_map<ByteBuffer, size_t> hashMap;
 
-    hashMap.insert(std::make_pair(buffer, ByteBuffer::hash(buffer)));
+    hashMap.insert(std::make_pair(buffer, ByteBuffer::Hash(buffer)));
 
     buffer.append("***");
-    hashMap.insert(std::make_pair(buffer, ByteBuffer::hash(buffer)));
+    hashMap.insert(std::make_pair(buffer, ByteBuffer::Hash(buffer)));
 
     CHECK(2 == hashMap.size());
 }

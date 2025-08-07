@@ -14,6 +14,7 @@
 
 #include "catch/catch.hpp"
 #include "utils/dir.h"
+#include "utils/string8.h"
 
 TEST_CASE("test_exists", "[dir]") {
     CHECK(eular::dir::exists("/home/"));
@@ -23,7 +24,7 @@ TEST_CASE("test_exists", "[dir]") {
 }
 
 TEST_CASE("test_absolute", "[dir]") {
-    eular::String8 absPath;
+    std::string absPath;
 
     REQUIRE(eular::dir::absolute("/home/", absPath));
     CHECK(absPath == "/home/");

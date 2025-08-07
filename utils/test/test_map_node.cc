@@ -29,7 +29,7 @@ TEST_CASE("test_map_data_all", "[MapData]") {
         data->insert(i, i);
     }
 
-    CHECK(insertSize == data->size());
+    CHECK(insertSize == (int32_t)data->size());
 
     int32_t value = 0;
     for (auto it = data->begin(); it != data->end(); it = data->nextNode(it)) {
@@ -42,7 +42,7 @@ TEST_CASE("test_map_data_all", "[MapData]") {
     for (int32_t i = 0; i < eraseSize; i++) {
         data->erase(i);
     }
-    CHECK(data->size() == (insertSize - eraseSize));
+    CHECK((int32_t)data->size() == (insertSize - eraseSize));
 
     value = 0;
     for (auto it = data->rbegin(); it != data->rend(); it = data->prevNode(it)) {
@@ -77,7 +77,7 @@ TEST_CASE("Delete nodes during traversal", "[MapData]") {
         data->insert(i, i);
     }
 
-    REQUIRE(insertSize == data->size());
+    REQUIRE(insertSize == (int32_t)data->size());
 
     std::random_device rd;
     std::mt19937 gen(rd());

@@ -92,9 +92,10 @@ TEST_CASE("UTF8 to UTF16LE", "[CodeConvert]") {
 
 TEST_CASE("static UTF8 to UTF16LE", "[CodeConvert]") {
     std::string u8str = HELLO_STRING;
-    std::string utf16str;
+    std::wstring utf16str;
 
-    REQUIRE(Status::OK == eular::CodeConvert::UTF8ToUTF16LE(u8str, utf16str));
+    eular::CodeConvert::UTF8ToUTF16LE(u8str, utf16str);
+    REQUIRE(eular::CodeConvert::UTF8ToUTF16LE(u8str, utf16str) == Status::OK);
 
     uint32_t helloCode = *reinterpret_cast<const uint32_t *>(utf16str.c_str());
 #if BYTE_ORDER == LITTLE_ENDIAN
