@@ -91,7 +91,7 @@ std::vector<std::string> _splitPath(const std::string& path) {
     std::stringstream ss(path.c_str());
 
     std::string segment;
-    while (std::getline(ss, segment, DIR_SEPARATOR)) {
+    while (std::getline(ss, segment, '/')) {
         if (!segment.empty()) {
             result.push_back(segment);
         }
@@ -139,6 +139,12 @@ bool absolute(const std::string &path, std::string &absPath)
 
     if (realPath.find('.') == std::string::npos && realPath.find("..") == std::string::npos) { // 不存在相对路径符号
         absPath = realPath;
+#if defined(OS_WINDOWS)
+        if (driveLetter[0] != '\0') {
+            // 在 Windows 上添加驱动器字母
+            absPath.insert(absPath.begin(), driveLetter, driveLetter + 2);
+        }
+#endif
         return true;
     }
 
@@ -158,15 +164,17 @@ bool absolute(const std::string &path, std::string &absPath)
     absPath.reserve(path.length());
     while (!pathDeque.empty()) {
         absPath += pathDeque.front();
-        if (absPath.back() != DIR_SEPARATOR) {
-            absPath.push_back(DIR_SEPARATOR);
+        if (absPath.back() != '/') {
+            absPath.push_back('/');
         }
         pathDeque.pop_front();
     }
 
 #if defined(OS_WINDOWS)
-	// 在 Windows 上添加驱动器字母
-	absPath.insert(absPath.begin(), driveLetter, driveLetter + 2);
+    if (driveLetter[0] != '\0') {
+        // 在 Windows 上添加驱动器字母
+        absPath.insert(absPath.begin(), driveLetter, driveLetter + 2);
+    }
 #endif
     return true;
 }
@@ -183,9 +191,9 @@ bool mkdir(const std::string &path)
     }
 
     char* filePath = strdup(realPath.c_str());
-    char* ptr = strchr(filePath + 1, DIR_SEPARATOR);
+    char* ptr = strchr(filePath + 1, '/');
     do {
-        for (; ptr; *ptr = DIR_SEPARATOR, ptr = strchr(ptr + 1, DIR_SEPARATOR)) {
+        for (; ptr; *ptr = '/', ptr = strchr(ptr + 1, '/')) {
             *ptr = '\0';
             if (__mkdir(filePath) != 0) {
                 break;

@@ -20,7 +20,7 @@
 #include "catch/catch.hpp"
 #include "utils/bimap.h"
 
-TEST_CASE("test_bimap_insert", "[bimap]") {
+TEST_CASE("test_bimap_insert", "[BiMap]") {
     eular::BiMap<uint32_t, std::string> bimap = {
         {1,     "One"},
         {2,     "Two"},
@@ -45,12 +45,12 @@ TEST_CASE("test_bimap_insert", "[bimap]") {
     REQUIRE(bimap.insert(1111, value) == false);
 }
 
-TEST_CASE("insert benchmark", "[bimap]") {
+TEST_CASE("insert benchmark", "[BiMap]") {
 
     {
         uint32_t insertSize = 500000;
 
-        BENCHMARK("Map insert performance") {
+        BENCHMARK("BiMap insert performance") {
             eular::BiMap<uint32_t, uint64_t> bimap;
 
             for (uint32_t i = 0; i < insertSize; ++i)
@@ -65,7 +65,7 @@ TEST_CASE("insert benchmark", "[bimap]") {
     }
 }
 
-TEST_CASE("test find", "[bimap]") {
+TEST_CASE("test find", "[BiMap]") {
     eular::BiMap<uint32_t, std::string> bimap = {
         {1,     "One"},
         {2,     "Two"},
@@ -88,7 +88,7 @@ TEST_CASE("test find", "[bimap]") {
     REQUIRE(it.value() == "Ten");
 }
 
-TEST_CASE("find benchmark", "[bimap]") {
+TEST_CASE("find benchmark", "[BiMap]") {
 
     {
         uint32_t insertSize = 500000;
@@ -102,7 +102,7 @@ TEST_CASE("find benchmark", "[bimap]") {
 
         REQUIRE(insertSize == bimap.size());
 
-        BENCHMARK("Map find by key performance") {
+        BENCHMARK("BiMap find by key performance") {
             std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
             std::chrono::milliseconds mills =
                 std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
@@ -113,7 +113,7 @@ TEST_CASE("find benchmark", "[bimap]") {
             REQUIRE(it.value() == key);
         };
 
-        BENCHMARK("Map find by value performance") {
+        BENCHMARK("BiMap find by value performance") {
             std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
             std::chrono::milliseconds mills =
                 std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
@@ -128,7 +128,7 @@ TEST_CASE("find benchmark", "[bimap]") {
     }
 }
 
-TEST_CASE("test erase", "[bimap]") {
+TEST_CASE("test erase", "[BiMap]") {
 
     eular::BiMap<uint32_t, std::string> bimap = {
         {1,     "One"},
@@ -154,7 +154,7 @@ TEST_CASE("test erase", "[bimap]") {
     REQUIRE(it == bimap.end());
 }
 
-TEST_CASE("erase benchmark", "[bimap]") {
+TEST_CASE("erase benchmark", "[BiMap]") {
 
     {
         uint32_t insertSize = 500000;
@@ -168,7 +168,7 @@ TEST_CASE("erase benchmark", "[bimap]") {
 
         REQUIRE(insertSize == bimap.size());
 
-        BENCHMARK("Map erase by key performance") {
+        BENCHMARK("BiMap erase by key performance") {
             std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
             std::chrono::milliseconds mills =
                 std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
@@ -180,7 +180,7 @@ TEST_CASE("erase benchmark", "[bimap]") {
             REQUIRE(it == bimap.end());
         };
 
-        BENCHMARK("Map erase by value performance") {
+        BENCHMARK("BiMap erase by value performance") {
             std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
             std::chrono::milliseconds mills =
                 std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
@@ -196,7 +196,7 @@ TEST_CASE("erase benchmark", "[bimap]") {
     }
 }
 
-TEST_CASE("test foreach", "[bimap]") {
+TEST_CASE("test foreach", "[BiMap]") {
 
     std::initializer_list<std::pair<uint32_t, std::string>> initList = {
         {1,     "One"},
@@ -235,7 +235,7 @@ TEST_CASE("test foreach", "[bimap]") {
     }
 }
 
-TEST_CASE("test replace", "[bimap]") {
+TEST_CASE("test replace", "[BiMap]") {
     std::initializer_list<std::pair<uint32_t, std::string>> initList = {
         {1,     "One"},
         {2,     "Two"},
@@ -270,7 +270,7 @@ TEST_CASE("test replace", "[bimap]") {
     REQUIRE_THROWS(bimap.replaceValue(11, "Eleven"));
 }
 
-TEST_CASE("test move", "[bimap]") {
+TEST_CASE("test move", "[BiMap]") {
     std::initializer_list<std::pair<uint32_t, std::string>> initList = {
         {1,     "One"},
         {2,     "Two"},

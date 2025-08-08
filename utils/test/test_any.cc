@@ -56,8 +56,8 @@ struct regression1_type
 TEST_CASE("simple test", "[any]") {
     eular::any int32_num = 10;
     eular::any uint32_num = 10u;
-    eular::any int64_num = 10l;
-    eular::any uint64_num = 10ul;
+    eular::any int64_num = (int64_t)10;
+    eular::any uint64_num = (uint64_t)10;
     eular::any double_num = 3.14;
     eular::any float_num = 3.14f;
 
@@ -73,7 +73,7 @@ TEST_CASE("simple test", "[any]") {
 
     if (typeid(int64_t) == typeid(long long))
     {
-        CHECK(eular::any(10L).type() == typeid(long long));
+        CHECK(eular::any(10LL).type() == typeid(long long));
     }
 #endif
 

@@ -25,8 +25,7 @@ public:
         mRBtree(Data::create())
     {
         typename std::initializer_list<std::pair<KeyType, ValType> >::const_iterator it;
-        for (it = initList.begin(); it != initList.end(); ++it)
-        {
+        for (it = initList.begin(); it != initList.end(); ++it) {
             mRBtree->insert(it->first, it->second);
         }
     }
@@ -44,8 +43,10 @@ public:
     Map(Map<KeyType, ValType> &&other) :
         mRBtree(nullptr)
     {
-        mRBtree = other.mRBtree;
-        other.mRBtree = Data::create();
+        if (this != std::addressof(other)) {
+            std::swap(mRBtree, other.mRBtree);
+            other.mRBtree = Data::create();
+        }
     }
 
     ~Map()
@@ -55,7 +56,7 @@ public:
 
     Map &operator=(const Map<KeyType, ValType> &other)
     {
-        if (this == &other) {
+        if (this == std::addressof(other)) {
             return *this;
         }
 
@@ -68,10 +69,12 @@ public:
 
     Map &operator=(Map<KeyType, ValType> &&other)
     {
-        if (this == &other) {
+        if (this == std::addressof(other)) {
             return *this;
         }
+
         std::swap(mRBtree, other.mRBtree);
+        other.mRBtree = Data::create();
         return *this;
     }
 

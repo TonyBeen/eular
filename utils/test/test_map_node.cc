@@ -151,7 +151,7 @@ void test_std_insert()
 }
 
 TEST_CASE("std::map Benchmark insert") {
-    BENCHMARK("Map insert performance") {
+    BENCHMARK("std::map insert performance") {
         test_std_insert();
     };
 }
