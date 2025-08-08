@@ -9,7 +9,7 @@ set(CMAKE_C_STANDARD 11)
 
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
-option(ENABLE_DEBUG "Enable debug symbol" ON)
+option(ENABLE_DEBUG "Enable debug symbol" OFF)
 option(ENABLE_TEST "Enable test" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
