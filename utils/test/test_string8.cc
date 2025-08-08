@@ -8,11 +8,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <log/log.h>
 #include <utils/string8.h>
 #include <catch/catch.hpp>
-
-#define LOG_TAG "String8-test"
 
 using namespace eular;
 using namespace std;

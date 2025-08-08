@@ -65,7 +65,7 @@ int main(int argc, char **argv)
     eular::Thread th1(std::bind(thread_1));
     eular::Thread th2(std::bind(thread_2));
     th2.join();
-    sleep(2);
+    eular_sleep(2);
     eular::Thread th3(std::bind(thread_3));
     th1.join();
     th3.join();
