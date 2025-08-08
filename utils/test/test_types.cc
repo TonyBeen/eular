@@ -5,6 +5,10 @@
     > Created Time: Wed 07 Sep 2022 09:53:47 AM CST
  ************************************************************************/
 
+#ifndef CATCH_CONFIG_MAIN
+#define CATCH_CONFIG_MAIN
+#endif
+
 #include <utils/types.hpp>
 #include <catch/catch.hpp>
 #include <iostream>

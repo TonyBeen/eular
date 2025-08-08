@@ -1,4 +1,3 @@
-#include <unistd.h>
 #include <signal.h>
 
 #include <utils/timer.h>

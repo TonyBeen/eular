@@ -48,7 +48,7 @@ int main()
     Thread t1(std::bind(read_func, nullptr), "read");
     Thread t2(std::bind(write_func, nullptr), "write");
 
-    sleep(2);
+    eular_sleep(2);
     gExit = true;
 
     t1.join();
