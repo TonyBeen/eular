@@ -162,14 +162,14 @@ TEST_CASE("test_other_function", "[string8]") {
     {
         String8 str2 = "\t\t12345\t\t\t";
         str2.trimLeft('\t');
-        CHECK(5 == str2.length());
+        CHECK(8 == str2.length());
         CHECK(std::string("12345\t\t\t") == str2.c_str());
     }
 
     {
         String8 str2 = "\t\t12345\t\t\t";
         str2.trimRight('\t');
-        CHECK(5 == str2.length());
+        CHECK(7 == str2.length());
         CHECK(std::string("\t\t12345") == str2.c_str());
     }
     

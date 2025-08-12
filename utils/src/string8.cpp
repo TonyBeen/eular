@@ -15,6 +15,7 @@
 #include "utils/debug.h"
 #include "utils/errors.h"
 #include "utils/exception.h"
+#include "src/printf.h"
 
 #define DEFAULT_STRING_SIZE 64
 #define MAXSIZE (1024 * 1024) // 1Mb
@@ -883,7 +884,7 @@ String8 String8::FormatV(const char* fmt, va_list args)
 
     va_list tmp_args;
     va_copy(tmp_args, args);
-    len = vsnprintf(nullptr, 0, fmt, tmp_args);
+    len = vsnprintf_(nullptr, 0, fmt, tmp_args);
     va_end(tmp_args);
 
     if (len > 0) {
@@ -893,7 +894,7 @@ String8 String8::FormatV(const char* fmt, va_list args)
             return String8();
         }
         buf = static_cast<char *>(psb->data());
-        vsnprintf(buf, cap + 1, fmt, args);
+        vsnprintf_(buf, cap + 1, fmt, args);
         buf[cap] = '\0';
         result.release();
         result.mString = buf;
@@ -919,7 +920,7 @@ int String8::appendFormatV(const char* fmt, va_list args)
     int n = 0;
     va_list tmp_args;
     va_copy(tmp_args, args);
-    n = vsnprintf(nullptr, 0, fmt, tmp_args);
+    n = vsnprintf_(nullptr, 0, fmt, tmp_args);
     va_end(tmp_args);
     if (n <= 0) {
         return n;
@@ -945,12 +946,12 @@ int String8::appendFormatV(const char* fmt, va_list args)
     }
 
     if (buf) {
-        vsnprintf(buf + oldLength, n + 1, fmt, args);
+        vsnprintf_(buf + oldLength, n + 1, fmt, args);
         mString = buf;
         return n;
     }
 
-    vsnprintf(mString + oldLength, n + 1, fmt, args);
+    vsnprintf_(mString + oldLength, n + 1, fmt, args);
     return n;
 }
 

@@ -50,6 +50,7 @@ file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
 list(APPEND HEADER_LIST     ${HPP_HEADER_LIST})
 
 file(GLOB SRC_LIST          "src/*.cpp")
+list(APPEND SRC_LIST        "src/printf.c")
 
 # link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
 
