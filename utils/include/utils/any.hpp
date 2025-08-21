@@ -547,6 +547,6 @@ namespace eular
     {
         return any(in_place_type_t<T>{}, il, std::forward<Args>(args)...);
     }
-}
+} // namespace eular
 
 #endif

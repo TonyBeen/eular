@@ -97,6 +97,22 @@ TEST_CASE("simple test", "[any]") {
     CHECK(eular::any().empty());
     CHECK(!eular::any(1).empty());
     CHECK(!eular::any(big_type()).empty());
+
+    // not support array
+    // int32_t array[2][3] = {
+    //     {1, 2, 3},
+    //     {4, 5, 6}
+    // };
+    // eular::any any_array = array;
+    // CHECK(!any_array.empty());
+    // decltype(array) *array_pointer = eular::any_cast<decltype(array)>(&any_array);
+    // CHECK(*array_pointer != nullptr);
+    // CHECK(*array_pointer[0][0] == 1);
+    // CHECK(*array_pointer[0][1] == 2);
+    // CHECK(*array_pointer[0][2] == 3);
+    // CHECK(*array_pointer[1][0] == 4);
+    // CHECK(*array_pointer[1][1] == 5);
+    // CHECK(*array_pointer[1][2] == 6);
 }
 
 TEST_CASE("any_cast failed and threw an exception", "[any]") {
