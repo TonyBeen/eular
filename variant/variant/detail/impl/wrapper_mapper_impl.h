@@ -31,6 +31,7 @@
 #include "variant/wrapper_mapper.h"
 #include "variant/detail/misc/std_type_traits.h"
 #include "variant/detail/misc/utility.h"
+#include "variant/rttr_cast.h"
 
 #include <type_traits>
 
