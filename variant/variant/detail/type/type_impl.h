@@ -39,7 +39,7 @@
 #include "variant/detail/type/type_data.h"
 #include "variant/detail/type/type_name.h"
 #include "variant/detail/registration/registration_manager.h"
-#include "variant/detail/misc/register_wrapper_mapper_conversion.h"
+// #include "variant/detail/misc/register_wrapper_mapper_conversion.h"
 
 namespace rttr
 {

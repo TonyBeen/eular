@@ -31,7 +31,6 @@
 #include "variant/wrapper_mapper.h"
 #include "variant/detail/misc/std_type_traits.h"
 #include "variant/detail/misc/utility.h"
-#include "variant/rttr_cast.h"
 
 #include <type_traits>
 
@@ -63,7 +62,7 @@ struct wrapper_mapper<std::shared_ptr<T>>
     template<typename U>
     static std::shared_ptr<U> convert(const type& source, bool& ok)
     {
-        if (auto p = rttr_cast<typename std::shared_ptr<U>::element_type*>(source.get()))
+        if (auto p = dynamic_cast<typename std::shared_ptr<U>::element_type*>(source.get()))
         {
             ok = true;
             return std::shared_ptr<U>(source, p);

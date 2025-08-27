@@ -36,14 +36,10 @@
 
 namespace rttr
 {
-
 class variant;
 class type;
 class instance;
 class argument;
-
-template<typename Target_Type, typename Source_Type>
-Target_Type rttr_cast(Source_Type object);
 
 namespace detail
 {
@@ -443,9 +439,6 @@ class type
         variant create_variant(const argument& data) const;
 
         friend class variant;
-        template<typename Target_Type, typename Source_Type>
-        friend Target_Type rttr_cast(Source_Type object);
-
         friend class instance;
         friend class detail::type_register;
         friend class detail::type_register_private;

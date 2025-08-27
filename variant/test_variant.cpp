@@ -53,11 +53,11 @@ int main(int argc, char **argv)
             std::cout << var.get_value<std::string>() << std::endl;
         }
 
-        // var = "1000";
-        // if (var.can_convert<int64_t>())
-        // {
-        //     std::cout << var.get_value<int64_t>() << std::endl;
-        // }
+        var = "1000";
+        if (var.can_convert<int64_t>())
+        {
+            std::cout << var.convert<int64_t>() << std::endl;
+        }
     }
 
     return 0;
