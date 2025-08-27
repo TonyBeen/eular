@@ -230,7 +230,6 @@ long long string_to_long_long(const std::string& source, bool* ok)
     {
         std::size_t pos = 0;
         const long long value = std::stoll(source, &pos);
-        printf("value: %lld\n", value);
         if (pos == source.length())
         {
             if (ok)
