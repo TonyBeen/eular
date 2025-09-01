@@ -70,8 +70,6 @@ public:
 
     static void custom_name(type& t, const std::string &name);
 
-    static void register_base_class(const type& derived_type, const base_class_info& base_info);
-
     static void register_reg_manager(registration_manager* manager);
     static void unregister_reg_manager(registration_manager* manager);
 

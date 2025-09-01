@@ -32,14 +32,11 @@
 #include "variant/detail/misc/misc_type_traits.h"
 #include "variant/detail/misc/function_traits.h"
 #include "variant/detail/type/base_classes.h"
-#include "variant/detail/type/get_derived_info_func.h"
-#include "variant/detail/type/get_create_variant_func.h"
 #include "variant/detail/type/type_register.h"
 #include "variant/detail/misc/utility.h"
 #include "variant/detail/type/type_data.h"
 #include "variant/detail/type/type_name.h"
 #include "variant/detail/registration/registration_manager.h"
-// #include "variant/detail/misc/register_wrapper_mapper_conversion.h"
 
 namespace rttr
 {

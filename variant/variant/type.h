@@ -25,8 +25,8 @@
 *                                                                                   *
 *************************************************************************************/
 
-#ifndef RTTR_TYPE_H_
-#define RTTR_TYPE_H_
+#ifndef __RTTR_TYPE_H__
+#define __RTTR_TYPE_H__
 
 #include <type_traits>
 #include <vector>
@@ -460,4 +460,4 @@ class type
 #include "variant/detail/type/type_impl.h"
 #include "variant/type.hpp"
 
-#endif // RTTR_TYPE_H_
+#endif // __RTTR_TYPE_H__

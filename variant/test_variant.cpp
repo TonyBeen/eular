@@ -10,8 +10,14 @@
 #include <variant/variant.h>
 #include <variant/type.h>
 
+#include "test_enums.h"
+
 int main(int argc, char **argv)
 {
+    {
+        rttr::variant var;
+        rttr::type type = rttr::type::get<int32_t>();
+    }
     // 测试int
     {
         rttr::variant var = 10;
@@ -57,6 +63,18 @@ int main(int argc, char **argv)
         if (var.can_convert<int64_t>())
         {
             std::cout << var.convert<int64_t>() << std::endl;
+        }
+    }
+
+    {
+        rttr::variant var = variant_enum_test::VALUE_1;
+        rttr::type type = var.get_type();
+        std::cout << type.get_name() << std::endl;
+        if (var.can_convert<variant_enum_test>())
+        {
+            variant_enum_test &value = var.get_value<variant_enum_test>();
+            value = variant_enum_test::VALUE_2;
+            std::cout << (int32_t)var.get_value<variant_enum_test>() << std::endl;
         }
     }
 

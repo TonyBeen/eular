@@ -25,60 +25,119 @@
 *                                                                                   *
 *************************************************************************************/
 
-#ifndef RTTR_TYPE_DATA_HPP_
-#define RTTR_TYPE_DATA_HPP_
+#ifndef TEST_ENUMS_H_
+#define TEST_ENUMS_H_
 
-#include "variant/type.h"
-// #include "variant/detail/type/type_data.h"
+#include <cstdint>
 
-namespace rttr
+enum class variant_enum_test : uint8_t
 {
-namespace detail
-{
+    VALUE_0 = 0,
+    VALUE_1 = 1,
+    VALUE_2 = 2
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-static class_data& get_invalid_type_class_data()
+enum class variant_enum_test_big : int32_t
 {
-    static std::unique_ptr<class_data> info = ::rttr::detail::make_unique<class_data>(nullptr, std::vector<type>());
-    return (*info.get());
-}
-
+    VALUE_0 = 500,
+    VALUE_1 = 501,
+    VALUE_2 = 502
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-static type_data& get_invalid_type_data_impl()
+enum class enum_bool : bool
 {
-    static type_data instance{ nullptr,
-                               nullptr,
-                               nullptr,
-                               std::string(),
-                               0, 0,
-                               &create_invalid_variant_policy::create_variant,
-                               &base_classes<void>::get_types,
-                               get_create_wrapper_func<void>(),
-                               &get_invalid_type_class_data,
-                               false,
-                               type_trait_value{0}};
-
-    instance.raw_type_data  = &instance;
-    instance.wrapped_type   = &instance;
-    instance.array_raw_type = &instance;
-
-    return instance;
-}
+    ON = true,
+    OFF = false
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_data* get_invalid_type_data()
+enum class enum_int8_t : int8_t
 {
-    static auto instance = &get_invalid_type_data_impl();
-    return instance;
-}
+    VALUE_1 = 100,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4,
+    VALUE_NEG = -100
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-} // end namespace detail
-} // end namespace rttr
+enum class enum_int16_t : int16_t
+{
+    VALUE_1 = 32760,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4,
+    VALUE_NEG = -32760
+};
 
-#endif // RTTR_TYPE_DATA_HPP_
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_int32_t : int32_t
+{
+    VALUE_1 = 2147483630,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4,
+    VALUE_NEG = -2147483630
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_int64_t : int64_t
+{
+    VALUE_1 = 8223372036854775807L,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4,
+    VALUE_NEG = -8223372036854775807L
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_uint8_t : uint8_t
+{
+    VALUE_1 = 200U,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_uint16_t : uint16_t
+{
+    VALUE_1 = 65530,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_uint32_t : uint32_t
+{
+    VALUE_1 = 4147483630U,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+enum class enum_uint64_t : uint64_t
+{
+    VALUE_1 = 17446744073709551615U,
+    VALUE_2,
+    VALUE_3,
+    VALUE_4
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+#endif // TEST_ENUMS_H_

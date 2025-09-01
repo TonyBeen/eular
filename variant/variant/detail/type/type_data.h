@@ -25,19 +25,20 @@
 *                                                                                   *
 *************************************************************************************/
 
-#ifndef RTTR_TYPE_DATA_H_
-#define RTTR_TYPE_DATA_H_
+#ifndef __RTTR_TYPE_DATA_H__
+#define __RTTR_TYPE_DATA_H__
 
 #include "variant/detail/misc/misc_type_traits.h"
 #include "variant/detail/misc/function_traits.h"
 #include "variant/detail/misc/template_type_trait.h"
 #include "variant/detail/type/base_classes.h"
-#include "variant/detail/type/get_derived_info_func.h"
-#include "variant/detail/type/get_create_variant_func.h"
 #include "variant/detail/type/type_register.h"
 #include "variant/detail/type/type_name.h"
 #include "variant/detail/misc/utility.h"
 #include "variant/wrapper_mapper.h"
+#include "variant/detail/type/get_derived_info_func.h"
+#include "variant/detail/type/get_create_variant_func.h"
+#include "variant/type.h"
 
 #include <type_traits>
 #include <bitset>
@@ -48,9 +49,6 @@ namespace rttr
 namespace detail
 {
 struct type_data;
-
-template<typename T>
-type_data& get_type_data();
 type_data* get_invalid_type_data();
 
 static type get_invalid_type();
@@ -299,4 +297,4 @@ std::unique_ptr<type_data> make_type_data()
 
 #include "variant/detail/type/type_data.hpp"
 
-#endif // RTTR_TYPE_DATA_H_
+#endif // __RTTR_TYPE_DATA_H__

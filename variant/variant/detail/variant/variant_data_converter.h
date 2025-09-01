@@ -33,6 +33,7 @@
 
 #include "variant/detail/conversion/std_conversion_functions.h"
 #include "variant/detail/conversion/number_conversion.h"
+#include "variant/argument.h"
 
 namespace rttr
 {
@@ -1430,8 +1431,7 @@ struct convert_from_enum
 
     static bool to(const T& from, std::string& to)
     {
-        to = get_enumeration_name(from).to_string();
-        return (to.empty() == false);
+        return false;
     }
 
     static bool to_enum(const T& from, argument& to)

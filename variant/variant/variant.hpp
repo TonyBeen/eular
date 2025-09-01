@@ -32,6 +32,7 @@
 
 #include "variant/detail/variant/variant_data_policy.h"
 #include "variant/argument.h"
+#include "variant/detail/type/type_data.h"
 
 #include <algorithm>
 #include <limits>
@@ -304,6 +305,21 @@ bool variant::convert(const type& target_type, variant& target_var) const
         {
             target_var = nullptr;
             ok = true;
+        }
+        else if (source_type.is_pointer() &&
+                (source_type.m_type_data->get_pointer_dimension == 1 && target_type.m_type_data->get_pointer_dimension == 1))
+        {
+            void* raw_ptr = get_raw_ptr();
+            auto& src_raw_type = source_type.m_type_data->raw_type_data;
+            auto& tgt_raw_type = target_type.m_type_data->raw_type_data;
+            if (src_raw_type == tgt_raw_type)
+            {
+                // although we forward a void* to create a variant,
+                // it will create a variant for the specific class type
+                target_var = target_type.create_variant(raw_ptr);
+                if (target_var.is_valid())
+                    ok = true;
+            }
         }
     }
 
