@@ -65,16 +65,16 @@ public:
     }
 
     template <typename T>
-    std::shared_ptr<TLSSlot<T>> set(const std::string &key, const T &value)
+    std::shared_ptr<TLSSlot<T>> set(const std::string &key, T &&value)
     {
         std::shared_ptr<TLSSlot<T>> result;
         auto it = m_tlsMap.find(key);
         if (it == m_tlsMap.end()) {
-            it = m_tlsMap.insert(std::make_pair(key, std::make_shared<TLSSlot<T>>(value))).first;
+            it = m_tlsMap.insert(std::make_pair(key, std::make_shared<TLSSlot<T>>(std::forward<T>(value)))).first;
             result = std::dynamic_pointer_cast<TLSSlot<T>>(it->second);
         } else {
             result = std::dynamic_pointer_cast<TLSSlot<T>>(it->second);
-            result->value() = value;
+            result->value() = std::forward<T>(value);
         }
 
         return result;
