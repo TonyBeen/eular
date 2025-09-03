@@ -10,7 +10,12 @@
 #include <variant/type.h>
 #include <variant/variant.h>
 
-#include "test_enums.h"
+enum class VariantEnumTest : uint8_t
+{
+    Value_0 = 0,
+    Value_1 = 1,
+    Value_2 = 2
+};
 
 int main(int argc, char **argv)
 {
@@ -67,14 +72,14 @@ int main(int argc, char **argv)
     }
 
     {
-        rttr::variant var = variant_enum_test::VALUE_1;
+        rttr::variant var = VariantEnumTest::Value_1;
         rttr::type type = var.get_type();
         std::cout << type.get_name() << std::endl;
-        if (var.can_convert<variant_enum_test>())
+        if (var.can_convert<VariantEnumTest>())
         {
-            variant_enum_test &value = var.get_value<variant_enum_test>();
-            value = variant_enum_test::VALUE_2;
-            std::cout << (int32_t)var.get_value<variant_enum_test>() << std::endl;
+            VariantEnumTest &value = var.get_value<VariantEnumTest>();
+            value = VariantEnumTest::Value_2;
+            std::cout << (int32_t)var.get_value<VariantEnumTest>() << std::endl;
         }
     }
 
@@ -88,14 +93,6 @@ int main(int argc, char **argv)
         int val = var.convert<int>(&ok);
         std::cout << ok << std::endl;
         std::cout << val << std::endl;
-        // CHECK(ok == true);
-        // CHECK(val == obj);
-
-        // CHECK(var.convert(type::get<int>()) == true);
-
-        // int val_2;
-        // CHECK(var.convert<int>(val_2) == true);
-        // CHECK(val_2 == obj);
     }
 
     return 0;
