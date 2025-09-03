@@ -372,6 +372,31 @@ class variant
         const T& get_wrapped_value() const;
 
         /*!
+         * \brief Extracts the wrapped value and copies its content into a new variant.
+         *
+         * \code{.cpp}
+         *  int value1 = 23;
+         *  variant var1 = std::ref(value1);
+         *
+         *  if (var1.get_type().get_wrapped_type() == type::get<int>())  // yields to true
+         *  {
+         *     variant var2 = var1.extract_wrapped_value(); // value will be copied into "var2"
+         *     var2.get_type() == type::get<int>(); // yields to true
+         *     const int& value2 = var2.get_value<int>();
+         *     std::cout << value2 << std::endl;    // prints "23"
+         *  }
+         * \endcode
+         *
+         * \remark Calling this method works only for wrapped types which are copiable.
+         *         When you work with custom types, which are not copyable, the variant will be \ref is_valid "invalid"
+         *
+         * \return A variant with the wrapped value.
+         *
+         * \see type::is_wrapper()
+         */
+        variant extract_wrapped_value() const;
+
+        /*!
          * \brief Returns `true` if the contained value can be converted to the given type \p T.
          *        Otherwise `false`.
          *
@@ -799,6 +824,8 @@ class variant
          * \return A boolean with value `true`, when the contained value type is equal to `nullptr`; otherwise false.
          */
         bool is_nullptr() const;
+
+        variant create_wrapped_value(const type& wrapped_type) const;
 
     private:
         friend class argument;

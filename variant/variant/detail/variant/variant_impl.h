@@ -207,7 +207,19 @@ bool variant::convert(T& value) const
 
     const type source_type = get_type();
     const type target_type = type::get<T>();
-    if (target_type == source_type)
+    if (source_type.is_wrapper() && !target_type.is_wrapper())
+    {
+        variant var = extract_wrapped_value();
+        return var.convert<T>(value);
+    }
+    else if (!source_type.is_wrapper() && target_type.is_wrapper() &&
+             target_type.get_wrapped_type() == source_type)
+    {
+        variant var = create_wrapped_value(target_type);
+        if ((ok = var.is_valid()) == true)
+            value = var.get_value<T>();
+    }
+    else if (target_type == source_type)
     {
         value = const_cast<variant&>(*this).get_value<T>();
         ok = true;

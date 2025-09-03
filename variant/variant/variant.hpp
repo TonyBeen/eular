@@ -155,6 +155,24 @@ type variant::get_type() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
+variant variant::extract_wrapped_value() const
+{
+    variant var;
+    m_policy(detail::variant_policy_operation::EXTRACT_WRAPPED_VALUE, m_data, var);
+    return var;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+variant variant::create_wrapped_value(const type& wrapped_type) const
+{
+    variant var;
+    m_policy(detail::variant_policy_operation::CREATE_WRAPPED_VALUE, m_data, std::tie(var, wrapped_type));
+    return var;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
 bool variant::can_convert(const type& target_type) const
 {
     if (!is_valid())
@@ -205,6 +223,18 @@ bool variant::convert(const type& target_type, variant& target_var) const
     {
         target_var = *this;
         return true; // the current variant is already the target type, we don't need to do anything
+    }
+    else if (!source_type.is_wrapper() && target_type.is_wrapper() &&
+             target_type.get_wrapped_type() == source_type)
+    {
+        target_var = create_wrapped_value(target_type);
+        ok = target_var.is_valid();
+    }
+    else if (source_type.is_wrapper() && !target_type.is_wrapper())
+    {
+        variant var = extract_wrapped_value();
+        ok = var.convert(target_type);
+        target_var = var;
     }
     else if ((source_is_arithmetic && target_is_arithmetic) ||
             (source_is_arithmetic && target_type == string_type) ||

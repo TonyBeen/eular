@@ -420,6 +420,11 @@ class type
          */
         bool is_arithmetic() const;
 
+        /*!
+         * \brief Creates a wrapped value from the given argument \p arg and moves it into the
+         *        the given variant \p var.
+         */
+        void create_wrapped_value(const argument& arg, variant& var) const;
 
     private:
 

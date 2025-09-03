@@ -70,6 +70,14 @@ type type::get_by_name(const std::string &name)
     return detail::get_invalid_type();
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////
+
+void type::create_wrapped_value(const argument& arg, variant& var) const
+{
+    if (m_type_data->create_wrapper)
+        m_type_data->create_wrapper(arg, var);
+}
+
 } // end namespace rttr
 
 #endif // RTTR_TYPE_HPP_
