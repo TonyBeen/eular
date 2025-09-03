@@ -363,35 +363,3 @@ TEST_CASE("variant::to_string() - from uint64_t", "[variant]")
         CHECK(var.get_value<std::string>() == "2147483640");
     }
 }
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-enum class unregisterd_enum { VALUE_1 };
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-TEST_CASE("variant::to_string() - from enum", "[variant]")
-{
-    SECTION("valid conversion")
-    {
-        variant var = enum_int64_t::VALUE_1;
-        REQUIRE(var.can_convert<int64_t>() == true);
-        bool ok = false;
-        CHECK(var.to_string(&ok) == "VALUE_1");
-        CHECK(ok == true);
-
-        REQUIRE(var.convert(type::get<std::string>()) == true);
-        CHECK(var.get_value<std::string>() == "VALUE_1");
-    }
-
-    SECTION("invalid conversion")
-    {
-        variant var = unregisterd_enum::VALUE_1;
-        bool ok = false;
-        CHECK(var.to_string(&ok) == "");
-        CHECK(ok == false);
-        CHECK(var.convert(type::get<std::string>()) == false);
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////

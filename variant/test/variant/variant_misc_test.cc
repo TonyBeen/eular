@@ -27,6 +27,7 @@
 
 #include <catch/catch.hpp>
 #include <iostream>
+#include <variant/variant.h>
 #include <variant/type.h>
 
 using namespace rttr;

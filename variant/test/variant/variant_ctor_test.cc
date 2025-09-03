@@ -27,6 +27,7 @@
 
 #include <catch/catch.hpp>
 #include <iostream>
+#include <variant/variant.h>
 #include <variant/type.h>
 
 #include <type_traits>
