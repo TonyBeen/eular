@@ -7,8 +7,8 @@
 
 #include <iostream>
 
-#include <variant/variant.h>
 #include <variant/type.h>
+#include <variant/variant.h>
 
 #include "test_enums.h"
 

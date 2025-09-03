@@ -29,9 +29,9 @@
 #define RTTR_TYPE_REGISTER_HPP_
 
 #include "variant/detail/type/type_register.h"
-#include "variant/detail/type/type_data.h"
 #include "variant/detail/type/type_register_p.h"
 #include "variant/detail/type/type_string_utils.h"
+#include "variant/detail/type/type_data.hpp"
 
 #include "variant/detail/registration/registration_manager.h"
 

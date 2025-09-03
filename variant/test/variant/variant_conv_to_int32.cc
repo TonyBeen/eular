@@ -28,8 +28,8 @@
 #include "variant/test_enums.h"
 
 #include <catch/catch.hpp>
-#include <variant/variant.h>
 #include <variant/type.h>
+#include <variant/variant.h>
 
 using namespace rttr;
 

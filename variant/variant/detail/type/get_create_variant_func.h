@@ -28,10 +28,11 @@
 #ifndef RTTR_GET_CREATE_VARIANT_FUNC_H_
 #define RTTR_GET_CREATE_VARIANT_FUNC_H_
 
-#include "variant/variant.h"
-#include "variant/detail/misc/misc_type_traits.h"
-#include "variant/argument.h"
 #include <type_traits>
+
+#include <variant/detail/misc/misc_type_traits.h>
+#include <variant/variant.h>
+#include <variant/argument.h>
 
 namespace rttr
 {

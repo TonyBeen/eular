@@ -29,6 +29,7 @@
 #define RTTR_TYPE_IMPL_H_
 
 #include <type_traits>
+
 #include "variant/detail/misc/misc_type_traits.h"
 #include "variant/detail/misc/function_traits.h"
 #include "variant/detail/type/base_classes.h"
