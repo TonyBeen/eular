@@ -78,5 +78,25 @@ int main(int argc, char **argv)
         }
     }
 
+    {
+        int obj = 42;
+        rttr::variant var = std::ref(obj);
+
+        std::cout << var.can_convert(rttr::type::get<int>()) << std::endl;
+
+        bool ok = false;
+        int val = var.convert<int>(&ok);
+        std::cout << ok << std::endl;
+        std::cout << val << std::endl;
+        // CHECK(ok == true);
+        // CHECK(val == obj);
+
+        // CHECK(var.convert(type::get<int>()) == true);
+
+        // int val_2;
+        // CHECK(var.convert<int>(val_2) == true);
+        // CHECK(val_2 == obj);
+    }
+
     return 0;
 }

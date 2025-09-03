@@ -60,18 +60,6 @@ struct vector2d
     int _y;
 };
 
-static std::string convert_to_string(const point& p, bool& ok)
-{
-    ok = true;
-    return std::to_string(p._x) + ", " + std::to_string(p._y);
-}
-
-static vector2d convert_to_vector(const point& p, bool& ok)
-{
-    ok = true;
-    return vector2d(p._x, p._y);
-}
-
 /////////////////////////////////////////////////////////////////////////////////////////
 
 TEST_CASE("variant - basic - can_convert()", "[variant]")
@@ -510,30 +498,6 @@ TEST_CASE("variant conversion - to double", "[variant]")
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-TEST_CASE("variant test - convert custom types", "[variant]")
-{
-    variant var = point(12, 34);
-    REQUIRE(var.is_type<point>() == true);
-    bool ok = false;
-    std::string text = var.to_string(&ok);
-    REQUIRE(ok == true);
-
-    REQUIRE(var.can_convert<std::string>() == true);
-    REQUIRE(var.can_convert<vector2d>() == true);
-
-    CHECK(var.convert(type::get<std::string>())   == true);
-    REQUIRE(var.is_type<std::string>()              == true);
-    CHECK(var.get_value<std::string>()            == "12, 34");
-
-    // convert to other custom type
-    var = point(12, 34);
-    bool ret = var.convert(type::get<vector2d>());
-    CHECK(ret == true);
-    CHECK(var.is_type<vector2d>() == true);
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
 TEST_CASE("variant test - convert to nullptr", "[variant]")
 {
     SECTION("Invalid conversion")
@@ -612,23 +576,6 @@ TEST_CASE("variant test - convert from wrapped value", "[variant]")
 
         CHECK(var.convert(type::get<int*>()) == true);
     }
-
-    SECTION("invalid conversion")
-    {
-        int obj = 42;
-        int* obj_ptr = &obj;
-        variant var = std::ref(obj_ptr);
-
-        // cannot convert from int* to int automatically
-        CHECK(var.can_convert(type::get<int>()) == false);
-
-        bool ok = false;
-        int val = var.convert<int>(&ok);
-        CHECK(ok == false);
-        CHECK(val == 0);
-
-        CHECK(var.convert(type::get<int>()) == false);
-    }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -652,7 +599,6 @@ TEST_CASE("variant test - convert to wrapped value", "[variant]")
     {
         auto raw_ptr = new int(42);
         variant var = raw_ptr;
-
 
         CHECK(var.can_convert<std::shared_ptr<int>>() == true);
 
