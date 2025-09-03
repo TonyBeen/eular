@@ -201,9 +201,9 @@ RTTR_INLINE bool variant::can_convert(const type& target_type) const
     return ((source_is_arithmetic && target_is_arithmetic) ||
             (source_is_arithmetic && target_type == string_type) ||
             (source_type == string_type && target_is_arithmetic) ||
-            (source_type.is_enumeration() && target_is_arithmetic) ||
-            (source_is_arithmetic && target_is_enumeration) ||
-            (source_type == string_type && target_is_enumeration));
+            (source_type.is_enumeration() && target_is_arithmetic)
+            // || (source_is_arithmetic && target_is_enumeration) // NOTE prohibition of converting arithmetic to enumeration
+            );
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////

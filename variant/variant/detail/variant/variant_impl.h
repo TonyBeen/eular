@@ -213,7 +213,7 @@ RTTR_INLINE bool variant::convert(T& value) const
         return var.convert<T>(value);
     }
     else if (!source_type.is_wrapper() && target_type.is_wrapper() &&
-             target_type.get_wrapped_type() == source_type)
+              target_type.get_wrapped_type() == source_type)
     {
         variant var = create_wrapped_value(target_type);
         if ((ok = var.is_valid()) == true)
