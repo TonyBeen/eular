@@ -34,6 +34,8 @@
 #include <memory>
 #include <cstdint>
 
+#include <variant/detail/base/core_prerequisites.h>
+
 namespace rttr
 {
 class variant;
@@ -51,7 +53,7 @@ class type_register_private;
 static type get_invalid_type();
 struct invalid_type{};
 struct type_data;
-type create_type(type_data*);
+RTTR_INLINE type create_type(type_data*);
 
 template<typename T>
 std::unique_ptr<type_data> make_type_data();
@@ -155,42 +157,42 @@ class type
          * \brief Assigns a type to another one.
          *
          */
-        type(const type& other);
+        RTTR_INLINE type(const type& other);
 
         /*!
          * \brief Assigns a type to another one.
          *
          * \return A type object.
          */
-        type& operator=(const type& other);
+        RTTR_INLINE type& operator=(const type& other);
 
         /*!
          * \brief Comparison operator for sorting the type data according to some internal criterion.
          *
          * \return True if this type is less than the \a other.
          */
-        bool operator<(const type& other) const;
+        RTTR_INLINE bool operator<(const type& other) const;
 
         /*!
          * \brief Comparison operator for sorting the type data according to some internal criterion.
          *
          * \return True if this type is greater than the \a other.
          */
-        bool operator>(const type& other) const;
+        RTTR_INLINE bool operator>(const type& other) const;
 
         /*!
          * \brief Comparison operator for sorting the type data according to some internal criterion.
          *
          * \return True if this type is greater than or equal to \a other.
          */
-        bool operator>=(const type& other) const;
+        RTTR_INLINE bool operator>=(const type& other) const;
 
         /*!
          * \brief Comparison operator for sorting the type data according to some internal criterion.
          *
          * \return True if this type is less than or equal to \a other.
          */
-        bool operator<=(const type& other) const;
+        RTTR_INLINE bool operator<=(const type& other) const;
 
         /*!
          * \brief Compares this type with the \a other type and returns true
@@ -198,7 +200,7 @@ class type
          *
          * \return True if both type are equal, otherwise false.
          */
-        bool operator==(const type& other) const;
+        RTTR_INLINE bool operator==(const type& other) const;
 
         /*!
          * \brief Compares this type with the \a other type and returns true
@@ -206,7 +208,7 @@ class type
          *
          * \return True if both type are \b not equal, otherwise false.
          */
-        bool operator!=(const type& other) const;
+        RTTR_INLINE bool operator!=(const type& other) const;
 
         /*!
          * \brief Returns the id of this type.
@@ -216,7 +218,7 @@ class type
          *
          * \return The type id.
          */
-        type_id get_id() const;
+        RTTR_INLINE type_id get_id() const;
 
         /*!
          * \brief Returns the unique and human-readable name of the type.
@@ -225,21 +227,21 @@ class type
          *
          * \return The type name.
          */
-        std::string get_name() const;
+        RTTR_INLINE std::string get_name() const;
 
         /*!
          * \brief Returns true if this type is valid, that means the type holds valid data to a type.
          *
          * \return True if this type is valid, otherwise false.
          */
-        bool is_valid() const;
+        RTTR_INLINE bool is_valid() const;
 
         /*!
          * \brief Convenience function to check if this \ref type is valid or not.
          *
          * \return True if this \ref type is valid, otherwise false.
          */
-         explicit operator bool() const;
+        RTTR_INLINE explicit operator bool() const;
 
         /*!
          * \brief Returns a type object which represent the raw type.
@@ -249,7 +251,7 @@ class type
          *
          * \return The corresponding raw type object.
          */
-        type get_raw_type() const;
+        RTTR_INLINE type get_raw_type() const;
 
         /*!
          * \brief Returns a type object which represent the wrapped type.
@@ -271,7 +273,7 @@ class type
          *
          * \return The type object of the wrapped type.
          */
-        type get_wrapped_type() const;
+        RTTR_INLINE type get_wrapped_type() const;
 
         /*!
          * \brief Returns a type object for the given template type \a T.
@@ -311,14 +313,14 @@ class type
          *
          * \return The size of the type in bytes.
          */
-        std::size_t get_sizeof() const;
+        RTTR_INLINE std::size_t get_sizeof() const;
 
         /*!
          * \brief Returns true whether the given type is class; that is not an atomic type or a method.
          *
          * \return True if the type is a class, otherwise false.
          */
-        bool is_class() const;
+        RTTR_INLINE bool is_class() const;
 
          /*!
          * \brief Returns true whether the given type is an instantiation of a class template.
@@ -338,14 +340,14 @@ class type
          *
          * \see get_template_arguments()
          */
-        bool is_template_instantiation() const;
+        RTTR_INLINE bool is_template_instantiation() const;
 
         /*!
          * \brief Returns true whether the given type represents an enumeration.
          *
          * \return True if the type is an enumeration, otherwise false.
          */
-        bool is_enumeration() const;
+        RTTR_INLINE bool is_enumeration() const;
 
         /*!
          * \brief Returns true whether the given type represents a wrapper type.
@@ -364,7 +366,7 @@ class type
          * \return True if the type is an wrapper, otherwise false.
          *
          */
-        bool is_wrapper() const;
+        RTTR_INLINE bool is_wrapper() const;
 
         /*!
          * \brief Returns `true` whether the given type represents an array.
@@ -381,7 +383,7 @@ class type
          *
          * \see is_sequential_container()
          */
-        bool is_array() const;
+        RTTR_INLINE bool is_array() const;
 
         /*!
          * \brief Returns true whether the given type represents an
@@ -391,7 +393,7 @@ class type
          *
          * \see \ref associative_container_mapper "associative_container_mapper<T>"
          */
-        bool is_associative_container() const;
+        RTTR_INLINE bool is_associative_container() const;
 
         /*!
          * \brief Returns true whether the given type represents an
@@ -401,7 +403,7 @@ class type
          *
          * \see \ref sequential_container_mapper "sequential_container_mapper<T>"
          */
-        bool is_sequential_container() const;
+        RTTR_INLINE bool is_sequential_container() const;
 
         /*!
          * \brief Returns true whether the given type represents a pointer.
@@ -409,7 +411,7 @@ class type
          *
          * \return True if the type is a pointer, otherwise false.
          */
-        bool is_pointer() const;
+        RTTR_INLINE bool is_pointer() const;
 
         /*!
          * \brief Returns true whether the given type represents an arithmetic type.
@@ -418,30 +420,30 @@ class type
          *
          * \return True if the type is a arithmetic type, otherwise false.
          */
-        bool is_arithmetic() const;
+        RTTR_INLINE bool is_arithmetic() const;
 
         /*!
          * \brief Creates a wrapped value from the given argument \p arg and moves it into the
          *        the given variant \p var.
          */
-        void create_wrapped_value(const argument& arg, variant& var) const;
+        RTTR_INLINE void create_wrapped_value(const argument& arg, variant& var) const;
 
     private:
 
         /*!
          * Constructs an empty and invalid type object.
          */
-        type();
+        RTTR_INLINE type();
 
         /*!
          * \brief Constructs a valid type object.
          *
          * \param id The unique id of the data type.
          */
-        explicit type(detail::type_data* data);
+        RTTR_INLINE explicit type(detail::type_data* data);
 
         //! Creates a variant from the given argument data.
-        variant create_variant(const argument& data) const;
+        RTTR_INLINE variant create_variant(const argument& data) const;
 
         friend class variant;
         friend class instance;

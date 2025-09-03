@@ -28,14 +28,15 @@
 #ifndef RTTR_VARIANT_H_
 #define RTTR_VARIANT_H_
 
-#include "variant/detail/misc/misc_type_traits.h"
-#include "variant/detail/variant/variant_data.h"
-#include "variant/detail/misc/argument_wrapper.h"
-
 #include <type_traits>
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
+
+#include <variant/detail/base/core_prerequisites.h>
+#include <variant/detail/misc/misc_type_traits.h>
+#include <variant/detail/variant/variant_data.h>
+#include <variant/detail/misc/argument_wrapper.h>
 
 namespace rttr
 {
@@ -50,9 +51,9 @@ class instance;
 namespace detail
 {
     template<class T>
-    T* unsafe_variant_cast(variant* operand);
+    RTTR_INLINE T* unsafe_variant_cast(variant* operand);
     template<class T>
-    const T* unsafe_variant_cast(const variant* operand);
+    RTTR_INLINE const T* unsafe_variant_cast(const variant* operand);
 
     struct data_address_container;
     template<typename T>
@@ -200,29 +201,29 @@ class variant
          *
          * \see is_valid()
          */
-        variant();
+        RTTR_INLINE variant();
 
         /*!
          * \brief Constructs a new variant with the new value \p val.
          *        The value will be copied or moved into the variant.
          */
         template<typename T, typename Tp = detail::decay_variant_t<T>>
-        variant(T&& val);
+        RTTR_INLINE variant(T&& val);
 
         /*!
          * \brief Constructs a new variant object from the given variant \p other.
          */
-        variant(const variant& other);
+        RTTR_INLINE variant(const variant& other);
 
         /*!
          * \brief Constructs a new variant via move constructor.
          */
-        variant(variant&& other);
+        RTTR_INLINE variant(variant&& other);
 
         /*!
          * \brief Destroys the variant and the contained object.
          */
-        ~variant();
+        RTTR_INLINE ~variant();
 
         /*!
          * Assigns the value of the \p other object to this variant.
@@ -230,33 +231,33 @@ class variant
          * \return A reference to the variant with the new data.
          */
         template<typename T, typename Tp = detail::decay_variant_t<T>>
-        variant& operator=(T&& other);
+        RTTR_INLINE variant& operator=(T&& other);
 
         /*!
          * \brief Assigns the value of the \a other variant to this variant.
          *
          * \return A reference to the variant with the new data.
          */
-        variant& operator=(variant&& other);
+        RTTR_INLINE variant& operator=(variant&& other);
 
         /*!
          * \brief Assigns the value of the \a other variant to this variant.
          *
          * \return A reference to the variant with the new data.
          */
-        variant& operator=(const variant& other);
+        RTTR_INLINE variant& operator=(const variant& other);
 
         /*!
          * \brief When the variant contains a value, then this function will clear the content.
          *
          * \remark After calling this function \ref is_valid() will return `false`.
          */
-        void clear();
+        RTTR_INLINE void clear();
 
         /*!
          * \brief Swaps the content of this variant with \p other variant.
          */
-        void swap(variant& other);
+        RTTR_INLINE void swap(variant& other);
 
         /*!
          * \brief Returns `true` if the containing variant data is of the given template type `T`.
@@ -264,7 +265,7 @@ class variant
          * \return True if variant data is of type `T`, otherwise false.
          */
         template<typename T>
-        bool is_type() const;
+        RTTR_INLINE bool is_type() const;
 
         /*!
          * \brief Returns the \ref type object of underlying data.
@@ -273,7 +274,7 @@ class variant
          *
          * \return \ref type of the underlying data type.
          */
-        type get_type() const;
+        RTTR_INLINE type get_type() const;
 
         /*!
          * \brief Returns true if this variant is valid, that means the variant is holding some data.
@@ -286,7 +287,7 @@ class variant
          *
          * \return `True` if this variant is valid, otherwise `false`.
          */
-        bool is_valid() const;
+        RTTR_INLINE bool is_valid() const;
 
         /*!
          * \brief Convenience function to check if this \ref variant is valid or not.
@@ -295,7 +296,7 @@ class variant
          *
          * \return `True` if this \ref variant is valid, otherwise `false`.
          */
-        explicit operator bool() const;
+        RTTR_INLINE explicit operator bool() const;
 
         /*!
          * \brief Returns a reference to the containing value as type \p T.
@@ -321,7 +322,7 @@ class variant
          * \return A reference to the stored value.
          */
         template<typename T>
-        T& get_value();
+        RTTR_INLINE T& get_value();
 
         /*!
          * \brief Returns a reference to the containing value as type \p T.
@@ -347,7 +348,7 @@ class variant
          * \return A reference to the stored value.
          */
         template<typename T>
-        const T& get_value() const;
+        RTTR_INLINE const T& get_value() const;
 
         /*!
          * \brief Returns a reference to the contained wrapped value as type \p T.
@@ -369,7 +370,7 @@ class variant
          * \return A reference to the stored wrapped value.
          */
         template<typename T>
-        const T& get_wrapped_value() const;
+        RTTR_INLINE const T& get_wrapped_value() const;
 
         /*!
          * \brief Extracts the wrapped value and copies its content into a new variant.
@@ -394,7 +395,7 @@ class variant
          *
          * \see type::is_wrapper()
          */
-        variant extract_wrapped_value() const;
+        RTTR_INLINE variant extract_wrapped_value() const;
 
         /*!
          * \brief Returns `true` if the contained value can be converted to the given type \p T.
@@ -405,7 +406,7 @@ class variant
          * \see convert(), type::register_converter_func()
          */
         template<typename T>
-        bool can_convert() const;
+        RTTR_INLINE bool can_convert() const;
 
         /*!
          * \brief Returns `true` if the contained value can be converted to the given type \p target_type;
@@ -420,7 +421,7 @@ class variant
          *
          * \see convert(), type::register_converter_func()
          */
-        bool can_convert(const type& target_type) const;
+        RTTR_INLINE bool can_convert(const type& target_type) const;
 
         /*!
          * \brief Converts the containing variant internally to the given type \p target_type.
@@ -451,7 +452,7 @@ class variant
          *
          * \see can_convert(), type::register_converter_func()
          */
-        bool convert(const type& target_type);
+        RTTR_INLINE bool convert(const type& target_type);
 
         /*!
          * \brief Converts the containing data to a *new value* of type \p T and return this *value*.
@@ -480,7 +481,7 @@ class variant
          * \see can_convert(), type::register_converter_func()
          */
         template<typename T>
-        T convert(bool* ok = nullptr) const;
+        RTTR_INLINE T convert(bool* ok = nullptr) const;
 
         /*!
          * \brief Converts the containing data to the given value \p value and returns a `bool` flag that indicated whether the conversion
@@ -511,7 +512,7 @@ class variant
          * \see can_convert(), type::register_converter_func()
          */
         template<typename T>
-        bool convert(T& value) const;
+        RTTR_INLINE bool convert(T& value) const;
 
         /*!
          * \brief Returns the variant as a `bool` if this variant is of \ref is_type() "type" `bool`.
@@ -527,7 +528,7 @@ class variant
          *
          * \return A `bool` value.
          */
-        bool to_bool() const;
+        RTTR_INLINE bool to_bool() const;
 
         /*!
          * \brief Returns the containing variant as an `int` when the \ref is_type() "type" is an `integer`.
@@ -546,7 +547,7 @@ class variant
          *
          * \return An `int` value.
          */
-        int to_int(bool *ok = nullptr) const;
+        RTTR_INLINE int to_int(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as a `float` when the \ref is_type() "type" is a `float`.
@@ -565,7 +566,7 @@ class variant
          *
          * \return A `float` value.
          */
-        float to_float(bool* ok = nullptr) const;
+        RTTR_INLINE float to_float(bool* ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as a `double` when the \ref is_type() "type" is a `double`.
@@ -584,7 +585,7 @@ class variant
          *
          * \return A `double` value.
          */
-        double to_double(bool* ok = nullptr) const;
+        RTTR_INLINE double to_double(bool* ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as a `std::string` when the \ref is_type() "type" is a `std::string`.
@@ -599,7 +600,7 @@ class variant
          *
          * \return A `std::string` value.
          */
-        std::string to_string(bool *ok = nullptr) const;
+        RTTR_INLINE std::string to_string(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `int8_t` when the \ref is_type() "type" is an `int8_t`.
@@ -618,7 +619,7 @@ class variant
          *
          * \return A `int8_t` value.
          */
-        int8_t to_int8(bool *ok = nullptr) const;
+        RTTR_INLINE int8_t to_int8(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `int16_t` when the \ref is_type() "type" is an `int16_t`.
@@ -637,7 +638,7 @@ class variant
          *
          * \return A `int16_t` value.
          */
-        int16_t to_int16(bool *ok = nullptr) const;
+        RTTR_INLINE int16_t to_int16(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `int32_t` when the \ref is_type() "type" is an `int32_t`.
@@ -656,7 +657,7 @@ class variant
          *
          * \return A `int32_t` value.
          */
-        int32_t to_int32(bool *ok = nullptr) const;
+        RTTR_INLINE int32_t to_int32(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `int64_t` when the \ref is_type() "type" is an `int64_t`.
@@ -675,7 +676,7 @@ class variant
          *
          * \return A `int64_t` value.
          */
-        int64_t to_int64(bool *ok = nullptr) const;
+        RTTR_INLINE int64_t to_int64(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `uint8_t` when the \ref is_type() "type" is an `uint8_t`.
@@ -695,7 +696,7 @@ class variant
          *
          * \return A `uint8_t` value.
          */
-        uint8_t to_uint8(bool *ok = nullptr) const;
+        RTTR_INLINE uint8_t to_uint8(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `uint16_t` when the \ref is_type() "type" is an `uint16_t`.
@@ -715,7 +716,7 @@ class variant
          *
          * \return A `uint16_t` value.
          */
-        uint16_t to_uint16(bool *ok = nullptr) const;
+        RTTR_INLINE uint16_t to_uint16(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `uint32_t` when the \ref is_type() "type" is an `uint32_t`.
@@ -735,7 +736,7 @@ class variant
          *
          * \return A `uint32_t` value.
          */
-        uint32_t to_uint32(bool *ok = nullptr) const;
+        RTTR_INLINE uint32_t to_uint32(bool *ok = nullptr) const;
 
         /*!
          * \brief Returns the containing variant as an `uint64_t` when the \ref is_type() "type" is an `uint64_t`.
@@ -755,7 +756,7 @@ class variant
          *
          * \return A `uint64_t` value.
          */
-        uint64_t to_uint64(bool *ok = nullptr) const;
+        RTTR_INLINE uint64_t to_uint64(bool *ok = nullptr) const;
 
     private:
         /////////////////////////////////////////////////////////////////////////////////
@@ -768,7 +769,7 @@ class variant
          *
          * \return
          */
-        void* get_ptr() const;
+        RTTR_INLINE void* get_ptr() const;
 
          /*!
          * \brief Returns the type object of the underlying data
@@ -777,7 +778,7 @@ class variant
          *
          * \return Type object.
          */
-        type get_raw_type() const;
+        RTTR_INLINE type get_raw_type() const;
 
         /*!
          * \brief Returns a pointer to the underlying data.
@@ -787,17 +788,17 @@ class variant
          *
          * \return Raw void pointer.
          */
-        void* get_raw_ptr() const;
+        RTTR_INLINE void* get_raw_ptr() const;
 
         //! Helper function to initialize all arithmetic types
         template<typename T>
-        detail::enable_if_t<std::is_arithmetic<T>::value, T> convert_impl(bool* ok = nullptr) const;
+        RTTR_INLINE detail::enable_if_t<std::is_arithmetic<T>::value, T> convert_impl(bool* ok = nullptr) const;
 
         template<typename T>
-        detail::enable_if_t<!std::is_arithmetic<T>::value && !std::is_enum<T>::value, T> convert_impl(bool* ok = nullptr) const;
+        RTTR_INLINE detail::enable_if_t<!std::is_arithmetic<T>::value && !std::is_enum<T>::value, T> convert_impl(bool* ok = nullptr) const;
 
         template<typename T>
-        detail::enable_if_t<std::is_enum<T>::value, T> convert_impl(bool* ok = nullptr) const;
+        RTTR_INLINE detail::enable_if_t<std::is_enum<T>::value, T> convert_impl(bool* ok = nullptr) const;
 
         /*!
          * \brief Returns a pointer to the underlying object pointer wrapped in a smart_ptr.
@@ -806,9 +807,9 @@ class variant
          *
          * \return Type object of the wrapped pointer object.
          */
-        detail::data_address_container get_data_address_container() const;
+        RTTR_INLINE detail::data_address_container get_data_address_container() const;
 
-        bool convert(const type& target_type, variant& var) const;
+        RTTR_INLINE bool convert(const type& target_type, variant& var) const;
 
         /*!
          * \brief Tries to convert the internal type to the given type \p to.
@@ -816,16 +817,16 @@ class variant
          * \return `True`, when the conversion was successful, otherwise `false`.
          */
         template<typename T>
-        bool try_basic_type_conversion(T& to) const;
+        RTTR_INLINE bool try_basic_type_conversion(T& to) const;
 
         /*!
          * \brief A function to check whether the contained pointer type is a `nullptr` or not.
          *
          * \return A boolean with value `true`, when the contained value type is equal to `nullptr`; otherwise false.
          */
-        bool is_nullptr() const;
+        RTTR_INLINE bool is_nullptr() const;
 
-        variant create_wrapped_value(const type& wrapped_type) const;
+        RTTR_INLINE variant create_wrapped_value(const type& wrapped_type) const;
 
     private:
         friend class argument;
@@ -836,7 +837,6 @@ class variant
         friend struct detail::variant_data_policy_nullptr_t;
         template<class T>
         friend T* detail::unsafe_variant_cast(variant* operand);
-
 
         detail::variant_data            m_data;
         detail::variant_policy_func     m_policy;
@@ -859,7 +859,7 @@ class variant
  *         No exception or error code will be returned!
  */
 template<class T>
-T variant_cast(const variant& operand);
+RTTR_INLINE T variant_cast(const variant& operand);
 
 /*!
  * \brief Returns a reference to the containing value as type \p T.
@@ -876,7 +876,7 @@ T variant_cast(const variant& operand);
  *         No exception or error code will be returned!
  */
 template<class T>
-T variant_cast(variant& operand);
+RTTR_INLINE T variant_cast(variant& operand);
 
 /*!
  * \brief Move the containing value from the variant into a type \p T.
@@ -895,7 +895,7 @@ T variant_cast(variant& operand);
  *         No exception or error code will be returned!
  */
 template<class T>
-T variant_cast(variant&& operand);
+RTTR_INLINE T variant_cast(variant&& operand);
 
 /*!
  * \brief Returns a pointer to the containing value with type \p T.
@@ -914,7 +914,7 @@ T variant_cast(variant&& operand);
  * \return A valid pointer, when the containing type is of type \p T; otherwise a `nullptr`.
  */
 template<class T>
-const T* variant_cast(const variant* operand);
+RTTR_INLINE const T* variant_cast(const variant* operand);
 
 /*!
  * \brief Returns a pointer to the containing value with type \p T.
@@ -933,7 +933,7 @@ const T* variant_cast(const variant* operand);
  * \return A valid pointer, when the containing type is of type \p T; otherwise a `nullptr`.
  */
 template<class T>
-T* variant_cast(variant* operand);
+RTTR_INLINE T* variant_cast(variant* operand);
 
 } // end namespace rttr
 

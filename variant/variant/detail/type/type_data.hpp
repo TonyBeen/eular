@@ -25,11 +25,13 @@
 *                                                                                   *
 *************************************************************************************/
 
-#ifndef RTTR_TYPE_DATA_HPP_
-#define RTTR_TYPE_DATA_HPP_
+#ifndef __RTTR_TYPE_DATA_HPP__
+#define __RTTR_TYPE_DATA_HPP__
+
+#pragma once
 
 #include "variant/type.h"
-// #include "variant/detail/type/type_data.h"
+#include "variant/detail/type/type_data.h"
 
 namespace rttr
 {
@@ -38,7 +40,7 @@ namespace detail
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-static class_data& get_invalid_type_class_data()
+static RTTR_INLINE class_data& get_invalid_type_class_data()
 {
     static std::unique_ptr<class_data> info = ::rttr::detail::make_unique<class_data>(nullptr, std::vector<type>());
     return (*info.get());
@@ -47,7 +49,7 @@ static class_data& get_invalid_type_class_data()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-static type_data& get_invalid_type_data_impl()
+static RTTR_INLINE type_data& get_invalid_type_data_impl()
 {
     static type_data instance{ nullptr,
                                nullptr,
@@ -70,15 +72,13 @@ static type_data& get_invalid_type_data_impl()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_data* get_invalid_type_data()
+RTTR_INLINE type_data* get_invalid_type_data()
 {
     static auto instance = &get_invalid_type_data_impl();
     return instance;
 }
 
-/////////////////////////////////////////////////////////////////////////////////////////
-
 } // end namespace detail
 } // end namespace rttr
 
-#endif // RTTR_TYPE_DATA_HPP_
+#endif // __RTTR_TYPE_DATA_HPP__

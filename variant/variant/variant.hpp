@@ -44,7 +44,7 @@ namespace rttr
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant::variant(const variant& other)
+RTTR_INLINE variant::variant(const variant& other)
 :   m_policy(other.m_policy)
 {
     m_policy(detail::variant_policy_operation::CLONE, other.m_data, m_data);
@@ -52,7 +52,7 @@ variant::variant(const variant& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant::variant(variant&& other)
+RTTR_INLINE variant::variant(variant&& other)
 :   m_policy(other.m_policy)
 {
     other.m_policy(detail::variant_policy_operation::SWAP, other.m_data, m_data);
@@ -61,7 +61,7 @@ variant::variant(variant&& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void variant::swap(variant& other)
+RTTR_INLINE void variant::swap(variant& other)
 {
     if (this == &other)
         return;
@@ -98,7 +98,7 @@ void variant::swap(variant& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant& variant::operator=(const variant& other)
+RTTR_INLINE variant& variant::operator=(const variant& other)
 {
     if (this == &other)
         return *this;
@@ -112,7 +112,7 @@ variant& variant::operator=(const variant& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant& variant::operator=(variant&& other)
+RTTR_INLINE variant& variant::operator=(variant&& other)
 {
     m_policy(detail::variant_policy_operation::DESTROY, m_data, detail::argument_wrapper());
     other.m_policy(detail::variant_policy_operation::SWAP, other.m_data, m_data);
@@ -124,7 +124,7 @@ variant& variant::operator=(variant&& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void variant::clear()
+RTTR_INLINE void variant::clear()
 {
     m_policy(detail::variant_policy_operation::DESTROY, m_data, detail::argument_wrapper());
     m_policy = &detail::variant_data_policy_empty::invoke;
@@ -132,21 +132,21 @@ void variant::clear()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::is_valid() const
+RTTR_INLINE bool variant::is_valid() const
 {
     return m_policy(detail::variant_policy_operation::IS_VALID, m_data, detail::argument_wrapper());
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant::operator bool() const
+RTTR_INLINE variant::operator bool() const
 {
     return m_policy(detail::variant_policy_operation::IS_VALID, m_data, detail::argument_wrapper());
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type variant::get_type() const
+RTTR_INLINE type variant::get_type() const
 {
     type src_type = detail::get_invalid_type();
     m_policy(detail::variant_policy_operation::GET_TYPE, m_data, src_type);
@@ -155,7 +155,7 @@ type variant::get_type() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant variant::extract_wrapped_value() const
+RTTR_INLINE variant variant::extract_wrapped_value() const
 {
     variant var;
     m_policy(detail::variant_policy_operation::EXTRACT_WRAPPED_VALUE, m_data, var);
@@ -164,7 +164,7 @@ variant variant::extract_wrapped_value() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant variant::create_wrapped_value(const type& wrapped_type) const
+RTTR_INLINE variant variant::create_wrapped_value(const type& wrapped_type) const
 {
     variant var;
     m_policy(detail::variant_policy_operation::CREATE_WRAPPED_VALUE, m_data, std::tie(var, wrapped_type));
@@ -173,7 +173,7 @@ variant variant::create_wrapped_value(const type& wrapped_type) const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::can_convert(const type& target_type) const
+RTTR_INLINE bool variant::can_convert(const type& target_type) const
 {
     if (!is_valid())
         return false;
@@ -208,7 +208,7 @@ bool variant::can_convert(const type& target_type) const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::convert(const type& target_type, variant& target_var) const
+RTTR_INLINE bool variant::convert(const type& target_type, variant& target_var) const
 {
     if (!is_valid())
         return false;
@@ -358,103 +358,101 @@ bool variant::convert(const type& target_type, variant& target_var) const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::convert(const type& target_type)
+RTTR_INLINE bool variant::convert(const type& target_type)
 {
     return convert(target_type, *this);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::to_bool() const
+RTTR_INLINE bool variant::to_bool() const
 {
     return convert<bool>(nullptr);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int variant::to_int(bool *ok) const
+RTTR_INLINE int variant::to_int(bool *ok) const
 {
     return convert<int>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string variant::to_string(bool *ok) const
+RTTR_INLINE std::string variant::to_string(bool *ok) const
 {
     return convert<std::string>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-float variant::to_float(bool* ok) const
+RTTR_INLINE float variant::to_float(bool* ok) const
 {
     return convert<float>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-double variant::to_double(bool* ok) const
+RTTR_INLINE double variant::to_double(bool* ok) const
 {
     return convert<double>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int8_t variant::to_int8(bool *ok) const
+RTTR_INLINE int8_t variant::to_int8(bool *ok) const
 {
     return convert<int8_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int16_t variant::to_int16(bool *ok) const
+RTTR_INLINE int16_t variant::to_int16(bool *ok) const
 {
     return convert<int16_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int32_t variant::to_int32(bool *ok) const
+RTTR_INLINE int32_t variant::to_int32(bool *ok) const
 {
     return convert<int32_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int64_t variant::to_int64(bool *ok) const
+RTTR_INLINE int64_t variant::to_int64(bool *ok) const
 {
     return convert<int64_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uint8_t variant::to_uint8(bool *ok) const
+RTTR_INLINE uint8_t variant::to_uint8(bool *ok) const
 {
     return convert<uint8_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uint16_t variant::to_uint16(bool *ok) const
+RTTR_INLINE uint16_t variant::to_uint16(bool *ok) const
 {
     return convert<uint16_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uint32_t variant::to_uint32(bool *ok) const
+RTTR_INLINE uint32_t variant::to_uint32(bool *ok) const
 {
     return convert<uint32_t>(ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uint64_t variant::to_uint64(bool *ok) const
+RTTR_INLINE uint64_t variant::to_uint64(bool *ok) const
 {
     return convert<uint64_t>(ok);
 }
-
-/////////////////////////////////////////////////////////////////////////////////////////
 
 } // end namespace rttr
 

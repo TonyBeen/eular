@@ -36,23 +36,23 @@ namespace rttr
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument::argument() : m_data(nullptr), m_variant(nullptr), m_type(detail::get_invalid_type()) {}
+RTTR_INLINE argument::argument() : m_data(nullptr), m_variant(nullptr), m_type(detail::get_invalid_type()) {}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument::argument(argument&& arg) : m_data(arg.m_data), m_variant(arg.m_variant), m_type(arg.m_type) {}
+RTTR_INLINE argument::argument(argument&& arg) : m_data(arg.m_data), m_variant(arg.m_variant), m_type(arg.m_type) {}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument::argument(const argument& other) : m_data(other.m_data), m_variant(other.m_variant), m_type(other.m_type) {}
+RTTR_INLINE argument::argument(const argument& other) : m_data(other.m_data), m_variant(other.m_variant), m_type(other.m_type) {}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument::argument(variant& var) : m_data(var.get_ptr()), m_variant(&var), m_type(var.get_type()) {}
+RTTR_INLINE argument::argument(variant& var) : m_data(var.get_ptr()), m_variant(&var), m_type(var.get_type()) {}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument::argument(const variant& var) : m_data(var.get_ptr()),  m_variant(&var), m_type(var.get_type()) {}
+RTTR_INLINE argument::argument(const variant& var) : m_data(var.get_ptr()),  m_variant(&var), m_type(var.get_type()) {}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -79,7 +79,7 @@ argument::argument(T& data)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::ptr_type<T> argument::is_type() const
+RTTR_INLINE argument::ptr_type<T> argument::is_type() const
 {
     return ((rttr::type::get<T>() == m_type) ||
              m_type == type::get<std::nullptr_t>() ||
@@ -89,7 +89,7 @@ argument::ptr_type<T> argument::is_type() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::non_ptr_type<T> argument::is_type() const
+RTTR_INLINE argument::non_ptr_type<T> argument::is_type() const
 {
     return (rttr::type::get<T>() == m_type ||
             (m_variant && type::get<variant>() == type::get<T>()));
@@ -97,7 +97,7 @@ argument::non_ptr_type<T> argument::is_type() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type argument::get_type() const
+RTTR_INLINE type argument::get_type() const
 {
     return m_type;
 }
@@ -105,7 +105,7 @@ type argument::get_type() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::arg_value_t<T>& argument::get_value() const
+RTTR_INLINE argument::arg_value_t<T>& argument::get_value() const
 {
     using raw_type = typename std::remove_reference<T>::type;
     return (*reinterpret_cast<raw_type*>(const_cast<void *>(m_data)));
@@ -114,7 +114,7 @@ argument::arg_value_t<T>& argument::get_value() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::arg_rvalue_t<T>&& argument::get_value() const
+RTTR_INLINE argument::arg_rvalue_t<T>&& argument::get_value() const
 {
     using raw_type = typename std::remove_reference<T>::type;
     return std::move(*reinterpret_cast<raw_type*>(const_cast<void *>(m_data)));
@@ -123,7 +123,7 @@ argument::arg_rvalue_t<T>&& argument::get_value() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::is_variant_t<T>& argument::get_value() const
+RTTR_INLINE argument::is_variant_t<T>& argument::get_value() const
 {
     using raw_type = typename std::remove_reference<T>::type;
     return (*reinterpret_cast<raw_type*>(const_cast<variant *>(m_variant)));
@@ -132,7 +132,7 @@ argument::is_variant_t<T>& argument::get_value() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-argument::is_variant_ref_t<T>&& argument::get_value() const
+RTTR_INLINE argument::is_variant_ref_t<T>&& argument::get_value() const
 {
     using raw_type = typename std::remove_reference<T>::type;
     return std::move(*reinterpret_cast<raw_type*>(const_cast<variant *>(m_variant)));
@@ -140,7 +140,7 @@ argument::is_variant_ref_t<T>&& argument::get_value() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-argument& argument::operator=(const argument& other)
+RTTR_INLINE argument& argument::operator=(const argument& other)
 {
     m_data = other.m_data;
     const_cast<rttr::type&>(m_type) = other.m_type;

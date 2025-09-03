@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+#include <variant/detail/base/core_prerequisites.h>
+
 namespace rttr
 {
 class variant;
@@ -63,18 +65,16 @@ class registration_manager;
 class type_register
 {
 public:
-    // no copy
     type_register(const type_register&) = delete;
-    // no assign
     type_register& operator=(const type_register&) = delete;
 
     static void custom_name(type& t, const std::string &name);
 
-    static void register_reg_manager(registration_manager* manager);
-    static void unregister_reg_manager(registration_manager* manager);
+    static RTTR_INLINE void register_reg_manager(registration_manager* manager);
+    static RTTR_INLINE void unregister_reg_manager(registration_manager* manager);
 
-    static type_data* register_type(type_data* info);
-    static void unregister_type(type_data* info);
+    static RTTR_INLINE type_data* register_type(type_data* info);
+    static RTTR_INLINE void unregister_type(type_data* info);
 
 private:
 

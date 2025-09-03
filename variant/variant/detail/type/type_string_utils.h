@@ -31,19 +31,21 @@
 #include <string>
 #include <cctype>
 
+#include <variant/detail/base/core_prerequisites.h>
+
 namespace rttr
 {
 namespace detail
 {
 
-void remove_whitespaces(std::string& text)
+RTTR_INLINE void remove_whitespaces(std::string& text)
 {
     text.erase(std::remove_if(text.begin(), text.end(), static_cast<int(*)(int)>(&std::isspace)), text.end());
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool is_space_after(const std::string& text, const std::string& part)
+RTTR_INLINE bool is_space_after(const std::string& text, const std::string& part)
 {
     auto found_pos = text.find(part);
 
@@ -60,7 +62,7 @@ bool is_space_after(const std::string& text, const std::string& part)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool is_space_before(const std::string& text, const std::string& part)
+RTTR_INLINE bool is_space_before(const std::string& text, const std::string& part)
 {
     auto found_pos = text.find_last_of(part);
 
@@ -77,7 +79,7 @@ bool is_space_before(const std::string& text, const std::string& part)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void insert_space_after(std::string& text, const std::string& part)
+RTTR_INLINE void insert_space_after(std::string& text, const std::string& part)
 {
     auto found_pos = text.find(part);
 
@@ -94,7 +96,7 @@ void insert_space_after(std::string& text, const std::string& part)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void insert_space_before(std::string& text, const std::string& part)
+RTTR_INLINE void insert_space_before(std::string& text, const std::string& part)
 {
    auto found_pos = text.find_last_of(part);
 
@@ -106,8 +108,6 @@ void insert_space_before(std::string& text, const std::string& part)
 
     text.insert(found_pos, " ");
 }
-
-/////////////////////////////////////////////////////////////////////////////////
 
 } // end namespace detail
 } // end namespace rttr

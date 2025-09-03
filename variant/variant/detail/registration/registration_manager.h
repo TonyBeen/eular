@@ -95,7 +95,7 @@ class registration_manager
 /////////////////////////////////////////////////////////////////////////////////////////
 
 
-registration_manager& get_registration_manager()
+RTTR_INLINE registration_manager& get_registration_manager()
 {
     static registration_manager obj;
     return obj;

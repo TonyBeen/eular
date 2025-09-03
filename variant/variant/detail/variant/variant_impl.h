@@ -44,7 +44,7 @@ using variant_t = remove_cv_t<remove_reference_t<T>>;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant::variant()
+RTTR_INLINE variant::variant()
 :   m_policy(&detail::variant_data_policy_empty::invoke)
 {
 }
@@ -52,7 +52,7 @@ variant::variant()
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, typename Tp>
-variant::variant(T&& val)
+RTTR_INLINE variant::variant(T&& val)
 :   m_policy(&detail::variant_policy<Tp>::invoke)
 {
     static_assert(std::is_copy_constructible<Tp>::value || std::is_array<Tp>::value,
@@ -63,7 +63,7 @@ variant::variant(T&& val)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant::~variant()
+RTTR_INLINE variant::~variant()
 {
    m_policy(detail::variant_policy_operation::DESTROY, m_data, detail::argument_wrapper());
 }
@@ -71,7 +71,7 @@ variant::~variant()
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, typename Tp>
-variant& variant::operator=(T&& other)
+RTTR_INLINE variant& variant::operator=(T&& other)
 {
     *this = variant(std::forward<T>(other));
     return *this;
@@ -80,7 +80,7 @@ variant& variant::operator=(T&& other)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-T& variant::get_value()
+RTTR_INLINE T& variant::get_value()
 {
     using namespace detail;
     auto result = unsafe_variant_cast<variant_t<T>>(this);
@@ -91,7 +91,7 @@ T& variant::get_value()
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-const T& variant::get_value() const
+RTTR_INLINE const T& variant::get_value() const
 {
     using namespace detail;
     auto result = unsafe_variant_cast<variant_t<T>>(this);
@@ -102,7 +102,7 @@ const T& variant::get_value() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-const T& variant::get_wrapped_value() const
+RTTR_INLINE const T& variant::get_wrapped_value() const
 {
     detail::data_address_container result{detail::get_invalid_type(), detail::get_invalid_type(), nullptr, nullptr};
     m_policy(detail::variant_policy_operation::GET_ADDRESS_CONTAINER, m_data, result);
@@ -112,7 +112,7 @@ const T& variant::get_wrapped_value() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void* variant::get_ptr() const
+RTTR_INLINE void* variant::get_ptr() const
 {
     void* value;
     m_policy(detail::variant_policy_operation::GET_PTR, m_data, value);
@@ -121,7 +121,7 @@ void* variant::get_ptr() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type variant::get_raw_type() const
+RTTR_INLINE type variant::get_raw_type() const
 {
     type result = detail::get_invalid_type();
     m_policy(detail::variant_policy_operation::GET_RAW_TYPE, m_data, result);
@@ -130,7 +130,7 @@ type variant::get_raw_type() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void* variant::get_raw_ptr() const
+RTTR_INLINE void* variant::get_raw_ptr() const
 {
     void* result;
     m_policy(detail::variant_policy_operation::GET_RAW_PTR, m_data, result);
@@ -139,7 +139,7 @@ void* variant::get_raw_ptr() const
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-detail::data_address_container variant::get_data_address_container() const
+RTTR_INLINE detail::data_address_container variant::get_data_address_container() const
 {
     detail::data_address_container result{detail::get_invalid_type(), detail::get_invalid_type(), nullptr, nullptr};
     m_policy(detail::variant_policy_operation::GET_ADDRESS_CONTAINER, m_data, result);
@@ -149,7 +149,7 @@ detail::data_address_container variant::get_data_address_container() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-bool variant::is_type() const
+RTTR_INLINE bool variant::is_type() const
 {
     type src_type = detail::get_invalid_type();
     m_policy(detail::variant_policy_operation::GET_TYPE, m_data, src_type);
@@ -159,7 +159,7 @@ bool variant::is_type() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-bool variant::can_convert() const
+RTTR_INLINE bool variant::can_convert() const
 {
     return can_convert(type::get<T>());
 }
@@ -167,14 +167,14 @@ bool variant::can_convert() const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-bool variant::try_basic_type_conversion(T& to) const
+RTTR_INLINE bool variant::try_basic_type_conversion(T& to) const
 {
     return m_policy(detail::variant_policy_operation::CONVERT, m_data, argument(to));
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool variant::is_nullptr() const
+RTTR_INLINE bool variant::is_nullptr() const
 {
     return m_policy(detail::variant_policy_operation::IS_NULLPTR, m_data, detail::argument_wrapper());
 }
@@ -201,7 +201,7 @@ static ptr_to_nullptr(T& to)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-bool variant::convert(T& value) const
+RTTR_INLINE bool variant::convert(T& value) const
 {
     bool ok = false;
 
@@ -240,7 +240,7 @@ bool variant::convert(T& value) const
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-detail::enable_if_t<std::is_arithmetic<T>::value, T> variant::convert_impl(bool* ok) const
+RTTR_INLINE detail::enable_if_t<std::is_arithmetic<T>::value, T> variant::convert_impl(bool* ok) const
 {
     T result = 0;
     const bool could_convert = convert<T>(result);
@@ -253,7 +253,7 @@ detail::enable_if_t<std::is_arithmetic<T>::value, T> variant::convert_impl(bool*
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-detail::enable_if_t<!std::is_arithmetic<T>::value && !std::is_enum<T>::value, T> variant::convert_impl(bool* ok) const
+RTTR_INLINE detail::enable_if_t<!std::is_arithmetic<T>::value && !std::is_enum<T>::value, T> variant::convert_impl(bool* ok) const
 {
     static_assert(std::is_default_constructible<T>::value, "The given type T has no default constructor."
                                                            "You can only convert to a type, with a default constructor.");
@@ -268,7 +268,7 @@ detail::enable_if_t<!std::is_arithmetic<T>::value && !std::is_enum<T>::value, T>
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-detail::enable_if_t<std::is_enum<T>::value, T> variant::convert_impl(bool* ok) const
+RTTR_INLINE detail::enable_if_t<std::is_enum<T>::value, T> variant::convert_impl(bool* ok) const
 {
     const auto target_type = type::get<T>();
     if (get_type() == target_type)
@@ -295,7 +295,7 @@ detail::enable_if_t<std::is_enum<T>::value, T> variant::convert_impl(bool* ok) c
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-T variant::convert(bool* ok) const
+RTTR_INLINE T variant::convert(bool* ok) const
 {
     return convert_impl<T>(ok);
 }
@@ -310,7 +310,7 @@ namespace detail
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-T* unsafe_variant_cast(variant* operand)
+RTTR_INLINE T* unsafe_variant_cast(variant* operand)
 {
     const void* value;
     operand->m_policy(detail::variant_policy_operation::GET_VALUE, operand->m_data, value);
@@ -320,7 +320,7 @@ T* unsafe_variant_cast(variant* operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-const T* unsafe_variant_cast(const variant* operand)
+RTTR_INLINE const T* unsafe_variant_cast(const variant* operand)
 {
     return unsafe_variant_cast<const T>(const_cast<variant*>(operand));
 }
@@ -330,7 +330,7 @@ const T* unsafe_variant_cast(const variant* operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-T variant_cast(const variant& operand)
+RTTR_INLINE T variant_cast(const variant& operand)
 {
     using namespace detail;
     static_assert(std::is_constructible<T, const variant_t<T>&>::value,
@@ -345,7 +345,7 @@ T variant_cast(const variant& operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-T variant_cast(variant& operand)
+RTTR_INLINE T variant_cast(variant& operand)
 {
     using namespace detail;
     static_assert(std::is_constructible<T, variant_t<T>&>::value,
@@ -360,7 +360,7 @@ T variant_cast(variant& operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-T variant_cast(variant&& operand)
+RTTR_INLINE T variant_cast(variant&& operand)
 {
     using namespace detail;
     static_assert(std::is_constructible<T, variant_t<T>>::value,
@@ -372,7 +372,7 @@ T variant_cast(variant&& operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-T* variant_cast(variant* operand)
+RTTR_INLINE T* variant_cast(variant* operand)
 {
     using namespace detail;
     return (type::get<T>() == operand->get_type()) ?
@@ -382,7 +382,7 @@ T* variant_cast(variant* operand)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<class T>
-const T* variant_cast(const variant* operand)
+RTTR_INLINE const T* variant_cast(const variant* operand)
 {
     return variant_cast<T>(const_cast<variant*>(operand));
 }

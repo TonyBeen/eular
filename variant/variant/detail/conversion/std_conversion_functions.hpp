@@ -46,7 +46,7 @@ namespace detail
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-std::string to_string_impl(T value, bool* ok)
+RTTR_INLINE std::string to_string_impl(T value, bool* ok)
 {
     try
     {
@@ -65,49 +65,49 @@ std::string to_string_impl(T value, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(int value, bool* ok)
+RTTR_INLINE std::string to_string(int value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(long value, bool* ok)
+RTTR_INLINE std::string to_string(long value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(long long value, bool* ok)
+RTTR_INLINE std::string to_string(long long value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(unsigned value, bool* ok)
+RTTR_INLINE std::string to_string(unsigned value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(unsigned long value, bool* ok)
+RTTR_INLINE std::string to_string(unsigned long value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(unsigned long long value, bool* ok)
+RTTR_INLINE std::string to_string(unsigned long long value, bool* ok)
 {
     return to_string_impl(value, ok);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(float value, bool* ok)
+RTTR_INLINE std::string to_string(float value, bool* ok)
 {
     try
     {
@@ -127,7 +127,7 @@ std::string to_string(float value, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string to_string(double value, bool* ok)
+RTTR_INLINE std::string to_string(double value, bool* ok)
 {
     try
     {
@@ -149,7 +149,7 @@ std::string to_string(double value, bool* ok)
 /////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool string_to_bool(std::string text, bool* ok)
+RTTR_INLINE bool string_to_bool(std::string text, bool* ok)
 {
     std::transform(text.begin(), text.end(), text.begin(), [](char ch) { return std::tolower(ch, std::locale::classic()); });
     text.erase( std::remove_if( text.begin(), text.end(),  [](char ch) { return std::isspace(ch, std::locale::classic() ); } ), text.end() );
@@ -169,7 +169,7 @@ bool string_to_bool(std::string text, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-int string_to_int(const std::string& source, bool* ok)
+RTTR_INLINE int string_to_int(const std::string& source, bool* ok)
 {
     try
     {
@@ -196,7 +196,7 @@ int string_to_int(const std::string& source, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-unsigned long string_to_ulong(const std::string& source, bool* ok)
+RTTR_INLINE unsigned long string_to_ulong(const std::string& source, bool* ok)
 {
     try
     {
@@ -224,7 +224,7 @@ unsigned long string_to_ulong(const std::string& source, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-long long string_to_long_long(const std::string& source, bool* ok)
+RTTR_INLINE long long string_to_long_long(const std::string& source, bool* ok)
 {
     try
     {
@@ -251,7 +251,7 @@ long long string_to_long_long(const std::string& source, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-unsigned long long string_to_ulong_long(const std::string& source, bool* ok)
+RTTR_INLINE unsigned long long string_to_ulong_long(const std::string& source, bool* ok)
 {
     try
     {
@@ -282,7 +282,7 @@ unsigned long long string_to_ulong_long(const std::string& source, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-float string_to_float(const std::string& source, bool* ok)
+RTTR_INLINE float string_to_float(const std::string& source, bool* ok)
 {
     try
     {
@@ -309,7 +309,7 @@ float string_to_float(const std::string& source, bool* ok)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-double string_to_double(const std::string& source, bool* ok)
+RTTR_INLINE double string_to_double(const std::string& source, bool* ok)
 {
     try
     {

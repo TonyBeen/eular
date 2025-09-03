@@ -30,6 +30,8 @@
 
 #include <string>
 
+#include "variant/detail/base/core_prerequisites.h"
+
 /////////////////////////////////////////////////////////////////////////////////
 
 #define RTTR_REGISTRATION_FUNC_EXTRACT_VARIABLES(begin_skip, end_skip)      \
@@ -37,8 +39,8 @@ namespace rttr                                                              \
 {                                                                           \
 namespace detail                                                            \
 {                                                                           \
-    std::size_t skip_size_at_begin = begin_skip;                            \
-    std::size_t skip_size_at_end   = end_skip;                              \
+    static std::size_t skip_size_at_begin = begin_skip;                     \
+    static std::size_t skip_size_at_end   = end_skip;                       \
 }                                                                           \
 }
 
@@ -66,7 +68,7 @@ namespace detail
 
 /////////////////////////////////////////////////////////////////////////////////
 
-const char* extract_type_signature(const char* signature)
+RTTR_INLINE const char* extract_type_signature(const char* signature)
 {
     return &signature[rttr::detail::skip_size_at_begin];
 }
@@ -91,7 +93,7 @@ const char* f()
 
 /////////////////////////////////////////////////////////////////////////////////
 
-std::size_t get_size(const char* s)
+RTTR_INLINE std::size_t get_size(const char* s)
 {
     return ( std::char_traits<char>::length(s) - rttr::detail::skip_size_at_end);
 }
@@ -99,12 +101,10 @@ std::size_t get_size(const char* s)
 /////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-std::string get_type_name()
+RTTR_INLINE std::string get_type_name()
 {
     return std::string(f<T>(), get_size(f<T>()));
 }
-
-/////////////////////////////////////////////////////////////////////////////////
 
 } // end namespace detail
 } // end namespace rttr

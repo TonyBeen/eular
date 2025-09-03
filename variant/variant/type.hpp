@@ -53,14 +53,14 @@ namespace rttr
 /////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type::type()
+RTTR_INLINE type::type()
 :   m_type_data(detail::get_invalid_type_data())
 {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type type::get_by_name(const std::string &name)
+RTTR_INLINE type type::get_by_name(const std::string &name)
 {
     auto& custom_name_to_id = detail::type_register_private::get_instance().get_custom_name_to_id();
     auto ret = custom_name_to_id.find(name);
@@ -72,7 +72,7 @@ type type::get_by_name(const std::string &name)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type::create_wrapped_value(const argument& arg, variant& var) const
+RTTR_INLINE void type::create_wrapped_value(const argument& arg, variant& var) const
 {
     if (m_type_data->create_wrapper)
         m_type_data->create_wrapper(arg, var);

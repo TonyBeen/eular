@@ -30,7 +30,6 @@
 
 #include "variant/detail/type/type_register.h"
 #include "variant/detail/type/type_data.h"
-#include "variant/detail/type/type_data.hpp"
 #include "variant/detail/type/type_register_p.h"
 #include "variant/detail/type/type_string_utils.h"
 
@@ -47,21 +46,21 @@ namespace detail
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register::register_reg_manager(registration_manager* manager)
+RTTR_INLINE void type_register::register_reg_manager(registration_manager* manager)
 {
     type_register_private::get_instance().register_reg_manager(manager);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register::unregister_reg_manager(registration_manager* manager)
+RTTR_INLINE void type_register::unregister_reg_manager(registration_manager* manager)
 {
      type_register_private::get_instance().unregister_reg_manager(manager);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register_private::register_custom_name(type& t, const std::string &custom_name)
+RTTR_INLINE void type_register_private::register_custom_name(type& t, const std::string &custom_name)
 {
     if (!t.is_valid())
         return;
@@ -79,14 +78,14 @@ void type_register_private::register_custom_name(type& t, const std::string &cus
     }
 }
 
-void type_register::custom_name(type& t, const std::string &custom_name)
+RTTR_INLINE void type_register::custom_name(type& t, const std::string &custom_name)
 {
      type_register_private::get_instance().register_custom_name(t, custom_name);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_register_private::type_register_private()
+RTTR_INLINE type_register_private::type_register_private()
 :   m_type_list({ type(get_invalid_type_data()) }),
     m_type_data_storage({ get_invalid_type_data() })
 {
@@ -94,7 +93,7 @@ type_register_private::type_register_private()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_register_private::~type_register_private()
+RTTR_INLINE type_register_private::~type_register_private()
 {
     // When this dtor is running, it means, that RTTR library will be unloaded
     // In order to avoid that the registration_manager instance's
@@ -107,7 +106,7 @@ type_register_private::~type_register_private()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_register_private& type_register_private::get_instance()
+RTTR_INLINE type_register_private& type_register_private::get_instance()
 {
     static type_register_private obj;
     return obj;
@@ -115,27 +114,27 @@ type_register_private& type_register_private::get_instance()
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register_private::register_reg_manager(registration_manager* manager)
+RTTR_INLINE void type_register_private::register_reg_manager(registration_manager* manager)
 {
     m_registration_manager_list.insert(manager);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register_private::unregister_reg_manager(registration_manager* manager)
+RTTR_INLINE void type_register_private::unregister_reg_manager(registration_manager* manager)
 {
     m_registration_manager_list.erase(manager);
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_data* type_register::register_type(type_data* info)
+RTTR_INLINE type_data* type_register::register_type(type_data* info)
 {
     return type_register_private::get_instance().register_type(info);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register::unregister_type(type_data* info)
+RTTR_INLINE void type_register::unregister_type(type_data* info)
 {
     type_register_private::get_instance().unregister_type(info);
 }
@@ -239,7 +238,7 @@ static bool remove_container_item(T& container, const I& item)
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_data* type_register_private::register_name_if_neccessary(type_data* info)
+RTTR_INLINE type_data* type_register_private::register_name_if_neccessary(type_data* info)
 {
     using namespace detail;
 
@@ -258,7 +257,7 @@ type_data* type_register_private::register_name_if_neccessary(type_data* info)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type_data* type_register_private::register_type(type_data* info)
+RTTR_INLINE type_data* type_register_private::register_type(type_data* info)
 {
     // this will register the base types
     info->get_base_types();
@@ -281,7 +280,7 @@ type_data* type_register_private::register_type(type_data* info)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register_private::unregister_type(type_data* info)
+RTTR_INLINE void type_register_private::unregister_type(type_data* info)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -309,7 +308,7 @@ void type_register_private::unregister_type(type_data* info)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string type_register_private::derive_template_instance_name(type_data* info)
+RTTR_INLINE std::string type_register_private::derive_template_instance_name(type_data* info)
 {
     auto& nested_types = info->get_class_data().m_nested_types;
     if (nested_types.empty()) // no template type
@@ -345,7 +344,7 @@ std::string type_register_private::derive_template_instance_name(type_data* info
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void type_register_private::update_custom_name(std::string new_name, const type& t)
+RTTR_INLINE void type_register_private::update_custom_name(std::string new_name, const type& t)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -381,33 +380,31 @@ static bool remove_item(Container& container, Item& item)
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-std::vector<type_data*>& type_register_private::get_type_data_storage()
+RTTR_INLINE std::vector<type_data*>& type_register_private::get_type_data_storage()
 {
     return m_type_data_storage;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-std::vector<type>& type_register_private::get_type_storage()
+RTTR_INLINE std::vector<type>& type_register_private::get_type_storage()
 {
     return m_type_list;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-flat_map<std::string, type>& type_register_private::get_orig_name_to_id()
+RTTR_INLINE flat_map<std::string, type>& type_register_private::get_orig_name_to_id()
 {
     return m_orig_name_to_id;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-flat_map<std::string, type, hash>& type_register_private::get_custom_name_to_id()
+RTTR_INLINE flat_map<std::string, type, hash>& type_register_private::get_custom_name_to_id()
 {
     return m_custom_name_to_id;
 }
-
-/////////////////////////////////////////////////////////////////////////////////////
 
 } // end namespace detail
 } // end

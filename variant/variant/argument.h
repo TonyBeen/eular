@@ -28,11 +28,12 @@
 #ifndef RTTR_ARGUMENT_H_
 #define RTTR_ARGUMENT_H_
 
-#include "variant/detail/misc/misc_type_traits.h"
-#include "variant/detail/misc/std_type_traits.h"
-
 #include <type_traits>
 #include <utility>
+
+#include <variant/detail/misc/std_type_traits.h>
+#include <variant/detail/misc/misc_type_traits.h>
+#include <variant/detail/base/core_prerequisites.h>
 
 namespace rttr
 {
@@ -40,7 +41,6 @@ class type;
 class variant;
 class variant_array;
 class instance;
-
 
 /*!
  * The \ref argument class is used for forwarding arguments to \ref property "properties" or \ref method "methods".
@@ -75,35 +75,35 @@ class argument
 
 public:
 
-    argument();
-    argument(argument&& arg);
-    argument(const argument& other);
-    argument(variant& var);
-    argument(const variant& var);
+    RTTR_INLINE argument();
+    RTTR_INLINE argument(argument&& arg);
+    RTTR_INLINE argument(const argument& other);
+    RTTR_INLINE argument(variant& var);
+    RTTR_INLINE argument(const variant& var);
 
     template<typename T, typename Tp = decay_arg_t<T>>
-    argument(const T& data);
+    RTTR_INLINE argument(const T& data);
     template<typename T, typename Tp = decay_arg_t<T>>
-    argument(T& data);
+    RTTR_INLINE argument(T& data);
 
-    argument& operator=(const argument& other);
+    RTTR_INLINE argument& operator=(const argument& other);
 
-    type get_type() const;
-
-    template<typename T>
-    ptr_type<T> is_type() const;
-    template<typename T>
-    non_ptr_type<T> is_type() const;
+    RTTR_INLINE type get_type() const;
 
     template<typename T>
-    arg_value_t<T>& get_value() const;
+    RTTR_INLINE ptr_type<T> is_type() const;
     template<typename T>
-    arg_rvalue_t<T> && get_value() const;
+    RTTR_INLINE non_ptr_type<T> is_type() const;
 
     template<typename T>
-    is_variant_t<T>& get_value() const;
+    RTTR_INLINE arg_value_t<T>& get_value() const;
     template<typename T>
-    is_variant_ref_t<T> && get_value() const;
+    RTTR_INLINE arg_rvalue_t<T> && get_value() const;
+
+    template<typename T>
+    RTTR_INLINE is_variant_t<T>& get_value() const;
+    template<typename T>
+    RTTR_INLINE is_variant_ref_t<T> && get_value() const;
 
 private:
     const void*         m_data;

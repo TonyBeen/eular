@@ -28,6 +28,7 @@
 #ifndef RTTR_TYPE_REGISTER_P_H_
 #define RTTR_TYPE_REGISTER_P_H_
 
+#include "variant/detail/base/core_prerequisites.h"
 #include "variant/detail/misc/flat_multimap.h"
 #include "variant/detail/misc/flat_map.h"
 #include "variant/detail/misc/utility.h"
@@ -56,28 +57,28 @@ class type_register_private
 public:
 
     /////////////////////////////////////////////////////////////////////////////////////
-    void register_reg_manager(registration_manager* manager);
-    void unregister_reg_manager(registration_manager* manager);
+    RTTR_INLINE void register_reg_manager(registration_manager* manager);
+    RTTR_INLINE void unregister_reg_manager(registration_manager* manager);
 
     /////////////////////////////////////////////////////////////////////////////////////
 
-    type_data* register_type(type_data* info);
-    void unregister_type(type_data* info);
+    RTTR_INLINE type_data* register_type(type_data* info);
+    RTTR_INLINE void unregister_type(type_data* info);
 
-    void register_custom_name(type& t, const std::string &custom_name);
+    RTTR_INLINE void register_custom_name(type& t, const std::string &custom_name);
 
     /////////////////////////////////////////////////////////////////////////////////////
 
-    std::vector<type_data*>& get_type_data_storage();
-    std::vector<type>& get_type_storage();
-    flat_map<std::string, type>& get_orig_name_to_id();
-    flat_map<std::string, type, hash>& get_custom_name_to_id();
+    RTTR_INLINE std::vector<type_data*>& get_type_data_storage();
+    RTTR_INLINE std::vector<type>& get_type_storage();
+    RTTR_INLINE flat_map<std::string, type>& get_orig_name_to_id();
+    RTTR_INLINE flat_map<std::string, type, hash>& get_custom_name_to_id();
 
     static type_register_private& get_instance();
 
 private:
-    type_register_private();
-    ~type_register_private();
+    RTTR_INLINE type_register_private();
+    RTTR_INLINE ~type_register_private();
 
     template<typename T, typename Data_Type = conditional_t<std::is_pointer<T>::value, T, std::unique_ptr<T>>>
     struct data_container
@@ -118,7 +119,7 @@ private:
     };
 
     //! Returns true, when the name was already registered
-    type_data* register_name_if_neccessary(type_data* info);
+    RTTR_INLINE type_data* register_name_if_neccessary(type_data* info);
 
     /*!
      * \brief This will create the derived name of a template instance, with all the custom names of a template parameter.
@@ -131,7 +132,7 @@ private:
     /*!
      * Updates the custom name for the given type \p t with \p new_name
      */
-    void update_custom_name(std::string new_name, const type& t);
+    RTTR_INLINE void update_custom_name(std::string new_name, const type& t);
 
     /*! A helper class to register the registration managers.
      * This class is needed in order to avoid that the registration_manager instance's

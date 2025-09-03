@@ -43,21 +43,21 @@ namespace rttr
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type::type(detail::type_data* data)
+RTTR_INLINE type::type(detail::type_data* data)
 :  m_type_data(data)
 {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type::type(const type& other)
+RTTR_INLINE type::type(const type& other)
 :   m_type_data(other.m_type_data)
 {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type& type::operator=(const type& other)
+RTTR_INLINE type& type::operator=(const type& other)
 {
     m_type_data = other.m_type_data;
     return *this;
@@ -65,162 +65,161 @@ type& type::operator=(const type& other)
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator<(const type& other) const
+RTTR_INLINE bool type::operator<(const type& other) const
 {
     return (m_type_data < other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator>(const type& other) const
+RTTR_INLINE bool type::operator>(const type& other) const
 {
     return (m_type_data > other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator>=(const type& other) const
+RTTR_INLINE bool type::operator>=(const type& other) const
 {
     return (m_type_data >= other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator<=(const type& other) const
+RTTR_INLINE bool type::operator<=(const type& other) const
 {
     return (m_type_data <= other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator==(const type& other) const
+RTTR_INLINE bool type::operator==(const type& other) const
 {
     return (m_type_data == other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::operator!=(const type& other) const
+RTTR_INLINE bool type::operator!=(const type& other) const
 {
     return (m_type_data != other.m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type::type_id type::get_id() const
+RTTR_INLINE type::type_id type::get_id() const
 {
     return reinterpret_cast<type::type_id>(m_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_valid() const
+RTTR_INLINE bool type::is_valid() const
 {
     return m_type_data->is_valid;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type::operator bool() const
+RTTR_INLINE type::operator bool() const
 {
     return m_type_data->is_valid;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type type::get_raw_type() const
+RTTR_INLINE type type::get_raw_type() const
 {
     return type(m_type_data->raw_type_data);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type type::get_wrapped_type() const
+RTTR_INLINE type type::get_wrapped_type() const
 {
     return type(m_type_data->wrapped_type);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::string type::get_name() const
+RTTR_INLINE std::string type::get_name() const
 {
     return m_type_data->type_name;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-std::size_t type::get_sizeof() const
+RTTR_INLINE std::size_t type::get_sizeof() const
 {
     return m_type_data->get_sizeof;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_class() const
+RTTR_INLINE bool type::is_class() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_class);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_template_instantiation() const
+RTTR_INLINE bool type::is_template_instantiation() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_template_instantiation);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_enumeration() const
+RTTR_INLINE bool type::is_enumeration() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_enum);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_array() const
+RTTR_INLINE bool type::is_array() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_array);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_associative_container() const
+RTTR_INLINE bool type::is_associative_container() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_associative_container);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_sequential_container() const
+RTTR_INLINE bool type::is_sequential_container() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_sequential_container);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_pointer() const
+RTTR_INLINE bool type::is_pointer() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_pointer);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_arithmetic() const
+RTTR_INLINE bool type::is_arithmetic() const
 {
     return m_type_data->type_trait_value(detail::type_trait_infos::is_arithmetic);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool type::is_wrapper() const
+RTTR_INLINE bool type::is_wrapper() const
 {
     return m_type_data->wrapped_type->is_valid;
 }
 
-
 /////////////////////////////////////////////////////////////////////////////////////////
 
-variant type::create_variant(const argument& data) const
+RTTR_INLINE variant type::create_variant(const argument& data) const
 {
     return m_type_data->create_variant(data);
 }
@@ -236,7 +235,7 @@ static type get_invalid_type() { return create_type(nullptr); }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-type create_type(type_data* data)
+RTTR_INLINE type create_type(type_data* data)
 {
     return data ? type(data) : type();
 }
@@ -317,7 +316,7 @@ struct type_converter;
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-type type::get()
+RTTR_INLINE type type::get()
 {
     using non_ref_type = typename std::remove_cv<typename std::remove_reference<T>::type>::type;
     return detail::create_or_get_type<non_ref_type>();
@@ -326,7 +325,7 @@ type type::get()
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<>
-type type::get<detail::invalid_type>()
+RTTR_INLINE type type::get<detail::invalid_type>()
 {
     return detail::get_invalid_type();
 }
@@ -334,7 +333,7 @@ type type::get<detail::invalid_type>()
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-type type::get(T&& object)
+RTTR_INLINE type type::get(T&& object)
 {
     using remove_ref = typename std::remove_reference<T>::type;
     return detail::type_from_instance<T, detail::has_get_type_func<T>::value && !std::is_pointer<remove_ref>::value>::get(std::forward<T>(object));
@@ -355,10 +354,4 @@ namespace std
     };
 } // end namespace std
 
-#define RTTR_CAT_IMPL(a, b) a##b
-#define RTTR_CAT(a, b) RTTR_CAT_IMPL(a, b)
-
-#define RTTR_REGISTRATION_STANDARD_TYPE_VARIANTS(T) rttr::type::get<T>();       \
-                                                    rttr::type::get<T*>();      \
-                                                    rttr::type::get<const T*>();
 #endif // RTTR_TYPE_IMPL_H_

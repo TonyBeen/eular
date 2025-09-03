@@ -28,8 +28,8 @@
 #ifndef RTTR_VARIANT_DATA_H_
 #define RTTR_VARIANT_DATA_H_
 
-#include "variant/detail/misc/misc_type_traits.h"
 #include <type_traits>
+#include <variant/detail/misc/misc_type_traits.h>
 
 namespace rttr
 {

@@ -28,6 +28,9 @@
 #ifndef __RTTR_TYPE_DATA_H__
 #define __RTTR_TYPE_DATA_H__
 
+#pragma once
+
+#include "variant/detail/base/core_prerequisites.h"
 #include "variant/detail/misc/misc_type_traits.h"
 #include "variant/detail/misc/function_traits.h"
 #include "variant/detail/misc/template_type_trait.h"
@@ -49,9 +52,9 @@ namespace rttr
 namespace detail
 {
 struct type_data;
-type_data* get_invalid_type_data();
+RTTR_INLINE type_data* get_invalid_type_data();
 
-static type get_invalid_type();
+static RTTR_INLINE type get_invalid_type();
 
 using rttr_cast_func        = void*(*)(void*);
 using get_derived_info_func = derived_info(*)(void*);
@@ -133,7 +136,7 @@ struct type_data
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-class_data& get_type_class_data()
+RTTR_INLINE class_data& get_type_class_data()
 {
     static std::unique_ptr<class_data> info = detail::make_unique<class_data>(get_most_derived_info_func<T>(), template_type_trait<T>::get_template_arguments());
     return (*info.get());
@@ -214,7 +217,7 @@ struct wrapper_type_info<T, false>
 /////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename Wrapper, typename Wrapped_Type>
-void create_wrapper(const argument& arg, variant& var)
+RTTR_INLINE void create_wrapper(const argument& arg, variant& var)
 {
     if (arg.get_type() != type::get<Wrapped_Type>())
         return;
@@ -228,7 +231,7 @@ enable_if_t<is_wrapper<Wrapper>::value &&
             ::rttr::detail::is_copy_constructible<Wrapper>::value &&
             std::is_default_constructible<Wrapper>::value &&
             has_create_wrapper_func<Wrapper>::value, impl::create_wrapper_func>
-get_create_wrapper_func()
+RTTR_INLINE get_create_wrapper_func()
 {
     return &create_wrapper<Wrapper, Tp>;
 }
@@ -239,7 +242,7 @@ enable_if_t<!is_wrapper<Wrapper>::value ||
             !::rttr::detail::is_copy_constructible<Wrapper>::value ||
             !std::is_default_constructible<Wrapper>::value ||
             !has_create_wrapper_func<Wrapper>::value, impl::create_wrapper_func>
-get_create_wrapper_func()
+RTTR_INLINE get_create_wrapper_func()
 {
     return nullptr;
 }
@@ -253,7 +256,7 @@ using type_trait_value = uint64_t;
 #define TYPE_TRAIT_TO_BITSET_VALUE_2(trait, enum_key) (static_cast<std::uint64_t>(trait<T>::value) << static_cast<std::size_t>(type_trait_infos::enum_key))
 
 template<typename T>
-std::unique_ptr<type_data> make_type_data()
+RTTR_INLINE std::unique_ptr<type_data> make_type_data()
 {
     auto obj = std::unique_ptr<type_data>
                (
