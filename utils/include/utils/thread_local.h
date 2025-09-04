@@ -8,15 +8,35 @@
 #ifndef __EULAR_UTILS_THREAD_H__
 #define __EULAR_UTILS_THREAD_H__
 
+#include <assert.h>
+
 #include <map>
 #include <memory>
 #include <string>
 
 #include <utils/utils.h>
+#include <utils/sysdef.h>
+
+#if defined(OS_WINDOWS)
+#include <windows.h>
+
+typedef DWORD tls_key_t;
+inline void tls_init(tls_key_t* k) { *k = TlsAlloc(); assert(*k != TLS_OUT_OF_INDEXES); }
+inline void tls_free(tls_key_t k) { TlsFree(k); }
+inline void* tls_get(tls_key_t k) { return TlsGetValue(k); }
+inline void tls_set(tls_key_t k, void* v) { BOOL r = TlsSetValue(k, v); assert(r); (void)r; }
+#else
+#include <pthread.h>
+
+typedef pthread_key_t tls_key_t;
+inline void tls_init(tls_key_t* k) { int r = pthread_key_create(k, 0); (void)r; assert(r == 0); }
+inline void tls_free(tls_key_t k) { int r = pthread_key_delete(k); (void)r; assert(r == 0); }
+inline void* tls_get(tls_key_t k) { return pthread_getspecific(k); }
+inline void tls_set(tls_key_t k, void* v) { int r = pthread_setspecific(k, v); (void)r; assert(r == 0); }
+#endif
 
 namespace eular {
-
-class TLSAbstractSlot
+class UTILS_API TLSAbstractSlot
 {
 public:
     TLSAbstractSlot() {}
@@ -24,26 +44,54 @@ public:
 };
 
 template <typename T>
-class TLSSlot: public TLSAbstractSlot
+class UTILS_API TLSSlot: public TLSAbstractSlot
 {
     DISALLOW_COPY_AND_ASSIGN(TLSSlot);
 public:
     TLSSlot(): m_value() { }
-    TLSSlot(const T &value): m_value(value) { }
-    ~TLSSlot() { }
+    TLSSlot(T &&value): m_value(std::forward<T>(value)) { }
+    ~TLSSlot() = default;
 
-    T &value()
-    {
+    T &value() {
         return m_value;
     }
 
-    T *pointer()
-    {
+    T *pointer() {
+        return &m_value;
+    }
+
+    T* operator->() const {
         return &m_value;
     }
 
 private:
     T m_value;
+};
+
+template <typename T>
+class TLS
+{
+    DISALLOW_COPY_AND_ASSIGN(TLS);
+public:
+    TLS() { tls_init(&m_key); }
+    ~TLS() { tls_free(m_key); }
+
+    void set(T *value) {
+        tls_set(m_key, value);
+    }
+
+    T *get() {
+        return (T *)tls_get(m_key);
+    }
+
+    T *operator->() const {
+        T* const o = this->get();
+        assert(o);
+        return o;
+    }
+
+private:
+    tls_key_t   m_key;
 };
 
 class UTILS_API ThreadLocalStorage
