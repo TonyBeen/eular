@@ -58,8 +58,8 @@ struct StunClientConfig {
     struct event*       read_event;
 
     StunClientConfig() :
-        server_ip("stun.l.google.com"),
-        server_port(19302),
+        server_ip("stun.voipstunt.com"),
+        server_port(3478),
         username(""),
         password(""),
         use_ipv6(false),

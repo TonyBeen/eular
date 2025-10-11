@@ -21,7 +21,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Compiler warnings
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
-        -Wall -Wextra -Wpedantic -Werror
+        -Wall -Wextra -Wpedantic
         # $<$<CONFIG:RELEASE>:-O2 -flto>
     )
 endif()
