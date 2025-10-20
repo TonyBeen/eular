@@ -28,7 +28,7 @@
 #include <netinet/ip.h>
 #endif
 
-#define STUNC_LOGD(...)                   \
+#define STUNC_LOGD(...)             \
     do {                            \
         if (g_config.verbose) {     \
             printf(__VA_ARGS__);    \
