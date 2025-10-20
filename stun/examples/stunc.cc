@@ -616,12 +616,20 @@ int main(int argc, char **argv)
     freeaddrinfo(result);
 
     auto interfaces = GetNetworkInterfaces();
+    std::string interface;
     for (const auto &it : interfaces) {
         if (it.can_send_data) {
             STUNC_LOGD("Interface %s(%s) can send data\n", it.name.c_str(), it.ip_address.c_str());
+            if (interface.empty()) {
+                interface = it.name;
+            }
         } else {
             STUNC_LOGD("Interface %s(%s) cannot send data\n", it.name.c_str(), it.ip_address.c_str());
         }
+    }
+    if (g_config.interface.empty()) {
+        g_config.interface = interface;
+        STUNC_LOGD("No interface specified, using default: %s\n", interface.c_str());
     }
 
     // Initialize libevent
