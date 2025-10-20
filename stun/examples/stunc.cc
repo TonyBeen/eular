@@ -54,6 +54,7 @@ struct NetworkInterface {
 
 struct StunClientConfig {
     // config
+    std::string     interface;
     std::string     server_host;
     std::string     server_ip;
     uint16_t        server_port;
@@ -74,6 +75,10 @@ struct StunClientConfig {
     eular::stun::StunMsgBuilder::SP msg_builder;
     eular::stun::SocketAddress      external_address; // 公网地址
     eular::stun::SocketAddress      changed_address; // binging response中CHANGED-ADDRESS属性
+
+    std::string     connectivity_testing_service_host;
+    std::string     connectivity_testing_service_ip;
+    uint16_t        connectivity_testing_service_port = 80;
 
     // event handling
     struct event_base*  base;
@@ -348,8 +353,22 @@ void stun_nat_detect(StunClientConfig *config)
     STUNC_LOGD("Created socket %d for STUN client.\n", sockfd);
 
     evutil_make_socket_nonblocking(sockfd);
-    struct sockaddr_in local_addr;
-    memset(&local_addr, 0, sizeof(local_addr));
+    // evutil_make_listen_socket_reuseable_port(sockfd);
+    // struct sockaddr_in local_addr;
+    // memset(&local_addr, 0, sizeof(local_addr));
+    // local_addr.sin_family = config->use_ipv6 ? AF_INET6 : AF_INET;
+    if (!config->interface.empty()) {
+#if defined(SO_BINDTODEVICE)
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, config->interface.c_str(), IFNAMSIZ);
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) < 0) {
+            perror("setsockopt SO_BINDTODEVICE");
+            close(sockfd);
+            return;
+        }
+#endif
+    }
 
     // 2、发送Test I
     config->msg_builder = std::make_shared<eular::stun::StunMsgBuilder>();
@@ -408,7 +427,7 @@ void stun_nat_detect(StunClientConfig *config)
 
 bool TestConnectivity(const std::string& interface_name, const std::string& source_ip = "")
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("socket error");
         return false;
@@ -429,9 +448,9 @@ bool TestConnectivity(const std::string& interface_name, const std::string& sour
         }
     }
 
+#if defined(SO_BINDTODEVICE)
     // 绑定网卡
     if (!interface_name.empty()) {
-        STUNC_LOGD("Bind socket %d to interface %s\n", sock, interface_name.c_str());
         struct ifreq ifr;
         memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, interface_name.c_str(), IFNAMSIZ - 1);
@@ -441,27 +460,36 @@ bool TestConnectivity(const std::string& interface_name, const std::string& sour
             return false;
         }
     }
+#endif
 
-    // 设置发送超时
-    struct timeval timeout;
-    timeout.tv_sec = 3;
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    // 设置连接超时
+    struct timeval timeout = {1, 0};
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt SO_RCVTIMEO");
+        close(sock);
+        return false;
+    }
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt SO_SNDTIMEO");
+        close(sock);
+        return false;
+    }
 
-    // 测试连接到公共DNS服务器 (8.8.8.8:53)
-    struct sockaddr_in dest_addr;
-    memset(&dest_addr, 0, sizeof(dest_addr));
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(53);
-    dest_addr.sin_addr.s_addr = inet_addr("8.8.8.8");
+    struct sockaddr_in remote_addr;
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_addr.s_addr = inet_addr(g_config.connectivity_testing_service_ip.c_str());
+    remote_addr.sin_port = htons(g_config.connectivity_testing_service_port);
 
-    // 发送空数据包测试连接
-    char test_data[1] = {0};
-    ssize_t sent = sendto(sock, test_data, 1, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-    bool can_send = (sent >= 0);
+    // 连接到服务端
+    if (connect(sock, (struct sockaddr*)&remote_addr, sizeof(remote_addr)) < 0) {
+        perror("connect error");
+        close(sock);
+        return false;
+    }
 
     close(sock);
-    return can_send;
+    return true;
 }
 
 std::vector<NetworkInterface> GetNetworkInterfaces() {
@@ -546,17 +574,46 @@ int main(int argc, char **argv)
 {
     // Parse command line arguments
     CLI::App app{"STUN Client"};
+    app.add_option("-i,--interface", g_config.interface, "Network interface to bind")->default_val("");
     app.add_option("-s,--server", g_config.server_host, "STUN server IP address")->default_val("stun.voipstunt.com");
     app.add_option("-p,--port", g_config.server_port, "STUN server port")->default_val(3478);
     app.add_option("-U,--username", g_config.username, "STUN username")->default_val("");
     app.add_option("-P,--password", g_config.password, "STUN password")->default_val("");
-    app.add_flag("--ipv6", g_config.use_ipv6, "Use IPv6")->default_val(false);
+    app.add_flag("-6,--ipv6", g_config.use_ipv6, "Use IPv6")->default_val(false);
     app.add_flag("-v,--verbose", g_config.verbose, "Enable verbose output")->default_val(false);
     app.add_option("-t,--timeout", g_config.timeout, "Timeout in seconds")->default_val(1);
     app.add_option("-r,--retries", g_config.max_retries, "Maximum number of retries")->default_val(2);
+    app.add_option("-c,--connectivity-service", g_config.connectivity_testing_service_host, "Connectivity testing service host")->default_val("www.baidu.com");
 
     CLI11_PARSE(app, argc, argv);
     g_config.retries = g_config.max_retries;
+
+    struct addrinfo *result;
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (0 != getaddrinfo(g_config.connectivity_testing_service_host.c_str(), NULL, NULL, &result)) {
+        perror("getaddrinfo error");
+        return 1;
+    }
+
+    // 遍历所有返回的地址信息
+    char ipstr[INET6_ADDRSTRLEN];
+    for (struct addrinfo *rp = result; rp != NULL; rp = rp->ai_next) {
+        void *addr;
+
+        if (rp->ai_family == AF_INET) {
+            struct sockaddr_in *ipv4 = (struct sockaddr_in *)rp->ai_addr;
+            addr = &(ipv4->sin_addr);
+
+            inet_ntop(rp->ai_family, addr, ipstr, sizeof(ipstr));
+            g_config.connectivity_testing_service_ip = ipstr;
+            STUNC_LOGD("Connectivity testing service IP: '%s'\n", g_config.connectivity_testing_service_ip.c_str());
+            break;
+        }
+    }
+    freeaddrinfo(result);
 
     auto interfaces = GetNetworkInterfaces();
     for (const auto &it : interfaces) {
