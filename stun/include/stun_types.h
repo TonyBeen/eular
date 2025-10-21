@@ -9,6 +9,7 @@
 #define __STUN_TYPES_H__
 
 #include <string>
+#include <vector>
 
 #define STUN_TRX_ID_SIZE    12  /* size of the STUN transaction ID */
 #define ENUM_CLASS(em)      (uint32_t)(em)
