@@ -105,7 +105,7 @@ int32_t kcp_log_format(int32_t level, const char *file_name, const char *func_na
 
     va_list ap;
     va_start(ap, fmt);
-    len = vsnprintf(log_buffer + offset, LOG_BUFFER_SIZE - offset, fmt, ap);
+    len = vsnprintf(log_buffer + offset, LOG_BUFFER_SIZE - offset - 1, fmt, ap);
     va_end(ap);
 
     if (len > 0 && g_log_callback != NULL) {
