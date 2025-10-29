@@ -189,10 +189,10 @@ std::string SocketAddress::toString() const
     char formatted[IP_LENGTH] = {0};
     if (m_address.addr.sa_family == AF_INET) {
         inet_ntop(AF_INET, &m_address.addr4.sin_addr, ip, IP_LENGTH);
-        snprintf(formatted, IP_LENGTH, "%s:%d", ip, getPort());
+        snprintf(formatted, IP_LENGTH, "%s:%u", ip, getPort());
     } else if (m_address.addr.sa_family == AF_INET6) {
         inet_ntop(AF_INET6, &m_address.addr6.sin6_addr, ip, IP_LENGTH);
-        snprintf(formatted, IP_LENGTH, "[%s]:%d", ip, getPort());
+        snprintf(formatted, IP_LENGTH, "[%s]:%u", ip, getPort());
     }
 
     return std::string(formatted);
