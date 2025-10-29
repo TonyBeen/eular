@@ -79,7 +79,7 @@ bool SocketAddress::operator==(const SocketAddress &other) const
         return false;
     }
 
-    if (m_address.addr.sa_family != AF_INET || m_address.addr.sa_family != AF_INET6) {
+    if (m_address.addr.sa_family != AF_INET && m_address.addr.sa_family != AF_INET6) {
         return false; // Unsupported address family
     }
 
