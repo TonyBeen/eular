@@ -34,7 +34,7 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
     case MTU_REDUCTION:
         if (kcp_connection) {
             printf("KCP connection %p: MTU reduction\n", kcp_connection);
-            kcp_close(kcp_connection, 1000);
+            kcp_close(kcp_connection);
         }
         break;
     case UDP_UNREACH:
@@ -47,6 +47,12 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
     case KEEPALIVE_ERROR:
         if (kcp_connection) {
             printf("KCP connection %p: Keepalive error\n", kcp_connection);
+            kcp_shutdown(kcp_connection);
+        }
+        break;
+    case TOO_MANY_RETRANS:
+        if (kcp_connection) {
+            printf("KCP connection %p: Too many retransmissions\n", kcp_connection);
             kcp_shutdown(kcp_connection);
         }
         break;

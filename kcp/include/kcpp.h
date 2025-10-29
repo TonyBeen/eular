@@ -188,7 +188,7 @@ KCP_PORT void kcp_set_close_cb(struct KcpContext *kcp_ctx, on_kcp_closed_t cb);
 /**
  * @brief Send FIN to peer.
  */
-KCP_PORT void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms);
+KCP_PORT void kcp_close(struct KcpConnection *kcp_connection);
 
 /**
  * @brief Send RST to peer.

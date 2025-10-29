@@ -946,14 +946,11 @@ static void kcp_close_timeout(int fd, short ev, void *arg)
     }
 }
 
-void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
+void kcp_close(struct KcpConnection *kcp_connection)
 {
     if (kcp_connection == NULL) {
         return;
     }
-
-    timeout_ms = CLAMP(timeout_ms, 100, 10000);
-    kcp_connection->receive_timeout = timeout_ms;
 
     kcp_context_t *kcp_ctx = kcp_connection->kcp_ctx;
     int32_t status = NO_ERROR;
@@ -1001,7 +998,7 @@ void kcp_close(struct KcpConnection *kcp_connection, uint32_t timeout_ms)
         if (kcp_connection->fin_timer_event == NULL) {
             kcp_connection->fin_timer_event = evtimer_new(kcp_connection->kcp_ctx->event_loop, kcp_close_timeout, kcp_connection);
         }
-        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        struct timeval tv = {kcp_connection->receive_timeout / 1000, (kcp_connection->receive_timeout % 1000) * 1000};
         evtimer_add(kcp_connection->fin_timer_event, &tv);
         return;
     }
