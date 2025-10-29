@@ -29,7 +29,7 @@ struct event_base*  g_ev_base = NULL;
 struct event*       g_timer_event = NULL;
 static int32_t      g_packet_count = 0;
 
-#define PACKET_COUNT    (1000)
+#define PACKET_COUNT    (15)
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
