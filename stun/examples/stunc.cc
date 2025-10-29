@@ -309,6 +309,11 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
                 event_free(config->read_event);
                 event_free(config->timeout_event);
                 close(config->sock);
+            } else {
+                STUNC_LOGD("Received STUN Binding Response with unexpected Changed Address: %s:%d\n",
+                    config->changed_address.getIp().c_str(), config->changed_address.getPort());
+                struct timeval timeout = {config->timeout, 0};
+                event_add(config->timeout_event, &timeout);
             }
         } else if (config->state == StunState::CHANGE_PORT_FOR_RESTRICTED) {
             // 处理受限锥形NAT测试的响应
@@ -623,8 +628,6 @@ int main(int argc, char **argv)
             if (interface.empty()) {
                 interface = it.name;
             }
-        } else {
-            STUNC_LOGD("Interface %s(%s) cannot send data\n", it.name.c_str(), it.ip_address.c_str());
         }
     }
     if (g_config.interface.empty()) {
