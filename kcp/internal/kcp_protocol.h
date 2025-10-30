@@ -297,7 +297,7 @@ typedef struct KcpContext {
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
 
-    int32_t                     nic_mtu;
+    int32_t                     udp_mtu;
     bitmap_t                    conv_bitmap;
     struct list_head            syn_queue;
     connection_set_t            connection_set;

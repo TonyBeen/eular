@@ -527,22 +527,23 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
         goto _error;
     }
 
+    int32_t nic_mtu = 0;
     if (nic != NULL) {
-        kcp_ctx->nic_mtu = get_mtu_by_nic(kcp_ctx->sock, nic);
+        nic_mtu = get_mtu_by_nic(kcp_ctx->sock, nic);
 
         status = set_socket_bind_nic(kcp_ctx->sock, nic);
         if (status != NO_ERROR) {
             goto _error;
         }
     } else {
-        kcp_ctx->nic_mtu = get_mtu_by_ip(kcp_ctx->sock, addr);
+        nic_mtu = get_mtu_by_ip(kcp_ctx->sock, addr);
     }
 
-    if (kcp_ctx->nic_mtu < 0) {
+    if (nic_mtu <= 0) {
         KCP_LOGE("get nic mtu error");
         goto _error;
     }
-    kcp_ctx->nic_mtu = kcp_get_mtu_by_param(kcp_ctx->nic_mtu, addr->sa.sa_family == AF_INET6);
+    kcp_ctx->udp_mtu = kcp_get_mtu_by_param(nic_mtu, addr->sa.sa_family == AF_INET6);
     if (bind(kcp_ctx->sock, (const struct sockaddr *)addr, sizeof(sockaddr_t)) == SOCKET_ERROR) {
         status = BIND_ERROR;
         goto _error;
@@ -715,12 +716,12 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
         list_init(&kcp_option->node);
         kcp_option->tag = KCP_OPTION_TAG_MTU;
         kcp_option->length = sizeof(uint32_t);
-        kcp_option->u64_value = kcp_ctx->nic_mtu;
+        kcp_option->u64_value = kcp_ctx->udp_mtu;
         list_add_tail(&kcp_syn_header->options, &kcp_option->node);
         list_add_tail(&kcp_syn_header->node_list, &kcp_connection->kcp_proto_header_list);
 
         kcp_option_t *option = NULL;
-        uint32_t mtu = kcp_connection->kcp_ctx->nic_mtu;
+        uint32_t mtu = kcp_connection->kcp_ctx->udp_mtu;
         list_for_each_entry(option, &syn_packet->options, node) {
             if (option->tag == KCP_OPTION_TAG_MTU) {
                 mtu = (uint32_t)option->u64_value;
@@ -788,7 +789,7 @@ static void kcp_connect_timeout(int fd, short ev, void *arg)
         list_init(&kcp_option->node);
         kcp_option->tag = KCP_OPTION_TAG_MTU;
         kcp_option->length = sizeof(uint32_t);
-        kcp_option->u64_value = kcp_connection->kcp_ctx->nic_mtu;
+        kcp_option->u64_value = kcp_connection->kcp_ctx->udp_mtu;
         list_add_tail(&kcp_header->options, &kcp_option->node);
 
         char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};
@@ -864,7 +865,7 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
     list_init(&kcp_option->node);
     kcp_option->tag = KCP_OPTION_TAG_MTU;
     kcp_option->length = sizeof(uint32_t);
-    kcp_option->u64_value = kcp_ctx->nic_mtu;
+    kcp_option->u64_value = kcp_ctx->udp_mtu;
     list_add_tail(&kcp_header->options, &kcp_option->node);
 
     char buffer[KCP_HEADER_SIZE + KCP_OPTION_TAG_MTU_LEN] = {0};

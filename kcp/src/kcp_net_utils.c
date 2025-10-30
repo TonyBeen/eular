@@ -139,7 +139,6 @@ int32_t get_mtu_by_nic(socket_t fd, const char *nic)
     pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
 
     if (pAddresses == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
         return -1;
     }
 
@@ -154,8 +153,6 @@ int32_t get_mtu_by_nic(socket_t fd, const char *nic)
             }
             pCurr = pCurr->Next;
         }
-    } else {
-        fprintf(stderr, "GetAdaptersAddresses() failed with error: %d\n", dwRetVal);
     }
 
     free(pAddresses);

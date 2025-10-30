@@ -675,7 +675,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     list_init(&kcp_conn->node_list);
 
     kcp_conn->conv = 0;
-    kcp_conn->mtu = kcp_ctx->nic_mtu;
+    kcp_conn->mtu = kcp_ctx->udp_mtu;
     kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
     kcp_conn->mss_min = kcp_get_min_mtu(remote_host->sa.sa_family == AF_INET6) - KCP_HEADER_SIZE;
 
@@ -1321,7 +1321,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     kcp_header.ack_data.una = 0;
 
                     kcp_option_t *option = NULL;
-                    uint32_t remote_mtu = kcp_connection->kcp_ctx->nic_mtu;
+                    uint32_t remote_mtu = kcp_connection->kcp_ctx->udp_mtu;
                     list_for_each_entry(option, &syn_packet->options, node) {
                         if (option->tag == KCP_OPTION_TAG_MTU) {
                             remote_mtu = (uint32_t)option->u64_value;
