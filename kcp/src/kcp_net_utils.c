@@ -164,7 +164,7 @@ int32_t get_mtu_by_nic(socket_t fd, const char *nic)
 
 int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
 {
-    int32_t mtu = kcp_get_mtu(addr->sa.sa_family == AF_INET6);
+    int32_t ifa_mtu = ETHERNET_MTU;
     if (addr == NULL) {
         return INVALID_PARAM;
     }
@@ -178,16 +178,23 @@ int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
         return IOCTL_ERROR;
     }
 
+    static const int32_t MAX_IFA_NAME_CNT = 16;
+    const char *ifa_name_vec[16] = {0};
+    int32_t ifa_name_cnt = 0;
     const char *ifa_name = NULL;
     for (ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == NULL) {
             continue;
         }
 
-        // if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_RUNNING)) {
-        //     continue;
-        // }
+        // 过滤掉未启用或未运行的网卡
+        if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_RUNNING)) {
+            continue;
+        }
 
+        if (ifa_name_cnt < MAX_IFA_NAME_CNT) {
+            ifa_name_vec[ifa_name_cnt++] = ifa->ifa_name;
+        }
         switch (ifa->ifa_addr->sa_family) {
         case AF_INET: {
             struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
@@ -222,15 +229,26 @@ int32_t get_mtu_by_ip(socket_t fd, const sockaddr_t *addr)
         strncpy(ifr.ifr_name, ifa_name, IFNAMSIZ - 1);
         if (ioctl(fd, SIOCGIFMTU, &ifr) < 0) {
             KCP_LOGE("Failed to get MTU for interface %s. [%d, %s]", ifa_name, errno, strerror(errno));
-            mtu = IOCTL_ERROR;
+            ifa_mtu = IOCTL_ERROR;
         } else {
-            mtu = ifr.ifr_mtu;
+            ifa_mtu = ifr.ifr_mtu;
+        }
+    } else {
+        for (int32_t i = 0; i < ifa_name_cnt; ++i) {
+            struct ifreq ifr;
+            memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, ifa_name_vec[i], IFNAMSIZ - 1);
+            if (ioctl(fd, SIOCGIFMTU, &ifr) < 0) {
+                continue;
+            }
+            ifa_mtu = MIN(ifa_mtu, ifr.ifr_mtu);
         }
     }
+    freeifaddrs(interfaces);
 #else // OS_WINDOWS
 
 #endif
-    return mtu;
+    return MIN(ifa_mtu, ETHERNET_MTU);
 }
 
 bool sockaddr_equal(const sockaddr_t *a, const sockaddr_t *b)

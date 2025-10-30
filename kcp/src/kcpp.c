@@ -550,7 +550,6 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
     int32_t nic_mtu = 0;
     if (nic != NULL) {
         nic_mtu = get_mtu_by_nic(kcp_ctx->sock, nic);
-
         status = set_socket_bind_nic(kcp_ctx->sock, nic);
         if (status != NO_ERROR) {
             goto _error;
