@@ -563,7 +563,9 @@ int32_t kcp_bind(struct KcpContext *kcp_ctx, const sockaddr_t *addr, const char 
         KCP_LOGE("get nic mtu error");
         goto _error;
     }
+    KCP_LOGE("nic mtu = %d", nic_mtu);
     kcp_ctx->udp_mtu = kcp_get_mtu_by_param(nic_mtu, addr->sa.sa_family == AF_INET6);
+    KCP_LOGE("nic mtu = %d", nic_mtu);
     if (bind(kcp_ctx->sock, (const struct sockaddr *)addr, sizeof(sockaddr_t)) == SOCKET_ERROR) {
         status = BIND_ERROR;
         goto _error;

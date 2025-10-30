@@ -29,7 +29,7 @@ struct event_base*  g_ev_base = NULL;
 struct event*       g_timer_event = NULL;
 static int32_t      g_packet_count = 0;
 
-#define PACKET_COUNT    (15)
+#define PACKET_COUNT    (5)
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
@@ -87,6 +87,12 @@ void kcp_timer(int fd, short ev, void *user)
     // 定时发送数据
     char message[4096] = {0};
     sprintf(message, "Hello, KCP! %d", g_packet_count++);
+    if (g_packet_count == PACKET_COUNT) {
+        // no data transfer, wait 10s
+        struct timeval timer_interval = {10, 0}; // 1s
+        evtimer_add(g_timer_event, &timer_interval);
+        return;
+    }
     if (g_packet_count > PACKET_COUNT) {
         printf("Closing KCP connection\n");
         kcp_close(kcp_connection);
@@ -128,7 +134,7 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     kcp_ioctl(kcp_connection, IOCTL_MTU_PROBE_TIMEOUT, &timeout);
     timeout = 2000; // 2s
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_TIMEOUT, &timeout);
-    timeout = 10000; // 10s
+    timeout = 5000; // 5s
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
     uint32_t retries = 3;
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
@@ -219,7 +225,7 @@ int main(int argc, char **argv)
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
     local_addr.sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    local_addr.sin.sin_port = htons(65432);
+    local_addr.sin.sin_port = htons(0);
 
     int32_t status = kcp_bind(ctx, &local_addr, nic);
     if (NO_ERROR != status) {
