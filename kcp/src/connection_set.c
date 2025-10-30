@@ -16,9 +16,9 @@ struct KcpConnection *connection_set_search(connection_set_t *root, uint32_t con
   	while (node) {
   		struct KcpConnection *pthis = container_of(node, struct KcpConnection, node_rbtree);
 
-		if (conv < pthis->conv) {
+		if (conv < pthis->dcid) {
             node = node->rb_left;
-        } else if (conv > pthis->conv) {
+        } else if (conv > pthis->dcid) {
   			node = node->rb_right;
         } else {
   			return pthis;
@@ -39,9 +39,9 @@ bool connection_set_insert(connection_set_t *root, struct KcpConnection *data)
         struct KcpConnection *pthis = container_of(*new, struct KcpConnection, node_rbtree);
 
         parent = *new;
-        if (data->conv < pthis->conv) {
+        if (data->dcid < pthis->dcid) {
             new = &((*new)->rb_left);
-        } else if (data->conv > pthis->conv) {
+        } else if (data->dcid > pthis->dcid) {
             new = &((*new)->rb_right);
         } else {
             return false;

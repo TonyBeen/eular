@@ -166,7 +166,6 @@ KCP_PORT void kcp_set_accept_cb(struct KcpContext *kcp_ctx, on_kcp_accepted_t cb
  * @brief accept a connection
  *
  * @param kcp_ctx kcp context
- * @param addr store remote address
  * @param timeout_ms timeout in milliseconds
  * @return int32_t 0 if success, otherwise < 0
  */

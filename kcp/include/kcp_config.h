@@ -3,8 +3,7 @@
 
 #include <stdint.h>
 
-// kcp 交流号标志, 即最多支持65535个会话
-#define KCP_CONV_FLAG       0xFFFF0000
+
 #define KCP_BITMAP_SIZE     65535
 
 #define KCP_HEADER_SIZE     32

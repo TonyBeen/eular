@@ -1,5 +1,6 @@
 #include "kcp_net_utils.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "kcp_inc.h"
@@ -7,6 +8,7 @@
 #include "kcp_protocol.h"
 #include "kcp_mtu.h"
 #include "kcp_log.h"
+#include "kcp_time.h"
 
 int32_t set_socket_nonblock(socket_t fd)
 {
@@ -387,4 +389,16 @@ int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
     }
 
     return NO_ERROR;
+}
+
+uint32_t kcp_random(uint32_t min, uint32_t max)
+{
+    if (min > max) {
+        uint32_t temp = min;
+        min = max;
+        max = temp;
+    }
+
+    srand((uint32_t)kcp_time_monotonic_ms());
+    return min + rand() % (max - min + 1);
 }

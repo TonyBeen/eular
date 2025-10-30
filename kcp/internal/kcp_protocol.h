@@ -77,7 +77,8 @@ typedef struct KcpOption {
 typedef struct KcpProtoHeader {
     struct list_head node_list;  // 链表节点
 
-    uint32_t    conv;       // 会话ID
+    uint16_t    scid;       // source connection ID
+    uint16_t    dcid;       // destination connection ID
 #if defined(BYTE_ORDER) && BYTE_ORDER == LITTLE_ENDIAN
     uint8_t     cmd:4;      // 命令类型 (low 4 bit)
     uint8_t     opt:4;      // 分片序号 (high 4 bit)
@@ -127,7 +128,8 @@ typedef struct KcpSengment {
     struct list_head    node_list;
     struct rb_node      node_rbtree;
 
-    uint32_t conv;      // 会话ID
+    uint16_t scid;      // source connection ID
+    uint16_t dcid;      // destination connection ID
     uint32_t cmd;       // 命令
     uint32_t frg;       // 分片序号
     uint32_t wnd;       // 窗口大小
@@ -160,7 +162,8 @@ typedef struct KcpConnection {
     struct list_node    node_list;   // for list
 
     // 基础配置
-    uint32_t conv;          // 会话ID，用于标识一个会话
+    uint16_t scid;          // source connection ID
+    uint16_t dcid;          // destination connection ID
     uint32_t mtu;           // 最大传输单元
     uint32_t mss;           // 报文段大小
     uint32_t mss_min;       // 最小报文段大小
@@ -283,7 +286,8 @@ typedef struct KcpFunctionCallback {
 
 typedef struct KcpSYNNode {
     struct list_head    node;
-    uint32_t            conv;
+    uint16_t            scid;       // source connection ID
+    uint16_t            dcid;       // destination connection ID
     uint32_t            rand_sn;    // 本机发送的sn
     uint32_t            packet_sn;  // 对端sn
     uint64_t            packet_ts;  // 对端时间戳
@@ -297,6 +301,7 @@ typedef struct KcpContext {
     sockaddr_t                  local_addr;
     kcp_function_callback_t     callback;
 
+    uint16_t                    connection_id;
     int32_t                     udp_mtu;
     bitmap_t                    conv_bitmap;
     struct list_head            syn_queue;

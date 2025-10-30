@@ -32,6 +32,7 @@ enum KcpError {
     INVALID_STATE       = -EILSEQ,      /* Invalid state */
     BUFFER_TOO_SMALL    = -ENOSPC,      /* Buffer too small */
     PACKET_TOO_LARGE    = -EMSGSIZE,    /* Packet too large */
+    CONNECTION_ID_CONFLICT,             /* Connection Id conflict */
     NO_MORE_CONV,                       /* No more conversation */
 
     // I/O errors

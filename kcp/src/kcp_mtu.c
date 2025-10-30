@@ -81,7 +81,8 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
 
         kcp_proto_header_t header;
         kcp_proto_header_t *kcp_header = &header;
-        header.conv = kcp_conn->conv;
+        header.scid = kcp_conn->scid;
+        header.dcid = kcp_conn->dcid;
         header.cmd = KCP_CMD_MTU_PROBE;
         header.opt = 0;
         header.frg = 0;
@@ -97,8 +98,10 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         probe_ctx->hash = XXH64(header.packet_data.data, header.packet_data.len, 0);
 
         char *buffer_offset = probe_ctx->probe_buf;
-        *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
-        buffer_offset += 4;
+        *(uint16_t *)buffer_offset = htole16(kcp_header->scid);
+        buffer_offset += 2;
+        *(uint16_t *)buffer_offset = htole16(kcp_header->dcid);
+        buffer_offset += 2;
         *(uint8_t *)buffer_offset = kcp_header->cmd;
         buffer_offset += 1;
         *(uint8_t *)buffer_offset = kcp_header->frg;
@@ -182,7 +185,8 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_heade
 {
     uint64_t hash = 0;
     kcp_proto_header_t mtu_ack_header;
-    mtu_ack_header.conv = kcp_header->conv;
+    mtu_ack_header.scid = kcp_header->scid;
+    mtu_ack_header.dcid = kcp_header->dcid;
     mtu_ack_header.cmd = KCP_CMD_MTU_ACK;
     mtu_ack_header.opt = 0;
     mtu_ack_header.frg = 0;
@@ -239,12 +243,9 @@ static kcp_connection_t *parse_icmp_payload(struct KcpContext *kcp_ctx, const vo
     if (len < KCP_HEADER_SIZE) {
         return NULL;
     }
-    uint32_t conv = le32toh(*(uint32_t *)buffer); // 会话ID
-    if (!(conv & KCP_CONV_FLAG)) {
-        return NULL;
-    }
 
-    kcp_connection_t* kcp_conn = connection_set_search(&kcp_ctx->connection_set, conv);
+    uint16_t scid = le16toh(*(uint16_t *)buffer); // source connection id
+    kcp_connection_t* kcp_conn = connection_set_search(&kcp_ctx->connection_set, scid);
     if (kcp_conn != NULL) {
         if (sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
             return NULL;

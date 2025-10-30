@@ -34,6 +34,8 @@ const char *errno_string(int32_t err);
 
 int32_t     kcp_add_write_event(struct KcpConnection *kcp_conn);
 
+uint32_t     kcp_random(uint32_t min, uint32_t max);
+
 EXTERN_C_END
 
 #endif // __KCP_NET_UTILS_H__

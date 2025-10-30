@@ -28,7 +28,7 @@ static int32_t  on_kcp_ping_timeout(kcp_connection_t *kcp_conn, uint64_t timesta
 
 static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int32_t code)
 {
-    KCP_LOGI("on_mtu_probe_completed: %u, mtu: %u, code: %d", kcp_conn->conv, mtu, code);
+    KCP_LOGI("on_mtu_probe_completed: scid(%u) <=> dcid(%u), mtu: %u, code: %d", kcp_conn->scid, kcp_conn->dcid, mtu, code);
     if (code == NO_ERROR) {
         int32_t ip_header_size = kcp_conn->remote_host.sa.sa_family == AF_INET6 ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
         if (kcp_conn->mtu > mtu) {
@@ -117,7 +117,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
                 if (pos->cmd == KCP_CMD_FIN && pos->syn_fin_data.rand_sn == kcp_header->syn_fin_data.packet_sn) {
                     kcp_proto_header_t kcp_ack_header;
-                    kcp_ack_header.conv = kcp_connection->conv;
+                    kcp_ack_header.scid = kcp_connection->scid;
+                    kcp_ack_header.dcid = kcp_connection->dcid;
                     kcp_ack_header.cmd = KCP_CMD_ACK;
                     kcp_ack_header.opt = 0;
                     kcp_ack_header.frg = 0;
@@ -150,7 +151,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
         if (kcp_header->cmd == KCP_CMD_FIN) { // 对端未收到FIN包
             kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
             list_init(&kcp_fin_header->node_list);
-            kcp_fin_header->conv = kcp_connection->conv;
+            kcp_fin_header->scid = kcp_connection->scid;
+            kcp_fin_header->dcid = kcp_connection->dcid;
             kcp_fin_header->cmd = KCP_CMD_FIN;
             kcp_fin_header->opt = 0;
             kcp_fin_header->frg = 0;
@@ -190,7 +192,8 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
 
     if (send_rst) {
         kcp_proto_header_t kcp_rst_header;
-        kcp_rst_header.conv = kcp_connection->conv;
+        kcp_rst_header.scid = kcp_connection->scid;
+        kcp_rst_header.dcid = kcp_connection->dcid;
         kcp_rst_header.cmd = KCP_CMD_RST;
         kcp_rst_header.opt = 0;
         kcp_rst_header.frg = 0;
@@ -258,7 +261,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     char *ptr = kcp_connection->buffer;
     char kcp_header_buffer[KCP_HEADER_SIZE] = {0};
     kcp_proto_header_t kcp_ack_header;
-    kcp_ack_header.conv = kcp_connection->conv;
+    kcp_ack_header.scid = kcp_connection->scid;
+    kcp_ack_header.dcid = kcp_connection->dcid;
     kcp_ack_header.cmd = KCP_CMD_ACK;
     kcp_ack_header.opt = 0;
     kcp_ack_header.frg = 0;
@@ -315,7 +319,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
     kcp_proto_header_t kcp_window_header;
     memset(&kcp_window_header, 0, sizeof(kcp_proto_header_t));
-    kcp_window_header.conv = kcp_connection->conv;
+    kcp_window_header.scid = kcp_connection->scid;
+    kcp_window_header.dcid = kcp_connection->dcid;
     kcp_window_header.packet_data.ts = timestamp;
     // window size ask
     if (kcp_connection->probe & KCP_ASK_SEND) {
@@ -358,7 +363,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     if (kcp_connection->ping_ctx->keepalive_next_ts < timestamp) {
         kcp_proto_header_t ping_header;
         memset(&ping_header, 0, sizeof(kcp_proto_header_t));
-        ping_header.conv = kcp_connection->conv;
+        ping_header.scid = kcp_connection->scid;
+        ping_header.dcid = kcp_connection->dcid;
         ping_header.cmd = KCP_CMD_PING;
         ping_header.ping_data.packet_ts = 0;
         ping_header.ping_data.ts = timestamp;
@@ -390,7 +396,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     if (kcp_connection->probe & KCP_PING_RECV) {
         kcp_proto_header_t pong_header;
         memset(&pong_header, 0, sizeof(kcp_proto_header_t));
-        pong_header.conv = kcp_connection->conv;
+        pong_header.scid = kcp_connection->scid;
+        pong_header.dcid = kcp_connection->dcid;
         pong_header.cmd = KCP_CMD_PONG;
         pong_header.ping_data.packet_ts = kcp_connection->ping_ctx->keepalive_packet_ts;
         pong_header.ping_data.ts = timestamp;
@@ -434,7 +441,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
         kcp_segment_t *segment = list_first_entry(&kcp_connection->snd_queue, kcp_segment_t, node_list);
         list_del_init(&segment->node_list);
-        segment->conv = kcp_connection->conv;
+        segment->scid = kcp_connection->scid;
+        segment->dcid = kcp_connection->dcid;
         segment->cmd = KCP_CMD_PUSH;
         if (segment->frg > 0) {
             // NOTE frg == 0 时wnd表示分片个数
@@ -674,7 +682,8 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     memset(&kcp_conn->node_rbtree, 0, sizeof(struct rb_node));
     list_init(&kcp_conn->node_list);
 
-    kcp_conn->conv = 0;
+    kcp_conn->scid = kcp_ctx->connection_id;
+    kcp_conn->dcid = 0;
     kcp_conn->mtu = kcp_ctx->udp_mtu;
     kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
     kcp_conn->mss_min = kcp_get_min_mtu(remote_host->sa.sa_family == AF_INET6) - KCP_HEADER_SIZE;
@@ -769,8 +778,7 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
     // 从红黑树中移除连接
     connection_set_erase_node(&kcp_conn->kcp_ctx->connection_set, kcp_conn);
-    int32_t index = (~KCP_CONV_FLAG) & kcp_conn->conv;
-    bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, index, false);
+    bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, kcp_conn->dcid, false);
 
     // 移除写事件
     if (!list_empty(&kcp_conn->node_list)) {
@@ -922,13 +930,10 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_t data_size)
 {
     const char *data_offset = *data;
-    kcp_header->conv = le32toh(*(uint32_t *)data_offset); // 会话ID
-    if (!(kcp_header->conv & KCP_CONV_FLAG)) {
-        KCP_LOGW("invalid conv: %u", kcp_header->conv);
-        return INVALID_KCP_HEADER;
-    }
-
-    data_offset += 4;
+    kcp_header->scid = le16toh(*(uint16_t *)data_offset); // source connection ID
+    data_offset += 2;
+    kcp_header->dcid = le16toh(*(uint16_t *)data_offset); // destination connection ID
+    data_offset += 2;
     kcp_header->cmd = *(uint8_t *)(data_offset) & 0x0F; // 命令
     kcp_header->opt = (*(uint8_t *)(data_offset) >> 4) & 0x0F; // 选项标志
     data_offset += 1;
@@ -1044,8 +1049,10 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
     }
 
     char *buffer_offset = buffer;
-    *(uint32_t *)buffer_offset = htole32(kcp_header->conv);
-    buffer_offset += 4;
+    *(uint16_t *)buffer_offset = htole16(kcp_header->scid);
+    buffer_offset += 2;
+    *(uint16_t *)buffer_offset = htole16(kcp_header->dcid);
+    buffer_offset += 2;
     *(uint8_t *)buffer_offset |= kcp_header->cmd;
     *(uint8_t *)buffer_offset |= (kcp_header->opt << 4);
     buffer_offset += 1;
@@ -1141,8 +1148,10 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
     }
     char *buffer_offset = buffer;
 
-    *(uint32_t *)buffer_offset = htole32(segment->conv);
-    buffer_offset += 4;
+    *(uint16_t *)buffer_offset = htole16(segment->scid);
+    buffer_offset += 2;
+    *(uint16_t *)buffer_offset = htole16(segment->dcid);
+    buffer_offset += 2;
     *(uint8_t *)buffer_offset = segment->cmd;
     buffer_offset += 1;
     *(uint8_t *)buffer_offset = segment->frg;
@@ -1271,7 +1280,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
         if (is_sever) {
             if (!kcp_ctx->callback.on_connect(kcp_ctx, addr)) { // 拒绝连接
                 kcp_proto_header_t kcp_rst_header;
-                kcp_rst_header.conv = KCP_CONV_FLAG;
+                kcp_rst_header.scid = kcp_ctx->connection_id;
+                kcp_rst_header.dcid = 0;
                 kcp_rst_header.cmd = KCP_CMD_RST;
                 kcp_rst_header.opt = 0;
                 kcp_rst_header.frg = 0;
@@ -1302,7 +1312,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
             list_for_each_entry_safe(pos, next, &kcp_connection->kcp_proto_header_list, node_list) {
                 if (pos->cmd == KCP_CMD_SYN && pos->syn_fin_data.rand_sn == syn_packet->packet_sn) {
                     // 检验发送的sn与server响应的sn是否一致
-                    kcp_connection->conv = syn_packet->conv;
+                    kcp_connection->dcid = syn_packet->scid;
                     memcpy(&kcp_connection->remote_host, addr, sizeof(sockaddr_t));
 
                     uint64_t current_ts = kcp_time_monotonic_us();
@@ -1310,7 +1320,8 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                     kcp_connection->rx_rttval = kcp_connection->rx_srtt / 2;
 
                     kcp_proto_header_t kcp_header;
-                    kcp_header.conv = syn_packet->conv;
+                    kcp_header.scid = kcp_connection->scid;
+                    kcp_header.dcid = kcp_connection->dcid;
                     kcp_header.cmd = KCP_CMD_ACK;
                     kcp_header.opt = 0;
                     kcp_header.frg = 0;
@@ -1518,7 +1529,8 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     list_add_tail(&ack_item->node, &kcp_conn->ack_item);
 
     // push data
-    kcp_segment->conv = kcp_header->conv;
+    kcp_segment->scid = kcp_header->scid;
+    kcp_segment->dcid = kcp_header->dcid;
     kcp_segment->cmd = kcp_header->cmd;
     kcp_segment->frg = kcp_header->frg;
     kcp_segment->wnd = kcp_header->wnd;
@@ -1644,7 +1656,8 @@ static void on_fin_packet_timeout_cb(int fd, short event, void *arg)
 
         kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
         list_init(&kcp_fin_header->node_list);
-        kcp_fin_header->conv = kcp_conn->conv;
+        kcp_fin_header->scid = kcp_conn->scid;
+        kcp_fin_header->dcid = kcp_conn->dcid;
         kcp_fin_header->cmd = KCP_CMD_FIN;
         kcp_fin_header->opt = 0;
         kcp_fin_header->frg = 0;
@@ -1681,7 +1694,8 @@ int32_t on_kcp_fin_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t *
     // 1、响应FIN包, 修改状态
     kcp_proto_header_t *kcp_fin_header = (kcp_proto_header_t *)malloc(sizeof(kcp_proto_header_t));
     list_init(&kcp_fin_header->node_list);
-    kcp_fin_header->conv = kcp_conn->conv;
+    kcp_fin_header->scid = kcp_conn->scid;
+    kcp_fin_header->dcid = kcp_conn->dcid;
     kcp_fin_header->cmd = KCP_CMD_FIN;
     kcp_fin_header->opt = 0;
     kcp_fin_header->frg = 0;
