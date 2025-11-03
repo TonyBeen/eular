@@ -15,7 +15,8 @@ local kcp_cmd_opt = 1 << 4 -- 0x20
 
 local n_kcp_header_size = 32
 
-local s_conversation    = ProtoField.uint32("kcp.conversation", "Conversation", base.HEX)
+local s_scid            = ProtoField.uint16("kcp.scid", "SCID", base.DEC)
+local s_dcid            = ProtoField.uint16("kcp.dcid", "DCID", base.DEC)
 local s_command         = ProtoField.uint8("kcp.command", "Command", base.HEX, kcp_payload_type)
 local s_fragmentation   = ProtoField.uint8("kcp.fragmentation", "Fragmentation", base.DEC)
 local s_window          = ProtoField.uint16("kcp.window", "Window", base.DEC)
@@ -50,7 +51,7 @@ local s_ping_sn         = ProtoField.uint64("kcp.ping.sn", "SN", base.DEC)
 local s_option_tag      = ProtoField.uint8("kcp.options", "Options")
 
 kcp_proto.fields = {
-    s_conversation, s_command, s_fragmentation, s_window,
+    s_scid, s_dcid, s_command, s_fragmentation, s_window,
     s_payload_value,
     s_packet_ts, s_packet_sn, s_packet_psn, s_packet_una, s_packet_len, s_packet_data,
     s_syn_packet_ts, s_syn_ts, s_syn_packet_sn, s_syn_rand_sn,
@@ -214,9 +215,12 @@ function kcp_proto.dissector(buf, pkt, root)
         local offset = size_offset
         local parse_size = 0
         -- conversation
-        local conversation_value = buf(offset, 4):le_uint()
-        kcp_tree:add_le(s_conversation, buf(offset, 4))
-        offset = offset + 4
+        local scid_value = buf(offset, 2):le_uint()
+        kcp_tree:add_le(s_scid, buf(offset, 2))
+        offset = offset + 2
+        local dcid_value = buf(offset, 2):le_uint()
+        kcp_tree:add_le(s_dcid, buf(offset, 2))
+        offset = offset + 2
 
         -- cmd
         kcp_tree:add(s_command, buf(offset, 1))
@@ -241,7 +245,7 @@ function kcp_proto.dissector(buf, pkt, root)
         if has_opt then
             cmd_string = cmd_string .. " | OPT"
         end
-        cmd_string = string.format(" [%s] Conv=0x%04X,", cmd_string, conversation_value)
+        cmd_string = string.format(" [%s] scid(%d) -> dcid(%d),", cmd_string, scid_value, dcid_value)
 
         local payload_len = total_len - offset
 
