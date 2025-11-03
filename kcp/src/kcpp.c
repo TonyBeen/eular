@@ -488,6 +488,9 @@ int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *
         kcp_connection->rcv_wnd = MAX(KCP_WND_RCV, *(uint32_t *)data);
         kcp_connection->snd_wnd = MAX(KCP_WND_SND, *(uint32_t *)data);
         break;
+    case IOCTL_USER_DATA:
+        kcp_connection->user_data = data;
+        break;
     default:
         return INVALID_PARAM;
     }
@@ -1077,6 +1080,15 @@ void kcp_shutdown(struct KcpConnection *kcp_connection)
     kcp_connection_destroy(kcp_connection);
 }
 
+void kcp_set_write_event_cb(struct KcpConnection *kcp_connection, on_kcp_write_event_t cb)
+{
+    if (kcp_connection == NULL) {
+        return;
+    }
+    kcp_connection->write_event_cb = cb;
+    
+}
+
 int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size)
 {
     if (kcp_connection == NULL || data == NULL || size == 0) {
@@ -1149,7 +1161,7 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
     return NO_ERROR;
 }
 
-void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb)
+void kcp_set_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb)
 {
     if (kcp_connection != NULL) {
         kcp_connection->read_event_cb = cb;
@@ -1215,6 +1227,11 @@ const char *kcp_connection_remote_address(struct KcpConnection *kcp_connection, 
     }
 
     return sockaddr_to_string(&kcp_connection->remote_host, buf, len);
+}
+
+void *kcp_connection_user_data(struct KcpConnection *kcp_connection)
+{
+    return kcp_connection->user_data;
 }
 
 int32_t kcp_connection_get_fd(struct KcpConnection *kcp_connection)

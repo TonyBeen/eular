@@ -591,6 +591,9 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     kcp_connection->ts_flush = timestamp / 1000 + kcp_connection->interval;
+    if (kcp_connection->write_event_cb) {
+        kcp_connection->write_event_cb(kcp_connection, kcp_connection->snd_wnd - kcp_connection->nsnd_buf);
+    }
 
 _end:
     if (kcp_connection->state == KCP_STATE_DISCONNECTED) {

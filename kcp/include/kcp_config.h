@@ -19,14 +19,15 @@ enum ConfigKey {
 typedef uint32_t em_config_key_t;
 
 enum IOControl {
-    IOCTL_RECEIVE_TIMEOUT,
-    IOCTL_MTU_PROBE_TIMEOUT,
-    IOCTL_KEEPALIVE_TIMEOUT,
-    IOCTL_KEEPALIVE_INTERVAL,
-    IOCTL_KEEPALIVE_RETRIES,
-    IOCTL_SYN_RETRIES,
-    IOCTL_FIN_RETRIES,
-    IOCTL_WINDOW_SIZE,
+    IOCTL_RECEIVE_TIMEOUT,      // uint32_t
+    IOCTL_MTU_PROBE_TIMEOUT,    // uint32_t
+    IOCTL_KEEPALIVE_TIMEOUT,    // uint32_t
+    IOCTL_KEEPALIVE_INTERVAL,   // uint32_t
+    IOCTL_KEEPALIVE_RETRIES,    // uint32_t
+    IOCTL_SYN_RETRIES,          // uint32_t
+    IOCTL_FIN_RETRIES,          // uint32_t
+    IOCTL_WINDOW_SIZE,          // uint32_t
+    IOCTL_USER_DATA,            // void *
 };
 typedef uint32_t em_ioctl_t;
 

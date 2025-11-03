@@ -251,6 +251,7 @@ typedef struct KcpConnection {
     int32_t                 syn_retries;
     uint32_t                fin_retries;
     sockaddr_t              remote_host;
+    void*                   user_data;
 
     // syn
     struct KcpSYNNode*      syn_node;
@@ -268,6 +269,7 @@ typedef struct KcpConnection {
 
     // user callback
     on_kcp_read_event_t     read_event_cb;
+    on_kcp_write_event_t    write_event_cb;
 
     // statistics
     uint32_t                ping_count; // ping次数

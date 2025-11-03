@@ -1,13 +1,19 @@
 /*************************************************************************
-    > File Name: kcp_server.c
+    > File Name: kcp_file_server.c
     > Author: hsz
     > Brief:
-    > Created Time: 2025年04月28日 星期一 16时07分52秒
+    > Created Time: 2025年10月30日 星期四 17时36分53秒
  ************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <map>
+#include <string>
+#include <fstream>
+#include <random>
+#include <filesystem>
 
 #include <event2/event.h>
 
@@ -24,7 +30,43 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <utils/endian.hpp>
+#include "xxhash.h"
+
+#include "file_info.h"
+
 struct event_base *g_event_base = NULL;
+
+struct KcpFileContext {
+    int32_t file_offset = 0;
+    uint32_t file_size = 0;
+    uint32_t file_hash = 0;
+    std::map<int32_t, std::string>  file_info_map; // file offset <-> file content
+    std::string file_name;
+    std::ofstream file_stream;
+    XXH32_state_t* xxhash_state;
+};
+
+std::string gen_random_string(size_t length)
+{
+    static const std::string charset =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789"
+        "_";
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dist(0, static_cast<int>(charset.size() - 1));
+
+    std::string result;
+    result.reserve(length);
+    for (size_t i = 0; i < length; ++i) {
+        result.push_back(charset[dist(gen)]);
+    }
+
+    return result;
+}
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
@@ -87,14 +129,94 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 {
     char *buffer = (char *)malloc(size);
+    char *buffer_offset = buffer;
     int32_t bytes_read = kcp_recv(kcp_connection, buffer, size);
+    KcpFileContext *file_ctx = (KcpFileContext *)kcp_connection_user_data(kcp_connection);
     if (bytes_read > 0) {
-        printf("Received %d bytes: %.*s\n", bytes_read, bytes_read, buffer);
-        // Echo back the data
-        kcp_send(kcp_connection, buffer, bytes_read);
+        printf("Received %d bytes\n", bytes_read);
+        uint16_t file_transfer_type = be16toh(*(uint16_t *)buffer_offset);
+        buffer_offset += 2;
+        switch (file_transfer_type) {
+        case kFileTransferTypeInfo: {
+            file_info_t *file_info = decode_file_info(buffer_offset, bytes_read - sizeof(uint16_t));
+            if (!file_info) {
+                break;
+            }
+            printf("Received file info: %.*s, %lu, %lu\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
+            
+            // 写入缓存中的其他文件内容
+            auto it = file_ctx->file_info_map.begin();
+            while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
+                XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
+                file_ctx->file_stream.write(it->second.data(), it->second.size());
+                file_ctx->file_offset += it->second.size();
+                it = file_ctx->file_info_map.erase(it);
+            }
+
+            // 文件已发送完毕
+            if (file_ctx->file_offset == file_info->file_size) {
+                // 校验xxhash
+                uint32_t hash = XXH32_digest(file_ctx->xxhash_state);
+                if (hash != file_info->file_hash) {
+                    printf("Hash check failed: %u != %u\n", hash, file_info->file_hash);
+                    break;
+                }
+                // 关闭文件流
+                file_ctx->file_stream.close();
+                // 释放xxhash状态
+                XXH32_freeState(file_ctx->xxhash_state);
+                // 重命名文件
+                std::string new_file_name = std::string(file_info->file_name, file_info->file_name_size);
+                if (rename(file_ctx->file_name.c_str(), new_file_name.c_str()) != 0) {
+                    printf("Rename file failed: %s\n", strerror(errno));
+                }
+            }
+            delete file_ctx;
+            kcp_ioctl(kcp_connection, IOCTL_USER_DATA, NULL);
+            break;
+        }
+        case kFileTransferTypeContent: {
+            file_content_t *file_content = decode_file_content(buffer_offset, bytes_read - sizeof(uint16_t));
+            if (!file_content) {
+                break;
+            }
+            printf("Received file content: %d, %d\n", file_content->size, file_content->offset);
+            if (file_content->offset == file_ctx->file_offset) {
+                // 写入文件
+                if (!file_ctx->file_stream.is_open()) {
+                    // 随机生成名字
+                    file_ctx->file_name = gen_random_string(16) + ".tmp";
+                    // 初始化xxhash状态
+                    file_ctx->xxhash_state = XXH32_createState();
+                    XXH32_reset(file_ctx->xxhash_state, 0);
+                    file_ctx->file_stream.open(file_ctx->file_name, std::ios::binary | std::ios::out);
+                }
+                // 更新xxhash状态
+                XXH32_update(file_ctx->xxhash_state, file_content->content, file_content->size);
+                file_ctx->file_stream.write((char *)file_content->content, file_content->size);
+                file_ctx->file_offset += file_content->size;
+
+                // 写入缓存中的其他文件内容
+                auto it = file_ctx->file_info_map.begin();
+                while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
+                    XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
+                    file_ctx->file_stream.write(it->second.data(), it->second.size());
+                    file_ctx->file_offset += it->second.size();
+                    it = file_ctx->file_info_map.erase(it);
+                }
+            } else {
+                // 缓存文件内容
+                file_ctx->file_info_map[file_content->offset] = std::string((char *)file_content->content, file_content->size);
+            }
+            break;
+        }
+        default:
+            break;
+        }
     } else if (bytes_read < 0) {
         fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
     }
+    free(buffer);
 }
 
 void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
@@ -117,6 +239,8 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_INTERVAL, &timeout);
         uint32_t retries = 3;
         kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
+        KcpFileContext *file_ctx = new KcpFileContext();
+        kcp_ioctl(kcp_connection, IOCTL_USER_DATA, file_ctx);
     } else {
         fprintf(stderr, "Failed to accept KCP connection: %d\n", code);
     }

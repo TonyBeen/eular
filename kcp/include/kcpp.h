@@ -194,6 +194,8 @@ KCP_PORT void kcp_close(struct KcpConnection *kcp_connection);
  */
 KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
 
+KCP_PORT void kcp_set_write_event_cb(struct KcpConnection *kcp_connection, on_kcp_write_event_t cb);
+
 /**
  * @brief send data to peer.
  * @param kcp_connection kcp connection
@@ -204,7 +206,7 @@ KCP_PORT void kcp_shutdown(struct KcpConnection *kcp_connection);
  */
 KCP_PORT int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size);
 
-KCP_PORT void set_kcp_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
+KCP_PORT void kcp_set_read_event_cb(struct KcpConnection *kcp_connection, on_kcp_read_event_t cb);
 
 KCP_PORT int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size_t size);
 
@@ -217,13 +219,15 @@ KCP_PORT int32_t kcp_recv(struct KcpConnection *kcp_connection, void *data, size
  * @param len buffer size
  * @return const char* return buf
  */
-const char *kcp_connection_remote_address(struct KcpConnection *kcp_connection, char *buf, size_t len);
+KCP_PORT const char *kcp_connection_remote_address(struct KcpConnection *kcp_connection, char *buf, size_t len);
 
-int32_t kcp_connection_get_fd(struct KcpConnection *kcp_connection);
+KCP_PORT void *kcp_connection_user_data(struct KcpConnection *kcp_connection);
 
-int32_t kcp_connection_get_mtu(struct KcpConnection *kcp_connection);
+KCP_PORT int32_t kcp_connection_get_fd(struct KcpConnection *kcp_connection);
 
-void kcp_connection_get_statistic(struct KcpConnection *kcp_connection, kcp_statistic_t *statistic);
+KCP_PORT int32_t kcp_connection_get_mtu(struct KcpConnection *kcp_connection);
+
+KCP_PORT void kcp_connection_get_statistic(struct KcpConnection *kcp_connection, kcp_statistic_t *statistic);
 
 EXTERN_C_END
 

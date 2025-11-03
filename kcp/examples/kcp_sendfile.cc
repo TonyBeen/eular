@@ -1,13 +1,19 @@
 /*************************************************************************
-    > File Name: kcp_client.c
+    > File Name: kcp_sendfile.c
     > Author: hsz
     > Brief:
-    > Created Time: 2025年04月28日 星期一 16时07分58秒
+    > Created Time: 2025年10月30日 星期四 17时37分02秒
  ************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <map>
+#include <string>
+#include <fstream>
+#include <random>
+#include <filesystem>
 
 #include <event2/event.h>
 
@@ -25,11 +31,27 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
+#include <utils/endian.hpp>
+#include "xxhash.h"
+
+#include "file_info.h"
+
 struct event_base*  g_ev_base = NULL;
 struct event*       g_timer_event = NULL;
 static int32_t      g_packet_count = 0;
 
 #define PACKET_COUNT    (5)
+
+struct KcpFileContext {
+    int32_t         file_offset = 0;
+    uint32_t        file_size = 0;
+    uint32_t        file_hash = 0;
+    std::string     file_name;
+    std::ifstream   file_stream;
+    XXH32_state_t*  xxhash_state;
+};
+
+std::string g_file_name;
 
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
@@ -75,6 +97,78 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
         kcp_close(kcp_connection);
     }
+}
+
+void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
+{
+    printf("on_kcp_write_event: %d\n", size);
+    if (size <= 0) {
+        return;
+    }
+
+    int32_t mtu = kcp_connection_get_mtu(kcp_connection);
+    int32_t size = std::min(KCP_PACKET_COUNT, size);
+    int32_t packet_size = (mtu - KCP_HEADER_SIZE) * size;
+    packet_size = std::min(packet_size, KCP_MAX_PACKET_SIZE);
+
+    KcpFileContext *file_ctx = (KcpFileContext *)kcp_connection_user_data(kcp_connection);
+    if (file_ctx == NULL) {
+        return;
+    }
+
+    if (!file_ctx->file_stream.is_open()) {
+        fprintf(stderr, "Error: file_ctx->file_stream is not open\n");
+        kcp_close(kcp_connection);
+        return;
+    }
+
+    // 文件结尾
+    if (file_ctx->file_stream.eof()) {
+        file_info_t *file_info = (file_info_t *)malloc(sizeof(file_info_t) + file_ctx->file_name.size());
+        file_info->file_size = file_ctx->file_size;
+        file_ctx->file_hash = XXH32_digest(file_ctx->xxhash_state);
+        XXH32_freeState(file_ctx->xxhash_state);
+        file_info->file_hash = file_ctx->file_hash;
+        memcpy(file_info->file_name, file_ctx->file_name.c_str(), file_ctx->file_name.size());
+        packet_size = encode_file_info(file_info);
+        int32_t status = kcp_send(kcp_connection, file_info, packet_size);
+        if (status != NO_ERROR) {
+            free(file_info);
+            fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+            kcp_close(kcp_connection);
+            return;
+        }
+        file_ctx->file_stream.close();
+        free(file_info);
+        delete file_ctx;
+        kcp_ioctl(kcp_connection, IOCTL_USER_DATA, NULL);
+        return;
+    }
+
+    file_content_t *file_content = (file_content_t *)malloc(sizeof(file_content_t) + packet_size);
+    file_ctx->file_stream.read((char *)file_content->content, packet_size);
+    int32_t bytes_read = file_ctx->file_stream.gcount();
+    if (bytes_read <= 0) {
+        fprintf(stderr, "Error: file_ctx->file_stream read failed\n");
+        kcp_close(kcp_connection);
+        return;
+    }
+
+    // 计算hash
+    XXH32_update(file_ctx->xxhash_state, file_content->content, bytes_read);
+
+    file_content->offset = file_ctx->file_offset;
+    file_content->size = bytes_read;
+    file_ctx->file_offset += bytes_read;
+    packet_size = encode_file_content(file_content);
+    int32_t status = kcp_send(kcp_connection, file_content, packet_size);
+    if (status != NO_ERROR) {
+        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+        kcp_close(kcp_connection);
+        return;
+    }
+
+    free(file_content);
 }
 
 void kcp_timer(int fd, short ev, void *user)
@@ -125,6 +219,8 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     }
     printf("KCP connection established: %p\n", kcp_connection);
     kcp_set_read_event_cb(kcp_connection, on_kcp_read_event);
+    kcp_set_write_event_cb(kcp_connection, on_kcp_write_event);
+
     struct KcpConfig config = KCP_CONFIG_FAST;
     kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
 
@@ -139,10 +235,25 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     uint32_t retries = 3;
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
 
-    // 创建定时器, 定时发送
-    g_timer_event = evtimer_new(g_ev_base, kcp_timer, kcp_connection);
-    struct timeval timer_interval = {1, 0}; // 1s
-    evtimer_add(g_timer_event, &timer_interval);
+    KcpFileContext* file_ctx = new KcpFileContext();
+    file_ctx->file_name = g_file_name;
+    file_ctx->file_stream.open(file_ctx->file_name, std::ios::binary);
+    if (!file_ctx->file_stream.is_open()) {
+        fprintf(stderr, "Failed to open file: %s\n", file_ctx->file_name.c_str());
+        event_base_loopbreak(g_ev_base);
+        return;
+    }
+    file_ctx->file_size = (uint32_t)file_ctx->file_stream.seekg(0, std::ios::end).tellg();
+    file_ctx->file_stream.seekg(0, std::ios::beg);
+    file_ctx->xxhash_state = XXH32_createState();
+    XXH32_reset(file_ctx->xxhash_state, 0);
+
+    kcp_ioctl(kcp_connection, IOCTL_USER_DATA, file_ctx);
+}
+
+void print_help(const char *prog_name)
+{
+    fprintf(stderr, "Usage: %s [-s command] [-n nic] [-f file_name]\n", prog_name);
 }
 
 int main(int argc, char **argv)
@@ -153,7 +264,7 @@ int main(int argc, char **argv)
     int32_t command = 0;
     const char *remote_host = "127.0.0.1";
     const char *nic = NULL;
-    while ((command = getopt(argc, argv, "s:n:h")) != -1) {
+    while ((command = getopt(argc, argv, "s:n:f:h")) != -1) {
         switch (command) {
             case 's':
                 remote_host = optarg;
@@ -161,16 +272,29 @@ int main(int argc, char **argv)
             case 'n':
                 nic = optarg;
                 break;
+            case 'f':
+                g_file_name = optarg;
+                break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-s command]\n", argv[0]);
+                print_help(argv[0]);
                 return 0;
             case '?':
-                fprintf(stderr, "Unknown option: %d\n", optopt);
+                print_help(argv[0]);
                 return -1;
             default:
-                fprintf(stderr, "Usage: %s [-s command] %d\n", argv[0], command);
+                print_help(argv[0]);
                 return -1;
         }
+    }
+
+    if (g_file_name.empty()) {
+        print_help(argv[0]);
+        return -1;
+    }
+    // 检验文件是否存在
+    if (!std::ifstream(g_file_name).good()) {
+        fprintf(stderr, "File not found: %s\n", g_file_name.c_str());
+        return -1;
     }
 
     sockaddr_t remote_addr;
