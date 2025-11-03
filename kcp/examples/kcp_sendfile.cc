@@ -107,7 +107,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
 
     int32_t mtu = kcp_connection_get_mtu(kcp_connection);
     size = std::min(KCP_PACKET_COUNT, size);
-    int32_t packet_size = (mtu - KCP_HEADER_SIZE) * size;
+    int32_t packet_size = (mtu - KCP_HEADER_SIZE) * size - sizeof(file_content_t);
     packet_size = std::min(packet_size, KCP_MAX_PACKET_SIZE);
 
     KcpFileContext *file_ctx = (KcpFileContext *)kcp_connection_user_data(kcp_connection);
