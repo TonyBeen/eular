@@ -13,7 +13,6 @@
 #include <string>
 #include <fstream>
 #include <random>
-#include <filesystem>
 
 #include <event2/event.h>
 
@@ -142,8 +141,8 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             if (!file_info) {
                 break;
             }
-            printf("Received file info: %.*s, %lu, %lu\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
-            
+            printf("Received file info: %.*s, %u, %u\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
+
             // 写入缓存中的其他文件内容
             auto it = file_ctx->file_info_map.begin();
             while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
@@ -154,7 +153,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             }
 
             // 文件已发送完毕
-            if (file_ctx->file_offset == file_info->file_size) {
+            if ((uint32_t)file_ctx->file_offset == file_info->file_size) {
                 // 校验xxhash
                 uint32_t hash = XXH32_digest(file_ctx->xxhash_state);
                 if (hash != file_info->file_hash) {

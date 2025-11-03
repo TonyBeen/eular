@@ -13,7 +13,6 @@
 #include <string>
 #include <fstream>
 #include <random>
-#include <filesystem>
 
 #include <event2/event.h>
 
@@ -107,7 +106,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     }
 
     int32_t mtu = kcp_connection_get_mtu(kcp_connection);
-    int32_t size = std::min(KCP_PACKET_COUNT, size);
+    size = std::min(KCP_PACKET_COUNT, size);
     int32_t packet_size = (mtu - KCP_HEADER_SIZE) * size;
     packet_size = std::min(packet_size, KCP_MAX_PACKET_SIZE);
 
