@@ -38,7 +38,7 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.scid);
         KCP_LOGI("recv kcp packet: scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u",
             kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
-        
+
         // NOTE 请求建连时dcid为0, 但其他时候dcid应该为本地connection_id
         if (kcp_header.dcid && kcp_header.dcid != kcp_ctx->connection_id) {
             KCP_LOGW("kcp remote packet dcid(%u) not match cid(%u)", kcp_header.dcid, kcp_ctx->connection_id);
