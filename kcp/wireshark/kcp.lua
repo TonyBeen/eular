@@ -4,14 +4,14 @@ kcp_proto = Proto("KCP", "KCP Protocol");
 local kcp_payload_type = {
     [0x01] = "SYN",  [0x02] = "ACK",  [0x03] = "PUSH", [0x04] = "WASK",
     [0x05] = "WINS", [0x06] = "PING", [0x07] = "PONG", [0x08] = "MTU Probe", [0x09] = "MTU Ack",
-    [0x0a] = "FIN",  [0x0b] = "RST"
+    [0x0a] = "FIN",  [0x0b] = "RST",  [0x11] = "SYN | OPT"
 }
 
 local kcp_option_tag = {
     [0x01] = "MTU",
 }
 
-local kcp_cmd_opt = 1 << 4 -- 0x20
+local kcp_cmd_opt = 1 << 4 -- 0x10
 
 local n_kcp_header_size = 32
 
@@ -227,7 +227,7 @@ function kcp_proto.dissector(buf, pkt, root)
         local command = buf(offset, 1):le_uint()
         offset = offset + 1
         local has_opt = (command & kcp_cmd_opt) ~= 0
-        command = command & 0x0f -- 只取低4位
+        command = command & 0x0F -- 只取低4位
 
         -- frg
         kcp_tree:add(s_fragmentation, buf(offset, 1))

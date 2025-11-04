@@ -95,11 +95,6 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
             char buffer[KCP_HEADER_SIZE] = {0};
             kcp_proto_header_encode(&kcp_rst_header, buffer, KCP_HEADER_SIZE);
 
-            char log_buffer[1024] = {0};
-            for (int32_t i = 0; i < KCP_HEADER_SIZE; ++i) {
-                snprintf(log_buffer + i * 2, sizeof(log_buffer) - i * 2, "%02x", (unsigned char)buffer[i]);
-            }
-
             struct iovec data[1];
             data[0].iov_base = buffer;
             data[0].iov_len = KCP_HEADER_SIZE;
