@@ -132,6 +132,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
         packet_size = encode_file_info(file_info);
         int32_t status = kcp_send(kcp_connection, file_info, packet_size);
         if (status != NO_ERROR) {
+            file_ctx->file_stream.close();
             free(file_info);
             printf("Error sending file info on KCP connection: %d\n", status);
             kcp_close(kcp_connection);
@@ -196,13 +197,14 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     kcp_ioctl(kcp_connection, IOCTL_KEEPALIVE_RETRIES, &retries);
 
     KcpFileContext* file_ctx = new KcpFileContext();
-    file_ctx->file_name = g_file_name;
+    file_ctx->file_name = std::move(g_file_name);
     file_ctx->file_stream.open(file_ctx->file_name, std::ios::binary);
     if (!file_ctx->file_stream.is_open()) {
         fprintf(stderr, "Failed to open file: %s\n", file_ctx->file_name.c_str());
         event_base_loopbreak(g_ev_base);
         return;
     }
+    printf("Successfully opened the file: %s\n", file_ctx->file_name.c_str());
     file_ctx->file_size = (uint32_t)file_ctx->file_stream.seekg(0, std::ios::end).tellg();
     file_ctx->file_stream.seekg(0, std::ios::beg);
     file_ctx->xxhash_state = XXH32_createState();

@@ -15,6 +15,7 @@ uint32_t encode_file_info(file_info_t *file_info)
     if (file_info == NULL) {
         return 0;
     }
+
     uint32_t total_size = sizeof(file_info_t) + file_info->file_name_size;
 #ifdef __linux__
     file_info->type = htobe16(file_info->type);

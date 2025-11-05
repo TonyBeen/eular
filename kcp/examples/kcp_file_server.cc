@@ -152,6 +152,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 it = file_ctx->file_info_map.erase(it);
             }
 
+            printf("file_offset = %d, file_size = %u\n", file_ctx->file_offset, file_info->file_size);
             // 文件已发送完毕
             if ((uint32_t)file_ctx->file_offset == file_info->file_size) {
                 // 校验xxhash
