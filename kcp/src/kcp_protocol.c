@@ -1599,6 +1599,10 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         kcp_segment_t *first = NULL;
         // NOTE 修复因乱序导致的UNA异常问题
         list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node_list) {
+            if (first->sn < kcp_conn->rcv_nxt) { // 已被接收过
+                continue;
+            }
+
             if (first->sn != kcp_conn->rcv_nxt) { // 不是连续的包
                 break;
             }
