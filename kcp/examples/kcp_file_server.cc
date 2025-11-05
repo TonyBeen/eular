@@ -138,6 +138,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         case kFileTransferTypeInfo: {
             file_info_t *file_info = decode_file_info(buffer_offset, bytes_read - sizeof(uint16_t));
             if (!file_info) {
+                printf("Error decoding file info\n");
                 break;
             }
             printf("Received file info: %.*s, %u, %u\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
@@ -176,6 +177,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         case kFileTransferTypeContent: {
             file_content_t *file_content = decode_file_content(buffer_offset, bytes_read - sizeof(uint16_t));
             if (!file_content) {
+                printf("Error decoding file content\n");
                 break;
             }
             printf("Received file content: %d, %d\n", file_content->size, file_content->offset);
@@ -209,6 +211,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             break;
         }
         default:
+            printf("Unknown file transfer type: %d\n", file_transfer_type);
             break;
         }
     } else if (bytes_read < 0) {
