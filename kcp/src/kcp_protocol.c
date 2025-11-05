@@ -1596,14 +1596,14 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     ++kcp_conn->nrcv_buf;
     if (kcp_segment->sn == kcp_conn->rcv_nxt) {
         kcp_conn->rcv_nxt++;
-        kcp_segment_t *first = NULL;
-        // NOTE 修复因乱序导致的UNA异常问题
-        list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node_list) {
-            if (first->sn < kcp_conn->rcv_nxt) { // 已被接收过
+        kcp_segment_t *iterator = NULL;
+        // NOTE 修复因收包乱序导致的UNA异常问题
+        list_for_each_entry_safe(iterator, next, &kcp_conn->rcv_buf, node_list) {
+            if (iterator->sn < kcp_conn->rcv_nxt) { // 已被接收过
                 continue;
             }
 
-            if (first->sn != kcp_conn->rcv_nxt) { // 不是连续的包
+            if (iterator->sn != kcp_conn->rcv_nxt) { // 不是连续的包
                 break;
             }
 
@@ -1612,26 +1612,26 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
     }
 
     // 解析rcv_buf, 组成完整数据包
-    kcp_segment_t *first = NULL;
+    kcp_segment_t *iterator = NULL;
     uint16_t packet_count = 0;
-    list_for_each_entry_safe(first, next, &kcp_conn->rcv_buf, node_list) {
-        if (first->frg == 0) {
-            packet_count = (uint16_t)first->wnd; // NOTE 起始packet, 表示packet个数
-            pos = first;
+    list_for_each_entry_safe(iterator, next, &kcp_conn->rcv_buf, node_list) {
+        if (iterator->frg == 0) {
+            packet_count = (uint16_t)iterator->wnd; // NOTE 起始packet, 表示packet个数
+            pos = iterator;
             uint16_t count = 0;
             kcp_segment_t *temp_next = NULL;
             list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
-                if (first->psn != pos->psn) { // 下一个包
+                if (iterator->psn != pos->psn) { // 下一个包
                     break;
                 }
                 ++count;
             }
 
             if (packet_count == count) { // 完整的一包
-                pos = first;
+                pos = iterator;
                 int32_t size = 0;
                 list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
-                    if (first->psn != pos->psn) { // 下一个包
+                    if (iterator->psn != pos->psn) { // 下一个包
                         break;
                     }
                     size += pos->len;

@@ -124,6 +124,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     // 文件结尾
     if (file_ctx->file_stream.eof()) {
         file_info_t *file_info = (file_info_t *)malloc(sizeof(file_info_t) + file_ctx->file_name.size());
+        file_info->type = kFileTransferTypeInfo;
         file_info->file_size = file_ctx->file_size;
         file_ctx->file_hash = XXH32_digest(file_ctx->xxhash_state);
         XXH32_freeState(file_ctx->xxhash_state);
@@ -155,7 +156,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
 
     // 计算hash
     XXH32_update(file_ctx->xxhash_state, file_content->content, bytes_read);
-
+    file_content->type = kFileTransferTypeContent;
     file_content->offset = file_ctx->file_offset;
     file_content->size = bytes_read;
     file_ctx->file_offset += bytes_read;

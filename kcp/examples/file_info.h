@@ -18,16 +18,18 @@ enum FileTransferType {
 #pragma pack(1)
 
 typedef struct FileInfo {
+    uint16_t type;
     uint32_t file_size;
     uint32_t file_hash;
     uint32_t file_name_size;
-    char file_name[0];
+    char     file_name[0];
 } file_info_t;
 
 typedef struct FileContent {
-    int32_t size;
-    int32_t offset;
-    uint8_t content[0];
+    uint16_t    type;
+    int32_t     size;
+    int32_t     offset;
+    uint8_t     content[0];
 } file_content_t;
 
 #pragma pack()

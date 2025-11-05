@@ -134,7 +134,6 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
     if (bytes_read > 0) {
         printf("Received %d bytes\n", bytes_read);
         uint16_t file_transfer_type = be16toh(*(uint16_t *)buffer_offset);
-        buffer_offset += 2;
         switch (file_transfer_type) {
         case kFileTransferTypeInfo: {
             file_info_t *file_info = decode_file_info(buffer_offset, bytes_read - sizeof(uint16_t));
