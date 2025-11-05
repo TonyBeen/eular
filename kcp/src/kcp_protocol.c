@@ -1467,6 +1467,10 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
         list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
             if (pos->sn < kcp_header->ack_data.una) {
+                kcp_conn->tx_bytes += pos->len; // 累加发送的字节数
+                if (pos->xmit > 1) {
+                    kcp_conn->rtx_bytes += pos->len; // 累加重传的字节数
+                }
                 HANDLE_SND_BUF(kcp_conn);
             } else {
                 break;
