@@ -13,6 +13,7 @@
 enum FileTransferType {
     kFileTransferTypeInfo = 1,
     kFileTransferTypeContent = 2,
+    kFileTransferTypeOk = 3,
 };
 
 #pragma pack(1)

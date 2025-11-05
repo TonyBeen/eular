@@ -87,14 +87,18 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 
 void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 {
-    char *buffer = (char *)malloc(size);
-    int32_t bytes_read = kcp_recv(kcp_connection, buffer, size);
+    uint8_t type  = 0;
+    int32_t bytes_read = kcp_recv(kcp_connection, &type, sizeof(type));
     if (bytes_read > 0) {
-        printf("----> RX: %.*s\n", bytes_read, buffer);
+        printf("on_kcp_read_event: %d\n", type);
+        if (type == kFileTransferTypeOk) {
+            printf("File transfer confirmed\n");
+        }
     } else if (bytes_read < 0) {
         fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
-        kcp_close(kcp_connection);
     }
+
+    kcp_close(kcp_connection);
 }
 
 void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
@@ -116,7 +120,6 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
 
     if (!file_ctx->file_stream.is_open()) {
         fprintf(stderr, "Error: file_ctx->file_stream is not open\n");
-        kcp_close(kcp_connection);
         return;
     }
 

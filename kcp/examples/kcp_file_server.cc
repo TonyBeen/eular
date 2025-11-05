@@ -170,6 +170,10 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 if (rename(file_ctx->file_name.c_str(), new_file_name.c_str()) != 0) {
                     printf("Rename file failed: %s\n", strerror(errno));
                 }
+
+                // 发送确认消息
+                uint8_t response = kFileTransferTypeOk;
+                kcp_send(kcp_connection, &response, sizeof(response));
             }
             delete file_ctx;
             kcp_ioctl(kcp_connection, IOCTL_USER_DATA, NULL);
