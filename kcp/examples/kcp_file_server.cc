@@ -136,7 +136,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         uint16_t file_transfer_type = be16toh(*(uint16_t *)buffer_offset);
         switch (file_transfer_type) {
         case kFileTransferTypeInfo: {
-            file_info_t *file_info = decode_file_info(buffer_offset, bytes_read - sizeof(uint16_t));
+            file_info_t *file_info = decode_file_info(buffer_offset, bytes_read);
             if (!file_info) {
                 printf("Error decoding file info\n");
                 break;
@@ -175,7 +175,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             break;
         }
         case kFileTransferTypeContent: {
-            file_content_t *file_content = decode_file_content(buffer_offset, bytes_read - sizeof(uint16_t));
+            file_content_t *file_content = decode_file_content(buffer_offset, bytes_read);
             if (!file_content) {
                 printf("Error decoding file content\n");
                 break;
