@@ -134,7 +134,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
         int32_t status = kcp_send(kcp_connection, file_info, packet_size);
         if (status != NO_ERROR) {
             free(file_info);
-            fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+            printf("Error sending file info on KCP connection: %d\n", status);
             kcp_close(kcp_connection);
             return;
         }
@@ -163,51 +163,12 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     packet_size = encode_file_content(file_content);
     int32_t status = kcp_send(kcp_connection, file_content, packet_size);
     if (status != NO_ERROR) {
-        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
+        printf("Error sending file content on KCP connection: %d\n", status);
         kcp_close(kcp_connection);
         return;
     }
 
     free(file_content);
-}
-
-void kcp_timer(int fd, short ev, void *user)
-{
-    (void)fd; // Unused parameter
-    (void)ev; // Unused parameter
-
-    struct KcpConnection *kcp_connection = (struct KcpConnection *)user;
-
-    // 定时发送数据
-    char message[4096] = {0};
-    sprintf(message, "Hello, KCP! %d", g_packet_count++);
-    if (g_packet_count == PACKET_COUNT) {
-        // no data transfer, wait 10s
-        struct timeval timer_interval = {10, 0}; // 1s
-        evtimer_add(g_timer_event, &timer_interval);
-        return;
-    }
-    if (g_packet_count > PACKET_COUNT) {
-        printf("Closing KCP connection\n");
-        kcp_close(kcp_connection);
-
-        event_free(g_timer_event);
-        g_timer_event = NULL;
-        return;
-    }
-
-    int32_t status = kcp_send(kcp_connection, message, sizeof(message));
-    if (status != NO_ERROR) {
-        fprintf(stderr, "Error sending data on KCP connection: %d\n", status);
-        kcp_close(kcp_connection);
-
-        return;
-    }
-
-    printf("TX: %s\n", message);
-
-    struct timeval timer_interval = {1, 0}; // 1s
-    evtimer_add(g_timer_event, &timer_interval);
 }
 
 void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
