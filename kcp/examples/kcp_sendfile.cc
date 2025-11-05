@@ -87,6 +87,7 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 
 void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 {
+    (void)size;
     uint8_t type  = 0;
     int32_t bytes_read = kcp_recv(kcp_connection, &type, sizeof(type));
     if (bytes_read > 0) {
