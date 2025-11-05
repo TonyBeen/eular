@@ -453,7 +453,11 @@ static int32_t create_socket(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 
 int32_t kcp_ioctl(struct KcpConnection *kcp_connection, em_ioctl_t flags, void *data)
 {
-    if (kcp_connection == NULL || data == NULL) {
+    if (kcp_connection == NULL) {
+        return INVALID_PARAM;
+    }
+
+    if (flags != IOCTL_USER_DATA && data == NULL) {
         return INVALID_PARAM;
     }
 
