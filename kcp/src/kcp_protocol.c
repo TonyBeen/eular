@@ -1418,7 +1418,6 @@ static int32_t on_kcp_ack_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_hea
 
     kcp_segment_t *pos = NULL;
     kcp_segment_t *next = NULL;
-    KCP_LOGD("send buf size %d", kcp_conn->nsnd_buf);
     list_for_each_entry_safe(pos, next, &kcp_conn->snd_buf, node_list) {
         if (pos->sn < kcp_header->ack_data.sn) {
             // 当前包的序号小于ack的序号, 表示当前包被跳过

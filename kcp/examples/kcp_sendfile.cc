@@ -128,6 +128,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
         file_ctx->file_hash = XXH32_digest(file_ctx->xxhash_state);
         XXH32_freeState(file_ctx->xxhash_state);
         file_info->file_hash = file_ctx->file_hash;
+        file_info->file_name_size = file_ctx->file_name.size();
         memcpy(file_info->file_name, file_ctx->file_name.c_str(), file_ctx->file_name.size());
         packet_size = encode_file_info(file_info);
         int32_t status = kcp_send(kcp_connection, file_info, packet_size);
@@ -138,6 +139,8 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
             kcp_close(kcp_connection);
             return;
         }
+        printf("Successfully sent file info: %s, size = %u, hash = %u\n", file_ctx->file_name.c_str(), file_ctx->file_size, file_ctx->file_hash);
+
         file_ctx->file_stream.close();
         free(file_info);
         delete file_ctx;
