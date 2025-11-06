@@ -222,7 +222,11 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
 void print_help(const char *prog_name)
 {
-    fprintf(stderr, "Usage: %s [-s command] [-n nic] [-f file_name]\n", prog_name);
+    fprintf(stderr, "Usage: %s [-s domain] [-n nic] [-f file_name] [-v verbose]\n", prog_name);
+    fprintf(stderr, "    -s domain: default: 127.0.0.1\n");
+    fprintf(stderr, "    -n nic: network interface, default: null\n");
+    fprintf(stderr, "    -f file_name: file to send\n");
+    fprintf(stderr, "    -v verbose: verbose level(0~5), default: %d\n", LOG_LEVEL_SILENT);
 }
 
 int main(int argc, char **argv)
@@ -233,7 +237,8 @@ int main(int argc, char **argv)
     int32_t command = 0;
     const char *remote_host = "127.0.0.1";
     const char *nic = NULL;
-    while ((command = getopt(argc, argv, "s:n:f:h")) != -1) {
+    int32_t verbose = LOG_LEVEL_SILENT;
+    while ((command = getopt(argc, argv, "s:n:f:v:h")) != -1) {
         switch (command) {
             case 's':
                 remote_host = optarg;
@@ -243,6 +248,9 @@ int main(int argc, char **argv)
                 break;
             case 'f':
                 g_file_name = optarg;
+                break;
+            case 'v':
+                verbose = atoi(optarg);
                 break;
             case 'h':
                 print_help(argv[0]);
