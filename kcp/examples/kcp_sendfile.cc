@@ -263,6 +263,7 @@ int main(int argc, char **argv)
                 return -1;
         }
     }
+    kcp_log_level(verbose);
 
     if (g_file_name.empty()) {
         print_help(argv[0]);

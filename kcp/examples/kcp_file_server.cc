@@ -272,23 +272,27 @@ int main(int argc, char **argv)
 
     int32_t command = 0;
     const char *nic = NULL;
-    while ((command = getopt(argc, argv, "n:h")) != -1) {
+    int verbose = LOG_LEVEL_ERROR;
+    while ((command = getopt(argc, argv, "v:n:h")) != -1) {
         switch (command) {
+            case 'v':
+                verbose = atoi(optarg);
+                break;
             case 'n':
                 nic = optarg;
                 break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-n nic]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-v verbose] [-n nic]\n", argv[0]);
                 return 0;
             case '?':
                 fprintf(stderr, "Unknown option: %d\n", optopt);
                 return -1;
             default:
-                fprintf(stderr, "Usage: %s [-n nic] %d\n", argv[0], command);
+                fprintf(stderr, "Usage: %s [-v verbose] [-n nic]\n", argv[0]);
                 return -1;
         }
     }
-
+    kcp_log_level(verbose);
 
     g_event_base = event_base_new();
     struct event_base *base = g_event_base;
