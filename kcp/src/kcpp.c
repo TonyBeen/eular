@@ -593,6 +593,15 @@ int32_t kcp_listen(struct KcpContext *kcp_ctx, on_kcp_connect_t cb)
         return INVALID_PARAM;
     }
 
+    if (kcp_ctx->sock == INVALID_SOCKET) {
+        return SOCKET_CLOSED;
+    }
+
+    // 已调用kcp_connect, 无法执行kcp_listen
+    if (kcp_ctx->callback.on_connected != NULL) {
+        return INVALID_OPERATION;
+    }
+
     kcp_ctx->callback.on_connect = cb;
 
     event_add(kcp_ctx->read_event, NULL);
@@ -849,6 +858,11 @@ int32_t kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr, uint32_t
         return SOCKET_CLOSED;
     }
 
+    // 已调用kcp_listen, 无法执行kcp_connect
+    if (kcp_ctx->callback.on_connect != NULL) {
+        return INVALID_OPERATION;
+    }
+
     // 客户端只能有一个连接
     kcp_connection_t *kcp_connection = connection_first(&kcp_ctx->connection_set);
     if (kcp_connection != NULL) {
@@ -1047,6 +1061,10 @@ void kcp_close(struct KcpConnection *kcp_connection)
 
 void kcp_shutdown(struct KcpConnection *kcp_connection)
 {
+    if (kcp_connection == NULL) {
+        return;
+    }
+
     // 发送RST
     if (kcp_connection->state != KCP_STATE_DISCONNECTED) {
         kcp_proto_header_t kcp_header;
@@ -1084,8 +1102,8 @@ void kcp_set_write_event_cb(struct KcpConnection *kcp_connection, on_kcp_write_e
     if (kcp_connection == NULL) {
         return;
     }
+
     kcp_connection->write_event_cb = cb;
-    
 }
 
 int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t size)
