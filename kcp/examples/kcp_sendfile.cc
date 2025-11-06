@@ -54,9 +54,9 @@ std::string g_file_name;
 void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connection, int32_t code)
 {
     if (kcp_connection) {
-        printf("KCP error on connection %p: %d\n", kcp_connection, code);
+        KCP_LOGI("KCP error on connection %p: %d\n", kcp_connection, code);
     } else {
-        printf("KCP error on context %p: %d\n", kcp_ctx, code);
+        KCP_LOGI("KCP error on context %p: %d\n", kcp_ctx, code);
     }
     kcp_close(kcp_connection);
 
@@ -68,16 +68,16 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
     char address[SOCKADDR_STRING_LEN] = {0};
     const char *addr_str = kcp_connection_remote_address(kcp_connection, address, sizeof(address));
     if (code == NO_ERROR) {
-        printf("KCP connection closed gracefully. %s\n", addr_str);
+        KCP_LOGI("KCP connection closed gracefully. %s\n", addr_str);
     } else {
-        printf("KCP connection closed with error code: %d, %s\n", code, addr_str);
+        KCP_LOGI("KCP connection closed with error code: %d, %s\n", code, addr_str);
     }
 
-    printf("mtu = %d\n", kcp_connection_get_mtu(kcp_connection));
+    KCP_LOGI("mtu = %d\n", kcp_connection_get_mtu(kcp_connection));
 
     kcp_statistic_t stat;
     kcp_connection_get_statistic(kcp_connection, &stat);
-    printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
+    KCP_LOGI("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
            "srtt: %d us, rttvar: %d us, rto: %d us\n",
            stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, stat.rtx_bytes / (double)stat.tx_bytes,
            stat.srtt, stat.rttvar, stat.rto);
@@ -91,12 +91,12 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
     uint8_t type  = 0;
     int32_t bytes_read = kcp_recv(kcp_connection, &type, sizeof(type));
     if (bytes_read > 0) {
-        printf("on_kcp_read_event: %d\n", type);
+        KCP_LOGI("on_kcp_read_event: %d\n", type);
         if (type == kFileTransferTypeOk) {
-            printf("File transfer confirmed\n");
+            KCP_LOGI("File transfer confirmed\n");
         }
     } else if (bytes_read < 0) {
-        fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
+        KCP_LOGW("Error reading from KCP connection: %d\n", bytes_read);
     }
 
     kcp_close(kcp_connection);
@@ -104,7 +104,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
 void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
 {
-    printf("on_kcp_write_event: %d\n", size);
+    KCP_LOGI("on_kcp_write_event: %d\n", size);
     if (size <= 0) {
         return;
     }
@@ -120,7 +120,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     }
 
     if (!file_ctx->file_stream.is_open()) {
-        fprintf(stderr, "Error: file_ctx->file_stream is not open\n");
+        KCP_LOGW("Error: file_ctx->file_stream is not open\n");
         return;
     }
 
@@ -139,11 +139,11 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
         if (status != NO_ERROR) {
             file_ctx->file_stream.close();
             free(file_info);
-            printf("Error sending file info on KCP connection: %d\n", status);
+            KCP_LOGI("Error sending file info on KCP connection: %d\n", status);
             kcp_close(kcp_connection);
             return;
         }
-        printf("Successfully sent file info: %s, size = %u, hash = %u\n", file_ctx->file_name.c_str(), file_ctx->file_size, file_ctx->file_hash);
+        KCP_LOGI("Successfully sent file info: %s, size = %u, hash = %u\n", file_ctx->file_name.c_str(), file_ctx->file_size, file_ctx->file_hash);
 
         file_ctx->file_stream.close();
         free(file_info);
@@ -156,7 +156,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     file_ctx->file_stream.read((char *)file_content->content, packet_size);
     int32_t bytes_read = file_ctx->file_stream.gcount();
     if (bytes_read <= 0) {
-        fprintf(stderr, "Error: file_ctx->file_stream read failed\n");
+        KCP_LOGW("Error: file_ctx->file_stream read failed\n");
         kcp_close(kcp_connection);
         return;
     }
@@ -170,7 +170,7 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
     packet_size = encode_file_content(file_content);
     int32_t status = kcp_send(kcp_connection, file_content, packet_size);
     if (status != NO_ERROR) {
-        printf("Error sending file content on KCP connection: %d\n", status);
+        KCP_LOGI("Error sending file content on KCP connection: %d\n", status);
         kcp_close(kcp_connection);
         return;
     }
@@ -181,11 +181,11 @@ void on_kcp_write_event(struct KcpConnection *kcp_connection, int32_t size)
 void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 {
     if (code != NO_ERROR) {
-        fprintf(stderr, "Failed to connect KCP connection: %d\n", code);
+        KCP_LOGW("Failed to connect KCP connection: %d\n", code);
         event_base_loopbreak(g_ev_base);
         return;
     }
-    printf("KCP connection established: %p\n", kcp_connection);
+    KCP_LOGI("KCP connection established: %p\n", kcp_connection);
     kcp_set_read_event_cb(kcp_connection, on_kcp_read_event);
     kcp_set_write_event_cb(kcp_connection, on_kcp_write_event);
 
@@ -207,11 +207,11 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
     file_ctx->file_name = std::move(g_file_name);
     file_ctx->file_stream.open(file_ctx->file_name, std::ios::binary);
     if (!file_ctx->file_stream.is_open()) {
-        fprintf(stderr, "Failed to open file: %s\n", file_ctx->file_name.c_str());
+        KCP_LOGW("Failed to open file: %s\n", file_ctx->file_name.c_str());
         event_base_loopbreak(g_ev_base);
         return;
     }
-    printf("Successfully opened the file: %s\n", file_ctx->file_name.c_str());
+    KCP_LOGI("Successfully opened the file: %s\n", file_ctx->file_name.c_str());
     file_ctx->file_size = (uint32_t)file_ctx->file_stream.seekg(0, std::ios::end).tellg();
     file_ctx->file_stream.seekg(0, std::ios::beg);
     file_ctx->xxhash_state = XXH32_createState();
@@ -222,16 +222,16 @@ void on_kcp_connected(struct KcpConnection *kcp_connection, int32_t code)
 
 void print_help(const char *prog_name)
 {
-    fprintf(stderr, "Usage: %s [-s domain] [-n nic] [-f file_name] [-v verbose]\n", prog_name);
-    fprintf(stderr, "    -s domain: default: 127.0.0.1\n");
-    fprintf(stderr, "    -n nic: network interface, default: null\n");
-    fprintf(stderr, "    -f file_name: file to send\n");
-    fprintf(stderr, "    -v verbose: verbose level(0~5), default: %d\n", LOG_LEVEL_SILENT);
+    KCP_LOGW("Usage: %s [-s domain] [-n nic] [-f file_name] [-v verbose]\n", prog_name);
+    KCP_LOGW("    -s domain: default: 127.0.0.1\n");
+    KCP_LOGW("    -n nic: network interface, default: null\n");
+    KCP_LOGW("    -f file_name: file to send\n");
+    KCP_LOGW("    -v verbose: verbose level(0~5), default: %d\n", LOG_LEVEL_SILENT);
 }
 
 int main(int argc, char **argv)
 {
-    printf("Libevent Version: %s\n", event_get_version());
+    KCP_LOGI("Libevent Version: %s\n", event_get_version());
     kcp_log_level(LOG_LEVEL_DEBUG);
 
     int32_t command = 0;
@@ -271,7 +271,7 @@ int main(int argc, char **argv)
     }
     // 检验文件是否存在
     if (!std::ifstream(g_file_name).good()) {
-        fprintf(stderr, "File not found: %s\n", g_file_name.c_str());
+        KCP_LOGW("File not found: %s\n", g_file_name.c_str());
         return -1;
     }
 
@@ -292,7 +292,7 @@ int main(int argc, char **argv)
 
     // 调用 getaddrinfo 解析域名
     if ((ret = getaddrinfo(remote_host, NULL, &hints, &result)) != 0) {
-        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(ret));
+        KCP_LOGW("getaddrinfo error: %s\n", gai_strerror(ret));
         exit(EXIT_FAILURE);
     }
 
@@ -310,7 +310,7 @@ int main(int argc, char **argv)
             // 将二进制地址转换为可读字符串
             inet_ntop(rp->ai_family, addr, ipstr, sizeof(ipstr));
             remote_host = ipstr;
-            printf("IP: %s\n", ipstr);
+            KCP_LOGI("IP: %s\n", ipstr);
             break;
         }
     }
@@ -319,7 +319,7 @@ int main(int argc, char **argv)
     struct KcpContext *ctx = NULL;
     ctx = kcp_context_create(g_ev_base, on_kcp_error, NULL);
     if (ctx == NULL) {
-        fprintf(stderr, "Failed to create KCP context\n");
+        KCP_LOGW("Failed to create KCP context\n");
         return -1;
     }
 
@@ -331,27 +331,27 @@ int main(int argc, char **argv)
 
     int32_t status = kcp_bind(ctx, &local_addr, nic);
     if (NO_ERROR != status) {
-        fprintf(stderr, "Failed to bind KCP context. %d\n", status);
+        KCP_LOGW("Failed to bind KCP context. %d\n", status);
         kcp_context_destroy(ctx);
         return -1;
     }
 
     if (NO_ERROR != kcp_connect(ctx, &remote_addr, 1000, on_kcp_connected)) {
-        fprintf(stderr, "Failed to connect KCP context\n");
+        KCP_LOGW("Failed to connect KCP context\n");
         kcp_context_destroy(ctx);
         return -1;
     }
 
     kcp_set_close_cb(ctx, on_kcp_closed);
 
-    printf("KCP client started, connecting to %s:%d\n", remote_host, ntohs(remote_addr.sin.sin_port));
+    KCP_LOGI("KCP client started, connecting to %s:%d\n", remote_host, ntohs(remote_addr.sin.sin_port));
     if (event_base_dispatch(g_ev_base) < 0) {
-        fprintf(stderr, "Failed to start event loop\n");
+        KCP_LOGW("Failed to start event loop\n");
         kcp_context_destroy(ctx);
         return -1;
     }
 
-    printf("KCP client exiting...\n");
+    KCP_LOGI("KCP client exiting...\n");
     kcp_context_destroy(ctx);
     event_base_free(g_ev_base);
     return 0;

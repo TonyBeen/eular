@@ -76,26 +76,26 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
     switch (code) {
     case MTU_REDUCTION:
         if (kcp_connection) {
-            printf("KCP connection %p: MTU reduction\n", kcp_connection);
+            KCP_LOGI("KCP connection %p: MTU reduction\n", kcp_connection);
             kcp_close(kcp_connection);
         }
         break;
     case UDP_UNREACH:
     case ICMP_ERROR:
         if (kcp_connection) {
-            printf("KCP connection %p: UDP unreachable or ICMP error\n", kcp_connection);
+            KCP_LOGI("KCP connection %p: UDP unreachable or ICMP error\n", kcp_connection);
             kcp_shutdown(kcp_connection);
         }
         break;
     case KEEPALIVE_ERROR:
         if (kcp_connection) {
-            printf("KCP connection %p: Keepalive error\n", kcp_connection);
+            KCP_LOGI("KCP connection %p: Keepalive error\n", kcp_connection);
             kcp_shutdown(kcp_connection);
         }
         break;
     case TOO_MANY_RETRANS:
         if (kcp_connection) {
-            printf("KCP connection %p: Too many retransmissions\n", kcp_connection);
+            KCP_LOGI("KCP connection %p: Too many retransmissions\n", kcp_connection);
             kcp_shutdown(kcp_connection);
         }
         break;
@@ -112,7 +112,7 @@ void on_kcp_error(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_connecti
 bool on_kcp_connect(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
 {
     int32_t status = kcp_accept(kcp_ctx, 1000);
-    printf("New KCP connection from %s:%d, status = %d\n", inet_ntoa(addr->sin.sin_addr), ntohs(addr->sin.sin_port), status);
+    KCP_LOGI("New KCP connection from %s:%d, status = %d\n", inet_ntoa(addr->sin.sin_addr), ntohs(addr->sin.sin_port), status);
     return NO_ERROR == status; // Accept the connection
 }
 
@@ -121,9 +121,9 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
     char address[SOCKADDR_STRING_LEN] = {0};
     const char *addr_str = kcp_connection_remote_address(kcp_connection, address, sizeof(address));
     if (code == NO_ERROR) {
-        printf("KCP connection closed gracefully. %s\n", addr_str);
+        KCP_LOGI("KCP connection closed gracefully. %s\n", addr_str);
     } else {
-        printf("KCP connection closed with error code: %d\n", code);
+        KCP_LOGI("KCP connection closed with error code: %d\n", code);
     }
 }
 
@@ -134,16 +134,16 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
     int32_t bytes_read = kcp_recv(kcp_connection, buffer, size);
     KcpFileContext *file_ctx = (KcpFileContext *)kcp_connection_user_data(kcp_connection);
     if (bytes_read > 0) {
-        printf("Received %d bytes\n", bytes_read);
+        KCP_LOGI("Received %d bytes\n", bytes_read);
         uint16_t file_transfer_type = be16toh(*(uint16_t *)buffer_offset);
         switch (file_transfer_type) {
         case kFileTransferTypeInfo: {
             file_info_t *file_info = decode_file_info(buffer_offset, bytes_read);
             if (!file_info) {
-                printf("Error decoding file info\n");
+                KCP_LOGI("Error decoding file info\n");
                 break;
             }
-            printf("Received file info: %.*s, %u, %u\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
+            KCP_LOGI("Received file info: %.*s, %u, %u\n", file_info->file_name_size, file_info->file_name, file_info->file_size, file_info->file_hash);
 
             // 写入缓存中的其他文件内容
             auto it = file_ctx->file_info_map.begin();
@@ -161,10 +161,10 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 // 校验xxhash
                 uint32_t hash = XXH32_digest(file_ctx->xxhash_state);
                 if (hash != file_info->file_hash) {
-                    printf("Hash check failed: %u != %u\n", hash, file_info->file_hash);
+                    KCP_LOGI("Hash check failed: %u != %u\n", hash, file_info->file_hash);
                     break;
                 }
-                printf("Hash check passed: %u\n", hash);
+                KCP_LOGI("Hash check passed: %u\n", hash);
                 // 释放xxhash状态
                 XXH32_freeState(file_ctx->xxhash_state);
 #if defined(DONT_SAVE_FILE)
@@ -173,7 +173,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 // 重命名文件
                 std::string new_file_name = std::string(file_info->file_name, file_info->file_name_size);
                 if (rename(file_ctx->file_name.c_str(), new_file_name.c_str()) != 0) {
-                    printf("Rename file failed: %s\n", strerror(errno));
+                    KCP_LOGI("Rename file failed: %s\n", strerror(errno));
                 }
 #endif
                 // 发送确认消息
@@ -187,10 +187,10 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
         case kFileTransferTypeContent: {
             file_content_t *file_content = decode_file_content(buffer_offset, bytes_read);
             if (!file_content) {
-                printf("Error decoding file content\n");
+                KCP_LOGI("Error decoding file content\n");
                 break;
             }
-            printf("Received file content: %d, %d\n", file_content->size, file_content->offset);
+            KCP_LOGI("Received file content: %d, %d\n", file_content->size, file_content->offset);
             if (file_content->offset == file_ctx->file_offset) {
 #if defined(DONT_SAVE_FILE)
                 if (!file_ctx->file_stream.is_open()) { // 打开文件
@@ -230,11 +230,11 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             break;
         }
         default:
-            printf("Unknown file transfer type: %d\n", file_transfer_type);
+            KCP_LOGI("Unknown file transfer type: %d\n", file_transfer_type);
             break;
         }
     } else if (bytes_read < 0) {
-        fprintf(stderr, "Error reading from KCP connection: %d\n", bytes_read);
+        KCP_LOGW("Error reading from KCP connection: %d\n", bytes_read);
     }
     free(buffer);
 }
@@ -244,7 +244,7 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
     (void)kcp_ctx; // Unused parameter
 
     if (code == NO_ERROR) {
-        printf("KCP connection accepted\n");
+        KCP_LOGI("KCP connection accepted\n");
         kcp_set_read_event_cb(kcp_connection, on_kcp_read_event);
         struct KcpConfig config = KCP_CONFIG_FAST;
         kcp_configure(kcp_connection, CONFIG_KEY_ALL, &config);
@@ -262,7 +262,7 @@ void on_kcp_accepted(struct KcpContext *kcp_ctx, struct KcpConnection *kcp_conne
         KcpFileContext *file_ctx = new KcpFileContext();
         kcp_ioctl(kcp_connection, IOCTL_USER_DATA, file_ctx);
     } else {
-        fprintf(stderr, "Failed to accept KCP connection: %d\n", code);
+        KCP_LOGW("Failed to accept KCP connection: %d\n", code);
     }
 }
 
@@ -282,13 +282,13 @@ int main(int argc, char **argv)
                 nic = optarg;
                 break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-v verbose] [-n nic]\n", argv[0]);
+                KCP_LOGW("Usage: %s [-v verbose] [-n nic]\n", argv[0]);
                 return 0;
             case '?':
-                fprintf(stderr, "Unknown option: %d\n", optopt);
+                KCP_LOGW("Unknown option: %d\n", optopt);
                 return -1;
             default:
-                fprintf(stderr, "Usage: %s [-v verbose] [-n nic]\n", argv[0]);
+                KCP_LOGW("Usage: %s [-v verbose] [-n nic]\n", argv[0]);
                 return -1;
         }
     }
@@ -299,7 +299,7 @@ int main(int argc, char **argv)
     struct KcpContext *ctx = NULL;
     ctx = kcp_context_create(base, on_kcp_error, NULL);
     if (ctx == NULL) {
-        fprintf(stderr, "Failed to create KCP context\n");
+        KCP_LOGW("Failed to create KCP context\n");
         return -1;
     }
 
@@ -311,7 +311,7 @@ int main(int argc, char **argv)
 
     int32_t statuc = kcp_bind(ctx, &local_addr, nic);
     if (statuc != NO_ERROR) {
-        fprintf(stderr, "Failed to bind KCP context: %d\n", statuc);
+        KCP_LOGW("Failed to bind KCP context: %d\n", statuc);
         kcp_context_destroy(ctx);
         return -1;
     }
@@ -326,10 +326,10 @@ int main(int argc, char **argv)
     kcp_set_accept_cb(ctx, on_kcp_accepted);
     kcp_set_close_cb(ctx, on_kcp_closed);
 
-    printf("KCP server is running on %s:%d\n", inet_ntoa(local_addr.sin.sin_addr), ntohs(local_addr.sin.sin_port));
+    KCP_LOGI("KCP server is running on %s:%d\n", inet_ntoa(local_addr.sin.sin_addr), ntohs(local_addr.sin.sin_port));
     // Start the event loop
     if (event_base_dispatch(base) < 0) {
-        fprintf(stderr, "Failed to start event loop\n");
+        KCP_LOGW("Failed to start event loop\n");
         kcp_context_destroy(ctx);
         return -1;
     }
@@ -337,6 +337,6 @@ int main(int argc, char **argv)
     // Cleanup
     kcp_context_destroy(ctx);
     event_base_free(base);
-    printf("KCP server stopped\n");
+    KCP_LOGI("KCP server stopped\n");
     return 0;
 }
