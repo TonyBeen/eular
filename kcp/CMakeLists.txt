@@ -5,7 +5,7 @@ include(cmake/configure_version.cmake)
 project(kcpp LANGUAGES C CXX VERSION ${KCP_VERSION_STRING})
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 
 # default
 if(NOT CMAKE_BUILD_TYPE)

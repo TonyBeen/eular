@@ -42,8 +42,10 @@ struct KcpFileContext {
     uint32_t file_hash = 0;
     std::map<int32_t, std::string>  file_info_map; // file offset <-> file content
     std::string file_name;
+#ifdef DONT_SAVE_FILE
     std::ofstream file_stream;
-    XXH32_state_t* xxhash_state;
+#endif
+    XXH32_state_t* xxhash_state{nullptr};
 };
 
 std::string gen_random_string(size_t length)
@@ -147,7 +149,9 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             auto it = file_ctx->file_info_map.begin();
             while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
                 XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
+#if defined(DONT_SAVE_FILE)
                 file_ctx->file_stream.write(it->second.data(), it->second.size());
+#endif
                 file_ctx->file_offset += it->second.size();
                 it = file_ctx->file_info_map.erase(it);
             }
@@ -161,16 +165,17 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                     break;
                 }
                 printf("Hash check passed: %u\n", hash);
-                // 关闭文件流
-                file_ctx->file_stream.close();
                 // 释放xxhash状态
                 XXH32_freeState(file_ctx->xxhash_state);
+#if defined(DONT_SAVE_FILE)
+                // 关闭文件流
+                file_ctx->file_stream.close();
                 // 重命名文件
                 std::string new_file_name = std::string(file_info->file_name, file_info->file_name_size);
                 if (rename(file_ctx->file_name.c_str(), new_file_name.c_str()) != 0) {
                     printf("Rename file failed: %s\n", strerror(errno));
                 }
-
+#endif
                 // 发送确认消息
                 uint8_t response = kFileTransferTypeOk;
                 kcp_send(kcp_connection, &response, sizeof(response));
@@ -187,25 +192,34 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             }
             printf("Received file content: %d, %d\n", file_content->size, file_content->offset);
             if (file_content->offset == file_ctx->file_offset) {
-                // 写入文件
-                if (!file_ctx->file_stream.is_open()) {
+#if defined(DONT_SAVE_FILE)
+                if (!file_ctx->file_stream.is_open()) { // 打开文件
                     // 随机生成名字
                     file_ctx->file_name = gen_random_string(16) + ".tmp";
-                    // 初始化xxhash状态
-                    file_ctx->xxhash_state = XXH32_createState();
-                    XXH32_reset(file_ctx->xxhash_state, 0);
                     file_ctx->file_stream.open(file_ctx->file_name, std::ios::binary | std::ios::out);
                 }
+#endif
+                if (file_ctx->xxhash_state == nullptr) { // 初始化xxhash状态
+                    file_ctx->xxhash_state = XXH32_createState();
+                    XXH32_reset(file_ctx->xxhash_state, 0);
+                }
+
                 // 更新xxhash状态
                 XXH32_update(file_ctx->xxhash_state, file_content->content, file_content->size);
+#if defined(DONT_SAVE_FILE)
+                // 写入文件
                 file_ctx->file_stream.write((char *)file_content->content, file_content->size);
+#endif
                 file_ctx->file_offset += file_content->size;
 
                 // 写入缓存中的其他文件内容
                 auto it = file_ctx->file_info_map.begin();
                 while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
                     XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
+#if defined(DONT_SAVE_FILE)
+                    // 写入文件
                     file_ctx->file_stream.write(it->second.data(), it->second.size());
+#endif
                     file_ctx->file_offset += it->second.size();
                     it = file_ctx->file_info_map.erase(it);
                 }
