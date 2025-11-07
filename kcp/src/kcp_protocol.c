@@ -82,7 +82,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     int32_t kcp_state = kcp_connection->state;
     switch (kcp_connection->state) {
     case KCP_STATE_DISCONNECTED:
-        KCP_LOGE("KCP_STATE_DISCONNECTED state, ignore packet");
+        KCP_LOGW("KCP_STATE_DISCONNECTED state, ignore packet");
         break;
     case KCP_STATE_SYN_RECEIVED: { // server
         if (kcp_header->cmd == KCP_CMD_ACK || kcp_header->cmd == KCP_CMD_PUSH) {
@@ -503,7 +503,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                 }
 
                 if (pos->xmit > KCP_RETRANSMISSION_MAX) {
-                    KCP_LOGE("Retransmission limit exceeded for segment SN: %u, XMIT: %u", pos->sn, pos->xmit);
+                    KCP_LOGE("scid(%u) -> dcid(%u): Retransmission limit exceeded for segment SN: %u, XMIT: %u",
+                        pos->scid, pos->dcid, pos->sn, pos->xmit);
                     kcp_connection->state = KCP_STATE_DISCONNECTED;
                     goto _end; // 重传次数超过限制, 断开连接
                 }

@@ -30,21 +30,15 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         kcp_proto_header_t kcp_header;
         list_init(&kcp_header.options);
         if (NO_ERROR != kcp_proto_parse(&kcp_header, &buffer_offset, buffer_remain)) {
-            char log_buffer[4096] = {0};
-            for (int32_t i = 0; i < (int32_t)buffer_size; ++i) {
-                snprintf(log_buffer + i * 2, sizeof(log_buffer) - i * 2, "%02x ", (uint8_t)kcp_ctx->read_buffer[i]);
-            }
-            KCP_LOGE("kcp read %s", log_buffer);
             char buffer[INET6_ADDRSTRLEN] = {0};
             KCP_LOGE("%s: kcp parse packet error(%zu). scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u", sockaddr_to_string(addr, buffer, sizeof(buffer)),
-                buffer_size,
-                kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
+                buffer_size, kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
             break;
         }
         buffer_remain = buffer + buffer_size - buffer_offset;
 
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.scid);
-        KCP_LOGE("recv kcp packet: scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u. buffer remain: %zu",
+        KCP_LOGI("recv kcp packet: scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u. buffer remain: %zu",
             kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd, buffer_remain);
 
         // NOTE 请求建连时dcid为0, 但其他时候dcid应该为本地connection_id
@@ -229,7 +223,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         //     snprintf(log_buffer + i * 2, sizeof(log_buffer) - i * 2, "%02x", (uint8_t)kcp_ctx->read_buffer[i]);
         // }
         // KCP_LOGD("kcp read %zd bytes from %s: %s", nreads, sockaddr_to_string(&remote_addr, buffer, sizeof(buffer)), log_buffer);
-        KCP_LOGE("kcp read %zd bytes from %s", nreads, sockaddr_to_string(&remote_addr, buffer, sizeof(buffer)));
+        KCP_LOGD("kcp read %zd bytes from %s", nreads, sockaddr_to_string(&remote_addr, buffer, sizeof(buffer)));
         kcp_parse_packet(kcp_ctx, kcp_ctx->read_buffer, nreads, &remote_addr);
     }
 #else
@@ -723,7 +717,6 @@ int32_t kcp_accept(struct KcpContext *kcp_ctx, uint32_t timeout_ms)
 
         // scid为对端id
         kcp_connection->dcid = scid;
-        KCP_LOGE("kcp_accept: scid = %d", scid);
         kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_accept_timeout, kcp_connection);
         if (kcp_connection->syn_timer_event == NULL) {
             status = NO_MEMORY;
@@ -1147,9 +1140,6 @@ int32_t kcp_send(struct KcpConnection *kcp_connection, const void *data, size_t 
         kcp_connection->scid, kcp_connection->dcid, size, fragmentation, packet_sn, kcp_connection->mss);
     for (int32_t i = 0; i < fragmentation; ++i) {
         uint32_t packet_size  = (uint32_t)size > kcp_connection->mss ? kcp_connection->mss : (uint32_t)size;
-        if (packet_size < 256) {
-            KCP_LOGE("kcp_send psn = %u, frg = %d, packet size = %u", packet_sn, i, packet_size);
-        }
         kcp_segment_t *segment = kcp_segment_send_get(kcp_connection);
         if (segment == NULL) {
             while (!list_empty(&buffer_list)) {
