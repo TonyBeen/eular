@@ -164,8 +164,8 @@ typedef struct KcpConnection {
     // 基础配置
     uint16_t scid;          // source connection ID
     uint16_t dcid;          // destination connection ID
-    uint32_t mtu;           // 最大传输单元
-    uint32_t mss;           // 报文段大小
+    uint32_t mtu;           // KCP 最大传输单元
+    uint32_t mss;           // KCP 负载大小
     uint32_t mss_min;       // 最小报文段大小
 
     // 发送和接收序号

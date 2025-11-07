@@ -1173,7 +1173,7 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
     *(uint32_t *)buffer_offset = htole32(segment->len);
     buffer_offset += 4;
 
-    if (segment->data && segment->len > 0) {
+    if (segment->len > 0) {
         memcpy(buffer_offset, segment->data, segment->len);
         buffer_offset += segment->len;
     }
