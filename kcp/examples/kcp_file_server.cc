@@ -293,6 +293,7 @@ int main(int argc, char **argv)
         }
     }
     kcp_log_level(verbose);
+    kcp_log_enable_color(false);
 
     g_event_base = event_base_new();
     struct event_base *base = g_event_base;
