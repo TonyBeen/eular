@@ -532,6 +532,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
                         buffer_index = 0;
                         buffer_offset = packet_cache[buffer_index];
+                        memset(packet_cache_size, 0, sizeof(packet_cache_size));
                     }
                     segment_size = kcp_segment_encode(pos, buffer_offset, max_mtu - packet_cache_size[buffer_index]);
                     if (segment_size == BUFFER_TOO_SMALL) {
