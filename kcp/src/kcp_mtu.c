@@ -102,7 +102,8 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         buffer_offset += 2;
         *(uint16_t *)buffer_offset = htole16(kcp_header->dcid);
         buffer_offset += 2;
-        *(uint8_t *)buffer_offset = kcp_header->cmd;
+        *(uint8_t *)buffer_offset |= kcp_header->cmd;
+        *(uint8_t *)buffer_offset |= (kcp_header->opt << 4);
         buffer_offset += 1;
         *(uint8_t *)buffer_offset = kcp_header->frg;
         buffer_offset += 1;
@@ -185,8 +186,8 @@ int32_t kcp_mtu_probe_received(kcp_connection_t *kcp_conn, const kcp_proto_heade
 {
     uint64_t hash = 0;
     kcp_proto_header_t mtu_ack_header;
-    mtu_ack_header.scid = kcp_header->scid;
-    mtu_ack_header.dcid = kcp_header->dcid;
+    mtu_ack_header.scid = kcp_header->dcid;
+    mtu_ack_header.dcid = kcp_header->scid;
     mtu_ack_header.cmd = KCP_CMD_MTU_ACK;
     mtu_ack_header.opt = 0;
     mtu_ack_header.frg = 0;

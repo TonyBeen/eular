@@ -82,7 +82,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
     int32_t kcp_state = kcp_connection->state;
     switch (kcp_connection->state) {
     case KCP_STATE_DISCONNECTED:
-        KCP_LOGE("KCP_STATE_DISCONNECTED state, ignore packet");
+        KCP_LOGW("KCP_STATE_DISCONNECTED state, ignore packet");
         break;
     case KCP_STATE_SYN_RECEIVED: { // server
         if (kcp_header->cmd == KCP_CMD_ACK || kcp_header->cmd == KCP_CMD_PUSH) {
@@ -503,7 +503,8 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
                 }
 
                 if (pos->xmit > KCP_RETRANSMISSION_MAX) {
-                    KCP_LOGE("Retransmission limit exceeded for segment SN: %u, XMIT: %u", pos->sn, pos->xmit);
+                    KCP_LOGE("scid(%u) -> dcid(%u): Retransmission limit exceeded for segment SN: %u, XMIT: %u",
+                        pos->scid, pos->dcid, pos->sn, pos->xmit);
                     kcp_connection->state = KCP_STATE_DISCONNECTED;
                     goto _end; // 重传次数超过限制, 断开连接
                 }
@@ -532,6 +533,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
 
                         buffer_index = 0;
                         buffer_offset = packet_cache[buffer_index];
+                        memset(packet_cache_size, 0, sizeof(packet_cache_size));
                     }
                     segment_size = kcp_segment_encode(pos, buffer_offset, max_mtu - packet_cache_size[buffer_index]);
                     if (segment_size == BUFFER_TOO_SMALL) {
@@ -980,7 +982,7 @@ int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_
         break;
     }
     default: {
-        kcp_header->packet_data.ts = le32toh(*(uint32_t *)(data_offset)); // 时间戳
+        kcp_header->packet_data.ts = le64toh(*(uint64_t *)(data_offset)); // 时间戳
         data_offset += 8;
         kcp_header->packet_data.sn = le32toh(*(uint32_t *)(data_offset)); // 序列号
         data_offset += 4;
@@ -1173,7 +1175,7 @@ int32_t kcp_segment_encode(const kcp_segment_t *segment, char *buffer, size_t bu
     *(uint32_t *)buffer_offset = htole32(segment->len);
     buffer_offset += 4;
 
-    if (segment->data && segment->len > 0) {
+    if (segment->len > 0) {
         memcpy(buffer_offset, segment->data, segment->len);
         buffer_offset += segment->len;
     }

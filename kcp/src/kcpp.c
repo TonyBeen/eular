@@ -30,14 +30,16 @@ static void kcp_parse_packet(struct KcpContext *kcp_ctx, const char *buffer, siz
         kcp_proto_header_t kcp_header;
         list_init(&kcp_header.options);
         if (NO_ERROR != kcp_proto_parse(&kcp_header, &buffer_offset, buffer_remain)) {
-            KCP_LOGW("kcp parse packet error");
+            char buffer[INET6_ADDRSTRLEN] = {0};
+            KCP_LOGE("%s: kcp parse packet error(%zu). scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u", sockaddr_to_string(addr, buffer, sizeof(buffer)),
+                buffer_size, kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
             break;
         }
         buffer_remain = buffer + buffer_size - buffer_offset;
 
         kcp_connection_t *kcp_connection = connection_set_search(&kcp_ctx->connection_set, kcp_header.scid);
-        KCP_LOGI("recv kcp packet: scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u",
-            kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd);
+        KCP_LOGI("recv kcp packet: scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u. buffer remain: %zu",
+            kcp_header.scid, kcp_header.dcid, COMMAND_TO_STRING(kcp_header.cmd), kcp_header.frg, kcp_header.wnd, buffer_remain);
 
         // NOTE 请求建连时dcid为0, 但其他时候dcid应该为本地connection_id
         if (kcp_header.dcid && kcp_header.dcid != kcp_ctx->connection_id) {
@@ -193,7 +195,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         sockaddr_t remote_addr;
         socklen_t addr_len = sizeof(sockaddr_t);
         struct msghdr msg;
-        char cmsgbuf[1024] = {0};
+        char cmsgbuf[CMSG_SPACE(sizeof(uint16_t))] = {0};
         struct iovec iov;
         iov.iov_base = kcp_ctx->read_buffer;
         iov.iov_len = kcp_ctx->read_buffer_size;
@@ -206,6 +208,7 @@ static void kcp_read_cb(int fd, short ev, void *arg)
         msg.msg_controllen = sizeof(cmsgbuf);
         msg.msg_flags = 0;
         ssize_t nreads = recvmsg(kcp_ctx->sock, &msg, MSG_NOSIGNAL | MSG_DONTWAIT);
+        // ssize_t nreads = recvfrom(kcp_ctx->sock, kcp_ctx->read_buffer, kcp_ctx->read_buffer_size, 0, &remote_addr.sa, &addr_len);
         if (nreads < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;

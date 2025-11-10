@@ -1,10 +1,10 @@
 #ifndef _KCP_VERSION_H_
 #define _KCP_VERSION_H_
 
-#define KCP_VERSION_STRING  "1.0.0"
+#define KCP_VERSION_STRING  "1.1.0"
 
 #define KCP_VERSION_MAJOR   1
-#define KCP_VERSION_MINOR   0
+#define KCP_VERSION_MINOR   1
 #define KCP_VERSION_PATCH   0
 #define KCP_VERSION         ((KCP_VERSION_MAJOR << 16) | (KCP_VERSION_MINOR << 8) | KCP_VERSION_PATCH)
 
