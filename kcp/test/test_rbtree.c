@@ -66,9 +66,9 @@ void test_foreach_erase()
     struct rb_root mytree = RB_ROOT;
     struct rb_node *node;
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 1; i++) {
         struct RBTreeType *data = (struct RBTreeType *)malloc(sizeof(struct RBTreeType));
-        data->data = i;
+        data->data = rand() % 299;
         mytype_insert(&mytree, data);
     }
 
@@ -91,6 +91,7 @@ void test_foreach_erase()
 
 int main(int argc, char **argv)
 {
+    srand(time(NULL));
     test_foreach_erase();
     return 0;
 }

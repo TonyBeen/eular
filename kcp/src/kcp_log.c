@@ -80,6 +80,9 @@ void default_log_cb(int32_t level, const char *log, int32_t size)
             break;
     }
 #undef XXX
+    if (log[size - 1] == '\n') {
+        size--;
+    }
 
     if (g_log_enable_color) {
         printf("%s[%s]: %.*s\n" CLR_CLR, color, str_level, size, log);
