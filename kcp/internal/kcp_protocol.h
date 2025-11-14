@@ -183,8 +183,8 @@ typedef struct KcpConnection {
     // RTT相关
     int32_t rx_rttval;      // RTT 的偏差, 用于计算 RTT 的波动
     int32_t rx_srtt;        // 平滑的 RTT 值, 用于计算平均 RTT(us)
-    int32_t rx_rto;         // 超时重传时间，初始为 KCP_RTO_DEF(200ms)
-    int32_t rx_minrto;      // 最小重传超时时间，默认为 KCP_RTO_MIN(100ms)
+    int32_t rx_rto;         // 超时重传时间，初始为 KCP_RTO_DEF(20ms)
+    int32_t rx_minrto;      // 最小重传超时时间，默认为 KCP_RTO_MIN(10ms)
 
     // 窗口相关
     int32_t snd_wnd;        // 发送窗口大小，默认128

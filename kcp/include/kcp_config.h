@@ -60,8 +60,8 @@ static const uint32_t   KCP_PING_RECV   = 0b0100;   // ping receive flag
 static const uint32_t   KCP_RTO_NDL     = 30;       // no delay min rto(ms)
 static const uint32_t   KCP_THRESH_INIT = 2;        // ssthresh
 static const uint32_t   KCP_THRESH_MIN  = 2;        // min ssthresh
-static const uint32_t   KCP_RTO_DEF     = 200;      // default rto, 200ms
-static const uint32_t   KCP_RTO_MIN     = 100;      // normal min rto
+static const uint32_t   KCP_RTO_DEF     = 20;       // default rto, 20ms
+static const uint32_t   KCP_RTO_MIN     = 10;       // normal min rto
 static const uint32_t   KCP_WND_SND     = 128;      // 发送窗口大小
 static const uint32_t   KCP_WND_RCV     = 256;      // must >= max fragment size
 static const uint32_t   KCP_PACKET_SIZE = 64;       // 最大分片个数
