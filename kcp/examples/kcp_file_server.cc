@@ -42,7 +42,7 @@ struct KcpFileContext {
     uint32_t file_hash = 0;
     std::map<int32_t, std::string>  file_info_map; // file offset <-> file content
     std::string file_name;
-#ifdef DONT_SAVE_FILE
+#ifndef DONT_SAVE_FILE
     std::ofstream file_stream;
 #endif
     XXH32_state_t* xxhash_state{nullptr};
@@ -149,7 +149,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             auto it = file_ctx->file_info_map.begin();
             while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
                 XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
-#if defined(DONT_SAVE_FILE)
+#if !defined(DONT_SAVE_FILE)
                 file_ctx->file_stream.write(it->second.data(), it->second.size());
 #endif
                 file_ctx->file_offset += it->second.size();
@@ -167,7 +167,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 KCP_LOGI("Hash check passed: %u\n", hash);
                 // 释放xxhash状态
                 XXH32_freeState(file_ctx->xxhash_state);
-#if defined(DONT_SAVE_FILE)
+#if !defined(DONT_SAVE_FILE)
                 // 关闭文件流
                 file_ctx->file_stream.close();
                 // 重命名文件
@@ -192,7 +192,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
             }
             KCP_LOGI("Received file content: %d, %d\n", file_content->size, file_content->offset);
             if (file_content->offset == file_ctx->file_offset) {
-#if defined(DONT_SAVE_FILE)
+#if !defined(DONT_SAVE_FILE)
                 if (!file_ctx->file_stream.is_open()) { // 打开文件
                     // 随机生成名字
                     file_ctx->file_name = gen_random_string(16) + ".tmp";
@@ -206,7 +206,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
 
                 // 更新xxhash状态
                 XXH32_update(file_ctx->xxhash_state, file_content->content, file_content->size);
-#if defined(DONT_SAVE_FILE)
+#if !defined(DONT_SAVE_FILE)
                 // 写入文件
                 file_ctx->file_stream.write((char *)file_content->content, file_content->size);
 #endif
@@ -216,7 +216,7 @@ void on_kcp_read_event(struct KcpConnection *kcp_connection, int32_t size)
                 auto it = file_ctx->file_info_map.begin();
                 while (it != file_ctx->file_info_map.end() && it->first == file_ctx->file_offset) {
                     XXH32_update(file_ctx->xxhash_state, it->second.data(), it->second.size());
-#if defined(DONT_SAVE_FILE)
+#if !defined(DONT_SAVE_FILE)
                     // 写入文件
                     file_ctx->file_stream.write(it->second.data(), it->second.size());
 #endif
