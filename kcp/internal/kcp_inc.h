@@ -47,6 +47,10 @@ struct iovec {
 #define _GNU_SOURCE
 #endif
 
+#ifndef __USE_GNU
+#define __USE_GNU
+#endif
+
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>

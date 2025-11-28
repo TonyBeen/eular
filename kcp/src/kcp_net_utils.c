@@ -305,7 +305,7 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
     int32_t send_packet = 0;
 #if defined(OS_LINUX) || defined(OS_MAC)
 
-#if !defined(USE_SENDMMSG)
+#ifndef USE_SENDMMSG
     int32_t send_size = 0;
     for (int32_t i = 0; i < (int32_t)size; ++i) {
         struct msghdr msg;

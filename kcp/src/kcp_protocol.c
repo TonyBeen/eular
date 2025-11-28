@@ -771,6 +771,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->read_cb = on_kcp_read_event;
     kcp_conn->write_cb = on_kcp_write_event;
     kcp_conn->read_event_cb = NULL;
+    kcp_conn->write_event_cb = NULL;
 
     // statistics
     kcp_conn->ping_count = 0;

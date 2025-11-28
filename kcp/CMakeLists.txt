@@ -7,6 +7,11 @@ project(kcpp LANGUAGES C CXX VERSION ${KCP_VERSION_STRING})
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 11)
 
+include(CheckFunctionExists)
+include(CheckSymbolExists)
+
+check_function_exists(sendmmsg HAVE_SENDMMSG)
+
 # default
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
@@ -15,6 +20,7 @@ endif()
 option(KCPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(KCPP_STATIC_LIB "Build static library" ON)
 option(BUILD_EXAMPLES "Compile sample program" ON)
+option(USE_SENDMMSG "Use sendmmsg" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 
 if(ENABLE_DEBUG MATCHES "ON")
@@ -34,6 +40,10 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/kcp_version.h
     NEWLINE_STYLE LF
 )
+
+if (USE_SENDMMSG MATCHES "ON" and HAVE_SENDMMSG)
+    add_definitions(-DUSE_SENDMMSG)
+endif()
 
 file(GLOB HEADER_LIST           "include/*.h")
 file(GLOB INTERNAL_HEADER_LIST  "internal/*.h")
@@ -75,7 +85,7 @@ if(KCPP_STATIC_LIB MATCHES "ON")
         ${CXX_COMPILER_FLAGS}
     )
 
-    set_target_properties (
+    set_target_properties(
         kcpp_static
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
@@ -88,7 +98,7 @@ if(KCPP_STATIC_LIB MATCHES "ON")
         install(TARGETS kcpp_static
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
     endif()
 endif()
 
@@ -113,7 +123,7 @@ if(KCPP_DYNAMIC_LIB MATCHES "ON")
         ${CXX_COMPILER_FLAGS}
     )
 
-    set_target_properties (
+    set_target_properties(
         kcpp
         PROPERTIES
         LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
@@ -127,7 +137,7 @@ if(KCPP_DYNAMIC_LIB MATCHES "ON")
         install(TARGETS kcpp
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
     endif()
 endif()
 
