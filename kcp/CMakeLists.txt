@@ -41,7 +41,7 @@ configure_file(
     NEWLINE_STYLE LF
 )
 
-if (USE_SENDMMSG MATCHES "ON" and HAVE_SENDMMSG)
+if(USE_SENDMMSG MATCHES "ON" AND HAVE_SENDMMSG)
     add_definitions(-DUSE_SENDMMSG)
 endif()
 
