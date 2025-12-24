@@ -10,7 +10,7 @@ endif()
 
 foreach(test_file ${TEST_SRC_LIST})
     get_filename_component(test ${test_file} NAME_WE)
-    
+
     add_executable(${test} ${test}.cc)
     target_link_libraries(${test} ${LINK_LIBS})
     target_include_directories(${test} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
