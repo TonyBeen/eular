@@ -8,6 +8,14 @@ elseif(UTILS_DYNAMIC_LIB)
     set(CXX_FLAGS)
 endif()
 
+# 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_compile_definitions(
+        SIGSTKSZ=65536
+        MINSIGSTKSZ=32768
+    )
+endif()
+
 foreach(test_file ${TEST_SRC_LIST})
     get_filename_component(test ${test_file} NAME_WE)
 

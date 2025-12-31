@@ -36,7 +36,7 @@ on:
 
 jobs:
   build-linux:
-    if: github.event. inputs.os == 'all' || github.event.inputs. os == 'ubuntu-latest'
+    if: github.event.inputs.os == 'all' || github.event.inputs.os == 'ubuntu-latest'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,14 +49,14 @@ jobs:
     if:  github.event.inputs.os == 'all' || github. event.inputs.os == 'windows-latest'
     runs-on: windows-latest
     steps: 
-      - uses:  actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs. build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
           cmake --build build
 
   build-macos:
-    if: github.event.inputs. os == 'all' || github.event.inputs.os == 'macos-latest'
+    if: github.event.inputs.os == 'all' || github.event.inputs.os == 'macos-latest'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
