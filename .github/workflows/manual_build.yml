@@ -13,15 +13,26 @@ on:
           - windows-latest
           - macos-latest
           - all
-      
+
       build_type:
         description: '构建类型'
         required: true
-        default: 'Release'
+        default: 'RelWithDebInfo'
         type: choice
         options: 
           - Debug
           - Release
+          - RelWithDebInfo
+
+      subdir:
+        description: '构建库目录'
+        required: true
+        default: 'utils'
+        type: choice
+        options: 
+          - utils
+          - kcp
+          - log
 
 jobs:
   build-linux:
@@ -44,7 +55,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs. build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
           cmake --build build
 
-  build-macos: 
+  build-macos:
     if: github.event.inputs. os == 'all' || github.event.inputs.os == 'macos-latest'
     runs-on: macos-latest
     steps:
