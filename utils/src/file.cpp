@@ -5,6 +5,7 @@
 #include <string.h>
 #include <assert.h>
 #include <fcntl.h>
+#include <stdexcept>
 
 #include "utils/code_convert.h"
 #include "utils/debug.h"

@@ -13,6 +13,7 @@
 #include <utils/utils.h>
 #include <utils/rbtree_base.h>
 #include <utils/refcount.h>
+#include <utils/exception.h>
 
 namespace detail {
 struct MapNodeBase {
@@ -275,7 +276,7 @@ MapNode<Key, Val> *MapData<Key, Val>::erase(const Node *currNode, bool check)
 
     Node *curr = const_cast<Node *>(currNode);
     if (check && MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
-        throw std::logic_error("node is not in this rbtree");
+        throw eular::Exception("node is not in this rbtree");
     }
 
     MapNode<Key, Val> *next = this->nextNode(currNode);
