@@ -23,8 +23,8 @@
 
 #define COLOR_MAP(XXX)                          \
     XXX(LogLevel::UNKNOW,         CLR_CLR)      \
-    XXX(LogLevel::LEVEL_DEBUG,    CLR_BLUE)     \
-    XXX(LogLevel::LEVEL_INFO,     CLR_WHITE)    \
+    XXX(LogLevel::LEVEL_DEBUG,    CLR_SKYBLUE)  \
+    XXX(LogLevel::LEVEL_INFO,     CLR_GREEN)    \
     XXX(LogLevel::LEVEL_WARN,     CLR_YELLOW)   \
     XXX(LogLevel::LEVEL_ERROR,    CLR_RED)      \
     XXX(LogLevel::LEVEL_FATAL,    CLR_PURPLE)   \

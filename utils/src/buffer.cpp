@@ -8,6 +8,9 @@
 #include "utils/buffer.h"
 #include "utils/shared_buffer.h"
 #include "utils/exception.h"
+#include "utils/sysdef.h"
+
+#include <assert.h>
 
 #define DEFAULT_BUFFER_SIZE (256)
 
@@ -135,9 +138,13 @@ size_t ByteBuffer::set(const uint8_t *data, size_t dataSize, size_t offset)
     size_t real_offset = mDataSize >= offset ? offset : 0;
     size_t newSize = 0;
 
+#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
     if (__builtin_add_overflow(dataSize, real_offset, &newSize)) {
         return 0;
     }
+#else
+    newSize = real_offset + dataSize;
+#endif
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) { // capacity exceeded
@@ -189,9 +196,13 @@ size_t ByteBuffer::insert(const uint8_t *data, size_t dataSize, size_t offset)
     size_t newSize = 0;
     size_t copySize = mDataSize - offset;
     size_t oldDataSize = mDataSize;
+#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
     if (__builtin_add_overflow(dataSize, mDataSize, &newSize)) {
         return 0;
     }
+#else
+    newSize = dataSize + mDataSize;
+#endif
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) {
@@ -237,6 +248,10 @@ void ByteBuffer::reserve(size_t newSize)
         return;
     }
 
+    if (mCapacity >= newSize) {
+        return;
+    }
+
     SharedBuffer *buf = SharedBuffer::bufferFromData(mBuffer)->editResize(newSize);
     if (buf) {
         mBuffer = static_cast<uint8_t *>(buf->data());
@@ -254,6 +269,14 @@ void ByteBuffer::clear()
     }
 #endif
     mDataSize = 0;
+}
+
+void ByteBuffer::resize(size_t sz)
+{
+    reserve(sz);
+    if (mBuffer) {
+        mDataSize = sz;
+    }
 }
 
 std::string ByteBuffer::dump() const
@@ -280,9 +303,13 @@ std::string ByteBuffer::dump() const
     return ret;
 }
 
-size_t ByteBuffer::hash(const ByteBuffer &buf)
+size_t ByteBuffer::Hash(const ByteBuffer &buf)
 {
+#if defined(OS_WINDOWS)
+    return std::_Hash_array_representation(buf.const_data(), buf.size());
+#else
     return std::_Hash_impl::hash(buf.const_data(), buf.size());
+#endif
 }
 
 bool ByteBuffer::operator==(const ByteBuffer &other) const
@@ -318,7 +345,9 @@ size_t ByteBuffer::allocBuffer(size_t size)
     if (mBuffer == nullptr) { 
         mBuffer = static_cast<uint8_t *>(SharedBuffer::alloc(size)->data());
         if (mBuffer) {
+#ifdef _DEBUG
             memset(mBuffer, 0, size);
+#endif
             return size;
         }
     }

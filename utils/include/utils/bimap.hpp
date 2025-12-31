@@ -8,7 +8,7 @@
 #ifndef __EULAR_UTILS_BIMAP_HPP__
 #define __EULAR_UTILS_BIMAP_HPP__
 
-#include "bimap.h"
+#include <utils/bimap.h>
 
 namespace eular {
 template <typename K, typename V, typename CompareK, typename HashV>

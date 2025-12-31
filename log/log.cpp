@@ -1,4 +1,5 @@
 #include "log.h"
+#include "log_main.h"
 #include "callstack.h"
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -17,7 +18,7 @@ namespace eular {
 static LogManager *gLogManager = nullptr;
 static std::atomic<int32_t> gLevel{LogLevel::LEVEL_DEBUG};
 static volatile bool gEnableLogoutColor = true;
-static thread_local char g_buf[MSG_BUF_SIZE + EXPAND_SIZE] = {0};
+static thread_local char g_logBuffer[MSG_BUF_SIZE + EXPAND_SIZE] = {0};
 
 namespace log {
 void getLogManager()
@@ -42,7 +43,9 @@ void SetLevel(LogLevel::Level lev)
 void SetPath(const char *path)
 {
     getLogManager();
-    gLogManager->setPath(path);
+    if (gLogManager != nullptr) {
+        gLogManager->setPath(path);
+    }
 }
 
 void EnableLogColor(bool flag)
@@ -74,7 +77,7 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
         return;
     }
 
-    char *out = g_buf;
+    char *out = g_logBuffer;
     bool needFree = false;
     LogEvent ev;
     struct timeval tv;
@@ -101,7 +104,7 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
         needFree = true;
         out = (char *)malloc(outSize + EXPAND_SIZE);
         if (out == nullptr) {
-            out = g_buf;
+            out = g_logBuffer;
             outSize = MSG_BUF_SIZE;
             needFree = false;
         }
@@ -113,12 +116,13 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
         goto need_free;
     }
 
-    out[outSize - 1] = '\0';
-
     len = formatSize;
     if (len && out[len - 1] != '\n') {
         out[len] = '\n';
+        ++len;
     }
+    out[len] = '\0';
+
     ev.msg = out;
     log::getLogManager();
     if (gLogManager) {
@@ -150,17 +154,17 @@ void log_write_assert(int32_t level, const char *expr, const char *tag, const ch
     ev.pid = getpid();
     ev.tid = gettid();
 
-    size_t index = snprintf(g_buf, MSG_BUF_SIZE - 1, "assertion \"%s\" failed. ", expr);
+    size_t index = snprintf(g_logBuffer, MSG_BUF_SIZE - 1, "assertion \"%s\" failed. ", expr);
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(g_buf + index, MSG_BUF_SIZE - index - 1, fmt, ap);
+    vsnprintf(g_logBuffer + index, MSG_BUF_SIZE - index - 1, fmt, ap);
     va_end(ap);
 
-    size_t len = strlen(g_buf);
-    if (len > 0 && g_buf[len - 1] != '\n') {
-        g_buf[len] = '\n';
+    size_t len = strlen(g_logBuffer);
+    if (len > 0 && g_logBuffer[len - 1] != '\n') {
+        g_logBuffer[len] = '\n';
     }
-    ev.msg = g_buf;
+    ev.msg = g_logBuffer;
     log_write_assertv(&ev);
 }
 

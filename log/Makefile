@@ -7,7 +7,7 @@ destfile := /usr/local
 src = $(wildcard log*.cpp)
 src += callstack.cpp
 
-headerfile = $(wildcard log*.h)
+headerfile = log.h log_level.h
 headerfile += callstack.h
 
 obj := $(patsubst %.cpp, %.o, $(src))
@@ -55,8 +55,8 @@ install : liblog.so logcat
 
 uninstall:
 	-rm -rf $(obj) $(mainobj) testlog.out
-	-(sudo rm -rf /usr/lib/liblog.so)
-	-(sudo rm -rf /usr/include/log/)
+	-(sudo rm -rf $(destfile)/lib/liblog.so)
+	-(sudo rm -rf $(destfile)/include/log/)
 
 clean:
 	-rm -rf $(obj) $(mainobj) testlog.ou

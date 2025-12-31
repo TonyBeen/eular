@@ -15,8 +15,7 @@
 #include <log/log.h>
 #include <gtest/gtest.h>
 
-#include "md5.h"
-#include "md5_detail.h"
+#include "md5_openssl.h"
 
 using namespace eular;
 using namespace std;
@@ -27,7 +26,7 @@ using namespace std;
 
 const char *gFileName = "test/for_md5_test.jpg";
 
-TEST(Md5_Test, test_encode) {
+TEST(Md5_Test, test_openssl_encode) {
     Md5 md5;
     uint8_t out[Md5::MD5_BUF_SIZE] = {0};
     const uint8_t *from = nullptr;
@@ -62,44 +61,6 @@ TEST(Md5_Test, test_encode) {
 
     String8 format(Md5::MD5_BUF_SIZE * 2);
     for (int i = 0; i < Md5::MD5_BUF_SIZE; ++i) {
-        format.appendFormat("%02x", out[i]);
-    }
-
-    format.toUpper();
-    EXPECT_TRUE(format == MD5_RESULT);
-}
-
-TEST(Md5_Test, Md5_detail_test) {
-    FILE *fp = fopen(gFileName, "r");
-    if (fp == nullptr) {
-        perror("open for_md5_test.jpg error");
-    }
-    ASSERT_NE(fp, nullptr);
-
-    struct stat st;
-    stat(gFileName, &st);
-    char timeBuf[128] = {0};
-    strftime(timeBuf, 128, "%Y-%m-%d %H:%M:%S", localtime(&st.st_ctim.tv_sec));
-
-    ByteBuffer buf(st.st_size);
-    int readSize = 0;
-    uint8_t tmp[1024] = {0};
-    while (!feof(fp)) {
-        readSize = fread(tmp, 1, sizeof(tmp), fp);
-        ASSERT_TRUE(readSize > 0);
-        buf.append(tmp, readSize);
-    }
-
-    const uint8_t *msg = buf.const_data();
-    uint32_t msgLen = buf.size();
-
-    ASSERT_EQ(st.st_size, msgLen);
-
-    uint8_t out[DIGEST_SIZE] = {0};
-    MD5::GetDigest(msg, msgLen, out);
-
-    String8 format(DIGEST_SIZE * 2);
-    for (int i = 0; i < DIGEST_SIZE; ++i) {
         format.appendFormat("%02x", out[i]);
     }
 

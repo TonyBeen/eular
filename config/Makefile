@@ -5,7 +5,7 @@ include 3rd_party/3rd_party.mk # 必须放在PWD后面, 其他.mk文件会使用
 INCLUDE_DIR := -I$(PWD) $(YAML_CXX_INCLUDES) $(JSON_CXX_INCLUDES)
 CPPFLAGS  := -std=c++11 # -m64
 LIBFLAGS  := -fPIC
-LIB_LIST  := -lpthread
+LIB_LIST  := -lutils -lpthread
 
 GTEST_LIB := /usr/local/lib/libgtest.a
 

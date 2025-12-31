@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <utils/sysdef.h>
+
 #ifdef __CHAR_BIT__
 #define BITS_PEER_BYTE      __CHAR_BIT__
 #else
@@ -18,8 +20,7 @@
 #endif
 
 namespace eular {
-
-class BitMap final
+class UTILS_API BitMap final
 {
 public:
     BitMap();
@@ -59,6 +60,13 @@ public:
     uint32_t count() const;
 
     /**
+     * @brief 获取当前bit位数, 通过resize设置
+     * 
+     * @return uint32_t 
+     */
+    uint32_t size() const;
+
+    /**
      * @brief 获取BitMap容量
      * 
      * @return 返回实际容量
@@ -71,10 +79,7 @@ public:
      * @param bitSize 要扩容的大小, 大于容量时才会进行扩容
      * @return 成功返回true, 失败返回false
      */
-    bool reserve(uint32_t bitSize);
-
-public:
-    static bool init();
+    bool resize(uint32_t bitSize);
 
 private:
     uint8_t *alloc(uint32_t bitSize);
@@ -83,12 +88,8 @@ private:
 
 private:
     uint8_t*    mBitMap;
+    uint32_t    mSize;
     uint32_t    mCapacity;
-
-private:
-    static const uint16_t POS_SIZE = sizeof(uint8_t) * BITS_PEER_BYTE;
-    static uint8_t POS[POS_SIZE];
-    static uint8_t NPOS[POS_SIZE];
 };
 
 } // namespace eular

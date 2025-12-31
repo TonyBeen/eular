@@ -5,22 +5,19 @@
     > Created Time: Thu 16 Sep 2021 02:32:45 PM CST
  ************************************************************************/
 
-/**
- *  基于epoll_wait实现的定时器
- *  epoll + 线程死循环
- */
-
 #ifndef __TIMER_H__
 #define __TIMER_H__
 
-#include "mutex.h"
-#include "thread.h"
-#include "singleton.h"
-#include <sys/epoll.h>
 #include <stdint.h>
 #include <set>
 #include <memory>
 #include <functional>
+#include <vector>
+
+#include <utils/sysdef.h>
+#include <utils/mutex.h>
+#include <utils/thread.h>
+#include <utils/singleton.h>
 
 using std::set;
 using std::function;
@@ -42,6 +39,7 @@ public:
     void setRecycleTime(uint64_t ms) { mRecycleTime = ms; }
 
     void cancel();
+    void resetCanceled();
     void refresh();
 
     /**
@@ -49,8 +47,6 @@ public:
      * @param recycle   是否循环
      */
     void reset(uint64_t ms, CallBack cb, uint32_t recycle);
-
-    static uint64_t getCurrentTime(clockid_t type = CLOCK_MONOTONIC);
 
 private:
     Timer();
@@ -61,7 +57,23 @@ private:
     friend class TimerManager;
     struct Comparator {
         // 传给set的比较器，从小到大排序
-        bool operator()(const Timer *l, const Timer *r) {
+        bool operator()(Timer* const &l, Timer* const &r) const {
+            if (l == nullptr && r == nullptr) {
+                return false;
+            }
+            if (l == nullptr) {
+                return true;
+            }
+            if (r == nullptr) {
+                return false;
+            }
+            if (l->mTime == r->mTime) { // 时间相同，比较ID
+                return l->mUniqueId < r->mUniqueId;
+            }
+            return l->mTime < r->mTime;
+        }
+
+        bool operator()(Timer* &l, Timer* &r) {
             if (l == nullptr && r == nullptr) {
                 return false;
             }
@@ -77,11 +89,14 @@ private:
             return l->mTime < r->mTime;
         }
     };
+
 private:
-    uint64_t    mTime;          // (绝对时间)下一次执行时间(ms)
-    uint64_t    mRecycleTime;   // 循环时间ms
-    CallBack    mCb;            // 回调函数
-    uint64_t    mUniqueId;      // 定时器唯一ID
+    uint64_t            mTime;          // (绝对时间)下一次执行时间(ms)
+    uint64_t            mRecycleTime;   // 循环时间ms
+    CallBack            mCb;            // 回调函数
+    uint64_t            mUniqueId;      // 定时器唯一ID
+    std::atomic<bool>   mCanceled;      // 是否取消
+    class TimerManager *mTimerManager;
 };
 
 class TimerManager : public ThreadBase
@@ -106,12 +121,14 @@ protected:
     virtual int threadWorkFunction(void *arg) override;
     void ListExpireTimer();
     void addTimer(Timer *timer);
+    void onNotify();
 
 private:
     Sem     mSignal;
     RWMutex mRWMutex;
-    int     mEpollFd;
+    int32_t mSockPair[2];
 
+    bool mUseCallerThread;
     std::atomic<bool> mShouldExit;
     std::vector<Timer *> mExpireTimerVec;
     std::set<Timer *, Timer::Comparator>  mTimers;        // 定时器集合

@@ -8,28 +8,23 @@
 #ifndef __CONDITION_H__
 #define __CONDITION_H__
 
-#include "utils.h"
-#include "mutex.h"
+#include <utils/mutex.h>
 
 namespace eular {
-class Condition {
+class UTILS_API Condition {
 public:
-    enum {
-        PRIVATE = 0,
-        SHARED = 1
-    };
     Condition();
-    Condition(int type);
     ~Condition();
 
     int wait(Mutex& mutex);
-    int timedWait(Mutex& mutex, nsec_t ns);
+    int timedWait(Mutex& mutex, uint64_t ms);
 
     void signal();
     void broadcast();
 
 private:
-    pthread_cond_t mCond;
+    struct ConditionImpl;
+    std::unique_ptr<ConditionImpl> m_impl;
 };
 
 } // namespace eular

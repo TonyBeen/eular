@@ -7,10 +7,12 @@
 
 #include "utils/endian.hpp"
 
-#include <mutex>
+#include "utils/mutex.h"
+
+static bool g_isLittleEngine = false;
 
 #ifndef BYTE_ORDER
-static std::once_flag g_endianOnceFlag;
+static eular::once_flag g_endianOnceFlag;
 
 static inline void __IsLittleEngine()
 {
@@ -26,13 +28,11 @@ static inline void __IsLittleEngine()
 }
 #endif
 
-static bool g_isLittleEngine = false;
-
 namespace runtime {
-static inline bool IsLittleEngine()
+static inline bool IsLittleEndian()
 {
 #ifndef BYTE_ORDER
-    std::call_once(g_endianOnceFlag, __IsLittleEngine);
+    eular::call_once(g_endianOnceFlag, __IsLittleEngine);
 #else
 #if BYTE_ORDER == LITTLE_EDNIAN
     g_isLittleEngine = true;

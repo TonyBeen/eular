@@ -14,8 +14,10 @@
 #include <string.h>
 #include <string>
 
+#include <utils/sysdef.h>
+
 namespace eular {
-class ByteBuffer final
+class UTILS_API ByteBuffer final
 {
 public:
     ByteBuffer();
@@ -40,17 +42,19 @@ public:
 
     uint8_t *   data() { return mBuffer ? mBuffer : nullptr; }
     const uint8_t *const_data() const { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *begin() const { return mBuffer ? mBuffer : nullptr; }                       // 返回数据开始地址
-    const uint8_t *end() const { return mBuffer ? (mBuffer + mDataSize - 1) : nullptr; }       // 返回数据结束地址
+    const uint8_t *begin() const { return mBuffer ? mBuffer : nullptr; }
+    const uint8_t *end() const { return mBuffer ? (mBuffer + mDataSize) : nullptr; }
     void        reserve(size_t newSize);
     size_t      capacity() const { return mCapacity; }
     size_t      size() const { return mDataSize; }
     void        clear();
-    void        resize(size_t sz) { mDataSize = sz > mCapacity ? mCapacity : sz; }
+    void        resize(size_t sz);
 
     std::string dump()  const;
-    static size_t hash(const ByteBuffer &buf);
+    static size_t Hash(const ByteBuffer &buf);
     bool        operator==(const ByteBuffer &other) const;
+
+    static void *GLIBC_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len);
 
 private:
     size_t      calculate(size_t);
@@ -69,9 +73,9 @@ private:
 
 namespace std {
     template<>
-    struct hash<eular::ByteBuffer> : public __hash_base<size_t, eular::ByteBuffer> {
+    struct hash<eular::ByteBuffer> {
         size_t operator()(const eular::ByteBuffer &obj) const {
-            return eular::ByteBuffer::hash(obj);
+            return eular::ByteBuffer::Hash(obj);
         }
     };
 }

@@ -11,6 +11,7 @@
 #include <exception>
 
 #include "utils/alloc.h"
+#include "utils/exception.h"
 
 #define ERROR_MSG(msg) \
     (std::string(__func__) + "() " + (msg)).c_str()
@@ -84,18 +85,18 @@ static int countBits(int hint)
 
 /**
  * hash模仿的QHash，下面是QHash的设计
- * 
+ *
  * QHash采用二级指针, Node **, 是一个Node *数组, Node是单向链表节点,
  * 每个数组其内部存储的是链表的头节点，对于key不重复的hash表, 链表的头节点就是值
  * 当重复时会往链表插入, 相同的hash值会挨着
- * 
+ *
  * 数组可以理解为n个桶, 每个桶放的是m个链表节点(当key不重复时m为2)
- * 
+ *
  * QHash如何判断结尾呢？
  * 其设计很巧妙, 从源代码可以看到QHashData的第一个成员变量是fakeNext, 当将QHashData *转成Node *后
  * next变量的值就等于fakeNext的值，故此时node->next == nullptr
  * 这样可以让每个桶的链表结尾都指向QHashData *, 所以判断结尾就是判断是否和QHashData的地址是否相同
- * 
+ *
  * rehash
  * rehash操作就是创建一个素数n大小的Node *数组, 然后遍历旧的数组，将链表根据hash值在插入到新的桶
  * 这样做就可以避免键值的拷贝
@@ -152,7 +153,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
     } catch (...) {
         d->numBuckets = 0;
         d->free_helper(node_delete);
-        std::__throw_runtime_error(ERROR_MSG("std::vector resize error."));
+        throw Exception(ERROR_MSG("std::vector resize error."));
     }
 
     if (numBuckets) {
@@ -169,7 +170,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
                         node_duplicate(oldNode, dup);
                     } catch (...) {
                         freeNode(dup);
-                        std::__throw_runtime_error(ERROR_MSG("node_duplicate error"));
+                        throw Exception(ERROR_MSG("node_duplicate error"));
                     }
                     *newNode = dup;
                     newNode = &dup->next;
@@ -178,7 +179,7 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
                     *newNode = end;
                     d->numBuckets = i + 1;
                     d->free_helper(node_delete);
-                    std::__throw_runtime_error(ERROR_MSG("unknow error"));
+                    throw Exception(ERROR_MSG("unknow error"));
                 }
             }
 
@@ -239,7 +240,7 @@ void HashData::rehash(int hint)
         try {
             newBuckets.resize(nb, end);
         } catch (...) {
-            std::__throw_runtime_error(ERROR_MSG("std::vector resize error."));
+            throw Exception(ERROR_MSG("std::vector resize error."));
         }
 
         for (int i = 0; i < oldNumBuckets; ++i) {

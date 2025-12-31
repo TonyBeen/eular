@@ -8,11 +8,10 @@
 #ifndef __UTILS_SINGLETON_OBJECT_H__
 #define __UTILS_SINGLETON_OBJECT_H__
 
-#include "exception.h"
-#include "refcount.h"
+#include <utils/exception.h>
+#include <utils/refcount.h>
 
 namespace eular {
-
 template <typename T>
 class Singleton;
 

@@ -70,14 +70,6 @@ public:
     virtual bool         CloseFile() = 0;
     virtual uint16_t     type() const = 0;
 
-public:
-    enum Type {
-        STDOUT = 0,
-        FILEOUT = 1,
-        CONSOLEOUT = 2,
-        UNKNOW
-    };
-
 protected:
     std::shared_ptr<ProcessMutex>   mMutex;     // 同步状态下保护文件描述符
     std::string                     mBasePath;
@@ -99,7 +91,7 @@ public:
 
     virtual bool         CreateNewFile(std::string fileName);
     virtual bool         CloseFile();
-    virtual uint16_t     type() const { return STDOUT; }
+    virtual uint16_t     type() const { return static_cast<uint16_t>(OutputType::STDOUT); }
 
 private:
     bool isInterrupt;
@@ -122,7 +114,7 @@ public:
 
     virtual bool         CreateNewFile(std::string fileName);
     virtual bool         CloseFile();
-    virtual uint16_t     type() const { return FILEOUT; }
+    virtual uint16_t     type() const { return static_cast<uint16_t>(OutputType::FILEOUT); }
 
 private:
     bool        isInterrupt;
@@ -150,7 +142,7 @@ public:
 
     bool         CreateNewFile(std::string fileName);
     bool         CloseFile();
-    uint16_t     type() const { return CONSOLEOUT; }
+    uint16_t     type() const { return static_cast<uint16_t>(OutputType::CONSOLEOUT); }
 
 protected:
     void         InitParams();

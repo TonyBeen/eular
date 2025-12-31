@@ -11,8 +11,7 @@
 #include <functional>
 
 namespace eular {
-
-class AutoClean final
+class AutoClean
 {
     using Callback = std::function<void(void)>;
 

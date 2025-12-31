@@ -8,10 +8,11 @@
 #ifndef __UTILS_MAP_NODE_HPP__
 #define __UTILS_MAP_NODE_HPP__
 
-#include "rbtree_base.h"
-#include "utils.h"
-#include "refcount.h"
 #include <functional>
+
+#include <utils/utils.h>
+#include <utils/rbtree_base.h>
+#include <utils/refcount.h>
 
 namespace detail {
 struct MapNodeBase {
@@ -208,7 +209,6 @@ MapNode<Key, Val> *MapData<Key, Val>::insert(const Key &key, const Val &val)
     struct rb_node **node = &(root->rb_node);
     struct rb_node *parent = nullptr;
     bool exists = false;
-    int compareResult = 0;
     while (nullptr != (*node)) {
         parent = *node;
         MapNode<Key, Val> *p = MapNode<Key, Val>::map_node_entry(parent);
@@ -240,7 +240,6 @@ MapNode<Key, Val> *MapData<Key, Val>::find(const Key &key)
     struct rb_node *curr = root->rb_node;
     MapNode<Key, Val> *currNode = nullptr;
     bool exist = false;
-    int compareResult = 0;
     while (curr) {
         currNode = MapNode<Key, Val>::map_node_entry(curr);
         if (std::less<const Key &>()(key, currNode->key)) { // key < currNode->key
@@ -293,7 +292,7 @@ void MapData<Key, Val>::clear()
     rb_root *root = &__rb_root;
     rb_node *node = nullptr;
     MapNode<Key, Val> *curr = nullptr;
-    while (node = root->rb_node) {
+    while ((node = root->rb_node) != nullptr) {
         rb_erase(node, root);
         curr = MapNode<Key, Val>::map_node_entry(node);
         freeNode(curr);

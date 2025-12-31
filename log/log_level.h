@@ -12,6 +12,14 @@
 #include <string.h>
 
 namespace eular {
+
+enum class OutputType {
+    STDOUT = 0,
+    FILEOUT = 1,
+    CONSOLEOUT = 2,
+    UNKNOW
+};
+
 class LogLevel {
 public:
     enum Level {

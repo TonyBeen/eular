@@ -1,14 +1,15 @@
 INCLUDE_DIR := -I./include/
-CXX_FLAGS := -std=c++11 -DNDEBUG -W -Wall -Werror -Wextra -O2 -m64 -g
+POSIX_MICRO := -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE 
+CXX_FLAGS := -std=c++11 -DNDEBUG $(POSIX_MICRO) -W -Wall -Werror -Wextra -O2 -m64 -g
 CXX_NO_ERROR_FLAGS := -Wno-deprecated -Wno-unused-result -Wno-class-memaccess -Wno-unused-function -Wno-unused-parameter
 SO_FLAGS := -fPIC
-LIB_LIST := -lpthread
+LIB_LIST := -lpthread -liconv
 CC := g++
 DEST_DIR := /usr/local
 
 SRC_LIST := $(wildcard ./src/*.cpp)
-HEADER_FILE_LIST := $(wildcard ./include/*.h)
-HEADER_FILE_LIST += $(wildcard ./include/*.hpp)
+HEADER_FILE_LIST := $(wildcard ./include/utils/*.h)
+HEADER_FILE_LIST += $(wildcard ./include/utils/*.hpp)
 OBJ_LIST := $(patsubst %.cpp, %.o, $(SRC_LIST))
 
 libutils.so : $(OBJ_LIST)

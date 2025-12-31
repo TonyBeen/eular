@@ -8,26 +8,29 @@
 #ifndef __SINGLETON_H__
 #define __SINGLETON_H__
 
-#include "mutex.h"
-#include "singleton_object.h"
-#include <bits/move.h>
+#include <utils/mutex.h>
+#include <utils/singleton_object.h>
 
 namespace eular {
-
 template<typename T>
 class Singleton {
 public:
+    // 编译期间检测类型完整性
+    static_assert(sizeof(T), "incomplete type");
+
     template<typename... Args>
     static SObject<T> Get(Args&&... args)
     {
-        // 编译期间检测类型完整性
-        static_assert(sizeof(T), "incomplete type");
-        AutoLock<Mutex> lock(mMutex);
-        if (mInstance == nullptr) {
-            mInstance = new T(std::forward<Args>(args)...);
-            mDeleter.registration(); // 模板静态成员变量需要使用才会构造
-            // ::atexit(Singleton<T>::free); // 在mian结束后调用free函数
-        }
+        call_once(mFlag, [&] () {
+            WRAutoLock<RWMutex> wlock(mMutex);
+            if (mInstance == nullptr) {
+                mInstance = new T(std::forward<Args>(args)...);
+                mDeleter.registration(); // 模板静态成员变量需要使用才会构造
+                // ::atexit(Singleton<T>::free); // 在mian结束后调用free函数
+            }
+        });
+
+        RDAutoLock<RWMutex> rlock(mMutex);
         SObject<T> obj(mInstance, &mRef);
         return obj;
     }
@@ -38,7 +41,7 @@ public:
     template<typename... Args>
     static SObject<T> Reset(Args&&... args)
     {
-        AutoLock<Mutex> lock(mMutex);
+        WRAutoLock<RWMutex> wlock(mMutex);
         if (mRef.load() == 0) {
             if (mInstance != nullptr) {
                 delete mInstance;
@@ -57,7 +60,7 @@ public:
             return;
         }
 
-        AutoLock<Mutex> lock(mMutex);
+        WRAutoLock<RWMutex> wlock(mMutex);
         if (mInstance != nullptr) {
             delete mInstance;
             mInstance = nullptr;
@@ -75,10 +78,11 @@ private:
     };
 
 private:
-    static T *mInstance;
-    static RefCount mRef;
-    static Mutex mMutex;
-    static Deleter mDeleter;
+    static T*           mInstance;
+    static RefCount     mRef;
+    static RWMutex      mMutex;
+    static Deleter      mDeleter;
+    static once_flag    mFlag;
 
     Singleton() {}
     Singleton(const Singleton&) = delete;
@@ -89,13 +93,16 @@ template<typename T>
 T *Singleton<T>::mInstance = nullptr;
 
 template<typename T>
-Mutex Singleton<T>::mMutex;
+RWMutex Singleton<T>::mMutex;
 
 template<typename T>
 RefCount Singleton<T>::mRef;
 
 template<typename T>
 typename Singleton<T>::Deleter Singleton<T>::mDeleter;
+
+template<typename T>
+once_flag Singleton<T>::mFlag;
 
 } // namespace eular
 

@@ -5,7 +5,7 @@
     > Created Time: Mon 27 Dec 2021 01:35:15 PM CST
  ************************************************************************/
 
-#include "aes.h"
+#include "aes_openssl.h"
 #include <gtest/gtest.h>
 
 using namespace eular;
@@ -42,4 +42,27 @@ TEST(AesTest, test_aes_encode_decode) {
     int decodeSize = aes.decode(tmp, out, encodeSize);
     EXPECT_TRUE(decodeSize == (int32_t)strlen(something));
     EXPECT_TRUE(memcmp(something, tmp, decodeSize) == 0);
+}
+
+TEST(AesTest, test_aes_wrong_key) {
+    uint8_t userKey[16] = {
+        '1', '2', '3', '4', '5', '6',
+        '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'};
+    Aes aes(userKey, sizeof(userKey), Aes::KeyType::AES128, Aes::EncodeType::AESCBC);
+
+    const uint32_t size = 4096;
+
+    uint8_t out[size] = {0};
+    uint8_t tmp[size] = {0};
+
+    int encodeSize = aes.encode(out, (const uint8_t *)something, strlen(something));
+    EXPECT_TRUE(encodeSize > 0);
+
+    userKey[0] = '0';
+    aes.setKey(userKey, sizeof(userKey));
+
+    // 使用错误的key不会报错, 但是得到的结果与加密的数据不一致
+    int decodeSize = aes.decode(tmp, out, encodeSize);
+    EXPECT_FALSE(decodeSize == (int32_t)strlen(something));
+    EXPECT_FALSE(memcmp(something, tmp, decodeSize) == 0);
 }

@@ -5,10 +5,11 @@
     > Created Time: Thu 24 Nov 2022 04:29:18 PM CST
  ************************************************************************/
 
-#include "map_node.h"
-#include "exception.h"
-#include <initializer_list>
 #include <assert.h>
+#include <initializer_list>
+
+#include <utils/map_node.h>
+#include <utils/exception.h>
 
 namespace eular {
 template<typename Key, typename Val>
@@ -17,14 +18,14 @@ class Map {
     typedef Val ValType;
     using Data = detail::MapData<KeyType, ValType>;
     using Node = detail::MapNode<KeyType, ValType>;
+
 public:
     Map() : mRBtree(Data::create()) {}
     Map(std::initializer_list<std::pair<KeyType, ValType>> initList) :
         mRBtree(Data::create())
     {
         typename std::initializer_list<std::pair<KeyType, ValType> >::const_iterator it;
-        for (it = initList.begin(); it != initList.end(); ++it)
-        {
+        for (it = initList.begin(); it != initList.end(); ++it) {
             mRBtree->insert(it->first, it->second);
         }
     }
@@ -42,8 +43,10 @@ public:
     Map(Map<KeyType, ValType> &&other) :
         mRBtree(nullptr)
     {
-        mRBtree = other.mRBtree;
-        other.mRBtree = Data::create();
+        if (this != std::addressof(other)) {
+            std::swap(mRBtree, other.mRBtree);
+            other.mRBtree = Data::create();
+        }
     }
 
     ~Map()
@@ -53,7 +56,7 @@ public:
 
     Map &operator=(const Map<KeyType, ValType> &other)
     {
-        if (this == &other) {
+        if (this == std::addressof(other)) {
             return *this;
         }
 
@@ -66,10 +69,12 @@ public:
 
     Map &operator=(Map<KeyType, ValType> &&other)
     {
-        if (this == &other) {
+        if (this == std::addressof(other)) {
             return *this;
         }
+
         std::swap(mRBtree, other.mRBtree);
+        other.mRBtree = Data::create();
         return *this;
     }
 

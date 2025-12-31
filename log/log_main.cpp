@@ -2,7 +2,7 @@
 #include <mutex>
 #include <memory>
 
-static std::once_flag       gOnceFlag;
+static pthread_once_t gOnceFlag = PTHREAD_ONCE_INIT;
 static eular::LogManager*   gLogManager = nullptr;
 
 namespace eular {
@@ -42,16 +42,13 @@ void LogManager::WriteLog(LogEvent *event)
     // pthread_mutex_lock(&mListMutex);
     for (LogWriteIt it = mLogWriteList.begin(); it != mLogWriteList.end(); ++it) {
         if (*it != nullptr) {
-            if ((*it)->type() != LogWrite::STDOUT) {
+            if ((*it)->type() != static_cast<uint16_t>(OutputType::STDOUT)) {
                 event->enableColor = false;
             }
 
-            if ((*it)->type() == LogWrite::CONSOLEOUT)
-            {
+            if ((*it)->type() == static_cast<uint16_t>(OutputType::CONSOLEOUT)) {
                 (*it)->WriteToFile(*event);
-            }
-            else
-            {
+            } else {
                 std::string log = LogFormat::Format(event);
                 (*it)->WriteToFile(log);
             }
@@ -81,15 +78,15 @@ void LogManager::addLogWriteToList(int type)
         ++it;
     }
 
-    switch (type) {
-        case LogWrite::STDOUT:
+    switch (static_cast<OutputType>(type)) {
+        case OutputType::STDOUT:
             logWrite = new StdoutLogWrite();
             break;
-        case LogWrite::FILEOUT:
+        case OutputType::FILEOUT:
             logWrite = new FileLogWrite();
             logWrite->setBasePath(mBasePath);
             break;
-        case LogWrite::CONSOLEOUT:
+        case OutputType::CONSOLEOUT:
             logWrite = new ConsoleLogWrite();
             break;
         default:
@@ -121,12 +118,14 @@ void LogManager::delLogWriteFromList(int type)
     pthread_mutex_unlock(&mListMutex);
 }
 
+void LogManager::once_entry()
+{
+    gLogManager = new (std::nothrow) LogManager();
+}
+
 LogManager *LogManager::getInstance()
 {
-    std::call_once(gOnceFlag, []() {
-        gLogManager = new LogManager();
-    });
-
+    pthread_once(&gOnceFlag, once_entry);
     return gLogManager;
 }
 

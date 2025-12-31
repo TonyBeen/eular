@@ -8,8 +8,8 @@
 #ifndef __UTILS_RBTREE_API_H__
 #define __UTILS_RBTREE_API_H__
 
-#include "rbtree_base.h"
-#include "utils.h"
+#include "utils/rbtree_base.h"
+#include "utils/utils.h"
 
 EXTERN_C_BEGIN
 

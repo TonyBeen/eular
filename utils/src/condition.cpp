@@ -6,48 +6,50 @@
  ************************************************************************/
 
 #include "utils/condition.h"
+#include "utils/sysdef.h"
 
 #include <time.h>
-#include <unistd.h>
 #include <pthread.h>
-#include <sys/time.h>
+
+#include "src/mutex.hpp"
 
 namespace eular {
-Condition::Condition() : Condition(PRIVATE)
+struct Condition::ConditionImpl
 {
+    pthread_cond_t cond;
+};
 
-}
-Condition::Condition(int type)
+Condition::Condition()
 {
+    m_impl = std::unique_ptr<ConditionImpl>(new ConditionImpl);
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);  // 绝对时间
-    if (SHARED == type) {
-        pthread_condattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-    }
-
-    pthread_cond_init(&mCond, &attr);
+#if defined(OS_LINUX) || defined(OS_MACOS)
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+#endif
+    pthread_cond_init(&m_impl->cond, &attr);
     pthread_condattr_destroy(&attr);
 }
 
 Condition::~Condition()
 {
-    pthread_cond_destroy(&mCond);
+    pthread_cond_destroy(&m_impl->cond);
 }
 
 int Condition::wait(Mutex& mutex)
 {
     // 先解锁，等待条件，加锁
-    return pthread_cond_wait(&mCond, &mutex.mMutex);
+    return pthread_cond_wait(&m_impl->cond, &mutex.m_impl->_mutex);
 }
 
-int Condition::timedWait(Mutex& mutex, nsec_t ns)
+int Condition::timedWait(Mutex& mutex, uint64_t ms)
 {
     struct timespec ts;
+#if defined(OS_LINUX) || defined(OS_MACOS)
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    int64_t reltime_sec = ns / 1000000000;
-    ts.tv_nsec += static_cast<long>(ns % 1000000000);
+    int64_t reltime_sec = ms / 1000;
+    ts.tv_nsec += static_cast<long>(ms % 1000) * 1000000;
     if (reltime_sec < INT64_MAX && ts.tv_nsec >= 1000000000) {
         ts.tv_nsec -= 1000000000;
         ++reltime_sec;
@@ -61,17 +63,21 @@ int Condition::timedWait(Mutex& mutex, nsec_t ns)
     }
 
     ts.tv_sec = static_cast<long>(time_sec);
-    return pthread_cond_timedwait(&mCond, &mutex.mMutex, &ts);
+#else
+    struct timespec relative = {static_cast<long>(ms / 1000), static_cast<long>(ms * 1000000)};
+    pthread_win32_getabstime_np(&ts, &relative);
+#endif
+    return pthread_cond_timedwait(&m_impl->cond, &mutex.m_impl->_mutex, &ts);
 }
 
 void Condition::signal()
 {
-    pthread_cond_signal(&mCond);
+    pthread_cond_signal(&m_impl->cond);
 }
 
 void Condition::broadcast()
 {
-    pthread_cond_broadcast(&mCond);
+    pthread_cond_broadcast(&m_impl->cond);
 }
 
 } // namespace eular

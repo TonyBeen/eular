@@ -9,21 +9,30 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdexcept>
 
+#include "utils/exception.h"
 #include "utils/sysdef.h"
 
-#define DEFAULT_SIZE    (1024)
+#define DEFAULT_SIZE    (256)
 
 namespace eular {
+static const uint16_t POS_SIZE = sizeof(uint8_t) * BITS_PEER_BYTE;
+static uint8_t POS[POS_SIZE];
+static uint8_t NPOS[POS_SIZE];
 
-static bool gInit = BitMap::init();
+static bool gInit = [] () -> bool {
+    // NOTE 从低位开始排列, 比如索引为1时, 取的是0x02
+    for (uint32_t i = 0; i < POS_SIZE; ++i) {
+        POS[i] = ((uint8_t)1) << i;
+        NPOS[i] = ~POS[i];
+    }
 
-uint8_t BitMap::POS[BitMap::POS_SIZE];
-uint8_t BitMap::NPOS[BitMap::POS_SIZE];
+    return true;
+}();
 
 BitMap::BitMap() :
     mBitMap(nullptr),
+    mSize(0),
     mCapacity(0)
 {
     mBitMap = alloc(DEFAULT_SIZE);
@@ -31,18 +40,25 @@ BitMap::BitMap() :
 
 BitMap::BitMap(uint32_t bitSize) :
     mBitMap(nullptr),
+    mSize(0),
     mCapacity(0)
 {
-    reserve(bitSize);
+    if (bitSize == 0) {
+        bitSize = DEFAULT_SIZE;
+    }
+
+    resize(bitSize);
 }
 
 BitMap::BitMap(const BitMap &other) :
     mBitMap(nullptr),
+    mSize(0),
     mCapacity(0)
 {
     if (other.mBitMap && other.mCapacity) {
         mBitMap = alloc(other.mCapacity);
-        memcpy(mBitMap, other.mBitMap, mCapacity);
+        memcpy(mBitMap, other.mBitMap, mCapacity / BITS_PEER_BYTE);
+        mSize = other.mSize;
     }
 }
 
@@ -53,13 +69,11 @@ BitMap::~BitMap()
 
 BitMap &BitMap::operator=(const BitMap &other)
 {
-    if (this != &other) {
-        mBitMap = nullptr;
-        mCapacity = 0;
-
+    if (this != std::addressof(other)) {
         if (other.mBitMap && other.mCapacity) {
             mBitMap = alloc(other.mCapacity);
-            memcpy(mBitMap, other.mBitMap, mCapacity);
+            memcpy(mBitMap, other.mBitMap, mCapacity / BITS_PEER_BYTE);
+            mSize = other.mSize;
         }
     }
 
@@ -156,40 +170,36 @@ uint32_t BitMap::count() const
     return count;
 }
 
+uint32_t BitMap::size() const
+{
+    return mSize;
+}
+
 uint32_t BitMap::capacity() const
 {
     return mCapacity;
 }
 
-bool BitMap::reserve(uint32_t bitSize)
+bool BitMap::resize(uint32_t bitSize)
 {
     if (bitSize <= mCapacity) {
+        mSize = bitSize;
         return true;
     }
 
     uint32_t oldCap = mCapacity;
     uint8_t* newBitMap = alloc(bitSize);
     if (newBitMap == nullptr) {
-        mCapacity = oldCap;
         return false;
     }
+
+    mSize = bitSize;
 
     uint32_t bytes = (oldCap > mCapacity) ? (mCapacity / BITS_PEER_BYTE) : (oldCap / BITS_PEER_BYTE);
     memcpy(newBitMap, mBitMap, bytes);
 
     release();
     mBitMap = newBitMap;
-    return true;
-}
-
-bool BitMap::init()
-{
-    // NOTE 从低位开始排列, 比如索引为1时, 取的是0x02
-    for (uint32_t i = 0; i < POS_SIZE; ++i) {
-        POS[i] = ((uint8_t)1) << i;
-        NPOS[i] = ~POS[i];
-    }
-
     return true;
 }
 
@@ -211,6 +221,7 @@ uint8_t* BitMap::alloc(uint32_t bitSize)
     if (bitMap != nullptr) {
         memset(bitMap, 0x00, bytes);
         mCapacity = bytes * BITS_PEER_BYTE;
+        mSize = bytes * BITS_PEER_BYTE;
     }
 
     return bitMap;
@@ -227,7 +238,7 @@ void BitMap::release()
 void BitMap::nullThrow() const
 {
     if (mBitMap == nullptr) {
-        throw std::runtime_error("using null pointers");
+        throw Exception("using null pointers");
     }
 }
 

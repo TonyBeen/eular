@@ -37,6 +37,7 @@ public:
     void delLogWriteFromList(int type);
 
 private:
+    static void once_entry();
     LogManager();
 
 private:

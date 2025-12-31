@@ -1,7 +1,7 @@
 /*************************************************************************
     > File Name: string8.h
     > Author: hsz
-    > Mail:
+    > Mail: utf-8(内部并不会监测是否utf-8, 只是表示此字符串为utf-8编码)
     > Created Time: 2021年04月11日 星期日 12时24分52秒
  ************************************************************************/
 
@@ -17,8 +17,19 @@
 #include <string>
 #include <iostream>
 
+#include <utils/sysdef.h>
+
+#if COMPILER_TYPE == COMPILER_MSVC
+  #include <sal.h>
+  #define PRINTF_FMT _Printf_format_string_
+  #define FORMAT_ATTR(...)
+#else
+  #define PRINTF_FMT
+  #define FORMAT_ATTR(...) __attribute__((format(__VA_ARGS__)))
+#endif
+
 namespace eular {
-class String8 {
+class UTILS_API String8 {
 public:
                         String8();
     explicit            String8(uint32_t size);
@@ -37,7 +48,12 @@ public:
     void                trimLeft(char c = ' ');         // 去掉字符串左侧空格
     void                trimRight(char c = ' ');        // 去掉字符串右侧空格
     String8             reverse();                      // 翻转字符串
+    void                reserve(size_t size);
     void                resize(size_t size);
+    char&               front();
+    const char&         front() const;
+    char&               back();
+    const char&         back() const;
     std::string         toStdString() const;            // String8 -> std::string
 
     bool                empty() const;
@@ -50,8 +66,8 @@ public:
     int                 append(const char* other);
     int                 append(const char* other, size_t numChars);
 
-    static String8      format(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-    int                 appendFormat(const char* fmt, ...) __attribute__((format (printf, 2, 3)));
+    static String8      Format(PRINTF_FMT const char* fmt, ...) FORMAT_ATTR(printf, 1, 2);
+    int                 appendFormat(PRINTF_FMT const char* fmt, ...) FORMAT_ATTR(printf, 2, 3);
 
     String8&            operator=(const String8& other);
     String8&            operator=(const char* other);
@@ -67,8 +83,8 @@ public:
     int                 ncompare(const String8& other, size_t n) const;
     int                 ncompare(const char* other, size_t n) const;
 
-    int                 strcasecmp(const String8& other) const;
-    int                 strcasecmp(const char* other) const;
+    int                 casecmp(const String8& other) const;
+    int                 casecmp(const char* other) const;
 
     bool                operator<(const String8& other) const;
     bool                operator<=(const String8& other) const;
@@ -84,6 +100,7 @@ public:
     bool                operator>=(const char* other) const;
     bool                operator>(const char* other) const;
     char&               operator[](size_t index);
+    const char&         operator[](size_t index) const;
 
     // return the index of the first byte of other in this at or after
     // start, or -1 if not found
@@ -109,27 +126,28 @@ public:
     // return true if this string contains the specified substring
     bool                contains(const char* other) const;
     bool                removeAll(const char* other);
-    ssize_t             replaceAll(char o, char n);
+    int64_t             replaceAll(char o, char n);
 
     void                toLower();
     void                toLower(size_t start, size_t numChars);
     void                toUpper();
     void                toUpper(size_t start, size_t numChars);
     // 未匹配到或参数错误返回负值，否则返回匹配到的字符串位置
-    static int32_t      kmp_strstr(const char *val, const char *key);
-    static size_t       hash(const String8 &obj);
+    static int32_t      KMP_strstr(const char *val, const char *key);
+    static size_t       Hash(const String8 &obj);
+
 private:
-    friend std::ostream&   operator<<(std::ostream &out, const String8& in);
+    friend std::ostream&operator<<(std::ostream &out, const String8& in);
     char*               getBuffer(size_t numChars = 0);
     void                release();
-    static String8      formatV(const char* fmt, va_list args);
+    static String8      FormatV(const char* fmt, va_list args);
     int                 appendFormatV(const char* fmt, va_list args);
     void                setTo(const String8& other);
     int                 setTo(const char* other);
     int                 setTo(const char* other, size_t numChars);
     int                 stringcompare(const char *other) const;
     // kmp next数组获取，非-1版本
-    static int          getNext(String8 key, int n);
+    static int          GetNext(String8 key, int n);
     void                detach();
     bool                removeOne(const char *str);
 
@@ -145,9 +163,9 @@ std::ostream&   operator<<(std::ostream &out, const String8& in);
 
 namespace std {
     template<>
-    struct hash<eular::String8> : public __hash_base<size_t, eular::String8> {
+    struct hash<eular::String8> {
         size_t operator()(const eular::String8 &obj) const {
-            return eular::String8::hash(obj);
+            return eular::String8::Hash(obj);
         }
     };
 }

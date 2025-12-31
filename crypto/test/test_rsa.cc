@@ -5,7 +5,7 @@
     > Created Time: Fri 24 Dec 2021 11:25:20 AM CST
  ************************************************************************/
 
-#include "rsa.h"
+#include "rsa_openssl.h"
 #include <gtest/gtest.h>
 #include <stdio.h>
 #include "utils/errors.h"

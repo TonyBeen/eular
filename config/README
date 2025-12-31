@@ -1,0 +1,11 @@
+#### 通用配置接口
+其中包括yaml, xml, json, ini四种配置文件
+解析所用到的库包括: tinyxml2, nlohmann-json, yaml-cpp
+三方库已内置在工程中, make && make install即可
+
+头文件和库的安装位置
+头文件 /usr/local/include/
+库文件 /usr/local/lib/
+可修改Makefile的DEST_PATH选项来更改安装位置
+
+> TODO 后面可能会将tinyxml2改为Markup来解析xml

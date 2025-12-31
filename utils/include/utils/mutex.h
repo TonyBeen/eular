@@ -5,25 +5,28 @@
     > Created Time: 2021年04月25日 星期日 21时24分54秒
  ************************************************************************/
 
-#ifndef __MUTEX_H__
-#define __MUTEX_H__
+#ifndef __UTILS_MUTEX_H__
+#define __UTILS_MUTEX_H__
 
 #include <stdint.h>
 #include <assert.h>
+#include <stdbool.h>
+
 #include <atomic>
+#include <memory>
 #include <functional>
 
-#include <utils/utils.h>
-#include <utils/string8.h>
 #include <utils/sysdef.h>
 
 #if defined(OS_LINUX)
-#include <pthread.h>
 #include <semaphore.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #endif
+
+#include <utils/utils.h>
+#include <utils/string8.h>
 
 namespace eular {
 class NonCopyAble
@@ -39,14 +42,17 @@ template<typename MutexType>
 class AutoLock final : public NonCopyAble
 {
 public:
-    AutoLock(MutexType& mutex) : mMutex(mutex)
+    AutoLock(MutexType& mutex) :
+        mMutex(mutex)
     {
         mMutex.lock();
     }
+
     ~AutoLock()
     {
         mMutex.unlock();
     }
+
 private:
     MutexType& mMutex;
 };
@@ -54,36 +60,22 @@ private:
 class SpinLock final : public NonCopyAble
 {
 public:
-    void lock() noexcept {
-        if (eular_likely(try_lock())) {
-            return;
-        }
+    SpinLock();
 
-        LockSlow();
-    }
-
-    bool try_lock() noexcept {
-        return !m_locked.exchange(true, std::memory_order_acquire);
-    }
-
-    void unlock() noexcept { m_locked.store(false, std::memory_order_release); }
+    void lock() noexcept;
+    bool trylock() noexcept;
+    void unlock() noexcept;
 
 private:
-    void LockSlow() noexcept;
-
-private:
-    std::atomic<bool> m_locked{false};
+    struct SpinLockImpl;
+    std::unique_ptr<SpinLockImpl>   m_impl;
 };
 
-typedef enum class __MutexSharedAttr {
-    PRIVATE = 0,    // mutex can only be used within the same process
-    SHARED = 1      // mutex can be used between processes
-} MutexSharedAttr;
-
+struct MutexImpl;
 class Mutex final : public NonCopyAble
 {
 public:
-    Mutex(int32_t type = static_cast<int32_t>(MutexSharedAttr::PRIVATE));
+    Mutex();
     ~Mutex();
 
     int32_t lock();
@@ -91,21 +83,18 @@ public:
     void    unlock();
 
     void setMutexName(const String8 &name);
-    const String8 &getMutexName() const { return mName; }
-
-    operator pthread_mutex_t *() { return &mMutex; }
-    pthread_mutex_t *mutex() { return &mMutex; }
+    const String8 &getMutexName() const { return m_name; }
 
 private:
     friend class Condition;
-    mutable pthread_mutex_t mMutex;
-    String8 mName;
+    std::unique_ptr<MutexImpl>  m_impl;
+    String8                     m_name;
 };
 
 class RecursiveMutex final : public NonCopyAble
 {
 public:
-    RecursiveMutex(int32_t type = static_cast<int32_t>(MutexSharedAttr::PRIVATE));
+    RecursiveMutex();
     ~RecursiveMutex();
 
     int32_t lock();
@@ -115,13 +104,10 @@ public:
     void setMutexName(const String8 &name);
     const String8 &getMutexName() const { return mName; }
 
-    operator pthread_mutex_t *() { return &mMutex; }
-    pthread_mutex_t *mutex() { return &mMutex; }
-
 private:
     friend class Condition;
-    mutable pthread_mutex_t mMutex;
-    String8 mName;
+    String8                     mName;
+    std::unique_ptr<MutexImpl>  mImpl;
 };
 
 // 局部写锁
@@ -160,7 +146,6 @@ private:
     RDMutexType &mutex;
 };
 
-// 读写锁, 读共享, 写独享, 读上锁无法写, 写上锁无法读写
 class RWMutex final : public NonCopyAble {
 public:
     typedef RDAutoLock<RWMutex> ReadAutoLock;
@@ -173,7 +158,8 @@ public:
     void unlock();
 
 private:
-    mutable pthread_rwlock_t mRWMutex;
+    struct RWMutexImpl;
+    std::unique_ptr<RWMutexImpl> mImpl;
 #ifdef DEBUG
     std::atomic<bool> mReadLocked;
     std::atomic<bool> mWritLocked;
@@ -193,43 +179,48 @@ public:
     bool timedwait(uint32_t ms);
 
 private:
-    sem_t  *mSem;       // 信号量
+    struct SemImpl;
+    std::unique_ptr<SemImpl> mImpl;
+
     String8 mFilePath;  // 有名信号量使用
     bool    isNamedSemaphore;
 };
 
+struct once_flag_impl;
 struct once_flag
 {
-    template<typename _Callable, typename... _Args>
-    friend void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args);
+    template<typename Callable, typename... Args>
+    friend void call_once(once_flag& once, Callable&& f, Args&&... args);
+
+    DISALLOW_COPY_AND_ASSIGN(once_flag);
+public:
+    once_flag();
+    ~once_flag();
 
 private:
-    pthread_once_t m_once = PTHREAD_ONCE_INIT;
-
-public:
-    constexpr once_flag() noexcept = default;
-    once_flag(const once_flag&) = delete;
-    once_flag& operator=(const once_flag&) = delete;
+    std::unique_ptr<once_flag_impl> mImpl;
 };
 
 namespace detail {
-extern __thread void* __once_callable;
-extern __thread void (*__once_call)();
-extern "C" void __once_proxy(void);
+extern THREAD_LOCAL void* __once_callable;
+extern THREAD_LOCAL void (*__once_call)();
+extern "C" void call_once_proxy(void);
+extern "C" int32_t call_once_internal(once_flag_impl *once, void (*callback)(void));
 } // namespace detail
 
-template<typename _Callable, typename... _Args>
-void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args)
+template<typename Callable, typename... Args>
+void call_once(once_flag& once, Callable&& f, Args&&... args)
 {
-    auto __callable = [&] {
-        std::__invoke(std::forward<_Callable>(__f), std::forward<_Args>(__args)...);
+    auto __callable = [&] () {
+        std::forward<Callable>(f)(std::forward<Args>(args)...);
     };
     detail::__once_callable = std::addressof(__callable);
-    detail::__once_call = []{ (*(decltype(__callable)*)detail::__once_callable)(); };
+    detail::__once_call = [] () { (*(decltype(__callable)*)detail::__once_callable)(); };
 
-    int __e = pthread_once(&__once.m_once, &detail::__once_proxy);
-    if (__e)
-        throw std::runtime_error("");
+    int code = detail::call_once_internal(once.mImpl.get(), &detail::call_once_proxy);
+    if (code) {
+        throw std::runtime_error("call_once_internal return error");
+    }
 
     detail::__once_callable = nullptr;
     detail::__once_call = nullptr;
@@ -237,4 +228,4 @@ void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args)
 
 } // namespace eular
 
-#endif // __MUTEX_H__
+#endif // __UTILS_MUTEX_H__

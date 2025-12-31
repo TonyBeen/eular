@@ -7,16 +7,17 @@
 
 #include "utils/string8.h"
 
-#include <error.h>
 #include <assert.h>
 
+#include "utils/platform.h"
 #include "utils/utils.h"
 #include "utils/shared_buffer.h"
 #include "utils/debug.h"
 #include "utils/errors.h"
 #include "utils/exception.h"
+#include "src/printf.h"
 
-#define DEFAULT_STRING_SIZE 128
+#define DEFAULT_STRING_SIZE 64
 #define MAXSIZE (1024 * 1024) // 1Mb
 
 namespace eular {
@@ -29,6 +30,10 @@ static inline char* getEmptyString()
         *str = 0;
         return buf;
     }();
+
+    ::atexit([]() {
+        gEmptyStringBuf->release();
+    });
 
     gEmptyStringBuf->acquire();
     return static_cast<char*>(gEmptyStringBuf->data());
@@ -77,7 +82,7 @@ void String8::detach()
 {
     SharedBuffer *psb = SharedBuffer::bufferFromData(mString);
     if (psb == nullptr) {
-        mString = getBuffer();
+        mString = getEmptyString();
         return;
     }
 
@@ -92,6 +97,7 @@ void String8::release()
     if (mString) {
         SharedBuffer::bufferFromData(mString)->release();
     }
+
     mString = nullptr;
     mCapacity = 0;
 }
@@ -293,10 +299,60 @@ String8 String8::reverse()
     return ret;
 }
 
+void String8::reserve(size_t size)
+{
+    detach();
+    if (mString == nullptr) {
+        mString = getBuffer(size);
+    }
+
+    if (mCapacity < size) {
+        release();
+        mString = getBuffer(size);
+    }
+}
+
 void String8::resize(size_t size)
 {
     String8 temp(mString, size);
     *this = std::move(temp);
+}
+
+char &String8::front()
+{
+    if (empty()) {
+        throw Exception("length == 0");
+    }
+    return mString[0];
+}
+
+const char &String8::front() const
+{
+    if (empty()) {
+        throw Exception("length == 0");
+    }
+
+    return mString[0];
+}
+
+char &String8::back()
+{
+    if (empty()) {
+        throw Exception("length == 0");
+    }
+
+    size_t size = length();
+    return mString[size - 1];
+}
+
+const char &String8::back() const
+{
+    if (empty()) {
+        throw Exception("length == 0");
+    }
+
+    size_t size = length();
+    return mString[size - 1];
 }
 
 std::string String8::toStdString() const
@@ -315,6 +371,7 @@ size_t String8::length() const
     if (mString) {
         len = strlen(mString);
     }
+
     return len;
 }
 
@@ -464,7 +521,7 @@ int String8::ncompare(const char* other, size_t n) const
     return strncmp(mString, other, n);
 }
 
-int String8::strcasecmp(const String8& other) const
+int String8::casecmp(const String8& other) const
 {
     if (mString) {
         return ::strcasecmp(mString, other.mString);
@@ -473,7 +530,7 @@ int String8::strcasecmp(const String8& other) const
     return -EPERM;
 }
 
-int String8::strcasecmp(const char* other) const
+int String8::casecmp(const char* other) const
 {
     if (mString) {
         return ::strcasecmp(mString, other);
@@ -547,6 +604,17 @@ char& String8::operator[](size_t index)
     return mString[index];
 }
 
+const char& String8::operator[](size_t index) const
+{
+    if (mString == nullptr) {
+        throw Exception("no memory");
+    }
+    if (index >= mCapacity) {
+        return mString[mCapacity];
+    }
+    return mString[index];
+}
+
 int String8::stringcompare(const char *other) const
 {
     if (!mString || !other) {
@@ -555,7 +623,7 @@ int String8::stringcompare(const char *other) const
     return strcmp(mString, other);
 }
 
-int String8::getNext(String8 key, int n)
+int String8::GetNext(String8 key, int n)
 {
     if (n < 2) {
         return 0;
@@ -589,7 +657,7 @@ int String8::setTo(const char* other)
 int String8::setTo(const char* other, size_t numChars)
 {
     if (other == nullptr || numChars == 0) {
-        return INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
     int ret = 0;
 
@@ -710,15 +778,15 @@ bool String8::removeOne(const char *other)
  * 
  * @param o old char
  * @param n new char
- * @return ssize_t 
+ * @return int64_t 
  */
-ssize_t String8::replaceAll(char o, char n)
+int64_t String8::replaceAll(char o, char n)
 {
     if (n == o) {
         return 0;
     }
 
-    ssize_t count = 0;
+    int64_t count = 0;
     for (size_t i = 0; i < length(); ++i) {
         if (mString[i] == o) {
             mString[i] = n;
@@ -731,7 +799,7 @@ ssize_t String8::replaceAll(char o, char n)
 
 void String8::toLower()
 {
-    toLower(0, length());
+    toLower(0, SIZE_MAX);
 }
 
 void String8::toLower(size_t start, size_t numChars)
@@ -739,14 +807,14 @@ void String8::toLower(size_t start, size_t numChars)
     size_t size = length();
     if (size > start) {
         for (size_t i = start; i < numChars && i < size; ++i) { // i < size -> anti overflow
-            mString[i] = static_cast<char>(tolower(mString[i]));
+            mString[i] = static_cast<char>(::tolower(mString[i]));
         }
     }
 }
 
 void String8::toUpper()
 {
-    toUpper(0, length());
+    toUpper(0, SIZE_MAX);
 }
 
 void String8::toUpper(size_t start, size_t numChars)
@@ -754,15 +822,15 @@ void String8::toUpper(size_t start, size_t numChars)
     size_t size = length();
     if (size > start) {
         for (size_t i = start; i < numChars && i < size; ++i) { // i < size -> anti overflow
-            mString[i] = static_cast<char>(toupper(mString[i]));
+            mString[i] = static_cast<char>(::toupper(mString[i]));
         }
     }
 }
 
-int32_t String8::kmp_strstr(const char *val, const char *key)
+int32_t String8::KMP_strstr(const char *val, const char *key)
 {
     if (val == nullptr || key == nullptr) {
-        return INVALID_PARAM;
+        return STATUS(INVALID_PARAM);
     }
     int valLen = strlen(val);
     int keyLen = strlen(key);
@@ -775,7 +843,7 @@ int32_t String8::kmp_strstr(const char *val, const char *key)
             }
             // j > 0: 表示当前存在匹配上的一段字符串，但是不完全匹配，所以需要偏移
             if (j > 0) {
-                i += (j - getNext(String8(key, j), j));
+                i += (j - GetNext(String8(key, j), j));
             } else { // 没有匹配到一个字符则只移动一个位置
                 ++i;
             }
@@ -788,23 +856,27 @@ int32_t String8::kmp_strstr(const char *val, const char *key)
     return -1;
 }
 
-size_t String8::hash(const String8 &obj)
+size_t String8::Hash(const String8 &obj)
 {
+#if defined(OS_WINDOWS)
+    return std::_Hash_array_representation(obj.c_str(), obj.length());
+#else
     return std::_Hash_impl::hash(obj.c_str(), obj.length());
+#endif
 }
 
-String8 String8::format(const char* fmt, ...)
+String8 String8::Format(const char* fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
 
-    String8 result = formatV(fmt, args);
+    String8 result = FormatV(fmt, args);
 
     va_end(args);
     return result;
 }
 
-String8 String8::formatV(const char* fmt, va_list args)
+String8 String8::FormatV(const char* fmt, va_list args)
 {
     String8 result;
     int len = 0;
@@ -812,7 +884,7 @@ String8 String8::formatV(const char* fmt, va_list args)
 
     va_list tmp_args;
     va_copy(tmp_args, args);
-    len = vsnprintf(nullptr, 0, fmt, tmp_args);
+    len = vsnprintf_(nullptr, 0, fmt, tmp_args);
     va_end(tmp_args);
 
     if (len > 0) {
@@ -822,7 +894,7 @@ String8 String8::formatV(const char* fmt, va_list args)
             return String8();
         }
         buf = static_cast<char *>(psb->data());
-        vsnprintf(buf, cap + 1, fmt, args);
+        vsnprintf_(buf, cap + 1, fmt, args);
         buf[cap] = '\0';
         result.release();
         result.mString = buf;
@@ -848,7 +920,7 @@ int String8::appendFormatV(const char* fmt, va_list args)
     int n = 0;
     va_list tmp_args;
     va_copy(tmp_args, args);
-    n = vsnprintf(nullptr, 0, fmt, tmp_args);
+    n = vsnprintf_(nullptr, 0, fmt, tmp_args);
     va_end(tmp_args);
     if (n <= 0) {
         return n;
@@ -874,12 +946,12 @@ int String8::appendFormatV(const char* fmt, va_list args)
     }
 
     if (buf) {
-        vsnprintf(buf + oldLength, n + 1, fmt, args);
+        vsnprintf_(buf + oldLength, n + 1, fmt, args);
         mString = buf;
         return n;
     }
 
-    vsnprintf(mString + oldLength, n + 1, fmt, args);
+    vsnprintf_(mString + oldLength, n + 1, fmt, args);
     return n;
 }
 
