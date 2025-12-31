@@ -1,14 +1,14 @@
 name: Manual Build
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: 
     inputs:
       os:
-        description:  '目标操作系统'
-        required:  true
-        default:  'ubuntu-latest'
-        type:  choice
-        options: 
+        description: '目标操作系统'
+        required: true
+        default: 'all'
+        type: choice
+        options:
           - ubuntu-latest
           - windows-latest
           - macos-latest
@@ -18,51 +18,38 @@ on:
         description: '构建类型'
         required: true
         default: 'Release'
-        type:  choice
+        type: choice
         options: 
           - Debug
           - Release
-      
-      subdir:
-        description: '子目录路径'
-        required: false
-        default: 'utils'
-        type: string
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            c_compiler:  gcc
-            cpp_compiler: g++
-          - os: windows-latest
-            c_compiler: cl
-            cpp_compiler: cl
-          - os:  macos-latest
-            c_compiler:  clang
-            cpp_compiler: clang++
-    
-    # 根据输入选择运行的系统
-    runs-on: ${{ matrix.os }}
-    
-    # 条件：选择 all 或匹配当前系统时才运行
-    if: >
-      github.event. inputs.os == 'all' || 
-      github. event.inputs.os == matrix.os
-
+  build-linux:
+    if: github.event. inputs.os == 'all' || github.event.inputs. os == 'ubuntu-latest'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure CMake
-        run: >
-          cmake -B build
-          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-          -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
-          -DCMAKE_BUILD_TYPE=${{ github.event.inputs. build_type }}
-          -S ${{ github.workspace }}/${{ github.event.inputs. subdir }}
-
       - name: Build
-        run: cmake --build build --config ${{ github.event. inputs.build_type }}
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build
+
+  build-windows:
+    if:  github.event.inputs.os == 'all' || github. event.inputs.os == 'windows-latest'
+    runs-on: windows-latest
+    steps: 
+      - uses:  actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs. build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build
+
+  build-macos: 
+    if: github.event.inputs. os == 'all' || github.event.inputs.os == 'macos-latest'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build
