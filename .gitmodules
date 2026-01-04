@@ -1,0 +1,3 @@
+[submodule "utils/3rd/libiconv_v1_18"]
+	path = utils/3rd/libiconv_v1_18
+	url = https://github.com/TonyBeen/libiconv.git

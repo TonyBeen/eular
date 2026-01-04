@@ -27,23 +27,29 @@ message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
 
+set(MACRO_DEFINITIONS)
+set(CXX_COMPILER_FLAGS)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
-    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
-    set(CXX_COMPILER_FLAGS -fPIC -pthread)
-    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
+    set(MACRO_DEFINITIONS -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    set(CXX_COMPILER_FLAGS -W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    set(CXX_COMPILER_FLAGS ${CXX_COMPILER_FLAGS} -fPIC -pthread)
+    # set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    set(MACRO_DEFINITIONS "-D_UNICODE -DUNICODE -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE")
     add_definitions(-D_UNICODE -DUNICODE)  # 启用UNICODE宏
     add_compile_options("/utf-8")          # 支持源码中的宽字符常量
+    set(CXX_COMPILER_FLAGS)
     set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_definitions(-D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
-    add_compile_options(-W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
-    set(CXX_COMPILER_FLAGS -fPIC -pthread)
-    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
+    set(MACRO_DEFINITIONS -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    set(CXX_COMPILER_FLAGS -W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    set(CXX_COMPILER_FLAGS ${CXX_COMPILER_FLAGS} -fPIC -pthread)
+    # set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
 else()
     message(STATUS "Unknown compiler: ${CMAKE_CXX_COMPILER_ID}")
 endif()
+
+add_subdirectory(3rd/libiconv_v1_18)
 
 file(GLOB HEADER_LIST       "include/utils/*.h")
 file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
@@ -77,11 +83,10 @@ if(UTILS_STATIC_LIB MATCHES "ON")
             ${3RD_INC_DIR}
     )
 
+    target_link_libraries(utils_static PRIVATE iconv charset)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
         target_link_libraries(utils_static PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_link_libraries(utils_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
         target_link_libraries(utils_static PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils_static
@@ -90,7 +95,6 @@ if(UTILS_STATIC_LIB MATCHES "ON")
         )
         target_link_libraries(utils_static
             PRIVATE
-                ${WIN_LINK_LIB_PATH}/libiconv_a.lib
                 $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
                 $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
                 ws2_32.lib)
@@ -98,7 +102,7 @@ if(UTILS_STATIC_LIB MATCHES "ON")
 
     target_compile_options(
         utils_static PRIVATE
-        ${CXX_COMPILER_FLAGS} -DUTILS_STATIC
+        ${CXX_COMPILER_FLAGS} ${MACRO_DEFINITIONS} -DUTILS_STATIC
     )
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -134,11 +138,10 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
             ${3RD_INC_DIR}
     )
 
+    target_link_libraries(utils PRIVATE iconv charset)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
         target_link_libraries(utils PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_link_libraries(utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/x64/libiconv.a)
         target_link_libraries(utils PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils
@@ -147,7 +150,6 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
         )
         target_link_libraries(utils
             PRIVATE
-                ${WIN_LINK_LIB_PATH}/libiconv_a.lib
                 $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
                 $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
                 ws2_32.lib)
@@ -155,7 +157,7 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
 
     target_compile_options(
         utils PRIVATE
-        ${CXX_COMPILER_FLAGS} -DUTILS_EXPORTS
+        ${CXX_COMPILER_FLAGS} ${MACRO_DEFINITIONS} -DUTILS_EXPORTS
     )
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
