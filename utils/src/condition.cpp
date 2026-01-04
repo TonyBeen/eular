@@ -11,6 +11,10 @@
 #include <time.h>
 #include <pthread.h>
 
+#if defined(OS_LINUX) || defined(OS_APPLE)
+#include <sys/time.h>
+#endif
+
 #include "src/mutex.hpp"
 
 namespace eular {
@@ -24,7 +28,7 @@ Condition::Condition()
     m_impl = std::unique_ptr<ConditionImpl>(new ConditionImpl);
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX)
     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
 #endif
     pthread_cond_init(&m_impl->cond, &attr);
@@ -45,7 +49,7 @@ int Condition::wait(Mutex& mutex)
 int Condition::timedWait(Mutex& mutex, uint64_t ms)
 {
     struct timespec ts;
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX)
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
     int64_t reltime_sec = ms / 1000;
@@ -63,6 +67,18 @@ int Condition::timedWait(Mutex& mutex, uint64_t ms)
     }
 
     ts.tv_sec = static_cast<long>(time_sec);
+#elif defined(OS_APPLE)
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    ts.tv_sec = tv.tv_sec + (ms / 1000);
+    ts.tv_nsec = tv.tv_usec * 1000 + (ms % 1000) * 1000000;
+
+    // 处理纳秒溢出
+    if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000;
+    }
 #else
     struct timespec relative = {static_cast<long>(ms / 1000), static_cast<long>(ms * 1000000)};
     pthread_win32_getabstime_np(&ts, &relative);

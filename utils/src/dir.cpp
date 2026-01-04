@@ -19,10 +19,12 @@
 #include "utils/code_convert.h"
 #include "utils/debug.h"
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_APPLE)
 #include <pwd.h>
 #include <unistd.h>
-#elif defined(OS_APPLE)
+#include <dirent.h>
+#include <errno.h>
+#include <string.h>
 #else
 #include <direct.h>
 #include <io.h>
@@ -114,7 +116,7 @@ bool absolute(const std::string &path, std::string &absPath)
     if (path.front() == '~') {
         struct passwd result;
         struct passwd *pw = nullptr;
-        char buffer[1204] = {0};
+        char buffer[1024] = {0};
         int32_t code = getpwuid_r(getuid(), &result, buffer, sizeof(buffer), &pw);
         if (code != 0 || pw == nullptr) {
             LOG("getpwuid error: [%d,%s]", errno, strerror(errno));

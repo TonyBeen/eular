@@ -9,7 +9,7 @@
 
 #include <string.h>
 
-#include <iconv.h>
+#include "iconv.h"
 
 #include "utils/exception.h"
 #include "utils/errors.h"
@@ -74,7 +74,7 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
         char *pOutputBuf = outputBuf;
         size_t leftOutputLen = CACHE_SIZE;
 
-        size_t nRet = iconv(m_codeConvHandle, &pBegin, &fromSize, &pOutputBuf, &leftOutputLen);
+        size_t nRet = iconv((iconv_t)m_codeConvHandle, &pBegin, &fromSize, &pOutputBuf, &leftOutputLen);
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
@@ -108,7 +108,7 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
 void CodeConvert::convertEnd()
 {
     if (m_codeConvHandle != INVALID_ICONV_HANDLE) {
-        iconv_close(m_codeConvHandle);
+        iconv_close((iconv_t)m_codeConvHandle);
     }
 }
 

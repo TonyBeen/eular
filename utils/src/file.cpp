@@ -99,7 +99,7 @@
 //     return result;
 // }
 
-#elif defined(OS_LINUX)
+#elif defined(OS_LINUX) || defined(OS_APPLE)
 #include <unistd.h>
 #define EU_O_RDONLY     O_RDONLY
 #define EU_O_WRONLY     O_WRONLY
