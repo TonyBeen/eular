@@ -40,6 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
@@ -50,6 +52,8 @@ jobs:
     runs-on: windows-latest
     steps: 
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
@@ -60,6 +64,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
