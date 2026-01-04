@@ -86,8 +86,13 @@ Mutex::Mutex()
     m_impl = std::unique_ptr<MutexImpl>(new MutexImpl);
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);  // for EDEADLK
+#elif defined(OS_APPLE)
+    // macOS does not support robust mutexes
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);     // for EDEADLK
+#endif
     pthread_mutex_init(&m_impl->_mutex, &attr);
     pthread_mutexattr_destroy(&attr);
 }
@@ -117,8 +122,10 @@ int32_t Mutex::lock()
         if (ret == EDEADLK) { // already locked
             throw Exception(String8::Format("deadlock detected: tid = %d mutex: %s", (int32_t)gettid(), m_name.c_str()));
         } else if (ret == EOWNERDEAD) { // other threads exited abnormally without unlocking the mutex
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
             pthread_mutex_consistent(&m_impl->_mutex); // will lock the mutex
             ret = 0;
+#endif
         }
     } while (0);
 
@@ -143,8 +150,13 @@ RecursiveMutex::RecursiveMutex()
     mImpl = std::unique_ptr<MutexImpl>(new MutexImpl);
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE_NP);   // for recursive
+#elif defined(OS_APPLE)
+    // macOS does not support robust mutexes
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);      // for recursive
+#endif
     pthread_mutex_init(&mImpl->_mutex, &attr);
     pthread_mutexattr_destroy(&attr);
 }
@@ -166,10 +178,12 @@ int32_t RecursiveMutex::lock()
     int32_t ret = 0;
     do {
         ret = pthread_mutex_lock(&mImpl->_mutex);
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
         if (ret == EOWNERDEAD) { // other threads exited abnormally without unlocking the mutex
             pthread_mutex_consistent(&mImpl->_mutex); // will lock the mutex
             ret = 0;
         }
+#endif
     } while (0);
 
     return ret;
