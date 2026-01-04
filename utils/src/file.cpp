@@ -39,68 +39,12 @@
 
 #define ST_MTIME        st_mtime
 #define ST_CTIME        st_ctime
-
-#ifndef CP_UTF8
-#define CP_UTF8 65001
-#endif // !CP_UTF8
-
-// std::wstring UTF8_To_Unicode(const std::string& strIn)
-// {
-//     if (strIn.empty())
-//     {
-//         return std::wstring();
-//     }
-
-//     std::wstring result;
-//     try
-//     {
-//         int32_t len = MultiByteToWideChar(CP_UTF8, 0, strIn.c_str(), -1, nullptr, 0);
-//         if (len > 0)
-//         {
-//             result.reserve((uint32_t)len);
-//             result.resize(uint32_t(len - 1), 0); // 第四个参数传入-1时返回值包含末尾的一个\0终止字符
-//             wchar_t* wszUnicode = &result[0];
-//             MultiByteToWideChar(CP_UTF8, 0, strIn.c_str(), (int32_t)strIn.length(), wszUnicode, len);
-//         }
-//     }
-//     catch (...)
-//     {
-//         result = std::wstring();
-//     }
-
-//     return r
-// }
-
-
-// std::string Unicode_To_UTF8(const std::wstring& strIn)
-// {
-//     if (strIn.empty())
-//     {
-//         return std::string();
-//     }
-
-//     std::string result;
-//     try
-//     {
-//         int32_t len = WideCharToMultiByte(CP_UTF8, 0, strIn.c_str(), -1, nullptr, 0, nullptr, nullptr);
-//         if (len > 0)
-//         {
-//             result.reserve((uint32_t)len);
-//             result.resize(uint32_t(len - 1), 0);
-//             char* szUtf8 = &result[0];
-//             WideCharToMultiByte(CP_UTF8, 0, strIn.c_str(), (int32_t)result.length(), szUtf8, len, nullptr, nullptr);
-//         }
-//     }
-//     catch (...)
-//     {
-//         result = std::string();
-//     }
-
-//     return result;
-// }
+#define ST_ATIME        st_atime
 
 #elif defined(OS_LINUX) || defined(OS_APPLE)
 #include <unistd.h>
+#include <sys/stat.h>
+
 #define EU_O_RDONLY     O_RDONLY
 #define EU_O_WRONLY     O_WRONLY
 #define EU_O_RDWR       O_RDWR
@@ -109,7 +53,12 @@
 #define EU_O_APPEND     O_APPEND
 #define EU_O_BINARY     O_RDONLY            // linux下不对文件区分文本还是二进制
 #define EU_O_EXCL       O_EXCL
+#if defined(OS_LINUX)
 #define EU_O_TMPFILE    O_TMPFILE
+#elif defined(OS_MACOS)
+// macOS 不支持 O_TMPFILE, 使用替代方案
+#define EU_O_TMPFILE    (O_CREAT | O_EXCL)
+#endif
 
 #define EU_MODE        (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH) // 0664
 
@@ -120,8 +69,23 @@
 #define EU_STATF        ::stat
 #define EU_SEEK         ::lseek
 
-#define ST_MTIME        st_mtim.tv_sec
-#define ST_CTIME        st_ctim.tv_sec
+#if defined(OS_LINUX)
+    #define ST_MTIME        st_mtim.tv_sec
+    #define ST_CTIME        st_ctim.tv_sec
+    #define ST_ATIME        st_atim.tv_sec
+#elif defined(OS_APPLE)
+    #if defined(__DARWIN_64_BIT_INO_T) || defined(_DARWIN_FEATURE_64_BIT_INODE)
+        // 现代 macOS (64位 inode)
+        #define ST_MTIME    st_mtimespec.tv_sec
+        #define ST_CTIME    st_ctimespec.tv_sec
+        #define ST_ATIME    st_atimespec.tv_sec
+    #else
+        // 旧版本
+        #define ST_MTIME    st_mtime
+        #define ST_CTIME    st_ctime
+        #define ST_ATIME    st_atime
+    #endif
+#endif
 
 #else
 #error "unsupport system"
