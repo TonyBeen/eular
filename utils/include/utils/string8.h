@@ -122,7 +122,7 @@ public:
      * @param end 字符结束位置
      * @return String8 
      */
-    String8             substr(size_t start, size_t end);
+    String8             substr(size_t start, size_t end) const;
     // return true if this string contains the specified substring
     bool                contains(const char* other) const;
     bool                removeAll(const char* other);

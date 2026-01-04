@@ -16,7 +16,8 @@
 #include "utils/errors.h"
 #include "utils/exception.h"
 
-#define CAST2UINT(x) static_cast<uint32_t>(x)
+#define CAST2UINT(x)        static_cast<uint32_t>(x)
+#define THREAD_NAME_SIZE    15
 
 namespace eular {
 struct ThreadBase::ThreadImpl {
@@ -132,7 +133,7 @@ int ThreadBase::run(size_t stackSize)
 int32_t ThreadBase::start(size_t stackSize)
 {
     int32_t code = 0;
-    switch (mImpl->_th_status) {
+    switch (mImpl->_th_status.load()) {
     case CAST2UINT(ThreadStatus::THREAD_WAITING):
         mImpl->_sem_block.post();
         break;
@@ -207,9 +208,19 @@ void Thread::SetName(const eular::String8 &name)
     if (name.empty()) {
         return;
     }
+
+    eular::String8 nameTemp = name;
+    if (name.length() > THREAD_NAME_SIZE) {
+        nameTemp = name.substr(0, THREAD_NAME_SIZE);
+    }
+
     if (gLocalThread) {
         gLocalThread->mThreadName = name;
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
         pthread_setname_np(gLocalThread->mImpl->_pthread_tid, name.c_str());
+#elif defined(OS_APPLE)
+        pthread_setname_np(name.c_str());
+#endif
     }
     gThreadName = name;
 }
@@ -257,7 +268,11 @@ void *Thread::entrance(void *arg)
     gLocalThread->mImpl->_tid = gettid();
     gLocalThread->mSemaphore.post();
 
-    pthread_setname_np(pthread_self(), th->mThreadName.substr(0, 15).c_str());
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
+        pthread_setname_np(pthread_self(), th->mThreadName.c_str());
+#elif defined(OS_APPLE)
+        pthread_setname_np(th->mThreadName.c_str());
+#endif
 
     std::function<void()> cb;
     cb.swap(th->mCallback);
