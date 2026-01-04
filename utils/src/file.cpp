@@ -55,7 +55,7 @@
 #define EU_O_EXCL       O_EXCL
 #if defined(OS_LINUX)
 #define EU_O_TMPFILE    O_TMPFILE
-#elif defined(OS_MACOS)
+#elif defined(OS_APPLE)
 // macOS 不支持 O_TMPFILE, 使用替代方案
 #define EU_O_TMPFILE    (O_CREAT | O_EXCL)
 #endif
@@ -346,7 +346,7 @@ bool FileOp::open(uint32_t emMode)
         return true;
     }
 
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     emMode = emMode & ~(uint32_t)FileOp::Binary;
 #endif
 

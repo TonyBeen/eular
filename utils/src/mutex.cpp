@@ -17,6 +17,10 @@
 
 #include <pthread.h>
 
+#if defined(OS_APPLE)
+#include <os/lock.h>
+#endif
+
 #include "utils/errors.h"
 #include "utils/utils.h"
 #include "utils/exception.h"
@@ -26,7 +30,23 @@ namespace eular {
 // @see https://codebrowser.dev/glibc/glibc/nptl/pthread_spin_lock.c.html
 
 struct SpinLock::SpinLockImpl {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_spinlock_t _spinlock{};
+#else
+    os_unfair_lock _spinlock = OS_UNFAIR_LOCK_INIT;
+#endif
+
+    SpinLockImpl() {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
+        pthread_spin_init(&_spinlock, PTHREAD_PROCESS_PRIVATE);
+#endif
+    }
+
+    ~SpinLockImpl() {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
+        pthread_spin_destroy(&_spinlock);
+#endif
+    }
 };
 
 SpinLock::SpinLock()
@@ -36,17 +56,29 @@ SpinLock::SpinLock()
 
 bool SpinLock::trylock() noexcept
 {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     return pthread_spin_trylock(&m_impl->_spinlock) == 0;
+#else
+    return os_unfair_lock_trylock(&m_impl->_spinlock);
+#endif
 }
 
 void SpinLock::unlock() noexcept
 {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_spin_unlock(&m_impl->_spinlock);
+#else
+    os_unfair_lock_unlock(&m_impl->_spinlock);
+#endif
 }
 
 void SpinLock::lock() noexcept
 {
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_spin_lock(&m_impl->_spinlock); // No need to check the return value
+#else
+    os_unfair_lock_lock(&m_impl->_spinlock);
+#endif
 }
 
 Mutex::Mutex()
