@@ -18,7 +18,7 @@
 
 #include <utils/sysdef.h>
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_APPLE)
 #include <semaphore.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
