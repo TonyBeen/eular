@@ -8,11 +8,30 @@
 #ifndef __UTP_UTP_H__
 #define __UTP_UTP_H__
 
+#include <string>
+#include <memory>
+#include <functional>
+
+#include <event2/event.h>
+
 #include <utp/platform.h>
 
-EXTERN_C_BEGIN
+namespace eular {
+namespace utp {
+class Context {
+public:
+    Context();
+    ~Context();
 
+public:
+    static std::string version();
+    static int32_t 
 
-EXTERN_C_END
+    bool initialize();
+    void shutdown();
+};
+
+} // namespace utp
+} // namespace eular
 
 #endif // __UTP_UTP_H__
