@@ -1,0 +1,66 @@
+name: Manual Build
+
+on:
+  workflow_dispatch: 
+    inputs:
+      os:
+        description: '目标操作系统'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+          - all
+
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'RelWithDebInfo'
+        type: choice
+        options: 
+          - Debug
+          - Release
+          - RelWithDebInfo
+
+      subdir:
+        description: '构建库目录'
+        required: true
+        default: 'utils'
+        type: choice
+        options: 
+          - utils
+          - kcp
+          - log
+
+jobs:
+  build-linux:
+    if: github.event.inputs.os == 'all' || github.event.inputs.os == 'ubuntu-latest'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build
+
+  build-windows:
+    if:  github.event.inputs.os == 'all' || github. event.inputs.os == 'windows-latest'
+    runs-on: windows-latest
+    steps: 
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build
+
+  build-macos:
+    if: github.event.inputs.os == 'all' || github.event.inputs.os == 'macos-latest'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -S ${{ github.workspace }}/${{ github.event.inputs.subdir }}
+          cmake --build build

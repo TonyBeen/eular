@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <map>
 #include <exception>
+#include <stdexcept>
 
 namespace eular {
 template <typename K, typename V, typename CompareK = std::less<K>, typename HashV = std::hash<V>>

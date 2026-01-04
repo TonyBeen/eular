@@ -307,8 +307,28 @@ size_t ByteBuffer::Hash(const ByteBuffer &buf)
 {
 #if defined(OS_WINDOWS)
     return std::_Hash_array_representation(buf.const_data(), buf.size());
-#else
+#elif defined(OS_LINUX)
     return std::_Hash_impl::hash(buf.const_data(), buf.size());
+#else
+    // MacOS and others
+    // FNV-1a hash algorithm
+    const uint8_t *data = buf.const_data();
+    size_t length = buf.size();
+
+#if UINTPTR_MAX == UINT64_MAX
+    size_t hash = 14695981039346656037ULL;
+    const size_t prime = 1099511628211ULL;
+#else
+    size_t hash = 2166136261U;
+    const size_t prime = 16777619U;
+#endif
+
+    for (size_t i = 0; i < length; ++i) {
+        hash ^= static_cast<size_t>(data[i]);
+        hash *= prime;
+    }
+
+    return hash;
 #endif
 }
 

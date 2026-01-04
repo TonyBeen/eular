@@ -35,11 +35,15 @@ void *AlignedRelloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignme
     // QT 5.12.10 source code
     // fake an aligned allocation
     void *actualptr = oldptr ? static_cast<void **>(oldptr)[-1] : 0;
+    int64_t oldoffset = 0;
+    if (oldptr) {
+        oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
+    }
     if (alignment <= sizeof(void*)) {
         // special, fast case
         void **newptr = static_cast<void **>(realloc(actualptr, newsize + sizeof(void*)));
         if (!newptr)
-            return 0;
+            return NULL;
         if (newptr == actualptr) {
             // realloc succeeded without reallocating
             return oldptr;
@@ -58,15 +62,15 @@ void *AlignedRelloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignme
     // alignment anyway.
 
     void *real = realloc(actualptr, newsize + alignment);
-    if (!real)
-        return 0;
+    if (!real) {
+        return NULL;
+    }
 
     uint64_t faked = reinterpret_cast<uint64_t>(real) + alignment;
     faked &= ~(alignment - 1);
     void **faked_ptr = reinterpret_cast<void **>(faked);
 
     if (oldptr) {
-        int64_t oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
         int64_t newoffset = reinterpret_cast<char *>(faked_ptr) - static_cast<char *>(real);
         if (oldoffset != newoffset)
             memmove(faked_ptr, static_cast<char *>(real) + oldoffset,
@@ -82,8 +86,10 @@ void *AlignedRelloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignme
 
 void  AlignedFree(void *ptr)
 {
-    if (!ptr)
+    if (!ptr) {
         return;
+    }
+
     void **ptr2 = static_cast<void **>(ptr);
     free(ptr2[-1]);
 }

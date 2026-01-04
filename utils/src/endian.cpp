@@ -29,7 +29,7 @@ static inline void __IsLittleEngine()
 #endif
 
 namespace runtime {
-static inline bool IsLittleEngine()
+static inline bool IsLittleEndian()
 {
 #ifndef BYTE_ORDER
     eular::call_once(g_endianOnceFlag, __IsLittleEngine);

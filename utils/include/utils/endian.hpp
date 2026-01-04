@@ -15,6 +15,13 @@
 
 #if defined(OS_WINDOWS)
 #define UINT_IDENTIFY(X) (X)
+#elif defined(OS_BSD)
+#include <sys/endian.h>
+#elif defined(OS_APPLE)
+#include <machine/endian.h>
+#include <libkern/OSByteOrder.h>
+#elif defined(OS_SOLARIS)
+#include <sys/byteorder.h>
 #else
 #include <endian.h>
 #endif
@@ -29,22 +36,44 @@
 #define NET_ENDIAN      BIG_ENDIAN
 #endif
 
+#if defined(OS_SOLARIS)
+    #if defined(_LITTLE_ENDIAN)
+        #define BYTE_ORDER LITTLE_ENDIAN
+    #elif defined(_BIG_ENDIAN)
+        #define BYTE_ORDER BIG_ENDIAN
+    #endif
+#endif
+
 #ifndef BYTE_ORDER
-#if defined(_X86_) || defined(__x86_64__) || defined(__i386__) ||   \
-    defined(__i486__) || defined(__i586__) || defined(__i686__) ||  \
-    defined(__ARMEL__) || defined(__AARCH64EL__) ||                 \
-    defined(_M_ARM) || defined(_M_ARM64) ||                         \
-    defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64)
-    #define BYTE_ORDER      LITTLE_ENDIAN
-#elif defined(__ARMEB__) || defined(__AARCH64EB__)
-    #define BYTE_ORDER      BIG_ENDIA
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && defined(__ORDER_BIG_ENDIAN__)
+    #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+        #define BYTE_ORDER LITTLE_ENDIAN
+    #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #define BYTE_ORDER BIG_ENDIAN
+    #endif
+#elif defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64) ||     \
+    defined(_M_ARM) || defined(_M_ARM64) ||                           \
+    defined(__x86_64__) || defined(__x86_64) ||                       \
+    defined(__amd64__) || defined(__amd64) ||                         \
+    defined(__i386__) || defined(__i386) ||                           \
+    defined(__i486__) || defined(__i586__) || defined(__i686__) ||    \
+    defined(_X86_) ||                                                 \
+    defined(__aarch64__) || defined(__AARCH64EL__) ||                 \
+    defined(__arm__) || defined(__ARMEL__) ||                         \
+    defined(__riscv) ||                                               \
+    defined(__LITTLE_ENDIAN__)
+    #define BYTE_ORDER LITTLE_ENDIAN
+#elif defined(__ARMEB__) || defined(__AARCH64EB__) ||                 \
+      defined(__MIPSEB__) || defined(__ppc__) ||                      \
+      defined(__powerpc__) || defined(__BIG_ENDIAN__)
+    #define BYTE_ORDER BIG_ENDIAN
 #else
-    #error "Unsupported byte order"
+    #error "Unsupported byte order:  unable to detect endianness"
 #endif
 #endif
 
 namespace runtime {
-static inline bool IsLittleEngine();
+static inline bool IsLittleEndian();
 } // namespace runtime
 
 static inline uint64_t byteswap_64(uint64_t host_int)
@@ -92,39 +121,65 @@ static inline uint16_t byteswap_16(uint16_t host_int)
 }
 
 #if defined(OS_WINDOWS)
-# if BYTE_ORDER == LITTLE_ENDIAN
-#define htobe16(x) byteswap_16 (x)
-#define htole16(x) UINT_IDENTIFY (x)
-#define be16toh(x) byteswap_16 (x)
-#define le16toh(x) UINT_IDENTIFY (x)
+    #if BYTE_ORDER == LITTLE_ENDIAN
+        #define htobe16(x) byteswap_16 (x)
+        #define htole16(x) UINT_IDENTIFY (x)
+        #define be16toh(x) byteswap_16 (x)
+        #define le16toh(x) UINT_IDENTIFY (x)
 
-#define htobe32(x) byteswap_32 (x)
-#define htole32(x) UINT_IDENTIFY (x)
-#define be32toh(x) byteswap_32 (x)
-#define le32toh(x) UINT_IDENTIFY (x)
+        #define htobe32(x) byteswap_32 (x)
+        #define htole32(x) UINT_IDENTIFY (x)
+        #define be32toh(x) byteswap_32 (x)
+        #define le32toh(x) UINT_IDENTIFY (x)
 
-#define htobe64(x) byteswap_64 (x)
-#define htole64(x) UINT_IDENTIFY (x)
-#define be64toh(x) byteswap_64 (x)
-#define le64toh(x) UINT_IDENTIFY (x)
+        #define htobe64(x) byteswap_64 (x)
+        #define htole64(x) UINT_IDENTIFY (x)
+        #define be64toh(x) byteswap_64 (x)
+        #define le64toh(x) UINT_IDENTIFY (x)
+    #else
+        #define htobe16(x) UINT_IDENTIFY (x)
+        #define htole16(x) byteswap_16 (x)
+        #define be16toh(x) UINT_IDENTIFY (x)
+        #define le16toh(x) byteswap_16 (x)
 
-#else
+        #define htobe32(x) UINT_IDENTIFY (x)
+        #define htole32(x) byteswap_32 (x)
+        #define be32toh(x) UINT_IDENTIFY (x)
+        #define le32toh(x) byteswap_32 (x)
 
-#define htobe16(x) UINT_IDENTIFY (x)
-#define htole16(x) byteswap_16 (x)
-#define be16toh(x) UINT_IDENTIFY (x)
-#define le16toh(x) byteswap_16 (x)
+        #define htobe64(x) UINT_IDENTIFY (x)
+        #define htole64(x) byteswap_64 (x)
+        #define be64toh(x) UINT_IDENTIFY (x)
+        #define le64toh(x) byteswap_64 (x)
+    #endif
+#elif defined(OS_APPLE)
+    #define htobe16(x) OSSwapHostToBigInt16(x)
+    #define htobe32(x) OSSwapHostToBigInt32(x)
+    #define htobe64(x) OSSwapHostToBigInt64(x)
+    #define htole16(x) OSSwapHostToLittleInt16(x)
+    #define htole32(x) OSSwapHostToLittleInt32(x)
+    #define htole64(x) OSSwapHostToLittleInt64(x)
 
-#define htobe32(x) UINT_IDENTIFY (x)
-#define htole32(x) byteswap_32 (x)
-#define be32toh(x) UINT_IDENTIFY (x)
-#define le32toh(x) byteswap_32 (x)
+    #define be16toh(x) OSSwapBigToHostInt16(x)
+    #define be32toh(x) OSSwapBigToHostInt32(x)
+    #define be64toh(x) OSSwapBigToHostInt64(x)
+    #define le16toh(x) OSSwapLittleToHostInt16(x)
+    #define le32toh(x) OSSwapLittleToHostInt32(x)
+    #define le64toh(x) OSSwapLittleToHostInt64(x)
+#elif defined(OS_SOLARIS)
+    #define htobe16(x) BE_16(x)
+    #define htobe32(x) BE_32(x)
+    #define htobe64(x) BE_64(x)
+    #define htole16(x) LE_16(x)
+    #define htole32(x) LE_32(x)
+    #define htole64(x) LE_64(x)
 
-#define htobe64(x) UINT_IDENTIFY (x)
-#define htole64(x) byteswap_64 (x)
-#define be64toh(x) UINT_IDENTIFY (x)
-#define le64toh(x) byteswap_64 (x)
-#endif
+    #define be16toh(x) BE_16(x)
+    #define be32toh(x) BE_32(x)
+    #define be64toh(x) BE_64(x)
+    #define le16toh(x) LE_16(x)
+    #define le32toh(x) LE_32(x)
+    #define le64toh(x) LE_64(x)
 #endif
 
 #endif // __EULAR_UTILS_ENDIAN_HPP__

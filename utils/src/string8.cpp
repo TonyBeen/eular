@@ -212,7 +212,7 @@ String8 String8::right(uint32_t n) const
     }
 
     size_t offset = length() - n;
-    return std::move(String8(mString + offset, n));
+    return String8(mString + offset, n);
 }
 
 void String8::trim(char c)
