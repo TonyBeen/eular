@@ -860,8 +860,17 @@ size_t String8::Hash(const String8 &obj)
 {
 #if defined(OS_WINDOWS)
     return std::_Hash_array_representation(obj.c_str(), obj.length());
-#else
+#elif defined(OS_LINUX)
     return std::_Hash_impl::hash(obj.c_str(), obj.length());
+#elif defined(OS_APPLE)
+    // FNV-1a
+    size_t hash = 14695981039346656037ULL;
+    const char* data = obj.c_str();
+    for (size_t i = 0; i < obj.length(); ++i) {
+        hash ^= static_cast<size_t>(data[i]);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 #endif
 }
 
