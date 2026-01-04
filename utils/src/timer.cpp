@@ -360,7 +360,7 @@ int TimerManager::threadWorkFunction(void *arg)
         FD_SET(mSockPair[RD_SOCK_IDX], &readfds); // 监听新连接
         uint64_t nextTime = (*it)->mTime - Time::AbsTime();
         if (nextTime > 0) {
-            struct timeval tv = {(long)nextTime / 1000, (long)nextTime % 1000 * 1000};
+            struct timeval tv = {(int32_t)nextTime / 1000, (int32_t)nextTime % 1000 * 1000};
             n = select(mSockPair[RD_SOCK_IDX] + 1, &readfds, nullptr, nullptr, &tv);
         }
 
