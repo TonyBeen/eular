@@ -49,7 +49,9 @@ else()
     message(STATUS "Unknown compiler: ${CMAKE_CXX_COMPILER_ID}")
 endif()
 
+if(NOT APPLE)
 add_subdirectory(3rd/libiconv_v1_18)
+endif()
 
 file(GLOB HEADER_LIST       "include/utils/*.h")
 file(GLOB HPP_HEADER_LIST   "include/utils/*.hpp")
