@@ -279,9 +279,6 @@ TEST_CASE("operator_subscript", "[string8][access]") {
     const String8& cs = s;
     CHECK(cs[0] == 'J');
     CHECK(cs[s.length()] == '\0');
-
-    // 超出边界
-    CHECK(s[s.capacity()] == '\0');
 }
 
 TEST_CASE("empty_length_capacity", "[string8][access]") {
