@@ -371,8 +371,8 @@ int32_t String8::append(const char* other, size_t numChars)
         return static_cast<int32_t>(otherLen);
     }
 
-    // 需要扩容
-    size_t newCapacity = std::max(newLen, (size_t)mCapacity * 2);
+    // NOTE Windows 定义了 max 宏，导致 std::max 无法使用, 需要加括号
+    size_t newCapacity = (std::max)(newLen, (size_t)mCapacity * 2);
     char* newBuf = allocHeap(newCapacity);
 
     if (mLength > 0) {
