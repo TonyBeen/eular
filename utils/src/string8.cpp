@@ -862,7 +862,7 @@ void String8::toLower(size_t start, size_t numChars)
     
     ensureUnique();
     
-    size_t end = std::min(start + numChars, static_cast<size_t>(mLength));
+    size_t end = (std::min)(start + numChars, static_cast<size_t>(mLength));
     for (size_t i = start; i < end; ++i) {
         mString[i] = static_cast<char>(::tolower(static_cast<unsigned char>(mString[i])));
     }
@@ -879,7 +879,7 @@ void String8::toUpper(size_t start, size_t numChars)
     
     ensureUnique();
     
-    size_t end = std::min(start + numChars, static_cast<size_t>(mLength));
+    size_t end = (std::min)(start + numChars, static_cast<size_t>(mLength));
     for (size_t i = start; i < end; ++i) {
         mString[i] = static_cast<char>(::toupper(static_cast<unsigned char>(mString[i])));
     }
@@ -958,7 +958,7 @@ int32_t String8::GetNext(const String8& key, int32_t n)
     int32_t max = 0;
     for (int32_t k = 1; k < n; ++k) {
         if (strncmp(key. c_str() + n - k, key. c_str(), k) == 0) {
-            max = std::max(max, k);
+            max = (std::max)(max, k);
         }
     }
     return max;
