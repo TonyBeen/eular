@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: proto_frame.h
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Fri 26 Dec 2025 02:12:12 PM CST
  ************************************************************************/
@@ -71,9 +71,7 @@ public:
     uint8_t         stream_flag{kFrameStreamFlagNone};
     uint64_t        stream_offset{0};
     uint16_t        stream_date_length{0};
-    std::array<uint8_t, 16>
-                    stream_crypto_tag{}; // aes-gcm tag
-    const uint8_t*  stream_data{nullptr};
+    const uint8_t*  stream_data{nullptr}; // aes-gcm tag 在数据后面
     std::string     stream_data_real;
 };
 

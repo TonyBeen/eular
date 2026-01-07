@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: malo.hpp
-    > Author: hsz
+    > Author: eular
     > Brief: Fast allocator for fixed-sized objects.
     > Created Time: Tue 09 Dec 2025 04:31:30 PM CST
  ************************************************************************/

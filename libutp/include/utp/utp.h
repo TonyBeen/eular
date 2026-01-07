@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: utp.h
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Tue 23 Dec 2025 05:14:55 PM CST
  ************************************************************************/
@@ -12,23 +12,31 @@
 #include <memory>
 #include <functional>
 
-#include <event2/event.h>
-
 #include <utp/platform.h>
+
+struct event;
+struct event_base;
 
 namespace eular {
 namespace utp {
-class Context {
+class ContextImpl;
+class UTP_API Context {
+    Context(const Context &) = delete;
+    Context &operator=(const Context &) = delete;
+    Context(Context &&) = delete;
+    Context &operator=(Context &&) = delete;
+
 public:
-    Context();
+    Context(event_base *base);
     ~Context();
 
 public:
-    static std::string version();
-    static int32_t 
+    static const char *Version();
 
-    bool initialize();
-    void shutdown();
+    int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname = "");
+
+private:
+    std::shared_ptr<ContextImpl> _impl{};
 };
 
 } // namespace utp

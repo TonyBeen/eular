@@ -1,18 +1,16 @@
 /*************************************************************************
     > File Name: utp_log.cpp
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Mon 08 Dec 2025 04:47:50 PM CST
  ************************************************************************/
 
-#include "log/utp_log.h"
+#include "logger/utp_log.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <errno.h>
-
-#define LOG_BUFFER_SIZE 8192
 
 #define CLR_CLR         "\033[0m"       // 恢复颜色
 #define CLR_BLACK       "\033[30m"      // 黑色字
@@ -95,9 +93,6 @@ void default_log_cb(int32_t level, const char *log, int32_t size)
         printf("[%s]: %.*s\n", str_level, size, log);
     }
 }
-
-utp_log_callback_t  g_log_cb = default_log_cb;
-int32_t             g_log_level = UTP_LOG_SILENT;
 
 void utp_set_log_cb(utp_log_callback_t log_cb)
 {
