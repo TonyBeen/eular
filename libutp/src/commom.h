@@ -16,10 +16,13 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #include <ws2ipdef.h>
+    #include <iphlpapi.h>
     #include <mswsock.h>
     #include <Windows.h>
 
     #pragma comment(lib, "ws2_32.lib")
+    #pragma comment(lib, "iphlpapi.lib")
+    #pragma comment(lib, "mswsock.lib")
 
     typedef SOCKET      socket_t;
     typedef SSIZE_T     ssize_t;
