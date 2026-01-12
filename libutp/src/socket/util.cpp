@@ -26,7 +26,7 @@ int32_t Socket::Ioctl::SetReuseAddr(socket_t sockfd, bool reuse)
 {
 #ifdef OS_WINDOWS
     BOOL flag = reuse ? 1 : 0;
-    return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&flag, sizeof(flag));
+    return setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&flag, sizeof(flag));
 #else
     int32_t flag = reuse ? 1 : 0;
     return setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
@@ -109,7 +109,7 @@ int32_t Socket::Ioctl::SetRecvError(socket_t sockfd, int32_t family, bool recver
 
 int32_t Socket::Ioctl::SetSendBufferSize(socket_t sockfd, int32_t size)
 {
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
+    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (const char *)&size, sizeof(size));
     if (status != 0) {
         int32_t code = GetSystemLastError();
         SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, SOL_SOCKET, SO_SNDBUF, {}) failed: [{}, {}].",
@@ -122,7 +122,7 @@ int32_t Socket::Ioctl::SetSendBufferSize(socket_t sockfd, int32_t size)
 
 int32_t Socket::Ioctl::SetRecvBufferSize(socket_t sockfd, int32_t size)
 {
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (const char *)&size, sizeof(size));
     if (status != 0) {
         int32_t code = GetSystemLastError();
         SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, SOL_SOCKET, SO_RCVBUF, {}) failed: [{}, {}].",
@@ -216,7 +216,7 @@ int32_t Socket::Ioctl::SetIPTos(socket_t sockfd)
     }
 #elif defined(OS_APPLE)
     int32_t tos = NET_SERVICE_TYPE_VO;
-    int32_t status = ::setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &tos, sizeof(tos));
+    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &tos, sizeof(tos));
     if (status != 0) {
         status = GetSystemLastError();
         SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_TOS, NET_SERVICE_TYPE_VO) failed: [{}, {}].",
