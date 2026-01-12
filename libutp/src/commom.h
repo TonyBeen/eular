@@ -16,16 +16,14 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #include <ws2ipdef.h>
-    #include <iphlpapi.h>
     #include <mswsock.h>
     #include <Windows.h>
 
     #pragma comment(lib, "ws2_32.lib")
-    #pragma comment(lib, "iphlpapi.lib")
-    #pragma comment(lib, "mswsock.lib")
 
     typedef SOCKET      socket_t;
     typedef SSIZE_T     ssize_t;
+
 #elif defined(OS_LINUX)
     #ifndef _GNU_SOURCE
     #define _GNU_SOURCE
@@ -33,7 +31,6 @@
 
     #ifndef __USE_GNU
     #define __USE_GNU
-    #endif
     #endif
 
     typedef int             socket_t;
