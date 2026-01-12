@@ -1,5 +1,5 @@
 /*************************************************************************
-    > File Name: proto_frame.h
+    > File Name: frame.h
     > Author: eular
     > Brief:
     > Created Time: Fri 26 Dec 2025 02:12:12 PM CST
@@ -57,7 +57,6 @@ public:
     enum FrameStreamFlags {
         kFrameStreamFlagNone    = 0x00,
         kFrameStreamFlagFin     = 0x80,
-        kFrameStreamFlagTag     = 0x40,
     };
 
     FrameStream() = default;
@@ -292,7 +291,7 @@ public:
     int32_t Decode(const void *data, size_t len) override;
 
 public:
-    uint8_t     token[SESSION_AUTH_TOKEN_SIZE];
+    uint8_t     token[SESSION_TOKEN_SIZE]; // SHA-256
 };
 
 class FrameCrypto : public FrameHeader {
@@ -319,7 +318,7 @@ public:
 public:
     // TODO seeion token 在服务端需要保持一定的时间, 以便验证客户端重连时使用
     uint16_t    token_effective_time{0}; // 有效时间, 单位秒, 最大18.204小时
-    std::array<uint8_t, SESSION_AUTH_TOKEN_SIZE> session_token{};
+    std::array<uint8_t, SESSION_TOKEN_SIZE> session_token{};
 };
 
 class FrameAckFrequency : public FrameHeader {

@@ -25,7 +25,7 @@ inline void SetLastErrorV(int32_t err_code, fmt::format_string<Args...> format_s
     tls_last_error = err_code;
 
     try {
-        auto result =  fmt::format_to_n(tls_error_buf.data(), tls_error_buf.size() - 1, "{}: {}", format_str, std::forward<Args>(args)...);
+        auto result = fmt::format_to_n(tls_error_buf.data(), tls_error_buf.size() - 1, "{}: {}", format_str, std::forward<Args>(args)...);
         *result.out = '\0';
         // tls_error_buf[result.size] = '\0';
     } catch (const fmt::format_error& e) {
@@ -39,5 +39,10 @@ inline void SetLastErrorV(int32_t err_code, fmt::format_string<Args...> format_s
 
 using OpenSSLErrorMsg = std::array<char, 256>;
 OpenSSLErrorMsg GetOpenSSLErrorMsg(uint32_t &sslCode);
+
+int32_t GetSystemLastError();
+
+using ErrnoMsg = std::string;
+ErrnoMsg GetSystemErrnoMsg(int32_t status);
 
 #endif // __UTP_UTILS_ERROR_H__

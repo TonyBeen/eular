@@ -71,6 +71,7 @@ public:
     bool fromSockAddr(const struct sockaddr* addr, socklen_t len);
     void fromSockAddrIn(const struct sockaddr_in& addr);
     void fromSockAddrIn6(const struct sockaddr_in6& addr);
+    bool fromSocket(int32_t sockfd);
     bool parseHostPort(const std::string& addrStr);
 
 public:

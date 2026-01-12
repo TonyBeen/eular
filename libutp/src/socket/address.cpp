@@ -6,7 +6,6 @@
  ************************************************************************/
 
 #include "socket/address.h"
-#include "address.h"
 
 namespace eular {
 namespace utp {
@@ -144,6 +143,18 @@ void Address::fromSockAddrIn6(const sockaddr_in6 &addr)
     memcpy(m_addr.v6, &addr.sin6_addr, kIPv6AddrLen);
 }
 
+bool Address::fromSocket(int32_t sockfd)
+{
+    sockaddr_storage storage;
+    socklen_t len = sizeof(storage);
+    int32_t status = getsockname(sockfd, reinterpret_cast<sockaddr*>(&storage), &len);
+    if (status != 0 || len == 0) {
+        return false;
+    }
+
+    return fromSockAddr(reinterpret_cast<sockaddr*>(&storage), len);
+}
+
 bool Address::parseHostPort(const std::string &addrStr)
 {
     if (addrStr.empty()) {
@@ -188,6 +199,59 @@ bool Address::parseHostPort(const std::string &addrStr)
     }
 
     return parse(host.c_str(), port);
+}
+
+bool Address::toSockAddrIn(sockaddr_in &addr) const
+{
+    if (m_family != Family::IPv4) {
+        return false;
+    }
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(m_port);
+    memcpy(&addr.sin_addr, m_addr.v4, kIPv4AddrLen);
+    return true;
+}
+
+bool Address::toSockAddrIn6(sockaddr_in6 &addr) const
+{
+    if (m_family != Family::IPv6) {
+        return false;
+    }
+
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(m_port);
+    memcpy(&addr.sin6_addr, m_addr.v6, kIPv6AddrLen);
+    return true;
+}
+
+socklen_t Address::toSockAddr(sockaddr_storage &storage) const
+{
+    if (m_family == Family::IPv4) {
+        sockaddr_in *addr4 = reinterpret_cast<sockaddr_in*>(&storage);
+        toSockAddrIn(*addr4);
+        return sizeof(sockaddr_in);
+    } else if (m_family == Family::IPv6) {
+        sockaddr_in6 *addr6 = reinterpret_cast<sockaddr_in6*>(&storage);
+        toSockAddrIn6(*addr6);
+        return sizeof(sockaddr_in6);
+    }
+
+    return 0;
+}
+
+std::string Address::toString() const
+{
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (m_family == Family::IPv4) {
+        inet_ntop(AF_INET, m_addr.v4, buf, sizeof(buf));
+        return std::string(buf) + ":" + std::to_string(m_port);
+    } else if (m_family == Family::IPv6) {
+        inet_ntop(AF_INET6, m_addr.v6, buf, sizeof(buf));
+        return "[" + std::string(buf) + "]:" + std::to_string(m_port);
+    }
+
+    return std::string();
 }
 
 bool Address::isLoopback() const noexcept

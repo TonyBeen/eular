@@ -1,5 +1,5 @@
 /*************************************************************************
-    > File Name: utp_log.h
+    > File Name: logger.h
     > Author: eular
     > Brief:
     > Created Time: Mon 08 Dec 2025 04:47:35 PM CST
@@ -35,11 +35,11 @@
 #define UTP_LOGE(fmt, ...)  eular::utp::UtpLog(UTP_LOG_ERROR, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 #define UTP_LOGF(fmt, ...)  eular::utp::UtpLog(UTP_LOG_FATAL, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
-#define UTP_LOGD_FMT(level, fmt, ...)  eular::utp::UtpLogV(UTP_LOG_DEBUG, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
-#define UTP_LOGI_FMT(level, fmt, ...)  eular::utp::UtpLogV(UTP_LOG_INFO, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
-#define UTP_LOGW_FMT(level, fmt, ...)  eular::utp::UtpLogV(UTP_LOG_WARN, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
-#define UTP_LOGE_FMT(level, fmt, ...)  eular::utp::UtpLogV(UTP_LOG_ERROR, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
-#define UTP_LOGF_FMT(level, fmt, ...)  eular::utp::UtpLogV(UTP_LOG_FATAL, __FILENAME__, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
+#define UTP_LOGD_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_DEBUG, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
+#define UTP_LOGI_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_INFO, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
+#define UTP_LOGW_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_WARN, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
+#define UTP_LOGE_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_ERROR, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
+#define UTP_LOGF_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_FATAL, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
 
 static void default_log_cb(int32_t level, const char *log, int32_t size);
 utp_log_callback_t  g_log_cb = default_log_cb;
