@@ -7,7 +7,6 @@
 
 #include "socket/util.h"
 #include "util/error.h"
-#include "util.h"
 
 namespace eular {
 namespace utp {
@@ -274,7 +273,7 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
         return -1;
     }
 
-    int mtu = -1;
+    int32_t mtu = -1;
     for (struct ifaddrs *it = ifs; it != nullptr; it = it->ifa_next) {
         if (it->ifa_name == nullptr) continue;
         if (strcmp(it->ifa_name, ifname) != 0) continue;
@@ -296,28 +295,58 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
 #else
     DWORD dwRetVal = 0;
     ULONG outBufLen = sizeof(IP_ADAPTER_ADDRESSES);
-    IP_ADAPTER_ADDRESSES *pAddresses = NULL, *pCurr = NULL;
-    int mtu = -1;
+    IP_ADAPTER_ADDRESSES* pAddresses = NULL;
+    int32_t mtu = -1;
 
-    // Allocate a 15KB buffer to start with.
+    // 初始缓冲区大小
     outBufLen = 15 * 1024;
-    pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
-
+    pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(outBufLen);
     if (pAddresses == NULL) {
         return -1;
     }
 
-    dwRetVal = GetAdaptersAddresses(AF_UNSPEC, 0, NULL, pAddresses, &outBufLen);
-    if (dwRetVal == NO_ERROR) {
-        pCurr = pAddresses;
-        while (pCurr) {
-            if (strcmp(pCurr->AdapterName, ifname) == 0 || 
-                (pCurr->FriendlyName && wcscmp(pCurr->FriendlyName, (const wchar_t*)ifname) == 0)) {
-                mtu = (int)pCurr->Mtu;
-                break;
+    // 循环尝试，直到缓冲区足够
+    do {
+        dwRetVal = GetAdaptersAddresses(AF_UNSPEC, 0, NULL, pAddresses, &outBufLen);
+        if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
+            // 缓冲区不够，重新分配更大的
+            free(pAddresses);
+            pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(outBufLen);
+            if (pAddresses == NULL) {
+                return -1;
             }
-            pCurr = pCurr->Next;
+        } else if (dwRetVal != NO_ERROR) {
+            free(pAddresses);
+            return -1;
         }
+    } while (dwRetVal == ERROR_BUFFER_OVERFLOW);
+
+    // 遍历适配器
+    PIP_ADAPTER_ADDRESSES pCurr = pAddresses;
+    while (pCurr) {
+        // 匹配 AdapterName (ANSI)
+        if (strcmp(pCurr->AdapterName, ifname) == 0) {
+            mtu = (int)pCurr->Mtu;
+            break;
+        }
+
+        // 匹配 FriendlyName (Unicode) - 需要转换 ifname 到 WCHAR
+        if (pCurr->FriendlyName) {
+            // 将 ifname 从 char* 转换为 WCHAR*
+            int len = MultiByteToWideChar(CP_ACP, 0, ifname, -1, NULL, 0);
+            WCHAR* wIfname = (WCHAR*)malloc(len * sizeof(WCHAR));
+            if (wIfname) {
+                MultiByteToWideChar(CP_ACP, 0, ifname, -1, wIfname, len);
+                if (wcscmp(pCurr->FriendlyName, wIfname) == 0) {
+                    mtu = (int)pCurr->Mtu;
+                    free(wIfname);
+                    break;
+                }
+                free(wIfname);
+            }
+        }
+
+        pCurr = pCurr->Next;
     }
 
     free(pAddresses);

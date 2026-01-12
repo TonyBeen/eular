@@ -16,48 +16,49 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #include <ws2ipdef.h>
+    #include <iphlpapi.h>
     #include <mswsock.h>
     #include <Windows.h>
 
     #pragma comment(lib, "ws2_32.lib")
+    #pragma comment(lib, "iphlpapi.lib")
+    #pragma comment(lib, "mswsock.lib")
 
     typedef SOCKET      socket_t;
     typedef SSIZE_T     ssize_t;
+#elif defined(OS_LINUX)
+    #ifndef _GNU_SOURCE
+    #define _GNU_SOURCE
+    #endif
 
-#else
-#if defined(OS_LINUX)
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
+    #ifndef __USE_GNU
+    #define __USE_GNU
+    #endif
+    #endif
 
-#ifndef __USE_GNU
-#define __USE_GNU
-#endif
-#endif
+    typedef int             socket_t;
+    #define INVALID_SOCKET  (-1)
+    #define SOCKET_ERROR    (-1)
 
-typedef int             socket_t;
-#define INVALID_SOCKET  (-1)
-#define SOCKET_ERROR    (-1)
+    #include <unistd.h>
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <sys/ioctl.h>
+    #include <fcntl.h>
+    #include <net/if.h>
+    #include <ifaddrs.h>
+    #include <linux/errqueue.h>
+    #include <netinet/ip_icmp.h>
 
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <net/if.h>
-#include <ifaddrs.h>
-#include <linux/errqueue.h>
-#include <netinet/ip_icmp.h>
+    #ifndef SO_REUSEPORT
+    #define SO_REUSEPORT 15
+    #endif
 
-#ifndef SO_REUSEPORT
-#define SO_REUSEPORT 15
-#endif
-
-#ifndef SO_BINDTODEVICE
-#define SO_BINDTODEVICE	25
-#endif
+    #ifndef SO_BINDTODEVICE
+    #define SO_BINDTODEVICE	25
+    #endif
 
 #endif
 
