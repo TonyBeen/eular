@@ -259,6 +259,7 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
 
     sockaddr_storage remoteAddr;
     socket_t addrLen = sizeof(remoteAddr);
+    char cmsgbuf[WSA_CMSG_SPACE(sizeof(in6_pktinfo))] = {0};
     WSAMSG msg;
     WSABUF iov;
     iov.buf = m_recvBuffer.data();
@@ -267,8 +268,8 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
     msg.namelen = addrLen;
     msg.lpBuffers = &iov;
     msg.dwBufferCount = 1;
-    msg.Control.len = 0;
-    msg.Control.buf = nullptr;
+    msg.Control.buf = cmsgbuf;
+    msg.Control.len = sizeof(cmsgbuf);
     msg.dwFlags = 0;
 
     DWORD nreads = 0;

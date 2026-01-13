@@ -332,17 +332,14 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
 
         // 匹配 FriendlyName (Unicode) - 需要转换 ifname 到 WCHAR
         if (pCurr->FriendlyName) {
-            // 将 ifname 从 char* 转换为 WCHAR*
-            int len = MultiByteToWideChar(CP_ACP, 0, ifname, -1, NULL, 0);
-            WCHAR* wIfname = (WCHAR*)malloc(len * sizeof(WCHAR));
-            if (wIfname) {
-                MultiByteToWideChar(CP_ACP, 0, ifname, -1, wIfname, len);
-                if (wcscmp(pCurr->FriendlyName, wIfname) == 0) {
-                    mtu = (int)pCurr->Mtu;
-                    free(wIfname);
-                    break;
-                }
-                free(wIfname);
+            // 将 ifname 从 utf-8 转换为 utf-16
+            int32_t wlen = MultiByteToWideChar(CP_UTF8, 0, ifname, -1, NULL, 0);
+            std::wstring wIfname;
+            wIfname.resize(wlen);
+            MultiByteToWideChar(CP_UTF8, 0, ifname, -1, wIfname.data(), wIfname.size());
+            if (wIfname == pCurr->FriendlyName) {
+                mtu = (int)pCurr->Mtu;
+                break;
             }
         }
 
