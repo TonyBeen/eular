@@ -354,7 +354,7 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
 #endif
 }
 
-Address Socket::Util::GetIPPktInfo(const msghdr &msg, uint16_t port)
+Address Socket::Util::GetIPPktInfo(const msghdr_t &msg, uint16_t port)
 {
 #if defined(OS_LINUX)
     if (msg.msg_controllen == 0 || msg.msg_control == nullptr) {
@@ -408,7 +408,31 @@ Address Socket::Util::GetIPPktInfo(const msghdr &msg, uint16_t port)
 
     return addr;
 #else
-    return Address();
+    if (msg.Control.buf == nullptr || msg.Control.len == 0) {
+        return Address();
+    }
+
+    for (WSACMSGHDR *cmsg = WSA_CMSG_FIRSTHDR((msghdr_t *)&msg); cmsg != nullptr; cmsg = WSA_CMSG_NXTHDR((msghdr_t *)&msg, cmsg)) {
+        if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
+            IN_PKTINFO *pktinfo = (IN_PKTINFO *)WSA_CMSG_DATA(cmsg);
+            sockaddr_in temp;
+            temp.sin_family = AF_INET;
+            temp.sin_addr = pktinfo->ipi_addr;
+            temp.sin_port = htons(port);
+            Address addr;
+            addr.fromSockAddrIn(temp);
+            return addr;
+        } else if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_PKTINFO) {
+            IN6_PKTINFO *pktinfo6 = (IN6_PKTINFO *)WSA_CMSG_DATA(cmsg);
+            sockaddr_in6 temp;
+            temp.sin6_family = AF_INET6;
+            temp.sin6_addr = pktinfo6->ipi6_addr;
+            temp.sin6_port = htons(port);
+            Address addr;
+            addr.fromSockAddrIn6(temp);
+            return addr;
+        }
+    }
 #endif
 }
 

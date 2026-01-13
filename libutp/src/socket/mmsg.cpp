@@ -5,7 +5,6 @@
 #include <stdlib.h>
 
 #include "util/error.h"
-#include "mmsg.h"
 
 namespace eular {
 namespace utp {

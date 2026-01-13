@@ -26,6 +26,7 @@
 
     typedef SOCKET      socket_t;
     typedef SSIZE_T     ssize_t;
+    typedef WSAMSG      msghdr_t;
 
 #elif defined(OS_LINUX)
     #ifndef _GNU_SOURCE
@@ -36,7 +37,8 @@
     #define __USE_GNU
     #endif
 
-    typedef int             socket_t;
+    typedef int32_t     socket_t;
+    typedef msghdr      msghdr_t;
     #define INVALID_SOCKET  (-1)
     #define SOCKET_ERROR    (-1)
 
@@ -59,7 +61,6 @@
     #ifndef SO_BINDTODEVICE
     #define SO_BINDTODEVICE	25
     #endif
-
 #endif
 
 #endif // __UTP_COMMON_H__

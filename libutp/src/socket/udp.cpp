@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <mutex>
 
+#include <utils/string8.h>
+
 #include "util/error.h"
 #include "socket/util.h"
 #include "utp/config.h"
@@ -212,6 +214,8 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
 
     return n;
 #else
+
+#if defined(OS_LINUX) || defined(OS_APPLE)
     sockaddr_storage remoteAddr;
     socket_t addrLen = sizeof(remoteAddr);
     char cmsgbuf[CMSG_SPACE(sizeof(in6_pktinfo))] = {0};
@@ -236,9 +240,70 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
             return -1;
         }
     }
+#elif defined(OS_WINDOWS)
+    static std::once_flag flagWSARecvMsg;
+    static LPFN_WSARECVMSG lpfnWSARecvMsg = nullptr;
+    std::call_once(flagWSARecvMsg, []() {
+        GUID guidWSARecvMsg = WSAID_WSARECVMSG;
+        DWORD dwBytesReturned = 0;
+        int32_t result = ::WSAIoctl(m_sock, SIO_GET_EXTENSION_FUNCTION_POINTER,
+                                    &guidWSARecvMsg, sizeof(guidWSARecvMsg),
+                                    &lpfnWSARecvMsg, sizeof(lpfnWSARecvMsg),
+                                    &dwBytesReturned, nullptr, nullptr);
+        if (result != 0) {
+            int32_t code = GetSystemLastError();
+            eular::String8 msg = eular::String8::Format("Failed to obtain the pointer to WSARecvMsg: [%d, %s]", code, GetSystemErrnoMsg(code));
+            throw std::runtime_error(msg.c_str());
+        }
+    });
 
-    
-#endif
+    sockaddr_storage remoteAddr;
+    socket_t addrLen = sizeof(remoteAddr);
+    WSAMSG msg;
+    WSABUF iov;
+    iov.buf = m_recvBuffer.data();
+    iov.len = static_cast<ULONG>(m_recvBuffer.capacity());
+    msg.name = (LPSOCKADDR)&remoteAddr;
+    msg.namelen = addrLen;
+    msg.lpBuffers = &iov;
+    msg.dwBufferCount = 1;
+    msg.Control.len = 0;
+    msg.Control.buf = nullptr;
+    msg.dwFlags = 0;
+
+    DWORD nreads = 0;
+    int32_t status = lpfnWSARecvMsg(m_sock, &msg, &nreads, nullptr, nullptr);
+    if (status == SOCKET_ERROR) {
+        int32_t code = GetSystemLastError();
+        if (code == WSAEWOULDBLOCK) {
+            return 0;
+        } else {
+            SetLastErrorV(UTP_ERR_SOCKET_READ, "{} WSARecvMsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code));
+            return -1;
+        }
+    }
+#endif // defined(OS_LINUX) || defined(OS_APPLE)
+
+    uint16_t port = m_bindAddr.port(); // 当绑定 0 端口时, 使用实际接收端口
+    if (m_localAddr.isValid()) {
+        port = m_localAddr.port();
+    }
+
+    msgVec.resize(1);
+    ReceivedMsg &rmsg = msgVec[0];
+    rmsg.len = static_cast<size_t>(nreads);
+    rmsg.data = m_recvBuffer.data();
+    rmsg.metaInfo.fd = m_sock;
+    rmsg.metaInfo.localAddress = Socket::Util::GetIPPktInfo(msg, m_bindAddr.family());
+    if (!rmsg.metaInfo.localAddress.isValid()) {
+        rmsg.metaInfo.localAddress.setPort(port);
+    } else {
+        rmsg.metaInfo.localAddress = Address::Loopback(m_bindAddr.family(), port);
+    }
+    rmsg.metaInfo.peerAddress.fromSockAddr((struct sockaddr *)&remoteAddr, addrLen);
+
+    return 1;
+#endif // defined(USE_SENDMMSG)
 }
 
 } // namespace utp

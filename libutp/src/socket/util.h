@@ -39,7 +39,7 @@ public:
     class Util
     {
     public:
-        static Address  GetIPPktInfo(const msghdr &msg, uint16_t port);
+        static Address  GetIPPktInfo(const msghdr_t &msg, uint16_t port);
     };
 
 
