@@ -22,7 +22,7 @@ class UdpSocket
 {
 public:
     struct ReceivedMsg {
-        char*           data;
+        void*           data;
         size_t          len;
         PacketMetaInfo  metaInfo;
     };

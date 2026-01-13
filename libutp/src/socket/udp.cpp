@@ -192,9 +192,11 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
         }
     }
 
+    const Address *pointer = &m_bindAddr;
     uint16_t port = m_bindAddr.port(); // 当绑定 0 端口时, 使用实际接收端口
     if (m_localAddr.isValid()) {
         port = m_localAddr.port();
+        pointer = &m_localAddr;
     }
 
     msgVec.resize(n);
@@ -205,9 +207,7 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
         rmsg.metaInfo.fd = m_sock;
         rmsg.metaInfo.localAddress = Socket::Util::GetIPPktInfo(m_mmsg.mmsghdrAt(i)->msg_hdr, m_bindAddr.family());
         if (!rmsg.metaInfo.localAddress.isValid()) {
-            rmsg.metaInfo.localAddress.setPort(port);
-        } else {
-            rmsg.metaInfo.localAddress = Address::Loopback(m_bindAddr.family(), port);
+            rmsg.metaInfo.localAddress = *pointer;
         }
         rmsg.metaInfo.peerAddress.fromSockAddr(m_mmsg.sockaddrAt(i), m_mmsg.mmsghdrAt(i)->msg_hdr.msg_namelen);
     }
@@ -284,9 +284,11 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
     }
 #endif // defined(OS_LINUX) || defined(OS_APPLE)
 
+    const Address *pointer = &m_bindAddr;
     uint16_t port = m_bindAddr.port(); // 当绑定 0 端口时, 使用实际接收端口
     if (m_localAddr.isValid()) {
         port = m_localAddr.port();
+        pointer = &m_localAddr;
     }
 
     msgVec.resize(1);
@@ -294,11 +296,9 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
     rmsg.len = static_cast<size_t>(nreads);
     rmsg.data = m_recvBuffer.data();
     rmsg.metaInfo.fd = m_sock;
-    rmsg.metaInfo.localAddress = Socket::Util::GetIPPktInfo(msg, m_bindAddr.family());
+    rmsg.metaInfo.localAddress = Socket::Util::GetIPPktInfo(msg, port);
     if (!rmsg.metaInfo.localAddress.isValid()) {
-        rmsg.metaInfo.localAddress.setPort(port);
-    } else {
-        rmsg.metaInfo.localAddress = Address::Loopback(m_bindAddr.family(), port);
+        rmsg.metaInfo.localAddress = *pointer;
     }
     rmsg.metaInfo.peerAddress.fromSockAddr((struct sockaddr *)&remoteAddr, addrLen);
 
