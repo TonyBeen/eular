@@ -125,7 +125,7 @@ void EventAsync::reset(const EventLoop *loop)
 
     if (loop != nullptr && loop->loop() != nullptr) {
         // NOTE socketpair不支持AF_INET
-        int32_t result = evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, m_sockPair);
+        int32_t result = evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, (evutil_socket_t *)m_sockPair);
         assert(result == 0);
         if (result != 0) {
             return;
