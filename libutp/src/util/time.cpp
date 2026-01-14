@@ -35,7 +35,7 @@ static std::atomic<int64_t> g_frequency{0};
 
 #endif
 
-uint64_t MonotonicMs()
+uint64_t MonotonicMs() noexcept
 {
 #if defined(OS_WINDOWS)
     int64_t frequency = g_frequency.load(std::memory_order_acquire);
@@ -52,7 +52,7 @@ uint64_t MonotonicMs()
 #endif
 }
 
-uint64_t MonotonicUs()
+uint64_t MonotonicUs() noexcept
 {
 #if defined(OS_WINDOWS)
     int64_t frequency = g_frequency.load(std::memory_order_acquire);
@@ -69,7 +69,7 @@ uint64_t MonotonicUs()
 #endif
 }
 
-uint64_t RealtimeMs()
+uint64_t RealtimeMs() noexcept
 {
 #if defined(OS_WINDOWS)
     // FILETIME 是从 1601-01-01 开始的 100 纳秒间隔
@@ -78,7 +78,7 @@ uint64_t RealtimeMs()
     static const uint64_t FILETIME_TO_UNIX_OFFSET = 116444736000000000ULL;
 
     FILETIME ft;
-    GetSystemTimePreciseAsFileTime(&ft);
+    WindwsGetSystemTime(&ft);
     uint64_t filetime = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
 
     // 转换为 Unix 时间戳 (100ns -> ms)
@@ -90,19 +90,25 @@ uint64_t RealtimeMs()
 #endif
 }
 
-int32_t _Timezone()
+int32_t _Timezone() noexcept
 {
     time_t now;
-    ::time(&now);
+    ::time(&now); // UTC 秒数
 
-    struct tm local_tm = *::localtime(&now);
-    struct tm utc_tm = *::gmtime(&now);
+    struct tm local_tm;
+#if defined(OS_WINDOWS)
+    ::localtime_s(&local_tm, &now);
+#elif defined(OS_LINUX) || defined(OS_APPLE)
+    ::localtime_r(&now, &local_tm);
+#endif
 
-    double diff = ::difftime(mktime(&local_tm), mktime(&utc_tm)) / 3600;
+    local_tm.tm_isdst = 0; // 不考虑夏令时
+    // return static_cast<int32_t>(local_tm.tm_gmtoff / 3600); // 受夏令时影响
+    double diff = ::difftime(mktime(&local_tm), now) / 3600;
     return (int32_t)diff;
 }
 
-int32_t Timezone()
+int32_t Timezone() noexcept
 {
     static int32_t g_timezone = INT32_MIN;
     if (g_timezone == INT32_MIN) {
