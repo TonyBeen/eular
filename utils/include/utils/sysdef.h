@@ -21,14 +21,23 @@
     #define OS_LINUX
 #elif defined(linux) || defined(__linux) || defined(__linux__)
     #define OS_LINUX
-#elif defined(__APPLE__) && (defined(__GNUC__) || defined(__xlC__) || defined(__xlc__))
+#elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #if defined(TARGET_OS_MAC) && TARGET_OS_MAC
-        #define OS_MACOS
-    #elif defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-        #define OS_IOS
+        #define OS_APPLE
     #endif
-    #define OS_APPLE
+    #if defined(TARGET_OS_OSX) && TARGET_OS_OSX
+        #define OS_MAC
+    #elif defined(TARGET_OS_IOS) && TARGET_OS_IOS
+        #define OS_IOS
+    #else
+        #error "unsupported Apple platform!"
+        // TARGET_OS_MAC	    在任意 Apple 平台下都为 1。
+        // TARGET_OS_IPHONE	    编译目标为 iOS（含 watchOS、tvOS）
+        // TARGET_OS_TV	        编译目标为 tvOS
+        // TARGET_OS_WATCH	    编译目标为 watchOS
+        // TARGET_OS_SIMULATOR	目标是模拟器（不是真机）
+    #endif
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
     #define OS_FREEBSD
     #define OS_BSD
