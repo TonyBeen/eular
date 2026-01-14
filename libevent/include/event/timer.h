@@ -1,5 +1,5 @@
 /*************************************************************************
-    > File Name: event_timer.h
+    > File Name: timer.h
     > Author: hsz
     > Brief:
     > Created Time: 2024年09月30日 星期一 16时06分25秒
@@ -10,8 +10,8 @@
 
 #include <functional>
 
-#include <event/event_base.h>
-#include <event/event_loop.h>
+#include <event/base.h>
+#include <event/loop.h>
 
 namespace ev {
 class EventTimer

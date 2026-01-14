@@ -16,7 +16,7 @@
 
 #include <ares.h>
 
-#include "event/event_timer.h"
+#include "event/timer.h"
 
 static std::once_flag g_initAres;
 

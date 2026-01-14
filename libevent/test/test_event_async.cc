@@ -11,8 +11,8 @@
 
 #include <unistd.h>
 
-#include <event/event_loop.h>
-#include <event/event_async.h>
+#include <event/loop.h>
+#include <event/async.h>
 
 #include <event2/event.h>
 

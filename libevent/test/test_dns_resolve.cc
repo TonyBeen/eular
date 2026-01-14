@@ -1,7 +1,7 @@
 #include <memory>
 
 #include <event/dns_resolve.h>
-#include <event/event_timer.h>
+#include <event/timer.h>
 
 int main()
 {

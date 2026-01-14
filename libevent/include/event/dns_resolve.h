@@ -12,9 +12,9 @@
 #include <vector>
 #include <map>
 
-#include <event/event_base.h>
-#include <event/event_loop.h>
-#include <event/event_poll.h>
+#include <event/base.h>
+#include <event/loop.h>
+#include <event/poll.h>
 
 #define DNS_SUCCESS 0
 #define DNS_TIMEOUT -1

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
 
 project(event_wrapper VERSION 1.0.0)
 
@@ -40,12 +40,12 @@ set(SOURCES
 
 set(HEADERS
     include/event/dns_resolve.h
-    include/event/event_async.h
-    include/event/event_base.h
-    include/event/event_loop.h
-    include/event/event_poll.h
-    include/event/event_signal.h
-    include/event/event_timer.h)
+    include/event/async.h
+    include/event/base.h
+    include/event/loop.h
+    include/event/poll.h
+    include/event/signal.h
+    include/event/timer.h)
 
 # libevent
 add_subdirectory(libevent_V2_1_10)

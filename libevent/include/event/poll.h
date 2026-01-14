@@ -1,5 +1,5 @@
 /*************************************************************************
-    > File Name: event_poll.h
+    > File Name: poll.h
     > Author: hsz
     > Brief:
     > Created Time: 2024年10月30日 星期三 10时00分08秒
@@ -10,8 +10,8 @@
 
 #include <functional>
 
-#include <event/event_base.h>
-#include <event/event_loop.h>
+#include <event/base.h>
+#include <event/loop.h>
 
 namespace ev {
 class EventPoll
