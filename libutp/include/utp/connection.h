@@ -25,6 +25,10 @@ class UTP_API Connection
     Connection(Connection &&) = delete;
     Connection &operator=(Connection &&) = delete;
 public:
+    using SP = std::shared_ptr<Connection>;
+    using WP = std::weak_ptr<Connection>;
+    using Ptr = SP;
+
     using OnStreamCanCreate = std::function<void()>;
     using OnStreamCreated = std::function<void(Stream *)>;
 

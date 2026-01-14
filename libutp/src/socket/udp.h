@@ -45,6 +45,8 @@ public:
     const std::string& tag() const { return m_tag; }
 
 public:
+    bool isValid() const { return m_sock != INVALID_SOCKET; }
+
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
 
     int32_t recvErrorMsg(ErrorMsg &errMsg);

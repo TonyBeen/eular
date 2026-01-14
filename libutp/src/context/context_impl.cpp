@@ -6,7 +6,6 @@
  ************************************************************************/
 
 #include "context/context_impl.h"
-#include "context_impl.h"
 
 #include <atomic>
 
@@ -32,6 +31,26 @@ const std::string &ContextImpl::tag() const
     return m_tag;
 }
 
+void ContextImpl::setOnConnected(const Context::OnConnected &cb)
+{
+    m_onConnected = cb;
+}
+
+void ContextImpl::setOnConnectError(const Context::OnConnectError &cb)
+{
+    m_onConnectError = cb;
+}
+
+void ContextImpl::setOnNewConnection(const Context::OnNewConnection &cb)
+{
+    m_onNewConnection = cb;
+}
+
+void ContextImpl::setOnConnectionClosed(const Context::OnConnectionClosed &cb)
+{
+    m_onConnectionClosed = cb;
+}
+
 int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     int32_t status = m_udpSocket.bind(ip, port, ifname);
@@ -41,6 +60,20 @@ int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::strin
 
     m_udpSocket.updateTag(tag());
     return UTP_ERR_NO_ERROR;
+}
+
+int32_t ContextImpl::connect(const Context::ConnectInfo &info)
+{
+    if (!m_udpSocket.isValid()) {
+        return UTP_ERR_NOT_BOUND;
+    }
+
+    return UTP_ERR_NO_ERROR;
+}
+
+Connection::Ptr ContextImpl::accept()
+{
+    return Connection::Ptr();
 }
 
 } // namespace utp

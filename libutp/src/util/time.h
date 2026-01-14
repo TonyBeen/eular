@@ -30,9 +30,10 @@ uint64_t RealtimeMs() noexcept;
 /**
  * @brief 获取当前地区的时区
  * @note 时区的取值范围为[-12, 12], 表示与UTC(格林尼治标准时间)的时差
- * @note 例如: 中国的时区为东八区 utc + 8, 美国的时区为西五区 utc - 5 // refer https://www.beijing-time.org/shiqu/
+ * @note 例如: 中国的时区为东八区 utc + 8, 美国的时区为西五区 utc - 5
+ * @note ref https://www.beijing-time.org/shiqu/
  *
- * @return int32_t 时区, 失败返回 INT32_MIN
+ * @return 时区, 失败返回 INT32_MIN
  */
 int32_t  Timezone() noexcept;
 

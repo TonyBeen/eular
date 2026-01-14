@@ -37,7 +37,7 @@ UdpSocket::~UdpSocket()
 {
     if (m_sock) {
         Socket::Close(m_sock);
-        m_sock = -1;
+        m_sock = INVALID_SOCKET;
     }
 }
 
@@ -118,7 +118,7 @@ int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string 
     } while (0);
 
     Socket::Close(m_sock);
-    m_sock = -1;
+    m_sock = INVALID_SOCKET;
     return -1;
 }
 

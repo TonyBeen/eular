@@ -26,6 +26,8 @@ typedef enum {
 
     // socket
     UTP_ERR_SOCKET_CREATE       = 0x0010,   // Socket错误
+    UTP_ERR_SOCKET_OPTION,                  // Socket选项错误
+    UTP_ERR_NOT_BOUND,                      // Socket未绑定
     UTP_ERR_SOCKET_BIND,                    // Socket绑定IP错误
     UTP_ERR_SOCKET_IOCTL,                   // IO控制错误
     UTP_ERR_SOCKET_READ,                    // 读取Socket错误
