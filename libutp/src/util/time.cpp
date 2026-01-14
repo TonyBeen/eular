@@ -30,11 +30,21 @@ int64_t _QueryPerfFrequency()
     QueryPerformanceFrequency(&li); // always succeeds
     return li.QuadPart;
 }
+
+static std::atomic<int64_t> g_frequency{0};
+
 #endif
 
 uint64_t MonotonicMs()
 {
 #if defined(OS_WINDOWS)
+    int64_t frequency = g_frequency.load(std::memory_order_acquire);
+    if (frequency == 0) {
+        frequency = _QueryPerfFrequency();
+        g_frequency.store(frequency, std::memory_order_release);
+    }
+    int64_t counter = _QueryPerfCounter();
+    return static_cast<uint64_t>(counter * 1000 / frequency);
 #elif defined(OS_LINUX) || defined(OS_APPLE)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -45,6 +55,13 @@ uint64_t MonotonicMs()
 uint64_t MonotonicUs()
 {
 #if defined(OS_WINDOWS)
+    int64_t frequency = g_frequency.load(std::memory_order_acquire);
+    if (frequency == 0) {
+        frequency = _QueryPerfFrequency();
+        g_frequency.store(frequency, std::memory_order_release);
+    }
+    int64_t counter = _QueryPerfCounter();
+    return static_cast<uint64_t>(counter * 1000000 / frequency);
 #elif defined(OS_LINUX) || defined(OS_APPLE)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -55,6 +72,17 @@ uint64_t MonotonicUs()
 uint64_t RealtimeMs()
 {
 #if defined(OS_WINDOWS)
+    // FILETIME 是从 1601-01-01 开始的 100 纳秒间隔
+    // Unix 时间戳是从 1970-01-01 开始的秒数
+    // 两者之间的偏移量是 116444736000000000 个 100 纳秒间隔
+    static const uint64_t FILETIME_TO_UNIX_OFFSET = 116444736000000000ULL;
+
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    uint64_t filetime = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+
+    // 转换为 Unix 时间戳 (100ns -> ms)
+    return (filetime - FILETIME_TO_UNIX_OFFSET) / 10000;
 #elif defined(OS_LINUX) || defined(OS_APPLE)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
