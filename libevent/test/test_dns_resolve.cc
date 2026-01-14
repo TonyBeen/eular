@@ -44,7 +44,7 @@ int main()
         }
     });
 
-    eventaTimer->reset(eventLoop.get(), [&eventLoop] () {
+    eventaTimer->reset(eventLoop->loop(), [&eventLoop] () {
         eventLoop->breakLoop();
         printf("event loop break\n");
     });
