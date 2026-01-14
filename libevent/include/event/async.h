@@ -60,7 +60,11 @@ public:
 
 private:
     event*          m_event = nullptr;
+#if defined(_WIN32) || defined(_WIN64)
+    intptr_t        m_sockPair[2] = { -1, -1 };
+#else
     int32_t         m_sockPair[2] = {-1, -1};
+#endif
     bool            m_started = false;
     std::mutex      m_mapMtx;
     std::unordered_map<std::string, AsyncCallback> m_asyncMap;
