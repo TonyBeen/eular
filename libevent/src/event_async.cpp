@@ -16,13 +16,19 @@ namespace ev {
 EventAsync::EventAsync(EventLoop::SP loop)
 {
     m_asyncMap.reserve(32);
-    reset(loop.get());
+    reset(loop->loop());
 }
 
 EventAsync::EventAsync(const EventLoop *loop)
 {
     m_asyncMap.reserve(32);
-    reset(loop);
+    reset(loop->loop());
+}
+
+EventAsync::EventAsync(event_base *base)
+{
+    m_asyncMap.reserve(32);
+    reset(base);
 }
 
 EventAsync::~EventAsync()
@@ -108,7 +114,7 @@ bool EventAsync::notify(const std::string &key) noexcept
     return found;
 }
 
-void EventAsync::reset(const EventLoop *loop)
+void EventAsync::reset(event_base *loop)
 {
     stop();
     if (m_event != nullptr) {
@@ -123,7 +129,7 @@ void EventAsync::reset(const EventLoop *loop)
         m_sockPair[SOCK_PAIR_SEND] = -1;
     }
 
-    if (loop != nullptr && loop->loop() != nullptr) {
+    if (loop != nullptr ) {
         // NOTE socketpair不支持AF_INET
         int32_t result = evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, m_sockPair);
         assert(result == 0);
@@ -134,7 +140,7 @@ void EventAsync::reset(const EventLoop *loop)
         assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_RECV]));
         assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_SEND]));
 
-        m_event = event_new(loop->loop(), m_sockPair[SOCK_PAIR_RECV], EV_READ | EV_PERSIST, [](evutil_socket_t, short, void *data) {
+        m_event = event_new(loop, m_sockPair[SOCK_PAIR_RECV], EV_READ | EV_PERSIST, [](evutil_socket_t, short, void *data) {
             auto self = static_cast<EventAsync *>(data);
 
             std::string eventDomain;

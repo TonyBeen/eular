@@ -195,7 +195,7 @@ void DNSResolver::OnSocketStateChanged(void *data, socket_t sock, int readable, 
     }
 
     if (eventFlag != EventPoll::Event::None) {
-        eventPoll.reset(eventLoop, sock, (EventPoll::Event)eventFlag, [self] (socket_t sockFd, EventPoll::event_t events) {
+        eventPoll.reset(eventLoop->loop(), sock, (EventPoll::Event)eventFlag, [self](socket_t sockFd, EventPoll::event_t events) {
                 socket_t readSock = (events & EventPoll::Event::Read) ? sockFd : ARES_SOCKET_BAD;
                 socket_t writeSock = (events & EventPoll::Event::Write) ? sockFd : ARES_SOCKET_BAD;
                 ares_process_fd(self->m_internal->channel, readSock, writeSock);
@@ -347,7 +347,7 @@ bool DNSResolver::resolve(const std::string &domain, DNSResolveCB cb, HostType t
     ares_getaddrinfo(m_internal->channel, domain.c_str(), NULL, &hint, OnDnsCallback, arg);
 
     // 添加超时定时器
-    timer->reset(m_internal->manager->m_internal->eventLoop, [domain, this] () {
+    timer->reset(m_internal->manager->m_internal->eventLoop->loop(), [domain, this]() {
         this->onResolveTimeout(domain);
     });
     return timer->start(m_internal->timeout);
@@ -361,7 +361,7 @@ DNSManager::DNSManager(EventLoop *loop)
 
     m_internal = std::make_shared<DNSManagerInternal>();
     m_internal->eventLoop = loop;
-    m_internal->timer.reset(loop, [this] () {
+    m_internal->timer.reset(loop->loop(), [this]() {
         uint64_t currentTimeMS = m_internal->acquireTimeCB();
         for (auto it = m_internal->domainResolvedMap.begin(); it != m_internal->domainResolvedMap.end(); ) {
             if ((it->second[0].resolvedTimeMS + it->second[0].ttl * 1000) <= currentTimeMS) {

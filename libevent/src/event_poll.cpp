@@ -22,7 +22,7 @@ EventPoll::~EventPoll()
     clean();
 }
 
-int32_t EventPoll::reset(EventLoop *loop, socket_t sock, event_t flag, EventCB cb)
+int32_t EventPoll::reset(event_base *loop, socket_t sock, event_t flag, EventCB cb)
 {
     if (loop == nullptr && cb == nullptr) {
         clean();
@@ -43,7 +43,7 @@ int32_t EventPoll::reset(EventLoop *loop, socket_t sock, event_t flag, EventCB c
     clean();
 
     m_cb = std::move(cb);
-    m_ev = event_new(loop->loop(), sock, (short)eventFlag, [] (evutil_socket_t sock, short flag, void *ptr) {
+    m_ev = event_new(loop, sock, (short)eventFlag, [] (evutil_socket_t sock, short flag, void *ptr) {
         EventPoll *self = static_cast<EventPoll *>(ptr);
         event_t evFlag = Event::None;
         if (flag & EV_READ) {

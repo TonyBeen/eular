@@ -15,7 +15,7 @@ EventTimer::~EventTimer()
     reset();
 }
 
-bool EventTimer::reset(EventLoop *loop, TimerCB cb) noexcept
+bool EventTimer::reset(event_base *loop, TimerCB cb) noexcept
 {
     if (loop == nullptr && cb == nullptr) {
         stop();
@@ -26,7 +26,7 @@ bool EventTimer::reset(EventLoop *loop, TimerCB cb) noexcept
         return true;
     }
 
-    if (loop == nullptr || loop->loop() == nullptr) {
+    if (loop == nullptr) {
         return false;
     }
 
@@ -41,7 +41,7 @@ bool EventTimer::reset(EventLoop *loop, TimerCB cb) noexcept
     }
 
     m_cb = cb;
-    m_event = event_new(loop->loop(), -1, EV_TIMEOUT, [](evutil_socket_t, short, void* data) {
+    m_event = event_new(loop, -1, EV_TIMEOUT, [](evutil_socket_t, short, void* data) {
         auto self = static_cast<EventTimer *>(data);
         if (self->m_repeat != 0) {
             self->addTimerEvent(self->m_repeat);
