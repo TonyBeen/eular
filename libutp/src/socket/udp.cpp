@@ -16,6 +16,7 @@
 #include "socket/util.h"
 #include "utp/config.h"
 #include "logger/logger.h"
+#include "udp.h"
 
 namespace eular {
 namespace utp {
@@ -38,6 +39,11 @@ UdpSocket::~UdpSocket()
         Socket::Close(m_sock);
         m_sock = -1;
     }
+}
+
+void UdpSocket::updateTag(const std::string &tag)
+{
+    m_tag = tag + "[udp socket(" + std::to_string(m_sock) + ")]";
 }
 
 int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &ifname)
@@ -178,7 +184,7 @@ int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg)
 #endif
 }
 
-int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
+int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
 {
 #if defined(USE_SENDMMSG)
     int32_t n = ::recvmmsg(m_sock, m_mmsg.mmsghdrAt(0), m_mmsg.size(), 0, nullptr);
@@ -201,7 +207,7 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
 
     msgVec.resize(n);
     for (int32_t i = 0; i < n; ++i) {
-        ReceivedMsg &rmsg = msgVec[i];
+        MsgMetaInfo &rmsg = msgVec[i];
         rmsg.len = m_mmsg.mmsghdrAt(i)->msg_len;
         rmsg.data = m_mmsg.dataAt(i);
         rmsg.metaInfo.fd = m_sock;
@@ -293,7 +299,7 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
     }
 
     msgVec.resize(1);
-    ReceivedMsg &rmsg = msgVec[0];
+    MsgMetaInfo &rmsg = msgVec[0];
     rmsg.len = static_cast<size_t>(nreads);
     rmsg.data = m_recvBuffer.data();
     rmsg.metaInfo.fd = m_sock;
@@ -305,6 +311,11 @@ int32_t UdpSocket::recv(std::vector<ReceivedMsg> &msgVec)
 
     return 1;
 #endif // defined(USE_SENDMMSG)
+}
+
+int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
+{
+
 }
 
 } // namespace utp

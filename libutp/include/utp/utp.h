@@ -13,6 +13,7 @@
 #include <functional>
 
 #include <utp/platform.h>
+#include <utp/connection.h>
 
 struct event;
 struct event_base;
@@ -27,6 +28,10 @@ class UTP_API Context {
     Context &operator=(Context &&) = delete;
 
 public:
+    using OnConnected = std::function<void(std::shared_ptr<Connection>)>;
+    using OnConnectError = std::function<void(int32_t, const std::string &, uint16_t)>;
+    using OnConnectionClosed = std::function<void(std::shared_ptr<Connection>)>;
+
     Context(event_base *base);
     ~Context();
 
@@ -36,7 +41,7 @@ public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname = "");
 
 private:
-    std::shared_ptr<ContextImpl> _impl{};
+    std::shared_ptr<ContextImpl>    m_impl{};
 };
 
 } // namespace utp

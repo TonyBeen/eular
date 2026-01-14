@@ -21,7 +21,7 @@ namespace utp {
 class UdpSocket
 {
 public:
-    struct ReceivedMsg {
+    struct MsgMetaInfo {
         void*           data;
         size_t          len;
         PacketMetaInfo  metaInfo;
@@ -32,7 +32,7 @@ public:
         std::vector<int32_t>    ee_code;
         std::vector<uint32_t>   ee_info;
 
-        uint8_t*    data;
+        void*       data;
         size_t      len;
         Address     peer_addr;
     };
@@ -49,9 +49,15 @@ public:
 
     int32_t recvErrorMsg(ErrorMsg &errMsg);
 
-    int32_t recv(std::vector<ReceivedMsg>& msgVec);
+    /**
+     * @brief 读取数据
+     *
+     * @param msgVec 数据缓存
+     * @return int32_t 返回读取到的数据包数量, 小于0表示失败, 等于0表示无数据
+     */
+    int32_t recv(std::vector<MsgMetaInfo>& msgVec);
 
-    int32_t send(const char* data, size_t len, const PacketMetaInfo& metaInfo);
+    int32_t send(const std::vector<MsgMetaInfo> &msgVec);
 
 private:
     socket_t    m_sock{INVALID_SOCKET};

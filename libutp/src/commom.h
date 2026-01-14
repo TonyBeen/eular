@@ -42,6 +42,7 @@
     #define INVALID_SOCKET  (-1)
     #define SOCKET_ERROR    (-1)
 
+    #include <time.h>
     #include <unistd.h>
     #include <sys/types.h>
     #include <sys/socket.h>

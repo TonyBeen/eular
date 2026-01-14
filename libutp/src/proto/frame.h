@@ -12,8 +12,8 @@
 
 #include "proto/proto.h"
 
-#define STREAM_IS_FIN(flag)    ((flag) & kFrameStreamFlagFin)
-#define STREAM_SET_FIN(flag)   ((flag) | kFrameStreamFlagFin)
+#define STREAM_IS_FIN(flag)    ((flag) & FrameStream::kFrameStreamFlagFin)
+#define STREAM_SET_FIN(flag)   ((flag) | FrameStream::kFrameStreamFlagFin)
 
 namespace eular {
 namespace utp {
