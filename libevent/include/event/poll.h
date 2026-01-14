@@ -50,7 +50,7 @@ public:
      * @param cb 事件回调
      * @return int32_t 成功返回0, 失败返回负值
      */
-    int32_t reset(EventLoop *loop = nullptr, socket_t sock = INVALID_SOCKET,
+    int32_t reset(event_base *loop = nullptr, socket_t sock = INVALID_SOCKET,
                   event_t flag = Event::None, EventCB cb = nullptr);
 
     bool start();

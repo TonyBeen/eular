@@ -28,7 +28,7 @@ public:
     EventTimer() noexcept = default;
     ~EventTimer();
 
-    bool reset(EventLoop *loop = nullptr, TimerCB cb = nullptr) noexcept;
+    bool reset(event_base *loop = nullptr, TimerCB cb = nullptr) noexcept;
 
     bool start(uint64_t timeout, uint64_t repeat = 0) noexcept;
 

@@ -31,6 +31,7 @@ public:
 
     EventAsync(EventLoop::SP loop);
     EventAsync(const EventLoop *loop);
+    EventAsync(event_base *base);
     ~EventAsync();
 
     bool start() noexcept;
@@ -56,7 +57,7 @@ public:
 
     bool notify(const std::string &key) noexcept;
 
-    void reset(const EventLoop *loop = nullptr);
+    void reset(event_base *loop = nullptr);
 
 private:
     event*          m_event = nullptr;
