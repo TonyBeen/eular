@@ -50,7 +50,7 @@ int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string 
 {
     Address address(ip, port);
     if (!address.isValid()) {
-        SetLastErrorV(UTP_ERR_INVALID_ARGUMENT, "{} bind({}) to an invalid address {}:{}", tag(), m_sock, ip.c_str(), port);
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} bind({}) to an invalid address {}:{}", tag(), m_sock, ip.c_str(), port);
         return -1;
     }
 

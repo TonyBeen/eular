@@ -57,7 +57,7 @@ int32_t Socket::Ioctl::SetDontFragment(socket_t sockfd, bool df)
 int32_t Socket::Ioctl::SetBindInterface(socket_t sockfd, const char *ifname)
 {
     if (ifname == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_ARGUMENT, "ifname is nullptr");
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
         return -1;
     }
 
@@ -95,7 +95,7 @@ int32_t Socket::Ioctl::SetRecvError(socket_t sockfd, int32_t family, bool recver
             status = -1;
         }
     } else {
-        SetLastErrorV(UTP_ERR_INVALID_ARGUMENT, "invalid family: {}", family);
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid family: {}", family);
         status = -1;
     }
 #else
@@ -249,7 +249,7 @@ int32_t Socket::Ioctl::SetNoSigPipe(socket_t sockfd)
 int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
 {
     if (ifname == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_ARGUMENT, "ifname is nullptr");
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
         return -1;
     }
 
@@ -436,7 +436,7 @@ Address Socket::Util::GetIPPktInfo(const msghdr_t &msg, uint16_t port)
 socket_t Socket::Open(int32_t family)
 {
     if (family != AF_INET && family != AF_INET6) {
-        SetLastErrorV(UTP_ERR_INVALID_ARGUMENT, "invalid family: {}", family);
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid family: {}", family);
         return -1;
     }
 

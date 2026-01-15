@@ -12,11 +12,16 @@
 #include <memory>
 #include <set>
 #include <tuple>
+#include <list>
+#include <unordered_map>
 
+#include <event/timer.h>
+#include <event/poll.h>
 #include <utils/utils.h>
 
 #include "utp/utp.h"
 #include "socket/udp.h"
+#include "context/connection_impl.h"
 
 namespace eular {
 namespace utp {
@@ -46,6 +51,9 @@ public:
     void setOnConnectError(const Context::OnConnectError &cb);
     void setOnNewConnection(const Context::OnNewConnection &cb);
     void setOnConnectionClosed(const Context::OnConnectionClosed &cb);
+    void wantWrite(ConnectionImpl *conn);
+
+    event_base* loop() const { return m_base; }
 
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
@@ -53,16 +61,27 @@ public:
     Connection::Ptr accept();
 
 private:
+    void onReadEvent();
+    void onWriteEvent();
+
+private:
     std::string     m_tag;
     event_base*     m_base;
     UdpSocket       m_udpSocket;
+
+    ev::EventPoll   m_readEvent;
+    ev::EventPoll   m_writeEvent;
 
     Context::OnConnected        m_onConnected;
     Context::OnConnectError     m_onConnectError;
     Context::OnNewConnection    m_onNewConnection;
     Context::OnConnectionClosed m_onConnectionClosed;
 
-    std::set<Context::ConnectInfo>  m_pendingConnections; // 正在连接队列
+    using ConnectionMap = std::unordered_map<uint32_t, ConnectionImpl::SP>; // cid -> ConnectionImpl
+    ConnectionMap                   m_connections;          // 所有连接容器
+    std::set<ConnectionImpl *>      m_pendingConnections;   // 正在连接队列
+    std::list<ConnectionImpl *>     m_wantWriteConns;       // 需要写数据的连接队列
+    std::list<ConnectionImpl *>     m_newConnections;       // 新连接队列
 };
 
 } // namespace utp

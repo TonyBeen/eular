@@ -22,6 +22,7 @@ public:
         return &instance;
     }
 
+    uint16_t    base_mtu = 1200;
     int32_t     recv_buf_size = 1024 * 1024;
     int32_t     send_buf_size = 1024 * 1024;
 };

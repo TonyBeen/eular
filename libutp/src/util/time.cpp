@@ -32,6 +32,7 @@ int64_t _QueryPerfFrequency()
 }
 
 static std::atomic<int64_t> g_frequency{0};
+#elif defined(OS_APPLE)
 
 #endif
 

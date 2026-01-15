@@ -43,6 +43,7 @@ public:
 public:
     void updateTag(const std::string& tag);
     const std::string& tag() const { return m_tag; }
+    socket_t fd() const { return m_sock; }
 
 public:
     bool isValid() const { return m_sock != INVALID_SOCKET; }

@@ -15,7 +15,7 @@
 typedef enum {
     /* 通用错误 */
     UTP_ERR_NO_ERROR             = 0x0000,  // 无错误，正常关闭
-    UTP_ERR_INVALID_ARGUMENT,               // 无效参数
+    UTP_ERR_INVALID_PARAM,                  // 无效参数
     UTP_ERR_INTERNAL_ERROR,                 // 内部错误
     UTP_ERR_CANCELLED,                      // 应用层取消
     UTP_ERR_TIMEOUT,                        // 超时
@@ -23,6 +23,8 @@ typedef enum {
     UTP_ERR_NOT_IMPLEMENTED,                // 功能未实现
     UTP_ERR_BUSY,                           // 资源忙
     UTP_ERR_NO_MEMORY,                      // 内存不足
+    UTP_ERR_IN_PROGRESS,                    // 操作正在进行中
+    UTP_ERR_WOULD_BLOCK,                    // 操作会阻塞
 
     // socket
     UTP_ERR_SOCKET_CREATE       = 0x0010,   // Socket错误
@@ -32,6 +34,7 @@ typedef enum {
     UTP_ERR_SOCKET_IOCTL,                   // IO控制错误
     UTP_ERR_SOCKET_READ,                    // 读取Socket错误
     UTP_ERR_SOCKET_WRITE,                   // 写入Socket错误
+    UTP_ERR_ALREADY_CONNECTED,              // 已经连接
 
     // stream
     UTP_ERR_STREAM_CLOSED        = 0x0020,  // 流已关闭

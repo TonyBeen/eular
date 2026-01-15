@@ -6,7 +6,6 @@
  ************************************************************************/
 
 #include "utp/utp.h"
-#include "utp.h"
 
 #include "version.h"
 #include "context/context_impl.h"

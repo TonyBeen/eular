@@ -62,6 +62,25 @@
     #ifndef SO_BINDTODEVICE
     #define SO_BINDTODEVICE	25
     #endif
+#elif defined(OS_APPLE)
+    typedef int32_t     socket_t;
+    typedef msghdr      msghdr_t;
+    #define INVALID_SOCKET  (-1)
+    #define SOCKET_ERROR    (-1)
+
+    #include <time.h>
+    #include <unistd.h>
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <sys/ioctl.h>
+    #include <fcntl.h>
+    #include <net/if.h>
+    #include <ifaddrs.h>
+    #include <linux/errqueue.h>
+    #include <netinet/ip_icmp.h>
+    #include <mach/mach_time.h>
 #endif
 
 #endif // __UTP_COMMON_H__

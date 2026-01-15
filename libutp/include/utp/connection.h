@@ -25,9 +25,7 @@ class UTP_API Connection
     Connection(Connection &&) = delete;
     Connection &operator=(Connection &&) = delete;
 public:
-    using SP = std::shared_ptr<Connection>;
-    using WP = std::weak_ptr<Connection>;
-    using Ptr = SP;
+    using Ptr = std::shared_ptr<Connection>;
 
     using OnStreamCanCreate = std::function<void()>;
     using OnStreamCreated = std::function<void(Stream *)>;
@@ -40,13 +38,13 @@ public:
     };
 
     struct Statistic {
-        uint32_t        pingTimes;
-        uint32_t        pongTimes;
-        uint64_t        transmitBytes;
-        uint64_t        retransmitBytes;
-        int32_t         srtt;   // smoothed round trip time (us)
-        int32_t         rttvar; // round trip time variance (us)
-        int32_t         rto;    // retransmission timeout (us)
+        uint32_t        pmtu;
+        uint32_t        rtt;
+        uint32_t        rttvar;
+        uint32_t        bw_estimate;
+        uint64_t        rx_bytes;
+        uint64_t        tx_bytes;
+        uint64_t        rtx_bytes;
     };
 
     Connection() = default;

@@ -20,11 +20,15 @@
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #if defined(TARGET_OS_MAC) && TARGET_OS_MAC
-        #define OS_MAC
-    #elif defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-        #define OS_IOS
+        #define OS_APPLE
     #endif
-    #define OS_DARWIN
+    #if defined(TARGET_OS_OSX) && TARGET_OS_OSX
+        #define OS_MAC
+    #elif defined(TARGET_OS_IOS) && TARGET_OS_IOS
+        #define OS_IOS
+    #else
+        #error "unsupported Apple platform!"
+    #endif
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
     #define OS_FREEBSD
     #define OS_BSD
