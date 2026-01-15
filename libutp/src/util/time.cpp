@@ -7,6 +7,8 @@
 
 #include "util/time.h"
 
+#include <utils/mutex.h>
+
 namespace eular {
 namespace utp {
 namespace time {
@@ -32,7 +34,13 @@ int64_t _QueryPerfFrequency()
 }
 
 static std::atomic<int64_t> g_frequency{0};
-#elif defined(OS_APPLE)
+#elif defined(OS_APPLE) && !defined(_POSIX_TIMERS)
+static mach_timebase_info_data_t g_timebase;
+static eular::once_flag g_timebaseFlag;
+void LoadTimebase()
+{
+    mach_timebase_info(&g_timebase);
+}
 
 #endif
 
@@ -46,10 +54,23 @@ uint64_t MonotonicMs() noexcept
     }
     int64_t counter = _QueryPerfCounter();
     return static_cast<uint64_t>(counter * 1000 / frequency);
-#elif defined(OS_LINUX) || defined(OS_APPLE)
+#elif defined(OS_LINUX)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+#elif defined(OS_APPLE)
+#if defined(_POSIX_TIMERS)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+#else
+    eular::call_once(g_timebaseFlag, LoadTimebase);
+    uint64_t t = mach_absolute_time();
+    t *= g_timebase.numer;
+    t /= g_timebase.denom;
+    t /= 1000000;
+    return t;
+#endif
 #endif
 }
 
@@ -63,10 +84,23 @@ uint64_t MonotonicUs() noexcept
     }
     int64_t counter = _QueryPerfCounter();
     return static_cast<uint64_t>(counter * 1000000 / frequency);
-#elif defined(OS_LINUX) || defined(OS_APPLE)
+#elif defined(OS_LINUX)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000 + static_cast<uint64_t>(ts.tv_nsec) / 1000;
+#elif defined(OS_APPLE)
+#if defined(_POSIX_TIMERS)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000;
+#else
+    eular::call_once(g_timebaseFlag, LoadTimebase);
+    uint64_t t = mach_absolute_time();
+    t *= g_timebase.numer;
+    t /= g_timebase.denom;
+    t /= 1000;
+    return t;
+#endif
 #endif
 }
 
@@ -84,10 +118,20 @@ uint64_t RealtimeMs() noexcept
 
     // 转换为 Unix 时间戳 (100ns -> ms)
     return (filetime - FILETIME_TO_UNIX_OFFSET) / 10000;
-#elif defined(OS_LINUX) || defined(OS_APPLE)
+#elif defined(OS_LINUX)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+#elif defined(OS_APPLE)
+#if defined(_POSIX_TIMERS)
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+#else
+    struct timeval tv;
+    (void)gettimeofday(&tv, NULL);
+    return static_cast<uint64_t>(tv.tv_sec) * 1000 + static_cast<uint64_t>(tv.tv_usec) / 1000;
+#endif
 #endif
 }
 

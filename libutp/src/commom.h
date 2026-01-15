@@ -78,7 +78,6 @@
     #include <fcntl.h>
     #include <net/if.h>
     #include <ifaddrs.h>
-    #include <linux/errqueue.h>
     #include <netinet/ip_icmp.h>
     #include <mach/mach_time.h>
 #endif
