@@ -34,12 +34,16 @@ void *AlignedRealloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignm
 {
     // QT 5.12.10 source code
     // fake an aligned allocation
-    void *actualptr = oldptr ? static_cast<void **>(oldptr)[-1] : nullptr;
+    void *actualptr = oldptr ? static_cast<void **>(oldptr)[-1] : 0;
+    int64_t oldoffset = 0;
+    if (oldptr) {
+        oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
+    }
     if (alignment <= sizeof(void*)) {
         // special, fast case
-        void **newptr = static_cast<void **>(::realloc(actualptr, newsize + sizeof(void*)));
+        void **newptr = static_cast<void **>(realloc(actualptr, newsize + sizeof(void*)));
         if (!newptr)
-            return nullptr;
+            return NULL;
         if (newptr == actualptr) {
             // realloc succeeded without reallocating
             return oldptr;
@@ -57,26 +61,26 @@ void *AlignedRealloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignm
     // However, we need to store the actual pointer, so we need to allocate actually size +
     // alignment anyway.
 
-    void *real = ::realloc(actualptr, newsize + alignment);
-    if (!real)
-        return nullptr;
+    void *real = realloc(actualptr, newsize + alignment);
+    if (!real) {
+        return NULL;
+    }
 
     uintptr_t faked = reinterpret_cast<uintptr_t>(real) + alignment;
     faked &= ~(alignment - 1);
     void **faked_ptr = reinterpret_cast<void **>(faked);
 
     if (oldptr) {
-        int64_t oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
         int64_t newoffset = reinterpret_cast<char *>(faked_ptr) - static_cast<char *>(real);
         if (oldoffset != newoffset)
-            ::memmove(faked_ptr, static_cast<char *>(real) + oldoffset, (oldsize < newsize) ? oldsize : newsize);
+            memmove(faked_ptr, static_cast<char *>(real) + oldoffset,
+                (oldsize < newsize) ? oldsize : newsize);
     }
 
     // now save the value of the real pointer at faked-sizeof(void*)
     // by construction, alignment > sizeof(void*) and is a power of 2, so
     // faked-sizeof(void*) is properly aligned for a pointer
     faked_ptr[-1] = real;
-
     return faked_ptr;
 }
 
