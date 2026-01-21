@@ -115,7 +115,7 @@ const HashData HashData::shared_null = {
 
 void *HashData::allocateNode(int align)
 {
-    void *ptr = AlignedMalloc(nodeSize, align);
+    void *ptr = AlignedAlloc(nodeSize, align);
     CHECK_PTR(ptr);
     return ptr;
 }

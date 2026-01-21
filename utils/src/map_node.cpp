@@ -22,7 +22,7 @@ static inline int AlignmentThreshold()
 static inline void *map_allocate(int size, int alignment)
 {
     return alignment > AlignmentThreshold()
-        ? AlignedMalloc(size, alignment)
+        ? AlignedAlloc(size, alignment)
         : ::malloc(size);
 }
 
