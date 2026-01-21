@@ -25,25 +25,21 @@ void *Realloc(void *ptr, size_t size)
     return ::realloc(ptr, size);
 }
 
-void *AlignedMalloc(size_t size, size_t alignment)
+void *AlignedAlloc(size_t size, size_t alignment)
 {
-    return AlignedRelloc(0, size, 0, alignment);
+    return AlignedRealloc(0, size, 0, alignment);
 }
 
-void *AlignedRelloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignment)
+void *AlignedRealloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignment)
 {
     // QT 5.12.10 source code
     // fake an aligned allocation
-    void *actualptr = oldptr ? static_cast<void **>(oldptr)[-1] : 0;
-    int64_t oldoffset = 0;
-    if (oldptr) {
-        oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
-    }
+    void *actualptr = oldptr ? static_cast<void **>(oldptr)[-1] : nullptr;
     if (alignment <= sizeof(void*)) {
         // special, fast case
-        void **newptr = static_cast<void **>(realloc(actualptr, newsize + sizeof(void*)));
+        void **newptr = static_cast<void **>(::realloc(actualptr, newsize + sizeof(void*)));
         if (!newptr)
-            return NULL;
+            return nullptr;
         if (newptr == actualptr) {
             // realloc succeeded without reallocating
             return oldptr;
@@ -61,30 +57,30 @@ void *AlignedRelloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignme
     // However, we need to store the actual pointer, so we need to allocate actually size +
     // alignment anyway.
 
-    void *real = realloc(actualptr, newsize + alignment);
-    if (!real) {
-        return NULL;
-    }
+    void *real = ::realloc(actualptr, newsize + alignment);
+    if (!real)
+        return nullptr;
 
-    uint64_t faked = reinterpret_cast<uint64_t>(real) + alignment;
+    uintptr_t faked = reinterpret_cast<uintptr_t>(real) + alignment;
     faked &= ~(alignment - 1);
     void **faked_ptr = reinterpret_cast<void **>(faked);
 
     if (oldptr) {
+        int64_t oldoffset = static_cast<char *>(oldptr) - static_cast<char *>(actualptr);
         int64_t newoffset = reinterpret_cast<char *>(faked_ptr) - static_cast<char *>(real);
         if (oldoffset != newoffset)
-            memmove(faked_ptr, static_cast<char *>(real) + oldoffset,
-                (oldsize < newsize) ? oldsize : newsize);
+            ::memmove(faked_ptr, static_cast<char *>(real) + oldoffset, (oldsize < newsize) ? oldsize : newsize);
     }
 
     // now save the value of the real pointer at faked-sizeof(void*)
     // by construction, alignment > sizeof(void*) and is a power of 2, so
     // faked-sizeof(void*) is properly aligned for a pointer
     faked_ptr[-1] = real;
+
     return faked_ptr;
 }
 
-void  AlignedFree(void *ptr)
+void AlignedFree(void *ptr)
 {
     if (!ptr) {
         return;
