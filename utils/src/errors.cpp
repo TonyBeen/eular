@@ -7,7 +7,7 @@
 
 #include "utils/errors.h"
 
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
 #include <string.h>
 #elif defined(OS_WINDOWS)
 #include <windows.h>
@@ -54,7 +54,7 @@ const char *StatusToString(status_t status)
 
 std::string FormatErrno(int32_t status)
 {
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     return std::string(strerror(status));
 #elif defined(OS_WINDOWS)
     LPSTR lpMsgBuf;

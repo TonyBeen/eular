@@ -27,7 +27,7 @@
         #define OS_APPLE
     #endif
     #if defined(TARGET_OS_OSX) && TARGET_OS_OSX
-        #define OS_MAC
+        #define OS_MACOS
     #elif defined(TARGET_OS_IOS) && TARGET_OS_IOS
         #define OS_IOS
     #else

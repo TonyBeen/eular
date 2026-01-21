@@ -20,7 +20,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#elif defined(OS_MACOS)
+#elif defined(OS_APPLE)
 #include <sys/event.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -36,7 +36,7 @@ typedef int     socklen_t;
 #include "utils/errors.h"
 #include "utils/time.h"
 
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
 inline int closesocket(int fd) {
     return close(fd);
 }
@@ -49,7 +49,7 @@ namespace eular {
 static std::atomic<uint64_t> gTimerCount = {0};
 
 int SocketPair(int32_t family, int32_t type, int32_t protocol, int sv[2]) {
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     return socketpair(AF_LOCAL, type, protocol, sv);
 #endif
     if (family != AF_INET || type != SOCK_STREAM) {

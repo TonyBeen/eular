@@ -274,7 +274,7 @@ Sem::Sem(const char *semPath, uint8_t val) :
     isNamedSemaphore(true)
 {
     mImpl = std::unique_ptr<SemImpl>(new SemImpl);
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     if (semPath == nullptr) {
         throw Exception("the first param can not be null");
     }
@@ -304,7 +304,7 @@ Sem::Sem(uint8_t valBase) :
     isNamedSemaphore(false)
 {
     mImpl = std::unique_ptr<SemImpl>(new SemImpl);
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     mImpl->_sem = new (std::nothrow)sem_t;
     if (mImpl->_sem == nullptr) {
         throw Exception("new sem_t error. no more memory");
@@ -404,7 +404,7 @@ bool Sem::trywait()
 bool Sem::timedwait(uint32_t ms)
 {
     struct timespec expire;
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     clock_gettime(CLOCK_REALTIME, &expire);
     expire.tv_sec += ms / 1000;
     expire.tv_nsec += (ms % 1000 * 1000 * 1000);
