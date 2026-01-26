@@ -60,6 +60,7 @@ if(EVENT_STATIC_LIB MATCHES "ON")
     add_library(event_wrapper::event_wrapper_static ALIAS event_wrapper_static)
 
     # list(APPEND target_libraries event_wrapper_static)
+    set_target_properties(event_wrapper_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(event_wrapper_static
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
