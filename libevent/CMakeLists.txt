@@ -67,7 +67,12 @@ if(EVENT_STATIC_LIB MATCHES "ON")
             $<INSTALL_INTERFACE:include>
     )
 
-    target_link_libraries(event_wrapper_static PRIVATE c-ares::cares_static event_static)
+    target_link_libraries(event_wrapper_static
+        PUBLIC
+            event_static
+        PRIVATE
+            c-ares::cares_static
+    )
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(event_wrapper_static PUBLIC pthread)
     endif()
@@ -102,7 +107,12 @@ if(EVENT_DYNAMIC_LIB MATCHES "ON")
 
     list(APPEND target_libraries event_wrapper)
 
-    target_link_libraries(event_wrapper PRIVATE c-ares::cares_static event_static)
+    target_link_libraries(event_wrapper
+        PUBLIC
+            event_static
+        PRIVATE
+            c-ares::cares_static
+    )
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(event_wrapper_static PUBLIC pthread)
     endif()
