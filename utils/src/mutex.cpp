@@ -19,6 +19,7 @@
 
 #if defined(OS_APPLE)
 #include <os/lock.h>
+#include <dispatch/dispatch.h>
 #endif
 
 #include "utils/errors.h"
@@ -264,8 +265,11 @@ void RWMutex::unlock()
 struct Sem::SemImpl {
 #ifdef OS_WINDOWS
     HANDLE _sem;    // 信号量
-#else
+#elif defined(OS_LINUX) || defined(OS_APPLE)
     sem_t* _sem;    // 信号量
+#if defined(OS_APPLE)
+    dispatch_semaphore_t _semApple; // 匿名信号量
+#endif
 #endif // OS_WINDOWS
 };
 
@@ -304,7 +308,7 @@ Sem::Sem(uint8_t valBase) :
     isNamedSemaphore(false)
 {
     mImpl = std::unique_ptr<SemImpl>(new SemImpl);
-#if defined(OS_LINUX) || defined(OS_APPLE)
+#if defined(OS_LINUX)
     mImpl->_sem = new (std::nothrow)sem_t;
     if (mImpl->_sem == nullptr) {
         throw Exception("new sem_t error. no more memory");
@@ -312,6 +316,11 @@ Sem::Sem(uint8_t valBase) :
 
     if (sem_init(mImpl->_sem, false, valBase)) {
         throw Exception(String8::Format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
+    }
+#elif defined(OS_APPLE)
+    mImpl->_semApple = dispatch_semaphore_create((intptr_t)valBase);
+    if (!mImpl->_semApple) {
+        throw Exception("dispatch_semaphore_create error. no more memory");
     }
 #else
     mImpl->_sem = CreateSemaphoreA(
@@ -332,14 +341,23 @@ Sem::~Sem()
 {
     if (mImpl->_sem != nullptr) {
 #ifdef OS_WINDOWS
-         CloseHandle(mImpl->_sem);
+        CloseHandle(mImpl->_sem);
 #else
         if (isNamedSemaphore) {
             sem_close(mImpl->_sem);
             sem_unlink(mFilePath.c_str());
-        } else {
+        }
+#endif
+
+#if defined(OS_LINUX)
+        else {
             sem_destroy(mImpl->_sem);
             delete mImpl->_sem;
+        }
+#elif defined(OS_APPLE)
+        else {
+            dispatch_release(mImpl->_semApple);
+            mImpl->_semApple = nullptr;
         }
 #endif // OS_WINDOWS
         mImpl->_sem = nullptr;
@@ -373,12 +391,23 @@ bool Sem::wait()
         return false;
     }
     return true;
-#else
+#elif defined(OS_LINUX)
     int32_t rt = 0;
     do {
         rt = sem_wait(mImpl->_sem);
     } while (rt == -1 && errno == EINTR);
     return 0 == rt;
+#elif defined(OS_APPLE)
+    if (isNamedSemaphore) {
+        int32_t rt = 0;
+        do {
+            rt = sem_wait(mImpl->_sem);
+        } while (rt == -1 && errno == EINTR);
+        return 0 == rt;
+    } else {
+        dispatch_semaphore_wait(mImpl->_semApple, DISPATCH_TIME_FOREVER);
+        return 0;
+    }
 #endif
 }
 
@@ -391,12 +420,23 @@ bool Sem::trywait()
         return false;
     }
     return true;
-#else
+#elif defined(OS_LINUX)
     int32_t rt = 0;
     do {
         rt = sem_trywait(mImpl->_sem);
     } while (rt == -1 && errno == EINTR);
     return 0 == rt;
+#elif defined(OS_APPLE)
+    if (isNamedSemaphore) {
+        int32_t rt = 0;
+        do {
+            rt = sem_trywait(mImpl->_sem);
+        } while (rt == -1 && errno == EINTR);
+        return 0 == rt;
+    } else {
+        dispatch_semaphore_wait(mImpl->_semApple, DISPATCH_TIME_NOW);
+        return 0;
+    }
 #endif
 }
 
@@ -461,4 +501,4 @@ extern "C" int32_t call_once_internal(once_flag_impl *once, void (*callback)(voi
     return pthread_once(&once->_once, callback);
 }
 
-}
+} // namespace eular
