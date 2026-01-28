@@ -4,3 +4,28 @@ find_package(c-ares REQUIRED)
 find_package(Libevent REQUIRED)
 
 include(${CMAKE_CURRENT_LIST_DIR}/event_wrapperTargets.cmake)
+
+# PACKAGE_PREFIX_DIR 是 @PACKAGE_INIT@ 提供的安装前缀
+set(event_wrapper_INCLUDE_DIRS
+    "${PACKAGE_PREFIX_DIR}/include/"
+)
+
+set(event_wrapper_SHARED_LIBRARIES "")
+set(event_wrapper_STATIC_LIBRARIES "")
+
+# 动态库
+if(TARGET eular::event_wrapper)
+    list(APPEND event_wrapper_SHARED_LIBRARIES eular::event_wrapper)
+endif()
+
+# 静态库
+if(TARGET eular::event_wrapper_static)
+    list(APPEND event_wrapper_STATIC_LIBRARIES eular::event_wrapper_static)
+endif()
+
+set(event_wrapper_LIBRARIES
+    ${event_wrapper_SHARED_LIBRARIES}
+    ${event_wrapper_STATIC_LIBRARIES}
+)
+
+set(event_wrapper_FOUND TRUE)
