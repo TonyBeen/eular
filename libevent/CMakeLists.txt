@@ -85,8 +85,10 @@ if(EVENT_STATIC_LIB)
     set_property(TARGET event_wrapper_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
     if(EVENT_SUBMODULE_ENABLE_INSTALL)
         install(TARGETS event_wrapper_static
+            EXPORT event_wrapperTargets
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
+        )
     endif()
 endif()
 
@@ -130,7 +132,7 @@ if(EVENT_DYNAMIC_LIB)
             EXPORT event_wrapperTargets
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
             LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        )
     endif()
 endif()
 
@@ -167,12 +169,12 @@ if(EVENT_SUBMODULE_ENABLE_INSTALL)
 
     export(
         EXPORT event_wrapperTargets
-        NAMESPACE ${PROJECT_NAME}::
+        NAMESPACE eular::
         FILE "cmake/${PROJECT_NAME}Targets.cmake")
 
     install(
         EXPORT event_wrapperTargets
-        NAMESPACE ${PROJECT_NAME}::
+        NAMESPACE eular::
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
         FILE "${PROJECT_NAME}Targets.cmake")
 
