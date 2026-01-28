@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <atomic>
 #include <sys/types.h>
+#include <utils/sysdef.h>
 
 namespace eular {
 class SharedBuffer
@@ -94,7 +95,7 @@ private:
     // Must be sized to preserve correct alignment.
     mutable std::atomic<int32_t>        mRefs;
             size_t                      mSize;
-            uint32_t                    mReserved;
+    UTILS_MAYBE_UNUSED uint32_t         mReserved;
 public:
     // mClientMetadata is reserved for client use.  It is initialized to 0
     // and the clients can do whatever they want with it.  Note that this is

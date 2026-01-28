@@ -38,8 +38,7 @@
 
 namespace eular {
 CodeConvert::CodeConvert() :
-    m_codeConvHandle(INVALID_ICONV_HANDLE),
-    m_cacheSize(0)
+    m_codeConvHandle(INVALID_ICONV_HANDLE)
 {
 }
 
