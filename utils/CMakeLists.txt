@@ -11,6 +11,12 @@ option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 option(ENABLE_TEST "Enable test" OFF)
+option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
+option(UTILS_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
+
+if (NOT UTILS_STATIC_LIB AND NOT UTILS_DYNAMIC_LIB)
+    message(FATAL_ERROR "UTILS_STATIC_LIB and UTILS_DYNAMIC_LIB cannot be both OFF")
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
@@ -20,9 +26,9 @@ if(ENABLE_DEBUG MATCHES "ON")
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-message(STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
-message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
-message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "UTILS CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
+message(STATUS "UTILS CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "UTILS CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
@@ -51,7 +57,7 @@ else()
 endif()
 
 if(NOT APPLE)
-add_subdirectory(3rd/libiconv_v1_18)
+    add_subdirectory(3rd/libiconv_v1_18)
 endif()
 
 file(GLOB HEADER_LIST       "include/utils/*.h")
@@ -60,8 +66,6 @@ list(APPEND HEADER_LIST     ${HPP_HEADER_LIST})
 
 file(GLOB SRC_LIST          "src/*.cpp")
 list(APPEND SRC_LIST        "src/printf.c")
-
-# link_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rd)
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(STATUS "X64")
@@ -72,7 +76,7 @@ else()
 endif()
 
 # build the static library
-if(UTILS_STATIC_LIB MATCHES "ON")
+if(UTILS_STATIC_LIB)
     add_library(utils_static STATIC ${SRC_LIST} ${HEADER_LIST})
     add_library(eular::utils_static ALIAS utils_static)
 
@@ -89,7 +93,7 @@ if(UTILS_STATIC_LIB MATCHES "ON")
     target_link_libraries(utils_static PRIVATE iconv charset)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(utils_static PUBLIC pthread)
-    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_link_libraries(utils_static PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils_static
@@ -118,16 +122,15 @@ if(UTILS_STATIC_LIB MATCHES "ON")
 
     set_property(TARGET utils_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-    if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
+    if(UTILS_SUBMODULE_ENABLE_INSTALL)
         install(TARGETS utils_static
-            RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
     endif()
 endif()
 
 #build dynamic library
-if(UTILS_DYNAMIC_LIB MATCHES "ON")
+if(UTILS_DYNAMIC_LIB)
     add_library(utils SHARED ${SRC_LIST} ${HEADER_LIST})
     add_library(eular::utils ALIAS utils)
 
@@ -144,7 +147,7 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
     target_link_libraries(utils PRIVATE iconv charset)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(utils PUBLIC pthread)
-    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_link_libraries(utils PUBLIC pthread)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_include_directories(utils
@@ -173,11 +176,10 @@ if(UTILS_DYNAMIC_LIB MATCHES "ON")
 
     set_property(TARGET utils PROPERTY LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-    if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
+    if(UTILS_SUBMODULE_ENABLE_INSTALL)
         install(TARGETS utils
-            RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
             ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-            LIBRARY DESTINATION "${INSTALL_LIB_DIR}" )
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}")
     endif()
 endif()
 
@@ -186,17 +188,16 @@ if(ENABLE_TEST MATCHES "ON")
     add_subdirectory(test)
 endif()
 
-if(NOT SKIP_INSTALL_HEADERS AND NOT SKIP_INSTALL_ALL)
+if(UTILS_SUBMODULE_ENABLE_INSTALL)
     install(FILES ${HEADER_LIST} DESTINATION "${INSTALL_INC_DIR}/utils")
-endif()
 
-# uninstall target
-if(NOT TARGET uninstall)
-  configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake"
-    IMMEDIATE @ONLY)
+    # uninstall target
+    if(NOT TARGET uninstall)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake"
+        IMMEDIATE @ONLY)
 
-  add_custom_target(uninstall
-    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake)
+    add_custom_target(uninstall COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/uninstall.cmake)
+    endif()
 endif()
