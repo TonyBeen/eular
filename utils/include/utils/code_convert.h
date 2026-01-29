@@ -111,7 +111,6 @@ protected:
 
 private:
     void*       m_codeConvHandle;
-    uint32_t    m_cacheSize;
     CodeFlag    m_codeFrom;
     CodeFlag    m_codeTo;
 };

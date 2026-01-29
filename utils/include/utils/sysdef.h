@@ -116,7 +116,7 @@
 #define COMPILER_CLANG      3
 #define COMPILER_APPLECLANG 4
 
-#if defined( __clang__ )
+#if defined(__clang__)
 #if defined(__apple_build_version__)
     #define COMPILER_TYPE       COMPILER_APPLECLANG
 #else
@@ -202,12 +202,16 @@
     #else
         #define UTILS_API
     #endif
+
+    #define UTILS_MAYBE_UNUSED
 #elif COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG || COMPILER_TYPE == COMPILER_APPLECLANG
     #ifndef UTILS_STATIC
         #define UTILS_API __attribute__((visibility("default")))
     #else
         #define UTILS_API
     #endif
+
+    #define UTILS_MAYBE_UNUSED __attribute__((unused))
 #else
     #error "Unknown compiler type."
 #endif
