@@ -50,10 +50,14 @@ public:
     Connection() = default;
     virtual ~Connection() = default;
 
-    virtual int32_t createStream() = 0;
-    virtual int32_t streamCount() const = 0;
-    virtual Statistic statistic() const = 0;
-    virtual void close() = 0;
+    virtual void        registerStreamCanCreate(const OnStreamCanCreate &cb) = 0;
+    virtual void        registerStreamCreated(const OnStreamCreated &cb) = 0;
+    virtual int32_t     streamCount() const = 0;
+    virtual Statistic   statistic() const = 0;
+    virtual Description description() const = 0;
+
+    virtual int32_t     createStream() = 0;
+    virtual void        close() = 0;
 };
 
 } // namespace utp

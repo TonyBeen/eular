@@ -13,6 +13,7 @@
 #include "context/connection_impl.h"
 #include "util/error.h"
 #include "util/random.hpp"
+#include "context_impl.h"
 
 static std::atomic<uint32_t> g_contextId{0};
 
@@ -54,6 +55,19 @@ void ContextImpl::setOnConnectionClosed(const Context::OnConnectionClosed &cb)
     m_onConnectionClosed = cb;
 }
 
+void ContextImpl::wantWrite(ConnectionImpl *conn)
+{
+    if (conn == nullptr) {
+        return;
+    }
+
+    m_wantWriteConns.push_back(conn);
+    if (m_writeEvent.hasPending()) {
+        return;
+    }
+    m_writeEvent.start();
+}
+
 int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     int32_t status = m_udpSocket.bind(ip, port, ifname);
@@ -61,9 +75,14 @@ int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::strin
         return status;
     }
 
-    m_readEvent.reset(m_base, m_udpSocket.fd(), ev::EventPoll::Read | ev::EventPoll::EdgeTrigger, [this] (socket_t, ev::EventPoll::event_t) {
-        this->onReadEvent();
+    m_writeEvent.reset(m_base, m_udpSocket.fd(), ev::EventPoll::WriteOnce, [this] (socket_t, ev::EventPoll::event_t) {
+        onWriteEvent();
     });
+
+    m_readEvent.reset(m_base, m_udpSocket.fd(), ev::EventPoll::Read | ev::EventPoll::EdgeTrigger, [this] (socket_t, ev::EventPoll::event_t) {
+        onReadEvent();
+    });
+    m_readEvent.start();
     m_udpSocket.updateTag(tag());
     return UTP_ERR_NO_ERROR;
 }
@@ -116,6 +135,21 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
 Connection::Ptr ContextImpl::accept()
 {
     return Connection::Ptr();
+}
+
+void ContextImpl::onReadEvent()
+{
+    // TODO 读取数据, 并解析数据包, 分发给对应的 ConnectionImpl
+}
+
+void ContextImpl::onWriteEvent()
+{
+    std::list<ConnectionImpl *> conns;
+    conns.swap(m_wantWriteConns);
+
+    for (ConnectionImpl *conn : conns) {
+        conn->onWrite();
+    }
 }
 
 } // namespace utp

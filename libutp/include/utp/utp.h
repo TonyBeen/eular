@@ -33,10 +33,11 @@ public:
         uint16_t    port{0};
         uint32_t    timeout{3000}; // ms
         int8_t      retries{0};
+        bool        encrypted{false};
     };
 
     using OnConnected = std::function<void(Connection::Ptr)>;
-    using OnConnectError = std::function<void(int32_t, ConnectInfo)>;
+    using OnConnectError = std::function<void(int32_t, const std::string &, ConnectInfo)>;
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
     using OnNewConnection = std::function<void(Connection::Ptr)>;
 

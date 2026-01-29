@@ -8,11 +8,16 @@
 #ifndef __UTP_CONTEXT_CONNECTION_H__
 #define __UTP_CONTEXT_CONNECTION_H__
 
+#include <map>
+
 #include <event/timer.h>
 
 #include "utp/connection.h"
 #include "socket/udp.h"
 #include "context/context_impl.h"
+#include "context/stream_impl.h"
+#include "crypto/x25519_wrapper.h"
+#include "crypto/aes_gcm_context.h"
 
 namespace eular {
 namespace utp {
@@ -32,7 +37,7 @@ public:
         kStateConnected,        // 已连接
         kStateCloseSent,        // 已发送关闭包
         kStateCloseReceived,    // 收到关闭包
-        kStatePtoTimedWait,     // 3 PTO超时等待
+        kStatePtoTimedWait,     // PTO超时等待
     };
 
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);
@@ -40,7 +45,17 @@ public:
 
     int32_t connect(const Context::ConnectInfo &info);
 
-    void onWrite();
+    void    onWrite();
+
+public:
+    void        registerStreamCanCreate(const OnStreamCanCreate &cb) override;
+    void        registerStreamCreated(const OnStreamCreated &cb) override;
+    int32_t     streamCount() const override;
+    Statistic   statistic() const override;
+    Description description() const override;
+
+    int32_t     createStream() override;
+    void        close() override;
 
 public:
     uint64_t packetNumber() { return m_packetNumber++; }
@@ -49,8 +64,7 @@ public:
 
 private:
     int32_t sendInitialPacket();
-    // int32_t send0RTTPacket();
-    void onConnTimeout();
+    void    onConnTimeout();
 
 private:
     ContextImpl*            m_ctx{};
@@ -63,6 +77,10 @@ private:
     uint32_t                m_cid;
     uint32_t                m_peerCid;
     uint64_t                m_packetNumber{1};
+
+    std::map<uint32_t, StreamImpl::SP> m_streams;
+    X25519Wrapper::Ptr      m_x25519;
+    AesGcmContext::Ptr      m_aesCtx;
 };
 
 } // namespace utp

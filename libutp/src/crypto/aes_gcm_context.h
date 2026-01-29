@@ -36,6 +36,8 @@ public:
     using AesKey128 = std::array<uint8_t, 16>; // AES-128 key size
     using AesKey256 = std::array<uint8_t, 32>; // AES-256 key size
     using Nonce     = std::array<uint8_t, GCM_NONCE_SIZE>;
+    using Ptr       = std::unique_ptr<AesGcmContext>;
+    using SP        = std::shared_ptr<AesGcmContext>;
 
     AesGcmContext() = default;
     ~AesGcmContext();

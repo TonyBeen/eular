@@ -22,9 +22,14 @@ public:
         return &instance;
     }
 
-    uint16_t    base_mtu = 1200;
+    uint16_t    base_mtu = 1400;            // default mtu
+    bool        enable_dplpmtud = true;     // enable dplpmtud
     int32_t     recv_buf_size = 1024 * 1024;
     int32_t     send_buf_size = 1024 * 1024;
+
+    // ack
+    uint32_t    packet_no_threshold = 10;   // 包号差阈值
+    uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt
 };
 
 } // namespace utp

@@ -19,6 +19,7 @@
     #include <iphlpapi.h>
     #include <mswsock.h>
     #include <Windows.h>
+    #include "queue.h" // 3rd
 
     #pragma comment(lib, "ws2_32.lib")
     #pragma comment(lib, "iphlpapi.lib")
@@ -54,6 +55,7 @@
     #include <ifaddrs.h>
     #include <linux/errqueue.h>
     #include <netinet/ip_icmp.h>
+    #include <sys/queue.h>
 
     #ifndef SO_REUSEPORT
     #define SO_REUSEPORT 15
@@ -80,6 +82,7 @@
     #include <ifaddrs.h>
     #include <netinet/ip_icmp.h>
     #include <mach/mach_time.h>
+    #include <sys/queue.h>
 #endif
 
 #endif // __UTP_COMMON_H__

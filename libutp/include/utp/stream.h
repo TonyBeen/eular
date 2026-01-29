@@ -8,6 +8,8 @@
 #ifndef __UTP_STREAM_H__
 #define __UTP_STREAM_H__
 
+#include <memory>
+
 namespace eular {
 namespace utp {
 class Stream

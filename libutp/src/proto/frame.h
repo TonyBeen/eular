@@ -40,6 +40,8 @@ enum FrameType : uint8_t {
     kFrameMax,
 };
 
+static inline std::string FrameTypeToString(uint32_t type);
+
 class FrameHeader {
 public:
     FrameHeader() = default;
@@ -52,6 +54,7 @@ public:
     FrameType   type{kFrameInvalid};
 };
 
+#define FRAME_STREAM_HDR_SIZE   (1 + 1 + 2 + 8 + 2) // type + stream_flag + stream_id + stream_offset + stream_data_length
 class FrameStream : public FrameHeader {
 public:
     enum FrameStreamFlags {
@@ -66,42 +69,13 @@ public:
     int32_t Decode(const void *data, size_t len) override;
 
 public:
-    uint16_t        stream_id{0};
     uint8_t         stream_flag{kFrameStreamFlagNone};
+    uint16_t        stream_id{0};
     uint64_t        stream_offset{0};
     uint16_t        stream_date_length{0};
     const uint8_t*  stream_data{nullptr}; // aes-gcm tag 在数据后面
-    std::string     stream_data_real;
 };
 
-// 场景: 接收端收到包号 95-100, 90-92, 80-85
-// QUIC 由于存在变长编码, 所以在设计时进行减1处理, 在边界时节省1字节, 这样在连续确认时, 可以节省更多字节. 此处未采用变长编码, 故使用实际数值.
-// 包号状态:
-//   80   81   82  83  84  85  86  87  88  89  90  91  92   93  94  95  96  97   98  99  100
-//   ✓    ✓    ✓   ✓   ✓   ✓  ✗   ✗   ✗  ✗   ✓   ✓   ✓   ✗   ✗   ✓   ✓   ✓   ✓   ✓    ✓
-// 
-// ACK 帧构造: 
-// 
-//  Largest Acknowledged = 100
-//
-//  First ACK Range = 6
-//  └── 确认 [95, 100] 共 6 个包
-//
-//  ACK Range Count = 2
-//  └── 有 2 个额外的 ACK Range
-//
-//  ACK Range 1:
-//  ├── Gap = 3
-//  │   └── 未确认 [93, 94] 共 2 个包 (Gap)
-//  └── ACK Range Length = 4
-//      └── 确认 [90, 92] 共 3 个包 (Length)
-//
-//  ACK Range 2:
-//  ├── Gap = 4
-//  │   └── 未确认 [86, 89] 共 4 个包 (Gap)
-//  └── ACK Range Length = 6
-//      └── 确认 [80, 85] 共 6 个包 (Length)
-//
 class FrameAck : public FrameHeader {
 public:
     FrameAck() = default;
@@ -133,8 +107,6 @@ public:
 
 public:
     uint16_t        padding_length{0};
-    const uint8_t*  padding_data{nullptr};
-    std::string     padding_data_real;
 };
 
 class FrameResetStream : public FrameHeader {

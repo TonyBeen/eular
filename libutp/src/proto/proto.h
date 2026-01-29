@@ -26,13 +26,14 @@
 //   │───────────────────────────────────────────────────>│
 //   │                                                    │
 
-#define UDP_HEADER_SIZE         20 // UDP 头部长度
+#define UTP_HEADER_SIZE             20 // UDP 头部长度
 
 #define UTP_TYPE_NONE               0x00 // None
 #define UTP_TYPE_INITIAL            0x01 // Client Hello
 #define UTP_TYPE_HANDSHAKE          0x02 // Server Hello
 #define UTP_TYPE_0RTT               0x03 // 0-RTT Data
 #define UTP_TYPE_CONNECTION_CLOSE   0x04 // Connection Close
+#define UTP_TYPE_CTRL               0x05 // Control Frame
 
 #define SESSION_TICKET_LIFETIME_S   7200 // 2 hours, max 18 hours
 #define SESSION_TOKEN_SIZE          32   // token size
@@ -43,17 +44,15 @@
 
 namespace eular {
 namespace utp {
-#pragma pack(push, 1)
 struct UTPHeaderProto {
     uint32_t    scid;           // source connection ID
     uint32_t    dcid;           // destination connection ID
     uint64_t    pn;             // packet number
     uint16_t    payload_length; // 有效载荷长度
-    uint8_t     flags;          // 标志位
+    uint8_t     types;          // 类型
     uint8_t     reserve;        // 保留字段
 };
-#pragma pack(pop)
-static_assert(sizeof(UTPHeaderProto) == 20, "UTPHeaderProto size error");
+
 
 struct SessionTicket {
     uint64_t issue_time;              // 发放时间

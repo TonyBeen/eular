@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <array>
+#include <memory>
 
 #include <openssl/curve25519.h>
 #include <openssl/rand.h>
@@ -31,6 +32,7 @@ public:
     using PublicKey = std::array<uint8_t, PUBLIC_KEY_SIZE>;
     using SharedSecret = std::array<uint8_t, SHARED_SECRET_SIZE>;
     using SharedSecretShort = std::array<uint8_t, SHARED_SECRET_SIZE / 2>;
+    using Ptr = std::unique_ptr<X25519Wrapper>;
 
     X25519Wrapper();
     explicit X25519Wrapper(const PrivateKey& private_key);

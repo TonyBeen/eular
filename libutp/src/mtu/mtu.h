@@ -14,6 +14,9 @@
 #define IPV6_HEADER_SIZE    40
 #define UDP_HEADER_SIZE     8
 
+#define ETHERNET_MTU_MIN    1280 // IPv6 minimum MTU
+#define ETHERNET_MTU_MID    1400 // middle MTU
+
 namespace eular {
 namespace utp {
 

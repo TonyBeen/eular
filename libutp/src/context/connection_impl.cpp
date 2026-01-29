@@ -9,6 +9,7 @@
 #include "utp/errno.h"
 #include "connection_impl.h"
 #include "util/random.hpp"
+#include "proto/frame.h"
 
 namespace eular {
 namespace utp {
@@ -41,7 +42,12 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
 
 int32_t ConnectionImpl::sendInitialPacket()
 {
-
+    if (m_connectInfo.encrypted) {
+        m_x25519 = std::make_unique<X25519Wrapper>();
+        FrameCrypto crypto;
+    }
+    
+    
 }
 
 void ConnectionImpl::onConnTimeout()
