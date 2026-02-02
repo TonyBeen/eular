@@ -50,6 +50,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # 匹配 AppleClang 和 Clang
     set(MACRO_DEFINITIONS -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
     set(CXX_COMPILER_FLAGS -W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
+    list(APPEND CXX_COMPILER_FLAGS -Wno-unused-private-field) # AppleClang 默认开启该警告
     set(CXX_COMPILER_FLAGS ${CXX_COMPILER_FLAGS} -fPIC -pthread)
     # set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
 else()

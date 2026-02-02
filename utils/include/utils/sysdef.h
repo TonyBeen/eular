@@ -202,16 +202,12 @@
     #else
         #define UTILS_API
     #endif
-
-    #define UTILS_MAYBE_UNUSED
 #elif COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG || COMPILER_TYPE == COMPILER_APPLECLANG
     #ifndef UTILS_STATIC
         #define UTILS_API __attribute__((visibility("default")))
     #else
         #define UTILS_API
     #endif
-
-    #define UTILS_MAYBE_UNUSED __attribute__((unused))
 #else
     #error "Unknown compiler type."
 #endif
