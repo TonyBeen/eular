@@ -16,14 +16,14 @@
 #include "socket/util.h"
 #include "utp/config.h"
 #include "logger/logger.h"
-#include "udp.h"
 
 namespace eular {
 namespace utp {
-UdpSocket::UdpSocket()
+UdpSocket::UdpSocket(Config &config) :
 #if defined(USE_SENDMMSG)
-    : m_mmsg(MAX_MMSG_SIZE, UTP_ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE)
+    m_mmsg(MAX_MMSG_SIZE, UTP_ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE),
 #endif
+    m_config(config)
 {
 #if defined(USE_SENDMMSG)
     if (!m_mmsg.valid()) {
@@ -91,11 +91,11 @@ int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string 
             break;
         }
 
-        if (Socket::Ioctl::SetRecvBufferSize(m_sock, Config::Instance()->recv_buf_size) < 0) {
+        if (Socket::Ioctl::SetRecvBufferSize(m_sock, m_config.recv_buf_size) < 0) {
             break;
         }
 
-        if (Socket::Ioctl::SetSendBufferSize(m_sock, Config::Instance()->send_buf_size) < 0) {
+        if (Socket::Ioctl::SetSendBufferSize(m_sock, m_config.send_buf_size) < 0) {
             break;
         }
 

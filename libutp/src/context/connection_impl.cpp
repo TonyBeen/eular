@@ -25,6 +25,10 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
 
 int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
 {
+    if (m_state != State::kStateDisconnected) {
+        return UTP_ERR_INVALID_STATE;
+    }
+
     m_state = State::kStateWaitSendInitial;
     m_connectInfo = info;
 

@@ -45,7 +45,7 @@ public:
     // 禁止拷贝
     AesGcmContext(const AesGcmContext&) = delete;
     AesGcmContext& operator=(const AesGcmContext&) = delete;
-    
+
     // 允许移动
     AesGcmContext(AesGcmContext&& other) noexcept;
     AesGcmContext& operator=(AesGcmContext&& other) noexcept;

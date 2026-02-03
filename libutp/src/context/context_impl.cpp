@@ -15,12 +15,15 @@
 #include "util/random.hpp"
 #include "context_impl.h"
 
-static std::atomic<uint32_t> g_contextId{0};
+static std::atomic<uint32_t>    g_contextId{0};
+static eular::utp::Config       g_defaultConfig;
 
 namespace eular {
 namespace utp {
-ContextImpl::ContextImpl(event_base *base) :
-    m_base(base)
+ContextImpl::ContextImpl(event_base *base, Config *config) :
+    m_base(base),
+    m_config(config != nullptr ? config : &g_defaultConfig),
+    m_udpSocket(config != nullptr ? *config : g_defaultConfig)
 {
     uint32_t id = g_contextId.fetch_add(1, std::memory_order_relaxed);
     m_tag = "[ContextImpl " + std::to_string(id) + "]";

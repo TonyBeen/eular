@@ -29,15 +29,16 @@ public:
     using WP = std::weak_ptr<ConnectionImpl>;
 
     enum State {
-        // 没有 Handshake 状态是因为响应后即连接成功
-        kStateDisconnected,     // 断连状态
-        kStateWaitSendInitial,  // 等待发送初始包
-        kStateWaitSend0RTT,     // 等待发送0-RTT包
-        kStateInitialSent,      // 已发送初始包
-        kStateConnected,        // 已连接
-        kStateCloseSent,        // 已发送关闭包
-        kStateCloseReceived,    // 收到关闭包
-        kStatePtoTimedWait,     // PTO超时等待
+        kStateDisconnected,         // 断连状态
+        kStateWaitSendInitial,      // 等待发送初始包
+        kStateWaitSend0RTT,         // 等待发送0-RTT包
+        kStateInitialSent,          // 已发送初始包
+        kStateHandshakeSent,        // 已发送握手包
+        kStateHandshakeReceived,    // 已收到握手包
+        kStateConnected,            // 已连接
+        kStateCloseSent,            // 已发送关闭包
+        kStateCloseReceived,        // 收到关闭包
+        kStatePtoTimedWait,         // PTO超时等待
     };
 
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);

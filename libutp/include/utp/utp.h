@@ -12,6 +12,7 @@
 #include <memory>
 #include <functional>
 
+#include <utp/config.h>
 #include <utp/platform.h>
 #include <utp/connection.h>
 
@@ -41,7 +42,7 @@ public:
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
     using OnNewConnection = std::function<void(Connection::Ptr)>;
 
-    Context(event_base *base);
+    Context(event_base *base, Config *config = nullptr);
     ~Context();
 
 public:

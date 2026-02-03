@@ -12,6 +12,7 @@
 
 #include <utils/buffer.h>
 
+#include "utp/config.h"
 #include "commom.h"
 #include "socket/mmsg.h"
 #include "socket/packet.h"
@@ -37,7 +38,7 @@ public:
         Address     peer_addr;
     };
 
-    UdpSocket();
+    UdpSocket(Config &config);
     ~UdpSocket();
 
 public:
@@ -63,9 +64,10 @@ public:
     int32_t send(const std::vector<MsgMetaInfo> &msgVec);
 
 private:
-    socket_t    m_sock{INVALID_SOCKET};
-    Address     m_bindAddr;
-    Address     m_localAddr;
+    socket_t        m_sock{INVALID_SOCKET};
+    Address         m_bindAddr;
+    Address         m_localAddr;
+    const Config&   m_config;
 
 #if defined(USE_SENDMMSG)
     MultipleMsg     m_mmsg;

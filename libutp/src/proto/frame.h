@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+#include <utils/endian.hpp>
+
 #include "proto/proto.h"
 
 #define STREAM_IS_FIN(flag)    ((flag) & FrameStream::kFrameStreamFlagFin)
@@ -19,43 +21,39 @@ namespace eular {
 namespace utp {
 
 enum FrameType : uint8_t {
-    kFrameInvalid           = 0x00, // 无效帧
-    kFrameStream            = 0x01, // 流数据帧
-    kFrameAck               = 0x02, // 确认帧
-    kFramePadding           = 0x03, // 填充帧
-    kFrameResetStream       = 0x04, // 流重置帧
-    kFrameConnectionClose   = 0x05, // 连接关闭帧
-    kFrameBlocked           = 0x06, // 连接级阻塞帧
-    FrameStreamBlocked      = 0x07, // 流级阻塞帧
-    kFramePing              = 0x08, // 心跳帧
-    kFrameMaxData           = 0x09, // 连接级最大数据帧
-    kFrameMaxStreamData     = 0x0A, // 流级最大数据帧
-    kFrameMaxStreams        = 0x0B, // 最大流数帧
-    kFramePathChallenge     = 0x0C, // 路径校验帧
-    kFramePathResponse      = 0x0D, // 路径响应帧
-    kFrameCrypto            = 0x0E, // 加密数据帧
-    kFrameSessionToken      = 0x0F, // 会话票据帧
-    kFrameAckFrequency      = 0x10, // 确认频率帧
-    kFrameVersion           = 0x11, // 版本协商帧
+    kFrameInvalid,          // 无效帧
+    kFrameStream,           // 流数据帧
+    kFrameAck,              // 确认帧
+    kFramePadding,          // 填充帧
+    kFrameConnectionClose,  // 连接关闭帧
+    kFramePing,             // 心跳帧
+    kFrameResetStream,      // 流重置帧
+    kFrameStreamsBlocked,   // 流ID阻塞帧
+    kFrameMaxStreams,       // 最大流数帧
+    kFramePathChallenge,    // 路径校验帧
+    kFramePathResponse,     // 路径响应帧
+    kFrameCrypto,           // 加密数据帧
+    kFrameSessionToken,     // 会话票据帧
+    kFrameAckFrequency,     // 确认频率帧
+    kFrameVersion,          // 版本协商帧
+    kFrameHandshakeDone,    // 握手完成帧
     kFrameMax,
 };
 
 static inline std::string FrameTypeToString(uint32_t type);
 
-class FrameHeader {
+class FrameBase {
 public:
-    FrameHeader() = default;
-    virtual ~FrameHeader() = default;
-
-    virtual int32_t Encode(std::string &out) const = 0;
-    virtual int32_t Decode(const void *data, size_t len) = 0;
+    FrameBase() = default;
+    FrameBase(FrameType t) : type(t) {}
+    virtual ~FrameBase() = default;
 
 public:
     FrameType   type{kFrameInvalid};
 };
 
-#define FRAME_STREAM_HDR_SIZE   (1 + 1 + 2 + 8 + 2) // type + stream_flag + stream_id + stream_offset + stream_data_length
-class FrameStream : public FrameHeader {
+#define FRAME_STREAM_HDR_SIZE   (1 + 1 + 2 + 4 + 8) // type + stream_flag + stream_data_length + stream_id + stream_offset
+class FrameStream : public FrameBase {
 public:
     enum FrameStreamFlags {
         kFrameStreamFlagNone    = 0x00,
@@ -70,34 +68,14 @@ public:
 
 public:
     uint8_t         stream_flag{kFrameStreamFlagNone};
-    uint16_t        stream_id{0};
+    uint16_t        stream_data_length{0};
+    uint32_t        stream_id{0};
     uint64_t        stream_offset{0};
-    uint16_t        stream_date_length{0};
     const uint8_t*  stream_data{nullptr}; // aes-gcm tag 在数据后面
 };
 
-class FrameAck : public FrameHeader {
-public:
-    FrameAck() = default;
-    ~FrameAck() = default;
 
-    int32_t Encode(std::string &out) const override;
-    int32_t Decode(const void *data, size_t len) override;
-
-public:
-    struct AckRange {
-        uint32_t    gap{0};          // gap to the previous ack range
-        uint32_t    length{0};       // length of this ack range
-    };
-
-    uint8_t         ack_count{0};       // number of ack blocks
-    uint16_t        ack_delay{0};       // ms
-    uint64_t        ack_largest{0};     // largest acknowledged packet number
-    uint64_t        first_ack_range;    // first ack range
-    std::vector<AckRange>  ack_ranges;  // additional ack ranges
-};
-
-class FramePadding : public FrameHeader {
+class FramePadding : public FrameBase {
 public:
     FramePadding() = default;
     ~FramePadding() = default;
@@ -109,7 +87,7 @@ public:
     uint16_t        padding_length{0};
 };
 
-class FrameResetStream : public FrameHeader {
+class FrameResetStream : public FrameBase {
 public:
     FrameResetStream() = default;
     ~FrameResetStream() = default;
@@ -145,7 +123,7 @@ public:
 //       │                                       │
 //       │     释放资源                  释放资源   │
 //       │                                       │
-class FrameConnectionClose : public FrameHeader {
+class FrameConnectionClose : public FrameBase {
 public:
     FrameConnectionClose() = default;
     ~FrameConnectionClose() = default;
@@ -156,7 +134,7 @@ public:
 public:
     uint16_t        error_code{0};
     uint16_t        reason_length{0};
-    const uint8_t*  reason_phrase{nullptr}; // utf-8
+    const uint8_t*  reason_phrase{nullptr}; // ascii
     std::string     reason_phrase_real;
 };
 
@@ -173,7 +151,7 @@ public:
  *
  * 4. 丢包安全：帧丢失后重传不会重复累加
  */
-class FrameBlocked : public FrameHeader {
+class FrameBlocked : public FrameBase {
 public:
     FrameBlocked() = default;
     ~FrameBlocked() = default;
@@ -185,7 +163,7 @@ public:
     uint64_t    maximum_data{0}; // 当前被阻塞的偏移量
 };
 
-class FrameStreamBlocked : public FrameHeader {
+class FrameStreamBlocked : public FrameBase {
 public:
     FrameStreamBlocked() = default;
     ~FrameStreamBlocked() = default;
@@ -198,7 +176,7 @@ public:
     uint64_t    maximum_stream_data{0}; // 被阻塞时的偏移量
 };
 
-class FramePing : public FrameHeader {
+class FramePing : public FrameBase {
 public:
     FramePing() = default;
     ~FramePing() = default;
@@ -207,7 +185,7 @@ public:
     int32_t Decode(const void *data, size_t len) override;
 };
 
-class FrameMaxData : public FrameHeader {
+class FrameMaxData : public FrameBase {
 public:
     FrameMaxData() = default;
     ~FrameMaxData() = default;
@@ -219,7 +197,7 @@ public:
     uint64_t    maximum_data{0}; // 连接级别数据最大偏移量
 };
 
-class FrameMaxStreamData : public FrameHeader {
+class FrameMaxStreamData : public FrameBase {
 public:
     FrameMaxStreamData() = default;
     ~FrameMaxStreamData() = default;
@@ -232,7 +210,7 @@ public:
     uint64_t    maximum_stream_data{0}; // 流级别数据最大偏移量
 };
 
-class FrameMaxStreams : public FrameHeader {
+class FrameMaxStreams : public FrameBase {
 public:
     FrameMaxStreams() = default;
     ~FrameMaxStreams() = default;
@@ -245,7 +223,7 @@ public:
     uint16_t    maximum_streams{0};  // 最大流数量
 };
 
-class FramePathChallenge : public FrameHeader {
+class FramePathChallenge : public FrameBase {
 public:
     FramePathChallenge() = default;
     ~FramePathChallenge() = default;
@@ -254,7 +232,7 @@ public:
     int32_t Decode(const void *data, size_t len) override;
 };
 
-class FramePathResponse : public FrameHeader {
+class FramePathResponse : public FrameBase {
 public:
     FramePathResponse() = default;
     ~FramePathResponse() = default;
@@ -266,7 +244,7 @@ public:
     uint8_t     token[SESSION_TOKEN_SIZE]; // SHA-256
 };
 
-class FrameCrypto : public FrameHeader {
+class FrameCrypto : public FrameBase {
 public:
     FrameCrypto() = default;
     ~FrameCrypto() = default;
@@ -279,7 +257,7 @@ public:
     std::array<uint8_t, 32>   crypto_data{};
 };
 
-class FrameSessionToken : public FrameHeader {
+class FrameSessionToken : public FrameBase {
 public:
     FrameSessionToken() = default;
     ~FrameSessionToken() = default;
@@ -293,7 +271,7 @@ public:
     std::array<uint8_t, SESSION_TOKEN_SIZE> session_token{};
 };
 
-class FrameAckFrequency : public FrameHeader {
+class FrameAckFrequency : public FrameBase {
 public:
     FrameAckFrequency() = default;
     ~FrameAckFrequency() = default;
@@ -308,7 +286,7 @@ public:
     uint32_t    max_ack_delay_ms;           // 最大 ACK 延迟, 单位毫秒
 };
 
-class FrameVersion : public FrameHeader {
+class FrameVersion : public FrameBase {
 public:
     FrameVersion() = default;
     ~FrameVersion() = default;

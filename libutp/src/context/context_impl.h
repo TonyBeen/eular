@@ -42,7 +42,7 @@ class ContextImpl
     DISALLOW_MOVE(ContextImpl);
 
 public:
-    ContextImpl(event_base *base);
+    ContextImpl(event_base *base, Config *config);
     ~ContextImpl();
 
     const std::string &tag() const;
@@ -67,6 +67,7 @@ private:
 private:
     std::string     m_tag;
     event_base*     m_base;
+    Config*         m_config;
     UdpSocket       m_udpSocket;
 
     ev::EventPoll   m_readEvent;
