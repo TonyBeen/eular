@@ -10,7 +10,7 @@ set(CMAKE_C_STANDARD 11)
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
-option(ENABLE_TEST "Enable test" OFF)
+option(ENABLE_TEST "Enable test" ON)
 option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
 option(UTILS_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
 
