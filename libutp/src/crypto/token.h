@@ -18,21 +18,47 @@
 
 #include <event/timer.h>
 
+#include "utp/platform.h"
+
+#if defined(OS_WINDOWS)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+#elif defined(OS_LINUX) || defined(OS_APPLE)
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <sys/socket.h>
+    #include <netdb.h>
+#endif
+
+
 #define AEAD_KEY_SIZE    32
 #define AEAD_NONCE_SIZE  12
 #define AEAD_TAG_SIZE    16
 
 namespace eular {
 namespace utp {
-
 struct TokenMeta {
     uint32_t    timestamp;  // unix seconds
     uint32_t    cid;        // connection id
     uint32_t    version;    // peer utp version
     uint32_t    secret;     // local secret number
+    uint16_t    family;     // peer address family
+    union {
+        in_addr     v4;     // peer ipv4 address
+        in6_addr    v6;     // peer ip address
+    } host;
+#define host_v4 host.v4
+#define host_v6 host.v6
+
+    TokenMeta() {
+        std::memset(&this->host, 0, sizeof(this->host));
+    }
 };
 
-static const size_t TOKEN_META_SIZE = sizeof(TokenMeta);
+static const size_t TOKEN_META_SIZE = 4 + 4 + 4 + 4 + 2 + 16; // 34 bytes
 static const std::string TOKEN_AAD("UTP-Token-AAD");
 
 // Token format: nonce(12) || ciphertext(sizeof(TokenMeta)) || tag(16)

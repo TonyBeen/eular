@@ -6,10 +6,10 @@
  ************************************************************************/
 
 #include "crypto/token.h"
-#include "token.h"
 
 #include <utils/exception.h>
-#include <utils/endian.hpp>
+#include <utils/serialize.hpp>
+
 #include "util/error.h"
 
 #ifndef TOKEN_KEY_UPDATE_INTERVAL_MS
@@ -39,37 +39,6 @@ TokenAuth::TokenAuth(event_base *base)
     if (!m_sealCtx || !m_openCtx) {
         throw Exception("EVP_CIPHER_CTX_new failed");
     }
-
-    // int32_t status = 0;
-    // int32_t outputSize = 0;
-    // status = EVP_EncryptInit_ex(m_ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
-    // if (status != 1) {
-    //     EVP_CIPHER_CTX_free(m_ctx);
-    //     m_ctx = nullptr;
-    //     throw Exception("EVP_EncryptInit_ex failed");
-    // }
-
-    // status = EVP_CIPHER_CTX_ctrl(m_ctx, EVP_CTRL_GCM_SET_IVLEN, AEAD_NONCE_SIZE, nullptr);
-    // if (status != 1) {
-    //     EVP_CIPHER_CTX_free(m_ctx);
-    //     m_ctx = nullptr;
-    //     throw Exception("EVP_CIPHER_CTX_ctrl failed");
-    // }
-
-    // status = EVP_EncryptInit_ex(m_ctx, nullptr, nullptr, m_key.data(), nullptr);
-    // if (status != 1) {
-    //     EVP_CIPHER_CTX_free(m_ctx);
-    //     m_ctx = nullptr;
-    //     throw Exception("EVP_EncryptInit_ex failed");
-    // }
-
-    // // AAD
-    // status = EVP_EncryptUpdate(m_ctx, nullptr, &outputSize, (const uint8_t *)(TOKEN_AAD.c_str()), TOKEN_AAD.size());
-    // if (status != 1) {
-    //     EVP_CIPHER_CTX_free(m_ctx);
-    //     m_ctx = nullptr;
-    //     throw Exception("EVP_EncryptUpdate failed");
-    // }
 }
 
 TokenAuth::~TokenAuth()
@@ -230,34 +199,26 @@ void TokenAuth::onUpdateKey()
 
 void TokenAuth::encode(const TokenMeta &meta, std::array<uint8_t, TOKEN_META_SIZE> &plaintext)
 {
-    uint8_t *p = plaintext.data();
-
-    auto put_u32 = [&] (uint32_t v) {
-        v = htobe32(v);
-        std::memcpy(p, &v, sizeof(v));
-        p += sizeof(v);
-    };
-
-    put_u32(meta.timestamp);
-    put_u32(meta.cid);
-    put_u32(meta.version);
-    put_u32(meta.secret);
+    uint8_t *offset = plaintext.data();
+    size_t size = TOKEN_META_SIZE;
+    offset = Serialize::SerializeTo(offset, size, meta.timestamp);
+    offset = Serialize::SerializeTo(offset, size, meta.cid);
+    offset = Serialize::SerializeTo(offset, size, meta.version);
+    offset = Serialize::SerializeTo(offset, size, meta.secret);
+    offset = Serialize::SerializeTo(offset, size, meta.family);
+    std::memcpy(offset, &meta.host, sizeof(meta.host));
 }
 
 void TokenAuth::decode(const std::array<uint8_t, TOKEN_META_SIZE> &plaintext, TokenMeta &meta)
 {
-    const uint8_t *p = plaintext.data();
-    auto get_u32 = [&]() -> uint32_t {
-        uint32_t v;
-        std::memcpy(&v, p, sizeof(v));
-        p += sizeof(v);
-        return be32toh(v);
-    };
-
-    meta.timestamp = get_u32();
-    meta.cid       = get_u32();
-    meta.version   = get_u32();
-    meta.secret    = get_u32();
+    const uint8_t *offset = plaintext.data();
+    size_t size = TOKEN_META_SIZE;
+    offset = Serialize::DeserializeFrom(offset, size, meta.timestamp);
+    offset = Serialize::DeserializeFrom(offset, size, meta.cid);
+    offset = Serialize::DeserializeFrom(offset, size, meta.version);
+    offset = Serialize::DeserializeFrom(offset, size, meta.secret);
+    offset = Serialize::DeserializeFrom(offset, size, meta.family);
+    std::memcpy(&meta.host, offset, sizeof(meta.host));
 }
 
 } // namespace utp
