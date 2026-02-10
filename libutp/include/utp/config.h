@@ -37,10 +37,17 @@ public:
     int32_t     send_buf_size = 1024 * 1024;
 
     // ack
-    uint32_t    packet_no_delta = 10;       // 包号差阈值
     uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt
-    uint32_t    max_ack_range_size = 149;   // 一个Ack帧可容纳的AckRange的数量
-    uint8_t     ack_dely_exponent = 3;      // ack延迟指数，ack延迟时间 = ack_delay << ack_dely_exponent us
+    uint8_t     max_ack_range_size = 149;   // 一个Ack帧可容纳的AckRange的数量
+    uint8_t     ack_delay_exponent = 3;     // ack延迟指数，ack延迟时间 = ack_delay << ack_dely_exponent us
+    uint16_t    ack_every_n_packets  = 10;  // 包号计数阈值
+    uint16_t    ack_delay = 150;            // 最大ack延迟时间(ms)
+
+    // tp
+    uint32_t    max_idle_timeout = 600000;  // 最大空闲超时时间(ms), 10min
+    uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
+    uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
+    uint16_t    init_max_streams_uni = 32;  // 初始单向流数量
 };
 
 } // namespace utp

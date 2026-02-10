@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "utp/types.h"
-
+// TODO 增加定时器, 定期丢弃过旧的包号记录(比如 cutoff 之前的记录), 避免占用过多内存
 namespace eular {
 namespace utp {
 class ReceiveHistory {
@@ -44,7 +44,7 @@ public:
     uint32_t rangeCount() const { return m_usedCount; }
 
     /**
-     * @brief 放回当前最小的包号(低于这个包号的信息已丢弃)
+     * @brief 返回当前最小的包号(低于这个包号的信息已丢弃)
      *
      * @return utp_packno_t 包号, 无效返回0(包号不会为0)
      */
@@ -84,7 +84,7 @@ public:
             return *this;
         }
 
-        const_iterator  operator++(int) {
+        const_iterator operator++(int) {
             const_iterator tmp(*this);
             ++(*this);
             return tmp;

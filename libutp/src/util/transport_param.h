@@ -9,11 +9,10 @@
 #define __UTP_TRANSPORT_PARAM_H__
 
 #include <stdint.h>
-#include <utp/platform.h>
 
 namespace eular {
 namespace utp {
-class UTP_API TransportParams {
+struct TransportParams {
 public:
     enum {
         kMaxIdleTimeout,        // 最大空闲超时时间(ms), 超过该时间未收到对端UDP包则断开连接
@@ -53,15 +52,14 @@ public:
 
     void clearParam(int32_t param);
 
-private:
+public:
     uint16_t    flags;
-    uint16_t    max_idle_timeout{600000};   // 10 minutes
-    uint16_t    handshake_timeout{10000};   // 10 seconds
-    uint16_t    init_max_streams_bidi{64};
-    uint16_t    init_max_streams_uni{32};
-    uint8_t     ack_delay_exponent;
-    uint16_t    max_ack_delta;
-    uint16_t    max_ack_delay;
+    uint32_t    max_idle_timeout{600000};   // 10 minutes
+    uint16_t    handshake_timeout{5000};    // 对端允许握手超时时间(ms)
+    uint16_t    init_max_streams_bidi{64};  // 对端允许的双向流最大数量
+    uint16_t    init_max_streams_uni{32};   // 对端允许的单向流最大数量
+    uint8_t     ack_delay_exponent{3};      // ack延迟时间的指数, ack_delay = 2^ack_delay_exponent ms
+    uint16_t    max_ack_delay{150};         // 150 ms
 };
 
 } // namespace utp

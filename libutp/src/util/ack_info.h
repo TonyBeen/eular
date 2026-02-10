@@ -14,6 +14,7 @@
 
 namespace eular {
 namespace utp {
+/// @brief 解析Ack帧后得到的Ack信息
 class AckInfo
 {
 public:

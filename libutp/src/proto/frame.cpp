@@ -18,13 +18,10 @@ std::string FrameTypeToString(uint32_t type)
         [kFrameStream]          = "FrameStream",
         [kFrameAck]             = "FrameAck",
         [kFramePadding]         = "FramePadding",
-        [kFrameResetStream]     = "FrameResetStream",
         [kFrameConnectionClose] = "FrameConnectionClose",
-        [kFrameBlocked]         = "FrameBlocked",
-        [FrameStreamBlocked]    = "rameStreamBlocked",
         [kFramePing]            = "FramePing",
-        [kFrameMaxData]         = "FrameMaxData",
-        [kFrameMaxStreamData]   = "FrameMaxStreamData",
+        [kFrameResetStream]     = "FrameResetStream",
+        [kFrameStreamsBlocked]  = "FrameStreamsBlocked",
         [kFrameMaxStreams]      = "FrameMaxStreams",
         [kFramePathChallenge]   = "FramePathChallenge",
         [kFramePathResponse]    = "FramePathResponse",
@@ -32,6 +29,7 @@ std::string FrameTypeToString(uint32_t type)
         [kFrameSessionToken]    = "FrameSessionToken",
         [kFrameAckFrequency]    = "FrameAckFrequency",
         [kFrameVersion]         = "FrameVersion",
+        [kFrameHandshakeDone]   = "FrameHandshakeDone",
     };
 
     char buffer[32];

@@ -8,7 +8,8 @@
 #ifndef __UTP_COMMON_H__
 #define __UTP_COMMON_H__
 
-#include <utils/utils.h>
+#include <memory>
+
 #include "utp/platform.h"
 
 #if defined(OS_WINDOWS)

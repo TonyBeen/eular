@@ -6,7 +6,6 @@
  ************************************************************************/
 
 #include "util/receive_history.h"
-#include "receive_history.h"
 
 #include <assert.h>
 

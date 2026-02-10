@@ -5,11 +5,30 @@
     > Created Time: Thu 29 Jan 2026 10:54:57 AM CST
  ************************************************************************/
 
-#include <iostream>
-using namespace std;
+#ifndef __UTP_PROTO_FRAME_STREAM_H__
+#define __UTP_PROTO_FRAME_STREAM_H__
 
-int main(int argc, char **argv)
-{
+#include "utp/config.h"
+#include "proto/frame.h"
 
-    return 0;
-}
+#define FRAME_STREAM_HDR_SIZE   (1 + 1 + 2 + 4 + 8) // type + stream_flag + stream_data_length + stream_id + stream_offset
+
+namespace eular {
+namespace utp {
+struct FrameStream : public FrameBase {
+public:
+    FrameStream() : FrameBase(FrameType::kFrameStream) {}
+    ~FrameStream() = default;
+
+public:
+    uint8_t     stream_flag;
+    uint16_t    stream_data_length;
+    uint32_t    stream_id;
+    uint64_t    stream_offset;
+    void*       stream_data;
+};
+
+} // namespace utp
+} // namespace eular
+
+#endif // __UTP_PROTO_FRAME_STREAM_H__

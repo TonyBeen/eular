@@ -12,6 +12,7 @@
 #include "proto/frame.h"
 #include "util/ack_info.h"
 #include "util/receive_history.h"
+#include "util/transport_param.h"
 
 #define FRAME_ACK_HDR_SIZE      (1 + 1 + 2 + 4 + 8) // type + ack_count + ack_delay + first_ack_range + ack_largest
 #define FRAME_ACK_RANGE_SIZE    (8)                 // ack_range size
@@ -26,12 +27,14 @@ public:
     int32_t encode(void *buffer, size_t size) const;
     int32_t decode(const void *buffer, size_t size);
     int32_t frameSize() const;
+    int32_t rangeSize() const;
 
 public:
-    const ReceiveHistory*   _history{nullptr};
-    const AckInfo*          _ackInfo{nullptr};
+    const ReceiveHistory*   _history{nullptr}; // for encoding
+    AckInfo*                _ackInfo{nullptr}; // for decoding
     utp_time_t              _now{0};
     Config*                 _config{nullptr};
+    TransportParams*        _params{nullptr};
 };
 
 } // namespace utp

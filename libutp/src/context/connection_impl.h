@@ -12,10 +12,11 @@
 
 #include <event/timer.h>
 
-#include "utp/connection.h"
 #include "socket/udp.h"
-#include "context/context_impl.h"
+#include "utp/connection.h"
 #include "context/stream_impl.h"
+#include "util/transport_param.h"
+#include "context/context_impl.h"
 #include "crypto/x25519_wrapper.h"
 #include "crypto/aes_gcm_context.h"
 
@@ -60,7 +61,7 @@ public:
 
 public:
     uint64_t packetNumber() { return m_packetNumber++; }
-    uint32_t cid() const { return m_cid; }
+    uint32_t cid() const { return m_localConnectionID; }
     const Context::ConnectInfo& connectInfo() const { return m_connectInfo; }
 
 private:
@@ -71,12 +72,13 @@ private:
     ContextImpl*            m_ctx{};
     UdpSocket*              m_udpSocket{};
     State                   m_state{kStateDisconnected};
+    TransportParams         m_transportParams{};
 
     Context::ConnectInfo    m_connectInfo{};
     ev::EventTimer          m_connTimer;
 
-    uint32_t                m_cid;
-    uint32_t                m_peerCid;
+    uint32_t                m_localConnectionID{};
+    uint32_t                m_peerConnectionID{};
     uint64_t                m_packetNumber{1};
 
     std::map<uint32_t, StreamImpl::SP> m_streams;

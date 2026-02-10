@@ -10,13 +10,14 @@
 #include "connection_impl.h"
 #include "util/random.hpp"
 #include "proto/frame.h"
+#include "make_unique.hpp"
 
 namespace eular {
 namespace utp {
 ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid) :
     m_ctx(ctx),
     m_udpSocket(udpSocket),
-    m_cid(cid)
+    m_localConnectionID(cid)
 {
     m_connTimer.reset(ctx->loop(), [this] () {
         onConnTimeout();

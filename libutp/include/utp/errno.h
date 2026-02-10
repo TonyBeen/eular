@@ -12,7 +12,7 @@
 
 #include <utp/platform.h>
 
-typedef enum {
+typedef enum : uint16_t {
     /* 通用错误 */
     UTP_ERR_NO_ERROR             = 0x0000,  // 无错误，正常关闭
     UTP_ERR_INVALID_PARAM,                  // 无效参数
