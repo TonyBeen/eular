@@ -21,9 +21,10 @@
 
 #include "utils/serialize.hpp"
 
+// 非枚举：原逻辑（浮点按位比较，其它直接==）
 template<typename T>
-static void require_bitwise_equal(T a, T b) {
-    static_assert(std::is_arithmetic<T>::value, "Arithmetic required");
+static typename std::enable_if<!std::is_enum<T>::value, void>::type
+require_bitwise_equal(T a, T b) {
     if (std::is_floating_point<T>::value) {
         if (sizeof(T) == 4) {
             uint32_t ba = 0, bb = 0;
@@ -36,12 +37,19 @@ static void require_bitwise_equal(T a, T b) {
             std::memcpy(&bb, &b, sizeof(bb));
             REQUIRE(ba == bb);
         } else {
-            // fallback to value comparison for unusual sizes
             REQUIRE(a == b);
         }
     } else {
         REQUIRE(a == b);
     }
+}
+
+// 枚举/enum class：比较 underlying 值
+template<typename T>
+static typename std::enable_if<std::is_enum<T>::value, void>::type
+require_bitwise_equal(T a, T b) {
+    typedef typename std::underlying_type<T>::type U;
+    REQUIRE(static_cast<U>(a) == static_cast<U>(b));
 }
 
 template<typename T>
@@ -166,4 +174,45 @@ TEST_CASE("Serialize multiple values in sequence", "[serialize][sequence]") {
     std::memcpy(&obd, &d, sizeof(obd));
     std::memcpy(&rbd, &rd, sizeof(rbd));
     REQUIRE(obd == rbd);
+}
+
+TEST_CASE("Serialize/Deserialize enums", "[serialize][enum]") {
+    // 非 enum class（无作用域枚举）
+    enum Color : uint8_t {
+        Red = 1,
+        Green = 2,
+        Blue = 3
+    };
+
+    // enum class
+    enum class Animal : uint16_t {
+        Cat = 10,
+        Dog = 20,
+        Fox = 30
+    };
+
+    // 默认底层类型（通常是 int, 大小依平台而定；只要是 4 或 8 就能过）
+    enum Plain {
+        A = -1,
+        B = 0,
+        C = 123
+    };
+
+    SECTION("Color (enum : uint8_t)") {
+        roundtrip_value<Color>(Red);
+        roundtrip_value<Color>(Green);
+        roundtrip_value<Color>(Blue);
+    }
+
+    SECTION("Animal (enum class : uint16_t)") {
+        roundtrip_value<Animal>(Animal::Cat);
+        roundtrip_value<Animal>(Animal::Dog);
+        roundtrip_value<Animal>(Animal::Fox);
+    }
+
+    SECTION("Plain (enum default underlying)") {
+        roundtrip_value<Plain>(A);
+        roundtrip_value<Plain>(B);
+        roundtrip_value<Plain>(C);
+    }
 }

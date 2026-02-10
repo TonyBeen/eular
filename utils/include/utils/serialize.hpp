@@ -8,6 +8,7 @@
 #ifndef __UTIL_SERIALIZE_HPP__
 #define __UTIL_SERIALIZE_HPP__
 
+#include <cstdint>
 #include <cstring>
 #include <type_traits>
 
@@ -82,6 +83,11 @@ class Serialize
         std::memcpy(&value, &host, sizeof(host)); // 兼容 double 类型
     }
 
+    template <typename T>
+    struct SupportedSize {
+        enum { value = (sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8) };
+    };
+
 public:
     Serialize() = default;
     ~Serialize() = default;
@@ -97,10 +103,11 @@ public:
      * @return R* 成功返回下一个写入位置, 失败返回 nullptr
      */
     template <typename R, typename T>
-    static R *SerializeTo(R *buf, size_t &size, T value)
+    static typename std::enable_if<std::is_arithmetic<T>::value, R*>::type
+    SerializeTo(R *buf, size_t &size, T value)
     {
         static_assert(sizeof(R) == 1, "Buffer must be byte-sized");
-        static_assert(std::is_arithmetic<T>::value, "Only arithmetic types supported");
+        static_assert(SupportedSize<T>::value, "Only 1/2/4/8-byte types supported");
 
         if (buf == nullptr || size < sizeof(T)) {
             return nullptr;
@@ -109,6 +116,22 @@ public:
         SerializeImpl(buf, value, std::integral_constant<size_t, sizeof(T)>{});
         size -= sizeof(T);
         return buf + sizeof(T);
+    }
+
+    // 枚举类型
+    template <typename R, typename T>
+    static typename std::enable_if<std::is_enum<T>::value, R*>::type
+    SerializeTo(R *buf, size_t &size, T value)
+    {
+        static_assert(sizeof(R) == 1, "Buffer must be byte-sized");
+        static_assert(SupportedSize<T>::value, "Only 1/2/4/8-byte types supported");
+
+        typedef typename std::underlying_type<T>::type U;
+        // NOTE 枚举大小应该等于 underlying 大小
+        static_assert(sizeof(T) == sizeof(U), "Enum size must match underlying type size");
+
+        U u = static_cast<U>(value);
+        return SerializeTo<R, U>(buf, size, u);
     }
 
     /**
@@ -122,10 +145,11 @@ public:
      * @return const R* 成功返回下一个读取位置, 失败返回 nullptr
      */
     template <typename R, typename T>
-    static const R *DeserializeFrom(const R *buf, size_t &size, T &value)
+    static typename std::enable_if<std::is_arithmetic<T>::value, const R*>::type
+    DeserializeFrom(const R *buf, size_t &size, T &value)
     {
         static_assert(sizeof(R) == 1, "Buffer must be byte-sized");
-        static_assert(std::is_arithmetic<T>::value, "Only arithmetic types supported");
+        static_assert(SupportedSize<T>::value, "Only 1/2/4/8-byte types supported");
 
         if (buf == nullptr) return nullptr;
         if (size < sizeof(T)) {
@@ -135,6 +159,27 @@ public:
         DeserializeImpl(buf, value, std::integral_constant<size_t, sizeof(T)>{});
         size -= sizeof(T);
         return buf + sizeof(T);
+    }
+
+    // 枚举类型
+    template <typename R, typename T>
+    static typename std::enable_if<std::is_enum<T>::value, const R*>::type
+    DeserializeFrom(const R *buf, size_t &size, T &value)
+    {
+        static_assert(sizeof(R) == 1, "Buffer must be byte-sized");
+        static_assert(SupportedSize<T>::value, "Only 1/2/4/8-byte types supported");
+
+        typedef typename std::underlying_type<T>::type U;
+        static_assert(sizeof(T) == sizeof(U), "Enum size must match underlying type size");
+
+        U u = 0;
+        const R* next = DeserializeFrom<R, U>(buf, size, u);
+        if (next == nullptr) {
+            return nullptr;
+        }
+
+        value = static_cast<T>(u);
+        return next;
     }
 };
 
