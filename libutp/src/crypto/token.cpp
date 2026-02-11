@@ -72,23 +72,23 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     EVP_CIPHER_CTX_reset(m_sealCtx);
     int32_t status = EVP_EncryptInit_ex(m_sealCtx, AEADCipher(), nullptr, m_key.data(), nonce);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_EncryptInit_ex failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
         return false;
     }
     status = EVP_CIPHER_CTX_ctrl(m_sealCtx, EVP_CTRL_AEAD_SET_IVLEN, AEAD_NONCE_SIZE, nullptr);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_CIPHER_CTX_ctrl failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
         return false;
     }
     status = EVP_EncryptInit_ex(m_sealCtx, nullptr, nullptr, m_key.data(), nonce);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_EncryptInit_ex failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
         return false;
     }
     // AAD
     status = EVP_EncryptUpdate(m_sealCtx, nullptr, nullptr, (const uint8_t *)(TOKEN_AAD.c_str()), static_cast<int32_t>(TOKEN_AAD.size()));
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_EncryptUpdate failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
         return false;
     }
 
@@ -96,7 +96,7 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     int32_t outLen = 0;
     status = EVP_EncryptUpdate(m_sealCtx, ciphertext, &outLen, plaintext.data(), static_cast<int32_t>(plaintext.size()));
     if (status != 1 || outLen != (int32_t)TOKEN_META_SIZE) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_EncryptUpdate failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
         return false;
     }
 
@@ -104,13 +104,13 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     int32_t finalOutLen = 0;
     status = EVP_EncryptFinal_ex(m_sealCtx, ciphertext + outLen, &finalOutLen);
     if (status != 1 || finalOutLen != 0) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_EncryptFinal_ex failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptFinal_ex failed");
         return false;
     }
     // get tag
     status = EVP_CIPHER_CTX_ctrl(m_sealCtx, EVP_CTRL_AEAD_GET_TAG, AEAD_TAG_SIZE, tag);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "EVP_CIPHER_CTX_ctrl failed");
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
         return false;
     }
     return true;
@@ -131,43 +131,43 @@ bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta)
 
         status = EVP_DecryptInit_ex(m_openCtx, AEADCipher(), nullptr, nullptr, nullptr);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 
         status = EVP_CIPHER_CTX_ctrl(m_openCtx, EVP_CTRL_AEAD_SET_IVLEN, AEAD_NONCE_SIZE, nullptr);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
         status = EVP_DecryptInit_ex(m_openCtx, nullptr, nullptr, key.data(), nonce);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 
         status = EVP_DecryptUpdate(m_openCtx, nullptr, &outLen, (const uint8_t *)(TOKEN_AAD.data()), (int32_t)(TOKEN_AAD.size()));
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 
         status = EVP_DecryptUpdate(m_openCtx, plaintext.data(), &outLen, ciphertext, (int32_t)(TOKEN_META_SIZE));
         if (status != 1 || outLen != static_cast<int32_t>(TOKEN_META_SIZE)) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 
         status = EVP_CIPHER_CTX_ctrl(m_openCtx, EVP_CTRL_AEAD_SET_TAG, AEAD_TAG_SIZE, (void *)tag);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 
         int32_t finalLen = 0;
         status = EVP_DecryptFinal_ex(m_openCtx, plaintext.data() + outLen, &finalLen);
         if (status != 1 || finalLen != 0) {
-            SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "EVP_DecryptInit_ex failed");
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
         }
 

@@ -23,6 +23,8 @@
 #include "socket/udp.h"
 #include "context/connection_impl.h"
 
+#include "util/mm.h"
+
 namespace eular {
 namespace utp {
 
@@ -53,7 +55,9 @@ public:
     void setOnConnectionClosed(const Context::OnConnectionClosed &cb);
     void wantWrite(ConnectionImpl *conn);
 
-    event_base* loop() const { return m_base; }
+    event_base*     loop() const { return m_base; }
+    Config*         config() const { return m_config; }
+    MemoryManager*  mm() { return &m_mm; }
 
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
@@ -69,6 +73,7 @@ private:
     event_base*     m_base;
     Config*         m_config;
     UdpSocket       m_udpSocket;
+    MemoryManager   m_mm;
 
     ev::EventPoll   m_readEvent;
     ev::EventPoll   m_writeEvent;

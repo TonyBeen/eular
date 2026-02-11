@@ -9,6 +9,7 @@
 #define __UTP_TYPES_H__
 
 #include <stdint.h>
+#include <inttypes.h>
 
 typedef uint64_t    utp_time_t;
 typedef uint64_t    utp_packno_t;

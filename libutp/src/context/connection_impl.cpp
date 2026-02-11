@@ -7,10 +7,11 @@
 
 #include "context/connection_impl.h"
 #include "utp/errno.h"
-#include "connection_impl.h"
 #include "util/random.hpp"
 #include "proto/frame.h"
 #include "make_unique.hpp"
+
+#include "connection_impl.h"
 
 namespace eular {
 namespace utp {
@@ -32,24 +33,23 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
 
     m_state = State::kStateWaitSendInitial;
     m_connectInfo = info;
+    m_ctx->wantWrite(this);
+    m_connTimer.start(info.timeout);
+    return UTP_ERR_NO_ERROR;
+}
 
-    int32_t status = sendInitialPacket();
-    if (status == UTP_ERR_NO_ERROR) {
-        m_state = State::kStateInitialSent;
-        m_connTimer.start(info.timeout);
-    } else if (status == UTP_ERR_WOULD_BLOCK) {
-        m_ctx->wantWrite(this);
-        status = UTP_ERR_NO_ERROR;
+void ConnectionImpl::onWrite()
+{
+    if (m_state == State::kStateWaitSendInitial) {
+        
     }
-
-    return status;
 }
 
 int32_t ConnectionImpl::sendInitialPacket()
 {
     if (m_connectInfo.encrypted) {
         m_x25519 = std::make_unique<X25519Wrapper>();
-        FrameCrypto crypto;
+        
     }
     
     

@@ -98,7 +98,7 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
     }
 
     if (!m_udpSocket.isValid()) {
-        SetLastErrorV(UTP_ERR_NOT_BOUND, "{} UDP socket is not bound", tag());
+        SetLastErrorV(UTP_ERR_SOCKET_NOT_BOUND, "{} UDP socket is not bound", tag());
         return -1;
     }
 
@@ -111,7 +111,7 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
                 return -1;
             }
 
-            SetLastErrorV(UTP_ERR_ALREADY_CONNECTED, "{} already connected to {}:{}", tag(), info.ip, info.port);
+            SetLastErrorV(UTP_ERR_SOCKET_CONNECTED, "{} already connected to {}:{}", tag(), info.ip, info.port);
             return -1;
         }
     }

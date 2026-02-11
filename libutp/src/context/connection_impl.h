@@ -9,16 +9,23 @@
 #define __UTP_CONTEXT_CONNECTION_H__
 
 #include <map>
+#include <unordered_map>
 
 #include <event/timer.h>
 
-#include "socket/udp.h"
 #include "utp/connection.h"
+
+#include "socket/udp.h"
+
 #include "context/stream_impl.h"
-#include "util/transport_param.h"
 #include "context/context_impl.h"
+
 #include "crypto/x25519_wrapper.h"
 #include "crypto/aes_gcm_context.h"
+
+#include "util/mm.h"
+#include "util/malo.hpp"
+#include "util/transport_param.h"
 
 namespace eular {
 namespace utp {
@@ -29,10 +36,8 @@ public:
     using SP = std::shared_ptr<ConnectionImpl>;
     using WP = std::weak_ptr<ConnectionImpl>;
 
-    enum State {
-        kStateDisconnected,         // 断连状态
+    enum State : uint8_t {
         kStateWaitSendInitial,      // 等待发送初始包
-        kStateWaitSend0RTT,         // 等待发送0-RTT包
         kStateInitialSent,          // 已发送初始包
         kStateHandshakeSent,        // 已发送握手包
         kStateHandshakeReceived,    // 已收到握手包
@@ -40,6 +45,7 @@ public:
         kStateCloseSent,            // 已发送关闭包
         kStateCloseReceived,        // 收到关闭包
         kStatePtoTimedWait,         // PTO超时等待
+        kStateDisconnected,         // 断连状态
     };
 
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);
@@ -81,7 +87,8 @@ private:
     uint32_t                m_peerConnectionID{};
     uint64_t                m_packetNumber{1};
 
-    std::map<uint32_t, StreamImpl::SP> m_streams;
+    using StreamMap = std::unordered_map<uint32_t, StreamImpl::SP>;
+    StreamMap               m_streams;
     X25519Wrapper::Ptr      m_x25519;
     AesGcmContext::Ptr      m_aesCtx;
 };

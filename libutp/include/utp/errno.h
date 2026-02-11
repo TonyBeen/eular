@@ -30,34 +30,34 @@ typedef enum : uint16_t {
     UTP_ERR_STREAM_LIMITED,                 // 流个数被限制(连接级, 触发ConnectionClose)
 
     // socket
-    UTP_ERR_SOCKET_CREATE       = 0x001F,   // Socket错误
+    UTP_ERR_SOCKET_CREATE       = 0x0020,   // Socket错误
     UTP_ERR_SOCKET_OPTION,                  // Socket选项错误
-    UTP_ERR_NOT_BOUND,                      // Socket未绑定
+    UTP_ERR_SOCKET_NOT_BOUND,               // Socket未绑定
     UTP_ERR_SOCKET_BIND,                    // Socket绑定IP错误
     UTP_ERR_SOCKET_IOCTL,                   // IO控制错误
     UTP_ERR_SOCKET_READ,                    // 读取Socket错误
     UTP_ERR_SOCKET_WRITE,                   // 写入Socket错误
-    UTP_ERR_ALREADY_CONNECTED,              // 已经连接
+    UTP_ERR_SOCKET_CONNECTED,               // 已经连接
 
     // stream
-    UTP_ERR_STREAM_CLOSED        = 0x003F,  // 流已关闭
+    UTP_ERR_STREAM_CLOSED        = 0x0040,  // 流已关闭
     UTP_ERR_STREAM_NOT_FOUND,               // 流不存在
     UTP_ERR_STREAM_STATE_ERROR,             // 流状态错误
     UTP_ERR_STREAM_LIMIT_ERROR,             // 超过流数量限制
     UTP_ERR_STREAM_FLOW_CONTROL,            // 流量控制违规
     UTP_ERR_STREAM_DATA_BLOCKED,            // 流数据阻塞
     UTP_ERR_STREAM_DATA_LIMITED,            // 超过数据限制
-    UTP_ERR_STREAMS_EXHAUSTED,              // 流ID耗尽
+    UTP_ERR_STREAM_ID_EXHAUSTED,            // 流ID耗尽
 
     /* 帧错误 */
-    UTP_ERR_FRAME_FORMAT_ERROR   = 0x004F,  // 帧格式错误
+    UTP_ERR_FRAME_FORMAT_ERROR   = 0x0060,  // 帧格式错误
     UTP_ERR_FRAME_UNEXPECTED,               // 意外的帧类型
 
     // 加密
-    UTP_ERR_CRYPTO_UNINITIALIZED = 0x005F,  // 加密模块未初始化
+    UTP_ERR_CRYPTO_UNINITIALIZED = 0x0080,  // 加密模块未初始化
     UTP_ERR_CRYPTO_INIT_FAILED,             // 加密模块初始化失败
-    UTP_ERR_ENCRYPTION_ERROR,               // 加密错误
-    UTP_ERR_DECRYPTION_ERROR,               // 解密错误
+    UTP_ERR_CRYPTO_ENCRYPTION,              // 加密错误
+    UTP_ERR_CRYPTO_DECRYPTION,              // 解密错误
     UTP_ERR_RANDOM_GENERATION_FAILED,       // 随机数生成失败
 
     /* 应用层错误 (0x0100 - 0xFFFF 由应用自定义) */

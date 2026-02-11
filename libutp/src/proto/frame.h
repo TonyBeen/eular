@@ -52,9 +52,14 @@ public:
     FrameType   type{kFrameInvalid};
 };
 
-enum FrameStreamFlags {
+enum FrameStreamFlags : uint8_t {
     kFrameStreamFlagNone    = 0x00,
     kFrameStreamFlagFin     = 0x01, // bit0 流结束标志, 该帧是流的最后一帧
+};
+
+enum FrameCryptoType : uint8_t {
+    kFrameCryptoAESGCM128,  // AES-GCM-128加密数据
+    kFrameCryptoAESGCM256,  // AES-GCM-256加密数据
 };
 
 } // namespace utp

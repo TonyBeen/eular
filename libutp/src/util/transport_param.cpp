@@ -9,28 +9,13 @@
 
 namespace eular {
 namespace utp {
-void TransportParams::clearParam(int32_t param)
+void TransportParams::clearParam(int32_t mask)
 {
-    switch (param) {
-    case kMaxIdleTimeout:
-        break;
-    case kHandshakeTimeout:
-        break;
-    case kInitMaxStreamsBidi:
-        break;
-    case kInitMaxStreamsUni:
-        break;
-    case kAckDelayExponent:
-        break;
-    case kMaxAckDelta:
-        break;
-    case kMaxAckDelay:
-        break;
-    default:
-        return;
+    while (mask) {
+        uint32_t bits = mask & (~mask + 1u);
+        flags &= ~bits; // 清掉对应位
+        mask &= (mask - 1u); // 清掉最低位 1
     }
-
-    flags &= ~(1 << param);
 }
 } // namespace utp
 } // namespace eular

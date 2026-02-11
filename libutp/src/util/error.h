@@ -24,6 +24,7 @@ template <typename... Args>
 inline void SetLastErrorV(int32_t err_code, fmt::format_string<Args...> format_str, Args&&... args) {
     tls_last_error = err_code;
 
+#ifdef UTP_ENABLE_ERROR_MSG
     try {
         auto result = fmt::format_to_n(tls_error_buf.data(), tls_error_buf.size() - 1, "{}: {}", format_str, std::forward<Args>(args)...);
         *result.out = '\0';
@@ -35,6 +36,11 @@ inline void SetLastErrorV(int32_t err_code, fmt::format_string<Args...> format_s
     } catch (...) {
         tls_error_buf[0] = '\0';
     }
+#else
+    UNUSED(format_str);
+    UNUSED(args);
+    tls_error_buf[0] = '\0';
+#endif
 }
 
 using OpenSSLErrorMsg = std::array<char, 256>;

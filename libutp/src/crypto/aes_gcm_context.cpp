@@ -67,7 +67,7 @@ int32_t AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, c
     if (code != 1) {
         uint32_t code = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(code);
-        SetLastErrorV(UTP_ERR_ENCRYPTION_ERROR, "AES-GCM encryption failed: {} (code=0x{:X})", msg.data(), code);
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "AES-GCM encryption failed: {} (code=0x{:X})", msg.data(), code);
         return -1;
     }
 
@@ -82,7 +82,7 @@ int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len,
     }
 
     if (ciphertext_len < GCM_TAG_SIZE) {
-        SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "Ciphertext too short for AES-GCM decryption");
+        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "Ciphertext too short for AES-GCM decryption");
         return -1;
     }
 
@@ -95,7 +95,7 @@ int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len,
     if (code != 1) {
         uint32_t code = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(code);
-        SetLastErrorV(UTP_ERR_DECRYPTION_ERROR, "AES-GCM decryption failed: {} (code=0x{:X})", msg.data(), code);
+        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "AES-GCM decryption failed: {} (code=0x{:X})", msg.data(), code);
         return -1;
     }
 
