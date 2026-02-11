@@ -22,8 +22,8 @@ namespace eular {
 namespace utp {
 ContextImpl::ContextImpl(event_base *base, Config *config) :
     m_base(base),
-    m_config(config != nullptr ? config : &g_defaultConfig),
-    m_udpSocket(config != nullptr ? *config : g_defaultConfig)
+    m_config(config != nullptr ? *config : g_defaultConfig),
+    m_udpSocket(m_config)
 {
     uint32_t id = g_contextId.fetch_add(1, std::memory_order_relaxed);
     m_tag = "[ContextImpl " + std::to_string(id) + "]";

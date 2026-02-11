@@ -78,7 +78,9 @@ private:
     ContextImpl*            m_ctx{};
     UdpSocket*              m_udpSocket{};
     State                   m_state{kStateDisconnected};
-    TransportParams         m_transportParams{};
+    TransportParams         m_loaclTP{};
+    TransportParams         m_peerTP{};
+    MemoryManager           m_mm;
 
     Context::ConnectInfo    m_connectInfo{};
     ev::EventTimer          m_connTimer;
@@ -88,6 +90,7 @@ private:
     uint64_t                m_packetNumber{1};
 
     using StreamMap = std::unordered_map<uint32_t, StreamImpl::SP>;
+    uint32_t                m_streamId[STREAM_TYPES]{0};
     StreamMap               m_streams;
     X25519Wrapper::Ptr      m_x25519;
     AesGcmContext::Ptr      m_aesCtx;

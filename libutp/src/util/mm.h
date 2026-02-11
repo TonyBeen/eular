@@ -24,19 +24,33 @@ class MemoryManager
 public:
     struct PoolStats {
         uint32_t    calls;
-        uint32_t    objs_total;
-        uint32_t    objs_inuse;
+        uint32_t    inuse_max;
+        uint32_t    inuse_max_avg;  // 指数加权移动平均 (EWMA)
+        uint32_t    inuse_max_var;  // 绝对偏差
+        uint32_t    objs_total; // Number of objects owned by the pool
+        uint32_t    objs_inuse; // Number of objects in use
     };
 
     MemoryManager();
     ~MemoryManager();
 
+    PacketOut*  getPacketOut(uint32_t size);
+    void        putPacketOut(PacketOut *pkt);
+
+private:
+    void poolStatsAllocated(PoolStats *stats, uint32_t allocated);
+    void poolStatsFree(PoolStats *stats);
+    void poolSampleMax(PoolStats *stats);
+    bool hasNewSample(PoolStats *stats);
+    void maybeShrinkPoolOut(uint32_t idx);
+
 public:
     struct {
-        MaloCacheLine<StreamImpl>       stream_malo;
+        MaloCacheLine<StreamImpl>   stream_malo;
+        MaloCacheLine<PacketOut>    packet_out_malo;
+        // TODO: packet_in
     };
-    
-    MaloCacheLine<PacketOut>        packet_out_malo;
+
     SLIST_HEAD(, PacketOutBuf)      packet_out_bufs[MM_OUT_BUCKETS];
     PoolStats                       packet_out_stats[MM_OUT_BUCKETS];
     SLIST_HEAD(, PacketInBuf)       packet_in_bufs[MM_IN_BUCKETS];

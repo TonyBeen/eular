@@ -70,8 +70,6 @@ struct PacketOut {
         FrameMetaInfo   one;
         FrameMetaVec    vec;
     } frames;
-
-    static PacketOut* Create();
 };
 static constexpr size_t PACKET_OUT_SIZE = sizeof(PacketOut);
 

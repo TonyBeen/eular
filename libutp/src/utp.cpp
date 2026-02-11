@@ -14,7 +14,7 @@ namespace eular {
 namespace utp {
 Context::Context(event_base *base, Config *config)
 {
-    m_impl = std::make_shared<ContextImpl>(base);
+    m_impl = std::make_shared<ContextImpl>(base, config);
 }
 
 Context::~Context()

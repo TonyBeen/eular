@@ -10,6 +10,15 @@
 
 #include "utp/stream.h"
 
+#define STREAM_TYPES                4 
+
+#define STREAM_ID_MASK              0b11
+
+#define STREAM_ID_IS_CLIENT(ID)     ((ID & 1) == 0)
+#define STREAM_ID_IS_SERVER(ID)     ((ID & 1) == 1)
+#define STREAM_ID_IS_BI_DIR(ID)     ((ID & 2) == 0)
+#define STREAM_ID_IS_UNI_DIR(ID)    ((ID & 2) == 2)
+
 namespace eular {
 namespace utp {
 class StreamImpl : public Stream {

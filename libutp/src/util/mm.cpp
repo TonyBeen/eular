@@ -8,7 +8,10 @@
 #include "util/mm.h"
 #include "mtu/mtu.h"
 #include "proto/proto.h"
+#include "logger/logger.h"
 #include "mm.h"
+
+#define POOL_SAMPLE_PERIOD 1024
 
 namespace eular {
 namespace utp {
@@ -37,6 +40,15 @@ static constexpr uint16_t g_packetOutSizeVec[] = {
     PACKET_OUT_PAYLOAD_4,
 };
 
+static int32_t PacketOutIndex(uint32_t size)
+{
+    uint32_t idx = (size > PACKET_OUT_PAYLOAD_0)
+                + (size > PACKET_OUT_PAYLOAD_1)
+                + (size > PACKET_OUT_PAYLOAD_2)
+                + (size > PACKET_OUT_PAYLOAD_3);
+    return idx;
+}
+
 MemoryManager::MemoryManager()
 {
 }
@@ -45,5 +57,130 @@ MemoryManager::~MemoryManager()
 {
 }
 
+PacketOut *MemoryManager::getPacketOut(uint32_t size)
+{
+    PacketOut *packetOut = packet_out_malo.get();
+    if (!packetOut) {
+        return nullptr;
+    }
+
+    uint32_t idx = PacketOutIndex(size);
+    PacketOutBuf *pob = SLIST_FIRST(&packet_out_bufs[idx]);
+    if (pob) {
+        SLIST_REMOVE_HEAD(&packet_out_bufs[idx], next_pob);
+        poolStatsAllocated(&packet_out_stats[idx], 0);
+    } else {
+        pob = (PacketOutBuf *)malloc(g_packetOutSizeVec[idx]);
+        if (!pob) {
+            packet_out_malo.put(packetOut);
+            return nullptr;
+        }
+        poolStatsAllocated(&packet_out_stats[idx], 1);
+    }
+
+    if (hasNewSample(&packet_out_stats[idx])) {
+        maybeShrinkPoolOut(idx);
+    }
+
+    memset(packetOut, 0, sizeof(PacketOut));
+    packetOut->alloc_size = g_packetOutSizeVec[idx];
+    packetOut->raw_data = (uint8_t *)pob;
+    return packetOut;
+}
+
+void MemoryManager::putPacketOut(PacketOut *pkt)
+{
+    PacketOutBuf *pob = (PacketOutBuf *)pkt->raw_data;
+    uint32_t idx = PacketOutIndex(pkt->alloc_size);
+    SLIST_INSERT_HEAD(&packet_out_bufs[idx], pob, next_pob);
+    poolStatsFree(&packet_out_stats[idx]);
+    if (hasNewSample(&packet_out_stats[idx])) {
+        maybeShrinkPoolOut(idx);
+    }
+    packet_out_malo.put(pkt);
+}
+
+void MemoryManager::poolStatsAllocated(PoolStats *stats, uint32_t allocated)
+{
+    ++stats->calls;
+    stats->objs_inuse += 1;
+    stats->objs_total += allocated;
+    if (stats->objs_inuse > stats->inuse_max) {
+        stats->inuse_max = stats->objs_inuse;
+    }
+
+    if (0 == stats->calls % POOL_SAMPLE_PERIOD) {
+        poolSampleMax(stats);
+    }
+}
+
+void MemoryManager::poolStatsFree(PoolStats *stats)
+{
+    --stats->objs_inuse;
+    ++stats->calls;
+    if (0 == stats->calls % POOL_SAMPLE_PERIOD) {
+        poolSampleMax(stats);
+    }
+}
+
+void MemoryManager::poolSampleMax(PoolStats *stats)
+{
+#define ALPHA_SHIFT 3
+#define BETA_SHIFT  2
+    uint32_t diff;
+
+    if (stats->inuse_max_avg) {
+        stats->inuse_max_var -= stats->inuse_max_var >> BETA_SHIFT;
+        if (stats->inuse_max_avg > stats->inuse_max)
+            diff = stats->inuse_max_avg - stats->inuse_max;
+        else
+            diff = stats->inuse_max - stats->inuse_max_avg;
+        stats->inuse_max_var += diff >> BETA_SHIFT;
+        stats->inuse_max_avg -= stats->inuse_max_avg >> ALPHA_SHIFT;
+        stats->inuse_max_avg += stats->inuse_max >> ALPHA_SHIFT;
+    } else {
+        /* First measurement */
+        stats->inuse_max_avg  = stats->inuse_max;
+        stats->inuse_max_var  = stats->inuse_max / 2;
+    }
+
+    stats->calls = 0;
+    stats->inuse_max = stats->objs_inuse;
+#if defined(UTP_LOG_POOL_STATS)
+    UTP_LOGI("pool stats: calls=%u, inuse=%u, total=%u, inuse_max=%u, inuse_max_avg=%u, inuse_max_var=%u",
+             stats->calls, stats->objs_inuse, stats->objs_total,
+             stats->inuse_max, stats->inuse_max_avg, stats->inuse_max_var);
+#endif // defined(UTP_LOG_POOL_STATS)
+}
+
+bool MemoryManager::hasNewSample(PoolStats *stats)
+{
+    return 0 == stats->calls;
+}
+
+/// @brief 平均最大值低于分配的所有对象的四分之一, 则释放一半已分配的对象
+void MemoryManager::maybeShrinkPoolOut(uint32_t idx)
+{
+    PoolStats *stats = &packet_out_stats[idx];
+    PacketOutBuf *pob;
+    uint32_t shrink = 0;
+    if (stats->inuse_max_avg * 4 < stats->objs_total) {
+        shrink = stats->objs_total / 2;
+        while (stats->objs_total > shrink && (pob = SLIST_FIRST(&packet_out_bufs[idx]))) {
+            SLIST_REMOVE_HEAD(&packet_out_bufs[idx], next_pob);
+            free(pob);
+            --stats->objs_total;
+        }
+#if defined(UTP_LOG_POOL_STATS)
+        UTP_LOGI("pool #%u; max avg %u; shrank from %u to %u objs",
+                idx, stats->inuse_max_avg, shrink * 2, stats->objs_total);
+#endif
+    } else {
+#if defined(UTP_LOG_POOL_STATS)
+        UTP_LOGI("pool #%u; max avg %u; objs: %u; won't shrink",
+                idx, stats->inuse_max_avg, stats->objs_total);
+#endif
+    }
+}
 } // namespace utp
 } // namespace eular
