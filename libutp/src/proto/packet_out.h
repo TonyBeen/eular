@@ -8,11 +8,13 @@
 #ifndef __UTP_PROTO_PACKET_OUT_H__
 #define __UTP_PROTO_PACKET_OUT_H__
 
+#include <queue.h>
+
 #include "commom.h"
 #include "proto/frame.h"
+#include "util/malo.hpp"
 #include "proto/packet_common.h"
 #include "congestion/bw_sampler.h"
-#include "util/malo.hpp"
 
 namespace eular {
 namespace utp {
@@ -72,6 +74,8 @@ struct PacketOut {
     } frames;
 };
 static constexpr size_t PACKET_OUT_SIZE = sizeof(PacketOut);
+
+TAILQ_HEAD(PacketOutTailQ, PacketOut);
 
 } // namespace utp
 } // namespace eular

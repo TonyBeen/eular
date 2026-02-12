@@ -36,6 +36,9 @@ public:
     int32_t     recv_buf_size = 1024 * 1024;
     int32_t     send_buf_size = 1024 * 1024;
 
+    // congestion control
+    int32_t     cc_algorithm = 0;           // 拥塞控制算法, 0表示默认算法(bbr), 1表示BBR算法, 2表示Cubic算法
+
     // ack
     uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt
     uint8_t     max_ack_range_size = 149;   // 一个Ack帧可容纳的AckRange的数量

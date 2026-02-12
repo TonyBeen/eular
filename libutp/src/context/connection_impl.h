@@ -66,15 +66,18 @@ public:
     void        close() override;
 
 public:
-    uint64_t packetNumber() { return m_packetNumber++; }
-    uint32_t cid() const { return m_localConnectionID; }
+    uint64_t    packetNumber() { return m_packetNumber++; }
+    uint32_t    cid() const { return m_localConnectionID; }
     const Context::ConnectInfo& connectInfo() const { return m_connectInfo; }
+    State       state() const { return m_state; }
 
 private:
     int32_t sendInitialPacket();
     void    onConnTimeout();
 
 private:
+    friend class SendControl;
+
     ContextImpl*            m_ctx{};
     UdpSocket*              m_udpSocket{};
     State                   m_state{kStateDisconnected};
@@ -94,6 +97,9 @@ private:
     StreamMap               m_streams;
     X25519Wrapper::Ptr      m_x25519;
     AesGcmContext::Ptr      m_aesCtx;
+
+    uint64_t                m_bytesIn{};
+    uint64_t                m_bytesOut{};
 };
 
 } // namespace utp

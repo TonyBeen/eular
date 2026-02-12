@@ -14,6 +14,9 @@
 typedef uint64_t    utp_time_t;
 typedef uint64_t    utp_packno_t;
 
+typedef unsigned long long  ull;
+typedef long long           ll;
+
 struct Range {
     utp_packno_t    low;
     utp_packno_t    high;

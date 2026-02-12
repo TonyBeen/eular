@@ -5,11 +5,21 @@
     > Created Time: Mon 08 Dec 2025 04:22:43 PM CST
  ************************************************************************/
 
-#include <iostream>
-using namespace std;
+#ifndef __UTP_CONGESTION_CUBIC_H__
+#define __UTP_CONGESTION_CUBIC_H__
 
-int main(int argc, char **argv)
+#include "congestion/congestion.h"
+
+namespace eular {
+namespace utp {
+class Cubic : public Congestion
 {
+public:
+    Cubic(/* args */);
+    ~Cubic();
+};
 
-    return 0;
-}
+} // namespace utp
+} // namespace eular
+
+#endif // __UTP_CONGESTION_CUBIC_H__

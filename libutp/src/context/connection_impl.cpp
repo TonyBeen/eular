@@ -49,10 +49,7 @@ int32_t ConnectionImpl::sendInitialPacket()
 {
     if (m_connectInfo.encrypted) {
         m_x25519 = std::make_unique<X25519Wrapper>();
-        
     }
-    
-    
 }
 
 void ConnectionImpl::onConnTimeout()
