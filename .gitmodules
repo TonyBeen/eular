@@ -7,3 +7,6 @@
 [submodule "config/3rd_party/libyaml"]
 	path = config/3rd_party/libyaml
 	url = https://github.com/yaml/libyaml.git
+[submodule "config/3rd_party/c4core"]
+	path = config/3rd_party/c4core
+	url = https://github.com/biojppm/c4core.git
