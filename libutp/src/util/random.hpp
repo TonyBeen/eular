@@ -51,9 +51,11 @@ inline Int Random(Int lo, Int hi)
 // 填充缓冲区（字节）
 inline void RandomBytes(void* data, std::size_t n)
 {
-    auto* p = static_cast<unsigned char*>(data);
+    auto* p = static_cast<uint8_t *>(data);
     std::uniform_int_distribution<int> d(0, 255);
-    for (std::size_t i = 0; i < n; ++i) p[i] = static_cast<unsigned char>(d(rng()));
+    for (std::size_t i = 0; i < n; ++i) {
+        p[i] = static_cast<uint8_t>(d(rng()));
+    }
 }
 } // namespace utp
 } // namespace eular

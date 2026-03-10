@@ -31,6 +31,13 @@ public:
      */
     void insert(utp_packno_t pn, utp_time_t now);
 
+    /**
+     * @brief cutoff之前的包号不再记录在Ack帧中
+     *
+     * @param cutoff 包号
+     */
+    void stopWait(utp_packno_t cutoff);
+
     // 清空所有记录
     void clear();
 

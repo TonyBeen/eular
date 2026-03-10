@@ -15,7 +15,7 @@
 
 namespace eular {
 namespace utp {
-enum PacketFrameTypeBit {
+enum PacketFrameTypeBit : uint32_t {
     kFTBitInvalid           = 1 << kFrameInvalid,
     kFTBitStrame            = 1 << kFrameStream,
     kFTBitAck               = 1 << kFrameAck,
@@ -33,6 +33,24 @@ enum PacketFrameTypeBit {
     kFTBitVersion           = 1 << kFrameVersion,
     kFTBitHandshakeDone     = 1 << kFrameHandshakeDone,
 };
+
+#define UTP_FRAME_RETX_MASK (   \
+      kFTBitStrame              \
+    /* | kFTBitAck */           \
+    /* | kFTBitPadding */       \
+    | kFTBitConnectionClose     \
+    /* | kFTBitPing */          \
+    | kFTBitResetStream         \
+    | kFTBitStreamsBlocked      \
+    | kFTBitMaxStreams          \
+    | kFTBitPathChallenge       \
+    | kFTBitPathResponse        \
+    | kFTBitCrypto              \
+    | kFTBitSessionToken        \
+    | kFTBitAckFrequency        \
+    | kFTBitVersion             \
+    | kFTBitHandshakeDone       \
+)
 
 static inline bool IsValidPackNo(uint64_t packno) {
     return packno <= UTP_MAX_PACKNO;

@@ -19,7 +19,7 @@
 namespace eular {
 namespace utp {
 
-enum PacketOutFlags {
+enum PacketOutFlags : uint32_t {
     kPoHello        = (1 << 0), // 携带 initial 或 handshake 帧
     kPoEncrypted    = (1 << 1), // 包已加密
     kPoResetPackNo  = (1 << 2), // 包序号需要生成新值
@@ -28,6 +28,13 @@ enum PacketOutFlags {
     kPoUnAcked      = (1 << 5), // 本包处于未确认队列
     kPoSched        = (1 << 6), // 本包处于调度队列, 等待发送
     kPoLost         = (1 << 7), // 本包处于丢包队列, 等待重传
+    kPoLossRecorded = (1 << 8), // 已记录丢包事件, 等待重传
+};
+
+enum PacketOutLocalFlags : uint16_t {
+    kPOLLoss        = (1 << 0), // 近期发生过丢包事件
+    kPOLLimited     = (1 << 1), // 近期发生过丢包事件, 且当前拥塞受限
+    kPOLFacked      = (1 << 2), // 被 FACK 检测出丢失
 };
 
 struct FrameMetaInfo {
@@ -52,19 +59,20 @@ static constexpr size_t FRAME_META_VEC_SIZE = sizeof(FrameMetaVec);
 struct PacketOut {
     TAILQ_ENTRY(PacketOut)  po_next;    // 未确认包队列指针
 
-    uint64_t    sent_time;  // 发送时间戳(us)
-    uint64_t    packno;     // 包序号
-    uint64_t    ackno;      // 当前包含Ack时有效, 且表示最大已接收包序号
-    PacketOut*  loss_chain; // 丢包链表指针, 循环链表
+    utp_time_t      sent_time;  // 发送时间戳(us)
+    utp_packno_t    packno;     // 包序号
+    utp_packno_t    ackno;      // 当前包含Ack时有效, 且表示最大已接收包序号
+    PacketOut*      loss_chain; // 丢包链表指针, 循环链表
 
-    PacketFrameTypeBit  frame_types;    // 包含的帧类型位图
-    PacketOutFlags      po_flags;       // PacketOutFlags 位图
+    uint32_t    frame_types;    // PacketFrameTypeBit 位图
+    uint16_t    po_flags;       // PacketOutFlags 位图
+    uint16_t    local_flags;    // PacketOutLocalFlags 位图
 
-    uint16_t    data_size;  // 包数据大小
-    uint16_t    encrypt_data_size; // 加密后数据大小
-    uint16_t    alloc_size; // data 可用大小
+    uint16_t    data_size;          // 包数据大小
+    uint16_t    encrypt_data_size;  // 加密后数据大小
+    uint16_t    alloc_size;         // data 可用大小
 
-    uint8_t*        raw_data;       // 多个帧数数据缓存
+    uint8_t*        raw_data;       // 头部 + 多个帧数据缓存, 加密时需要预留16字节
     uint8_t*        encrypt_data;   // 加密后数据指针
     BWPacketState*  bw_state;       // 带宽采样状态指针
 

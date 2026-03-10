@@ -36,6 +36,51 @@ void ReceiveHistory::insert(utp_packno_t pn, utp_time_t now)
     }
 }
 
+void ReceiveHistory::stopWait(utp_packno_t cutoff)
+{
+    if (m_cutoff >= cutoff) {
+        return;
+    }
+
+    m_cutoff = cutoff;
+    if (m_head == npos) {
+        return;
+    }
+
+    uint32_t prev = npos;
+    uint32_t cur  = m_head;
+
+    for (;;) {
+        Element &e = m_elements[cur];
+        Range r = ElementRange(e);
+
+        if (cutoff > r.high) {
+            // 整个区间都在 cutoff 左边, 删除整个区间
+            if (prev == npos) { // 删除头部
+                m_head = e.next;
+            } else {
+                m_elements[prev].next = e.next;
+            }
+            removeElement(cur);
+        } else if (r.low < cutoff) {
+            // 区间部分在 cutoff 左边, 向右调整 low
+            uint32_t delta = static_cast<uint32_t>(cutoff - r.low);
+            e.low += delta;
+            e.count -= delta;
+            break;
+        } else {
+            // 区间在 cutoff 右边, 无需处理
+            break;
+        }
+
+        if (e.next == npos) {
+            return;
+        }
+        prev = cur;
+        cur = e.next;
+    }
+}
+
 void ReceiveHistory::clear()
 {
     m_elements.clear();

@@ -14,22 +14,22 @@ namespace utp {
 std::string FrameTypeToString(uint32_t type)
 {
     static const char *frame2string[kFrameMax] = {
-        [kFrameInvalid]         = "FrameInvalid",
-        [kFrameStream]          = "FrameStream",
-        [kFrameAck]             = "FrameAck",
-        [kFramePadding]         = "FramePadding",
-        [kFrameConnectionClose] = "FrameConnectionClose",
-        [kFramePing]            = "FramePing",
-        [kFrameResetStream]     = "FrameResetStream",
-        [kFrameStreamsBlocked]  = "FrameStreamsBlocked",
-        [kFrameMaxStreams]      = "FrameMaxStreams",
-        [kFramePathChallenge]   = "FramePathChallenge",
-        [kFramePathResponse]    = "FramePathResponse",
-        [kFrameCrypto]          = "FrameCrypto",
-        [kFrameSessionToken]    = "FrameSessionToken",
-        [kFrameAckFrequency]    = "FrameAckFrequency",
-        [kFrameVersion]         = "FrameVersion",
-        [kFrameHandshakeDone]   = "FrameHandshakeDone",
+        [kFrameInvalid]         = "Invalid",
+        [kFrameStream]          = "Stream",
+        [kFrameAck]             = "Ack",
+        [kFramePadding]         = "Padding",
+        [kFrameConnectionClose] = "ConnectionClose",
+        [kFramePing]            = "Ping",
+        [kFrameResetStream]     = "ResetStream",
+        [kFrameStreamsBlocked]  = "StreamsBlocked",
+        [kFrameMaxStreams]      = "MaxStreams",
+        [kFramePathChallenge]   = "PathChallenge",
+        [kFramePathResponse]    = "PathResponse",
+        [kFrameCrypto]          = "Crypto",
+        [kFrameSessionToken]    = "SessionToken",
+        [kFrameAckFrequency]    = "AckFrequency",
+        [kFrameVersion]         = "Version",
+        [kFrameHandshakeDone]   = "HandshakeDone",
     };
 
     char buffer[32];

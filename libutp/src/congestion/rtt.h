@@ -58,9 +58,9 @@ public:
     inline uint64_t minRTT() const { return m_minrtt; }
 
 protected:
-    uint64_t    m_srtt; // smoothed round trip time
-    uint64_t    m_rttvar; // round trip time variation
-    uint64_t    m_minrtt; // minimum rtt
+    uint64_t    m_srtt{0};      // smoothed round trip time
+    uint64_t    m_rttvar{0};    // round trip time variation
+    uint64_t    m_minrtt{0};    // minimum rtt
 };
 
 } // namespace utp

@@ -13,12 +13,15 @@
 
 #include <event/timer.h>
 
+#include "utp/types.h"
 #include "utp/connection.h"
 
 #include "socket/udp.h"
 
 #include "context/stream_impl.h"
 #include "context/context_impl.h"
+
+#include "congestion/rtt.h"
 
 #include "crypto/x25519_wrapper.h"
 #include "crypto/aes_gcm_context.h"
@@ -55,6 +58,9 @@ public:
 
     void    onWrite();
 
+    // @brief 下一次调度时间(ms), send control触发
+    void    nextScheduleTime(utp_time_t timeNext);
+
 public:
     void        registerStreamCanCreate(const OnStreamCanCreate &cb) override;
     void        registerStreamCreated(const OnStreamCreated &cb) override;
@@ -84,9 +90,11 @@ private:
     TransportParams         m_loaclTP{};
     TransportParams         m_peerTP{};
     MemoryManager           m_mm;
+    RttStats                m_rttStats;
 
     Context::ConnectInfo    m_connectInfo{};
     ev::EventTimer          m_connTimer;
+    ev::EventTimer          m_scheduleTimer;
 
     uint32_t                m_localConnectionID{};
     uint32_t                m_peerConnectionID{};

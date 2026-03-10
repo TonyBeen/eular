@@ -8,16 +8,16 @@
 #ifndef __MALO_HPP__
 #define __MALO_HPP__
 
-#include <cstdint>
-#include <cstddef>
-#include <cstdlib>
-#include <cstring>
-#include <cerrno>
-#include <cstdio>
-#include <cassert>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <assert.h>
+
 #include <new>
 #include <vector>
 #include <map>
+
 #include <utils/alloc.h>
 
 namespace eular {

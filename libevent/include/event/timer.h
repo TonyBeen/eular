@@ -34,6 +34,8 @@ public:
 
     void stop() noexcept;
 
+    bool isActive() const noexcept;
+
 protected:
     bool addTimerEvent(uint64_t timeout);
 

@@ -5,7 +5,8 @@
     > Created Time: Thu 12 Feb 2026 04:50:37 PM CST
  ************************************************************************/
 
-#include "pacer.h"
+#include "congestion/pacer.h"
+
 #include <string.h>
 #include <assert.h>
 

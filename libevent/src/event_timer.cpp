@@ -66,6 +66,15 @@ void EventTimer::stop() noexcept
     }
 }
 
+bool EventTimer::isActive() const noexcept
+{
+    if (m_event == nullptr) {
+        return false;
+    }
+
+    return 0 != event_pending(m_event, EV_TIMEOUT, nullptr);
+}
+
 bool EventTimer::addTimerEvent(uint64_t timeout)
 {
     if (m_event == nullptr) {

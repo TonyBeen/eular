@@ -38,6 +38,7 @@ public:
 
     // congestion control
     int32_t     cc_algorithm = 0;           // 拥塞控制算法, 0表示默认算法(bbr), 1表示BBR算法, 2表示Cubic算法
+    uint32_t    clock_granularity_us = 1;   // pacer时钟粒度(us), 影响RTT的测量精度和拥塞控制的性能
 
     // ack
     uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt

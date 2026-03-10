@@ -23,6 +23,10 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
     m_connTimer.reset(ctx->loop(), [this] () {
         onConnTimeout();
     });
+
+    m_scheduleTimer.reset(ctx->loop(), [this] () {
+        onWrite();
+    });
 }
 
 int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
@@ -43,6 +47,11 @@ void ConnectionImpl::onWrite()
     if (m_state == State::kStateWaitSendInitial) {
         
     }
+}
+
+void ConnectionImpl::nextScheduleTime(utp_time_t timeNext)
+{
+    m_scheduleTimer.start(timeNext);
 }
 
 int32_t ConnectionImpl::sendInitialPacket()

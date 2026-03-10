@@ -36,10 +36,10 @@ public:
     utp_time_t nextSched() const { return _next_sched; }
     bool canScheduleProbe(uint64_t inflight, utp_time_t txTime);
 
-public:
-    utp_time_t  _next_sched;    // 下一次调度时间
-    utp_time_t  _last_delayed;  // 上次延迟的时间
-    utp_time_t  _now;           // 当前时间
+private:
+    utp_time_t  _next_sched;    // 下一次调度时间(us)
+    utp_time_t  _last_delayed;  // 上次延迟的时间(us)
+    utp_time_t  _now;           // 当前时间(us)
 
     uint32_t    _clock_granularity; // 时钟粒度 (us)
     uint32_t    _burst_tokens;      // 突发令牌数
