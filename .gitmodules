@@ -1,3 +1,9 @@
 [submodule "utils/3rd/libiconv_v1_18"]
 	path = utils/3rd/libiconv_v1_18
 	url = https://github.com/TonyBeen/libiconv.git
+[submodule "config/3rd_party/yyjson"]
+	path = config/3rd_party/yyjson
+	url = https://github.com/ibireme/yyjson.git
+[submodule "config/3rd_party/libyaml"]
+	path = config/3rd_party/libyaml
+	url = https://github.com/yaml/libyaml.git
