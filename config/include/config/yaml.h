@@ -1,0 +1,61 @@
+/*************************************************************************
+    > File Name: yaml.h
+    > Author: eular
+    > Brief:
+    > Created Time: Tue 10 Mar 2026 03:41:48 PM CST
+ ************************************************************************/
+
+#ifndef __CONFIG_YAML_H__
+#define __CONFIG_YAML_H__
+
+#include <string>
+#include <vector>
+#include <map>
+#include <memory>
+
+#include <c4/charconv.hpp>
+
+#include <config/result.h>
+#include <config/exports.h>
+#include <config/yaml/node.h>
+
+namespace eular {
+struct YamlParserPrivate;
+class CONFIG_API YamlParser
+{
+    YamlParser(const YamlParser&) = delete;
+    YamlParser& operator=(const YamlParser&) = delete;
+    YamlParser(YamlParser&&) = delete;
+    YamlParser& operator=(YamlParser&&) = delete;
+public:
+    using SP    = std::shared_ptr<YamlParser>;
+    using WP    = std::weak_ptr<YamlParser>;
+    using Ptr   = std::unique_ptr<YamlParser>;
+
+    YamlParser();
+    ~YamlParser();
+
+    ConfigResult    load(const char *filePath) noexcept;
+    ConfigResult    load(const std::string &filePath) noexcept;
+    ConfigResult    loadFromString(const char *yamlContent, uint32_t size = UINT32_MAX) noexcept;
+    ConfigResult    loadFromString(const std::string &yamlContent) noexcept;
+
+    void            reset();
+
+    YamlNode        getNode(const std::string &key) const noexcept;
+
+    void            foreachNode() const noexcept;
+
+private:
+    std::string readFromeFile(const char *filePath, ConfigResult &result);
+    bool checkPrivateFailed(ConfigResult &result) noexcept;
+    void buildMap(ConfigResult &result);
+
+private:
+    std::string m_errorMsg;
+    std::shared_ptr<YamlParserPrivate> m_private = nullptr;
+};
+
+} // namespace eular
+
+#endif // __CONFIG_YAML_H__
