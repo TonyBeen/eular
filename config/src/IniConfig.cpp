@@ -5,11 +5,12 @@
     > Created Time: Tue 27 Dec 2022 04:00:06 PM CST
  ************************************************************************/
 
-#include "IniConfig.h"
+#include "config/ini.h"
+#include <stdio.h>
 #include <string.h>
-#include <exception>
 #include <vector>
 #include <sstream>
+#include <memory>
 
 #define GLOBAL_NODE_NAME    ""
 #define SEPARATOR           "."
@@ -34,13 +35,22 @@ bool trim(std::string &str, const char *c = " \t\r\n")
         return false;
     }
 
-    if (begin == end) {
-        return false;
-    }
-
     std::string temp(str.c_str() + begin, end - begin + 1);
     std::swap(temp, str);
     return true;
+}
+
+static void splitKey(const std::string &fullKey, std::string &nodeName, std::string &keyName)
+{
+    size_t pos = fullKey.find('.');
+    if (pos == std::string::npos) {
+        nodeName = GLOBAL_NODE_NAME;
+        keyName = fullKey;
+        return;
+    }
+
+    nodeName = fullKey.substr(0, pos);
+    keyName = fullKey.substr(pos + 1);
 }
 
 IniConfig::IniConfig()
@@ -58,22 +68,20 @@ bool IniConfig::parser(const std::string &configPath)
     static const std::string escapeString = "abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     reset();
     mConfigFilePath = configPath;
-    FILE *filePtr = fopen(configPath.c_str(), "r");
-    if (filePtr == nullptr) {
+    FILE *rawFile = fopen(configPath.c_str(), "r");
+    if (rawFile == nullptr) {
         perror("fopen error");
         return false;
     }
+
+    std::unique_ptr<FILE, int(*)(FILE*)> filePtr(rawFile, fclose);
 
     std::string nodeName = GLOBAL_NODE_NAME;
 
     char buf[1024];
     char *pos = nullptr;
     size_t index = 0;
-    while (feof(filePtr) == false) {
-        pos = fgets(buf, sizeof(buf), filePtr);
-        if (pos == nullptr) {
-            break;
-        }
+    while ((pos = fgets(buf, sizeof(buf), filePtr.get())) != nullptr) {
 
         std::string line(pos);
         // 处理注释部分
@@ -81,7 +89,7 @@ bool IniConfig::parser(const std::string &configPath)
             continue;
         }
         if ((index = line.find(';')) != std::string::npos) {
-            line[index] = '\0';
+            line.erase(index);
         }
 
         if (trim(line) == false) {
@@ -96,38 +104,35 @@ bool IniConfig::parser(const std::string &configPath)
             nodeName = std::string(left + 1, right - left - 1);
             trim(nodeName);
             // printf("node name = \"%s\"\n", nodeName.c_str());
-            if (nodeName.find_first_not_of(escapeString) != std::string::npos) {
-                throw std::logic_error("node name contains invalid charactor!");
+            if (!nodeName.empty() && nodeName.find_first_not_of(escapeString) != std::string::npos) {
+                return false;
             }
             continue;
         }
 
         char *equalChar = strchr(pos, '='); 
         if (equalChar == nullptr) {
-            throw std::logic_error("invalid key value pair");
+            return false;
         }
 
-        std::string key(pos, equalChar - 1);
+        std::string key(pos, static_cast<size_t>(equalChar - pos));
         std::string val(equalChar + 1);
         trim(key);
         trim(val);
         // printf("key - value: [%s = %s]\n", key.c_str(), val.c_str());
-        if (key.find_first_not_of(escapeString) != std::string::npos) {
-            throw std::logic_error("key name contains invalid charactor!");
+        if (key.empty() || key.find_first_not_of(escapeString) != std::string::npos) {
+            return false;
         }
 
-        if (nodeName == GLOBAL_NODE_NAME) {
-            mConfigMap[key] = val;
-        } else {
-            mConfigMap[nodeName + "." + key] = val;
-        }
-        mSourceMap[nodeName].insert(std::make_pair(key, val));
+        std::string fullKey = nodeName == GLOBAL_NODE_NAME ? key : (nodeName + SEPARATOR + key);
+        mConfigMap[fullKey] = val;
+        mSourceMap[nodeName][key] = val;
     }
 
     return true;
 }
 
-std::string IniConfig::value(const std::string &key)
+std::string IniConfig::value(const std::string &key) const
 {
     auto it = mConfigMap.find(key);
     if (it == mConfigMap.end()) {
@@ -140,50 +145,30 @@ std::string IniConfig::value(const std::string &key)
 std::string &IniConfig::operator[](const std::string &key)
 {
     std::string nodeName, keyName;
-    size_t pos = key.find('.');
-    if (pos == std::string::npos) {
-        nodeName = GLOBAL_NODE_NAME;
-        keyName = key;
-    } else {
-        nodeName = std::string(key.c_str(), pos - 1);
-        keyName = std::string(key.c_str() + pos + 1);
-    }
+    splitKey(key, nodeName, keyName);
 
-    auto mapIt = mSourceMap.find(nodeName);
-    if (mapIt == mSourceMap.end()) {
-        std::map<std::string, std::string> m;
-        m[keyName] = std::string();
-        mSourceMap[nodeName] = m;
-        return mSourceMap[nodeName].find(keyName)->second;
-    }
-
-    return mapIt->second[keyName];
+    std::string fullKey = nodeName == GLOBAL_NODE_NAME ? keyName : (nodeName + SEPARATOR + keyName);
+    std::string &valueRef = mConfigMap[fullKey];
+    mSourceMap[nodeName][keyName] = valueRef;
+    return valueRef;
 }
 
 bool IniConfig::del(const std::string &key)
 {
-    auto it = mConfigMap.find(key);
-    if (it == mConfigMap.end()) {
-        return true;
-    }
-
-    mConfigMap.erase(it);
     std::string nodeName, keyName;
-    size_t pos = key.find('.');
-    if (pos == std::string::npos) {
-        nodeName = GLOBAL_NODE_NAME;
-        keyName = key;
-    } else {
-        nodeName = std::string(key.c_str(), pos - 1);
-        keyName = std::string(key.c_str() + pos + 1);
-    }
+    splitKey(key, nodeName, keyName);
+
+    std::string fullKey = nodeName == GLOBAL_NODE_NAME ? keyName : (nodeName + SEPARATOR + keyName);
+    mConfigMap.erase(fullKey);
     
     auto iter = mSourceMap.find(nodeName);
-    if (iter == mSourceMap.end()) {
-        return true;
+    if (iter != mSourceMap.end()) {
+        iter->second.erase(keyName);
+        if (iter->second.empty()) {
+            mSourceMap.erase(iter);
+        }
     }
 
-    iter->second.erase(keyName);
     return true;
 }
 
@@ -192,10 +177,20 @@ bool IniConfig::keep(std::string file)
     if (file.length() == 0) {
         file = mConfigFilePath;
     }
-    FILE *fp = fopen(file.c_str(), "w");
-    if (fp == nullptr) {
+    FILE *rawFile = fopen(file.c_str(), "w");
+    if (rawFile == nullptr) {
         perror("fopen error");
         return false;
+    }
+
+    std::unique_ptr<FILE, int(*)(FILE*)> fp(rawFile, fclose);
+
+    mSourceMap.clear();
+    for (auto it = mConfigMap.begin(); it != mConfigMap.end(); ++it) {
+        std::string nodeName;
+        std::string keyName;
+        splitKey(it->first, nodeName, keyName);
+        mSourceMap[nodeName][keyName] = it->second;
     }
 
     std::stringstream nodeStream;
@@ -221,17 +216,21 @@ bool IniConfig::keep(std::string file)
             nodeStream << WRAP;
         }
     }
-    
+
     std::string global = globalStream.str();
     std::string node = nodeStream.str();
+    bool writeOk = true;
     if (global.length() > 0) {
-        fwrite(global.c_str(), sizeof(char), global.length(), fp);
+        writeOk = fwrite(global.c_str(), sizeof(char), global.length(), fp.get()) == global.length();
     }
     if (node.length() > 0) {
-        fwrite(node.c_str(), sizeof(char), node.length() - strlen(WRAP), fp); // 去除最后的换行符
+        size_t writeLen = node.length() > strlen(WRAP) ? (node.length() - strlen(WRAP)) : 0;
+        if (writeLen > 0) {
+            writeOk = writeOk && (fwrite(node.c_str(), sizeof(char), writeLen, fp.get()) == writeLen); // 去除最后的换行符
+        }
     }
 
-    fclose(fp);
+    return writeOk && ferror(fp.get()) == 0;
 }
 
 void IniConfig::reset()

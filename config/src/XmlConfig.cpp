@@ -5,9 +5,9 @@
     > Created Time: Thu 12 Jan 2023 10:18:34 AM CST
  ************************************************************************/
 
-#include "XmlConfig.h"
-#include "rwmutex.h"
-#include "tinyxml2.h"
+#include "config/xml.h"
+#include "internal/rwmutex.h"
+#include "internal/tinyxml2.h"
 
 static inline RWMutex *toMutex(void *mtx)
 {
@@ -52,6 +52,7 @@ bool XmlConfig::loadFile(const std::string &xmlFile)
     }
 
     toMutex(m_mutex)->wlock();
+    m_xmlMap.clear();
 
     tinyxml2::XMLElement *curr = doc.RootElement();
     for (; curr; curr = curr->NextSiblingElement()) {
@@ -71,6 +72,7 @@ bool XmlConfig::parse(const std::string &xmlText)
     }
 
     toMutex(m_mutex)->wlock();
+    m_xmlMap.clear();
 
     tinyxml2::XMLElement *curr = doc.RootElement();
     for (; curr; curr = curr->NextSiblingElement()) {
@@ -104,7 +106,7 @@ void XmlConfig::loadXml(std::string prefix, void *e)
         std::string key = prefix.empty() ? curr->Name() : prefix + "." + curr->Name();
         std::string value = curr->GetText() ? curr->GetText() : "";
         trim(value);
-        m_xmlMap.insert(std::make_pair(key, value));
+        m_xmlMap[key] = value;
         if (curr->NoChildren() == false) {
             loadXml(key, curr);
         }
@@ -117,7 +119,7 @@ std::string XmlConfig::lookup(const std::string &key)
     toMutex(m_mutex)->rlock();
     auto it = m_xmlMap.find(key);
     if (it != m_xmlMap.end()) {
-        ret = it->second.c_str();
+        ret = it->second;
     }
 
     toMutex(m_mutex)->runlock();
