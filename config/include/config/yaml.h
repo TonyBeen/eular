@@ -12,6 +12,7 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <mutex>
 
 #include <c4/charconv.hpp>
 
@@ -48,12 +49,12 @@ public:
 
 private:
     std::string readFromeFile(const char *filePath, ConfigResult &result);
-    bool checkPrivateFailed(ConfigResult &result) noexcept;
-    void buildMap(ConfigResult &result);
+    ConfigResult loadFromStringInternal(const char *yamlContent, uint32_t size) noexcept;
+    void buildMap(YamlParserPrivate &snapshot, ConfigResult &result);
 
 private:
-    std::string m_errorMsg;
     std::shared_ptr<YamlParserPrivate> m_private = nullptr;
+    mutable std::mutex m_writeMutex;
 };
 
 } // namespace eular

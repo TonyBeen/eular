@@ -9,9 +9,11 @@
 #define __CONFIG_YAML_NODE_H__
 
 #include <string>
+#include <stdint.h>
 #include <memory>
 
 #include <c4/charconv.hpp>
+#include <c4/std/string.hpp>
 
 #include <config/exports.h>
 
@@ -30,8 +32,63 @@ public:
     YamlNode();
     ~YamlNode();
 
-private:
+    bool            valid() const noexcept;
+    NodeType        type() const noexcept;
 
+    bool            isNull() const noexcept;
+    bool            isScalar() const noexcept;
+    bool            isSequence() const noexcept;
+    bool            isMap() const noexcept;
+
+    uint32_t        size() const noexcept;
+
+    YamlNode        at(const std::string &key) const noexcept;
+    YamlNode        at(uint32_t index) const noexcept;
+
+    std::string     scalar() const noexcept;
+
+    template<typename T>
+    bool as(T *value) const noexcept
+    {
+        if (value == nullptr || !isScalar()) {
+            return false;
+        }
+
+        T temp;
+        if (!parseValue(scalar(), temp)) {
+            return false;
+        }
+
+        *value = temp;
+        return true;
+    }
+
+    template<typename T>
+    T as(const T &defaultValue = T()) const noexcept
+    {
+        T value;
+        if (!as(&value)) {
+            return defaultValue;
+        }
+
+        return value;
+    }
+
+private:
+    static std::string trimScalar(const std::string &value) noexcept;
+    static bool parseValue(const std::string &text, std::string &value) noexcept;
+    static bool parseValue(const std::string &text, bool &value) noexcept;
+
+    template<typename T>
+    static bool parseValue(const std::string &text, T &value) noexcept
+    {
+        std::string trimmed = trimScalar(text);
+        if (trimmed.empty()) {
+            return false;
+        }
+
+        return c4::from_chars(c4::to_csubstr(trimmed), &value);
+    }
 
 private:
     std::shared_ptr<YamlNodePrivate>    m_private = nullptr;
