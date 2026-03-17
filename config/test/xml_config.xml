@@ -1,0 +1,8 @@
+<root>
+  <server>
+    <host>192.168.1.100</host>
+    <port>9000</port>
+    <enabled>no</enabled>
+    <bad_int>not_number</bad_int>
+  </server>
+</root>

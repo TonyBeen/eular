@@ -29,6 +29,8 @@ find_package(Threads REQUIRED)
 set(CONFIG_SOURCE_FILES
     src/IniConfig.cpp
     src/XmlConfig.cpp
+    src/json.cpp
+    src/json_node.cpp
     src/rwmutex.cpp
     src/tinyxml2.cpp
     src/yaml.cpp
@@ -142,6 +144,10 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
 )
 
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/c4core/src/c4
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/yyjson/src/yyjson.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 

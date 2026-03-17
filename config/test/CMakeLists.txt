@@ -1,4 +1,7 @@
 set(CONFIG_TEST_SOURCES
+    test_ini_config_catch.cc
+    test_xml_config_catch.cc
+    test_json_parser_node_catch.cc
     test_yaml_parser_node_catch.cc
 )
 
