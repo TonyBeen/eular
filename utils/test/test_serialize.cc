@@ -5,10 +5,6 @@
     > Created Time: Wed 04 Feb 2026 11:01:27 AM CST
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <iostream>
 #include <vector>
 #include <cstdint>

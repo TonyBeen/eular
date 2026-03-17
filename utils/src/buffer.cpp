@@ -102,10 +102,14 @@ ByteBuffer::~ByteBuffer()
 ByteBuffer& ByteBuffer::operator=(const ByteBuffer& other)
 {
     if (std::addressof(other) != this) {
+        if (other.mBuffer) {
+            SharedBuffer::bufferFromData(other.mBuffer)->acquire();
+        }
+
+        freeBuffer();
         mBuffer = other.mBuffer;
         mCapacity = other.mCapacity;
         mDataSize = other.mDataSize;
-        SharedBuffer::bufferFromData(mBuffer)->acquire();
     }
 
     return *this;
@@ -362,9 +366,10 @@ size_t ByteBuffer::allocBuffer(size_t size)
         size = DEFAULT_BUFFER_SIZE;
     }
 
-    if (mBuffer == nullptr) { 
-        mBuffer = static_cast<uint8_t *>(SharedBuffer::alloc(size)->data());
-        if (mBuffer) {
+    if (mBuffer == nullptr) {
+        SharedBuffer *sb = SharedBuffer::alloc(size);
+        if (sb != nullptr) {
+            mBuffer = static_cast<uint8_t *>(sb->data());
 #ifdef _DEBUG
             memset(mBuffer, 0, size);
 #endif

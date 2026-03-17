@@ -5,10 +5,6 @@
     > Created Time: 2024年03月26日 星期二 10时37分33秒
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #ifndef CATCH_CONFIG_ENABLE_BENCHMARKING
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
 #endif

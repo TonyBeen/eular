@@ -5,10 +5,6 @@
     > Created Time: Wed 24 Dec 2025 04:01:06 PM CST
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #ifndef CATCH_CONFIG_ENABLE_BENCHMARKING
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
 #endif

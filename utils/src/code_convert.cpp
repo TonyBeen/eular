@@ -38,12 +38,21 @@
 
 namespace eular {
 CodeConvert::CodeConvert() :
-    m_codeConvHandle(INVALID_ICONV_HANDLE)
+    m_codeConvHandle(INVALID_ICONV_HANDLE),
+    m_codeFrom(UTF8),
+    m_codeTo(UTF8)
 {
+}
+
+CodeConvert::~CodeConvert()
+{
+    convertEnd();
 }
 
 bool CodeConvert::convertBegin(CodeFlag from, CodeFlag to)
 {
+    convertEnd();
+
     iconv_t cd = iconv_open(_Flag2str(to), _Flag2str(from));
     if (cd == INVALID_ICONV_HANDLE) {
         perror("iconv_open");
@@ -108,6 +117,7 @@ void CodeConvert::convertEnd()
 {
     if (m_codeConvHandle != INVALID_ICONV_HANDLE) {
         iconv_close((iconv_t)m_codeConvHandle);
+        m_codeConvHandle = INVALID_ICONV_HANDLE;
     }
 }
 

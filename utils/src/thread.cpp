@@ -50,6 +50,14 @@ ThreadBase::~ThreadBase()
 {
     if (threadStatus() != CAST2UINT(ThreadStatus::THREAD_EXIT)) { // 等待线程退出，否则在析构完成之后会导致线程段错误问题
         stop();
+
+        if (pthread_equal(mImpl->_pthread_tid, pthread_self()) == 0) {
+            pthread_join(mImpl->_pthread_tid, nullptr);
+        } else {
+            pthread_detach(mImpl->_pthread_tid);
+        }
+
+        mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_EXIT);
     }
 }
 

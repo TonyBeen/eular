@@ -5,10 +5,6 @@
     > Created Time: Thu 04 Jul 2024 04:08:33 PM CST
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <stdio.h>
 #include <iostream>
 #include <string>

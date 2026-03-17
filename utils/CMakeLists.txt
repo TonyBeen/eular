@@ -10,7 +10,7 @@ set(CMAKE_C_STANDARD 11)
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
-option(ENABLE_TEST "Enable test" OFF)
+option(ENABLE_TEST "Enable test" ON)
 option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
 option(UTILS_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
 
@@ -18,12 +18,16 @@ if (NOT UTILS_STATIC_LIB AND NOT UTILS_DYNAMIC_LIB)
     message(FATAL_ERROR "UTILS_STATIC_LIB and UTILS_DYNAMIC_LIB cannot be both OFF")
 endif()
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type (Release MinSizeRel RelWithDebInfo Debug)")
 endif()
 
-if(ENABLE_DEBUG MATCHES "ON")
-    set(CMAKE_BUILD_TYPE "Debug")
+if(ENABLE_DEBUG)
+    if(CMAKE_CONFIGURATION_TYPES)
+        message(STATUS "ENABLE_DEBUG is ON. Please build with Debug configuration for multi-config generators.")
+    else()
+        set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type (Release MinSizeRel RelWithDebInfo Debug)" FORCE)
+    endif()
 endif()
 
 message(STATUS "UTILS CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
@@ -36,19 +40,17 @@ set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation 
 set(MACRO_DEFINITIONS)
 set(CXX_COMPILER_FLAGS)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(MACRO_DEFINITIONS -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    set(MACRO_DEFINITIONS _GNU_SOURCE __USE_FILE_OFFSET64 _LARGEFILE64_SOURCE)
     set(CXX_COMPILER_FLAGS -W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
     set(CXX_COMPILER_FLAGS ${CXX_COMPILER_FLAGS} -fPIC -pthread)
     # set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    set(MACRO_DEFINITIONS "-D_UNICODE -DUNICODE -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE")
-    add_definitions(-D_UNICODE -DUNICODE)  # 启用UNICODE宏
-    add_compile_options("/utf-8")          # 支持源码中的宽字符常量
-    set(CXX_COMPILER_FLAGS)
+    set(MACRO_DEFINITIONS _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+    set(CXX_COMPILER_FLAGS /utf-8)
     set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # 匹配 AppleClang 和 Clang
-    set(MACRO_DEFINITIONS -D_GNU_SOURCE -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
+    set(MACRO_DEFINITIONS _GNU_SOURCE __USE_FILE_OFFSET64 _LARGEFILE64_SOURCE)
     set(CXX_COMPILER_FLAGS -W -Wall -Werror -Wextra -Wno-deprecated -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
     list(APPEND CXX_COMPILER_FLAGS -Wno-unused-private-field) # AppleClang 默认开启该警告
     set(CXX_COMPILER_FLAGS ${CXX_COMPILER_FLAGS} -fPIC -pthread)
@@ -110,16 +112,12 @@ if(UTILS_STATIC_LIB)
 
     target_compile_options(
         utils_static PRIVATE
-        ${CXX_COMPILER_FLAGS} ${MACRO_DEFINITIONS} -DUTILS_STATIC
+        ${CXX_COMPILER_FLAGS}
     )
-
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        set_target_properties (
-            utils_static
-            PROPERTIES
-            LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
-        )
-    endif()
+    target_compile_definitions(
+        utils_static PRIVATE
+        ${MACRO_DEFINITIONS} UTILS_STATIC
+    )
 
     set_property(TARGET utils_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
@@ -164,10 +162,16 @@ if(UTILS_DYNAMIC_LIB)
 
     target_compile_options(
         utils PRIVATE
-        ${CXX_COMPILER_FLAGS} ${MACRO_DEFINITIONS} -DUTILS_EXPORTS
+        ${CXX_COMPILER_FLAGS}
+    )
+    target_compile_definitions(
+        utils PRIVATE
+        ${MACRO_DEFINITIONS} UTILS_EXPORTS
     )
 
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.13")
+        target_link_options(utils PRIVATE -Wl,-z,now -Wl,-z,relro)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         set_target_properties (
             utils
             PROPERTIES
@@ -185,7 +189,7 @@ if(UTILS_DYNAMIC_LIB)
 endif()
 
 # build test
-if(ENABLE_TEST MATCHES "ON")
+if(ENABLE_TEST)
     add_subdirectory(test)
 endif()
 

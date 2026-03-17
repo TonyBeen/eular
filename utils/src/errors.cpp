@@ -7,6 +7,8 @@
 
 #include "utils/errors.h"
 
+#include <string>
+
 #if defined(OS_LINUX) || defined(OS_APPLE)
 #include <string.h>
 #elif defined(OS_WINDOWS)
@@ -57,16 +59,17 @@ std::string FormatErrno(int32_t status)
 #if defined(OS_LINUX) || defined(OS_APPLE)
     return std::string(strerror(status));
 #elif defined(OS_WINDOWS)
-    LPSTR lpMsgBuf;
-    FormatMessageA(
+    LPSTR lpMsgBuf = nullptr;
+    DWORD msgLen = FormatMessageA(
         FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
         NULL, status, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
         (LPSTR)&lpMsgBuf, 0, NULL);
-    std::string msg(lpMsgBuf);
-    if (lpMsgBuf) {
-        LocalFree(lpMsgBuf);
-        lpMsgBuf = NULL;
+    if (msgLen == 0 || lpMsgBuf == nullptr) {
+        return "Unknown windows error";
     }
+
+    std::string msg(lpMsgBuf, msgLen);
+    LocalFree(lpMsgBuf);
     return msg;
 #else
     return "Unsupported platform";

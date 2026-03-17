@@ -1,7 +1,3 @@
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <unordered_map>
 
 #include "catch/catch.hpp"

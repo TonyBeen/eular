@@ -29,7 +29,7 @@ public:
     };
 
     CodeConvert();
-    ~CodeConvert() = default;
+    ~CodeConvert();
 
     /**
      * @brief 编码转换开始

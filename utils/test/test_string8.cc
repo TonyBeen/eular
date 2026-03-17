@@ -1,12 +1,9 @@
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <stdio.h>
 #include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <limits>
+#include <sstream>
 
 #include <utils/string8.h>
 #include <catch/catch.hpp>
