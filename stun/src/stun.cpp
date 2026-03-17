@@ -10,6 +10,7 @@
 #include <map>
 #include <exception>
 #include <stdexcept>
+#include <cstring>
 
 #include "stun/msg.h"
 
@@ -52,7 +53,10 @@ struct StunMsgBuilderPrivate {
 StunMsgBuilder::StunMsgBuilder()
 {
     m_impl = std::unique_ptr<StunMsgBuilderPrivate>(new StunMsgBuilderPrivate());
+    memset(&m_impl->msg_hdr, 0, sizeof(m_impl->msg_hdr));
     m_impl->msg_hdr.type = STUN_BINDING_REQUEST;
+    m_impl->msg_hdr.length = 0;
+    m_impl->msg_hdr.magic = STUN_MAGIC_COOKIE;
     m_impl->msg_buf.reserve(BUFFER_SIZE);
 }
 
@@ -356,9 +360,7 @@ bool StunMsgParser::parse(const void *data, size_t size)
         return false; // Invalid data or size
     }
 
-    if (size < STUN_MSG_HDR_SIZE) {
-        return false; // Not enough data for header
-    }
+    m_impl->attributes.clear();
 
     const stun_msg_hdr *msg_hdr = (const stun_msg_hdr *)data;
     const stun_attr_hdr *attr_hdr = nullptr;
@@ -368,6 +370,7 @@ bool StunMsgParser::parse(const void *data, size_t size)
 
     m_impl->msg_hdr.type = stun_msg_type(msg_hdr);
     m_impl->msg_hdr.length = be16toh(msg_hdr->length);
+    m_impl->msg_hdr.magic = be32toh(msg_hdr->magic);
     memcpy(m_impl->msg_hdr.tsx_id, msg_hdr->tsx_id, STUN_TRX_ID_SIZE);
 
     while ((attr_hdr = stun_msg_next_attr(msg_hdr, attr_hdr)) != nullptr) {
@@ -419,7 +422,6 @@ bool StunMsgParser::parse(const void *data, size_t size)
                 StunAttrVarSize stun_attr_varsize;
                 stun_attr_varsize.value = std::move(value);
                 m_impl->attributes[attr_type] = std::move(stun_attr_varsize);
-                printf("Parsed attribute type: %u, value size: %zu\n", attr_type, value.size());
             } else {
                 m_impl->attributes[attr_type] = StunAttrVarSize();
             }
@@ -505,7 +507,8 @@ const eular::any *StunMsgParser::getAttribute(uint16_t type) const
 
 std::vector<uint16_t> StunMsgParser::getAttributeTypes() const
 {
-    std::vector<uint16_t> types(m_impl->attributes.size());
+    std::vector<uint16_t> types;
+    types.reserve(m_impl->attributes.size());
     for (const auto &pair : m_impl->attributes) {
         types.push_back(pair.first);
     }

@@ -156,10 +156,13 @@ uint16_t SocketAddress::getNetEndianIp(void *pAddr, uint16_t length) const
 void SocketAddress::setIp(const std::string &ip)
 {
     if (inet_pton(AF_INET, ip.c_str(), &this->m_address.addr4.sin_addr)) {
+        this->m_address.addr4.sin_family = AF_INET;
         return;
     }
 
-    inet_pton(AF_INET6, ip.c_str(), &this->m_address.addr6.sin6_addr);
+    if (inet_pton(AF_INET6, ip.c_str(), &this->m_address.addr6.sin6_addr)) {
+        this->m_address.addr6.sin6_family = AF_INET6;
+    }
 }
 
 uint16_t SocketAddress::family() const

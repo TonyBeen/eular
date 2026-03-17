@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 
+#include <random>
+
 #include <utils/CLI11.hpp>
 
 #include <stun.h>
@@ -122,11 +124,14 @@ enum NatType {
     Symmetric,              // 对称NAT
 };
 
-std::array<uint8_t, STUN_TRX_ID_SIZE> GenerateTransactionTd()
+std::array<uint8_t, STUN_TRX_ID_SIZE> GenerateTransactionId()
 {
+    static thread_local std::mt19937 generator(std::random_device{}());
+    static thread_local std::uniform_int_distribution<uint16_t> distribution(0, 255);
+
     std::array<uint8_t, STUN_TRX_ID_SIZE> trx_id;
     for (size_t i = 0; i < STUN_TRX_ID_SIZE; ++i) {
-        trx_id[i] = rand() % 256; // 随机生成0-255之间的字节
+        trx_id[i] = static_cast<uint8_t>(distribution(generator));
     }
 
     return trx_id;
@@ -135,6 +140,7 @@ std::array<uint8_t, STUN_TRX_ID_SIZE> GenerateTransactionTd()
 void sendto_peer(StunClientConfig *config, bool changed_addr = false)
 {
     struct sockaddr_storage peer_addr;
+    socklen_t peer_addr_len = 0;
     memset(&peer_addr, 0, sizeof(struct sockaddr_storage));
     if (config->use_ipv6) {
         struct sockaddr_in6 *server_addr6 = (struct sockaddr_in6 *)&peer_addr;
@@ -142,8 +148,10 @@ void sendto_peer(StunClientConfig *config, bool changed_addr = false)
         server_addr6->sin6_family = AF_INET6;
         server_addr6->sin6_port = htons(config->server_port);
         inet_pton(AF_INET6, config->server_ip.c_str(), &server_addr6->sin6_addr);
+        peer_addr_len = sizeof(struct sockaddr_in6);
         if (changed_addr) {
-            memcpy(server_addr6, config->changed_address.getSockAddr(), config->changed_address.getSockAddrLength());
+            peer_addr_len = config->changed_address.getSockAddrLength();
+            memcpy(server_addr6, config->changed_address.getSockAddr(), peer_addr_len);
         }
     } else {
         struct sockaddr_in *server_addr = (struct sockaddr_in *)&peer_addr;
@@ -151,13 +159,15 @@ void sendto_peer(StunClientConfig *config, bool changed_addr = false)
         server_addr->sin_family = AF_INET;
         server_addr->sin_port = htons(config->server_port);
         inet_pton(AF_INET, config->server_ip.c_str(), &server_addr->sin_addr);
+        peer_addr_len = sizeof(struct sockaddr_in);
         if (changed_addr) {
-            memcpy(server_addr, config->changed_address.getSockAddr(), config->changed_address.getSockAddrLength());
+            peer_addr_len = config->changed_address.getSockAddrLength();
+            memcpy(server_addr, config->changed_address.getSockAddr(), peer_addr_len);
         }
     }
     std::vector<uint8_t> stun_msg = config->msg_builder->message();
 
-    if (sendto(config->sock, stun_msg.data(), stun_msg.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr)) < 0) {
+    if (sendto(config->sock, stun_msg.data(), stun_msg.size(), 0, (struct sockaddr *)&peer_addr, peer_addr_len) < 0) {
         perror("sendto");
         exit(EXIT_FAILURE);
         return;
@@ -244,7 +254,7 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
                 }
 
                 config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
-                config->msg_builder->setTransactionId(parser.transactionId());
+                config->msg_builder->setTransactionId(GenerateTransactionId());
                 config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), static_cast<uint32_t>(CHANGE_IP | CHANGE_PORT));
                 config->open_public = false;
                 STUNC_LOGD("Sending STUN Binding Request with CHANGE-REQUEST (change ip and port) to test for Full Cone...\n");
@@ -268,7 +278,7 @@ void read_event_callback(evutil_socket_t sock, short ev, void *arg)
                     mapped_address->getPort() == config->external_address.getPort()) {
                     // 锥形NAT, 发送Test III
                     config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
-                    config->msg_builder->setTransactionId(parser.transactionId());
+                    config->msg_builder->setTransactionId(GenerateTransactionId());
                     config->msg_builder->addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), static_cast<uint32_t>(CHANGE_PORT));
                     printf("Sending STUN Binding Request with CHANGE-REQUEST (change port) to test for Restricted Cone NAT...\n");
                     config->state = StunState::CHANGE_PORT_FOR_RESTRICTED;
@@ -378,8 +388,7 @@ void stun_nat_detect(StunClientConfig *config)
     // 2、发送Test I
     config->msg_builder = std::make_shared<eular::stun::StunMsgBuilder>();
     config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
-    uint8_t tsx_id[STUN_TRX_ID_SIZE] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B};
-    config->msg_builder->setTransactionId(tsx_id);
+    config->msg_builder->setTransactionId(GenerateTransactionId());
     STUNC_LOGD("Sending STUN Binding Request to %s:%d\n", config->server_ip.c_str(), config->server_port);
 
     config->read_event = event_new(config->base, sockfd, EV_READ | EV_PERSIST, read_event_callback, config);
@@ -401,8 +410,18 @@ void stun_nat_detect(StunClientConfig *config)
             config->nat_type = NatType::OpenPublicWithFirewall;
             config->state = StunState::COMPLETED;
         } else if (config->state == StunState::CHANGE_REQUEST_FOR_CONE) {
+            if (config->changed_address.family() == 0) {
+                fprintf(stderr, "Missing CHANGED-ADDRESS, cannot continue NAT classification.\n");
+                config->state = StunState::FAILED;
+                event_base_loopbreak(config->base);
+                event_free(config->read_event);
+                event_free(config->timeout_event);
+                close(config->sock);
+                return;
+            }
+
             config->msg_builder->setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
-            config->msg_builder->setTransactionId(GenerateTransactionTd());
+            config->msg_builder->setTransactionId(GenerateTransactionId());
             STUNC_LOGD("Sending STUN Binding Request with CHANGE-REQUEST (change port) to test for Symmetric...\n");
 
             // 发送Test I到CHANGED-ADDRESS
@@ -598,8 +617,9 @@ int main(int argc, char **argv)
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    if (0 != getaddrinfo(g_config.connectivity_testing_service_host.c_str(), NULL, NULL, &result)) {
-        perror("getaddrinfo error");
+    int gai_error = getaddrinfo(g_config.connectivity_testing_service_host.c_str(), NULL, &hints, &result);
+    if (gai_error != 0) {
+        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(gai_error));
         return 1;
     }
 
