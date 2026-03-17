@@ -8,4 +8,7 @@
 库文件 /usr/local/lib/
 可修改Makefile的DEST_PATH选项来更改安装位置
 
+CMake 方式卸载（先执行过 install 才有 install_manifest.txt）:
+cmake --build build --target uninstall
+
 > TODO 后面可能会将tinyxml2改为Markup来解析xml

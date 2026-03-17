@@ -175,6 +175,17 @@ install(FILES
     DESTINATION ${CONFIG_INSTALL_CMAKEDIR}
 )
 
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
+    @ONLY
+)
+
+add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
+    COMMENT "Uninstall ${PROJECT_NAME} using install_manifest.txt"
+)
+
 if(CONFIG_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
