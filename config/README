@@ -3,6 +3,14 @@
 解析所用到的库包括: tinyxml2, nlohmann-json, libyaml, yyjson, c4core
 三方库已内置在工程中, make && make install即可
 
+CMake 默认不编译 test 和 examples:
+-DCONFIG_BUILD_TESTS=OFF
+-DCONFIG_BUILD_EXAMPLES=OFF
+
+如需编译示例程序:
+cmake -S . -B build -DCONFIG_BUILD_EXAMPLES=ON
+cmake --build build
+
 头文件和库的安装位置
 头文件 /usr/local/include/
 库文件 /usr/local/lib/

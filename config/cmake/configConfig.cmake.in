@@ -5,4 +5,14 @@ find_dependency(Threads REQUIRED)
 
 include("${CMAKE_CURRENT_LIST_DIR}/configTargets.cmake")
 
+if(NOT TARGET config::config)
+    if(TARGET config::static)
+        add_library(config::config INTERFACE IMPORTED)
+        set_property(TARGET config::config PROPERTY INTERFACE_LINK_LIBRARIES config::static)
+    elseif(TARGET config::shared)
+        add_library(config::config INTERFACE IMPORTED)
+        set_property(TARGET config::config PROPERTY INTERFACE_LINK_LIBRARIES config::shared)
+    endif()
+endif()
+
 check_required_components(config)

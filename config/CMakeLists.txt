@@ -4,7 +4,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.31")
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
 
-project(config VERSION 1.0 LANGUAGES C CXX)
+project(config VERSION 0.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -14,7 +14,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(CONFIG_BUILD_TESTS "Build config Catch tests" ON)
+option(CONFIG_BUILD_TESTS "Build config Catch tests" OFF)
+option(CONFIG_BUILD_EXAMPLES "Build config examples" OFF)
 option(CONFIG_BUILD_SHARED "Build shared config library" ON)
 option(CONFIG_BUILD_STATIC "Build static config library" ON)
 
@@ -73,7 +74,12 @@ set(CONFIG_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
 
 if(CONFIG_BUILD_SHARED)
     add_library(config_shared SHARED ${CONFIG_SOURCE_FILES} ${CONFIG_VENDOR_SOURCE_FILES})
-    set_target_properties(config_shared PROPERTIES OUTPUT_NAME config EXPORT_NAME shared)
+    set_target_properties(config_shared PROPERTIES
+        OUTPUT_NAME config
+        EXPORT_NAME shared
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+    )
     target_compile_definitions(config_shared PRIVATE CONFIG_EXPORTS)
     target_compile_definitions(config_shared PRIVATE ${CONFIG_VENDOR_COMPILE_DEFINITIONS})
     target_include_directories(config_shared
@@ -112,6 +118,14 @@ if(CONFIG_BUILD_STATIC)
             Threads::Threads
     )
     add_library(config::static ALIAS config_static)
+endif()
+
+if(NOT TARGET config::config)
+    if(TARGET config_static)
+        add_library(config::config ALIAS config_static)
+    elseif(TARGET config_shared)
+        add_library(config::config ALIAS config_shared)
+    endif()
 endif()
 
 set(CONFIG_INSTALL_TARGETS)
@@ -185,6 +199,10 @@ add_custom_target(uninstall
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
     COMMENT "Uninstall ${PROJECT_NAME} using install_manifest.txt"
 )
+
+if(CONFIG_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 if(CONFIG_BUILD_TESTS)
     enable_testing()
