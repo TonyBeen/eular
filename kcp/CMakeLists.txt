@@ -88,7 +88,7 @@ if(KCPP_STATIC_LIB MATCHES "ON")
     set_target_properties(
         kcpp_static
         PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
     set_property(TARGET kcpp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
@@ -126,7 +126,9 @@ if(KCPP_DYNAMIC_LIB MATCHES "ON")
     set_target_properties(
         kcpp
         PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+        LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
     set_property(TARGET kcpp PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 

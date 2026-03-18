@@ -627,7 +627,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         return CONNECTION_CLOSED;
     case KCP_STATE_SYN_SENT: // client
     case KCP_STATE_SYN_RECEIVED: { // server
-        kcp_proto_header_t *kcp_header_last = list_last_entry(&kcp_connection->node_list, kcp_proto_header_t, node_list);
+        kcp_proto_header_t *kcp_header_last = list_last_entry(&kcp_connection->kcp_proto_header_list, kcp_proto_header_t, node_list);
         kcp_header_last->syn_fin_data.ts = kcp_time_monotonic_us(); // 由于EAGAIN错误不能算到rtt中, 故只更新发送时间戳
 
         char buffer[KCP_HEADER_SIZE] = {0};
@@ -657,7 +657,7 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
     }
     case KCP_STATE_FIN_SENT: // EAGAIN 重传
     case KCP_STATE_FIN_RECEIVED: {
-        kcp_proto_header_t *kcp_fin_header = list_last_entry(&kcp_connection->node_list, kcp_proto_header_t, node_list);
+        kcp_proto_header_t *kcp_fin_header = list_last_entry(&kcp_connection->kcp_proto_header_list, kcp_proto_header_t, node_list);
         char buffer[KCP_HEADER_SIZE] = {0};
         kcp_proto_header_encode(kcp_fin_header, buffer, KCP_HEADER_SIZE);
 
@@ -1091,7 +1091,7 @@ int32_t kcp_proto_header_encode(const kcp_proto_header_t *kcp_header, char *buff
         buffer_offset += 8;
         *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.ts);
         buffer_offset += 8;
-        *(uint32_t *)buffer_offset = htole64(kcp_header->ping_data.sn);
+        *(uint64_t *)buffer_offset = htole64(kcp_header->ping_data.sn);
         buffer_offset += 8;
     } else {
         if (buffer_size < (KCP_HEADER_SIZE + kcp_header->packet_data.len)) {

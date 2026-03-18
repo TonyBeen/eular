@@ -318,12 +318,29 @@ struct KcpContext *kcp_context_create(struct event_base *base, on_kcp_error_t cb
     };
 
     list_init(&ctx->syn_queue);
+    list_init(&ctx->conn_write_event_queue);
     connection_set_init(&ctx->connection_set);
     ctx->event_loop = base;
     ctx->read_event = NULL;
     ctx->write_event = NULL;
     ctx->write_timer_event = evtimer_new(base, kcp_write_timeout, ctx);
+    if (ctx->write_timer_event == NULL) {
+        free(ctx->conv_bitmap.array);
+        ctx->conv_bitmap.array = NULL;
+        free(ctx);
+        return NULL;
+    }
+
     ctx->read_buffer = (char *)malloc(ETHERNET_MTU);
+    if (ctx->read_buffer == NULL) {
+        event_free(ctx->write_timer_event);
+        ctx->write_timer_event = NULL;
+        free(ctx->conv_bitmap.array);
+        ctx->conv_bitmap.array = NULL;
+        free(ctx);
+        return NULL;
+    }
+
     ctx->read_buffer_size = ETHERNET_MTU;
     ctx->user_data = user;
     return ctx;
@@ -341,9 +358,9 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         kcp_connection_t *next = connection_next(it);
         if (it->state != KCP_STATE_DISCONNECTED) {
             kcp_shutdown(it);
+        } else {
+            kcp_connection_destroy(it);
         }
-
-        kcp_connection_destroy(it);
         it = next;
     }
 
@@ -388,6 +405,11 @@ void kcp_context_destroy(struct KcpContext *kcp_ctx)
         free(kcp_ctx->read_buffer);
         kcp_ctx->read_buffer = NULL;
         kcp_ctx->read_buffer_size = 0;
+    }
+
+    if (kcp_ctx->conv_bitmap.array) {
+        free(kcp_ctx->conv_bitmap.array);
+        kcp_ctx->conv_bitmap.array = NULL;
     }
 
 #if defined(OS_LINUX)
@@ -663,7 +685,8 @@ static void kcp_accept_timeout(int fd, short ev, void *arg)
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
         if (status <= 0) {
             // Linux EAGAIN, Windows EWOULDBLOCK (WSAEWOULDBLOCK)
-            if (get_last_errno() != EAGAIN || get_last_errno() != EWOULDBLOCK) {
+            int32_t code = get_last_errno();
+            if (code == EAGAIN || code == EWOULDBLOCK) {
                 kcp_add_write_event(kcp_connection);
             } else {
                 kcp_ctx->callback.on_error(kcp_ctx, kcp_connection, WRITE_ERROR);

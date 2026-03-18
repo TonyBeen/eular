@@ -401,12 +401,16 @@ const char *errno_string(int32_t err)
 
 int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
 {
-    if (list_empty(&kcp_conn->node_list)) {
-        kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
-        return event_add(kcp_ctx->write_event, NULL);
+    if (kcp_conn == NULL || kcp_conn->kcp_ctx == NULL || kcp_conn->kcp_ctx->write_event == NULL) {
+        return INVALID_PARAM;
     }
 
-    return NO_ERROR;
+    kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
+    if (list_empty(&kcp_conn->node_list)) {
+        list_add_tail(&kcp_conn->node_list, &kcp_ctx->conn_write_event_queue);
+    }
+
+    return event_add(kcp_ctx->write_event, NULL);
 }
 
 uint32_t kcp_random(uint32_t min, uint32_t max)

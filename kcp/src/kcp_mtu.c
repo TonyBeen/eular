@@ -109,7 +109,7 @@ static void kcp_send_mtu_probe_packet(kcp_connection_t *kcp_conn)
         buffer_offset += 1;
         *(uint16_t *)buffer_offset = htole16(kcp_header->wnd);
         buffer_offset += 2;
-        *(uint32_t *)buffer_offset = htole64(kcp_header->packet_data.ts);
+        *(uint64_t *)buffer_offset = htole64(kcp_header->packet_data.ts);
         buffer_offset += 8;
         *(uint32_t *)buffer_offset = htole32(kcp_header->packet_data.sn);
         buffer_offset += 4;
@@ -248,7 +248,7 @@ static kcp_connection_t *parse_icmp_payload(struct KcpContext *kcp_ctx, const vo
     uint16_t scid = le16toh(*(uint16_t *)buffer); // source connection id
     kcp_connection_t* kcp_conn = connection_set_search(&kcp_ctx->connection_set, scid);
     if (kcp_conn != NULL) {
-        if (sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
+        if (!sockaddr_equal(&kcp_conn->remote_host, remote_addr)) {
             return NULL;
         }
 
