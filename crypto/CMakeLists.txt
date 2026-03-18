@@ -13,7 +13,7 @@ set(CMAKE_C_STANDARD 11)
 option(CRYPTOPP_STATIS_LIB "Build static library" ON)
 option(CRYPTOPP_DYNAMIC_LIB "Build dynamic library" OFF)
 option(BUILD_EXAMPLE "Build example" ON)
-option(ENABLE_DEBUG "Enable debug symbol" ON)
+option(ENABLE_DEBUG "Enable debug symbol" OFF)
 
 option(ENABLE_GNUTLS "Enable use of GnuTLS" OFF)
 option(ENABLE_MBEDTLS "Enable use of mbed TLS" ON)
@@ -21,11 +21,11 @@ option(ENABLE_OPENSSL "Enable use of OpenSSL" OFF)
 option(ENABLE_WINDOWS_CRYPTO "Enable use of Windows cryptography libraries" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
-endif()
-
-if(ENABLE_DEBUG MATCHES "ON")
-    set(CMAKE_BUILD_TYPE "Debug")
+    if(ENABLE_DEBUG MATCHES "ON")
+        set(CMAKE_BUILD_TYPE "Debug")
+    else()
+        set(CMAKE_BUILD_TYPE "RelWithDebInfo") # Release MinSizeRel RelWithDebInfo Debug
+    endif()
 endif()
 
 include(CheckFunctionExists)
@@ -38,6 +38,7 @@ include(CheckCSourceCompiles)
 include(CheckStructHasMember)
 include(TestBigEndian)
 include(GNUInstallDirs)
+include(CTest)
 
 add_subdirectory(3rd_party/base64)
 
@@ -97,13 +98,45 @@ message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation directory for libraries")
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include/" CACHE PATH "Installation directory for headers")
 
-file(GLOB HEADER_LIST       "${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/*.h")
+set(HEADER_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/aes.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/base64.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/crc32.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/md5.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/rsa.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/sha.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crypto/xxhash.h
+)
 
-file(GLOB SRC_LIST          "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-file(GLOB SRC_OPENSSL_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/*.cpp")
-file(GLOB SRC_GNUTLS_LIST   "${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/*.cpp")
-file(GLOB SRC_MBEDTLS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/*.cpp")
-file(GLOB SRC_WINDOWS_LIST  "${CMAKE_CURRENT_SOURCE_DIR}/src/win/*.cpp")
+set(SRC_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/base64.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/crc32.cpp
+)
+
+set(SRC_OPENSSL_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/aes_openssl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/md5_openssl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/rsa_openssl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/openssl/sha_openssl.cpp
+)
+
+set(SRC_GNUTLS_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/aes_gnutls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/md5_gnutls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/rsa_gnutls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gnutls/sha_gnutls.cpp
+)
+
+set(SRC_MBEDTLS_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/aes_mbedtls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/md5_mbedtls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/rsa_mbedtls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mbedtls/sha_mbedtls.cpp
+)
+
+set(SRC_WINDOWS_LIST
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/sha_win.cpp
+)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "Linux")
@@ -121,16 +154,16 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
     add_library(eular::cryptopp_static ALIAS cryptopp_static)
 
     if(HAVE_WINDOWS_CRYPTO)
-        target_sources(cryptopp_static PUBLIC ${SRC_WINDOWS_LIST})
+        target_sources(cryptopp_static PRIVATE ${SRC_WINDOWS_LIST})
         target_link_libraries(cryptopp_static PUBLIC bcrypt)
     elseif(HAVE_GNUTLS)
-        target_sources(cryptopp_static PUBLIC ${SRC_GNUTLS_LIST})
+        target_sources(cryptopp_static PRIVATE ${SRC_GNUTLS_LIST})
         target_link_libraries(cryptopp_static PUBLIC Nettle::Nettle Nettle::Hogweed Nettle::Gmp)
     elseif(HAVE_OPENSSL)
-        target_sources(cryptopp_static PUBLIC ${SRC_OPENSSL_LIST})
+        target_sources(cryptopp_static PRIVATE ${SRC_OPENSSL_LIST})
         target_link_libraries(cryptopp_static PUBLIC OpenSSL::Crypto)
     elseif(HAVE_MBEDTLS)
-        target_sources(cryptopp_static PUBLIC ${SRC_MBEDTLS_LIST})
+        target_sources(cryptopp_static PRIVATE ${SRC_MBEDTLS_LIST})
         target_link_libraries(cryptopp_static PUBLIC MbedTLS::Static)
     endif()
     target_link_libraries(cryptopp_static PUBLIC base64)
@@ -138,7 +171,7 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
     target_include_directories(cryptopp_static
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/crypto>
-            $<INSTALL_INTERFACE:include>
+            $<INSTALL_INTERFACE:include/crypto>
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
     )
@@ -151,7 +184,7 @@ if(CRYPTOPP_STATIS_LIB MATCHES "ON")
     set_target_properties (
         cryptopp_static
         PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
     set_property(TARGET cryptopp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
@@ -171,22 +204,22 @@ if(CRYPTOPP_DYNAMIC_LIB MATCHES "ON")
     target_include_directories(cryptopp
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/crypto>
-            $<INSTALL_INTERFACE:include>
+            $<INSTALL_INTERFACE:include/crypto>
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
     )
 
     if(HAVE_WINDOWS_CRYPTO)
-        target_sources(cryptopp PUBLIC ${SRC_WINDOWS_LIST})
+        target_sources(cryptopp PRIVATE ${SRC_WINDOWS_LIST})
         target_link_libraries(cryptopp PUBLIC bcrypt)
     elseif(HAVE_GNUTLS)
-        target_sources(cryptopp PUBLIC ${SRC_GNUTLS_LIST})
+        target_sources(cryptopp PRIVATE ${SRC_GNUTLS_LIST})
         target_link_libraries(cryptopp PUBLIC Nettle::Nettle Nettle::Hogweed Nettle::Gmp)
     elseif(HAVE_OPENSSL)
-        target_sources(cryptopp PUBLIC ${SRC_OPENSSL_LIST})
+        target_sources(cryptopp PRIVATE ${SRC_OPENSSL_LIST})
         target_link_libraries(cryptopp PUBLIC OpenSSL::Crypto)
     elseif(HAVE_MBEDTLS)
-        target_sources(cryptopp PUBLIC ${SRC_MBEDTLS_LIST})
+        target_sources(cryptopp PRIVATE ${SRC_MBEDTLS_LIST})
         target_link_libraries(cryptopp PUBLIC MbedTLS::Shared)
     endif()
     target_link_libraries(cryptopp PUBLIC base64)
@@ -214,6 +247,10 @@ endif()
 
 if(NOT SKIP_INSTALL_HEADERS AND NOT SKIP_INSTALL_ALL)
     install(FILES ${HEADER_LIST} DESTINATION "${INSTALL_INC_DIR}/crypto")
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(test)
 endif()
 
 # uninstall target

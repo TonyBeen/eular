@@ -38,6 +38,12 @@ public:
         _md(Rsa::MT_SHA256)
     {
         yarrow256_init(&_ctrDrbg, 0, nullptr);
+        uint8_t seed[32] = {0};
+        std::random_device rd;
+        for (size_t i = 0; i < sizeof(seed); ++i) {
+            seed[i] = static_cast<uint8_t>(rd());
+        }
+        nettle_yarrow256_seed(&_ctrDrbg, sizeof(seed), seed);
     }
 
     ~RSAContex() {
@@ -131,7 +137,13 @@ int32_t Rsa::GenerateRSAKey(std::string &publicKey, std::string &privateKey, int
 
 std::string Rsa::Status2Msg(int32_t status)
 {
-    return std::string();
+    const char *msg = NULL;
+    RSA_ERROR_MSG(status, msg);
+    if (msg != NULL) {
+        return std::string(msg);
+    }
+
+    return std::string("Nettle/GnuTLS error: ") + std::to_string(status);
 }
 
 int32_t Rsa::initRSAKey(const std::string &publicKey, const std::string &privateKey)

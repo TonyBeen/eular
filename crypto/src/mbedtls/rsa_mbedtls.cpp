@@ -31,22 +31,29 @@ class RSAContex
 public:
     mbedtls_pk_context          _publicPKContext;
     mbedtls_pk_context          _privatePKContext;
+    mbedtls_entropy_context     _entropy;
     mbedtls_ctr_drbg_context    _ctrDrbg;
     mbedtls_rsa_context*        _publicRsaKey{};
     mbedtls_rsa_context*        _privateRsaKey{};
     std::string                 _publicKey;
     std::string                 _privateKey;
     int32_t                     _md;
+    bool                        _drbgReady{false};
 
     RSAContex() :
         _md(MBEDTLS_MD_SHA256)
     {
+        mbedtls_entropy_init(&_entropy);
         mbedtls_ctr_drbg_init(&_ctrDrbg);
+        const char *pers = "rsa_ctx_rng";
+        _drbgReady = mbedtls_ctr_drbg_seed(&_ctrDrbg, mbedtls_entropy_func, &_entropy,
+                                           (const uint8_t *)pers, strlen(pers)) == 0;
     }
 
     ~RSAContex()
     {
         mbedtls_ctr_drbg_free(&_ctrDrbg);
+        mbedtls_entropy_free(&_entropy);
         clean();
     }
 
@@ -175,7 +182,8 @@ int32_t Rsa::initRSAKey(const std::string &publicKey, const std::string &private
 
         mbedtls_pk_init(&m_context->_privatePKContext);
         status = mbedtls_pk_parse_key(&m_context->_privatePKContext, (const uint8_t *)privateKey.data(), privateKey.size() + 1,
-                                       NULL, 0, mbedtls_ctr_drbg_random, NULL);
+                                       NULL, 0, mbedtls_ctr_drbg_random,
+                                       m_context->_drbgReady ? &m_context->_ctrDrbg : nullptr);
         if (status != 0) {
             break; // Failed to parse private key
         }
@@ -217,6 +225,9 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     if (m_context == nullptr || m_context->_publicRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
+    if (!m_context->_drbgReady) {
+        return RSA_ERROR_NOT_INITIALIZED;
+    }
     if (data == nullptr || dataSize == 0) {
         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
     }
@@ -227,7 +238,8 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     }
 
     const uint8_t *ptr = (const uint8_t *)data;
-    encryptedData.reserve(dataSize);
+    size_t reserveSize = ((dataSize + static_cast<size_t>(blockSize) - 1) / static_cast<size_t>(blockSize)) * static_cast<size_t>(keySize);
+    encryptedData.reserve(reserveSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
         size_t blockLen = MIN((size_t)blockSize, dataSize - i);
@@ -270,6 +282,9 @@ int32_t Rsa::sign(const std::vector<uint8_t> &hashVec, std::vector<uint8_t> &sig
     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or public key not initialized
     }
+    if (!m_context->_drbgReady) {
+        return RSA_ERROR_NOT_INITIALIZED;
+    }
 
     int32_t keySize = 0;
     int32_t blockSize = rsaPaddingSize(m_context->_publicRsaKey, keySize);
@@ -290,6 +305,9 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::vector<uint8
 {
     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or private key not initialized
+    }
+    if (!m_context->_drbgReady) {
+        return RSA_ERROR_NOT_INITIALIZED;
     }
     if (data == nullptr || dataSize == 0) {
         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input
@@ -320,6 +338,9 @@ int32_t Rsa::privateDecrypt(const void *data, size_t dataSize, std::string &decr
 {
     if (m_context == nullptr || m_context->_privateRsaKey == nullptr) {
         return RSA_ERROR_NOT_INITIALIZED; // RSA context or private key not initialized
+    }
+    if (!m_context->_drbgReady) {
+        return RSA_ERROR_NOT_INITIALIZED;
     }
     if (data == nullptr || dataSize == 0) {
         return RSA_ERROR_INVALID_PARAMETER; // Invalid data input

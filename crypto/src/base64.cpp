@@ -38,7 +38,7 @@ std::string Base64::Encrypt(const void *data, size_t len)
     size_t size = base64_encode_len(len);
     std::string result;
     result.resize(size);
-    base64_encode((const char *)data, len, const_cast<char *>(result.data()), &size, 0);
+    base64_encode((const char *)data, len, &result[0], &size, 0);
     result.resize(size);
     return result;
 }
@@ -70,7 +70,7 @@ std::string Base64::encrypt(const void *data, size_t len)
     auto size = base64_encode_len(len);
     result.resize(size);
     base64_stream_encode(&m_context->_ctx, (const char *)data, len,
-                         const_cast<char *>(result.data()), &size);
+                         &result[0], &size);
     result.resize(size);
     return result;
 }

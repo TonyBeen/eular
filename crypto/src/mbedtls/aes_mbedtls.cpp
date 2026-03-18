@@ -79,7 +79,7 @@ std::vector<uint8_t> AES::Decrypt(const std::string &data, const std::string &ke
 
 void AES::setKey(const std::string &key, int32_t keySize)
 {
-    if (keySize != KeySize::AES_128 || keySize != KeySize::AES_256) {
+    if (keySize != KeySize::AES_128 && keySize != KeySize::AES_256) {
         return; // Invalid key size
     }
 
@@ -152,13 +152,12 @@ std::vector<uint8_t> AES::encrypt(const void *data, size_t len)
         outputOffset += blockSize;
 
         // Handle padding
-        memcpy(temporaryIV, m_context->_iv, CBC_IV_SIZE);
         uint8_t temporaryBuffer[AES_BLOCK_SIZE] = {0};
         int64_t remaining = (int64_t)len - (int64_t)offset;
         memcpy(temporaryBuffer, ptr + offset, remaining);
         memset(temporaryBuffer + remaining, (uint8_t)paddingSize, paddingSize);
 
-        mbedtls_aes_crypt_cbc(&m_context->_ctx, MBEDTLS_AES_ENCRYPT, AES_BLOCK_SIZE, temporaryIV, temporaryBuffer, temporaryBuffer);
+        mbedtls_aes_crypt_cbc(&m_context->_ctx, MBEDTLS_AES_ENCRYPT, AES_BLOCK_SIZE, temporaryIV, temporaryBuffer, encryptedData.data() + outputOffset);
     }
 
     return encryptedData;

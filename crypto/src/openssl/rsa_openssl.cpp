@@ -17,6 +17,7 @@
 #include <openssl/err.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
+#include <openssl/bn.h>
 
 #ifndef RSA_PADDING
 #define RSA_PADDING RSA_PKCS1_PADDING
@@ -80,11 +81,27 @@ int32_t Rsa::GenerateRSAKey(std::string &publicKey, std::string &privateKey, int
     size_t privateKeyLen = 0;
     size_t publicKeyLen = 0;
     int32_t status = RSA_ERROR_NONE;
-    RSA *keyPair = RSA_generate_key(keyBits, RSA_F4, nullptr, nullptr);
-    if (!keyPair) {
+    RSA *keyPair = RSA_new();
+    BIGNUM *exponent = BN_new();
+    if (!keyPair || !exponent) {
+        if (exponent) {
+            BN_free(exponent);
+        }
+        if (keyPair) {
+            RSA_free(keyPair);
+        }
         status = (int32_t)ERR_get_error();
+        return status;
+    }
+
+    if (BN_set_word(exponent, RSA_F4) != 1 ||
+        RSA_generate_key_ex(keyPair, keyBits, exponent, nullptr) != 1) {
+        status = (int32_t)ERR_get_error();
+        BN_free(exponent);
+        RSA_free(keyPair);
         return status; // Key generation failed
     }
+    BN_free(exponent);
 
     BIO *privateBIO = BIO_new(BIO_s_mem());
     if (!privateBIO) {
@@ -242,7 +259,8 @@ int32_t Rsa::publicEncrypt(const void *data, size_t dataSize, std::vector<uint8_
     }
 
     const uint8_t *ptr = (const uint8_t *)data;
-    encryptedData.reserve(dataSize);
+    size_t reserveSize = ((dataSize + static_cast<size_t>(blockSize) - 1) / static_cast<size_t>(blockSize)) * static_cast<size_t>(keySize);
+    encryptedData.reserve(reserveSize);
     std::vector<uint8_t> blockVec(keySize);
     for (size_t i = 0; i < dataSize; i += blockSize) {
         size_t blockLen = MIN((size_t)blockSize, dataSize - i);
