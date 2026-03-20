@@ -55,5 +55,4 @@ typename detail::unique_if<T>::Unsupported make_unique(Args&&...) = delete;
 
 #endif // __cplusplus < 201402L
 
-
 #endif // __UTP_MAKE_UNIQUE_HPP__

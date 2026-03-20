@@ -12,9 +12,14 @@
 #include <array>
 #include <memory>
 
+#if __has_include(<openssl/curve25519.h>)
 #include <openssl/curve25519.h>
+#define UTP_HAVE_OPENSSL_CURVE25519 1
+#else
+#include <openssl/evp.h>
+#define UTP_HAVE_OPENSSL_CURVE25519 0
+#endif
 #include <openssl/rand.h>
-#include <openssl/mem.h>
 
 namespace eular {
 namespace utp {
@@ -24,9 +29,9 @@ class X25519Wrapper
     X25519Wrapper& operator=(const X25519Wrapper&) = delete;
 
 public:
-    static constexpr size_t PRIVATE_KEY_SIZE = X25519_PRIVATE_KEY_LEN;  // 32
-    static constexpr size_t PUBLIC_KEY_SIZE = X25519_PUBLIC_VALUE_LEN;  // 32
-    static constexpr size_t SHARED_SECRET_SIZE = X25519_SHARED_KEY_LEN; // 32
+    static constexpr size_t PRIVATE_KEY_SIZE = 32;
+    static constexpr size_t PUBLIC_KEY_SIZE = 32;
+    static constexpr size_t SHARED_SECRET_SIZE = 32;
 
     using PrivateKey = std::array<uint8_t, PRIVATE_KEY_SIZE>;
     using PublicKey = std::array<uint8_t, PUBLIC_KEY_SIZE>;

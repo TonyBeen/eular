@@ -21,7 +21,7 @@ inline std::mt19937_64 &rng()
 }
 
 // 浮点范围 [lo, hi)；当 lo > hi 时会自动交换
-template <typename Float, typename = typename std::enable_if<std::is_floating_point<Float>::value, Float>::type>
+template <typename Float, typename std::enable_if<std::is_floating_point<Float>::value, int>::type = 0>
 inline Float Random(Float lo, Float hi)
 {
     if (lo > hi) {
@@ -35,7 +35,7 @@ inline Float Random(Float lo, Float hi)
 }
 
 // 整数范围 [lo, hi]
-template <typename Int, typename = typename std::enable_if<std::is_integral<Int>::value, Int>::type>
+template <typename Int, typename std::enable_if<std::is_integral<Int>::value, int>::type = 0>
 inline Int Random(Int lo, Int hi)
 {
     if (lo > hi) {

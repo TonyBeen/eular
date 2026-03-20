@@ -14,7 +14,7 @@
 
 typedef enum : uint16_t {
     /* 通用错误 */
-    UTP_ERR_NO_ERROR             = 0x0000,  // 无错误，正常关闭
+    UTP_ERR_OK                  = 0x0000,   // 无错误，正常关闭
     UTP_ERR_INVALID_PARAM,                  // 无效参数
     UTP_ERR_INTERNAL_ERROR,                 // 内部错误
     UTP_ERR_CANCELLED,                      // 应用层取消

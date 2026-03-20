@@ -37,10 +37,18 @@ public:
         bool        encrypted{false};
     };
 
+    struct NewConnectionInfo {
+        std::string remote_ip;
+        uint16_t    remote_port{0};
+        uint32_t    local_cid{0};
+        uint32_t    peer_cid{0};
+        bool        encrypted{false};
+    };
+
     using OnConnected = std::function<void(Connection::Ptr)>;
     using OnConnectError = std::function<void(int32_t, const std::string &, ConnectInfo)>;
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
-    using OnNewConnection = std::function<void(Connection::Ptr)>;
+    using OnNewConnection = std::function<bool(const NewConnectionInfo &)>;
 
     Context(event_base *base, Config *config = nullptr);
     ~Context();
@@ -52,14 +60,14 @@ public:
     void setOnConnected(const OnConnected &cb);
     // 主动调用connect接口失败时回调
     void setOnConnectError(const OnConnectError &cb);
-    // 被动接受连接时回调
+    // 被动接受连接时回调，返回true表示放行, false表示拒绝
     void setOnNewConnection(const OnNewConnection &cb);
     // 连接关闭时回调
     void setOnConnectionClosed(const OnConnectionClosed &cb);
 
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname = "");
     int32_t connect(const ConnectInfo &info);
-    Connection::Ptr accept();
+    int32_t accept();
 
 private:
     std::shared_ptr<ContextImpl>    m_impl{};

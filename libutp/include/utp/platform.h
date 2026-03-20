@@ -69,12 +69,12 @@
 #endif
 
 #if defined(__cplusplus) && __cplusplus >= 201103L
-    #define THREAD_LOCAL thread_local
+    #define UTP_THREAD_LOCAL thread_local
 #else
     #ifdef _MSC_VER
-        #define THREAD_LOCAL __declspec(thread)
+        #define UTP_THREAD_LOCAL __declspec(thread)
     #else
-        #define THREAD_LOCAL __thread
+        #define UTP_THREAD_LOCAL __thread
     #endif
 #endif
 

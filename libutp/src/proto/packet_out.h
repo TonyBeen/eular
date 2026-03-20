@@ -8,9 +8,11 @@
 #ifndef __UTP_PROTO_PACKET_OUT_H__
 #define __UTP_PROTO_PACKET_OUT_H__
 
+#include <cstddef>
 #include <queue.h>
 
 #include "commom.h"
+#include "utp/types.h"
 #include "proto/frame.h"
 #include "util/malo.hpp"
 #include "proto/packet_common.h"
@@ -42,7 +44,6 @@ struct FrameMetaInfo {
         class StreamImpl*   stream; // 帧所属流, 含有流数据时才有效
         uintptr_t           data;
     } fmi_u;
-    #define stream      fmi_u.stream
     uint16_t            offset;     // 帧数据偏移
     uint16_t            length;     // 帧数据长度
     FrameType           frame_type; // 帧类型
@@ -56,7 +57,24 @@ struct FrameMetaVec {
 };
 static constexpr size_t FRAME_META_VEC_SIZE = sizeof(FrameMetaVec);
 
+struct PacketOutAttempt {
+    utp_packno_t      packet_no;
+    utp_time_t        sent_time;
+    PacketOutAttempt *next;
+};
+
+struct PacketOutSlice {
+    uint16_t offset;
+    uint16_t length;
+};
+
+static constexpr uint8_t PACKET_OUT_MAX_SLICES = 4;
+
 struct PacketOut {
+    void                reset();
+    bool                addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime);
+    void                clearSendAttempts();
+
     TAILQ_ENTRY(PacketOut)  po_next;    // 未确认包队列指针
 
     utp_time_t      sent_time;  // 发送时间戳(us)
@@ -71,10 +89,17 @@ struct PacketOut {
     uint16_t    data_size;          // 包数据大小
     uint16_t    encrypt_data_size;  // 加密后数据大小
     uint16_t    alloc_size;         // data 可用大小
+    uint8_t     slice_count;        // 发送 slice 数量（基于 raw_data 偏移）
 
     uint8_t*        raw_data;       // 头部 + 多个帧数据缓存, 加密时需要预留16字节
     uint8_t*        encrypt_data;   // 加密后数据指针
+    PacketOutSlice  slices[PACKET_OUT_MAX_SLICES];
     BWPacketState*  bw_state;       // 带宽采样状态指针
+    // TODO(next): 为 MSG_ZEROCOPY 增加发送完成跟踪字段（cookie/完成状态/完成区间），
+    // 并与 attempts/重传状态联合决定回收时机。
+    PacketOutAttempt* attempts_head;
+    PacketOutAttempt* attempts_tail;
+    uint16_t          attempts_count;
 
     union {
         FrameMetaInfo   one;

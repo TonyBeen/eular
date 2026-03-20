@@ -10,6 +10,7 @@
 
 #include <array>
 
+#include "context/stream_impl.h"
 #include "util/malo.hpp"
 #include "proto/packet_out.h"
 #include "queue.h"
@@ -27,8 +28,8 @@ public:
         uint32_t    inuse_max;
         uint32_t    inuse_max_avg;  // 指数加权移动平均 (EWMA)
         uint32_t    inuse_max_var;  // 绝对偏差
-        uint32_t    objs_total; // Number of objects owned by the pool
-        uint32_t    objs_inuse; // Number of objects in use
+        uint32_t    objs_total;     // Number of objects owned by the pool
+        uint32_t    objs_inuse;     // Number of objects in use
     };
 
     MemoryManager();
@@ -45,11 +46,9 @@ private:
     void maybeShrinkPoolOut(uint32_t idx);
 
 public:
-    struct {
-        MaloCacheLine<StreamImpl>   stream_malo;
-        MaloCacheLine<PacketOut>    packet_out_malo;
-        // TODO: packet_in
-    };
+    MaloCacheLine<StreamImpl>   stream_malo;
+    MaloCacheLine<PacketOut>    packet_out_malo;
+    // TODO: packet_in
 
     SLIST_HEAD(, PacketOutBuf)      packet_out_bufs[MM_OUT_BUCKETS];
     PoolStats                       packet_out_stats[MM_OUT_BUCKETS];

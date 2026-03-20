@@ -28,6 +28,10 @@
 namespace eular {
 namespace utp {
 
+class X25519Wrapper;
+class AesGcmContext;
+struct PacketIn;
+
 inline bool operator<(const Context::ConnectInfo &lhs, const Context::ConnectInfo &rhs)
 {
     return std::tie(lhs.ip, lhs.port) < std::tie(rhs.ip, rhs.port);
@@ -61,7 +65,38 @@ public:
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
     int32_t connect(const Context::ConnectInfo &info);
-    Connection::Ptr accept();
+    int32_t accept();
+
+private:
+    struct PendingIncomingConnection {
+        uint32_t                localCid{0};
+        uint32_t                peerCid{0};
+        Address                 peerAddress;
+        std::string             peerIp;
+        bool                    encrypted{false};
+        uint64_t                packetNumber{1};
+        utp_time_t              acceptStartUs{0};
+        bool                    handshakeSent{false};
+        TransportParams         peerTp{};
+        std::shared_ptr<X25519Wrapper> x25519;
+        std::shared_ptr<AesGcmContext> aesCtx;
+    };
+
+private:
+    static std::string peerKey(const Address &peerAddress, uint32_t peerCid);
+    int32_t sendPendingHandshake(PendingIncomingConnection &pending);
+    int32_t sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
+    int32_t sendPendingPacket(PendingIncomingConnection &pending,
+                              uint8_t packetType,
+                              const void *payload,
+                              size_t payloadLen);
+    bool decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
+                                     PendingIncomingConnection &pending,
+                                     PacketIn &packet) const;
+    bool allocLocalCid(uint32_t &cid);
+    void removePendingIncoming(uint32_t localCid);
+    void onPendingHandshakeTimeout();
+    void processPendingHandshakeTimeouts();
 
 private:
     void onReadEvent();
@@ -75,6 +110,7 @@ private:
 
     ev::EventPoll   m_readEvent;
     ev::EventPoll   m_writeEvent;
+    ev::EventTimer  m_pendingHandshakeTimer;
 
     Context::OnConnected        m_onConnected;
     Context::OnConnectError     m_onConnectError;
@@ -85,7 +121,11 @@ private:
     ConnectionMap                   m_connections;          // 所有连接容器
     std::set<ConnectionImpl *>      m_pendingConnections;   // 正在连接队列
     std::list<ConnectionImpl *>     m_wantWriteConns;       // 需要写数据的连接队列
-    std::list<ConnectionImpl *>     m_newConnections;       // 新连接队列
+
+    std::unordered_map<uint32_t, PendingIncomingConnection> m_pendingIncoming; // local cid -> pending incoming
+    std::unordered_map<std::string, uint32_t> m_pendingIncomingPeerIndex;       // peer address+scid -> local cid
+    std::list<uint32_t>             m_pendingIncomingQueue; // 回调通知后的待 accept 队列
+    std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
 };
 
 } // namespace utp

@@ -8,10 +8,11 @@
 #ifndef __UTP_CONTEXT_SEND_CTL_H__
 #define __UTP_CONTEXT_SEND_CTL_H__
 
+#include <string>
+
 #include <queue.h>
 
-#include "context/context_impl.h"
-#include "context/connection_impl.h"
+#include <event/timer.h>
 
 #include "congestion/congestion.h"
 #include "congestion/pacer.h"
@@ -69,6 +70,10 @@ ENUM_UTIL_REGISTER_ENUM(RetransmissionMode, MODE_ENUM_ITEMS, 3)
 
 namespace eular {
 namespace utp {
+class ContextImpl;
+class ConnectionImpl;
+class AckInfo;
+
 enum BufPacketType : uint8_t {
     HighestPrio = 0, // 高优先级
     OtherPrio = 1,   // 普通优先级
@@ -84,7 +89,7 @@ class SendControl
 {
 public:
     SendControl(ConnectionImpl *conn, ContextImpl *ctx);
-    ~SendControl() = default;
+    ~SendControl();
 
     void    init();
 
@@ -99,6 +104,8 @@ public:
 public:
     bool        canSend();
     uint64_t    bytesOutTotal() const;
+    int32_t     onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
+    void        onCanWrite(utp_time_t nowUs);
 
 private:
     void        appendUnacked(PacketOut *pkt);
@@ -115,6 +122,7 @@ private:
     utp_packno_t largestRetxPacketNo() const;
     PacketOut*  handleRegularLostPacket(PacketOut *pkt, PacketOut *&next);
     bool        handleLostMtuProbe(PacketOut *pkt);
+    int32_t     retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs);
     void        unackedRemove(PacketOut *pkt);
 
     void        destroyPacket(PacketOut *pkt);

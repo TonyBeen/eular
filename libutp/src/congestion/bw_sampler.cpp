@@ -122,6 +122,7 @@ BWSample BandwidthSampler::onPacketAcked(PacketInfo *packetInfo, uint64_t ackTim
         isAppLimited = packetState->sendState.isAppLimited;
 
         m_samplePool.put(packetState);
+        packetInfo->packetState = nullptr;
 
         if (BW_VALUE(&sendRate) < BW_VALUE(&ackRate)) {
             sample.bandwidth = sendRate;

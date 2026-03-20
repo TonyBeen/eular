@@ -11,6 +11,9 @@
 #include "logger/logger.h"
 #include "mm.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #define POOL_SAMPLE_PERIOD 1024
 
 namespace eular {
@@ -51,10 +54,34 @@ static int32_t PacketOutIndex(uint32_t size)
 
 MemoryManager::MemoryManager()
 {
+    for (uint32_t i = 0; i < MM_OUT_BUCKETS; ++i) {
+        SLIST_INIT(&packet_out_bufs[i]);
+        std::memset(&packet_out_stats[i], 0, sizeof(packet_out_stats[i]));
+    }
+
+    for (uint32_t i = 0; i < MM_IN_BUCKETS; ++i) {
+        SLIST_INIT(&packet_in_bufs[i]);
+        std::memset(&packet_in_stats[i], 0, sizeof(packet_in_stats[i]));
+    }
 }
 
 MemoryManager::~MemoryManager()
 {
+    for (uint32_t i = 0; i < MM_OUT_BUCKETS; ++i) {
+        PacketOutBuf *pob = nullptr;
+        while ((pob = SLIST_FIRST(&packet_out_bufs[i])) != nullptr) {
+            SLIST_REMOVE_HEAD(&packet_out_bufs[i], next_pob);
+            std::free(pob);
+        }
+    }
+
+    for (uint32_t i = 0; i < MM_IN_BUCKETS; ++i) {
+        PacketInBuf *pib = nullptr;
+        while ((pib = SLIST_FIRST(&packet_in_bufs[i])) != nullptr) {
+            SLIST_REMOVE_HEAD(&packet_in_bufs[i], next_pib);
+            std::free(pib);
+        }
+    }
 }
 
 PacketOut *MemoryManager::getPacketOut(uint32_t size)
@@ -90,6 +117,17 @@ PacketOut *MemoryManager::getPacketOut(uint32_t size)
 
 void MemoryManager::putPacketOut(PacketOut *pkt)
 {
+    if (pkt == nullptr) {
+        return;
+    }
+
+    pkt->clearSendAttempts();
+    if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
+        std::free(pkt->encrypt_data);
+        pkt->encrypt_data = nullptr;
+        pkt->encrypt_data_size = 0;
+    }
+
     PacketOutBuf *pob = (PacketOutBuf *)pkt->raw_data;
     uint32_t idx = PacketOutIndex(pkt->alloc_size);
     SLIST_INSERT_HEAD(&packet_out_bufs[idx], pob, next_pob);

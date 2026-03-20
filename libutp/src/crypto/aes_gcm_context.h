@@ -8,16 +8,10 @@
 #ifndef __UTP_CRYPTO_AES_GCM_CONTEXT_H__
 #define __UTP_CRYPTO_AES_GCM_CONTEXT_H__
 
-#include <string>
-#include <vector>
+#include <array>
 #include <memory>
 
-#include <openssl/curve25519.h>
-#include <openssl/aead.h>
-#include <openssl/rand.h>
-#include <openssl/hkdf.h>
-#include <openssl/sha.h>
-#include <openssl/mem.h>
+#include <openssl/evp.h>
 #include <openssl/err.h>
 
 namespace eular {
@@ -109,7 +103,9 @@ private:
     void  cleanup();
 
 private:
-    EVP_AEAD_CTX*   m_ctx{nullptr};
+    const EVP_CIPHER*      m_cipher{nullptr};
+    std::array<uint8_t, 32> m_key{};
+    size_t                  m_keySize{0};
     std::array<uint8_t, 4> m_noncePerfix; // 96-bit nonce for AES-GCM
 };
 

@@ -9,13 +9,14 @@
 #define __PROTO_PROTO_FRAME_H__
 
 #include <stdint.h>
+#include <string>
 
 #include <utils/endian.hpp>
 
 #include "proto/proto.h"
 
-#define STREAM_IS_FIN(flag)    ((flag) & FrameStream::kFrameStreamFlagFin)
-#define STREAM_SET_FIN(flag)   ((flag) | FrameStream::kFrameStreamFlagFin)
+#define STREAM_IS_FIN(flag)    ((flag) & kFrameStreamFlagFin)
+#define STREAM_SET_FIN(flag)   ((flag) | kFrameStreamFlagFin)
 
 namespace eular {
 namespace utp {
@@ -40,7 +41,7 @@ enum FrameType : uint8_t {
     kFrameMax,
 };
 
-static inline std::string FrameTypeToString(uint32_t type);
+std::string FrameTypeToString(uint32_t type);
 
 class FrameBase {
 public:

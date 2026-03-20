@@ -15,8 +15,8 @@
 
 #include "utp/errno.h"
 
-static THREAD_LOCAL int32_t tls_last_error = 0;
-static THREAD_LOCAL std::array<char, 512> tls_error_buf = {0};
+static UTP_THREAD_LOCAL int32_t tls_last_error = 0;
+static UTP_THREAD_LOCAL std::array<char, 512> tls_error_buf = {0};
 
 void SetLastError(int32_t err_code, const char* fmt = nullptr, ...);
 
@@ -38,7 +38,7 @@ inline void SetLastErrorV(int32_t err_code, fmt::format_string<Args...> format_s
     }
 #else
     UNUSED(format_str);
-    UNUSED(args);
+    (void)sizeof...(args);
     tls_error_buf[0] = '\0';
 #endif
 }

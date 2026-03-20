@@ -28,6 +28,10 @@ int32_t eular::utp::FrameAck::encode(void *buffer, size_t size) const
     uint32_t firstAckRange = 0;
     auto it = _history->begin();
     firstAckRange = it->high - it->low + 1; // +1 表示闭区间
+    if (firstAckRange == 0) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range {}", firstAckRange);
+        return -1;
+    }
 
     uint8_t rangeCount = rangeSize();
     uint8_t *bufferOffset = static_cast<uint8_t *>(buffer);
@@ -55,45 +59,119 @@ int32_t eular::utp::FrameAck::encode(void *buffer, size_t size) const
 
 int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
 {
+    if (buffer == nullptr || _ackInfo == nullptr || _params == nullptr) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack decode args: buffer={}, ackInfo={}, params={}",
+            buffer != nullptr, _ackInfo != nullptr, _params != nullptr);
+        return -1;
+    }
+
     if (size < FRAME_ACK_HDR_SIZE) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than minimum ack frame size {}", size, FRAME_ACK_HDR_SIZE);
         return -1;
     }
 
     const uint8_t *bufferOffset = static_cast<const uint8_t *>(buffer);
+    const size_t sizeOriginal = size;
+    auto deserialize = [&] (auto &value) -> bool {
+        bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, value);
+        return bufferOffset != nullptr;
+    };
+
     FrameType frameType;
-    bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
+    if (!deserialize(frameType)) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack frame type");
+        return -1;
+    }
     if (frameType != FrameType::kFrameAck) {
         SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
         return -1;
     }
 
-    size_t sizeOriginal = size;
     uint8_t rangeCount;
-    bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, rangeCount);
-    _ackInfo->range_size = rangeCount;
+    if (!deserialize(rangeCount)) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack range count");
+        return -1;
+    }
+
+    // range_count 表示 additional ACK ranges 的数量（不含 first_ack_range）
+    if (rangeCount >= _ackInfo->ack_ranges.size()) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range count {}", rangeCount);
+        return -1;
+    }
+
+    const size_t expectedSize = FRAME_ACK_HDR_SIZE + static_cast<size_t>(rangeCount) * FRAME_ACK_RANGE_SIZE;
+    if (sizeOriginal < expectedSize) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "ack frame too short: size={}, expected={}", sizeOriginal, expectedSize);
+        return -1;
+    }
+
+    _ackInfo->range_size = static_cast<uint32_t>(rangeCount) + 1;
 
     uint16_t ackDelay;
-    bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, ackDelay);
+    if (!deserialize(ackDelay)) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack delay");
+        return -1;
+    }
     _ackInfo->ack_delay = ackDelay << _params->ack_delay_exponent;
 
     uint32_t firstAckRange;
-    bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, firstAckRange);
+    if (!deserialize(firstAckRange)) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode first ack range");
+        return -1;
+    }
+
+    if (firstAckRange == 0) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range 0");
+        return -1;
+    }
 
     utp_packno_t largestAcked;
-    bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, largestAcked);
+    if (!deserialize(largestAcked)) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode largest acked packno");
+        return -1;
+    }
+
+    if (largestAcked < static_cast<utp_packno_t>(firstAckRange - 1)) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range {} for largest packno {}", firstAckRange, largestAcked);
+        return -1;
+    }
+
+    _ackInfo->largest_ack_packno = largestAcked;
 
     uint32_t i = 0;
     _ackInfo->ack_ranges[i].high = largestAcked;
     _ackInfo->ack_ranges[i].low = largestAcked - firstAckRange + 1;
     ++i;
     utp_packno_t lastAcked = _ackInfo->ack_ranges[0].low;
-    for (; i < rangeCount; ++i) {
+    for (; i <= rangeCount; ++i) {
         uint32_t gap;
-        bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, gap);
+        if (!deserialize(gap)) {
+            SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack gap at index {}", i);
+            return -1;
+        }
+
+        if (lastAcked <= static_cast<utp_packno_t>(gap)) {
+            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack gap {} at index {}", gap, i);
+            return -1;
+        }
+
         uint32_t ackRangeLength;
-        bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, ackRangeLength);
+        if (!deserialize(ackRangeLength)) {
+            SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack range length at index {}", i);
+            return -1;
+        }
+
+        if (ackRangeLength == 0) {
+            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range length 0 at index {}", i);
+            return -1;
+        }
+
         _ackInfo->ack_ranges[i].high = lastAcked - gap - 1;
+        if (_ackInfo->ack_ranges[i].high + 1 < ackRangeLength) {
+            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range length {} at index {}", ackRangeLength, i);
+            return -1;
+        }
+
         _ackInfo->ack_ranges[i].low = _ackInfo->ack_ranges[i].high - ackRangeLength + 1;
         lastAcked = _ackInfo->ack_ranges[i].low;
     }
@@ -104,15 +182,24 @@ int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
 
 int32_t eular::utp::FrameAck::frameSize() const
 {
-    uint32_t rangeCount = _history->rangeCount() > _config->max_ack_range_size ?
-                          _config->max_ack_range_size : _history->rangeCount();
+    uint32_t rangeCount = rangeSize();
     uint32_t size = rangeCount * FRAME_ACK_RANGE_SIZE;
     return static_cast<int32_t>(FRAME_ACK_HDR_SIZE + size);
 }
 
 int32_t eular::utp::FrameAck::rangeSize() const
 {
-    uint32_t rangeCount = _history->rangeCount() > _config->max_ack_range_size ?
-                          _config->max_ack_range_size : _history->rangeCount();
-    return static_cast<int32_t>(rangeCount);
+    if (_history == nullptr || _history->empty()) {
+        return 0;
+    }
+
+    uint32_t historyRangeCount = _history->rangeCount();
+    uint32_t maxAckRanges = _config != nullptr ? _config->max_ack_range_size : historyRangeCount;
+    uint32_t boundedRangeCount = historyRangeCount > maxAckRanges ? maxAckRanges : historyRangeCount;
+    if (boundedRangeCount == 0) {
+        return 0;
+    }
+
+    // range_count 表示 additional ACK ranges 的数量（不含 first_ack_range）
+    return static_cast<int32_t>(boundedRangeCount - 1);
 }

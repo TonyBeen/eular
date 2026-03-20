@@ -50,34 +50,36 @@ void ReceiveHistory::stopWait(utp_packno_t cutoff)
     uint32_t prev = npos;
     uint32_t cur  = m_head;
 
-    for (;;) {
+    while (cur != npos) {
         Element &e = m_elements[cur];
         Range r = ElementRange(e);
+        const uint32_t next = e.next;
 
         if (cutoff > r.high) {
             // 整个区间都在 cutoff 左边, 删除整个区间
             if (prev == npos) { // 删除头部
-                m_head = e.next;
+                m_head = next;
             } else {
-                m_elements[prev].next = e.next;
+                m_elements[prev].next = next;
             }
             removeElement(cur);
+
+            cur = next;
+            continue;
         } else if (r.low < cutoff) {
             // 区间部分在 cutoff 左边, 向右调整 low
             uint32_t delta = static_cast<uint32_t>(cutoff - r.low);
             e.low += delta;
             e.count -= delta;
-            break;
+            prev = cur;
+            cur = next;
+            continue;
         } else {
-            // 区间在 cutoff 右边, 无需处理
-            break;
+            // 当前区间在 cutoff 右边, 后续较小区间仍可能需要裁剪
+            prev = cur;
+            cur = next;
+            continue;
         }
-
-        if (e.next == npos) {
-            return;
-        }
-        prev = cur;
-        cur = e.next;
     }
 }
 
@@ -165,6 +167,19 @@ void ReceiveHistory::insertIntoList(utp_packno_t pn)
                     pe.count = static_cast<uint32_t>(e.low + e.count - plow);
                     pe.next  = e.next;
                     removeElement(cur);
+                    return;
+                }
+            }
+
+            const uint32_t next = e.next;
+            if (next != npos) {
+                Element &ne = m_elements[next];
+                utp_packno_t nhigh = static_cast<utp_packno_t>(ne.low + ne.count - 1);
+                if (nhigh + 1 == e.low) {
+                    e.low = ne.low;
+                    e.count = static_cast<uint32_t>(high - ne.low + 1);
+                    e.next = ne.next;
+                    removeElement(next);
                 }
             }
             return;
@@ -180,7 +195,7 @@ void ReceiveHistory::insertIntoList(utp_packno_t pn)
                 Element &ne = m_elements[next];
                 utp_packno_t nlow  = ne.low;
                 utp_packno_t nhigh = static_cast<utp_packno_t>(ne.low + ne.count - 1);
-                if (high + 1 == nlow) {
+                if (pn + 1 == nlow) {
                     e.count = static_cast<uint32_t>(nhigh - low + 1);
                     e.next  = ne.next;
                     removeElement(next);

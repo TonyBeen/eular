@@ -56,7 +56,7 @@ int32_t Context::connect(const ConnectInfo &info)
     return m_impl->connect(info);
 }
 
-Connection::Ptr Context::accept()
+int32_t Context::accept()
 {
     return m_impl->accept();
 }

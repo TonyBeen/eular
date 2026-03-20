@@ -8,6 +8,8 @@
 #ifndef __UTP_UTIL_H__
 #define __UTP_UTIL_H__
 
+#include <cstddef>
+
 #include "utp/types.h"
 
 namespace eular {

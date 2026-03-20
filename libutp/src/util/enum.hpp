@@ -32,10 +32,10 @@ namespace util {
     }
 
     template <typename E>
-    typename std::enable_if<enable_bitmask_operators<E>::value, bool>::type
+    typename std::enable_if<enable_bitmask_operators<E>::value, E>::type
     operator&(E a, E b) noexcept
     {
-        return static_cast<bool>(to_underlying(a) & to_underlying(b));
+        return static_cast<E>(to_underlying(a) & to_underlying(b));
     }
 
     template <typename E>
@@ -80,7 +80,7 @@ namespace util {
     typename std::enable_if<enable_bitmask_operators<E>::value, bool>::type
     has(E value, E flag) noexcept
     {
-        return (to_underlying(value & flag) != 0);
+        return ((to_underlying(value) & to_underlying(flag)) != 0);
     }
 
     template <typename E>

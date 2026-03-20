@@ -8,6 +8,7 @@
 #ifndef __UTP_CONTEXT_CONNECTION_H__
 #define __UTP_CONTEXT_CONNECTION_H__
 
+#include <memory>
 #include <map>
 #include <unordered_map>
 
@@ -15,23 +16,28 @@
 
 #include "utp/types.h"
 #include "utp/connection.h"
+#include "utp/utp.h"
 
 #include "socket/udp.h"
 
 #include "context/stream_impl.h"
-#include "context/context_impl.h"
 
 #include "congestion/rtt.h"
-
-#include "crypto/x25519_wrapper.h"
-#include "crypto/aes_gcm_context.h"
 
 #include "util/mm.h"
 #include "util/malo.hpp"
 #include "util/transport_param.h"
+#include "util/network_path.h"
+#include "util/receive_history.h"
+#include "mtu/mtu.h"
 
 namespace eular {
 namespace utp {
+
+class ContextImpl;
+class X25519Wrapper;
+class AesGcmContext;
+class SendControl;
 
 class ConnectionImpl : public Connection
 {
@@ -52,10 +58,17 @@ public:
     };
 
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);
-    ~ConnectionImpl() = default;
+    ~ConnectionImpl();
 
     int32_t connect(const Context::ConnectInfo &info);
+    int32_t initPassive(const Context::ConnectInfo &info,
+                        const Address &peerAddress,
+                        uint32_t peerConnectionID,
+                        const TransportParams &peerTp,
+                        const std::shared_ptr<X25519Wrapper> &x25519,
+                        const std::shared_ptr<AesGcmContext> &aesCtx);
 
+    void    onUdpPacket(const UdpSocket::MsgMetaInfo &msg);
     void    onWrite();
 
     // @brief 下一次调度时间(ms), send control触发
@@ -78,11 +91,41 @@ public:
     State       state() const { return m_state; }
 
 private:
+    void scheduleWrite();
+    void flushPendingStreamWrites();
+    int32_t sendStreamFrame(uint32_t streamId,
+                            uint64_t streamOffset,
+                            const uint8_t *data,
+                            size_t len,
+                            bool fin);
+    int32_t sendHandshakeDonePacket();
     int32_t sendInitialPacket();
+    int32_t sendHandshakePacket(bool encrypted);
+    int32_t sendPacket(uint8_t packetType,
+                       const void *payload,
+                       size_t payloadLen,
+                       uint16_t packetFlags = 0,
+                       utp_packno_t *outPacketNo = nullptr);
+    int32_t sendPacket(uint8_t packetType,
+                       const void *payloadHead,
+                       size_t payloadHeadLen,
+                       const void *payloadBody,
+                       size_t payloadBodyLen,
+                       uint16_t packetFlags,
+                       utp_packno_t *outPacketNo = nullptr);
+    bool    canSendOnCurrentPath(size_t packetLen, FrameType frameType) const;
+    void    maybeSendPathChallenge();
+    void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize);
+    void    handlePathResponseFrame(const uint8_t *frameData, size_t frameSize);
+    void    onPathValidationTimeout();
+    void    onHandshakeDoneTimeout();
+    void    armHandshakeDoneTimer();
+    uint32_t handshakeDoneDelayMs() const;
     void    onConnTimeout();
 
 private:
     friend class SendControl;
+    friend class StreamImpl;
 
     ContextImpl*            m_ctx{};
     UdpSocket*              m_udpSocket{};
@@ -99,15 +142,27 @@ private:
     uint32_t                m_localConnectionID{};
     uint32_t                m_peerConnectionID{};
     uint64_t                m_packetNumber{1};
+    Address                 m_peerAddress;
+    NetworkPath             m_networkPath;
 
     using StreamMap = std::unordered_map<uint32_t, StreamImpl::SP>;
     uint32_t                m_streamId[STREAM_TYPES]{0};
     StreamMap               m_streams;
-    X25519Wrapper::Ptr      m_x25519;
-    AesGcmContext::Ptr      m_aesCtx;
+    std::shared_ptr<X25519Wrapper> m_x25519;
+    std::shared_ptr<AesGcmContext> m_aesCtx;
+    std::unique_ptr<SendControl>   m_sendCtl;
+
+    OnStreamCanCreate       m_onStreamCanCreate;
+    OnStreamCreated         m_onStreamCreated;
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};
+    ev::EventTimer          m_pathValidationTimer;
+    ev::EventTimer          m_handshakeDoneTimer;
+    ReceiveHistory          m_receiveHistory;
+    MtuDiscovery            m_mtuDiscovery;
+    bool                    m_handshakeDonePending{false};
+    bool                    m_handshakeDoneSent{false};
 };
 
 } // namespace utp

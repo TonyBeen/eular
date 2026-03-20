@@ -240,6 +240,20 @@ socklen_t Address::toSockAddr(sockaddr_storage &storage) const
     return 0;
 }
 
+std::string Address::toIpString() const
+{
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (m_family == Family::IPv4) {
+        inet_ntop(AF_INET, m_addr.v4, buf, sizeof(buf));
+        return std::string(buf);
+    } else if (m_family == Family::IPv6) {
+        inet_ntop(AF_INET6, m_addr.v6, buf, sizeof(buf));
+        return std::string(buf);
+    }
+
+    return std::string();
+}
+
 std::string Address::toString() const
 {
     char buf[INET6_ADDRSTRLEN] = {0};

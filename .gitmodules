@@ -10,3 +10,6 @@
 [submodule "config/3rd_party/c4core"]
 	path = config/3rd_party/c4core
 	url = https://github.com/biojppm/c4core.git
+[submodule "libutp/3rd/boringssl"]
+	path = libutp/3rd/boringssl
+	url = git@github.com:google/boringssl.git

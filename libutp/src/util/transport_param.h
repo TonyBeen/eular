@@ -22,9 +22,16 @@ public:
         kAckDelayExponent   = 1u << 4, // ack延迟指数
         kMaxAckDelta        = 1u << 5, // 包号差值
         kMaxAckDelay        = 1u << 6, // 最大ack延迟时间(ms)
-        kMaxNumeric         = 1u << 7, // 占位符, 表示枚举值的最大数量
+        kMaxNumeric         = 7,        // 参数个数
     };
-    static const uint16_t kDefaultFlags = (1u << kMaxNumeric) - 1; // 默认启用所有参数
+    static const uint16_t kDefaultFlags =
+          kMaxIdleTimeout
+        | kHandshakeTimeout
+        | kInitMaxStreamsBidi
+        | kInitMaxStreamsUni
+        | kAckDelayExponent
+        | kMaxAckDelta
+        | kMaxAckDelay;
 
     template<typename T>
     void setParam(int32_t param, T value)
@@ -55,7 +62,7 @@ public:
             return;
         }
 
-        flags |= (1 << param);
+        flags |= static_cast<uint16_t>(param);
     }
 
     void clearParam(int32_t mask);

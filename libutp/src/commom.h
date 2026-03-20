@@ -40,7 +40,7 @@
     #endif
 
     typedef int32_t     socket_t;
-    typedef msghdr      msghdr_t;
+    typedef struct msghdr msghdr_t;
     #define INVALID_SOCKET  (-1)
     #define SOCKET_ERROR    (-1)
 
@@ -67,7 +67,7 @@
     #endif
 #elif defined(OS_APPLE)
     typedef int32_t     socket_t;
-    typedef msghdr      msghdr_t;
+    typedef struct msghdr msghdr_t;
     #define INVALID_SOCKET  (-1)
     #define SOCKET_ERROR    (-1)
 

@@ -22,9 +22,18 @@ namespace utp {
 class UdpSocket
 {
 public:
+    static constexpr uint8_t kMaxMsgSlices = 4;
+
+    struct MsgSlice {
+        const void* data;
+        size_t      len;
+    };
+
     struct MsgMetaInfo {
-        void*           data;
+        const void*     data;
         size_t          len;
+        uint8_t         slice_count;
+        MsgSlice        slices[kMaxMsgSlices];
         PacketMetaInfo  metaInfo;
     };
 
@@ -61,6 +70,8 @@ public:
      */
     int32_t recv(std::vector<MsgMetaInfo>& msgVec);
 
+    // TODO(next): 在 Linux 上增加 MSG_ZEROCOPY 发送与错误队列完成事件处理（SO_EE_ORIGIN_ZEROCOPY）。
+    // NOTE: 需要与 SendControl/PacketOut 生命周期联动，避免在 completion 前释放或改写缓冲。
     int32_t send(const std::vector<MsgMetaInfo> &msgVec);
 
 private:

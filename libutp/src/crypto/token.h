@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <array>
+#include <cstring>
 #include <vector>
 #include <string>
 

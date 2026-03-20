@@ -46,6 +46,9 @@ bool    g_log_enable_color  = true;
 bool    g_log_enable_color  = false;
 #endif
 
+utp_log_callback_t g_log_cb = default_log_cb;
+int32_t g_log_level = UTP_LOG_SILENT;
+
 void default_log_cb(int32_t level, const char *log, int32_t size)
 {
     const char *str_level = "UNKNOW";

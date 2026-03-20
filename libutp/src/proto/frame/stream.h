@@ -20,12 +20,16 @@ public:
     FrameStream() : FrameBase(FrameType::kFrameStream) {}
     ~FrameStream() = default;
 
+    int32_t encode(void *buffer, size_t size) const;
+    int32_t decode(const void *buffer, size_t size);
+    int32_t frameSize() const;
+
 public:
-    uint8_t     stream_flag;
-    uint16_t    stream_data_length;
-    uint32_t    stream_id;
-    uint64_t    stream_offset;
-    void*       stream_data;
+    uint8_t     stream_flag{0};
+    uint16_t    stream_data_length{0};
+    uint32_t    stream_id{0};
+    uint64_t    stream_offset{0};
+    void*       stream_data{nullptr};
 };
 
 } // namespace utp

@@ -15,6 +15,7 @@
 #include <assert.h>
 
 #include <new>
+#include <cstddef>
 #include <vector>
 #include <map>
 

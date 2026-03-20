@@ -78,6 +78,7 @@ public:
     bool toSockAddrIn(sockaddr_in& addr) const;
     bool toSockAddrIn6(struct sockaddr_in6& addr) const;
     socklen_t toSockAddr(struct sockaddr_storage& storage) const;
+    std::string toIpString() const;
     std::string toString() const;
 
 public:

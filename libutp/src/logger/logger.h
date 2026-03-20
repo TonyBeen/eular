@@ -41,10 +41,9 @@
 #define UTP_LOGE_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_ERROR, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
 #define UTP_LOGF_FMT(format, ...)  eular::utp::UtpLogV(UTP_LOG_FATAL, __FILENAME__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
 
-static void default_log_cb(int32_t level, const char *log, int32_t size);
-utp_log_callback_t  g_log_cb = default_log_cb;
-int32_t             g_log_level = UTP_LOG_SILENT;
-
+void default_log_cb(int32_t level, const char *log, int32_t size);
+extern utp_log_callback_t g_log_cb;
+extern int32_t g_log_level;
 
 namespace eular {
 namespace utp {
@@ -58,7 +57,7 @@ void UtpLogV(int32_t level, const char *fileName, const char *funcName, int32_t 
         return;
     }
 
-    static THREAD_LOCAL fmt::basic_memory_buffer<char, LOG_BUFFER_SIZE> buffer;
+    static UTP_THREAD_LOCAL fmt::basic_memory_buffer<char, LOG_BUFFER_SIZE> buffer;
     buffer.clear();
 
     try {
