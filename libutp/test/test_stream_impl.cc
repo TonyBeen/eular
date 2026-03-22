@@ -147,3 +147,21 @@ TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")
     REQUIRE(rxOnly.onFrame(fin) == UTP_ERR_OK);
     REQUIRE(rxOnly.state() == eular::utp::Stream::kStateHalfClosedRemote);
 }
+
+TEST_CASE("StreamImpl: reset frame notifies upper layer", "[Stream]")
+{
+    StreamImpl stream(nullptr, 21);
+
+    bool resetNotified = false;
+    uint16_t resetCode = 0;
+    stream.setOnReset([&](uint16_t err) {
+        resetNotified = true;
+        resetCode = err;
+    });
+
+    REQUIRE(stream.onReset(UTP_ERR_CANCELLED, true) == UTP_ERR_OK);
+    REQUIRE(stream.resetReceived());
+    REQUIRE(resetNotified);
+    REQUIRE(resetCode == UTP_ERR_CANCELLED);
+    REQUIRE(stream.state() == eular::utp::Stream::kStateClosed);
+}

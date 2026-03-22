@@ -34,6 +34,7 @@
 #include "proto/frame/session_token.h"
 #include "proto/frame/ack.h"
 #include "proto/frame/stream.h"
+#include "proto/frame/reset_stream.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/connection_close.h"
 
@@ -45,6 +46,7 @@
 namespace {
 
 using eular::Serialize;
+using eular::utp::Connection;
 using eular::utp::FrameType;
 
 constexpr uint64_t kPathValidationSendCredit = 256;
@@ -87,6 +89,41 @@ FrameType FirstFrameTypeBit(uint32_t frameTypes)
     }
 
     return eular::utp::kFrameInvalid;
+}
+
+bool IsSupportedStreamType(Connection::StreamType streamType)
+{
+    return streamType == Connection::kStreamTypeBidirectional
+        || streamType == Connection::kStreamTypeUnidirectional;
+}
+
+Connection::StreamType StreamTypeFromStreamId(uint32_t streamId)
+{
+    return STREAM_ID_IS_UNI_DIR(streamId)
+        ? Connection::kStreamTypeUnidirectional
+        : Connection::kStreamTypeBidirectional;
+}
+
+bool StreamTypeMatchesId(Connection::StreamType streamType, uint32_t streamId)
+{
+    if (streamType == Connection::kStreamTypeAll) {
+        return true;
+    }
+
+    if (streamType == Connection::kStreamTypeBidirectional) {
+        return STREAM_ID_IS_BI_DIR(streamId);
+    }
+
+    if (streamType == Connection::kStreamTypeUnidirectional) {
+        return STREAM_ID_IS_UNI_DIR(streamId);
+    }
+
+    return false;
+}
+
+bool IsLocalInitiatedStream(uint32_t streamId, bool isClientInitiator)
+{
+    return isClientInitiator ? STREAM_ID_IS_CLIENT(streamId) : STREAM_ID_IS_SERVER(streamId);
 }
 
 int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
@@ -431,6 +468,13 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             FrameStream streamFrame;
             if (streamFrame.decode(frameData, frameLen) >= 0) {
                 (void)ingestStreamFrame(streamFrame);
+            }
+            break;
+        }
+        case kFrameResetStream: {
+            FrameResetStream resetFrame;
+            if (resetFrame.decode(frameData, frameLen) >= 0) {
+                handleResetStreamFrame(resetFrame);
             }
             break;
         }
@@ -870,15 +914,64 @@ void ConnectionImpl::onAckTimeout()
     }
 }
 
-size_t ConnectionImpl::activeStreamCount() const
+size_t ConnectionImpl::activeStreamCount(StreamType streamType) const
 {
     size_t count = 0;
     for (const auto &entry : m_streams) {
-        if (entry.second && entry.second->state() != Stream::kStateClosed) {
+        if (!entry.second || entry.second->state() == Stream::kStateClosed) {
+            continue;
+        }
+
+        if (StreamTypeMatchesId(streamType, entry.first)) {
             ++count;
         }
     }
     return count;
+}
+
+size_t ConnectionImpl::activeLocalStreamCount(StreamType streamType) const
+{
+    size_t count = 0;
+    for (const auto &entry : m_streams) {
+        if (!entry.second || entry.second->state() == Stream::kStateClosed) {
+            continue;
+        }
+
+        if (!StreamTypeMatchesId(streamType, entry.first)) {
+            continue;
+        }
+
+        if (IsLocalInitiatedStream(entry.first, m_isClientInitiator)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint32_t ConnectionImpl::streamLimit(StreamType streamType, bool peerLimit) const
+{
+    if (!IsSupportedStreamType(streamType)) {
+        return 0;
+    }
+
+    const TransportParams &tp = peerLimit ? m_peerTP : m_loaclTP;
+    const uint32_t limit = streamType == kStreamTypeUnidirectional
+                        ? tp.init_max_streams_uni
+                        : tp.init_max_streams_bidi;
+    return std::max<uint32_t>(1, limit);
+}
+
+uint32_t ConnectionImpl::streamIdSlot(StreamType streamType) const
+{
+    if (!IsSupportedStreamType(streamType)) {
+        return STREAM_TYPES;
+    }
+
+    const uint32_t roleBase = m_isClientInitiator ? 0u : 1u;
+    if (streamType == kStreamTypeUnidirectional) {
+        return roleBase + 2u;
+    }
+    return roleBase;
 }
 
 void ConnectionImpl::collectClosedStreams()
@@ -900,17 +993,14 @@ void ConnectionImpl::collectClosedStreams()
 
 int32_t ConnectionImpl::validateIncomingStreamId(uint32_t streamId) const
 {
-    if (!STREAM_ID_IS_BI_DIR(streamId)) {
-        return UTP_ERR_STREAM_STATE_ERROR;
-    }
-
     const bool peerInitiated = m_isClientInitiator ? STREAM_ID_IS_SERVER(streamId)
                                                     : STREAM_ID_IS_CLIENT(streamId);
     if (!peerInitiated) {
         return UTP_ERR_STREAM_STATE_ERROR;
     }
 
-    const uint32_t maxPeerStreams = std::max<uint32_t>(1, m_loaclTP.init_max_streams_bidi);
+    const StreamType streamType = StreamTypeFromStreamId(streamId);
+    const uint32_t maxPeerStreams = streamLimit(streamType, false);
     const uint32_t streamOrdinal = (streamId / STREAM_TYPES) + 1;
     if (streamOrdinal > maxPeerStreams) {
         return UTP_ERR_STREAM_LIMIT_ERROR;
@@ -1148,6 +1238,60 @@ int32_t ConnectionImpl::sendConnectionCloseFrame()
         err = UTP_ERR_SOCKET_WRITE;
     }
     return err;
+}
+
+int32_t ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize)
+{
+    FrameResetStream resetFrame;
+    resetFrame.error_code = errorCode;
+    resetFrame.stream_id = streamId;
+    resetFrame.final_size = finalSize;
+
+    std::array<uint8_t, FRAME_RESET_STREAM_SIZE> payload{};
+    const int32_t frameLen = resetFrame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const int32_t status = sendPacket(UTP_TYPE_CTRL,
+                                      payload.data(),
+                                      static_cast<size_t>(frameLen),
+                                      0,
+                                      nullptr,
+                                      (1u << static_cast<uint32_t>(kFrameResetStream)));
+    if (status == UTP_ERR_OK) {
+        return UTP_ERR_OK;
+    }
+
+    int32_t err = GetLastError();
+    if (err <= 0) {
+        err = UTP_ERR_SOCKET_WRITE;
+    }
+    return err;
+}
+
+void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
+{
+    auto it = m_streams.find(resetFrame.stream_id);
+    if (it == m_streams.end()) {
+        const int32_t validateStatus = validateIncomingStreamId(resetFrame.stream_id);
+        if (validateStatus != UTP_ERR_OK) {
+            return;
+        }
+
+        StreamImpl::SP stream = std::make_shared<StreamImpl>(this, resetFrame.stream_id);
+        m_streams.emplace(resetFrame.stream_id, stream);
+        if (m_onStreamCreated) {
+            m_onStreamCreated(stream.get());
+        }
+        it = m_streams.find(resetFrame.stream_id);
+    }
+
+    if (it == m_streams.end() || !it->second) {
+        return;
+    }
+
+    (void)it->second->onReset(resetFrame.error_code, true);
 }
 
 int32_t ConnectionImpl::sendHandshakeDonePacket()
@@ -1798,19 +1942,28 @@ void ConnectionImpl::onCloseDrainTimeout()
     scheduleWrite();
 }
 
-void ConnectionImpl::registerStreamCanCreate(const OnStreamCanCreate &cb)
-{
-    m_onStreamCanCreate = cb;
-}
-
 void ConnectionImpl::registerStreamCreated(const OnStreamCreated &cb)
 {
     m_onStreamCreated = cb;
 }
 
-int32_t ConnectionImpl::streamCount() const
+int32_t ConnectionImpl::streamCount(StreamType streamType) const
 {
-    return static_cast<int32_t>(activeStreamCount());
+    return static_cast<int32_t>(activeStreamCount(streamType));
+}
+
+int32_t ConnectionImpl::creatableStreamCount(StreamType streamType) const
+{
+    if (!IsSupportedStreamType(streamType)) {
+        return 0;
+    }
+
+    const uint32_t maxStreams = streamLimit(streamType, true);
+    const uint32_t usedStreams = static_cast<uint32_t>(activeLocalStreamCount(streamType));
+    if (usedStreams >= maxStreams) {
+        return 0;
+    }
+    return static_cast<int32_t>(maxStreams - usedStreams);
 }
 
 Connection::Statistic ConnectionImpl::statistic() const
@@ -1835,8 +1988,12 @@ Connection::Description ConnectionImpl::description() const
     return desc;
 }
 
-int32_t ConnectionImpl::createStream()
+int32_t ConnectionImpl::createStream(StreamType streamType)
 {
+    if (!IsSupportedStreamType(streamType)) {
+        return UTP_ERR_INVALID_PARAM;
+    }
+
     const bool allowEarlyData = (m_state == State::kStateInitialSent)
                              && m_connectInfo.enable_0rtt
                              && !m_connectInfo.session_ticket.empty();
@@ -1846,18 +2003,25 @@ int32_t ConnectionImpl::createStream()
 
     collectClosedStreams();
 
-    const uint32_t maxStreams = std::max<uint32_t>(1, m_peerTP.init_max_streams_bidi);
-    if (activeStreamCount() >= maxStreams) {
+    const uint32_t maxStreams = streamLimit(streamType, true);
+    if (activeLocalStreamCount(streamType) >= maxStreams) {
         return UTP_ERR_STREAM_LIMIT_ERROR;
     }
 
-    uint32_t &nextStreamId = m_streamId[0];
+    const uint32_t slot = streamIdSlot(streamType);
+    if (slot >= STREAM_TYPES) {
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    uint32_t &nextStreamId = m_streamId[slot];
     if (nextStreamId == 0) {
-        nextStreamId = m_isClientInitiator ? 0u : 1u;
+        const uint32_t roleBase = m_isClientInitiator ? 0u : 1u;
+        const uint32_t dirBit = streamType == kStreamTypeUnidirectional ? 2u : 0u;
+        nextStreamId = roleBase + dirBit;
     }
 
     const uint32_t streamId = nextStreamId;
-    nextStreamId += 4;
+    nextStreamId += STREAM_TYPES;
 
     if (m_streams.find(streamId) != m_streams.end()) {
         return UTP_ERR_STREAM_ID_EXHAUSTED;
@@ -1868,10 +2032,6 @@ int32_t ConnectionImpl::createStream()
 
     if (m_onStreamCreated) {
         m_onStreamCreated(stream.get());
-    }
-
-    if (m_onStreamCanCreate && (activeStreamCount() < maxStreams)) {
-        m_onStreamCanCreate();
     }
 
     return static_cast<int32_t>(streamId);

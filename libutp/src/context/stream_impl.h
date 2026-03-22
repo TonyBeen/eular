@@ -49,11 +49,15 @@ public:
     bool readable() const override;
     bool writable() const override;
     void close() override;
+    int32_t reset(uint16_t errorCode) override;
+    bool resetReceived() const override;
     void setOnReadable(const OnReadable &cb) override;
     void setOnClosed(const OnClosed &cb) override;
+    void setOnReset(const OnReset &cb) override;
 
     // Feed an incoming STREAM frame payload into this stream.
     int32_t onFrame(const FrameStream &frame);
+    int32_t onReset(uint16_t errorCode, bool fromPeer);
 
 private:
     friend class ConnectionImpl;
@@ -97,6 +101,7 @@ private:
     int32_t flushPendingSends();
     void drainRecvFragments();
     void maybeNotifyClosed();
+    void notifyResetOnce();
 
 private:
     ConnectionImpl *m_conn{nullptr};
@@ -107,7 +112,10 @@ private:
     bool m_localFinQueued{false};
     bool m_localFinSent{false};
     bool m_peerFin{false};
+    bool m_resetByPeer{false};
+    bool m_resetNotified{false};
     bool m_closedNotified{false};
+    uint16_t m_resetErrorCode{0};
     size_t m_sendQueuedBytes{0};
     size_t m_recvFragmentsBytes{0};
     RingBuffer m_sendBuffer;
@@ -116,6 +124,7 @@ private:
     std::map<uint64_t, RecvFragment> m_recvFragments;
     OnReadable m_onReadable;
     OnClosed m_onClosed;
+    OnReset m_onReset;
 };
 
 } // namespace utp

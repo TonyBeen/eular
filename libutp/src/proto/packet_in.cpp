@@ -21,6 +21,7 @@
 #include "proto/frame/session_token.h"
 #include "proto/frame/connection_close.h"
 #include "proto/frame/crypto.h"
+#include "proto/frame/reset_stream.h"
 
 namespace {
 
@@ -177,6 +178,9 @@ int32_t PacketIn::frameLength(const uint8_t *frameData,
         break;
     case kFrameCrypto:
         frameLen = FRAME_CRYPTO_SIZE;
+        break;
+    case kFrameResetStream:
+        frameLen = FRAME_RESET_STREAM_SIZE;
         break;
     case kFrameAckFrequency:
         frameLen = FRAME_ACK_FREQUENCY_SIZE;

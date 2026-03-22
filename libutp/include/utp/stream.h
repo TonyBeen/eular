@@ -37,6 +37,7 @@ public:
 
     using OnReadable = std::function<void()>;
     using OnClosed = std::function<void()>;
+    using OnReset = std::function<void(uint16_t)>;
 
     Stream() = default;
     virtual ~Stream() = default;
@@ -52,9 +53,12 @@ public:
     virtual bool readable() const = 0;
     virtual bool writable() const = 0;
     virtual void close() = 0;
+    virtual int32_t reset(uint16_t errorCode) = 0;
+    virtual bool resetReceived() const = 0;
 
     virtual void setOnReadable(const OnReadable &cb) = 0;
     virtual void setOnClosed(const OnClosed &cb) = 0;
+    virtual void setOnReset(const OnReset &cb) = 0;
 };
 
 } // namespace utp

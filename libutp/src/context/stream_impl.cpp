@@ -337,12 +337,48 @@ bool StreamImpl::readable() const
 
 bool StreamImpl::writable() const
 {
-    return !m_localFinQueued;
+    return !m_localFinQueued && !m_resetByPeer;
 }
 
 void StreamImpl::close()
 {
     (void)write(nullptr, 0, true);
+}
+
+int32_t StreamImpl::reset(uint16_t errorCode)
+{
+    if (m_conn == nullptr) {
+        return StreamErr(UTP_ERR_INVALID_STATE);
+    }
+
+    if (m_localFinQueued && m_localFinSent && m_peerFin) {
+        return StreamErr(UTP_ERR_STREAM_CLOSED);
+    }
+
+    const int32_t status = m_conn->sendResetStreamFrame(m_streamId, errorCode, m_sendBufferedOffset);
+    if (status != UTP_ERR_OK) {
+        if (status < 0) {
+            return StreamErr(UTP_ERR_INTERNAL_ERROR);
+        }
+        return StreamErr(static_cast<utp_error_t>(status));
+    }
+
+    m_localFinQueued = true;
+    m_localFinSent = true;
+    m_peerFin = true;
+    m_sendQueue.clear();
+    m_sendQueuedBytes = 0;
+    m_sendBuffer.consume(m_sendBuffer.size());
+    m_recvFragments.clear();
+    m_recvFragmentsBytes = 0;
+    m_recvBuffer.consume(m_recvBuffer.size());
+    maybeNotifyClosed();
+    return UTP_ERR_OK;
+}
+
+bool StreamImpl::resetReceived() const
+{
+    return m_resetByPeer;
 }
 
 void StreamImpl::setOnReadable(const OnReadable &cb)
@@ -355,8 +391,17 @@ void StreamImpl::setOnClosed(const OnClosed &cb)
     m_onClosed = cb;
 }
 
+void StreamImpl::setOnReset(const OnReset &cb)
+{
+    m_onReset = cb;
+}
+
 int32_t StreamImpl::onFrame(const FrameStream &frame)
 {
+    if (m_resetByPeer) {
+        return UTP_ERR_STREAM_CLOSED;
+    }
+
     if (frame.stream_id != m_streamId) {
         return UTP_ERR_INVALID_PARAM;
     }
@@ -417,6 +462,28 @@ int32_t StreamImpl::onFrame(const FrameStream &frame)
         m_onReadable();
     }
 
+    maybeNotifyClosed();
+    return UTP_ERR_OK;
+}
+
+int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
+{
+    m_resetErrorCode = errorCode;
+    if (fromPeer) {
+        m_resetByPeer = true;
+    }
+
+    m_sendQueue.clear();
+    m_sendQueuedBytes = 0;
+    m_sendBuffer.consume(m_sendBuffer.size());
+    m_recvFragments.clear();
+    m_recvFragmentsBytes = 0;
+    m_recvBuffer.consume(m_recvBuffer.size());
+    m_localFinQueued = true;
+    m_localFinSent = true;
+    m_peerFin = true;
+
+    notifyResetOnce();
     maybeNotifyClosed();
     return UTP_ERR_OK;
 }
@@ -521,6 +588,18 @@ void StreamImpl::maybeNotifyClosed()
             m_onClosed();
         }
     }
+}
+
+void StreamImpl::notifyResetOnce()
+{
+    if (m_resetNotified) {
+        return;
+    }
+
+    if (m_onReset) {
+        m_onReset(m_resetErrorCode);
+    }
+    m_resetNotified = true;
 }
 
 } // namespace utp

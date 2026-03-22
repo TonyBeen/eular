@@ -5,6 +5,7 @@ set(UTP_TEST_SOURCES
     test_context_integration.cc
     test_context_zero_rtt.cc
     test_frame_ack_decode.cc
+    test_frame_reset_stream.cc
     test_frame_ack_frequency.cc
     test_frame_crypto.cc
     test_frame_path.cc

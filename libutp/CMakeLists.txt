@@ -106,6 +106,7 @@ set(UTP_SOURCES
     src/proto/frame/crypto.cpp
     src/proto/frame/padding.cpp
     src/proto/frame/path.cpp
+    src/proto/frame/reset_stream.cpp
     src/proto/frame/session_token.cpp
     src/proto/frame/stream.cpp
     src/proto/frame/version.cpp
@@ -222,6 +223,7 @@ if(UTP_BUILD_TESTS)
         test/test_context_cid_alloc.cc
         test/test_context_integration.cc
         test/test_frame_ack_decode.cc
+        test/test_frame_reset_stream.cc
         test/test_frame_crypto.cc
         test/test_frame_path.cc
         test/test_frame_session_token.cc

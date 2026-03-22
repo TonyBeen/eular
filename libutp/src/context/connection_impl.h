@@ -40,6 +40,7 @@ class X25519Wrapper;
 class AesGcmContext;
 class SendControl;
 struct FrameAckFrequency;
+struct FrameResetStream;
 
 class ConnectionImpl : public Connection
 {
@@ -83,13 +84,13 @@ public:
     void    nextScheduleTime(utp_time_t timeNext);
 
 public:
-    void        registerStreamCanCreate(const OnStreamCanCreate &cb) override;
     void        registerStreamCreated(const OnStreamCreated &cb) override;
-    int32_t     streamCount() const override;
+    int32_t     streamCount(StreamType streamType = kStreamTypeAll) const override;
+    int32_t     creatableStreamCount(StreamType streamType) const override;
     Statistic   statistic() const override;
     Description description() const override;
 
-    int32_t     createStream() override;
+    int32_t     createStream(StreamType streamType = kStreamTypeBidirectional) override;
     Stream*     getStream(uint32_t streamId) override;
     void        close() override;
     int32_t     ingestEarlyStreamFrame(uint32_t streamId,
@@ -109,11 +110,16 @@ public:
 private:
     void scheduleWrite();
     void collectClosedStreams();
-    size_t activeStreamCount() const;
+    size_t activeStreamCount(StreamType streamType = kStreamTypeAll) const;
+    size_t activeLocalStreamCount(StreamType streamType) const;
+    uint32_t streamLimit(StreamType streamType, bool peerLimit) const;
+    uint32_t streamIdSlot(StreamType streamType) const;
     int32_t validateIncomingStreamId(uint32_t streamId) const;
     int32_t ingestStreamFrame(const FrameStream &streamFrame);
     void flushPendingStreamWrites();
     int32_t sendConnectionCloseFrame();
+    int32_t sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize);
+    void    handleResetStreamFrame(const FrameResetStream &resetFrame);
     int32_t sendStreamFrame(uint32_t streamId,
                             uint64_t streamOffset,
                             const uint8_t *data,
@@ -193,7 +199,6 @@ private:
     std::shared_ptr<AesGcmContext> m_aesCtx;
     std::unique_ptr<SendControl>   m_sendCtl;
 
-    OnStreamCanCreate       m_onStreamCanCreate;
     OnStreamCreated         m_onStreamCreated;
 
     uint64_t                m_bytesIn{};

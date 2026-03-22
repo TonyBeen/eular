@@ -17,6 +17,7 @@
 #include "utp/errno.h"
 
 using eular::utp::Config;
+using eular::utp::Connection;
 using eular::utp::ConnectionImpl;
 using eular::utp::ContextImpl;
 using eular::utp::Stream;
@@ -64,7 +65,7 @@ TEST_CASE("ConnectionImpl: streamCount counts only active streams", "[Connection
     REQUIRE(conn.streamCount() == 1);
 }
 
-TEST_CASE("ConnectionImpl: ingress stream gate checks role direction and limit", "[Connection][Stream]")
+TEST_CASE("ConnectionImpl: ingress stream gate checks role and per-type limits", "[Connection][Stream]")
 {
     Config cfg;
     ev::EventLoop loop;
@@ -74,6 +75,7 @@ TEST_CASE("ConnectionImpl: ingress stream gate checks role direction and limit",
     conn.m_state = ConnectionImpl::kStateConnected;
     conn.m_isClientInitiator = true;
     conn.m_loaclTP.init_max_streams_bidi = 1;
+    conn.m_loaclTP.init_max_streams_uni = 1;
 
     FrameStream valid;
     uint8_t byte = 1;
@@ -87,13 +89,17 @@ TEST_CASE("ConnectionImpl: ingress stream gate checks role direction and limit",
     wrongRole.stream_id = 0; // client-initiated, should not appear as ingress for client side
     REQUIRE(conn.ingestStreamFrame(wrongRole) == UTP_ERR_STREAM_STATE_ERROR);
 
-    FrameStream wrongDir = valid;
-    wrongDir.stream_id = 3; // server-initiated uni stream
-    REQUIRE(conn.ingestStreamFrame(wrongDir) == UTP_ERR_STREAM_STATE_ERROR);
+    FrameStream validUni = valid;
+    validUni.stream_id = 3; // server-initiated uni stream
+    REQUIRE(conn.ingestStreamFrame(validUni) == UTP_ERR_OK);
 
     FrameStream overLimit = valid;
     overLimit.stream_id = 5; // second server-initiated bidi stream (ordinal=2)
     REQUIRE(conn.ingestStreamFrame(overLimit) == UTP_ERR_STREAM_LIMIT_ERROR);
+
+    FrameStream overLimitUni = valid;
+    overLimitUni.stream_id = 7; // second server-initiated uni stream (ordinal=2)
+    REQUIRE(conn.ingestStreamFrame(overLimitUni) == UTP_ERR_STREAM_LIMIT_ERROR);
 }
 
 TEST_CASE("ConnectionImpl: collectClosedStreams erases fully drained closed stream", "[Connection][Stream]")
@@ -126,9 +132,46 @@ TEST_CASE("ConnectionImpl: passive side creates server-initiated stream id", "[C
     conn.m_state = ConnectionImpl::kStateConnected;
     conn.m_isClientInitiator = false;
     conn.m_peerTP.init_max_streams_bidi = 8;
+    conn.m_peerTP.init_max_streams_uni = 1;
 
-    const int32_t streamId = conn.createStream();
-    REQUIRE(streamId == 1);
+    const int32_t bidiStreamId = conn.createStream(Connection::kStreamTypeBidirectional);
+    REQUIRE(bidiStreamId == 1);
+
+    const int32_t uniStreamId = conn.createStream(Connection::kStreamTypeUnidirectional);
+    REQUIRE(uniStreamId == 3);
+
+    REQUIRE(conn.createStream(Connection::kStreamTypeUnidirectional) == UTP_ERR_STREAM_LIMIT_ERROR);
+}
+
+TEST_CASE("ConnectionImpl: streamCount and creatableStreamCount support stream type", "[Connection][Stream]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1007);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_isClientInitiator = true;
+    conn.m_peerTP.init_max_streams_bidi = 2;
+    conn.m_peerTP.init_max_streams_uni = 1;
+
+    // Simulate one peer-initiated bidi stream; it must not consume local creation quota.
+    conn.m_streams.emplace(1u, std::make_shared<StreamImpl>(&conn, 1u));
+
+    REQUIRE(conn.streamCount(Connection::kStreamTypeAll) == 1);
+    REQUIRE(conn.streamCount(Connection::kStreamTypeBidirectional) == 1);
+    REQUIRE(conn.streamCount(Connection::kStreamTypeUnidirectional) == 0);
+    REQUIRE(conn.creatableStreamCount(Connection::kStreamTypeBidirectional) == 2);
+    REQUIRE(conn.creatableStreamCount(Connection::kStreamTypeUnidirectional) == 1);
+
+    REQUIRE(conn.createStream(Connection::kStreamTypeBidirectional) == 0);
+    REQUIRE(conn.createStream(Connection::kStreamTypeUnidirectional) == 2);
+
+    REQUIRE(conn.streamCount(Connection::kStreamTypeAll) == 3);
+    REQUIRE(conn.streamCount(Connection::kStreamTypeBidirectional) == 2);
+    REQUIRE(conn.streamCount(Connection::kStreamTypeUnidirectional) == 1);
+    REQUIRE(conn.creatableStreamCount(Connection::kStreamTypeBidirectional) == 1);
+    REQUIRE(conn.creatableStreamCount(Connection::kStreamTypeUnidirectional) == 0);
 }
 
 TEST_CASE("ConnectionImpl: multi-stream ingress and reclamation regression", "[Connection][Stream][Regression]")
