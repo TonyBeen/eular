@@ -7,6 +7,8 @@
 
 #include "proto/frame/ack_frequency.h"
 
+#include <algorithm>
+
 #include <utils/serialize.hpp>
 
 #include "utp/errno.h"
@@ -17,6 +19,9 @@ namespace utp {
 
 int32_t FrameAckFrequency::encode(void *buffer, size_t size) const
 {
+    FrameAckFrequency normalized = *this;
+    normalized.normalize();
+
     if (size < FRAME_ACK_FREQUENCY_SIZE) {
         SetLastErrorV(UTP_ERR_OVERFLOW,
                       "buffer size {} is smaller than ack frequency frame size {}",
@@ -27,10 +32,10 @@ int32_t FrameAckFrequency::encode(void *buffer, size_t size) const
 
     uint8_t *offset = static_cast<uint8_t *>(buffer);
     offset = Serialize::SerializeTo(offset, size, FrameType::kFrameAckFrequency);
-    offset = Serialize::SerializeTo(offset, size, ack_eliciting_threshold);
-    offset = Serialize::SerializeTo(offset, size, reordering_threshold);
-    offset = Serialize::SerializeTo(offset, size, max_ack_delay_ms);
-    offset = Serialize::SerializeTo(offset, size, timestamp);
+    offset = Serialize::SerializeTo(offset, size, normalized.ack_eliciting_threshold);
+    offset = Serialize::SerializeTo(offset, size, normalized.reordering_threshold);
+    offset = Serialize::SerializeTo(offset, size, normalized.max_ack_delay_ms);
+    offset = Serialize::SerializeTo(offset, size, normalized.timestamp);
     if (offset == nullptr) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "encode ack frequency frame failed");
         return -1;
@@ -68,12 +73,35 @@ int32_t FrameAckFrequency::decode(const void *buffer, size_t size)
         return -1;
     }
 
+    normalize();
+
     return FRAME_ACK_FREQUENCY_SIZE;
 }
 
 int32_t FrameAckFrequency::frameSize() const
 {
     return FRAME_ACK_FREQUENCY_SIZE;
+}
+
+void FrameAckFrequency::normalize()
+{
+    if (ack_eliciting_threshold == 0) {
+        ack_eliciting_threshold = kDefaultAckElicitingThreshold;
+    } else {
+        ack_eliciting_threshold = std::min<uint8_t>(ack_eliciting_threshold, kMaxAckElicitingThreshold);
+    }
+
+    if (reordering_threshold == 0) {
+        reordering_threshold = kDefaultReorderingThreshold;
+    } else {
+        reordering_threshold = std::min<uint8_t>(reordering_threshold, kMaxReorderingThreshold);
+    }
+
+    if (max_ack_delay_ms == 0) {
+        max_ack_delay_ms = kDefaultMaxAckDelayMs;
+    } else {
+        max_ack_delay_ms = std::min<uint32_t>(max_ack_delay_ms, kMaxAckDelayMsClamp);
+    }
 }
 
 } // namespace utp

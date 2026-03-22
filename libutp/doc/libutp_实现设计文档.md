@@ -32,7 +32,7 @@
 | PacketIn 解析 | ✅ 已实现 | 固定头解析、payload 长度校验、帧遍历 |
 | PacketOut 生命周期 | ✅ 已实现 | `MemoryManager` 池化分配/归还，支持重传 attempt 链 |
 | ACK 解析与发送侧处理 | ✅ 已实现 | `FrameAck::decode` + `SendControl::onAckReceived` |
-| ACK 发送生成 | ✅ 已接入 | 非 ACK-only 包会基于 `ReceiveHistory` 生成 ACK 并发送 |
+| ACK 发送生成 | ✅ 已接入 | 已支持独立 ACK timer、包计数阈值/延迟二选一触发、乱序快速 ACK，以及流发送时的 ACK piggyback |
 | 丢包检测/重传 | ✅ 已实现 | FACK 检测 + Lost 队列 + 新包号重传 |
 | 拥塞控制 | ✅ BBRv1 已接入 | `SendControl` 默认使用 `BbrV1` |
 | Cubic | ❌ 未实现 | `cubic.cpp` 仍是占位程序 |
@@ -153,7 +153,7 @@
 | `PathChallenge` | ✅ | ✅ | 地址变化验证 |
 | `PathResponse` | ✅ | ✅ | 回显校验数据 |
 | `SessionToken` | ✅ | ⚠️ 未见连接流程集成 | 编解码和 token 模块都有 |
-| `AckFrequency` | ❌ | ❌ | 仅枚举定义 |
+| `AckFrequency` | ✅ | ✅ | 已接入握手协商 + 事件驱动自适应更新（RTT/丢包持续变化触发），并联动发送侧重排序阈值 |
 | `Version` | ✅ | ✅ | 当前 Initial 发送该帧 |
 | `Crypto` | ✅ | ✅ | 用于加密握手参数与公钥交换 |
 | `HandshakeDone` | ✅（长度解析） | ✅（被动建连完成信号） | 用于 pending -> Connected 晋升 |
@@ -170,10 +170,23 @@
   - 从 unacked 队列移除被确认包
   - 回调拥塞控制 `onBeginAck/onAck/onEndAck`
   - 触发后续丢包检测与重传定时器更新
+- ACK 发送策略：
+  - 收到 ack-eliciting 包后，按 `ack_eliciting_threshold` 或 `max_ack_delay_ms` 触发 ACK
+  - 增加独立 ACK timer，避免“只收 1 个包后无后续流量”时 ACK 长时间滞留
+  - 收到超过 `reordering_threshold` 的包号缺口时立即快速 ACK
+  - 本端若恰好要发 Stream 数据，会优先把待发送 ACK piggyback 到同一包里
+- AckFrequency：
+  - 握手包会携带 `AckFrequency`
+  - 收包侧会更新连接级 `ack_eliciting_threshold / reordering_threshold / max_ack_delay_ms`
+  - `reordering_threshold` 会同步写入 `SendControl::m_reorderThresh`，用于发送侧 FACK 丢包判定
+  - 本端不会定时广播 `AckFrequency`，仅在事件驱动评估时发送更新
+  - 评估维度：`RTT` 持续上升（LatencySensitive）与丢包频繁（Lossy）
+  - 采用三档策略：`Stable / LatencySensitive / Lossy`
+  - 档位切换有持续时间门限（升档更快、回退更慢）与最小发送间隔，避免参数抖动
 
 ## 7.2 丢包检测
 
-- 策略：基于 FACK + 重排序阈值（默认 `N_NACKS_BEFORE_RETX=3`）
+- 策略：基于 FACK + 重排序阈值（默认 3，且可被 AckFrequency 动态联动调整）
 - 函数：`SendControl::detectLosses`
 - 命中后：包从 unacked 移入 lost 队列，并打 `kPoLost/kPoLossRecorded` 等标志
 
@@ -290,7 +303,7 @@
 
 ## 11.2 未完成（协议接入级）
 
-- `AckFrequency` 帧尚未实现
+- `AckFrequency` 帧已实现并接入主流程；当前已支持事件驱动自适应更新，后续可继续增强统计可观测性与参数学习能力
 - Cubic 拥塞控制尚未实现
 - 0-RTT 重连已接入 Phase-3（见 §16 设计草案与实现状态）
 
@@ -316,6 +329,8 @@
 - `test_packet_in.cc`：包头解析、帧迭代、截断保护
 - `test_packet_out.cc`：创建/重置/尺寸边界
 - `test_frame_ack_decode.cc`：ACK 解码范围与 `largest_ack_packno`
+- `test_frame_ack_frequency.cc`：AckFrequency 默认回退、超限钳制与 encode/decode 归一化
+- `test_ack_behavior.cc`：独立 ACK timer、乱序快速 ACK、ACK piggyback、发送侧阈值联动与 RTT 持续升高触发的自适应 AckFrequency 更新
 - `test_frame_path.cc`：Challenge/Response 编解码
 - `test_frame_session_token.cc`：Token 帧编码/截断
 - `test_network_path.cc`：路径状态机与超时失败

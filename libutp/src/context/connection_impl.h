@@ -11,6 +11,7 @@
 #include <memory>
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 #include <event/timer.h>
 
@@ -38,6 +39,7 @@ class ContextImpl;
 class X25519Wrapper;
 class AesGcmContext;
 class SendControl;
+struct FrameAckFrequency;
 
 class ConnectionImpl : public Connection
 {
@@ -55,6 +57,12 @@ public:
         kStateCloseReceived,        // 收到关闭包
         kStatePtoTimedWait,         // PTO超时等待
         kStateDisconnected,         // 断连状态
+    };
+
+    enum AckFrequencyProfile : uint8_t {
+        kAckProfileStable = 0,
+        kAckProfileLatencySensitive,
+        kAckProfileLossy,
     };
 
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);
@@ -112,18 +120,31 @@ private:
     int32_t sendHandshakeDonePacket();
     int32_t sendInitialPacket();
     int32_t sendHandshakePacket(bool encrypted);
+    int32_t buildAckPayload(std::vector<uint8_t> &payload, utp_time_t nowUs) const;
+    int32_t sendAckPacket(utp_time_t nowUs);
+    void    noteAckElicitingPacket(utp_time_t nowUs);
+    void    applyAckFrequency(const FrameAckFrequency &ackFreq, utp_time_t nowMs);
+    void    maybeUpdateAckFrequency(utp_time_t nowUs);
+    AckFrequencyProfile selectDesiredAckProfile(utp_time_t nowUs);
+    utp_time_t ackProfileTransitionHoldUs(AckFrequencyProfile from, AckFrequencyProfile to) const;
+    int32_t sendAckFrequencyUpdate(AckFrequencyProfile profile, utp_time_t nowUs);
+    void    armAckTimer(uint32_t delayMs);
+    void    stopAckTimer();
+    void    onAckTimeout();
     int32_t sendPacket(uint8_t packetType,
                        const void *payload,
                        size_t payloadLen,
                        uint16_t packetFlags = 0,
-                       utp_packno_t *outPacketNo = nullptr);
+                       utp_packno_t *outPacketNo = nullptr,
+                       uint32_t frameTypeBitsOverride = 0);
     int32_t sendPacket(uint8_t packetType,
                        const void *payloadHead,
                        size_t payloadHeadLen,
                        const void *payloadBody,
                        size_t payloadBodyLen,
                        uint16_t packetFlags,
-                       utp_packno_t *outPacketNo = nullptr);
+                       utp_packno_t *outPacketNo = nullptr,
+                       uint32_t frameTypeBitsOverride = 0);
     bool    canSendOnCurrentPath(size_t packetLen, FrameType frameType) const;
     void    maybeSendPathChallenge();
     void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize);
@@ -177,6 +198,7 @@ private:
     uint64_t                m_bytesOut{};
     ev::EventTimer          m_pathValidationTimer;
     ev::EventTimer          m_handshakeDoneTimer;
+    ev::EventTimer          m_ackTimer;
     ev::EventTimer          m_keepaliveTimer;
     ev::EventTimer          m_closeDrainTimer;
     ReceiveHistory          m_receiveHistory;
@@ -192,6 +214,17 @@ private:
     utp_time_t              m_lastActivityUs{0};
     uint16_t                m_keepaliveMissedProbes{0};
     uint8_t                 m_closePeerResendCount{0};
+    uint8_t                 m_ackElicitingThreshold{0};
+    uint8_t                 m_ackReorderingThreshold{0};
+    uint32_t                m_ackMaxDelayMs{0};
+    uint32_t                m_ackElicitingSinceLastAck{0};
+    utp_time_t              m_ackPendingSinceUs{0};
+    utp_time_t              m_lastAckFrequencyApplyMs{0};
+    AckFrequencyProfile     m_ackProfileCurrent{kAckProfileStable};
+    AckFrequencyProfile     m_ackProfileCandidate{kAckProfileStable};
+    utp_time_t              m_ackProfileCandidateSinceUs{0};
+    utp_time_t              m_ackProfileLastSentMs{0};
+    utp_time_t              m_ackProfileBaselineSrttUs{0};
     int32_t                 m_lastErrorCode{0};
     std::string             m_lastErrorReason;
 };

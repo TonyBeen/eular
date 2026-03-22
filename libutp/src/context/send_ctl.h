@@ -9,6 +9,7 @@
 #define __UTP_CONTEXT_SEND_CTL_H__
 
 #include <string>
+#include <deque>
 
 #include <queue.h>
 
@@ -114,11 +115,14 @@ public:
     uint64_t    bytesOutTotal() const;
     int32_t     onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
     void        onCanWrite(utp_time_t nowUs);
+    void        setReorderThreshold(uint32_t threshold);
+    bool        isLossFrequent(utp_time_t nowUs, utp_time_t windowUs, uint32_t threshold) const;
 
 private:
     bool        haveUnackedHandshakePackets() const;
     int32_t     expireUnacked(ExpireFilter filter, utp_time_t nowUs);
     void        onLossEvent();
+    void        recordLossSignal(utp_time_t nowUs);
 
     void        appendUnacked(PacketOut *pkt);
     void        retransAlarm(utp_time_t now);
@@ -207,6 +211,7 @@ private:
 #endif // UTP_SEND_STATS
 
     uint32_t            m_reorderThresh;                // 重排序阈值 (包号差值), 用于丢包检测中的重排序容忍度
+    std::deque<utp_time_t> m_lossSignalsUs;             // 最近丢包信号时间戳，用于频率判定
 };
 
 } // namespace utp

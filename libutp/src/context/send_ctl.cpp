@@ -451,6 +451,44 @@ void SendControl::onCanWrite(utp_time_t nowUs)
     }
 }
 
+void SendControl::setReorderThreshold(uint32_t threshold)
+{
+    m_reorderThresh = std::max<uint32_t>(1, threshold);
+}
+
+bool SendControl::isLossFrequent(utp_time_t nowUs, utp_time_t windowUs, uint32_t threshold) const
+{
+    if (windowUs == 0 || threshold == 0 || m_lossSignalsUs.empty()) {
+        return false;
+    }
+
+    uint32_t count = 0;
+    for (auto it = m_lossSignalsUs.rbegin(); it != m_lossSignalsUs.rend(); ++it) {
+        if (nowUs > *it && (nowUs - *it) > windowUs) {
+            break;
+        }
+
+        ++count;
+        if (count >= threshold) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void SendControl::recordLossSignal(utp_time_t nowUs)
+{
+    m_lossSignalsUs.push_back(nowUs);
+
+    static constexpr utp_time_t kKeepWindowUs = 10000000;
+    while (!m_lossSignalsUs.empty()
+        && nowUs > m_lossSignalsUs.front()
+        && (nowUs - m_lossSignalsUs.front()) > kKeepWindowUs) {
+        m_lossSignalsUs.pop_front();
+    }
+}
+
 void SendControl::appendUnacked(PacketOut *pkt)
 {
     const uint32_t packetSize = PacketSentSize(pkt);
@@ -705,6 +743,10 @@ bool SendControl::detectLosses(utp_time_t now)
 
     if (largestLostPackNo > m_largestSentAtCutback) {
         onLossEvent();
+    }
+
+    if (hasLoss) {
+        recordLossSignal(now);
     }
 
     return hasLoss;
