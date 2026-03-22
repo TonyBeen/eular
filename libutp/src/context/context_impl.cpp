@@ -81,6 +81,11 @@ void ContextImpl::setOnConnectionClosed(const Context::OnConnectionClosed &cb)
     m_onConnectionClosed = cb;
 }
 
+void ContextImpl::setOnZeroRttDecision(const Context::OnZeroRttDecision &cb)
+{
+    m_onZeroRttDecision = cb;
+}
+
 void ContextImpl::wantWrite(ConnectionImpl *conn)
 {
     if (conn == nullptr) {
@@ -414,9 +419,15 @@ int32_t ContextImpl::sendPendingConnectionClose(PendingIncomingConnection &pendi
 
 bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                               PendingIncomingConnection &pending,
-                                              PacketIn &packet) const
+                                              PacketIn &packet)
 {
-    if (packet.decode(msg.data, msg.len) == UTP_ERR_OK) {
+    if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
+        return false;
+    }
+
+    std::memcpy(const_cast<uint8_t *>(packet.raw_data), msg.data, msg.len);
+    packet.raw_size = msg.len;
+    if (packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK) {
         return true;
     }
 
@@ -424,36 +435,60 @@ bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
         return false;
     }
 
-    PacketIn encryptedPacket;
-    encryptedPacket.raw_data = static_cast<const uint8_t *>(msg.data);
-    encryptedPacket.raw_size = msg.len;
-
-    const uint8_t *offset = encryptedPacket.raw_data;
-    size_t left = encryptedPacket.raw_size;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.scid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.dcid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.pn);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.payload_length);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.types);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.reserve);
-    if (offset == nullptr) return false;
-
-    if (left < encryptedPacket.header.payload_length) {
+    auto packetReleaser = [this] (PacketIn *pkt) {
+        m_mm.putPacketIn(pkt);
+    };
+    std::unique_ptr<PacketIn, decltype(packetReleaser)> encryptedPacket(
+        m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
+    if (!encryptedPacket) {
         return false;
     }
 
-    encryptedPacket.payload = offset;
-    encryptedPacket.payload_size = encryptedPacket.header.payload_length;
-    if (pending.aesCtx->decrypt(&encryptedPacket) != UTP_ERR_OK) {
+    std::memcpy(const_cast<uint8_t *>(encryptedPacket->raw_data), msg.data, msg.len);
+    encryptedPacket->raw_size = msg.len;
+
+    const uint8_t *offset = encryptedPacket->raw_data;
+    size_t left = encryptedPacket->raw_size;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.scid);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.dcid);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.pn);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.payload_length);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.types);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.reserve);
+    if (offset == nullptr) return false;
+
+    if (left < encryptedPacket->header.payload_length) {
         return false;
     }
 
-    return packet.decode(encryptedPacket.raw_data, encryptedPacket.raw_size) == UTP_ERR_OK;
+    encryptedPacket->payload = offset;
+    encryptedPacket->payload_size = encryptedPacket->header.payload_length;
+    if (pending.aesCtx->decrypt(encryptedPacket.get()) != UTP_ERR_OK) {
+        return false;
+    }
+
+    return packet.decode(encryptedPacket->raw_data, encryptedPacket->raw_size) == UTP_ERR_OK;
+}
+
+void ContextImpl::reportZeroRttDecision(const PendingIncomingConnection &pending,
+                                        bool accepted,
+                                        const std::string &reason)
+{
+    if (m_onZeroRttDecision) {
+        Context::ZeroRttDecisionInfo info;
+        info.remote_ip = pending.peerIp;
+        info.remote_port = pending.peerAddress.port();
+        info.local_cid = pending.localCid;
+        info.peer_cid = pending.peerCid;
+        info.accepted = accepted;
+        info.reason = reason;
+        m_onZeroRttDecision(info);
+    }
 }
 
 TokenAuth *ContextImpl::tokenAuth()
@@ -736,10 +771,17 @@ void ContextImpl::onReadEvent()
 
             auto pendingIt = m_pendingIncoming.find(dcid);
             if (pendingIt != m_pendingIncoming.end() && pendingIt->second.handshakeSent) {
-                PacketIn pendingPacket;
+                auto packetReleaser = [this] (PacketIn *pkt) {
+                    m_mm.putPacketIn(pkt);
+                };
+                std::unique_ptr<PacketIn, decltype(packetReleaser)> pendingPacket(
+                    m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
+                if (!pendingPacket) {
+                    continue;
+                }
                 bool handshakeDone = false;
-                if (decodeIncomingPendingPacket(msg, pendingIt->second, pendingPacket)) {
-                    handshakeDone = pendingPacket.hasFrame(kFrameHandshakeDone);
+                if (decodeIncomingPendingPacket(msg, pendingIt->second, *pendingPacket)) {
+                    handshakeDone = pendingPacket->hasFrame(kFrameHandshakeDone);
                 } else if (packetType == UTP_TYPE_CTRL
                         && payloadLen == 1
                         && msg.len >= UTP_HEADER_SIZE + 1) {
@@ -813,20 +855,31 @@ void ContextImpl::onReadEvent()
 
                 if (!rememberZeroRttNonce(pending.zeroRttTokenCid, pn)) {
                     pending.zeroRttAccepted = false;
+                    ++pending.zeroRttRejectedCount;
+                    ++m_stat.zero_rtt_rejected;
+                    ++m_stat.zero_rtt_replay_rejected;
+                    reportZeroRttDecision(pending, false, "replay");
                     continue;
                 }
 
-                PacketIn packet;
-                if (!decodeIncomingPendingPacket(msg, pending, packet)) {
+                auto packetReleaser = [this] (PacketIn *pkt) {
+                    m_mm.putPacketIn(pkt);
+                };
+                std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(
+                    m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
+                if (!packet) {
+                    continue;
+                }
+                if (!decodeIncomingPendingPacket(msg, pending, *packet)) {
                     continue;
                 }
 
                 size_t frameOffset = 0;
-                while (frameOffset < packet.payload_size) {
+                while (frameOffset < packet->payload_size) {
                     FrameType frameType = kFrameInvalid;
                     const uint8_t *frameData = nullptr;
                     size_t frameLen = 0;
-                    if (packet.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                    if (packet->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
                         break;
                     }
 
@@ -928,10 +981,19 @@ void ContextImpl::onReadEvent()
                     }
 
                     pending.zeroRttOffered = true;
+                    ++m_stat.zero_rtt_offered;
                     pending.zeroRttAccepted = validateZeroRttTicket(msg.metaInfo.peerAddress,
                                                                     sessionToken.token,
                                                                     sessionToken.token_validity_period,
                                                                     pending.zeroRttTokenCid);
+                    if (pending.zeroRttAccepted) {
+                        ++m_stat.zero_rtt_accepted;
+                        reportZeroRttDecision(pending, true, "accepted");
+                    } else {
+                        ++pending.zeroRttRejectedCount;
+                        ++m_stat.zero_rtt_rejected;
+                        reportZeroRttDecision(pending, false, "invalid_ticket");
+                    }
                 }
             }
 

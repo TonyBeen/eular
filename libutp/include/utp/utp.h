@@ -30,6 +30,13 @@ class UTP_API Context {
     Context &operator=(Context &&) = delete;
 
 public:
+    struct Statistic {
+        uint64_t zero_rtt_offered{0};
+        uint64_t zero_rtt_accepted{0};
+        uint64_t zero_rtt_rejected{0};
+        uint64_t zero_rtt_replay_rejected{0};
+    };
+
     struct ConnectInfo {
         std::string ip;
         uint16_t    port{0};
@@ -48,10 +55,20 @@ public:
         bool        encrypted{false};
     };
 
+    struct ZeroRttDecisionInfo {
+        std::string remote_ip;
+        uint16_t    remote_port{0};
+        uint32_t    local_cid{0};
+        uint32_t    peer_cid{0};
+        bool        accepted{false};
+        std::string reason;
+    };
+
     using OnConnected = std::function<void(Connection::Ptr)>;
     using OnConnectError = std::function<void(int32_t, const std::string &, ConnectInfo)>;
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
     using OnNewConnection = std::function<bool(const NewConnectionInfo &)>;
+    using OnZeroRttDecision = std::function<void(const ZeroRttDecisionInfo &)>;
 
     Context(event_base *base, Config *config = nullptr);
     ~Context();
@@ -67,6 +84,10 @@ public:
     void setOnNewConnection(const OnNewConnection &cb);
     // 连接关闭时回调
     void setOnConnectionClosed(const OnConnectionClosed &cb);
+    // 0-RTT 接受/拒绝事件（如无效票据、重放拒绝）
+    void setOnZeroRttDecision(const OnZeroRttDecision &cb);
+
+    Statistic statistic() const;
 
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname = "");
     int32_t connect(const ConnectInfo &info);

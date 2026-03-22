@@ -217,6 +217,7 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
     m_mtuDiscovery.setAddressFamily(peer.family());
     m_lastErrorCode = UTP_ERR_OK;
     m_lastErrorReason.clear();
+    m_isClientInitiator = true;
     m_lastActivityUs = 0;
     m_keepaliveMissedProbes = 0;
     m_ackElicitingSinceLastAck = 0;
@@ -250,6 +251,7 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     }
 
     m_connectInfo = info;
+    m_isClientInitiator = false;
     m_peerAddress = peerAddress;
     m_peerConnectionID = peerConnectionID;
     m_peerTP = peerTp;
@@ -879,10 +881,53 @@ size_t ConnectionImpl::activeStreamCount() const
     return count;
 }
 
+void ConnectionImpl::collectClosedStreams()
+{
+    for (auto it = m_streams.begin(); it != m_streams.end();) {
+        if (!it->second) {
+            it = m_streams.erase(it);
+            continue;
+        }
+
+        if (it->second->state() == Stream::kStateClosed && !it->second->readable()) {
+            it = m_streams.erase(it);
+            continue;
+        }
+
+        ++it;
+    }
+}
+
+int32_t ConnectionImpl::validateIncomingStreamId(uint32_t streamId) const
+{
+    if (!STREAM_ID_IS_BI_DIR(streamId)) {
+        return UTP_ERR_STREAM_STATE_ERROR;
+    }
+
+    const bool peerInitiated = m_isClientInitiator ? STREAM_ID_IS_SERVER(streamId)
+                                                    : STREAM_ID_IS_CLIENT(streamId);
+    if (!peerInitiated) {
+        return UTP_ERR_STREAM_STATE_ERROR;
+    }
+
+    const uint32_t maxPeerStreams = std::max<uint32_t>(1, m_loaclTP.init_max_streams_bidi);
+    const uint32_t streamOrdinal = (streamId / STREAM_TYPES) + 1;
+    if (streamOrdinal > maxPeerStreams) {
+        return UTP_ERR_STREAM_LIMIT_ERROR;
+    }
+
+    return UTP_ERR_OK;
+}
+
 int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
 {
     auto it = m_streams.find(streamFrame.stream_id);
     if (it == m_streams.end()) {
+        const int32_t validateStatus = validateIncomingStreamId(streamFrame.stream_id);
+        if (validateStatus != UTP_ERR_OK) {
+            return validateStatus;
+        }
+
         StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamFrame.stream_id);
         m_streams.emplace(streamFrame.stream_id, stream);
         if (m_onStreamCreated) {
@@ -895,7 +940,9 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
         return UTP_ERR_INTERNAL_ERROR;
     }
 
-    return it->second->onFrame(streamFrame);
+    const int32_t status = it->second->onFrame(streamFrame);
+    collectClosedStreams();
+    return status;
 }
 
 int32_t ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId,
@@ -931,6 +978,8 @@ void ConnectionImpl::flushPendingStreamWrites()
             }
         }
     }
+
+    collectClosedStreams();
 }
 
 int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
@@ -1795,15 +1844,16 @@ int32_t ConnectionImpl::createStream()
         return UTP_ERR_INVALID_STATE;
     }
 
+    collectClosedStreams();
+
     const uint32_t maxStreams = std::max<uint32_t>(1, m_peerTP.init_max_streams_bidi);
     if (activeStreamCount() >= maxStreams) {
         return UTP_ERR_STREAM_LIMIT_ERROR;
     }
 
-    const bool isClientInitiator = !m_connectInfo.ip.empty();
     uint32_t &nextStreamId = m_streamId[0];
     if (nextStreamId == 0) {
-        nextStreamId = isClientInitiator ? 0u : 1u;
+        nextStreamId = m_isClientInitiator ? 0u : 1u;
     }
 
     const uint32_t streamId = nextStreamId;
@@ -1829,6 +1879,8 @@ int32_t ConnectionImpl::createStream()
 
 Stream* ConnectionImpl::getStream(uint32_t streamId)
 {
+    collectClosedStreams();
+
     auto it = m_streams.find(streamId);
     if (it == m_streams.end() || !it->second) {
         return nullptr;

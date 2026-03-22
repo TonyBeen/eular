@@ -58,10 +58,12 @@ public:
     void setOnConnectError(const Context::OnConnectError &cb);
     void setOnNewConnection(const Context::OnNewConnection &cb);
     void setOnConnectionClosed(const Context::OnConnectionClosed &cb);
+    void setOnZeroRttDecision(const Context::OnZeroRttDecision &cb);
     void wantWrite(ConnectionImpl *conn);
 
     event_base*     loop() const { return m_base; }
     Config*         config() { return &m_config; }
+    Context::Statistic statistic() const { return m_stat; }
 
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
@@ -85,6 +87,7 @@ private:
         bool                    zeroRttOffered{false};
         bool                    zeroRttAccepted{false};
         uint32_t                zeroRttTokenCid{0};
+        uint32_t                zeroRttRejectedCount{0};
         uint64_t                packetNumber{1};
         utp_time_t              acceptStartUs{0};
         bool                    handshakeSent{false};
@@ -105,7 +108,10 @@ private:
                               size_t payloadLen);
     bool decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                      PendingIncomingConnection &pending,
-                                     PacketIn &packet) const;
+                                     PacketIn &packet);
+    void reportZeroRttDecision(const PendingIncomingConnection &pending,
+                               bool accepted,
+                               const std::string &reason);
     bool allocLocalCid(uint32_t &cid);
     void removePendingIncoming(uint32_t localCid);
     void onPendingHandshakeTimeout();
@@ -136,6 +142,7 @@ private:
     Context::OnConnectError     m_onConnectError;
     Context::OnNewConnection    m_onNewConnection;
     Context::OnConnectionClosed m_onConnectionClosed;
+    Context::OnZeroRttDecision  m_onZeroRttDecision;
 
     using ConnectionMap = std::unordered_map<uint32_t, ConnectionImpl::SP>; // cid -> ConnectionImpl
     ConnectionMap                   m_connections;          // 所有连接容器
@@ -166,6 +173,8 @@ private:
     };
 
     std::unordered_map<ZeroRttReplayKey, uint64_t, ZeroRttReplayKeyHash> m_zeroRttReplayCache;
+    MemoryManager            m_mm;
+    Context::Statistic       m_stat{};
 };
 
 } // namespace utp

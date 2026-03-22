@@ -400,11 +400,22 @@ TEST_CASE("Context integration: 0-RTT rejected ticket falls back without deliver
 
     bool accepted = false;
     bool earlyWriteSent = false;
+    int32_t zeroRttAcceptedEvents = 0;
+    int32_t zeroRttRejectedEvents = 0;
+    std::string lastZeroRttReason;
     uint32_t earlyStreamId = 0;
     const std::string earlyPayload = "drop-me";
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
+    });
+    server.setOnZeroRttDecision([&](const Context::ZeroRttDecisionInfo &info) {
+        if (info.accepted) {
+            ++zeroRttAcceptedEvents;
+        } else {
+            ++zeroRttRejectedEvents;
+            lastZeroRttReason = info.reason;
+        }
     });
 
     Context::ConnectInfo info;
@@ -450,4 +461,12 @@ TEST_CASE("Context integration: 0-RTT rejected ticket falls back without deliver
     ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(client));
     REQUIRE(serverConn != nullptr);
     REQUIRE(serverConn->m_streams.find(earlyStreamId) == serverConn->m_streams.end());
+
+    const Context::Statistic stat = server.statistic();
+    REQUIRE(stat.zero_rtt_offered >= 1);
+    REQUIRE(stat.zero_rtt_rejected >= 1);
+    REQUIRE(stat.zero_rtt_accepted == 0);
+    REQUIRE(zeroRttAcceptedEvents == 0);
+    REQUIRE(zeroRttRejectedEvents >= 1);
+    REQUIRE(lastZeroRttReason == "invalid_ticket");
 }

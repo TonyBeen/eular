@@ -46,6 +46,16 @@ void Context::setOnConnectionClosed(const OnConnectionClosed &cb)
     m_impl->setOnConnectionClosed(cb);
 }
 
+void Context::setOnZeroRttDecision(const OnZeroRttDecision &cb)
+{
+    m_impl->setOnZeroRttDecision(cb);
+}
+
+Context::Statistic Context::statistic() const
+{
+    return m_impl->statistic();
+}
+
 int32_t Context::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     return m_impl->bind(ip, port, ifname);

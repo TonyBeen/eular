@@ -108,7 +108,9 @@ public:
 
 private:
     void scheduleWrite();
+    void collectClosedStreams();
     size_t activeStreamCount() const;
+    int32_t validateIncomingStreamId(uint32_t streamId) const;
     int32_t ingestStreamFrame(const FrameStream &streamFrame);
     void flushPendingStreamWrites();
     int32_t sendConnectionCloseFrame();
@@ -225,6 +227,7 @@ private:
     utp_time_t              m_ackProfileCandidateSinceUs{0};
     utp_time_t              m_ackProfileLastSentMs{0};
     utp_time_t              m_ackProfileBaselineSrttUs{0};
+    bool                    m_isClientInitiator{true};
     int32_t                 m_lastErrorCode{0};
     std::string             m_lastErrorReason;
 };
