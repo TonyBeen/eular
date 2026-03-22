@@ -41,8 +41,12 @@
 
     typedef int32_t     socket_t;
     typedef struct msghdr msghdr_t;
+    #ifndef INVALID_SOCKET
     #define INVALID_SOCKET  (-1)
+    #endif
+    #ifndef SOCKET_ERROR
     #define SOCKET_ERROR    (-1)
+    #endif
 
     #include <time.h>
     #include <unistd.h>
@@ -68,8 +72,12 @@
 #elif defined(OS_APPLE)
     typedef int32_t     socket_t;
     typedef struct msghdr msghdr_t;
+    #ifndef INVALID_SOCKET
     #define INVALID_SOCKET  (-1)
+    #endif
+    #ifndef SOCKET_ERROR
     #define SOCKET_ERROR    (-1)
+    #endif
 
     #include <time.h>
     #include <unistd.h>

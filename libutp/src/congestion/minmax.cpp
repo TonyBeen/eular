@@ -7,11 +7,22 @@
 
 #include "congestion/minmax.h"
 
+#include <limits>
 #include <string.h>
 #include "minmax.h"
 
 namespace eular {
 namespace utp {
+namespace {
+uint32_t clampToU32(uint64_t value)
+{
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        return std::numeric_limits<uint32_t>::max();
+    }
+    return static_cast<uint32_t>(value);
+}
+}
+
 void MinMax::init(uint64_t win)
 {
     window = win;
@@ -29,7 +40,7 @@ uint64_t MinMax::get(int32_t idx) const
 
 void MinMax::updateMin(uint64_t now, uint64_t meas)
 {
-    MinMaxSample sample{now, meas};
+    MinMaxSample sample{now, clampToU32(meas)};
     if (samples[0].value == 0 ||                    // uninitialized
         sample.value <= samples[0].value ||         // found new min?
         sample.time - samples[2].time > window) {   // nothing left in window?
@@ -48,7 +59,7 @@ void MinMax::updateMin(uint64_t now, uint64_t meas)
 
 void MinMax::updateMax(uint64_t now, uint64_t meas)
 {
-    MinMaxSample sample{now, meas};
+    MinMaxSample sample{now, clampToU32(meas)};
     if (samples[0].value == 0 ||                    // uninitialized
         sample.value >= samples[0].value ||         // found new max?
         sample.time - samples[2].time > window) {   // nothing left in window?

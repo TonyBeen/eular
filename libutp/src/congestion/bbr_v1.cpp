@@ -245,7 +245,7 @@ void BbrV1::onEndAck(uint64_t inflight)
     assert(m_flags & BBR_FLAG_IN_ACK);
     m_flags &= ~BBR_FLAG_IN_ACK;
 
-    UTP_LOGD("end_ack; mode: %s; in_flight: %"PRIu64, mode2str[m_mode], inflight);
+    UTP_LOGD("end_ack; mode: %s; in_flight: %" PRIu64, mode2str[m_mode], inflight);
 
     bytesAcked = m_bwSampler.totalAcked() - m_ackState.totalBytesAckedBefore;
     if (m_ackState.ackedBytes) {
@@ -253,7 +253,7 @@ void BbrV1::onEndAck(uint64_t inflight)
         if (isRoundStart) {
             ++m_roundCount;
             m_currentRoundTripEnd = m_lastSentPackNo;
-            UTP_LOGD("up round count to %"PRIu64"; new rt end: %"PRIu64, m_roundCount, m_currentRoundTripEnd);
+            UTP_LOGD("up round count to %" PRIu64 "; new rt end: %" PRIu64, m_roundCount, m_currentRoundTripEnd);
         }
 
         minRttExpired = updateBandwidthAndMinRtt();
@@ -345,7 +345,7 @@ void BbrV1::appLimited(uint64_t inflight)
 
     m_flags |= BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT;
     m_bwSampler.appLimited();
-    UTP_LOGD("becoming application-limited.  Last sent packet: %"PRIu64"; CWND: %"PRIu64, m_lastSentPackNo, cwnd);
+    UTP_LOGD("becoming application-limited.  Last sent packet: %" PRIu64 "; CWND: %" PRIu64, m_lastSentPackNo, cwnd);
 }
 
 bool BbrV1::isPipeSufficientlyFull(uint64_t inflight)
@@ -394,10 +394,10 @@ bool BbrV1::updateBandwidthAndMinRtt()
     minRttExpired = m_minRtt != 0 && (m_ackState.ackTime > m_minRttTimestamp + kMinRttExpiry);
     if (minRttExpired || sampleMinRtt < m_minRtt || m_minRtt == 0) {
         if (minRttExpired && shouldExtendMinRttExpiry()) {
-            UTP_LOGD("min rtt expiration extended, stay at: %"PRIu64, m_minRtt);
+            UTP_LOGD("min rtt expiration extended, stay at: %" PRIu64, m_minRtt);
             minRttExpired = false;
         } else {
-            UTP_LOGD("min rtt updated: %"PRIu64" -> %"PRIu64, m_minRtt, sampleMinRtt);
+            UTP_LOGD("min rtt updated: %" PRIu64 " -> %" PRIu64, m_minRtt, sampleMinRtt);
             m_minRtt = sampleMinRtt;
         }
 
@@ -446,7 +446,7 @@ void BbrV1::calculatePacingRate()
         return;
     }
 
-    UTP_LOGD("BW estimate: %"PRIu64, BW_VALUE(&bw));
+    UTP_LOGD("BW estimate: %" PRIu64, BW_VALUE(&bw));
     BandWidth targetRate = BW_TIMES(&bw, m_pacingGain);
     if (m_flags & BBR_FLAG_IS_AT_FULL_BANDWIDTH) {
         m_pacingRate = targetRate;
@@ -611,17 +611,17 @@ void BbrV1::checkIsFullBwReached()
             m_maxAckHeight.reset(MinMaxSample{m_roundCount, 0});
         }
 
-        UTP_LOGD("bandwidth increased to %"PRIu64"bytes/sec: full BW not reached", BW_TO_BYTES_PER_SEC(&bw));
+        UTP_LOGD("bandwidth increased to %" PRIu64 "bytes/sec: full BW not reached", BW_TO_BYTES_PER_SEC(&bw));
         return;
     }
 
     // 带宽未增长
     ++m_roundWoBwGain;
-    UTP_LOGD("no bandwidth growth this round (%"PRIu32"/%"PRIu32")", m_roundWoBwGain, m_nStartupRtts);
+    UTP_LOGD("no bandwidth growth this round (%" PRIu32 "/%" PRIu32 ")", m_roundWoBwGain, m_nStartupRtts);
     if (m_roundWoBwGain >= m_nStartupRtts || ((m_flags & BBR_FLAG_EXIT_STARTUP_ON_LOSS) && inRecovery())) {
         assert(m_flags & BBR_FLAG_HAS_NON_APP_LIMITED);
         m_flags |= BBR_FLAG_IS_AT_FULL_BANDWIDTH;
-        UTP_LOGD("no bandwidth growth for %"PRIu32" rounds: full BW reached", m_nStartupRtts);
+        UTP_LOGD("no bandwidth growth for %" PRIu32 " rounds: full BW reached", m_nStartupRtts);
     } else {
         UTP_LOGD("rounds w/o gain: %u, full BW not reached", m_roundWoBwGain);
     }
@@ -639,7 +639,7 @@ void BbrV1::maybeExitStartupOrDrain(uint64_t now, uint64_t bytestInflight)
 
     if (m_mode == Mode::Drain) {
         targetCwnd = getTargetCwnd(1.0f);
-        UTP_LOGD("bytes in flight: %"PRIu64"; target cwnd: %"PRIu64, bytestInflight, targetCwnd);
+        UTP_LOGD("bytes in flight: %" PRIu64 "; target cwnd: %" PRIu64, bytestInflight, targetCwnd);
         if (bytestInflight <= targetCwnd) {
             enterProbeBWMode(now);
         }
@@ -660,7 +660,7 @@ void BbrV1::maybeEnterOrExitProbeRtt(uint64_t now, bool isRoundStart, bool minRt
 
     if (m_mode == Mode::ProbeRTT) {
         m_bwSampler.appLimited();
-        UTP_LOGD("exit probe at: %"PRIu64"; now: %"PRIu64"; round start: %d; round passed: %d; rtt: %"PRIu64" usec",
+        UTP_LOGD("exit probe at: %" PRIu64 "; now: %" PRIu64 "; round start: %d; round passed: %d; rtt: %" PRIu64 " usec",
             m_exitProbeRttAt, now, isRoundStart, !!(m_flags & BBR_FLAG_PROBE_RTT_ROUND_PASSED), m_rttStats->minRTT());
         
         if (m_exitProbeRttAt == 0) {
@@ -668,7 +668,7 @@ void BbrV1::maybeEnterOrExitProbeRtt(uint64_t now, bool isRoundStart, bool minRt
             if (bytestInflight < getProbeRttCwnd() + kMaxOutgoingPacketSize) {
                 m_flags &= ~BBR_FLAG_PROBE_RTT_ROUND_PASSED;
                 m_exitProbeRttAt = now + kProbeRttTime;
-                UTP_LOGD("exit time set to %"PRIu64, m_exitProbeRttAt);
+                UTP_LOGD("exit time set to %" PRIu64, m_exitProbeRttAt);
             }
         } else {
             if (isRoundStart) {

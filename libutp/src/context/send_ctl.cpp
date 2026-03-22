@@ -416,6 +416,11 @@ void SendControl::onCanWrite(utp_time_t nowUs)
         return;
     }
 
+    // MTU probe should start only after handshake is fully established.
+    if (m_conn->state() != ConnectionImpl::kStateConnected) {
+        return;
+    }
+
     MtuDiscovery &mtu = m_conn->m_mtuDiscovery;
     const utp_time_t nowMs = nowUs / 1000;
     mtu.onProbeTimeout(nowMs);
@@ -885,7 +890,12 @@ bool SendControl::handleLostMtuProbe(PacketOut *pkt)
         m_conn->m_mtuDiscovery.onProbeLost(pkt->packno, time::MonotonicMs());
     }
     unackedRemove(pkt);
-    assert(pkt->loss_chain == pkt);
+    if (pkt->loss_chain != pkt) {
+        UTP_LOGW("%s MTU probe loss_chain mismatch: packet #" PRIu64,
+                 m_tag.c_str(),
+                 pkt->packno);
+        pkt->loss_chain = pkt;
+    }
     destroyPacket(pkt);
     return true;
 }

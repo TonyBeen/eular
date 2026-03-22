@@ -911,6 +911,27 @@ void ContextImpl::onReadEvent()
                 continue;
             }
 
+            const std::string peerIp = msg.metaInfo.peerAddress.toIpString();
+            const uint16_t peerPort = msg.metaInfo.peerAddress.port();
+            bool knownPeerConnection = false;
+            for (const auto &entry : m_connections) {
+                if (!entry.second) {
+                    continue;
+                }
+
+                const Connection::Description desc = entry.second->description();
+                const Context::ConnectInfo &peerInfo = entry.second->connectInfo();
+                if (desc.dcid == scid
+                    && peerInfo.port == peerPort
+                    && peerInfo.ip == peerIp) {
+                    knownPeerConnection = true;
+                    break;
+                }
+            }
+            if (knownPeerConnection) {
+                continue;
+            }
+
             const std::string key = peerKey(msg.metaInfo.peerAddress, scid);
             if (m_pendingIncomingPeerIndex.find(key) != m_pendingIncomingPeerIndex.end()) {
                 continue;

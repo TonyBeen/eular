@@ -27,7 +27,7 @@ struct BandWidth {
 #define BW_IS_ZERO(bw_) ((bw_)->value == 0)
 #define BW_TO_BYTES_PER_SEC(bw_) ((bw_)->value / 8)
 #define BW_VALUE(bw_) (+(bw_)->value)
-#define BW_TIMES(bw_, factor_) ((struct BandWidth) { .value = BW_VALUE(bw_) * (factor_), })
+#define BW_TIMES(bw_, factor_) ((struct BandWidth) { .value = static_cast<uint64_t>(BW_VALUE(bw_) * static_cast<double>(factor_)), })
 #define BW(initial_value_) ((struct BandWidth) { .value = (initial_value_) })
 
 namespace eular {

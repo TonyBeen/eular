@@ -97,7 +97,7 @@ void eular::utp::Pacer::packetScheduled(uint64_t inflight, bool inRecovery, TxTi
         _next_sched = std::max(_next_sched + delay, schedTime + delay);
     }
 
-    UTP_LOGD("next_sched is set to %"PRIu64" usec from now", _next_sched - _now);
+    UTP_LOGD("next_sched is set to %" PRIu64 " usec from now", _next_sched - _now);
 }
 
 void eular::utp::Pacer::lossEvent()

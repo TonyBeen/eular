@@ -51,7 +51,11 @@ ErrnoMsg GetSystemErrnoMsg(int32_t status)
                    MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
                    buffer.data(), static_cast<DWORD>(buffer.size()), NULL);
 #else
-    strerror_r(status, buffer.data(), buffer.size());
+    char *errorMsg = strerror_r(status, buffer.data(), buffer.size());
+    if (errorMsg && errorMsg != buffer.data()) {
+        buffer[0] = '\0';
+        strncat(buffer.data(), errorMsg, buffer.size() - 1);
+    }
 #endif
     buf = buffer.data();
     return buf;

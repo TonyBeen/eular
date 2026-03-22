@@ -1630,7 +1630,14 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
 
     m_bytesOut += packet->data_size;
 
-    const bool shouldTrackPacket = frameTypeBits != (1u << static_cast<uint32_t>(kFrameAck));
+    const bool isAckOnlyPacket = frameTypeBits == (1u << static_cast<uint32_t>(kFrameAck));
+    const bool isClosePacket = packetType == UTP_TYPE_CONNECTION_CLOSE
+                            || (frameTypeBits & (1u << static_cast<uint32_t>(kFrameConnectionClose))) != 0;
+    const bool allowSendCtlRetrans = (m_state == State::kStateConnected)
+                                  || (m_state == State::kStateCloseSent)
+                                  || (m_state == State::kStateCloseReceived)
+                                  || isClosePacket;
+    const bool shouldTrackPacket = !isAckOnlyPacket && allowSendCtlRetrans;
     if (m_sendCtl && shouldTrackPacket) {
         if (m_sendCtl->packetSent(packet) != UTP_ERR_OK) {
             m_mm.putPacketOut(packet);

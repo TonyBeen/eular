@@ -159,6 +159,8 @@ endif()
 
 set_target_properties(utp_static PROPERTIES OUTPUT_NAME utp EXPORT_NAME utp)
 
+add_subdirectory(examples)
+
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/libutpConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
