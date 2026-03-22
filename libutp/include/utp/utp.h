@@ -11,6 +11,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <vector>
 
 #include <utp/config.h>
 #include <utp/platform.h>
@@ -35,6 +36,8 @@ public:
         uint32_t    timeout{3000}; // ms
         int8_t      retries{0};
         bool        encrypted{false};
+        bool        enable_0rtt{false};
+        std::vector<uint8_t> session_ticket;
     };
 
     struct NewConnectionInfo {

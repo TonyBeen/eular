@@ -31,6 +31,7 @@
 #include "proto/frame/version.h"
 #include "proto/frame/padding.h"
 #include "proto/frame/ack_frequency.h"
+#include "proto/frame/session_token.h"
 #include "proto/frame/ack.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/crypto.h"
@@ -352,19 +353,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         case kFrameStream: {
             FrameStream streamFrame;
             if (streamFrame.decode(frameData, frameLen) >= 0) {
-                auto it = m_streams.find(streamFrame.stream_id);
-                if (it == m_streams.end()) {
-                    StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamFrame.stream_id);
-                    m_streams.emplace(streamFrame.stream_id, stream);
-                    if (m_onStreamCreated) {
-                        m_onStreamCreated(stream.get());
-                    }
-                    it = m_streams.find(streamFrame.stream_id);
-                }
-
-                if (it != m_streams.end()) {
-                    (void)it->second->onFrame(streamFrame);
-                }
+                (void)ingestStreamFrame(streamFrame);
             }
             break;
         }
@@ -563,6 +552,59 @@ void ConnectionImpl::scheduleWrite()
     }
 }
 
+size_t ConnectionImpl::activeStreamCount() const
+{
+    size_t count = 0;
+    for (const auto &entry : m_streams) {
+        if (entry.second && entry.second->state() != Stream::kStateClosed) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
+{
+    auto it = m_streams.find(streamFrame.stream_id);
+    if (it == m_streams.end()) {
+        StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamFrame.stream_id);
+        m_streams.emplace(streamFrame.stream_id, stream);
+        if (m_onStreamCreated) {
+            m_onStreamCreated(stream.get());
+        }
+        it = m_streams.find(streamFrame.stream_id);
+    }
+
+    if (it == m_streams.end()) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    return it->second->onFrame(streamFrame);
+}
+
+int32_t ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId,
+                                               uint64_t streamOffset,
+                                               const uint8_t *data,
+                                               size_t len,
+                                               bool fin)
+{
+    if (m_state != State::kStateConnected) {
+        return UTP_ERR_INVALID_STATE;
+    }
+
+    if (len > UINT16_MAX) {
+        return UTP_ERR_OVERFLOW;
+    }
+
+    FrameStream streamFrame;
+    streamFrame.stream_flag = fin ? STREAM_SET_FIN(0) : 0;
+    streamFrame.stream_data_length = static_cast<uint16_t>(len);
+    streamFrame.stream_id = streamId;
+    streamFrame.stream_offset = streamOffset;
+    streamFrame.stream_data = const_cast<uint8_t *>(data);
+    return ingestStreamFrame(streamFrame);
+}
+
 void ConnectionImpl::flushPendingStreamWrites()
 {
     for (auto &entry : m_streams) {
@@ -591,8 +633,11 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         return UTP_ERR_CONNECTION_CLOSING;
     }
 
-    if (m_state != State::kStateConnected) {
-        return UTP_ERR_INVALID_STATE;
+    const bool allowEarlyData = (m_state == State::kStateInitialSent)
+                             && m_connectInfo.enable_0rtt
+                             && !m_connectInfo.session_ticket.empty();
+    if (m_state != State::kStateConnected && !allowEarlyData) {
+        return UTP_ERR_WOULD_BLOCK;
     }
 
     if (len > UINT16_MAX) {
@@ -630,14 +675,18 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         return -1;
     }
 
-    const bool piggybackHandshakeDone = m_handshakeDonePending && !m_handshakeDoneSent && len > 0;
+    const bool piggybackHandshakeDone = (m_state == State::kStateConnected)
+                                     && m_handshakeDonePending
+                                     && !m_handshakeDoneSent
+                                     && len > 0;
+    const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
     if (piggybackHandshakeDone) {
         std::vector<uint8_t> streamBody;
         streamBody.reserve(len + 1);
         streamBody.insert(streamBody.end(), data, data + len);
         streamBody.push_back(static_cast<uint8_t>(kFrameHandshakeDone));
 
-        const int32_t status = sendPacket(UTP_TYPE_CTRL,
+        const int32_t status = sendPacket(packetType,
                                           header.data(),
                                           header.size(),
                                           streamBody.data(),
@@ -651,7 +700,7 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         return status;
     }
 
-    return sendPacket(UTP_TYPE_CTRL,
+    return sendPacket(packetType,
                       header.data(),
                       header.size(),
                       data,
@@ -728,6 +777,24 @@ int32_t ConnectionImpl::sendInitialPacket()
             return -1;
         }
         payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
+    }
+
+    if (m_connectInfo.enable_0rtt && !m_connectInfo.session_ticket.empty()) {
+        FrameSessionToken sessionToken;
+        sessionToken.token = m_connectInfo.session_ticket;
+        sessionToken.token_size = static_cast<uint8_t>(sessionToken.token.size());
+
+        const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+        const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
+        sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
+
+        std::vector<uint8_t> tokenPayload(static_cast<size_t>(sessionToken.frameSize()), 0);
+        const int32_t tokenLen = sessionToken.encode(tokenPayload.data(), tokenPayload.size());
+        if (tokenLen < 0) {
+            return -1;
+        }
+
+        payload.insert(payload.end(), tokenPayload.begin(), tokenPayload.begin() + tokenLen);
     }
 
     std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> ackFreqPayload{};
@@ -1322,7 +1389,7 @@ void ConnectionImpl::registerStreamCreated(const OnStreamCreated &cb)
 
 int32_t ConnectionImpl::streamCount() const
 {
-    return static_cast<int32_t>(m_streams.size());
+    return static_cast<int32_t>(activeStreamCount());
 }
 
 Connection::Statistic ConnectionImpl::statistic() const
@@ -1349,12 +1416,15 @@ Connection::Description ConnectionImpl::description() const
 
 int32_t ConnectionImpl::createStream()
 {
-    if (m_state != State::kStateConnected) {
+    const bool allowEarlyData = (m_state == State::kStateInitialSent)
+                             && m_connectInfo.enable_0rtt
+                             && !m_connectInfo.session_ticket.empty();
+    if (m_state != State::kStateConnected && !allowEarlyData) {
         return UTP_ERR_INVALID_STATE;
     }
 
     const uint32_t maxStreams = std::max<uint32_t>(1, m_peerTP.init_max_streams_bidi);
-    if (m_streams.size() >= maxStreams) {
+    if (activeStreamCount() >= maxStreams) {
         return UTP_ERR_STREAM_LIMIT_ERROR;
     }
 
@@ -1378,11 +1448,20 @@ int32_t ConnectionImpl::createStream()
         m_onStreamCreated(stream.get());
     }
 
-    if (m_onStreamCanCreate && (m_streams.size() < maxStreams)) {
+    if (m_onStreamCanCreate && (activeStreamCount() < maxStreams)) {
         m_onStreamCanCreate();
     }
 
     return static_cast<int32_t>(streamId);
+}
+
+Stream* ConnectionImpl::getStream(uint32_t streamId)
+{
+    auto it = m_streams.find(streamId);
+    if (it == m_streams.end() || !it->second) {
+        return nullptr;
+    }
+    return it->second.get();
 }
 
 void ConnectionImpl::close()

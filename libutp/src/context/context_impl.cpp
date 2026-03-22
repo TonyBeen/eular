@@ -21,14 +21,18 @@
 #include "proto/frame/version.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/ack_frequency.h"
+#include "proto/frame/session_token.h"
+#include "proto/frame/stream.h"
 #include "proto/frame/connection_close.h"
 #include "context/connection_impl.h"
 #include "crypto/aes_gcm_context.h"
+#include "crypto/token.h"
 #include "crypto/x25519_wrapper.h"
 #include "util/error.h"
 #include "util/random.hpp"
 #include "util/time.h"
 #include "context_impl.h"
+#include "make_unique.hpp"
 
 static std::atomic<uint32_t>    g_contextId{0};
 static eular::utp::Config       g_defaultConfig;
@@ -452,6 +456,130 @@ bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
     return packet.decode(encryptedPacket.raw_data, encryptedPacket.raw_size) == UTP_ERR_OK;
 }
 
+TokenAuth *ContextImpl::tokenAuth()
+{
+    if (m_tokenAuth) {
+        return m_tokenAuth.get();
+    }
+
+    if (m_base == nullptr) {
+        return nullptr;
+    }
+
+    try {
+        m_tokenAuth = std::make_unique<TokenAuth>(m_base);
+    } catch (const std::exception &) {
+        m_tokenAuth.reset();
+    }
+
+    return m_tokenAuth.get();
+}
+
+bool ContextImpl::validateZeroRttTicket(const Address &peerAddress,
+                                        const std::vector<uint8_t> &ticket,
+                                        uint16_t validityPeriod,
+                                        uint32_t &ticketCid)
+{
+    if (!peerAddress.isValid() || ticket.size() != TOKEN_SIZE) {
+        return false;
+    }
+
+    TokenAuth *auth = tokenAuth();
+    if (auth == nullptr) {
+        return false;
+    }
+
+    TokenAuth::TokenBuf tokenBuf{};
+    std::memcpy(tokenBuf.data(), ticket.data(), tokenBuf.size());
+
+    TokenMeta tokenMeta;
+    if (!auth->open(tokenBuf, tokenMeta, TokenType::kZeroRttResumption)) {
+        return false;
+    }
+
+    if (tokenMeta.family != static_cast<uint16_t>(peerAddress.family())) {
+        return false;
+    }
+
+    if (peerAddress.isIPv4()) {
+        sockaddr_in addr4{};
+        if (!peerAddress.toSockAddrIn(addr4)
+            || std::memcmp(&addr4.sin_addr, &tokenMeta.host_v4, sizeof(addr4.sin_addr)) != 0) {
+            return false;
+        }
+    } else if (peerAddress.isIPv6()) {
+        sockaddr_in6 addr6{};
+        if (!peerAddress.toSockAddrIn6(addr6)
+            || std::memcmp(&addr6.sin6_addr, &tokenMeta.host_v6, sizeof(addr6.sin6_addr)) != 0) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    const uint64_t nowSec = time::RealtimeMs() / 1000;
+    if (nowSec < tokenMeta.timestamp) {
+        return false;
+    }
+
+    uint32_t maxLifetime = m_config.zero_rtt_token_max_lifetime;
+    if (maxLifetime == 0) {
+        return false;
+    }
+    if (validityPeriod > 0) {
+        maxLifetime = std::min<uint32_t>(maxLifetime, validityPeriod);
+    }
+
+    if ((nowSec - tokenMeta.timestamp) > maxLifetime) {
+        return false;
+    }
+
+    ticketCid = tokenMeta.cid;
+    return true;
+}
+
+void ContextImpl::purgeZeroRttReplayCache(uint64_t nowMs)
+{
+    if (m_zeroRttReplayCache.empty()) {
+        return;
+    }
+
+    for (auto it = m_zeroRttReplayCache.begin(); it != m_zeroRttReplayCache.end();) {
+        if (it->second <= nowMs) {
+            it = m_zeroRttReplayCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool ContextImpl::rememberZeroRttNonce(uint32_t ticketCid, uint64_t nonce, uint64_t nowMs)
+{
+    if (ticketCid == 0) {
+        return false;
+    }
+
+    if (nowMs == 0) {
+        nowMs = time::RealtimeMs();
+    }
+
+    purgeZeroRttReplayCache(nowMs);
+
+    ZeroRttReplayKey key;
+    key.ticketCid = ticketCid;
+    key.nonce = nonce;
+
+    auto it = m_zeroRttReplayCache.find(key);
+    if (it != m_zeroRttReplayCache.end()) {
+        return false;
+    }
+
+    const uint32_t replayWindowS = std::max<uint32_t>(m_config.zero_rtt_replay_window, 1);
+    const uint64_t expireAtMs = nowMs + static_cast<uint64_t>(replayWindowS) * 1000ULL;
+    m_zeroRttReplayCache.emplace(key, expireAtMs);
+    return true;
+}
+
 bool ContextImpl::allocLocalCid(uint32_t &cid)
 {
     constexpr int32_t kMaxTry = 8;
@@ -651,9 +779,77 @@ void ContextImpl::onReadEvent()
                     continue;
                 }
 
+                for (const auto &earlyFrame : pending.earlyStreamFrames) {
+                    (void)conn->ingestEarlyStreamFrame(earlyFrame.streamId,
+                                                       earlyFrame.streamOffset,
+                                                       earlyFrame.data.empty() ? nullptr : earlyFrame.data.data(),
+                                                       earlyFrame.data.size(),
+                                                       earlyFrame.fin);
+                }
+
                 removePendingIncoming(dcid);
                 if (m_onConnected) {
                     m_onConnected(conn);
+                }
+                continue;
+            }
+
+            if (packetType == UTP_TYPE_0RTT) {
+                const std::string key = peerKey(msg.metaInfo.peerAddress, scid);
+                auto pendingIndexIt = m_pendingIncomingPeerIndex.find(key);
+                if (pendingIndexIt == m_pendingIncomingPeerIndex.end()) {
+                    continue;
+                }
+
+                auto pendingZeroRttIt = m_pendingIncoming.find(pendingIndexIt->second);
+                if (pendingZeroRttIt == m_pendingIncoming.end()) {
+                    continue;
+                }
+
+                PendingIncomingConnection &pending = pendingZeroRttIt->second;
+                if (!pending.handshakeSent || !pending.zeroRttAccepted) {
+                    continue;
+                }
+
+                if (!rememberZeroRttNonce(pending.zeroRttTokenCid, pn)) {
+                    pending.zeroRttAccepted = false;
+                    continue;
+                }
+
+                PacketIn packet;
+                if (!decodeIncomingPendingPacket(msg, pending, packet)) {
+                    continue;
+                }
+
+                size_t frameOffset = 0;
+                while (frameOffset < packet.payload_size) {
+                    FrameType frameType = kFrameInvalid;
+                    const uint8_t *frameData = nullptr;
+                    size_t frameLen = 0;
+                    if (packet.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                        break;
+                    }
+
+                    if (frameType != kFrameStream) {
+                        continue;
+                    }
+
+                    FrameStream streamFrame;
+                    if (streamFrame.decode(frameData, frameLen) < 0) {
+                        continue;
+                    }
+
+                    PendingIncomingConnection::EarlyStreamFrame earlyFrame;
+                    earlyFrame.streamId = streamFrame.stream_id;
+                    earlyFrame.streamOffset = streamFrame.stream_offset;
+                    earlyFrame.fin = STREAM_IS_FIN(streamFrame.stream_flag);
+                    if (streamFrame.stream_data != nullptr && streamFrame.stream_data_length > 0) {
+                        const uint8_t *streamDataBegin = static_cast<const uint8_t *>(streamFrame.stream_data);
+                        earlyFrame.data.assign(streamDataBegin,
+                                               streamDataBegin + streamFrame.stream_data_length);
+                    }
+
+                    pending.earlyStreamFrames.emplace_back(std::move(earlyFrame));
                 }
                 continue;
             }
@@ -684,51 +880,58 @@ void ContextImpl::onReadEvent()
             pending.peerIp = msg.metaInfo.peerAddress.toIpString();
             pending.encrypted = initialPacket.hasFrame(kFrameCrypto);
 
-            if (pending.encrypted) {
-                size_t frameOffset = 0;
-                while (frameOffset < initialPacket.payload_size) {
-                    FrameType frameType = kFrameInvalid;
-                    const uint8_t *frameData = nullptr;
-                    size_t frameLen = 0;
-                    if (initialPacket.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
-                        break;
-                    }
+            size_t frameOffset = 0;
+            while (frameOffset < initialPacket.payload_size) {
+                FrameType frameType = kFrameInvalid;
+                const uint8_t *frameData = nullptr;
+                size_t frameLen = 0;
+                if (initialPacket.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                    break;
+                }
 
-                    if (frameType != kFrameCrypto) {
-                        continue;
-                    }
-
+                if (frameType == kFrameCrypto && pending.encrypted && pending.aesCtx == nullptr) {
                     TransportParams peerTp;
                     std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubKey{};
                     FrameCrypto crypto;
                     crypto.tp = &peerTp;
                     crypto.eph_pubkey = peerPubKey.data();
-                    if (crypto.decode(frameData, frameLen) < 0) {
-                        break;
-                    }
+                    if (crypto.decode(frameData, frameLen) >= 0) {
+                        pending.peerTp = peerTp;
+                        if (!pending.x25519) {
+                            pending.x25519 = std::make_shared<X25519Wrapper>();
+                        }
 
-                    pending.peerTp = peerTp;
-                    if (!pending.x25519) {
-                        pending.x25519 = std::make_shared<X25519Wrapper>();
-                    }
+                        try {
+                            X25519Wrapper::PublicKey peerPublicKey;
+                            std::memcpy(peerPublicKey.data(), peerPubKey.data(), peerPublicKey.size());
 
-                    try {
-                        X25519Wrapper::PublicKey peerPublicKey;
-                        std::memcpy(peerPublicKey.data(), peerPubKey.data(), peerPublicKey.size());
+                            auto sharedSecretShort = pending.x25519->deriveSharedSecretShort(peerPublicKey);
+                            AesGcmContext::AesKey128 key128;
+                            std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
 
-                        auto sharedSecretShort = pending.x25519->deriveSharedSecretShort(peerPublicKey);
-                        AesGcmContext::AesKey128 key128;
-                        std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
-
-                        pending.aesCtx = std::make_shared<AesGcmContext>();
-                        const uint32_t noncePrefix = pending.localCid ^ pending.peerCid;
-                        if (!pending.aesCtx->init(key128, noncePrefix)) {
+                            pending.aesCtx = std::make_shared<AesGcmContext>();
+                            const uint32_t noncePrefix = pending.localCid ^ pending.peerCid;
+                            if (!pending.aesCtx->init(key128, noncePrefix)) {
+                                pending.aesCtx.reset();
+                            }
+                        } catch (const std::exception &) {
                             pending.aesCtx.reset();
                         }
-                    } catch (const std::exception &) {
-                        pending.aesCtx.reset();
                     }
-                    break;
+                    continue;
+                }
+
+                if (frameType == kFrameSessionToken) {
+                    FrameSessionToken sessionToken;
+                    if (sessionToken.decode(frameData, frameLen) < 0) {
+                        continue;
+                    }
+
+                    pending.zeroRttOffered = true;
+                    pending.zeroRttAccepted = validateZeroRttTicket(msg.metaInfo.peerAddress,
+                                                                    sessionToken.token,
+                                                                    sessionToken.token_validity_period,
+                                                                    pending.zeroRttTokenCid);
                 }
             }
 

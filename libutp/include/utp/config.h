@@ -34,6 +34,7 @@ public:
 
     // token / 0-rtt
     uint32_t    zero_rtt_token_max_lifetime = 600; // 0-RTT token 最长时效(s)
+    uint32_t    zero_rtt_replay_window = 10;       // 0-RTT 抗重放去重窗口(s)
 
     // socket
     int32_t     recv_buf_size = 1024 * 1024;

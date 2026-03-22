@@ -1,6 +1,8 @@
 set(UTP_TEST_SOURCES
+    test_connection_stream_layer.cc
     test_context_cid_alloc.cc
     test_context_integration.cc
+    test_context_zero_rtt.cc
     test_frame_ack_decode.cc
     test_frame_crypto.cc
     test_frame_path.cc

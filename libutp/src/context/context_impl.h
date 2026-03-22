@@ -30,6 +30,7 @@ namespace utp {
 
 class X25519Wrapper;
 class AesGcmContext;
+class TokenAuth;
 struct PacketIn;
 
 inline bool operator<(const Context::ConnectInfo &lhs, const Context::ConnectInfo &rhs)
@@ -69,15 +70,26 @@ public:
 
 private:
     struct PendingIncomingConnection {
+        struct EarlyStreamFrame {
+            uint32_t            streamId{0};
+            uint64_t            streamOffset{0};
+            bool                fin{false};
+            std::vector<uint8_t> data;
+        };
+
         uint32_t                localCid{0};
         uint32_t                peerCid{0};
         Address                 peerAddress;
         std::string             peerIp;
         bool                    encrypted{false};
+        bool                    zeroRttOffered{false};
+        bool                    zeroRttAccepted{false};
+        uint32_t                zeroRttTokenCid{0};
         uint64_t                packetNumber{1};
         utp_time_t              acceptStartUs{0};
         bool                    handshakeSent{false};
         TransportParams         peerTp{};
+        std::vector<EarlyStreamFrame> earlyStreamFrames;
         std::shared_ptr<X25519Wrapper> x25519;
         std::shared_ptr<AesGcmContext> aesCtx;
     };
@@ -98,6 +110,13 @@ private:
     void removePendingIncoming(uint32_t localCid);
     void onPendingHandshakeTimeout();
     void processPendingHandshakeTimeouts();
+    TokenAuth *tokenAuth();
+    bool validateZeroRttTicket(const Address &peerAddress,
+                               const std::vector<uint8_t> &ticket,
+                               uint16_t validityPeriod,
+                               uint32_t &ticketCid);
+    void purgeZeroRttReplayCache(uint64_t nowMs);
+    bool rememberZeroRttNonce(uint32_t ticketCid, uint64_t nonce, uint64_t nowMs = 0);
 
 private:
     void onReadEvent();
@@ -127,6 +146,26 @@ private:
     std::unordered_map<std::string, uint32_t> m_pendingIncomingPeerIndex;       // peer address+scid -> local cid
     std::list<uint32_t>             m_pendingIncomingQueue; // 回调通知后的待 accept 队列
     std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
+    std::unique_ptr<TokenAuth>      m_tokenAuth;
+
+    struct ZeroRttReplayKey {
+        uint32_t ticketCid{0};
+        uint64_t nonce{0};
+
+        bool operator==(const ZeroRttReplayKey &other) const {
+            return ticketCid == other.ticketCid && nonce == other.nonce;
+        }
+    };
+
+    struct ZeroRttReplayKeyHash {
+        size_t operator()(const ZeroRttReplayKey &key) const {
+            return static_cast<size_t>(key.ticketCid)
+                ^ static_cast<size_t>(key.nonce)
+                ^ static_cast<size_t>(key.nonce >> 32);
+        }
+    };
+
+    std::unordered_map<ZeroRttReplayKey, uint64_t, ZeroRttReplayKeyHash> m_zeroRttReplayCache;
 };
 
 } // namespace utp

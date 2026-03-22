@@ -28,7 +28,7 @@
 | Context/连接调度 | ✅ 已实现 | 支持 `bind/connect`、读写事件驱动、连接表管理 |
 | 主动建连流程 | ✅ 可用 | 发送 Initial，收到 Handshake 后置 Connected |
 | 被动接入/accept | ✅ 已实现 | 两阶段流程：`OnNewConnection` 决策 -> `accept()` 发 Handshake -> 等待 `HandshakeDone` 后建连 |
-| Stream 业务层 | ✅ 基本可用 | `ConnectionImpl::createStream()` 已实现基础创建与配额检查 |
+| Stream 业务层 | ✅ 可用 | 已支持 `createStream/getStream`、收发缓冲与读写回调，stream 配额按活跃流统计 |
 | PacketIn 解析 | ✅ 已实现 | 固定头解析、payload 长度校验、帧遍历 |
 | PacketOut 生命周期 | ✅ 已实现 | `MemoryManager` 池化分配/归还，支持重传 attempt 链 |
 | ACK 解析与发送侧处理 | ✅ 已实现 | `FrameAck::decode` + `SendControl::onAckReceived` |
@@ -41,7 +41,7 @@
 | 会话票据 TokenAuth | ✅ 可用（模块级） | AEAD token 封装/解封装已实现 |
 | Crypto 帧与握手接入 | ✅ 已实现 | `FrameCrypto` 编解码已实现，并接入 Initial/Handshake |
 | AES-GCM 包级收发接入 | ✅ 已实现 | `AesGcmContext::encrypt(PacketOut*)/decrypt(PacketIn*)` 已接入 |
-| 0-RTT 重连 | ❌ 未接入 | 仅有类型/结构预留，连接状态机与 API 尚未打通 |
+| 0-RTT 重连 | ✅ Phase-3 已接入 | 已支持票据携带/验证、`UTP_TYPE_0RTT` 发送与 pending 缓存回放，并具备短窗口抗重放去重 |
 
 ---
 
@@ -55,9 +55,9 @@
   - `OnNewConnection` 当前签名为 `bool(const NewConnectionInfo&)`，返回值用于放行/拒绝被动连接
 - `Connection`（`include/utp/connection.h`）：
   - 连接统计、描述信息
-  - 流创建入口（当前实现侧未打通）
+  - 流创建与查询入口（`createStream/getStream`）
 - `Stream`（`include/utp/stream.h`）：
-  - 当前为极简骨架
+  - 支持 `write/read` 与零拷贝 `acquire/commit` 接口
 
 ### 3.2 内部实现层
 
@@ -145,7 +145,7 @@
 
 | 帧类型 | 编解码实现 | 接入连接主流程 | 说明 |
 |---|---|---|---|
-| `Stream` | ✅ | ⚠️ 未形成端到端流收发 | 帧格式可编解码，但 Stream 业务层未完成 |
+| `Stream` | ✅ | ✅（收发已接入） | 已接入连接收包分发、发送队列与可读回调 |
 | `Ack` | ✅ | ✅（收发已接入） | ACK 解析驱动发送侧回收/拥塞控制，且可在接收路径生成发送 |
 | `Padding` | ✅ | ⚠️ 未见主动生成路径 | 编解码完整 |
 | `ConnectionClose` | ✅ | ✅（接收） | 收到后状态置 `CloseReceived` |
@@ -290,10 +290,9 @@
 
 ## 11.2 未完成（协议接入级）
 
-- Stream 数据面端到端（应用收发）仍需继续补齐
 - `AckFrequency` 帧尚未实现
 - Cubic 拥塞控制尚未实现
-- 0-RTT 重连流程尚未接入（见 §16 设计草案）
+- 0-RTT 重连已接入 Phase-3（见 §16 设计草案与实现状态）
 
 ---
 
@@ -355,10 +354,10 @@
 
 ### P0（建议优先）
 
-1. 打通 Stream 数据面最小可用路径（发送队列 + 对端可读回调 + 流关闭语义）。
-2. 补齐被动建连相关测试（放行/拒绝、accept 后等待 HandshakeDone、超时回收）。
-3. 增加连接级端到端回归（主动/被动混合并发、CID 冲突回避场景）。
-4. 0-RTT 最小可用闭环：票据发放与缓存、客户端携带、服务端校验与接收早数据。
+1. 补齐被动建连相关测试（放行/拒绝、accept 后等待 HandshakeDone、超时回收）。
+2. 增加连接级端到端回归（主动/被动混合并发、CID 冲突回避场景）。
+3. 扩展 Stream 生命周期回收策略（已关闭流的对象回收与统计）。
+4. 0-RTT 可观测性增强：补充 accepted/rejected 事件与统计。
 
 ### P1
 

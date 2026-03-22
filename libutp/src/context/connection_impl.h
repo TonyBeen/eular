@@ -82,7 +82,13 @@ public:
     Description description() const override;
 
     int32_t     createStream() override;
+    Stream*     getStream(uint32_t streamId) override;
     void        close() override;
+    int32_t     ingestEarlyStreamFrame(uint32_t streamId,
+                                       uint64_t streamOffset,
+                                       const uint8_t *data,
+                                       size_t len,
+                                       bool fin);
 
 public:
     uint64_t    packetNumber() { return m_packetNumber++; }
@@ -94,6 +100,8 @@ public:
 
 private:
     void scheduleWrite();
+    size_t activeStreamCount() const;
+    int32_t ingestStreamFrame(const FrameStream &streamFrame);
     void flushPendingStreamWrites();
     int32_t sendConnectionCloseFrame();
     int32_t sendStreamFrame(uint32_t streamId,

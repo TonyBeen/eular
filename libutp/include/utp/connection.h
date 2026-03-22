@@ -57,6 +57,7 @@ public:
     virtual Description description() const = 0;
 
     virtual int32_t     createStream() = 0;
+    virtual Stream*     getStream(uint32_t streamId) = 0;
     virtual void        close() = 0;
 };
 
