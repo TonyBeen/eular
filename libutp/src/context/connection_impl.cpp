@@ -13,6 +13,7 @@
 #include <array>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <vector>
 
 #include <utils/serialize.hpp>
@@ -33,6 +34,7 @@
 #include "proto/frame/ack.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/crypto.h"
+#include "proto/frame/connection_close.h"
 
 #include "crypto/x25519_wrapper.h"
 #include "crypto/aes_gcm_context.h"
@@ -45,6 +47,10 @@ using eular::Serialize;
 using eular::utp::FrameType;
 
 constexpr uint64_t kPathValidationSendCredit = 256;
+constexpr utp_time_t kMinPtoUs = 10000;
+constexpr utp_time_t kDefaultPtoUs = 333333;
+constexpr utp_time_t kMaxPtoUs = 60000000;
+constexpr uint8_t kMaxCloseResendCount = 3;
 
 int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
                                uint8_t *buffer,
@@ -119,6 +125,14 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
         onHandshakeDoneTimeout();
     });
 
+    m_keepaliveTimer.reset(ctx->loop(), [this] () {
+        onKeepaliveTimeout();
+    });
+
+    m_closeDrainTimer.reset(ctx->loop(), [this] () {
+        onCloseDrainTimeout();
+    });
+
     m_sendCtl = std::make_unique<SendControl>(this, ctx);
     if (ctx != nullptr) {
         m_mtuDiscovery.init(ctx->config(), Address::IPv4);
@@ -145,6 +159,11 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
     m_peerAddress = peer;
     m_networkPath.bindPeerAddress(peer);
     m_mtuDiscovery.setAddressFamily(peer.family());
+    m_lastErrorCode = UTP_ERR_OK;
+    m_lastErrorReason.clear();
+    m_lastActivityUs = 0;
+    m_keepaliveMissedProbes = 0;
+    m_keepaliveTimer.stop();
 
     m_ctx->wantWrite(this);
     m_connTimer.start(info.timeout);
@@ -177,6 +196,7 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     m_mtuDiscovery.setAddressFamily(peerAddress.family());
 
     m_state = State::kStateConnected;
+    markPeerActivity(time::MonotonicUs());
     return UTP_ERR_OK;
 }
 
@@ -188,83 +208,144 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
     const utp_time_t nowUs = time::MonotonicUs();
 
-    PacketIn packet;
-    if (packet.decode(msg.data, msg.len) < 0) {
+    auto packetReleaser = [this] (PacketIn *packet) {
+        m_mm.putPacketIn(packet);
+    };
+    std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
+    if (!packet) {
+        return;
+    }
+
+    std::memcpy(const_cast<uint8_t *>(packet->raw_data), msg.data, msg.len);
+    packet->raw_size = msg.len;
+
+    if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
         if (!m_aesCtx) {
             return;
         }
 
-        PacketIn encryptedPacket;
-        encryptedPacket.raw_data = static_cast<const uint8_t *>(msg.data);
-        encryptedPacket.raw_size = msg.len;
-
-        const uint8_t *offset = encryptedPacket.raw_data;
-        size_t left = encryptedPacket.raw_size;
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.scid);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.dcid);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.pn);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.payload_length);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.types);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket.header.reserve);
-        if (offset == nullptr) {
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> encryptedPacket(
+            m_mm.getPacketIn(static_cast<uint32_t>(msg.len)),
+            packetReleaser);
+        if (!encryptedPacket) {
             return;
         }
 
-        if (left < encryptedPacket.header.payload_length) {
+        std::memcpy(const_cast<uint8_t *>(encryptedPacket->raw_data), msg.data, msg.len);
+        encryptedPacket->raw_size = msg.len;
+
+        const uint8_t *offset = encryptedPacket->raw_data;
+        size_t left = encryptedPacket->raw_size;
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.scid);
+        if (offset == nullptr) {
+            return;
+        }
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.dcid);
+        if (offset == nullptr) {
+            return;
+        }
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.pn);
+        if (offset == nullptr) {
+            return;
+        }
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.payload_length);
+        if (offset == nullptr) {
+            return;
+        }
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.types);
+        if (offset == nullptr) {
+            return;
+        }
+        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.reserve);
+        if (offset == nullptr) {
             return;
         }
 
-        encryptedPacket.payload = offset;
-        encryptedPacket.payload_size = encryptedPacket.header.payload_length;
-        if (m_aesCtx->decrypt(&encryptedPacket) != UTP_ERR_OK) {
+        if (left < encryptedPacket->header.payload_length) {
             return;
         }
 
-        if (packet.decode(encryptedPacket.raw_data, encryptedPacket.raw_size) < 0) {
+        encryptedPacket->payload = offset;
+        encryptedPacket->payload_size = encryptedPacket->header.payload_length;
+        if (m_aesCtx->decrypt(encryptedPacket.get()) != UTP_ERR_OK) {
+            return;
+        }
+
+        if (packet->decode(encryptedPacket->raw_data, encryptedPacket->raw_size) < 0) {
             return;
         }
     }
 
     const bool isPassiveInitial = (m_state == State::kStateDisconnected)
-                               && packet.header.types == UTP_TYPE_INITIAL
-                               && packet.header.dcid == 0;
-    if (packet.header.dcid != m_localConnectionID && !isPassiveInitial) {
+                               && packet->header.types == UTP_TYPE_INITIAL
+                               && packet->header.dcid == 0;
+    if (packet->header.dcid != m_localConnectionID && !isPassiveInitial) {
         return;
     }
 
     m_bytesIn += msg.len;
-    m_receiveHistory.insert(packet.header.pn, nowUs);
-    m_peerConnectionID = packet.header.scid;
+    m_receiveHistory.insert(packet->header.pn, nowUs);
+    m_peerConnectionID = packet->header.scid;
     m_peerAddress = msg.metaInfo.peerAddress;
     m_mtuDiscovery.setAddressFamily(m_peerAddress.family());
-    packet.meta = msg.metaInfo;
+    packet->meta = msg.metaInfo;
 
-    if (m_networkPath.detectPeerAddressChange(msg.metaInfo.peerAddress)) {
+    if (m_state == State::kStateConnected) {
+        markPeerActivity(nowUs);
+    }
+
+    if (m_state == State::kStatePtoTimedWait) {
+        bool peerCloseInTimedWait = false;
+        size_t timedWaitOffset = 0;
+        while (timedWaitOffset < packet->payload_size) {
+            FrameType frameType = kFrameInvalid;
+            const uint8_t *frameData = nullptr;
+            size_t frameLen = 0;
+            if (packet->nextFrame(timedWaitOffset, frameType, frameData, frameLen) < 0) {
+                break;
+            }
+            if (frameType == kFrameConnectionClose) {
+                peerCloseInTimedWait = true;
+                break;
+            }
+        }
+
+        if (peerCloseInTimedWait && m_closePeerResendCount < kMaxCloseResendCount) {
+            const utp_time_t nowTimedWaitUs = time::MonotonicUs();
+            const utp_time_t resendGuardUs = std::max<utp_time_t>(m_closePtoUs / 2, 1000);
+            if (m_closeLastSendUs == 0 || nowTimedWaitUs - m_closeLastSendUs >= resendGuardUs) {
+                if (sendConnectionCloseFrame() == UTP_ERR_OK) {
+                    m_closeLastSendUs = nowTimedWaitUs;
+                    ++m_closePeerResendCount;
+                }
+            }
+        }
+        return;
+    }
+
+    if (m_state == State::kStateDisconnected) {
+        return;
+    }
+
+    const bool closingState = m_state == State::kStateCloseSent
+                           || m_state == State::kStateCloseReceived;
+
+    if (!closingState && m_networkPath.detectPeerAddressChange(msg.metaInfo.peerAddress)) {
         maybeSendPathChallenge();
     }
 
     size_t frameOffset = 0;
-    while (frameOffset < packet.payload_size) {
+    bool peerCloseReceived = false;
+    while (frameOffset < packet->payload_size) {
         FrameType frameType = kFrameInvalid;
         const uint8_t *frameData = nullptr;
         size_t frameLen = 0;
-        if (packet.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+        if (packet->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
             break;
+        }
+
+        if (closingState && frameType != kFrameConnectionClose) {
+            continue;
         }
 
         switch (frameType) {
@@ -342,15 +423,36 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             break;
         }
         case kFrameConnectionClose:
+            peerCloseReceived = true;
             m_state = kStateCloseReceived;
+            if (m_lastErrorCode == UTP_ERR_OK) {
+                m_lastErrorCode = UTP_ERR_CANCELLED;
+                m_lastErrorReason = "peer closed connection";
+            }
             break;
         default:
             break;
         }
     }
 
+    if (peerCloseReceived) {
+        m_closeErrorCode = UTP_ERR_CANCELLED;
+        m_closeReason = "peer close ack";
+        m_closeFramePending = true;
+        m_closePtoUs = closePtoUs();
+        m_closeDeadlineUs = 0;
+        m_closeLastSendUs = 0;
+        m_closePeerResendCount = 0;
+        scheduleWrite();
+        return;
+    }
+
+    if (closingState) {
+        return;
+    }
+
     const uint32_t ackMask = (1u << static_cast<uint32_t>(kFrameAck));
-    const bool ackOnly = packet.frame_types == ackMask;
+    const bool ackOnly = packet->frame_types == ackMask;
     if (!ackOnly && !m_receiveHistory.empty() && m_ctx != nullptr && m_peerConnectionID != 0) {
         FrameAck ackFrame;
         ackFrame._history = &m_receiveHistory;
@@ -365,29 +467,73 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         }
     }
 
-    if (m_state == State::kStateDisconnected && packet.header.types == UTP_TYPE_INITIAL) {
+    if (m_state == State::kStateDisconnected && packet->header.types == UTP_TYPE_INITIAL) {
         const bool encryptedHandshake = (m_aesCtx != nullptr);
         if (sendHandshakePacket(encryptedHandshake) == UTP_ERR_OK) {
             m_state = State::kStateConnected;
+            markPeerActivity(nowUs);
         }
         return;
     }
 
-    if (m_state == State::kStateInitialSent && packet.header.types == UTP_TYPE_HANDSHAKE) {
+    if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
         m_state = State::kStateConnected;
         m_handshakeDonePending = true;
         m_handshakeDoneSent = false;
         armHandshakeDoneTimer();
         m_connTimer.stop();
+        markPeerActivity(nowUs);
     }
 }
 
 void ConnectionImpl::onWrite()
 {
+    if (m_state == State::kStatePtoTimedWait || m_state == State::kStateDisconnected) {
+        return;
+    }
+
+    if (m_state == State::kStateCloseSent || m_state == State::kStateCloseReceived) {
+        if (!m_closeFramePending) {
+            return;
+        }
+
+        const int32_t closeStatus = sendConnectionCloseFrame();
+        if (closeStatus == UTP_ERR_OK) {
+            m_closeFramePending = false;
+            m_closeLastSendUs = time::MonotonicUs();
+            if (m_state == State::kStateCloseReceived && m_closePeerResendCount < kMaxCloseResendCount) {
+                ++m_closePeerResendCount;
+            }
+            enterPtoTimedWait();
+            return;
+        }
+
+        if (closeStatus == UTP_ERR_WOULD_BLOCK) {
+            scheduleWrite();
+            return;
+        }
+
+        m_closeFramePending = false;
+        m_state = State::kStateDisconnected;
+        m_keepaliveTimer.stop();
+        scheduleWrite();
+        return;
+    }
+
     if (m_state == State::kStateWaitSendInitial) {
         int32_t status = sendInitialPacket();
         if (status != UTP_ERR_OK) {
-            // TODO 发包失败要通知到调用者 OnConnectError
+            int32_t err = GetLastError();
+            if (err <= 0) {
+                err = UTP_ERR_SOCKET_WRITE;
+            }
+            m_lastErrorCode = err;
+            m_lastErrorReason = "send initial packet failed";
+            m_state = State::kStateDisconnected;
+            m_connTimer.stop();
+            m_handshakeDoneTimer.stop();
+            m_pathValidationTimer.stop();
+            m_keepaliveTimer.stop();
             return;
         }
 
@@ -435,6 +581,20 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                         size_t len,
                                         bool fin)
 {
+    if (m_state == State::kStateCloseSent
+        || m_state == State::kStateCloseReceived
+        || m_state == State::kStatePtoTimedWait) {
+        SetLastErrorV(UTP_ERR_CONNECTION_CLOSING,
+                      "connection {} is closing, stream {} send rejected",
+                      m_localConnectionID,
+                      streamId);
+        return UTP_ERR_CONNECTION_CLOSING;
+    }
+
+    if (m_state != State::kStateConnected) {
+        return UTP_ERR_INVALID_STATE;
+    }
+
     if (len > UINT16_MAX) {
         return UTP_ERR_OVERFLOW;
     }
@@ -497,6 +657,33 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                       data,
                       len,
                       0);
+}
+
+int32_t ConnectionImpl::sendConnectionCloseFrame()
+{
+    FrameConnectionClose closeFrame;
+    closeFrame.error_code = m_closeErrorCode;
+    closeFrame.reason_phrase = m_closeReason;
+    closeFrame.reason_length = static_cast<uint16_t>(closeFrame.reason_phrase.size());
+
+    std::array<uint8_t, 256> payload{};
+    const int32_t frameLen = closeFrame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const int32_t status = sendPacket(UTP_TYPE_CONNECTION_CLOSE,
+                                      payload.data(),
+                                      static_cast<size_t>(frameLen));
+    if (status == UTP_ERR_OK) {
+        return UTP_ERR_OK;
+    }
+
+    int32_t err = GetLastError();
+    if (err <= 0) {
+        err = UTP_ERR_SOCKET_WRITE;
+    }
+    return err;
 }
 
 int32_t ConnectionImpl::sendHandshakeDonePacket()
@@ -562,7 +749,10 @@ int32_t ConnectionImpl::sendInitialPacket()
         }
     }
 
-    return sendPacket(UTP_TYPE_INITIAL, payload.data(), payload.size());
+    return sendPacket(UTP_TYPE_INITIAL,
+                      payload.data(),
+                      payload.size(),
+                      PacketOutFlags::kPoHello);
 }
 
 int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
@@ -607,7 +797,10 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
     }
     payload.insert(payload.end(), ackFreqPayload.begin(), ackFreqPayload.begin() + ackFreqSize);
 
-    return sendPacket(UTP_TYPE_HANDSHAKE, payload.data(), payload.size());
+    return sendPacket(UTP_TYPE_HANDSHAKE,
+                      payload.data(),
+                      payload.size(),
+                      PacketOutFlags::kPoHello);
 }
 
 int32_t ConnectionImpl::sendPacket(uint8_t packetType,
@@ -908,8 +1101,12 @@ void ConnectionImpl::onPathValidationTimeout()
 {
     if (m_networkPath.onTimeout(time::MonotonicMs())) {
         if (m_networkPath.state() == NetworkPath::kPathFailed) {
+            m_lastErrorCode = UTP_ERR_TIMEOUT;
+            m_lastErrorReason = "path validation timeout";
             m_state = kStateDisconnected;
             m_pathValidationTimer.stop();
+            m_keepaliveTimer.stop();
+            scheduleWrite();
         }
         return;
     }
@@ -956,12 +1153,161 @@ uint32_t ConnectionImpl::handshakeDoneDelayMs() const
 
 void ConnectionImpl::onConnTimeout()
 {
-    if (m_state == State::kStateConnected || m_state == State::kStateDisconnected) {
+    if (m_state == State::kStateConnected
+        || m_state == State::kStateDisconnected
+        || m_state == State::kStateCloseSent
+        || m_state == State::kStatePtoTimedWait) {
+        return;
+    }
+
+    m_lastErrorCode = UTP_ERR_TIMEOUT;
+    m_lastErrorReason = "connect timeout";
+    m_state = State::kStateDisconnected;
+    m_handshakeDoneTimer.stop();
+    m_keepaliveTimer.stop();
+    scheduleWrite();
+}
+
+uint32_t ConnectionImpl::keepaliveIntervalMs() const
+{
+    if (m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return 1000;
+    }
+
+    const Config *cfg = m_ctx->config();
+    if (cfg->keepalive_interval > 0) {
+        return cfg->keepalive_interval;
+    }
+
+    const uint32_t srttMs = static_cast<uint32_t>(m_rttStats.srtt() / 1000);
+    const uint32_t guardMs = 3 * srttMs;
+    if (cfg->max_idle_timeout > guardMs + 1) {
+        return cfg->max_idle_timeout - guardMs;
+    }
+
+    return std::max<uint32_t>(cfg->max_idle_timeout / 2, 1);
+}
+
+void ConnectionImpl::armKeepaliveTimer(uint32_t delayMs)
+{
+    if (m_state != State::kStateConnected || m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return;
+    }
+    if (!m_ctx->config()->enable_keepalive) {
+        return;
+    }
+
+    m_keepaliveTimer.stop();
+    m_keepaliveTimer.start(delayMs > 0 ? delayMs : 1);
+}
+
+void ConnectionImpl::markPeerActivity(utp_time_t nowUs)
+{
+    m_lastActivityUs = nowUs;
+    m_keepaliveMissedProbes = 0;
+    armKeepaliveTimer(keepaliveIntervalMs());
+}
+
+void ConnectionImpl::onKeepaliveTimeout()
+{
+    if (m_state != State::kStateConnected || m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return;
+    }
+
+    const Config *cfg = m_ctx->config();
+    if (!cfg->enable_keepalive) {
+        return;
+    }
+
+    const utp_time_t nowUs = time::MonotonicUs();
+    if (m_lastActivityUs == 0) {
+        m_lastActivityUs = nowUs;
+    }
+
+    const uint32_t intervalMs = keepaliveIntervalMs();
+    const utp_time_t intervalUs = static_cast<utp_time_t>(intervalMs) * 1000;
+    if (nowUs < m_lastActivityUs + intervalUs) {
+        const utp_time_t remainUs = m_lastActivityUs + intervalUs - nowUs;
+        armKeepaliveTimer(static_cast<uint32_t>(std::max<utp_time_t>(remainUs / 1000, 1)));
+        return;
+    }
+
+    const uint16_t maxProbes = std::max<uint16_t>(cfg->keepalive_probes, 1);
+    if (m_keepaliveMissedProbes >= maxProbes) {
+        m_lastErrorCode = UTP_ERR_TIMEOUT;
+        m_lastErrorReason = "keepalive timeout";
+        m_state = State::kStateDisconnected;
+        m_keepaliveTimer.stop();
+        scheduleWrite();
+        return;
+    }
+
+    const uint8_t payload[1] = {static_cast<uint8_t>(kFramePing)};
+    const int32_t status = sendPacket(UTP_TYPE_CTRL, payload, sizeof(payload));
+    if (status == UTP_ERR_OK) {
+        ++m_keepaliveMissedProbes;
+        const uint32_t timeoutMs = cfg->keepalive_timeout > 0 ? cfg->keepalive_timeout : intervalMs;
+        armKeepaliveTimer(timeoutMs);
+        return;
+    }
+
+    armKeepaliveTimer(10);
+}
+
+utp_time_t ConnectionImpl::closePtoUs() const
+{
+    utp_time_t srtt = m_rttStats.srtt();
+    utp_time_t rttVar = m_rttStats.rttVar();
+    if (srtt == 0) {
+        srtt = kDefaultPtoUs;
+    }
+
+    utp_time_t granularityUs = 1000;
+    if (m_ctx != nullptr && m_ctx->config() != nullptr) {
+        granularityUs = std::max<utp_time_t>(1000, m_ctx->config()->clock_granularity_us);
+    }
+
+    utp_time_t maxAckDelayUs = static_cast<utp_time_t>(m_peerTP.max_ack_delay) * 1000;
+    utp_time_t ptoUs = srtt + std::max<utp_time_t>(4 * rttVar, granularityUs) + maxAckDelayUs;
+    ptoUs = std::max<utp_time_t>(ptoUs, kMinPtoUs);
+    ptoUs = std::min<utp_time_t>(ptoUs, kMaxPtoUs);
+
+    return ptoUs;
+}
+
+void ConnectionImpl::enterPtoTimedWait()
+{
+    const utp_time_t nowUs = time::MonotonicUs();
+    m_connTimer.stop();
+    m_handshakeDoneTimer.stop();
+    m_pathValidationTimer.stop();
+    m_keepaliveTimer.stop();
+    if (m_state != State::kStateCloseReceived) {
+        m_state = State::kStatePtoTimedWait;
+    }
+
+    if (m_closePtoUs == 0) {
+        m_closePtoUs = closePtoUs();
+    }
+    if (m_closeDeadlineUs == 0 || m_closeDeadlineUs < nowUs) {
+        m_closeDeadlineUs = nowUs + m_closePtoUs * 3;
+    }
+
+    m_closeDrainTimer.stop();
+    utp_time_t remainUs = (m_closeDeadlineUs > nowUs) ? (m_closeDeadlineUs - nowUs) : 0;
+    uint32_t waitMs = static_cast<uint32_t>(remainUs / 1000);
+    m_closeDrainTimer.start(waitMs > 0 ? waitMs : 1);
+}
+
+void ConnectionImpl::onCloseDrainTimeout()
+{
+    if (m_state != State::kStateCloseSent && m_state != State::kStatePtoTimedWait && m_state != State::kStateCloseReceived) {
         return;
     }
 
     m_state = State::kStateDisconnected;
-    m_handshakeDoneTimer.stop();
+    m_keepaliveTimer.stop();
+    scheduleWrite();
 }
 
 void ConnectionImpl::registerStreamCanCreate(const OnStreamCanCreate &cb)
@@ -1041,7 +1387,22 @@ int32_t ConnectionImpl::createStream()
 
 void ConnectionImpl::close()
 {
+    if (m_state == State::kStateDisconnected) {
+        return;
+    }
+
     m_state = State::kStateCloseSent;
+    m_connTimer.stop();
+    m_handshakeDoneTimer.stop();
+    m_pathValidationTimer.stop();
+    m_keepaliveTimer.stop();
+
+    m_closeErrorCode = UTP_ERR_CANCELLED;
+    m_closeReason = "local close";
+    m_closeFramePending = true;
+    m_closePeerResendCount = 0;
+
+    scheduleWrite();
 }
 
 } // namespace utp

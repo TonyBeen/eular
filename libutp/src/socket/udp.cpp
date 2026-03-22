@@ -169,7 +169,7 @@ int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg)
         if (err == NULL) {
             continue;
         }
-        if (err->ee_origin != SO_EE_ORIGIN_ICMP || err->ee_origin != SO_EE_ORIGIN_ICMP6) {
+        if (err->ee_origin != SO_EE_ORIGIN_ICMP && err->ee_origin != SO_EE_ORIGIN_ICMP6) {
             continue;
         }
 

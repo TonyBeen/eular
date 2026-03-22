@@ -41,6 +41,7 @@ private:
 public:
     const uint8_t*  raw_data{nullptr};
     size_t          raw_size{0};
+    uint16_t        alloc_size{0};
 
     UTPHeaderProto  header{};
     const uint8_t*  payload{nullptr};

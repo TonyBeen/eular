@@ -15,6 +15,7 @@
 
 #include "context/context_impl.h"
 #include "context/connection_impl.h"
+#include "crypto/aes_gcm_context.h"
 
 #include "congestion/cubic.h"
 #include "congestion/bbr_v1.h"
@@ -35,6 +36,7 @@
 #define MIN_RTO_DELAY       200000   // us
 #define INITIAL_RTT         333333   // us
 #define MAX_RTO_BACKOFFS    10
+#define MAX_RESUBMITTED_ON_RTO 2
 
 namespace {
 
@@ -117,6 +119,24 @@ bool BuildMtuProbePayload(uint16_t packetSize,
     return true;
 }
 
+uint32_t PacketSentSize(const eular::utp::PacketOut *pkt)
+{
+    if (pkt == nullptr) {
+        return 0;
+    }
+
+    if ((pkt->po_flags & eular::utp::PacketOutFlags::kPoEncrypted) && pkt->encrypt_data_size > 0) {
+        return pkt->encrypt_data_size;
+    }
+
+    return pkt->data_size;
+}
+
+bool IsHandshakePacket(const eular::utp::PacketOut *pkt)
+{
+    return pkt != nullptr && (pkt->po_flags & eular::utp::PacketOutFlags::kPoHello);
+}
+
 } // namespace
 
 namespace eular {
@@ -189,7 +209,6 @@ void SendControl::init()
     m_largestSentAtCutback = 0;
     m_maxRttPackNo = 0;
     m_largestAck2ed = 0;
-    m_largestAcked = 0;
     m_lossTo = 0;
     m_retxFrames = (PacketFrameTypeBit)UTP_FRAME_RETX_MASK;
     m_sendHistory._last_sent = m_currentPackNo;
@@ -203,9 +222,10 @@ void SendControl::init()
 
 int32_t SendControl::packetSent(PacketOut *pkt)
 {
+    const uint32_t packetSize = PacketSentSize(pkt);
     const std::string &packetFrames = FrameTypeToString(pkt->frame_types);
     UTP_LOGD("%s Packet sent: Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
-        m_tag.c_str(), pkt->packno, packetFrames.c_str(), pkt->data_size);
+        m_tag.c_str(), pkt->packno, packetFrames.c_str(), packetSize);
 
     if (!pkt->addSendAttempt(pkt->packno, pkt->sent_time)) {
         UTP_LOGW("%s record send attempt failed: Packet No=%" PRIu64,
@@ -217,7 +237,7 @@ int32_t SendControl::packetSent(PacketOut *pkt)
     PacketInfo info;
     info.packetNo = pkt->packno;
     info.sendTimeUs = pkt->sent_time;
-    info.packetSize = pkt->data_size;
+    info.packetSize = packetSize;
     info.packetState = pkt->bw_state;
     m_congestion->onPacketSent(&info, m_bytesUnackedAll, m_flags & SendCtlFlags::AppLimited);
     pkt->bw_state = static_cast<BWPacketState *>(info.packetState);
@@ -268,11 +288,18 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 {
     bool hasAcked = false;
     bool hasLoss = false;
+    utp_packno_t largestAckedThisRound = 0;
+    utp_time_t largestAckedSentTimeThisRound = 0;
     const utp_packno_t largestAckedBefore = m_largestAckedPackNo;
     if (ackInfo.largest_ack_packno > m_largestAckedPackNo) {
         m_largestAckedPackNo = ackInfo.largest_ack_packno;
     }
     const bool ackProgress = m_largestAckedPackNo > largestAckedBefore;
+
+    if ((m_flags & SendCtlFlags::WasQuiet) && m_congestion) {
+        m_flags &= ~SendCtlFlags::WasQuiet;
+        m_congestion->wasQuiet(nowUs, m_bytesUnackedAll);
+    }
 
     if (m_congestion) {
         m_congestion->onBeginAck(nowUs, m_bytesUnackedAll);
@@ -289,16 +316,16 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 
         hasAcked = true;
 
-        if (pkt->packno > m_largestAckedPackNo) {
-            m_largestAckedPackNo = pkt->packno;
-            m_largestAckedSentTime = pkt->sent_time;
+        if (pkt->packno >= largestAckedThisRound) {
+            largestAckedThisRound = pkt->packno;
+            largestAckedSentTimeThisRound = pkt->sent_time;
         }
 
         if (m_congestion) {
             PacketInfo info;
             info.packetNo = pkt->packno;
             info.sendTimeUs = pkt->sent_time;
-            info.packetSize = pkt->data_size;
+            info.packetSize = PacketSentSize(pkt);
             info.packetState = pkt->bw_state;
             m_congestion->onAck(&info, nowUs, m_flags & SendCtlFlags::AppLimited);
             pkt->bw_state = static_cast<BWPacketState *>(info.packetState);
@@ -316,8 +343,18 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         m_congestion->onEndAck(m_bytesUnackedAll);
     }
 
+    if (largestAckedThisRound > 0) {
+        if (largestAckedThisRound > m_largestAckedPackNo) {
+            m_largestAckedPackNo = largestAckedThisRound;
+        }
+        m_largestAckedSentTime = largestAckedSentTimeThisRound;
+    }
+
     if (hasAcked) {
         m_nConsecRtos = 0;
+        m_nHandshake = 0;
+        m_nTlp = 0;
+        m_nextLimit = 0;
     }
 
     if (!TAILQ_EMPTY(&m_unackedPackets)) {
@@ -336,6 +373,10 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         }
     }
 
+    if (m_nInflightRetrans == 0) {
+        m_flags |= SendCtlFlags::WasQuiet;
+    }
+
     return UTP_ERR_OK;
 }
 
@@ -346,7 +387,9 @@ void SendControl::onCanWrite(utp_time_t nowUs)
     }
 
     bool sentAny = false;
-    while (!TAILQ_EMPTY(&m_lostPackets) && canSend()) {
+    uint32_t sentBudget = m_nextLimit > 0 ? m_nextLimit : UINT32_MAX;
+    uint32_t sentCount = 0;
+    while (!TAILQ_EMPTY(&m_lostPackets) && canSend() && sentCount < sentBudget) {
         PacketOut *pkt = TAILQ_FIRST(&m_lostPackets);
         if (pkt == nullptr) {
             break;
@@ -357,7 +400,12 @@ void SendControl::onCanWrite(utp_time_t nowUs)
         }
 
         sentAny = true;
+        ++sentCount;
         nowUs = time::MonotonicUs();
+    }
+
+    if (m_nextLimit > 0) {
+        m_nextLimit = (sentCount >= m_nextLimit) ? 0 : (m_nextLimit - sentCount);
     }
 
     if (!TAILQ_EMPTY(&m_lostPackets) && !sentAny && m_conn != nullptr) {
@@ -405,13 +453,13 @@ void SendControl::onCanWrite(utp_time_t nowUs)
 
 void SendControl::appendUnacked(PacketOut *pkt)
 {
+    const uint32_t packetSize = PacketSentSize(pkt);
     TAILQ_INSERT_TAIL(&m_unackedPackets, pkt, po_next);
     pkt->po_flags |= PacketOutFlags::kPoUnAcked;
-    // TODO 确认是否需要加上包头大小
-    m_bytesUnackedAll += (pkt->po_flags & PacketOutFlags::kPoEncrypted ? pkt->encrypt_data_size : pkt->data_size);
+    m_bytesUnackedAll += packetSize;
     m_nInflightAll++;
     if (pkt->frame_types & m_retxFrames) {
-        m_bytesUnackedRetrans += (pkt->po_flags & PacketOutFlags::kPoEncrypted ? pkt->encrypt_data_size : pkt->data_size);
+        m_bytesUnackedRetrans += packetSize;
         m_nInflightRetrans++;
     }
 }
@@ -432,6 +480,10 @@ void SendControl::retransAlarm(utp_time_t now)
     utp_time_t delay = 0;
     RetransmissionMode mode = getRetransmissionMode();
     switch (mode) {
+    case RetransmissionMode::kHandshake: {
+        delay = calculateHandshakeDelay();
+        break;
+    }
     case RetransmissionMode::kLoss: {
         delay = m_lossTo;
         break;
@@ -465,6 +517,9 @@ void SendControl::retransAlarm(utp_time_t now)
 
 RetransmissionMode SendControl::getRetransmissionMode()
 {
+    if (haveUnackedHandshakePackets()) {
+        return RetransmissionMode::kHandshake;
+    }
     if (m_lossTo) {
         return RetransmissionMode::kLoss;
     }
@@ -486,37 +541,26 @@ void SendControl::onRetransTimer()
     }
 
     bool hasLoss = false;
-    if (rm == RetransmissionMode::kLoss) {
+    if (rm == RetransmissionMode::kHandshake) {
+        hasLoss = expireUnacked(ExpireFilter::kHandshakeOnly, now) > 0;
+    } else if (rm == RetransmissionMode::kLoss) {
         hasLoss = detectLosses(now);
+    } else if (rm == RetransmissionMode::kTlp) {
+        m_lastRtoTime = now;
+        ++m_nTlp;
+        hasLoss = expireUnacked(ExpireFilter::kLastOnly, now) > 0;
     } else {
-        PacketOut *pkt = nullptr;
-        PacketOut *next = nullptr;
-        for (pkt = TAILQ_FIRST(&m_unackedPackets); pkt != nullptr; pkt = next) {
-            next = TAILQ_NEXT(pkt, po_next);
-            if (0 == (pkt->frame_types & m_retxFrames)) {
-                continue;
-            }
-
-            if (m_congestion) {
-                PacketInfo info;
-                info.packetNo = pkt->packno;
-                info.sendTimeUs = pkt->sent_time;
-                info.packetSize = pkt->data_size;
-                info.packetState = pkt->bw_state;
-                m_congestion->onLost(&info);
-            }
-
-            hasLoss = (handleRegularLostPacket(pkt, next) != nullptr) || hasLoss;
-        }
-
-        if (rm == RetransmissionMode::kRto) {
+        assert(rm == RetransmissionMode::kRto);
+        const utp_time_t rto = calculatePacketRto();
+        if ((m_flags & SendCtlFlags::OneRttAcked) || now - m_lastRtoTime >= rto) {
+            m_lastRtoTime = now;
             ++m_nConsecRtos;
+            m_nextLimit = MAX_RESUBMITTED_ON_RTO;
             if (m_congestion) {
                 m_congestion->onTimeout();
             }
-        } else {
-            ++m_nTlp;
         }
+        hasLoss = expireUnacked(ExpireFilter::kAll, now) > 0;
     }
 
     if (hasLoss && m_conn != nullptr) {
@@ -524,6 +568,24 @@ void SendControl::onRetransTimer()
     }
 
     retransAlarm(now);
+}
+
+utp_time_t SendControl::calculateHandshakeDelay()
+{
+    utp_time_t delay = m_conn->m_rttStats.srtt();
+    if (0 == delay) {
+        delay = 150000;
+    } else {
+        delay += delay / 2;
+        if (delay < 10000) {
+            delay = 10000;
+        }
+    }
+
+    const uint32_t exp = std::min<uint32_t>(m_nHandshake, 8);
+    ++m_nHandshake;
+    delay <<= exp;
+    return delay;
 }
 
 utp_time_t SendControl::calculateTlpDelay() const
@@ -582,6 +644,7 @@ bool SendControl::detectLosses(utp_time_t now)
     (void)now;
     utp_packno_t largestLostPackNo = 0;
     utp_packno_t largestRetxPackNo = largestRetxPacketNo();
+    utp_time_t srtt = m_conn != nullptr ? m_conn->m_rttStats.srtt() : 0;
     m_lossTo = 0;
     bool hasLoss = false;
 
@@ -606,26 +669,124 @@ bool SendControl::detectLosses(utp_time_t now)
                 lossRecord = handleRegularLostPacket(pktOut, next);
                 if (lossRecord) {
                     lossRecord->local_flags |= PacketOutLocalFlags::kPOLFacked;
-                    if (m_congestion) {
-                        PacketInfo info;
-                        info.packetNo = lossRecord->packno;
-                        info.sendTimeUs = lossRecord->sent_time;
-                        info.packetSize = lossRecord->data_size;
-                        info.packetState = lossRecord->bw_state;
-                        m_congestion->onLost(&info);
-                        lossRecord->bw_state = static_cast<BWPacketState *>(info.packetState);
-                    }
                     hasLoss = true;
                 }
             } else {
                 hasLoss = handleLostMtuProbe(pktOut) || hasLoss;
             }
+            continue;
+        }
+
+        if (largestRetxPackNo
+            && (pktOut->frame_types & m_retxFrames)
+            && 0 == (pktOut->po_flags & PacketOutFlags::kPoMtuProbe)
+            && largestRetxPackNo <= m_largestAckedPackNo) {
+            UTP_LOGD("%s loss by early retransmit detected, packet #" PRIu64,
+                m_tag.c_str(), pktOut->packno);
+            largestLostPackNo = pktOut->packno;
+            if (srtt > 0) {
+                m_lossTo = srtt / 4;
+            }
+            hasLoss = (handleRegularLostPacket(pktOut, next) != nullptr) || hasLoss;
+            continue;
+        }
+
+        if (srtt > 0 && m_largestAckedSentTime > pktOut->sent_time + srtt) {
+            UTP_LOGD("%s loss by sent time detected, packet #" PRIu64,
+                m_tag.c_str(), pktOut->packno);
+            if ((pktOut->frame_types & m_retxFrames)
+                && 0 == (pktOut->po_flags & PacketOutFlags::kPoMtuProbe)) {
+                largestLostPackNo = pktOut->packno;
+            }
+            hasLoss = (handleRegularLostPacket(pktOut, next) != nullptr) || hasLoss;
+            continue;
         }
     }
 
-    (void)largestLostPackNo;
-    (void)largestRetxPackNo;
+    if (largestLostPackNo > m_largestSentAtCutback) {
+        onLossEvent();
+    }
+
     return hasLoss;
+}
+
+bool SendControl::haveUnackedHandshakePackets() const
+{
+    if (m_conn == nullptr || m_conn->state() == ConnectionImpl::kStateConnected) {
+        return false;
+    }
+
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &m_unackedPackets, po_next) {
+        if (IsHandshakePacket(pkt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int32_t SendControl::expireUnacked(ExpireFilter filter, utp_time_t nowUs)
+{
+    (void)nowUs;
+    int32_t nResubmitted = 0;
+
+    if (filter == ExpireFilter::kLastOnly) {
+        PacketOut *pkt = nullptr;
+        TAILQ_FOREACH_REVERSE(pkt, &m_unackedPackets, PacketOutTailQ, po_next) {
+            if (0 == (pkt->frame_types & m_retxFrames)) {
+                continue;
+            }
+
+            if (handleRegularLostPacket(pkt, pkt) != nullptr) {
+                ++nResubmitted;
+            }
+            break;
+        }
+        return nResubmitted;
+    }
+
+    PacketOut *pkt = nullptr;
+    PacketOut *next = nullptr;
+    for (pkt = TAILQ_FIRST(&m_unackedPackets); pkt != nullptr; pkt = next) {
+        next = TAILQ_NEXT(pkt, po_next);
+
+        if (filter == ExpireFilter::kHandshakeOnly && !IsHandshakePacket(pkt)) {
+            continue;
+        }
+
+        if (pkt->po_flags & PacketOutFlags::kPoLossRecorded) {
+            continue;
+        }
+
+        if (0 == (pkt->frame_types & m_retxFrames) && 0 == (pkt->po_flags & PacketOutFlags::kPoMtuProbe)) {
+            continue;
+        }
+
+        if (pkt->po_flags & PacketOutFlags::kPoMtuProbe) {
+            (void)handleLostMtuProbe(pkt);
+            continue;
+        }
+
+        if (handleRegularLostPacket(pkt, next) != nullptr) {
+            ++nResubmitted;
+        }
+    }
+
+    return nResubmitted;
+}
+
+void SendControl::onLossEvent()
+{
+    if (m_congestion) {
+        m_congestion->onLoss();
+    }
+
+    if (m_flags & SendCtlFlags::Pace) {
+        m_pacer.lossEvent();
+    }
+
+    m_largestSentAtCutback = m_sendHistory.largestPackNo();
 }
 
 utp_packno_t SendControl::largestRetxPacketNo() const
@@ -645,6 +806,20 @@ PacketOut *SendControl::handleRegularLostPacket(PacketOut *pkt, PacketOut *&next
     (void)next;
     if (pkt == nullptr) {
         return nullptr;
+    }
+
+    if (pkt->frame_types & (1u << static_cast<uint32_t>(kFrameAck))) {
+        m_flags |= SendCtlFlags::LostAckApp;
+    }
+
+    if (m_congestion) {
+        PacketInfo info;
+        info.packetNo = pkt->packno;
+        info.sendTimeUs = pkt->sent_time;
+        info.packetSize = PacketSentSize(pkt);
+        info.packetState = pkt->bw_state;
+        m_congestion->onLost(&info);
+        pkt->bw_state = static_cast<BWPacketState *>(info.packetState);
     }
 
     unackedRemove(pkt);
@@ -685,8 +860,19 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     }
 
     const utp_packno_t previousPackNo = pkt->packno;
-    if ((pkt->po_flags & PacketOutFlags::kPoResetPackNo) && !RewritePacketNumber(m_conn, pkt)) {
-        return UTP_ERR_INTERNAL_ERROR;
+    if (pkt->po_flags & PacketOutFlags::kPoResetPackNo) {
+        if (!RewritePacketNumber(m_conn, pkt)) {
+            return UTP_ERR_INTERNAL_ERROR;
+        }
+
+        // Packet number participates in AEAD nonce/AAD; encrypted packets must
+        // be re-encrypted after packet number rewrite.
+        if ((pkt->po_flags & PacketOutFlags::kPoEncrypted) && m_conn->m_aesCtx) {
+            if (m_conn->m_aesCtx->encrypt(pkt) != UTP_ERR_OK) {
+                return UTP_ERR_CRYPTO_ENCRYPTION;
+            }
+            pkt->data_size = pkt->encrypt_data_size;
+        }
     }
 
     UdpSocket::MsgMetaInfo msg;
@@ -727,7 +913,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         PacketInfo info;
         info.packetNo = pkt->packno;
         info.sendTimeUs = pkt->sent_time;
-        info.packetSize = pkt->data_size;
+        info.packetSize = PacketSentSize(pkt);
         info.packetState = pkt->bw_state;
         m_congestion->onPacketSent(&info, m_bytesUnackedAll, m_flags & SendCtlFlags::AppLimited);
         pkt->bw_state = static_cast<BWPacketState *>(info.packetState);
@@ -747,13 +933,14 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
 
 void SendControl::unackedRemove(PacketOut *pkt)
 {
+    const uint32_t packetSize = PacketSentSize(pkt);
     TAILQ_REMOVE(&m_unackedPackets, pkt, po_next);
     pkt->po_flags &= ~PacketOutFlags::kPoUnAcked;
-    assert(m_bytesUnackedAll >= pkt->data_size);
-    m_bytesUnackedAll -= pkt->data_size;
+    assert(m_bytesUnackedAll >= packetSize);
+    m_bytesUnackedAll -= packetSize;
     --m_nInflightAll;
     if (pkt->frame_types & m_retxFrames) {
-        m_bytesUnackedRetrans -= pkt->data_size;
+        m_bytesUnackedRetrans -= packetSize;
         --m_nInflightRetrans;
     }
 }
@@ -768,7 +955,7 @@ void SendControl::destroyPacket(PacketOut *pkt)
         PacketInfo info;
         info.packetNo = pkt->packno;
         info.sendTimeUs = pkt->sent_time;
-        info.packetSize = pkt->data_size;
+        info.packetSize = PacketSentSize(pkt);
         info.packetState = pkt->bw_state;
         m_congestion->onLost(&info);
         pkt->bw_state = static_cast<BWPacketState *>(info.packetState);

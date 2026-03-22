@@ -60,7 +60,6 @@ public:
      */
     bool init(const AesKey256& key, uint32_t noncePerfix);
 
-    // TODO proto 实现 PacketOut、PacketIn
     int32_t encrypt(PacketOut *packet);
     int32_t decrypt(PacketIn *packet);
 

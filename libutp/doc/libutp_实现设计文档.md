@@ -1,6 +1,6 @@
 # libutp 实现设计文档（实现对齐版）
 
-> 更新时间：2026-03-19  
+> 更新时间：2026-03-22  
 > 目的：对齐当前代码实现，明确“已实现能力 / 未接入能力 / 风险与注意事项 / 下一步优化方向”。
 
 ---
@@ -37,9 +37,11 @@
 | 拥塞控制 | ✅ BBRv1 已接入 | `SendControl` 默认使用 `BbrV1` |
 | Cubic | ❌ 未实现 | `cubic.cpp` 仍是占位程序 |
 | Path Challenge/Response | ✅ 已实现 | 地址变化检测、挑战应答、超时重试与失败 |
+| Keepalive（空闲保活） | ✅ 已实现 | 空闲定时发 Ping，收到任意包刷新活动时间，连续 N 次无响应超时断开（N 可配置） |
 | 会话票据 TokenAuth | ✅ 可用（模块级） | AEAD token 封装/解封装已实现 |
 | Crypto 帧与握手接入 | ✅ 已实现 | `FrameCrypto` 编解码已实现，并接入 Initial/Handshake |
 | AES-GCM 包级收发接入 | ✅ 已实现 | `AesGcmContext::encrypt(PacketOut*)/decrypt(PacketIn*)` 已接入 |
+| 0-RTT 重连 | ❌ 未接入 | 仅有类型/结构预留，连接状态机与 API 尚未打通 |
 
 ---
 
@@ -147,7 +149,7 @@
 | `Ack` | ✅ | ✅（收发已接入） | ACK 解析驱动发送侧回收/拥塞控制，且可在接收路径生成发送 |
 | `Padding` | ✅ | ⚠️ 未见主动生成路径 | 编解码完整 |
 | `ConnectionClose` | ✅ | ✅（接收） | 收到后状态置 `CloseReceived` |
-| `Ping` | ⚠️ 仅在解析长度分支支持 | ⚠️ 未见生成发送 | 主要是帧类型留位 |
+| `Ping` | ✅ | ✅ | 已接入 keepalive 探测发送，MTU 探测也会构造 Ping |
 | `PathChallenge` | ✅ | ✅ | 地址变化验证 |
 | `PathResponse` | ✅ | ✅ | 回显校验数据 |
 | `SessionToken` | ✅ | ⚠️ 未见连接流程集成 | 编解码和 token 模块都有 |
@@ -257,6 +259,7 @@
 
 - `PacketOut` 对象池：`MaloCacheLine<PacketOut>`
 - raw buffer 池：按桶（5档）复用，降低 malloc/free 开销
+- `PacketIn` 对象池：`MaloCacheLine<PacketIn>` + 3 桶接收缓冲池
 - 构造时初始化池头；析构时释放缓存链表
 
 ## 10.2 PacketOut 生命周期
@@ -266,7 +269,14 @@
 - ACK 回收/销毁：`SendControl::destroyPacket` -> `MemoryManager::putPacketOut`
 - 复用前清理：attempt 链会被清空
 
-注意：当前 `MemoryManager` 注释中仍有 `packet_in` TODO，接收侧池化尚未完整接入。
+注意：`PacketIn` 池化已接入 `ConnectionImpl::onUdpPacket` 主收包路径；`ContextImpl` 的 pending 解码路径仍为栈对象，可继续统一。
+
+## 10.3 PacketIn 生命周期（当前）
+
+- 分配：`MemoryManager::getPacketIn`
+- 使用：`ConnectionImpl::onUdpPacket`（含解密分支）
+- 回收：`MemoryManager::putPacketIn`
+- 缓冲复用：按接收包大小映射到 3 桶，支持统计与收缩
 
 ---
 
@@ -283,6 +293,20 @@
 - Stream 数据面端到端（应用收发）仍需继续补齐
 - `AckFrequency` 帧尚未实现
 - Cubic 拥塞控制尚未实现
+- 0-RTT 重连流程尚未接入（见 §16 设计草案）
+
+---
+
+## 11.3 连接关闭与收尾（最新行为）
+
+1. 进入 `CloseSent/CloseReceived` 后：
+  - 停止正常 stream 数据面发送。
+  - 接收侧仅保留 `ConnectionClose` 最小处理，其它业务帧忽略。
+2. 收到对端 `ConnectionClose` 后：
+  - 回发 close 并进入 PTO timed-wait。
+  - timed-wait 下仅在再次收到对端 close 时被动重发，最多 3 次。
+3. 3*PTO 到期后：
+  - 状态转 `Disconnected`，交由 `ContextImpl::handleConnectionState` 收敛回调。
 
 ---
 
@@ -322,6 +346,8 @@
 3. `FrameTypeToString` 在头文件声明形式与实现文件存在编译告警（链接/内联风格需统一）。
 4. 工程内有宏重定义告警（`INVALID_SOCKET`、`UTP_THREAD_LOCAL`），建议统一平台宏来源。
 5. `AesGcmContext::init` 成功路径应补全显式返回值（当前代码需关注）。
+6. `ContextImpl` pending 握手解码路径尚未复用 `PacketIn` 池（与主连接路径存在实现差异）。
+7. `keepalive_interval=0` 时当前按 `max_idle_timeout - 3*srtt` 近似推导，属于工程策略而非严格规范条款。
 
 ---
 
@@ -332,12 +358,13 @@
 1. 打通 Stream 数据面最小可用路径（发送队列 + 对端可读回调 + 流关闭语义）。
 2. 补齐被动建连相关测试（放行/拒绝、accept 后等待 HandshakeDone、超时回收）。
 3. 增加连接级端到端回归（主动/被动混合并发、CID 冲突回避场景）。
+4. 0-RTT 最小可用闭环：票据发放与缓存、客户端携带、服务端校验与接收早数据。
 
 ### P1
 
 1. `UdpSocket` 增加 scatter-gather（header + payload iovec）发送能力，减少重传拷贝成本。
 2. 将 attempt 记录接入 ACK 统计（更细粒度 RTT/重传分析）。
-3. 完成 `PacketIn` 池化接入并补齐统计。
+3. 将 `PacketIn` 池化扩展到 pending 握手路径并补齐统计对齐。
 
 ### P2
 
@@ -351,3 +378,80 @@
 
 当前 `libutp` 已完成“连接骨架 + 主被动握手 + ACK 收发闭环 + 重传/拥塞控制 + 路径验证 + 基础内存池 + 包级加密接入”的主干能力。  
 尚未完成的重点转为“Stream 数据面端到端能力、Cubic 实现和更完整的连接级回归测试”。
+
+---
+
+## 16. 0-RTT 实现设计草案（第一版）
+
+目标：在保持现有协议风格前提下，实现可控、可回退的 0-RTT 重连能力，优先落地最小可用闭环。
+
+### 16.1 设计目标
+
+1. 客户端可在重连时携带票据并发送早数据。
+2. 服务端可验证票据后选择“接受或拒绝”早数据。
+3. 拒绝 0-RTT 时不影响正常 1-RTT 握手与建连。
+4. 保证基础抗重放能力（窗口 + 去重缓存）。
+
+### 16.2 非目标（首版不做）
+
+1. 不做跨节点全局防重放（仅单进程/单节点窗口防护）。
+2. 不做复杂应用层语义回滚（先约束早数据只用于幂等请求）。
+3. 不引入多版本兼容协商扩展。
+
+### 16.3 协议与结构扩展建议
+
+1. `ConnectInfo` 增加可选恢复参数：
+  - `session_ticket`（字节串）
+  - `enable_0rtt`（开关）
+2. 在 Initial/Handshake 阶段携带 `SessionToken` 帧（或扩展 Crypto 附带字段），用于服务端恢复验证。
+3. 保留现有 `UTP_TYPE_0RTT`，用于客户端在握手未完成时发送早数据包。
+
+### 16.4 客户端状态机（建议）
+
+1. `connect(enable_0rtt=true 且有 ticket)`：
+  - 发送 Initial（含票据/恢复信息）
+  - 并行允许发送 `UTP_TYPE_0RTT` 的 Stream 数据（仅进入 0-RTT 发送队列）
+2. 收到服务端“接受 0-RTT”信号：
+  - 早数据继续按正常 ACK/重传轨道推进
+3. 收到“拒绝 0-RTT”或握手参数不匹配：
+  - 丢弃未确认早数据并上报可重试提示
+  - 回退到 1-RTT 正常发送路径
+
+### 16.5 服务端状态机（建议）
+
+1. 收到含票据 Initial：
+  - 调用 `TokenAuth::open` 验证有效期、来源、上下文绑定
+2. 验证通过：
+  - 标记连接可接收 0-RTT
+  - 提前放行 `UTP_TYPE_0RTT` 的 Stream 帧进入接收缓存
+3. 验证失败：
+  - 标记拒绝 0-RTT，仅保留握手流程
+  - 对早数据帧直接丢弃（可统计）
+
+### 16.6 抗重放最小方案
+
+1. 票据中加入 `issue_time + nonce + client_ip_prefix(optional)`。
+2. 服务端维护短时窗口去重表：`(ticket_id, client_nonce)`。
+3. 命中重复即拒绝 0-RTT（但不必拒绝连接本身）。
+
+### 16.7 关键代码落点（建议）
+
+1. API：`include/utp/utp.h` 的 `ConnectInfo` 扩展。
+2. 连接发送：`ConnectionImpl::connect/sendInitialPacket/sendPacket` 增加 0-RTT 分支。
+3. 收包解析：`ConnectionImpl::onUdpPacket` 增加 `UTP_TYPE_0RTT` 验证与分发。
+4. Token：复用 `crypto/token.*`，新增恢复上下文校验接口。
+5. 回调：为应用补充“0-RTT accepted/rejected”可观测事件（可选）。
+
+### 16.8 分阶段实施计划
+
+1. Phase-1：打通票据携带与验证，先不发早数据。
+2. Phase-2：接入 `UTP_TYPE_0RTT` 早数据发送/接收，支持拒绝回退。
+3. Phase-3：补齐抗重放统计、回归测试与压测。
+
+### 16.9 测试建议
+
+1. 正常重连：票据有效，0-RTT 被接受，数据可达。
+2. 票据过期：0-RTT 被拒绝但连接可建立。
+3. 重放请求：命中去重窗口，0-RTT 被拒绝。
+4. 参数不一致：拒绝 0-RTT 并回退 1-RTT。
+5. 丢包场景：0-RTT 包重传与握手并发不互相破坏。

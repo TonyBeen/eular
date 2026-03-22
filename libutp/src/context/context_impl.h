@@ -84,6 +84,7 @@ private:
 
 private:
     static std::string peerKey(const Address &peerAddress, uint32_t peerCid);
+    void handleConnectionState(ConnectionImpl *conn);
     int32_t sendPendingHandshake(PendingIncomingConnection &pending);
     int32_t sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
     int32_t sendPendingPacket(PendingIncomingConnection &pending,

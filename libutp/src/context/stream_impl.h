@@ -32,6 +32,8 @@ public:
     using SP = std::shared_ptr<StreamImpl>;
 
     static constexpr size_t kDefaultBufferCapacity = 64 * 1024;
+    static constexpr size_t kMaxSendQueueBytes = 4 * 1024 * 1024;
+    static constexpr size_t kMaxRecvFragmentBytes = 4 * 1024 * 1024;
 
     StreamImpl(ConnectionImpl *conn, uint32_t streamId);
     ~StreamImpl();
@@ -106,6 +108,8 @@ private:
     bool m_localFinSent{false};
     bool m_peerFin{false};
     bool m_closedNotified{false};
+    size_t m_sendQueuedBytes{0};
+    size_t m_recvFragmentsBytes{0};
     RingBuffer m_sendBuffer;
     RingBuffer m_recvBuffer;
     std::vector<PendingSendChunk> m_sendQueue;

@@ -56,17 +56,25 @@ ENUM_UTIL_ENABLE_BITMASK(SendCtlFlags);
 ENUM_UTIL_REGISTER_ENUM(SendCtlFlags, FLAG_ENUM_ITEMS, 12)
 
 enum class RetransmissionMode {
+    kHandshake,  // 握手阶段重传模式, 优先重传握手包
     kLoss,       // 基于丢包的重传模式, 当检测到丢包时触发, 适用于网络状况较差的环境
     kTlp,        // 主动探测 机制, 在怀疑最后几个包丢失时发送探测包
     kRto         // 基于超时的重传模式, 当没有收到ACK且重传定时器到期时触发, 适用于网络状况极差或丢包率高的环境
 };
 
 #define MODE_ENUM_ITEMS(X)          \
+    X(RetransmissionMode, kHandshake)\
     X(RetransmissionMode, kLoss)    \
     X(RetransmissionMode, kTlp)     \
     X(RetransmissionMode, kRto)     \
 
-ENUM_UTIL_REGISTER_ENUM(RetransmissionMode, MODE_ENUM_ITEMS, 3)
+ENUM_UTIL_REGISTER_ENUM(RetransmissionMode, MODE_ENUM_ITEMS, 4)
+
+enum class ExpireFilter {
+    kAll,
+    kHandshakeOnly,
+    kLastOnly,
+};
 
 namespace eular {
 namespace utp {
@@ -108,12 +116,17 @@ public:
     void        onCanWrite(utp_time_t nowUs);
 
 private:
+    bool        haveUnackedHandshakePackets() const;
+    int32_t     expireUnacked(ExpireFilter filter, utp_time_t nowUs);
+    void        onLossEvent();
+
     void        appendUnacked(PacketOut *pkt);
     void        retransAlarm(utp_time_t now);
     RetransmissionMode getRetransmissionMode();
     void        onRetransTimer();
 
 private:
+    utp_time_t  calculateHandshakeDelay();
     /// @brief 计算 TLP 探测的延迟发送时间 (us)
     utp_time_t  calculateTlpDelay() const;
     utp_time_t  calculatePacketRto() const;
@@ -174,7 +187,6 @@ private:
     utp_packno_t        m_maxRttPackNo{0};              // 最后一次 RTT 采样的包号, 避免重复采样同一包
 
     utp_packno_t        m_largestAck2ed{0};             // 对端已确认收到我方 ACK 的最大包号, 用于裁剪接收历史. (Ack帧与stream或ping帧一起传输时会被Ack)
-    utp_packno_t        m_largestAcked;                 // 本端已生成 ACK 的最大对端包号 TODO: 这个字段的作用不太明确
     utp_time_t          m_lossTo;                       // 丢包超时时间 (早期重传触发时间), 非 0 时触发 kLoss
 
     /// @b 缓冲包类型缓存(性能优化)

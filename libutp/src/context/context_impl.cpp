@@ -90,6 +90,85 @@ void ContextImpl::wantWrite(ConnectionImpl *conn)
     m_writeEvent.start();
 }
 
+void ContextImpl::handleConnectionState(ConnectionImpl *conn)
+{
+    if (conn == nullptr) {
+        return;
+    }
+
+    auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
+        return entry.second.get() == conn;
+    });
+    if (it == m_connections.end()) {
+        return;
+    }
+
+    ConnectionImpl::SP current = it->second;
+    const ConnectionImpl::State state = current->state();
+
+    auto pendingIt = m_pendingConnections.find(current.get());
+    if (state == ConnectionImpl::kStateConnected) {
+        if (pendingIt != m_pendingConnections.end()) {
+            m_pendingConnections.erase(pendingIt);
+            if (m_onConnected) {
+                m_onConnected(current);
+            }
+        }
+        return;
+    }
+
+    if (state == ConnectionImpl::kStateCloseSent
+        || state == ConnectionImpl::kStateCloseReceived
+        || state == ConnectionImpl::kStatePtoTimedWait) {
+        if (pendingIt != m_pendingConnections.end()) {
+            m_pendingConnections.erase(pendingIt);
+
+            int32_t errorCode = current->lastErrorCode();
+            if (errorCode == UTP_ERR_OK) {
+                errorCode = UTP_ERR_CANCELLED;
+            }
+
+            std::string reason = current->lastErrorReason();
+            if (reason.empty()) {
+                reason = "connection closed during handshake";
+            }
+
+            if (m_onConnectError) {
+                m_onConnectError(errorCode, reason, current->connectInfo());
+            }
+        }
+        return;
+    }
+
+    if (state != ConnectionImpl::kStateDisconnected) {
+        return;
+    }
+
+    if (pendingIt != m_pendingConnections.end()) {
+        m_pendingConnections.erase(pendingIt);
+
+        int32_t errorCode = current->lastErrorCode();
+        if (errorCode == UTP_ERR_OK) {
+            errorCode = UTP_ERR_INVALID_STATE;
+        }
+
+        std::string reason = current->lastErrorReason();
+        if (reason.empty()) {
+            reason = "connection failed before established";
+        }
+
+        if (m_onConnectError) {
+            m_onConnectError(errorCode, reason, current->connectInfo());
+        }
+    } else {
+        if (m_onConnectionClosed) {
+            m_onConnectionClosed(current);
+        }
+    }
+
+    m_connections.erase(it);
+}
+
 int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     int32_t status = m_udpSocket.bind(ip, port, ifname);
@@ -523,15 +602,7 @@ void ContextImpl::onReadEvent()
             if (it != m_connections.end()) {
                 it->second->onUdpPacket(msg);
 
-                if (it->second->state() == ConnectionImpl::kStateConnected) {
-                    auto pendingIt = m_pendingConnections.find(it->second.get());
-                    if (pendingIt != m_pendingConnections.end()) {
-                        m_pendingConnections.erase(pendingIt);
-                        if (m_onConnected) {
-                            m_onConnected(it->second);
-                        }
-                    }
-                }
+                handleConnectionState(it->second.get());
                 continue;
             }
 
@@ -694,7 +765,16 @@ void ContextImpl::onWriteEvent()
     conns.swap(m_wantWriteConns);
 
     for (ConnectionImpl *conn : conns) {
-        conn->onWrite();
+        auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
+            return entry.second.get() == conn;
+        });
+        if (it == m_connections.end()) {
+            continue;
+        }
+
+        ConnectionImpl::SP current = it->second;
+        current->onWrite();
+        handleConnectionState(current.get());
     }
 }
 

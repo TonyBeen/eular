@@ -89,10 +89,13 @@ public:
     uint32_t    cid() const { return m_localConnectionID; }
     const Context::ConnectInfo& connectInfo() const { return m_connectInfo; }
     State       state() const { return m_state; }
+    int32_t     lastErrorCode() const { return m_lastErrorCode; }
+    const std::string& lastErrorReason() const { return m_lastErrorReason; }
 
 private:
     void scheduleWrite();
     void flushPendingStreamWrites();
+    int32_t sendConnectionCloseFrame();
     int32_t sendStreamFrame(uint32_t streamId,
                             uint64_t streamOffset,
                             const uint8_t *data,
@@ -119,6 +122,13 @@ private:
     void    handlePathResponseFrame(const uint8_t *frameData, size_t frameSize);
     void    onPathValidationTimeout();
     void    onHandshakeDoneTimeout();
+    void    onKeepaliveTimeout();
+    void    onCloseDrainTimeout();
+    void    enterPtoTimedWait();
+    utp_time_t closePtoUs() const;
+    uint32_t keepaliveIntervalMs() const;
+    void    armKeepaliveTimer(uint32_t delayMs);
+    void    markPeerActivity(utp_time_t nowUs);
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
     void    onConnTimeout();
@@ -159,10 +169,23 @@ private:
     uint64_t                m_bytesOut{};
     ev::EventTimer          m_pathValidationTimer;
     ev::EventTimer          m_handshakeDoneTimer;
+    ev::EventTimer          m_keepaliveTimer;
+    ev::EventTimer          m_closeDrainTimer;
     ReceiveHistory          m_receiveHistory;
     MtuDiscovery            m_mtuDiscovery;
     bool                    m_handshakeDonePending{false};
     bool                    m_handshakeDoneSent{false};
+    bool                    m_closeFramePending{false};
+    uint16_t                m_closeErrorCode{0};
+    std::string             m_closeReason{"local close"};
+    utp_time_t              m_closePtoUs{0};
+    utp_time_t              m_closeDeadlineUs{0};
+    utp_time_t              m_closeLastSendUs{0};
+    utp_time_t              m_lastActivityUs{0};
+    uint16_t                m_keepaliveMissedProbes{0};
+    uint8_t                 m_closePeerResendCount{0};
+    int32_t                 m_lastErrorCode{0};
+    std::string             m_lastErrorReason;
 };
 
 } // namespace utp

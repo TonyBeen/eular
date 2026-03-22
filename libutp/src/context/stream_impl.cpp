@@ -18,6 +18,11 @@
 namespace eular {
 namespace utp {
 
+static inline int32_t StreamErr(utp_error_t err)
+{
+    return -static_cast<int32_t>(err);
+}
+
 StreamImpl::RingBuffer::RingBuffer(size_t capacity) :
     m_buffer(std::max<size_t>(capacity, 1), 0)
 {
@@ -176,13 +181,13 @@ uint32_t StreamImpl::id() const
 int32_t StreamImpl::write(const void *data, size_t len, bool fin)
 {
     if (len == 0 && !fin) {
-        return UTP_ERR_INVALID_PARAM;
+        return StreamErr(UTP_ERR_INVALID_PARAM);
     }
 
     MutableBufferView views[2];
     size_t acquired = acquireWriteBuffer(views, len);
     if (acquired < len) {
-        return UTP_ERR_WOULD_BLOCK;
+        return StreamErr(UTP_ERR_WOULD_BLOCK);
     }
 
     const uint8_t *payload = static_cast<const uint8_t *>(data);
@@ -202,11 +207,11 @@ int32_t StreamImpl::write(const void *data, size_t len, bool fin)
 int32_t StreamImpl::read(void *buffer, size_t capacity)
 {
     if (buffer == nullptr || capacity == 0) {
-        return UTP_ERR_INVALID_PARAM;
+        return StreamErr(UTP_ERR_INVALID_PARAM);
     }
 
     if (m_recvBuffer.empty()) {
-        return m_peerFin ? 0 : UTP_ERR_WOULD_BLOCK;
+        return m_peerFin ? 0 : StreamErr(UTP_ERR_WOULD_BLOCK);
     }
 
     const size_t n = m_recvBuffer.read(static_cast<uint8_t *>(buffer), capacity);
@@ -233,19 +238,23 @@ size_t StreamImpl::acquireWriteBuffer(MutableBufferView views[2], size_t maxByte
 int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
 {
     if (m_localFinQueued) {
-        return UTP_ERR_STREAM_CLOSED;
+        return StreamErr(UTP_ERR_STREAM_CLOSED);
     }
 
     if (m_conn == nullptr) {
-        return UTP_ERR_INVALID_STATE;
+        return StreamErr(UTP_ERR_INVALID_STATE);
     }
 
     if (bytes > m_sendBuffer.freeSize()) {
-        return UTP_ERR_OVERFLOW;
+        return StreamErr(UTP_ERR_OVERFLOW);
     }
 
     if (bytes > std::numeric_limits<uint32_t>::max()) {
-        return UTP_ERR_OVERFLOW;
+        return StreamErr(UTP_ERR_OVERFLOW);
+    }
+
+    if (m_sendQueuedBytes + bytes > kMaxSendQueueBytes) {
+        return StreamErr(UTP_ERR_STREAM_DATA_LIMITED);
     }
 
     if (bytes > 0) {
@@ -257,6 +266,7 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
         chunk.fin = false;
         m_sendQueue.push_back(chunk);
         m_sendBufferedOffset += bytes;
+        m_sendQueuedBytes += bytes;
     }
 
     if (fin) {
@@ -274,7 +284,7 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
 
     const int32_t flushStatus = flushPendingSends();
     if (flushStatus != UTP_ERR_OK && flushStatus != UTP_ERR_WOULD_BLOCK) {
-        return flushStatus;
+        return StreamErr(static_cast<utp_error_t>(flushStatus));
     }
 
     maybeNotifyClosed();
@@ -298,7 +308,7 @@ size_t StreamImpl::acquireReadBuffer(ConstBufferView views[2], size_t maxBytes) 
 int32_t StreamImpl::consumeRead(size_t bytes)
 {
     if (bytes > m_recvBuffer.size()) {
-        return UTP_ERR_OVERFLOW;
+        return StreamErr(UTP_ERR_OVERFLOW);
     }
 
     m_recvBuffer.consume(bytes);
@@ -383,9 +393,19 @@ int32_t StreamImpl::onFrame(const FrameStream &frame)
 
     auto existing = m_recvFragments.find(frameOffset);
     if (existing == m_recvFragments.end()) {
+        if (m_recvFragmentsBytes + frameLength > kMaxRecvFragmentBytes) {
+            return UTP_ERR_WOULD_BLOCK;
+        }
         m_recvFragments.emplace(frameOffset, std::move(fragment));
+        m_recvFragmentsBytes += frameLength;
     } else if (existing->second.data.size() < frameLength) {
+        const size_t oldSize = existing->second.data.size();
+        const size_t nextBytes = m_recvFragmentsBytes - oldSize + frameLength;
+        if (nextBytes > kMaxRecvFragmentBytes) {
+            return UTP_ERR_WOULD_BLOCK;
+        }
         existing->second = std::move(fragment);
+        m_recvFragmentsBytes = nextBytes;
     } else if (fragment.fin) {
         existing->second.fin = true;
     }
@@ -436,6 +456,11 @@ int32_t StreamImpl::flushPendingSends()
                 m_sendBuffer.consume(payloadLen);
                 chunk.offset += payloadLen;
                 chunk.bytes -= payloadLen;
+                if (m_sendQueuedBytes >= payloadLen) {
+                    m_sendQueuedBytes -= payloadLen;
+                } else {
+                    m_sendQueuedBytes = 0;
+                }
             }
 
             if (frameFin) {
@@ -466,6 +491,11 @@ void StreamImpl::drainRecvFragments()
         }
 
         RecvFragment fragment = std::move(it->second);
+        if (m_recvFragmentsBytes >= fragment.data.size()) {
+            m_recvFragmentsBytes -= fragment.data.size();
+        } else {
+            m_recvFragmentsBytes = 0;
+        }
         m_recvFragments.erase(it);
 
         if (!fragment.data.empty()) {

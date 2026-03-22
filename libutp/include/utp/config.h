@@ -48,7 +48,7 @@ public:
     uint16_t    ack_delay = 150;            // 最大ack延迟时间(ms)
 
     // tp
-    uint32_t    max_idle_timeout = 600000;  // 最大空闲超时时间(ms), 10min
+    uint32_t    max_idle_timeout = 30000;   // 最大空闲超时时间(ms), 30s
     uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
     uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
     uint16_t    init_max_streams_uni = 32;  // 初始单向流数量

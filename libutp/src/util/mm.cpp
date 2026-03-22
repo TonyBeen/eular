@@ -43,12 +43,31 @@ static constexpr uint16_t g_packetOutSizeVec[] = {
     PACKET_OUT_PAYLOAD_4,
 };
 
+enum {
+    PACKET_IN_SIZE_0 = ETHERNET_MTU_MIN,
+    PACKET_IN_SIZE_1 = UTP_ETHERNET_MTU,
+    PACKET_IN_SIZE_2 = 0xffff,
+};
+
+static constexpr uint16_t g_packetInSizeVec[] = {
+    PACKET_IN_SIZE_0,
+    PACKET_IN_SIZE_1,
+    PACKET_IN_SIZE_2,
+};
+
 static int32_t PacketOutIndex(uint32_t size)
 {
     uint32_t idx = (size > PACKET_OUT_PAYLOAD_0)
                 + (size > PACKET_OUT_PAYLOAD_1)
                 + (size > PACKET_OUT_PAYLOAD_2)
                 + (size > PACKET_OUT_PAYLOAD_3);
+    return idx;
+}
+
+static int32_t PacketInIndex(uint32_t size)
+{
+    uint32_t idx = (size > PACKET_IN_SIZE_0)
+                + (size > PACKET_IN_SIZE_1);
     return idx;
 }
 
@@ -138,6 +157,53 @@ void MemoryManager::putPacketOut(PacketOut *pkt)
     packet_out_malo.put(pkt);
 }
 
+PacketIn *MemoryManager::getPacketIn(uint32_t size)
+{
+    PacketIn *packetIn = packet_in_malo.get();
+    if (!packetIn) {
+        return nullptr;
+    }
+
+    const uint32_t idx = PacketInIndex(size);
+    PacketInBuf *pib = SLIST_FIRST(&packet_in_bufs[idx]);
+    if (pib) {
+        SLIST_REMOVE_HEAD(&packet_in_bufs[idx], next_pib);
+        poolStatsAllocated(&packet_in_stats[idx], 0);
+    } else {
+        pib = static_cast<PacketInBuf *>(std::malloc(g_packetInSizeVec[idx]));
+        if (!pib) {
+            packet_in_malo.put(packetIn);
+            return nullptr;
+        }
+        poolStatsAllocated(&packet_in_stats[idx], 1);
+    }
+
+    if (hasNewSample(&packet_in_stats[idx])) {
+        maybeShrinkPoolIn(idx);
+    }
+
+    std::memset(packetIn, 0, sizeof(PacketIn));
+    packetIn->alloc_size = g_packetInSizeVec[idx];
+    packetIn->raw_data = reinterpret_cast<const uint8_t *>(pib);
+    return packetIn;
+}
+
+void MemoryManager::putPacketIn(PacketIn *pkt)
+{
+    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->alloc_size == 0) {
+        return;
+    }
+
+    PacketInBuf *pib = (PacketInBuf *) pkt->raw_data;
+    const uint32_t idx = PacketInIndex(pkt->alloc_size);
+    SLIST_INSERT_HEAD(&packet_in_bufs[idx], pib, next_pib);
+    poolStatsFree(&packet_in_stats[idx]);
+    if (hasNewSample(&packet_in_stats[idx])) {
+        maybeShrinkPoolIn(idx);
+    }
+    packet_in_malo.put(pkt);
+}
+
 void MemoryManager::poolStatsAllocated(PoolStats *stats, uint32_t allocated)
 {
     ++stats->calls;
@@ -216,6 +282,30 @@ void MemoryManager::maybeShrinkPoolOut(uint32_t idx)
     } else {
 #if defined(UTP_LOG_POOL_STATS)
         UTP_LOGI("pool #%u; max avg %u; objs: %u; won't shrink",
+                idx, stats->inuse_max_avg, stats->objs_total);
+#endif
+    }
+}
+
+void MemoryManager::maybeShrinkPoolIn(uint32_t idx)
+{
+    PoolStats *stats = &packet_in_stats[idx];
+    PacketInBuf *pib;
+    uint32_t shrink = 0;
+    if (stats->inuse_max_avg * 4 < stats->objs_total) {
+        shrink = stats->objs_total / 2;
+        while (stats->objs_total > shrink && (pib = SLIST_FIRST(&packet_in_bufs[idx]))) {
+            SLIST_REMOVE_HEAD(&packet_in_bufs[idx], next_pib);
+            std::free(pib);
+            --stats->objs_total;
+        }
+#if defined(UTP_LOG_POOL_STATS)
+        UTP_LOGI("packet in pool #%u; max avg %u; shrank from %u to %u objs",
+                idx, stats->inuse_max_avg, shrink * 2, stats->objs_total);
+#endif
+    } else {
+#if defined(UTP_LOG_POOL_STATS)
+        UTP_LOGI("packet in pool #%u; max avg %u; objs: %u; won't shrink",
                 idx, stats->inuse_max_avg, stats->objs_total);
 #endif
     }

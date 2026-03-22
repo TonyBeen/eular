@@ -11,6 +11,7 @@
 #include <array>
 
 #include "context/stream_impl.h"
+#include "proto/packet_in.h"
 #include "util/malo.hpp"
 #include "proto/packet_out.h"
 #include "queue.h"
@@ -36,7 +37,9 @@ public:
     ~MemoryManager();
 
     PacketOut*  getPacketOut(uint32_t size);
+    PacketIn*   getPacketIn(uint32_t size);
     void        putPacketOut(PacketOut *pkt);
+    void        putPacketIn(PacketIn *pkt);
 
 private:
     void poolStatsAllocated(PoolStats *stats, uint32_t allocated);
@@ -44,11 +47,12 @@ private:
     void poolSampleMax(PoolStats *stats);
     bool hasNewSample(PoolStats *stats);
     void maybeShrinkPoolOut(uint32_t idx);
+    void maybeShrinkPoolIn(uint32_t idx);
 
 public:
     MaloCacheLine<StreamImpl>   stream_malo;
+    MaloCacheLine<PacketIn>     packet_in_malo;
     MaloCacheLine<PacketOut>    packet_out_malo;
-    // TODO: packet_in
 
     SLIST_HEAD(, PacketOutBuf)      packet_out_bufs[MM_OUT_BUCKETS];
     PoolStats                       packet_out_stats[MM_OUT_BUCKETS];

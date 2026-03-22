@@ -13,7 +13,8 @@
 #include <vector>
 
 #include "utp/types.h"
-// TODO 增加定时器, 定期丢弃过旧的包号记录(比如 cutoff 之前的记录), 避免占用过多内存
+// ReceiveHistory 当前通过 m_maxRanges + dropOldestRange() 控制内存占用，
+// 并结合 stopWait(cutoff) 裁剪已不需要出现在 ACK 中的历史包号。
 namespace eular {
 namespace utp {
 class ReceiveHistory {
