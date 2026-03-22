@@ -41,7 +41,13 @@
 
 namespace eular {
 namespace utp {
+enum class TokenType : uint8_t {
+    kPathValidation = 1,
+    kZeroRttResumption = 2,
+};
+
 struct TokenMeta {
+    uint8_t     token_type{static_cast<uint8_t>(TokenType::kPathValidation)};
     uint32_t    timestamp;  // unix seconds
     uint32_t    cid;        // connection id
     uint32_t    version;    // peer utp version
@@ -59,8 +65,9 @@ struct TokenMeta {
     }
 };
 
-static const size_t TOKEN_META_SIZE = 4 + 4 + 4 + 4 + 2 + 16; // 34 bytes
-static const std::string TOKEN_AAD("UTP-Token-AAD");
+static const size_t TOKEN_META_SIZE = 1 + 4 + 4 + 4 + 4 + 2 + 16; // 35 bytes
+static const std::string TOKEN_AAD_PATH("UTP-PathToken-AAD");
+static const std::string TOKEN_AAD_0RTT("UTP-0RTTToken-AAD");
 
 // Token format: nonce(12) || ciphertext(sizeof(TokenMeta)) || tag(16)
 static const size_t TOKEN_SIZE = AEAD_NONCE_SIZE + TOKEN_META_SIZE + AEAD_TAG_SIZE;
@@ -77,7 +84,7 @@ public:
     ~TokenAuth();
 
     bool seal(const TokenMeta &meta, TokenBuf &outToken);
-    bool open(const TokenBuf &token, TokenMeta &outMeta);
+    bool open(const TokenBuf &token, TokenMeta &outMeta, TokenType expectedType = TokenType::kPathValidation);
 
 private:
     void onUpdateKey();

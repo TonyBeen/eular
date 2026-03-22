@@ -25,6 +25,14 @@ static inline const EVP_CIPHER* AEADCipher()
     return EVP_aes_256_gcm();
 }
 
+static inline const std::string& TokenAadByType(TokenType type)
+{
+    if (type == TokenType::kZeroRttResumption) {
+        return TOKEN_AAD_0RTT;
+    }
+    return TOKEN_AAD_PATH;
+}
+
 TokenAuth::TokenAuth(event_base *base)
 {
     m_timerUpdateKey.reset(base, std::bind(&TokenAuth::onUpdateKey, this));
@@ -58,6 +66,8 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
 {
     std::array<uint8_t, TOKEN_META_SIZE> plaintext;
     encode(meta, plaintext);
+    const TokenType tokenType = static_cast<TokenType>(meta.token_type);
+    const std::string &tokenAad = TokenAadByType(tokenType);
 
     // nonce
     uint8_t *nonce = outToken.data();
@@ -86,7 +96,9 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
         return false;
     }
     // AAD
-    status = EVP_EncryptUpdate(m_sealCtx, nullptr, nullptr, (const uint8_t *)(TOKEN_AAD.c_str()), static_cast<int32_t>(TOKEN_AAD.size()));
+    status = EVP_EncryptUpdate(m_sealCtx, nullptr, nullptr,
+                               reinterpret_cast<const uint8_t *>(tokenAad.data()),
+                               static_cast<int32_t>(tokenAad.size()));
     if (status != 1) {
         SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
         return false;
@@ -116,11 +128,12 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     return true;
 }
 
-bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta)
+bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta, TokenType expectedType)
 {
     const uint8_t *nonce      = token.data();
     const uint8_t *ciphertext = token.data() + AEAD_NONCE_SIZE;
     const uint8_t *tag        = token.data() + AEAD_NONCE_SIZE + TOKEN_META_SIZE;
+    const std::string &tokenAad = TokenAadByType(expectedType);
 
     auto try_open_with_key = [&] (const TokenKey& key) -> bool {
         EVP_CIPHER_CTX_reset(m_openCtx);
@@ -146,7 +159,9 @@ bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta)
             return false;
         }
 
-        status = EVP_DecryptUpdate(m_openCtx, nullptr, &outLen, (const uint8_t *)(TOKEN_AAD.data()), (int32_t)(TOKEN_AAD.size()));
+        status = EVP_DecryptUpdate(m_openCtx, nullptr, &outLen,
+                       reinterpret_cast<const uint8_t *>(tokenAad.data()),
+                       static_cast<int32_t>(tokenAad.size()));
         if (status != 1) {
             SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
             return false;
@@ -172,6 +187,13 @@ bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta)
         }
 
         decode(plaintext, outMeta);
+        if (outMeta.token_type != static_cast<uint8_t>(expectedType)) {
+            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION,
+                          "token type mismatch: expected={}, actual={}",
+                          static_cast<uint8_t>(expectedType),
+                          outMeta.token_type);
+            return false;
+        }
         return true;
     };
 
@@ -201,6 +223,7 @@ void TokenAuth::encode(const TokenMeta &meta, std::array<uint8_t, TOKEN_META_SIZ
 {
     uint8_t *offset = plaintext.data();
     size_t size = TOKEN_META_SIZE;
+    offset = Serialize::SerializeTo(offset, size, meta.token_type);
     offset = Serialize::SerializeTo(offset, size, meta.timestamp);
     offset = Serialize::SerializeTo(offset, size, meta.cid);
     offset = Serialize::SerializeTo(offset, size, meta.version);
@@ -213,6 +236,7 @@ void TokenAuth::decode(const std::array<uint8_t, TOKEN_META_SIZE> &plaintext, To
 {
     const uint8_t *offset = plaintext.data();
     size_t size = TOKEN_META_SIZE;
+    offset = Serialize::DeserializeFrom(offset, size, meta.token_type);
     offset = Serialize::DeserializeFrom(offset, size, meta.timestamp);
     offset = Serialize::DeserializeFrom(offset, size, meta.cid);
     offset = Serialize::DeserializeFrom(offset, size, meta.version);

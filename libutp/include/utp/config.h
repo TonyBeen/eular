@@ -32,6 +32,9 @@ public:
     uint32_t    keepalive_timeout = 1500;   // keepalive超时时间(ms)
     uint16_t    keepalive_probes = 3;       // keepalive探测次数
 
+    // token / 0-rtt
+    uint32_t    zero_rtt_token_max_lifetime = 600; // 0-RTT token 最长时效(s)
+
     // socket
     int32_t     recv_buf_size = 1024 * 1024;
     int32_t     send_buf_size = 1024 * 1024;

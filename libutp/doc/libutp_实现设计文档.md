@@ -405,6 +405,7 @@
   - `enable_0rtt`（开关）
 2. 在 Initial/Handshake 阶段携带 `SessionToken` 帧（或扩展 Crypto 附带字段），用于服务端恢复验证。
 3. 保留现有 `UTP_TYPE_0RTT`，用于客户端在握手未完成时发送早数据包。
+4. 配置新增 `zero_rtt_token_max_lifetime_s`（建议默认 600 秒）。
 
 ### 16.4 客户端状态机（建议）
 
