@@ -24,6 +24,9 @@
 #include "proto/frame/session_token.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/connection_close.h"
+#include "proto/frame/path.h"
+#include "proto/frame/padding.h"
+#include "proto/frame/reset_stream.h"
 #include "context/connection_impl.h"
 #include "crypto/aes_gcm_context.h"
 #include "crypto/token.h"
@@ -33,9 +36,13 @@
 #include "util/time.h"
 #include "context_impl.h"
 #include "make_unique.hpp"
+#include "logger/logger.h"
 
 static std::atomic<uint32_t>    g_contextId{0};
 static eular::utp::Config       g_defaultConfig;
+
+namespace {
+} // namespace
 
 namespace eular {
 namespace utp {
@@ -238,6 +245,43 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
     m_pendingConnections.insert(conn.get());
     m_connections[cid] = std::move(conn);
     return status;
+}
+
+int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
+{
+    if (info.ip.empty() || info.port == 0 || info.session_ticket.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "{} invalid 0-rtt connect info: {}:{} ticket={}",
+                      tag(),
+                      info.ip,
+                      info.port,
+                      info.session_ticket.size());
+        return -1;
+    }
+
+    size_t payloadSize = FRAME_SESSION_TOKEN_HDR_SIZE + info.session_ticket.size();
+    if (!info.early_data.empty()) {
+        payloadSize += FRAME_STREAM_HDR_SIZE + info.early_data.size();
+    }
+    if (UTP_HEADER_SIZE + payloadSize > 1280) {
+        SetLastErrorV(UTP_ERR_OVERFLOW,
+                      "{} 0-rtt first packet too large: {} bytes",
+                      tag(),
+                      UTP_HEADER_SIZE + payloadSize);
+        return -1;
+    }
+
+    Context::ConnectInfo base;
+    base.ip = info.ip;
+    base.port = info.port;
+    base.timeout = info.timeout;
+    base.retries = info.retries;
+    base.encrypted = info.encrypted;
+    base.enable_0rtt = true;
+    base.session_ticket = info.session_ticket;
+    base.early_data = info.early_data;
+    base.early_fin = info.early_fin;
+    return connect(base);
 }
 
 int32_t ContextImpl::accept()
@@ -769,7 +813,29 @@ void ContextImpl::onReadEvent()
                 continue;
             }
 
+            if (packetType == UTP_TYPE_0RTT) {
+                auto existingZeroRttConn = std::find_if(m_connections.begin(),
+                                                        m_connections.end(),
+                                                        [&] (const ConnectionMap::value_type &entry) {
+                                                            if (!entry.second) {
+                                                                return false;
+                                                            }
+                                                            const Connection::Description desc = entry.second->description();
+                                                            const Context::ConnectInfo &peerInfo = entry.second->connectInfo();
+                                                            return desc.dcid == scid
+                                                                && peerInfo.port == msg.metaInfo.peerAddress.port()
+                                                                && peerInfo.ip == msg.metaInfo.peerAddress.toIpString();
+                                                        });
+                if (existingZeroRttConn != m_connections.end()) {
+                    existingZeroRttConn->second->onUdpPacket(msg);
+                    handleConnectionState(existingZeroRttConn->second.get());
+                    continue;
+                }
+            }
+
             auto pendingIt = m_pendingIncoming.find(dcid);
+            UTP_LOGD_FMT("{} received packet with dcid {}, scid {}, pn {}, type {}, pending handshake: {}",
+                      tag(), dcid, scid, pn, packetType, (pendingIt != m_pendingIncoming.end() ? pendingIt->second.handshakeSent : false));
             if (pendingIt != m_pendingIncoming.end() && pendingIt->second.handshakeSent) {
                 auto packetReleaser = [this] (PacketIn *pkt) {
                     m_mm.putPacketIn(pkt);
@@ -780,14 +846,11 @@ void ContextImpl::onReadEvent()
                     continue;
                 }
                 bool handshakeDone = false;
-                if (decodeIncomingPendingPacket(msg, pendingIt->second, *pendingPacket)) {
+                bool decodeOk = decodeIncomingPendingPacket(msg, pendingIt->second, *pendingPacket);
+                if (decodeOk) {
                     handshakeDone = pendingPacket->hasFrame(kFrameHandshakeDone);
-                } else if (packetType == UTP_TYPE_CTRL
-                        && payloadLen == 1
-                        && msg.len >= UTP_HEADER_SIZE + 1) {
-                    const uint8_t *payloadPtr = static_cast<const uint8_t *>(msg.data) + UTP_HEADER_SIZE;
-                    handshakeDone = static_cast<FrameType>(payloadPtr[0]) == kFrameHandshakeDone;
                 }
+                UTP_LOGD_FMT("{} pending packet decode {}, handshake done: {}", tag(), (decodeOk ? "succeeded" : "failed"), handshakeDone);
 
                 if (!handshakeDone) {
                     continue;
@@ -814,22 +877,15 @@ void ContextImpl::onReadEvent()
                 auto inserted = m_connections.emplace(pending.localCid, conn);
                 if (!inserted.second) {
                     if (m_onConnectError) {
-                        m_onConnectError(UTP_ERR_INVALID_STATE,
+                        m_onConnectError(UTP_ERR_CID_CONFLICT,
                                          "local cid collision while promoting passive connection",
                                          info);
                     }
                     continue;
                 }
 
-                for (const auto &earlyFrame : pending.earlyStreamFrames) {
-                    (void)conn->ingestEarlyStreamFrame(earlyFrame.streamId,
-                                                       earlyFrame.streamOffset,
-                                                       earlyFrame.data.empty() ? nullptr : earlyFrame.data.data(),
-                                                       earlyFrame.data.size(),
-                                                       earlyFrame.fin);
-                }
-
                 removePendingIncoming(dcid);
+                conn->onUdpPacket(msg);
                 if (m_onConnected) {
                     m_onConnected(conn);
                 }
@@ -837,31 +893,6 @@ void ContextImpl::onReadEvent()
             }
 
             if (packetType == UTP_TYPE_0RTT) {
-                const std::string key = peerKey(msg.metaInfo.peerAddress, scid);
-                auto pendingIndexIt = m_pendingIncomingPeerIndex.find(key);
-                if (pendingIndexIt == m_pendingIncomingPeerIndex.end()) {
-                    continue;
-                }
-
-                auto pendingZeroRttIt = m_pendingIncoming.find(pendingIndexIt->second);
-                if (pendingZeroRttIt == m_pendingIncoming.end()) {
-                    continue;
-                }
-
-                PendingIncomingConnection &pending = pendingZeroRttIt->second;
-                if (!pending.handshakeSent || !pending.zeroRttAccepted) {
-                    continue;
-                }
-
-                if (!rememberZeroRttNonce(pending.zeroRttTokenCid, pn)) {
-                    pending.zeroRttAccepted = false;
-                    ++pending.zeroRttRejectedCount;
-                    ++m_stat.zero_rtt_rejected;
-                    ++m_stat.zero_rtt_replay_rejected;
-                    reportZeroRttDecision(pending, false, "replay");
-                    continue;
-                }
-
                 auto packetReleaser = [this] (PacketIn *pkt) {
                     m_mm.putPacketIn(pkt);
                 };
@@ -870,10 +901,14 @@ void ContextImpl::onReadEvent()
                 if (!packet) {
                     continue;
                 }
-                if (!decodeIncomingPendingPacket(msg, pending, *packet)) {
+                std::memcpy(const_cast<uint8_t *>(packet->raw_data), msg.data, msg.len);
+                packet->raw_size = msg.len;
+                if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
                     continue;
                 }
 
+                FrameSessionToken sessionToken;
+                bool hasSessionToken = false;
                 size_t frameOffset = 0;
                 while (frameOffset < packet->payload_size) {
                     FrameType frameType = kFrameInvalid;
@@ -882,27 +917,102 @@ void ContextImpl::onReadEvent()
                     if (packet->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
                         break;
                     }
-
-                    if (frameType != kFrameStream) {
-                        continue;
+                    if (frameType == kFrameSessionToken) {
+                        if (sessionToken.decode(frameData, frameLen) >= 0) {
+                            hasSessionToken = true;
+                        }
+                        break;
                     }
+                }
 
-                    FrameStream streamFrame;
-                    if (streamFrame.decode(frameData, frameLen) < 0) {
-                        continue;
+                if (!hasSessionToken) {
+                    continue;
+                }
+
+                uint32_t ticketCid = 0;
+                if (!validateZeroRttTicket(msg.metaInfo.peerAddress,
+                                           sessionToken.token,
+                                           sessionToken.token_validity_period,
+                                           ticketCid)) {
+                    PendingIncomingConnection decision;
+                    decision.peerAddress = msg.metaInfo.peerAddress;
+                    decision.peerIp = msg.metaInfo.peerAddress.toIpString();
+                    decision.peerCid = scid;
+                    decision.zeroRttAccepted = false;
+                    ++m_stat.zero_rtt_rejected;
+                    reportZeroRttDecision(decision, false, "invalid_ticket");
+                    continue;
+                }
+
+                if (!rememberZeroRttNonce(ticketCid, pn)) {
+                    PendingIncomingConnection decision;
+                    decision.peerAddress = msg.metaInfo.peerAddress;
+                    decision.peerIp = msg.metaInfo.peerAddress.toIpString();
+                    decision.peerCid = scid;
+                    decision.zeroRttAccepted = false;
+                    ++m_stat.zero_rtt_rejected;
+                    ++m_stat.zero_rtt_replay_rejected;
+                    reportZeroRttDecision(decision, false, "replay");
+                    continue;
+                }
+
+                uint32_t localCid = 0;
+                if (!allocLocalCid(localCid)) {
+                    continue;
+                }
+
+                Context::NewConnectionInfo newInfo;
+                newInfo.remote_ip = msg.metaInfo.peerAddress.toIpString();
+                newInfo.remote_port = msg.metaInfo.peerAddress.port();
+                newInfo.local_cid = localCid;
+                newInfo.peer_cid = scid;
+                newInfo.encrypted = false;
+
+                bool accepted = true;
+                if (m_onNewConnection) {
+                    accepted = m_onNewConnection(newInfo);
+                }
+                if (!accepted) {
+                    continue;
+                }
+
+                Context::ConnectInfo info;
+                info.ip = newInfo.remote_ip;
+                info.port = newInfo.remote_port;
+                info.timeout = m_config.handshake_timeout;
+                info.encrypted = false;
+
+                ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, localCid);
+                if (conn->initPassive(info,
+                                      msg.metaInfo.peerAddress,
+                                      scid,
+                                      TransportParams{},
+                                      nullptr,
+                                      nullptr) != UTP_ERR_OK) {
+                    continue;
+                }
+
+                auto inserted = m_connections.emplace(localCid, conn);
+                if (!inserted.second) {
+                    if (m_onConnectError) {
+                        m_onConnectError(UTP_ERR_CID_CONFLICT,
+                                         "local cid collision while creating 0-rtt connection",
+                                         info);
                     }
+                    continue;
+                }
 
-                    PendingIncomingConnection::EarlyStreamFrame earlyFrame;
-                    earlyFrame.streamId = streamFrame.stream_id;
-                    earlyFrame.streamOffset = streamFrame.stream_offset;
-                    earlyFrame.fin = STREAM_IS_FIN(streamFrame.stream_flag);
-                    if (streamFrame.stream_data != nullptr && streamFrame.stream_data_length > 0) {
-                        const uint8_t *streamDataBegin = static_cast<const uint8_t *>(streamFrame.stream_data);
-                        earlyFrame.data.assign(streamDataBegin,
-                                               streamDataBegin + streamFrame.stream_data_length);
-                    }
+                PendingIncomingConnection sendCtx;
+                sendCtx.localCid = localCid;
+                sendCtx.peerCid = scid;
+                sendCtx.peerAddress = msg.metaInfo.peerAddress;
+                sendCtx.peerIp = msg.metaInfo.peerAddress.toIpString();
+                sendCtx.encrypted = false;
+                (void)sendPendingHandshake(sendCtx);
 
-                    pending.earlyStreamFrames.emplace_back(std::move(earlyFrame));
+                conn->onUdpPacket(msg);
+                if (m_onConnected) {
+                    m_onConnected(conn);
                 }
                 continue;
             }

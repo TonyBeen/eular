@@ -45,6 +45,19 @@ public:
         bool        encrypted{false};
         bool        enable_0rtt{false};
         std::vector<uint8_t> session_ticket;
+        std::vector<uint8_t> early_data;
+        bool        early_fin{false};
+    };
+
+    struct Connect0RttInfo {
+        std::string ip;
+        uint16_t    port{0};
+        uint32_t    timeout{3000}; // ms
+        int8_t      retries{0};
+        bool        encrypted{false};
+        std::vector<uint8_t> session_ticket;
+        std::vector<uint8_t> early_data;
+        bool        early_fin{false};
     };
 
     struct NewConnectionInfo {
@@ -91,6 +104,7 @@ public:
 
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname = "");
     int32_t connect(const ConnectInfo &info);
+    int32_t connect0Rtt(const Connect0RttInfo &info);
     int32_t accept();
 
 private:

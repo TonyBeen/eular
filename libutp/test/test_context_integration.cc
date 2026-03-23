@@ -304,11 +304,9 @@ TEST_CASE("Context integration: 0-RTT accepted stream data is replayed after pas
     REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
     REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
 
-    bool accepted = false;
     bool patchedPendingZeroRtt = false;
-    bool injectedPendingEarlyFrame = false;
     bool earlyWriteSent = false;
-    uint32_t earlyStreamId = 8;
+    uint32_t earlyStreamId = 0;
     const std::string earlyPayload = "hello-0rtt";
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
@@ -338,26 +336,11 @@ TEST_CASE("Context integration: 0-RTT accepted stream data is replayed after pas
                 patchedPendingZeroRtt = true;
             }
 
-            if (!injectedPendingEarlyFrame && !server.m_pendingIncoming.empty()) {
-                auto pendingIt = server.m_pendingIncoming.begin();
-                ContextImpl::PendingIncomingConnection::EarlyStreamFrame earlyFrame;
-                earlyFrame.streamId = earlyStreamId;
-                earlyFrame.streamOffset = 0;
-                earlyFrame.fin = false;
-                earlyFrame.data.assign(earlyPayload.begin(), earlyPayload.end());
-                pendingIt->second.earlyStreamFrames.emplace_back(std::move(earlyFrame));
-                injectedPendingEarlyFrame = true;
-            }
-
-            if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                REQUIRE(server.accept() == UTP_ERR_OK);
-                accepted = true;
-            }
-
             ConnectionImpl::SP clientConn = FindConnectionByRemote(client, BoundPort(server));
-            if (!earlyWriteSent && accepted && clientConn != nullptr && clientConn->state() == ConnectionImpl::kStateInitialSent) {
+            if (!earlyWriteSent && clientConn != nullptr && clientConn->state() == ConnectionImpl::kStateInitialSent) {
                 const int32_t sid = clientConn->createStream();
                 REQUIRE(sid >= 0);
+                earlyStreamId = static_cast<uint32_t>(sid);
 
                 auto streamIt = clientConn->m_streams.find(static_cast<uint32_t>(sid));
                 REQUIRE(streamIt != clientConn->m_streams.end());

@@ -166,9 +166,11 @@ private:
     uint32_t keepaliveIntervalMs() const;
     void    armKeepaliveTimer(uint32_t delayMs);
     void    markPeerActivity(utp_time_t nowUs);
+    void    beginCloseSent(uint16_t errorCode, const std::string &reason);
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
     void    onConnTimeout();
+    void    trySendZeroRttEarlyData();
 
 private:
     friend class SendControl;
@@ -235,6 +237,8 @@ private:
     bool                    m_isClientInitiator{true};
     int32_t                 m_lastErrorCode{0};
     std::string             m_lastErrorReason;
+    bool                    m_zeroRttEarlyDataSent{false};
+    uint32_t                m_zeroRttEarlyStreamId{0};
 };
 
 } // namespace utp

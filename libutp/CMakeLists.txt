@@ -16,7 +16,7 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
 
-option(UTP_BUILD_TESTS "Build libutp tests" ON)
+option(UTP_BUILD_TESTS "Build libutp tests" OFF)
 option(UTP_USE_BUNDLED_BORINGSSL "Use bundled BoringSSL submodule" ON)
 
 set(UTP_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to the sibling utils project")

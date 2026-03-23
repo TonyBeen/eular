@@ -66,6 +66,11 @@ int32_t Context::connect(const ConnectInfo &info)
     return m_impl->connect(info);
 }
 
+int32_t Context::connect0Rtt(const Connect0RttInfo &info)
+{
+    return m_impl->connect0Rtt(info);
+}
+
 int32_t Context::accept()
 {
     return m_impl->accept();

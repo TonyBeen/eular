@@ -68,17 +68,11 @@ public:
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
     int32_t connect(const Context::ConnectInfo &info);
+    int32_t connect0Rtt(const Context::Connect0RttInfo &info);
     int32_t accept();
 
 private:
     struct PendingIncomingConnection {
-        struct EarlyStreamFrame {
-            uint32_t            streamId{0};
-            uint64_t            streamOffset{0};
-            bool                fin{false};
-            std::vector<uint8_t> data;
-        };
-
         uint32_t                localCid{0};
         uint32_t                peerCid{0};
         Address                 peerAddress;
@@ -92,7 +86,6 @@ private:
         utp_time_t              acceptStartUs{0};
         bool                    handshakeSent{false};
         TransportParams         peerTp{};
-        std::vector<EarlyStreamFrame> earlyStreamFrames;
         std::shared_ptr<X25519Wrapper> x25519;
         std::shared_ptr<AesGcmContext> aesCtx;
     };

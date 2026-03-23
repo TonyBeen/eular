@@ -61,6 +61,8 @@ int main(int argc, char **argv)
     ev::EventLoop loop;
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
+    cfg.enable_keepalive = false;
+    cfg.enable_dplpmtud = false;
     eular::utp::Context ctx(loop.loop(), &cfg);
 
     ctx.setOnNewConnection([](const eular::utp::Context::NewConnectionInfo &info) {

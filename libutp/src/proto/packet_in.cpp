@@ -22,6 +22,7 @@
 #include "proto/frame/connection_close.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/reset_stream.h"
+#include "logger/logger.h"
 
 namespace {
 
@@ -89,6 +90,7 @@ int32_t PacketIn::decode(const void *buffer, size_t size)
             return -1;
         }
 
+        UTP_LOGD_FMT("PacketIn::decode frame found: type={}, len={}", static_cast<uint32_t>(frameType), frameLen);
         if (frameType >= kFrameMax) {
             SetLastErrorV(UTP_ERR_FRAME_FORMAT_ERROR,
                           "invalid frame type {}",
@@ -100,7 +102,7 @@ int32_t PacketIn::decode(const void *buffer, size_t size)
         iter += frameLen;
     }
 
-    return static_cast<int32_t>(UTP_HEADER_SIZE + payload_size);
+    return UTP_ERR_OK;
 }
 
 int32_t PacketIn::nextFrame(size_t &offset,

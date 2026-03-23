@@ -32,6 +32,10 @@ std::string FrameTypeToString(uint32_t type)
         [kFrameHandshakeDone]   = "HandshakeDone",
     };
 
+    if (type == kFrameInvalid) {
+        return "Invalid";
+    }
+
     char buffer[32];
     std::string result;
     for (auto i = 0; i < kFrameMax; ++i) {
@@ -52,6 +56,5 @@ std::string FrameTypeToString(uint32_t type)
     return result;
 }
 
-
-} // namespace tup
+} // namespace utp
 } // namespace eular

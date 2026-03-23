@@ -9,19 +9,21 @@
 #include <thread>
 #include <vector>
 
-#include <event2/event.h>
+#include <event/base.h>
 #include <event/loop.h>
+#include <event/timer.h>
+
+#include <utils/CLI11.hpp>
 
 #include <utp/errno.h>
 #include <utp/utp.h>
 
 namespace {
 
-std::atomic<bool> g_running(true);
-
 void OnSignal(int)
 {
-    g_running.store(false, std::memory_order_release);
+    std::cout << "\n[client] signal received, shutting down...\n";
+    std::exit(0);
 }
 
 std::string RandomString(size_t len)
@@ -59,41 +61,13 @@ int main(int argc, char **argv)
     uint32_t sendCount = 5;
     size_t msgLen = 16;
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--server-ip") == 0 && i + 1 < argc) {
-            serverIp = argv[++i];
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--server-port") == 0 && i + 1 < argc) {
-            serverPort = static_cast<uint16_t>(std::stoul(argv[++i]));
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) {
-            intervalMs = static_cast<uint32_t>(std::stoul(argv[++i]));
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
-            sendCount = static_cast<uint32_t>(std::stoul(argv[++i]));
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--length") == 0 && i + 1 < argc) {
-            msgLen = static_cast<size_t>(std::stoul(argv[++i]));
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            PrintUsage(argv[0]);
-            return 0;
-        }
-
-        std::cerr << "unknown argument: " << argv[i] << "\n";
-        PrintUsage(argv[0]);
-        return 1;
-    }
+    CLI::App app("UTP echo client example");
+    app.add_option("--server-ip", serverIp, "Server IP address")->check(CLI::ValidIPV4);
+    app.add_option("--server-port", serverPort, "Server port")->check(CLI::Range(5000, 65535));
+    app.add_option("--interval-ms", intervalMs, "Interval between messages in milliseconds")->check(CLI::Range(1, 15000));
+    app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 1024));
+    app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 1024));
+    CLI11_PARSE(app, argc, argv);
 
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
@@ -101,6 +75,8 @@ int main(int argc, char **argv)
     ev::EventLoop loop;
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
+    cfg.enable_keepalive = false;
+    cfg.enable_dplpmtud = false;
     eular::utp::Context ctx(loop.loop(), &cfg);
 
     eular::utp::Connection::Ptr conn;
@@ -110,10 +86,35 @@ int main(int argc, char **argv)
 
     uint32_t sent = 0;
     uint32_t echoed = 0;
+    ev::EventTimer stopTimer;
+    stopTimer.reset(loop.loop(), [&]() {
+        std::cout << "[client] exiting...\n";
+        loop.breakLoop();
+    });
 
-    const auto start = std::chrono::steady_clock::now();
-    auto nextSendAt = start;
-    auto lastSendAt = start;
+    ev::EventTimer nextSendTimer;
+    nextSendTimer.reset(loop.loop(), [&]() {
+        if (!connectFailed && connected && stream != nullptr) {
+            if (sent >= sendCount) {
+                std::cout << "[client] done, sent=" << sent << ", echoed=" << echoed << "\n";
+                nextSendTimer.stop();
+                conn->close();
+                return;
+            }
+
+            const bool fin = (sent + 1 == sendCount);
+            const std::string payload = RandomString(msgLen);
+            const int32_t nwrite = stream->write(payload.data(), payload.size(), fin);
+            if (nwrite < 0) {
+                std::cerr << "[client] write failed: " << nwrite << "\n";
+                return;
+            }
+
+            ++sent;
+            std::cout << "[client] send #" << sent << ": \"" << payload << "\""
+                      << (fin ? " [fin]" : "") << "\n";
+        }
+    });
 
     ctx.setOnConnected([&](eular::utp::Connection::Ptr c) {
         connected = true;
@@ -124,6 +125,7 @@ int main(int argc, char **argv)
         conn->registerStreamCreated([&](eular::utp::Stream *s) {
             stream = s;
             std::cout << "[client] stream created id=" << stream->id() << "\n";
+            nextSendTimer.start(0, intervalMs);
             stream->setOnReadable([&]() {
                 std::vector<uint8_t> buffer(2048);
                 for (;;) {
@@ -144,12 +146,8 @@ int main(int argc, char **argv)
         if (sid < 0) {
             std::cerr << "[client] createStream failed: " << sid << "\n";
             connectFailed = true;
-            g_running.store(false, std::memory_order_release);
             return;
         }
-
-        // Give the transport time to finish HandshakeDone exchange on the passive side.
-        nextSendAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     });
 
     ctx.setOnConnectError([&](int32_t code, const std::string &reason, eular::utp::Context::ConnectInfo info) {
@@ -157,11 +155,11 @@ int main(int argc, char **argv)
                   << " peer=" << info.ip << ":" << info.port
                   << " reason=" << reason << "\n";
         connectFailed = true;
-        g_running.store(false, std::memory_order_release);
     });
 
     ctx.setOnConnectionClosed([&](eular::utp::Connection::Ptr c) {
         std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
+        stopTimer.start(1000);
     });
 
     const int32_t bindStatus = ctx.bind("0.0.0.0", 0);
@@ -186,54 +184,6 @@ int main(int argc, char **argv)
               << ", count=" << sendCount
               << ", length=" << msgLen << "\n";
 
-    bool allSent = false;
-    while (g_running.load(std::memory_order_acquire)) {
-        loop.dispatch(EVLOOP_NONBLOCK | EVLOOP_ONCE);
-
-        const auto now = std::chrono::steady_clock::now();
-        if (!connectFailed && connected && stream != nullptr && !allSent && now >= nextSendAt) {
-            const bool fin = (sent + 1 == sendCount);
-            const std::string payload = RandomString(msgLen);
-            const int32_t nwrite = stream->write(payload.data(), payload.size(), fin);
-            if (nwrite < 0) {
-                std::cerr << "[client] write failed: " << nwrite << "\n";
-                break;
-            }
-
-            ++sent;
-            lastSendAt = now;
-            nextSendAt = now + std::chrono::milliseconds(intervalMs);
-            std::cout << "[client] send #" << sent << ": \"" << payload << "\""
-                      << (fin ? " [fin]" : "") << "\n";
-
-            if (sent >= sendCount) {
-                allSent = true;
-            }
-        }
-
-        if (allSent) {
-            const auto elapsedAfterLastSend = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSendAt);
-            if (echoed >= sent || elapsedAfterLastSend.count() > 5000) {
-                break;
-            }
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    if (conn) {
-        conn->close();
-    }
-
-    for (int i = 0; i < 100; ++i) {
-        loop.dispatch(EVLOOP_NONBLOCK | EVLOOP_ONCE);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    if (connectFailed) {
-        return 1;
-    }
-
-    std::cout << "[client] done, sent=" << sent << ", echoed=" << echoed << "\n";
+    loop.dispatch();
     return 0;
 }

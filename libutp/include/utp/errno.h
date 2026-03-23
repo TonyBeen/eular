@@ -27,6 +27,7 @@ typedef enum : uint16_t {
     UTP_ERR_WOULD_BLOCK,                    // 操作会阻塞
     UTP_ERR_INVALID_STATE,                  // 状态无效
     UTP_ERR_CONNECTION_CLOSING,             // 连接正在关闭，数据面发送被禁止
+    UTP_ERR_CID_CONFLICT,                   // CID冲突
     UTP_ERR_OVERFLOW,                       // 溢出
     UTP_ERR_STREAM_LIMITED,                 // 流个数被限制(连接级, 触发ConnectionClose)
 
