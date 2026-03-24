@@ -136,7 +136,7 @@ PacketOut *MemoryManager::getPacketOut(uint32_t size)
 
 void MemoryManager::putPacketOut(PacketOut *pkt)
 {
-    if (pkt == nullptr) {
+    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->alloc_size == 0) {
         return;
     }
 
@@ -149,6 +149,13 @@ void MemoryManager::putPacketOut(PacketOut *pkt)
 
     PacketOutBuf *pob = (PacketOutBuf *)pkt->raw_data;
     uint32_t idx = PacketOutIndex(pkt->alloc_size);
+
+    // Make putPacketOut idempotent in release builds. If upper layer
+    // accidentally releases the same PacketOut twice, the second call will
+    // short-circuit on null raw_data/alloc_size instead of duplicating pool nodes.
+    pkt->raw_data = nullptr;
+    pkt->alloc_size = 0;
+
     SLIST_INSERT_HEAD(&packet_out_bufs[idx], pob, next_pob);
     poolStatsFree(&packet_out_stats[idx]);
     if (hasNewSample(&packet_out_stats[idx])) {
@@ -196,6 +203,17 @@ void MemoryManager::putPacketIn(PacketIn *pkt)
 
     PacketInBuf *pib = (PacketInBuf *) pkt->raw_data;
     const uint32_t idx = PacketInIndex(pkt->alloc_size);
+
+    // Make putPacketIn idempotent in release builds. If upper layer
+    // accidentally releases the same PacketIn twice, the second call will
+    // short-circuit on null raw_data/alloc_size and avoid double-free later.
+    pkt->raw_data = nullptr;
+    pkt->alloc_size = 0;
+    pkt->raw_size = 0;
+    pkt->payload = nullptr;
+    pkt->payload_size = 0;
+    pkt->frame_types = 0;
+
     SLIST_INSERT_HEAD(&packet_in_bufs[idx], pib, next_pib);
     poolStatsFree(&packet_in_stats[idx]);
     if (hasNewSample(&packet_in_stats[idx])) {

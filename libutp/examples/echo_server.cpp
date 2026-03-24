@@ -116,8 +116,8 @@ int main(int argc, char **argv)
 
         zeroRttAcceptedPeers.erase(peer);
 
-        conn->registerStreamCreated([](eular::utp::Stream *stream) {
-            std::cout << "[server] stream created id=" << stream->id() << "\n";
+        conn->setOnIncomingStream([](eular::utp::Stream *stream) {
+            std::cout << "[server] incoming stream id=" << stream->id() << "\n";
             stream->setOnReadable([stream]() {
                 std::vector<uint8_t> buffer(2048);
                 for (;;) {

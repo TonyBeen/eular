@@ -222,13 +222,13 @@ int main(int argc, char **argv)
 
         auto sessions = std::make_shared<std::unordered_map<uint32_t, StreamUploadSession>>();
 
-        conn->registerStreamCreated([conn, shared, sessions](eular::utp::Stream *stream) {
+        conn->setOnIncomingStream([conn, shared, sessions](eular::utp::Stream *stream) {
             if (stream == nullptr) {
                 return;
             }
 
             const uint32_t sid = stream->id();
-            std::cout << "[server] stream created id=" << sid << "\n";
+            std::cout << "[server] incoming stream id=" << sid << "\n";
             sessions->try_emplace(sid);
 
             stream->setOnReadable([conn, shared, sessions, stream]() {

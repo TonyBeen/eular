@@ -34,7 +34,7 @@ public:
         kStreamTypeAll = 0xFF,
     };
 
-    using OnStreamCreated = std::function<void(Stream *)>;
+    using OnIncomingStream = std::function<void(Stream *)>;
     using OnSessionTokenReady = std::function<void()>;
 
     struct Description {
@@ -57,7 +57,7 @@ public:
     Connection() = default;
     virtual ~Connection() = default;
 
-    virtual void        registerStreamCreated(const OnStreamCreated &cb) = 0;
+    virtual void        setOnIncomingStream(const OnIncomingStream &cb) = 0;
     virtual void        setOnSessionTokenReady(const OnSessionTokenReady &cb) = 0;
     virtual int32_t     streamCount(StreamType streamType = kStreamTypeAll) const = 0;
     virtual int32_t     creatableStreamCount(StreamType streamType) const = 0;

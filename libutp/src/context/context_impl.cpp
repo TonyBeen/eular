@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
+#include <unordered_set>
 #include <vector>
 
 #include <utils/serialize.hpp>
@@ -236,6 +237,11 @@ void ContextImpl::clearResumptionSecret()
 void ContextImpl::wantWrite(ConnectionImpl *conn)
 {
     if (conn == nullptr) {
+        return;
+    }
+
+    auto exists = std::find(m_wantWriteConns.begin(), m_wantWriteConns.end(), conn);
+    if (exists != m_wantWriteConns.end()) {
         return;
     }
 
@@ -868,7 +874,14 @@ bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
         return false;
     }
 
-    return packet.decode(encryptedPacket->raw_data, encryptedPacket->raw_size) == UTP_ERR_OK;
+    // PacketIn::decode overwrites raw_data/raw_size with the input buffer.
+    // Keep ownership single by decoding from packet's own storage.
+    std::memcpy(const_cast<uint8_t *>(packet.raw_data),
+                encryptedPacket->raw_data,
+                encryptedPacket->raw_size);
+    packet.raw_size = encryptedPacket->raw_size;
+
+    return packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK;
 }
 
 void ContextImpl::reportZeroRttDecision(const PendingIncomingConnection &pending,
@@ -1586,7 +1599,16 @@ void ContextImpl::onWriteEvent()
     std::list<ConnectionImpl *> conns;
     conns.swap(m_wantWriteConns);
 
+    std::unordered_set<ConnectionImpl *> seen;
+
     for (ConnectionImpl *conn : conns) {
+        if (conn == nullptr) {
+            continue;
+        }
+        if (!seen.insert(conn).second) {
+            continue;
+        }
+
         auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
             return entry.second.get() == conn;
         });

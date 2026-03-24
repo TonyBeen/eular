@@ -377,6 +377,75 @@ int main(int argc, char **argv)
             std::cout << "[client] phase1 connected scid=" << conn->description().scid
                       << " dcid=" << conn->description().dcid << "\n";
 
+            auto attachUploadStream = [&](eular::utp::Stream *stream) {
+                if (stream == nullptr || uploadStream != nullptr) {
+                    return;
+                }
+
+                uploadStream = stream;
+                std::cout << "[client] phase1 local stream id=" << uploadStream->id() << "\n";
+                uploadStream->setOnWritable([&]() {
+                    kickUpload();
+                });
+                uploadStream->setOnReadable([&]() {
+                    std::vector<uint8_t> buf(4096, 0);
+                    for (;;) {
+                        const int32_t n = uploadStream->read(buf.data(), buf.size());
+                        if (n < 0) {
+                            break;
+                        }
+                        if (n == 0) {
+                            break;
+                        }
+                        uploadReplyLine.append(reinterpret_cast<const char *>(buf.data()), static_cast<size_t>(n));
+                        const size_t lf = uploadReplyLine.find('\n');
+                        if (lf == std::string::npos) {
+                            continue;
+                        }
+
+                        std::string line = uploadReplyLine.substr(0, lf);
+                        uploadReplyLine.erase(0, lf + 1);
+                        uint64_t recvBytes = 0;
+                        std::string recvMd5;
+                        if (!ParseUploadOk(line, recvBytes, recvMd5)) {
+                            finishWithFailure("bad upload reply: " + line);
+                            return;
+                        }
+
+                        const bool match = (recvBytes == uploadData.size()) && (recvMd5 == uploadMd5);
+                        std::cout << "[client] phase1 reply bytes=" << recvBytes
+                                  << " md5=" << recvMd5
+                                  << " match=" << (match ? "yes" : "no") << "\n";
+                        uploadAckOk = match;
+
+                        if (!sessionMaterialReady && connPhase1) {
+                            std::vector<uint8_t> token;
+                            std::string state;
+                            if (connPhase1->exportSessionToken(token) == UTP_ERR_OK
+                                && connPhase1->exportSessionResumptionState(state) == UTP_ERR_OK) {
+                                savedSessionToken = std::move(token);
+                                savedResumptionState = std::move(state);
+                                sessionMaterialReady = true;
+                                std::cout << "[client] saved SessionToken lazily size=" << savedSessionToken.size()
+                                          << " and resumption state size=" << savedResumptionState.size() << "\n";
+                            }
+                        }
+
+                        PrintConnStats("[client] phase1 conn stat", connPhase1);
+                        const auto ctxStat = ctx.statistic();
+                        std::cout << "[client] phase1 ctx stat offered=" << ctxStat.zero_rtt_offered
+                                  << " accepted=" << ctxStat.zero_rtt_accepted
+                                  << " rejected=" << ctxStat.zero_rtt_rejected << "\n";
+
+                        phase = kPhaseWaitReconnect;
+                        if (connPhase1) {
+                            connPhase1->close();
+                        }
+                        return;
+                    }
+                });
+            };
+
             conn->setOnSessionTokenReady([&]() {
                 std::vector<uint8_t> token;
                 std::string state;
@@ -391,82 +460,15 @@ int main(int argc, char **argv)
                 }
             });
 
-            conn->registerStreamCreated([&](eular::utp::Stream *stream) {
-                if (stream == nullptr) {
-                    return;
-                }
-
-                if (uploadStream == nullptr) {
-                    uploadStream = stream;
-                    std::cout << "[client] phase1 stream id=" << uploadStream->id() << "\n";
-                    uploadStream->setOnWritable([&]() {
-                        kickUpload();
-                    });
-                    uploadStream->setOnReadable([&]() {
-                        std::vector<uint8_t> buf(4096, 0);
-                        for (;;) {
-                            const int32_t n = uploadStream->read(buf.data(), buf.size());
-                            if (n < 0) {
-                                break;
-                            }
-                            if (n == 0) {
-                                break;
-                            }
-                            uploadReplyLine.append(reinterpret_cast<const char *>(buf.data()), static_cast<size_t>(n));
-                            const size_t lf = uploadReplyLine.find('\n');
-                            if (lf == std::string::npos) {
-                                continue;
-                            }
-
-                            std::string line = uploadReplyLine.substr(0, lf);
-                            uploadReplyLine.erase(0, lf + 1);
-                            uint64_t recvBytes = 0;
-                            std::string recvMd5;
-                            if (!ParseUploadOk(line, recvBytes, recvMd5)) {
-                                finishWithFailure("bad upload reply: " + line);
-                                return;
-                            }
-
-                            const bool match = (recvBytes == uploadData.size()) && (recvMd5 == uploadMd5);
-                            std::cout << "[client] phase1 reply bytes=" << recvBytes
-                                      << " md5=" << recvMd5
-                                      << " match=" << (match ? "yes" : "no") << "\n";
-                            uploadAckOk = match;
-
-                            if (!sessionMaterialReady && connPhase1) {
-                                std::vector<uint8_t> token;
-                                std::string state;
-                                if (connPhase1->exportSessionToken(token) == UTP_ERR_OK
-                                    && connPhase1->exportSessionResumptionState(state) == UTP_ERR_OK) {
-                                    savedSessionToken = std::move(token);
-                                    savedResumptionState = std::move(state);
-                                    sessionMaterialReady = true;
-                                    std::cout << "[client] saved SessionToken lazily size=" << savedSessionToken.size()
-                                              << " and resumption state size=" << savedResumptionState.size() << "\n";
-                                }
-                            }
-
-                            PrintConnStats("[client] phase1 conn stat", connPhase1);
-                            const auto ctxStat = ctx.statistic();
-                            std::cout << "[client] phase1 ctx stat offered=" << ctxStat.zero_rtt_offered
-                                      << " accepted=" << ctxStat.zero_rtt_accepted
-                                      << " rejected=" << ctxStat.zero_rtt_rejected << "\n";
-
-                            phase = kPhaseWaitReconnect;
-                            reconnectTimer.start(reconnectDelayMs);
-                            if (connPhase1) {
-                                connPhase1->close();
-                            }
-                            return;
-                        }
-                    });
-
-                }
-            });
-
             const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
             if (sid < 0) {
                 finishWithFailure("phase1 createStream failed: " + std::to_string(sid));
+                return;
+            }
+
+            attachUploadStream(conn->getStream(static_cast<uint32_t>(sid)));
+            if (uploadStream == nullptr) {
+                finishWithFailure("phase1 getStream failed: " + std::to_string(sid));
             }
             return;
         }
@@ -476,7 +478,7 @@ int main(int argc, char **argv)
             std::cout << "[client] phase2 connected scid=" << conn->description().scid
                       << " dcid=" << conn->description().dcid << "\n";
 
-            conn->registerStreamCreated([&](eular::utp::Stream *stream) {
+            conn->setOnIncomingStream([&](eular::utp::Stream *stream) {
                 if (stream == nullptr) {
                     return;
                 }
@@ -524,6 +526,7 @@ int main(int argc, char **argv)
         if (phase == kPhaseWaitReconnect && connPhase1 && c.get() == connPhase1.get()) {
             connPhase1.reset();
             uploadStream = nullptr;
+            reconnectTimer.stop();
             reconnectTimer.start(reconnectDelayMs);
         }
     });

@@ -122,32 +122,36 @@ int main(int argc, char **argv)
         std::cout << "[client] connected scid=" << conn->description().scid
                   << " dcid=" << conn->description().dcid << "\n";
 
-        conn->registerStreamCreated([&](eular::utp::Stream *s) {
-            stream = s;
-            std::cout << "[client] stream created id=" << stream->id() << "\n";
-            nextSendTimer.start(0, intervalMs);
-            stream->setOnReadable([&]() {
-                std::vector<uint8_t> buffer(2048);
-                for (;;) {
-                    const int32_t n = stream->read(buffer.data(), buffer.size());
-                    if (n > 0) {
-                        ++echoed;
-                        std::string msg(reinterpret_cast<const char *>(buffer.data()),
-                                        static_cast<size_t>(n));
-                        std::cout << "[client] echo #" << echoed << ": \"" << msg << "\"\n";
-                        continue;
-                    }
-                    break;
-                }
-            });
-        });
-
         const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
         if (sid < 0) {
             std::cerr << "[client] createStream failed: " << sid << "\n";
             connectFailed = true;
             return;
         }
+
+        stream = conn->getStream(static_cast<uint32_t>(sid));
+        if (stream == nullptr) {
+            std::cerr << "[client] getStream failed for sid=" << sid << "\n";
+            connectFailed = true;
+            return;
+        }
+
+        std::cout << "[client] local stream id=" << stream->id() << "\n";
+        nextSendTimer.start(0, intervalMs);
+        stream->setOnReadable([&]() {
+            std::vector<uint8_t> buffer(2048);
+            for (;;) {
+                const int32_t n = stream->read(buffer.data(), buffer.size());
+                if (n > 0) {
+                    ++echoed;
+                    std::string msg(reinterpret_cast<const char *>(buffer.data()),
+                                    static_cast<size_t>(n));
+                    std::cout << "[client] echo #" << echoed << ": \"" << msg << "\"\n";
+                    continue;
+                }
+                break;
+            }
+        });
     });
 
     ctx.setOnConnectError([&](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {

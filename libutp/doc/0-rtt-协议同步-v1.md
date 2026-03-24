@@ -41,9 +41,9 @@
 主动侧在 0-RTT 路径下要求顺序：
 
 1. `OnConnected`
-2. `OnStreamCreated`
+2. `setOnIncomingStream`
 
-原因：`OnStreamCreated` 回调依赖用户在 `OnConnected` 中注册的逻辑。
+原因：`setOnIncomingStream` 注册的回调依赖用户在 `OnConnected` 中注册的逻辑。
 
 ## 7. 失败处理与拒绝信号
 

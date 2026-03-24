@@ -43,6 +43,41 @@ TEST_CASE("ConnectionImpl: getStream returns created stream pointer", "[Connecti
     REQUIRE(conn.getStream(999999) == nullptr);
 }
 
+TEST_CASE("ConnectionImpl: setOnIncomingStream only fires for peer-created streams", "[Connection][Stream]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1008);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_isClientInitiator = true;
+    conn.m_peerTP.init_max_streams_bidi = 8;
+    conn.m_loaclTP.init_max_streams_bidi = 8;
+
+    uint32_t callbackStreamId = UINT32_MAX;
+    int callbackCount = 0;
+    conn.setOnIncomingStream([&](Stream *stream) {
+        REQUIRE(stream != nullptr);
+        callbackStreamId = stream->id();
+        ++callbackCount;
+    });
+
+    const int32_t localStreamId = conn.createStream();
+    REQUIRE(localStreamId == 0);
+    REQUIRE(callbackCount == 0);
+
+    FrameStream incoming;
+    uint8_t byte = 7;
+    incoming.stream_id = 1;
+    incoming.stream_offset = 0;
+    incoming.stream_data_length = 1;
+    incoming.stream_data = &byte;
+    REQUIRE(conn.ingestStreamFrame(incoming) == UTP_ERR_OK);
+    REQUIRE(callbackCount == 1);
+    REQUIRE(callbackStreamId == 1);
+}
+
 TEST_CASE("ConnectionImpl: streamCount counts only active streams", "[Connection][Stream]")
 {
     Config cfg;

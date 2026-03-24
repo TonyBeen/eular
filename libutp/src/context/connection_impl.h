@@ -101,7 +101,7 @@ public:
     void    nextScheduleTime(utp_time_t timeNext);
 
 public:
-    void        registerStreamCreated(const OnStreamCreated &cb) override;
+    void        setOnIncomingStream(const OnIncomingStream &cb) override;
     void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
     int32_t     streamCount(StreamType streamType = kStreamTypeAll) const override;
     int32_t     creatableStreamCount(StreamType streamType) const override;
@@ -237,7 +237,7 @@ private:
     std::shared_ptr<AesGcmContext> m_aesCtx;
     std::unique_ptr<SendControl>   m_sendCtl;
 
-    OnStreamCreated         m_onStreamCreated;
+    OnIncomingStream        m_onIncomingStream;
     OnSessionTokenReady     m_onSessionTokenReady;
 
     uint64_t                m_bytesIn{};

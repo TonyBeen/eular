@@ -428,7 +428,7 @@ TEST_CASE("Context integration: 0-RTT accepted early data establishes directly",
     });
     server.setOnConnected([&](Connection::Ptr conn) {
         serverConnected = true;
-        conn->registerStreamCreated([&](eular::utp::Stream *stream) {
+        conn->setOnIncomingStream([&](eular::utp::Stream *stream) {
             REQUIRE(stream != nullptr);
             connectedBeforeStream = serverConnected;
             serverStreamCreated = true;
@@ -618,6 +618,134 @@ TEST_CASE("Context integration: SessionToken callback and export work after hand
     REQUIRE_FALSE(state.empty());
 }
 
+TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close", "[Context][Integration][0RTT][ResumptionState]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 300;
+    cfg.zero_rtt_token_max_lifetime = 600;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+    ContextImpl resumer(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(resumer.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    bool phase1Accepted = false;
+    bool phase1Connected = false;
+    bool tokenReady = false;
+    Connection::Ptr phase1ClientConn;
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+    client.setOnConnected([&](Connection::Ptr conn) {
+        if (!phase1Connected) {
+            phase1Connected = true;
+            phase1ClientConn = conn;
+            conn->setOnSessionTokenReady([&]() {
+                tokenReady = true;
+            });
+        }
+    });
+
+    Context::ConnectInfo phase1;
+    phase1.ip = "127.0.0.1";
+    phase1.port = BoundPort(server);
+    phase1.timeout = 300;
+    phase1.encrypted = Context::kEncryptionAesGcm256;
+    REQUIRE(client.connect(phase1) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() {
+            return phase1Accepted && phase1Connected && tokenReady && phase1ClientConn != nullptr;
+        },
+        [&]() {
+            if (!phase1Accepted && !server.m_pendingIncomingQueue.empty()) {
+                phase1Accepted = (server.accept() == UTP_ERR_OK);
+            }
+        },
+        600,
+        1));
+
+    std::string state;
+    REQUIRE(phase1ClientConn->exportSessionResumptionState(state) == UTP_ERR_OK);
+    REQUIRE_FALSE(state.empty());
+
+    phase1ClientConn->close();
+    for (auto &entry : server.m_connections) {
+        if (entry.second != nullptr) {
+            entry.second->close();
+        }
+    }
+    // Give close notifications a chance to flush, but do not require hard-empty maps
+    // because closed connections may linger briefly before deferred cleanup.
+    PumpUntil(
+        loop,
+        [&]() {
+            return FindConnectedByRemote(server, BoundPort(client)) == nullptr
+                && FindConnectedByRemote(client, BoundPort(server)) == nullptr;
+        },
+        nullptr,
+        200,
+        1);
+
+    bool phase2ServerConnected = false;
+    bool phase2ClientConnected = false;
+    bool phase2ServerStreamCreated = false;
+    const std::string earlyPayload = "state-0rtt";
+    uint32_t earlyStreamId = UINT32_MAX;
+
+    server.setOnConnected([&](Connection::Ptr conn) {
+        phase2ServerConnected = true;
+        conn->setOnIncomingStream([&](eular::utp::Stream *stream) {
+            REQUIRE(stream != nullptr);
+            phase2ServerStreamCreated = true;
+            earlyStreamId = stream->id();
+        });
+    });
+    resumer.setOnConnected([&](Connection::Ptr) {
+        phase2ClientConnected = true;
+    });
+
+    Context::Connect0RttWithStateInfo phase2;
+    phase2.ip = "127.0.0.1";
+    phase2.port = BoundPort(server);
+    phase2.timeout = 300;
+    phase2.early_data.assign(earlyPayload.begin(), earlyPayload.end());
+    REQUIRE(resumer.connect0RttWithState(phase2, state) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() {
+            return FindConnectedByRemote(server, BoundPort(resumer)) != nullptr
+                && FindConnectedByRemote(resumer, BoundPort(server)) != nullptr
+                && phase2ServerConnected
+                && phase2ClientConnected
+                && phase2ServerStreamCreated;
+        },
+        nullptr,
+        800,
+        1));
+
+    ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(resumer));
+    REQUIRE(serverConn != nullptr);
+    REQUIRE(serverConn->connectInfo().encrypted == Context::kEncryptionAesGcm256);
+    REQUIRE(earlyStreamId == 0);
+
+    auto streamIt = serverConn->m_streams.find(earlyStreamId);
+    REQUIRE(streamIt != serverConn->m_streams.end());
+    REQUIRE(streamIt->second != nullptr);
+
+    std::array<char, 64> readBuf{};
+    const int32_t nread = streamIt->second->read(readBuf.data(), readBuf.size());
+    REQUIRE(nread == static_cast<int32_t>(earlyPayload.size()));
+    REQUIRE(std::string(readBuf.data(), static_cast<size_t>(nread)) == earlyPayload);
+}
+
 TEST_CASE("Context integration: 0-RTT replay is rejected and counted", "[Context][Integration][0RTT]")
 {
     Config cfg;
@@ -789,7 +917,7 @@ TEST_CASE("Context integration: handshake promotion preserves first stream callb
 
     server.setOnConnected([&](Connection::Ptr conn) {
         serverConnected = true;
-        conn->registerStreamCreated([&](eular::utp::Stream *stream) {
+        conn->setOnIncomingStream([&](eular::utp::Stream *stream) {
             REQUIRE(stream != nullptr);
             serverStreamCreated = true;
         });

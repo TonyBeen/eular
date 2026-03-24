@@ -477,7 +477,15 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             return;
         }
 
-        if (packet->decode(encryptedPacket->raw_data, encryptedPacket->raw_size) < 0) {
+        // PacketIn::decode updates raw_data/raw_size to the input buffer.
+        // Decode into packet's own backing store to avoid aliasing two
+        // PacketIn objects to the same raw_data and double recycling.
+        std::memcpy(const_cast<uint8_t *>(packet->raw_data),
+                    encryptedPacket->raw_data,
+                    encryptedPacket->raw_size);
+        packet->raw_size = encryptedPacket->raw_size;
+
+        if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
             return;
         }
     }
@@ -1201,8 +1209,8 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
 
         StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamFrame.stream_id);
         m_streams.emplace(streamFrame.stream_id, stream);
-        if (m_onStreamCreated) {
-            m_onStreamCreated(stream.get());
+        if (m_onIncomingStream) {
+            m_onIncomingStream(stream.get());
         }
         it = m_streams.find(streamFrame.stream_id);
     }
@@ -1494,8 +1502,8 @@ void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
 
         StreamImpl::SP stream = std::make_shared<StreamImpl>(this, resetFrame.stream_id);
         m_streams.emplace(resetFrame.stream_id, stream);
-        if (m_onStreamCreated) {
-            m_onStreamCreated(stream.get());
+        if (m_onIncomingStream) {
+            m_onIncomingStream(stream.get());
         }
         it = m_streams.find(resetFrame.stream_id);
     }
@@ -2270,9 +2278,9 @@ void ConnectionImpl::onCloseDrainTimeout()
     scheduleWrite();
 }
 
-void ConnectionImpl::registerStreamCreated(const OnStreamCreated &cb)
+void ConnectionImpl::setOnIncomingStream(const OnIncomingStream &cb)
 {
-    m_onStreamCreated = cb;
+    m_onIncomingStream = cb;
 }
 
 void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
@@ -2461,10 +2469,6 @@ int32_t ConnectionImpl::createStream(StreamType streamType)
 
     StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamId);
     m_streams.emplace(streamId, stream);
-
-    if (m_onStreamCreated) {
-        m_onStreamCreated(stream.get());
-    }
 
     return static_cast<int32_t>(streamId);
 }
