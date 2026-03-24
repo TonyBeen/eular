@@ -12,6 +12,7 @@
 
 #include <utils/serialize.hpp>
 
+#include "utp/errno.h"
 #include "proto/packet_in.h"
 #include "proto/frame/version.h"
 #include "proto/frame/path.h"
@@ -64,7 +65,7 @@ TEST_CASE("PacketIn: decode and iterate frames", "[PacketIn]")
     const size_t packetSize = UTP_HEADER_SIZE + payloadLen;
 
     PacketIn packet;
-    REQUIRE(packet.decode(packetBytes.data(), packetSize) == static_cast<int32_t>(packetSize));
+    REQUIRE(packet.decode(packetBytes.data(), packetSize) == UTP_ERR_OK);
     REQUIRE(packet.header.scid == 1001);
     REQUIRE(packet.header.dcid == 2002);
     REQUIRE(packet.header.pn == 7);

@@ -5,21 +5,31 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
-#include <event2/event.h>
+#include <event/base.h>
 #include <event/loop.h>
+#include <event/timer.h>
+
+#include <utils/CLI11.hpp>
 
 #include <utp/errno.h>
 #include <utp/utp.h>
 
 namespace {
 
-std::atomic<bool> g_running(true);
+ev::EventLoop loop;
+
+std::string PeerKey(const std::string &ip, uint16_t port)
+{
+    return ip + ":" + std::to_string(port);
+}
 
 void OnSignal(int)
 {
-    g_running.store(false, std::memory_order_release);
+    std::cout << "\n[server] signal received, shutting down...\n";
+    std::exit(0);
 }
 
 void PrintUsage(const char *argv0)
@@ -34,26 +44,10 @@ int main(int argc, char **argv)
     std::string bindIp = "0.0.0.0";
     uint16_t bindPort = 9000;
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--bind-ip") == 0 && i + 1 < argc) {
-            bindIp = argv[++i];
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--bind-port") == 0 && i + 1 < argc) {
-            bindPort = static_cast<uint16_t>(std::stoul(argv[++i]));
-            continue;
-        }
-
-        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            PrintUsage(argv[0]);
-            return 0;
-        }
-
-        std::cerr << "unknown argument: " << argv[i] << "\n";
-        PrintUsage(argv[0]);
-        return 1;
-    }
+    CLI::App app{"UTP Echo Server"};
+    app.add_option("--bind-ip", bindIp, "IP address to bind")->check(CLI::ValidIPV4);
+    app.add_option("--bind-port", bindPort, "Port to bind")->check(CLI::Range(5000, 65535));
+    CLI11_PARSE(app, argc, argv);
 
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
@@ -64,18 +58,63 @@ int main(int argc, char **argv)
     cfg.enable_keepalive = false;
     cfg.enable_dplpmtud = false;
     eular::utp::Context ctx(loop.loop(), &cfg);
+    std::unordered_set<std::string> zeroRttAcceptedPeers;
 
-    ctx.setOnNewConnection([](const eular::utp::Context::NewConnectionInfo &info) {
-        std::cout << "[server] new connection from "
+    ctx.setOnNewConnection([&ctx](const eular::utp::Context::NewConnectionInfo &info) {
+        const bool zeroRttPath = info.local_cid == 0;
+        if (zeroRttPath) {
+            std::cout << "[server] incoming 0-rtt request from "
+                      << info.remote_ip << ":" << info.remote_port
+                      << ", peer_cid=" << info.peer_cid << "\n";
+            return true;
+        }
+
+        std::cout << "[server] incoming handshake request from "
                   << info.remote_ip << ":" << info.remote_port
                   << ", local_cid=" << info.local_cid
                   << ", peer_cid=" << info.peer_cid << "\n";
+
+        const int32_t acceptStatus = ctx.accept();
+        if (acceptStatus != UTP_ERR_OK) {
+            std::cerr << "[server] accept failed for local_cid=" << info.local_cid
+                      << ": " << acceptStatus << "\n";
+            return false;
+        }
+
+        std::cout << "[server] accepted handshake local_cid=" << info.local_cid << "\n";
         return true;
     });
 
-    ctx.setOnConnected([](eular::utp::Connection::Ptr conn) {
-        std::cout << "[server] connected scid=" << conn->description().scid
-                  << " dcid=" << conn->description().dcid << "\n";
+    ctx.setOnZeroRttDecision([&](const eular::utp::Context::ZeroRttDecisionInfo &info) {
+        const std::string peer = PeerKey(info.remote_ip, info.remote_port);
+        if (info.accepted) {
+            zeroRttAcceptedPeers.insert(peer);
+            std::cout << "[server] 0-rtt accepted from "
+                      << peer
+                      << ", peer_cid=" << info.peer_cid
+                      << ", reason=" << info.reason << "\n";
+            return;
+        }
+
+        zeroRttAcceptedPeers.erase(peer);
+        std::cout << "[server] 0-rtt rejected from "
+                  << peer
+                  << ", peer_cid=" << info.peer_cid
+                  << ", reason=" << info.reason << "\n";
+    });
+
+    ctx.setOnConnected([&](eular::utp::Connection::Ptr conn) {
+        const auto desc = conn->description();
+        const std::string peer = PeerKey(desc.remoteHost, desc.remotePort);
+        const bool zeroRttPath = zeroRttAcceptedPeers.find(peer) != zeroRttAcceptedPeers.end();
+
+        std::cout << "[server] connected via "
+                  << (zeroRttPath ? "0-rtt" : "handshake")
+                  << " scid=" << desc.scid
+                  << " dcid=" << desc.dcid
+                  << " peer=" << peer << "\n";
+
+        zeroRttAcceptedPeers.erase(peer);
 
         conn->registerStreamCreated([](eular::utp::Stream *stream) {
             std::cout << "[server] stream created id=" << stream->id() << "\n";
@@ -108,7 +147,9 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectionClosed([](eular::utp::Connection::Ptr conn) {
-        std::cout << "[server] connection closed scid=" << conn->description().scid << "\n";
+        const auto desc = conn->description();
+        std::cout << "[server] connection closed scid=" << desc.scid
+                  << " peer=" << desc.remoteHost << ":" << desc.remotePort << "\n";
     });
 
     const int32_t bindStatus = ctx.bind(bindIp, bindPort);
@@ -119,24 +160,7 @@ int main(int argc, char **argv)
 
     std::cout << "[server] listening on " << bindIp << ":" << bindPort << "\n";
 
-    while (g_running.load(std::memory_order_acquire)) {
-        loop.dispatch(EVLOOP_NONBLOCK | EVLOOP_ONCE);
-
-        for (;;) {
-            const int32_t acceptStatus = ctx.accept();
-            if (acceptStatus == UTP_ERR_OK) {
-                std::cout << "[server] accepted one pending incoming connection\n";
-                continue;
-            }
-            if (acceptStatus != UTP_ERR_WOULD_BLOCK) {
-                std::cerr << "[server] accept returned " << acceptStatus << "\n";
-            }
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
+    loop.dispatch();
     std::cout << "[server] shutdown\n";
     return 0;
 }

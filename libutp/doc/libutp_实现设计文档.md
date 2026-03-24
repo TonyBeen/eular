@@ -421,11 +421,21 @@
 3. 保留现有 `UTP_TYPE_0RTT`，用于客户端在握手未完成时发送早数据包。
 4. 配置新增 `zero_rtt_token_max_lifetime_s`（建议默认 600 秒）。
 
+当前实现决策补充：
+1. `UTP_TYPE_0RTT` 首包不拆为双包模型，先采用单包布局。
+2. `SessionToken` 固定作为 payload 首帧，保持明文可解析。
+3. `SessionToken` 后的应用数据帧进入早期 AEAD 保护区，不再按明文 frame 链直接解析。
+4. 接收端处理顺序固定为“先解析 SessionToken -> 验票并恢复早期密钥 -> 再解密后续应用数据帧”。
+5. SessionResumptionState 对外暴露为 opaque 字符串，使用标准 Base64（非 URL-safe）。
+6. SDK 支持 `Context` 级别设置会话恢复密钥；若用户未设置则使用 SDK 默认密钥。
+7. SDK 不提供对外解析 API，应用不感知封装内部字段。
+8. SDK 不做持久化；收到“可导出”通知后由用户主动调用导出接口并自行存储。
+
 ### 16.4 客户端状态机（建议）
 
 1. `connect(enable_0rtt=true 且有 ticket)`：
-  - 发送 Initial（含票据/恢复信息）
-  - 并行允许发送 `UTP_TYPE_0RTT` 的 Stream 数据（仅进入 0-RTT 发送队列）
+  - 发送 `UTP_TYPE_0RTT` 首包，payload 首帧为 `SessionToken`
+  - 若存在早数据，则放在 `SessionToken` 之后并使用恢复得到的早期 AEAD 上下文加密
 2. 收到服务端“接受 0-RTT”信号：
   - 早数据继续按正常 ACK/重传轨道推进
 3. 收到“拒绝 0-RTT”或握手参数不匹配：
@@ -434,14 +444,15 @@
 
 ### 16.5 服务端状态机（建议）
 
-1. 收到含票据 Initial：
+1. 收到 `UTP_TYPE_0RTT` 首包：
+  - 首先只解析 payload 第一帧 `SessionToken`
   - 调用 `TokenAuth::open` 验证有效期、来源、上下文绑定
 2. 验证通过：
-  - 标记连接可接收 0-RTT
-  - 提前放行 `UTP_TYPE_0RTT` 的 Stream 帧进入接收缓存
+  - 恢复票据中的加密模式与早期密钥材料
+  - 初始化早期 AEAD 上下文后，再解密 `SessionToken` 之后的应用数据帧
 3. 验证失败：
-  - 标记拒绝 0-RTT，仅保留握手流程
-  - 对早数据帧直接丢弃（可统计）
+  - 标记拒绝 0-RTT，仅保留后续正常握手或直接拒绝连接
+  - 不允许将 `SessionToken` 之后的帧按明文继续解析
 
 ### 16.6 抗重放最小方案
 
@@ -456,6 +467,12 @@
 3. 收包解析：`ConnectionImpl::onUdpPacket` 增加 `UTP_TYPE_0RTT` 验证与分发。
 4. Token：复用 `crypto/token.*`，新增恢复上下文校验接口。
 5. 回调：为应用补充“0-RTT accepted/rejected”可观测事件（可选）。
+6. API：新增会话恢复能力接口：
+  - `setResumptionSecret(...) / clearResumptionSecret()`
+  - `setOnSessionResumptionReady(...)`
+  - `exportSessionResumptionState(...)`
+  - `connect0RttWithState(...)`
+7. 错误语义：`connect0RttWithState` 返回前置校验错误码（如 Base64 解码失败、AEAD 解密失败、本地过期等）；服务端拒绝通过异步失败回调上报。
 
 ### 16.8 分阶段实施计划
 
@@ -470,3 +487,5 @@
 3. 重放请求：命中去重窗口，0-RTT 被拒绝。
 4. 参数不一致：拒绝 0-RTT 并回退 1-RTT。
 5. 丢包场景：0-RTT 包重传与握手并发不互相破坏。
+6. 状态串前置校验：标准 Base64 非法、AEAD 解密失败、expires_at 本地过期应返回不同错误码。
+7. 服务端拒绝路径：前置校验通过但服务端拒绝时，通过异步回调返回拒绝原因。

@@ -126,6 +126,40 @@ bool IsLocalInitiatedStream(uint32_t streamId, bool isClientInitiator)
     return isClientInitiator ? STREAM_ID_IS_CLIENT(streamId) : STREAM_ID_IS_SERVER(streamId);
 }
 
+eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
+{
+    switch (mode) {
+    case eular::utp::Context::kEncryptionAesGcm256:
+        return eular::utp::kFrameCryptoAESGCM256;
+    case eular::utp::Context::kEncryptionAesGcm128:
+    default:
+        return eular::utp::kFrameCryptoAESGCM128;
+    }
+}
+
+bool FrameCryptoTypeToEncryptionContext(eular::utp::FrameCryptoType type,
+                                        const eular::utp::X25519Wrapper::PublicKey &peerPublicKey,
+                                        const std::shared_ptr<eular::utp::X25519Wrapper> &x25519,
+                                        const std::shared_ptr<eular::utp::AesGcmContext> &aesCtx,
+                                        uint32_t noncePrefix)
+{
+    if (!x25519 || !aesCtx) {
+        return false;
+    }
+
+    if (type == eular::utp::kFrameCryptoAESGCM256) {
+        auto sharedSecret = x25519->deriveSharedSecret(peerPublicKey);
+        eular::utp::AesGcmContext::AesKey256 key256;
+        std::copy(sharedSecret.begin(), sharedSecret.end(), key256.begin());
+        return aesCtx->init(key256, noncePrefix);
+    }
+
+    auto sharedSecretShort = x25519->deriveSharedSecretShort(peerPublicKey);
+    eular::utp::AesGcmContext::AesKey128 key128;
+    std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
+    return aesCtx->init(key128, noncePrefix);
+}
+
 int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
                                uint8_t *buffer,
                                size_t size,
@@ -518,16 +552,16 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
                     X25519Wrapper::PublicKey peerPublicKey;
                     std::memcpy(peerPublicKey.data(), peerPubkey.data(), peerPublicKey.size());
 
-                    auto sharedSecretShort = m_x25519->deriveSharedSecretShort(peerPublicKey);
-                    AesGcmContext::AesKey128 key;
-                    std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key.begin());
-
                     if (!m_aesCtx) {
                         m_aesCtx = std::make_shared<AesGcmContext>();
                     }
 
                     const uint32_t noncePrefix = m_localConnectionID ^ m_peerConnectionID;
-                    if (!m_aesCtx->init(key, noncePrefix)) {
+                    if (!FrameCryptoTypeToEncryptionContext(crypto.crypto_type,
+                                                            peerPublicKey,
+                                                            m_x25519,
+                                                            m_aesCtx,
+                                                            noncePrefix)) {
                         SetLastErrorV(UTP_ERR_CRYPTO_INIT_FAILED,
                                       "init aes-gcm context failed after x25519 key exchange");
                     }
@@ -1380,13 +1414,13 @@ int32_t ConnectionImpl::sendInitialPacket()
 {
     std::vector<uint8_t> payload;
 
-    if (m_connectInfo.encrypted) {
+    if (m_connectInfo.encrypted != Context::kEncryptionNone) {
         if (!m_x25519) {
             m_x25519 = std::make_shared<X25519Wrapper>();
         }
 
         FrameCrypto crypto;
-        crypto.crypto_type = kFrameCryptoAESGCM128;
+        crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
         crypto.tp = &m_loaclTP;
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
@@ -1461,7 +1495,7 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
         }
 
         FrameCrypto crypto;
-        crypto.crypto_type = kFrameCryptoAESGCM128;
+        crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
         crypto.tp = &m_loaclTP;
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
@@ -1877,17 +1911,18 @@ uint32_t ConnectionImpl::keepaliveIntervalMs() const
     }
 
     const Config *cfg = m_ctx->config();
-    if (cfg->keepalive_interval > 0) {
-        return cfg->keepalive_interval;
-    }
+    const uint32_t localInterval = cfg->keepalive_interval > 0
+                                 ? cfg->keepalive_interval
+                                 : std::max<uint32_t>(cfg->max_idle_timeout, 1);
 
+    const uint32_t peerIdleTimeout = std::max<uint32_t>(m_peerTP.max_idle_timeout, 1);
     const uint32_t srttMs = static_cast<uint32_t>(m_rttStats.srtt() / 1000);
-    const uint32_t guardMs = 3 * srttMs;
-    if (cfg->max_idle_timeout > guardMs + 1) {
-        return cfg->max_idle_timeout - guardMs;
-    }
+    const uint32_t guardMs = std::max<uint32_t>(3 * srttMs, 50);
+    const uint32_t peerSafeInterval = peerIdleTimeout > guardMs + 1
+                                    ? (peerIdleTimeout - guardMs)
+                                    : 1;
 
-    return std::max<uint32_t>(cfg->max_idle_timeout / 2, 1);
+    return std::max<uint32_t>(std::min(localInterval, peerSafeInterval), 1);
 }
 
 void ConnectionImpl::armKeepaliveTimer(uint32_t delayMs)

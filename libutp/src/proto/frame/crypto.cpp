@@ -47,7 +47,6 @@ int32_t FrameCrypto::encode(void *buffer, size_t size) const
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->init_max_streams_bidi);
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->init_max_streams_uni);
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->ack_delay_exponent);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->max_ack_delta);
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->max_ack_delay);
 
     if (bufferOffset == nullptr || size < FRAME_CRYPTO_EPH_PUBKEY_SIZE) {
@@ -106,7 +105,6 @@ int32_t FrameCrypto::decode(const void *buffer, size_t size)
         || !deserialize(tp->init_max_streams_bidi)
         || !deserialize(tp->init_max_streams_uni)
         || !deserialize(tp->ack_delay_exponent)
-        || !deserialize(tp->max_ack_delta)
         || !deserialize(tp->max_ack_delay)) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode crypto frame transport params");
         return -1;

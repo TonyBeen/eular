@@ -50,6 +50,7 @@ struct TokenMeta {
     uint8_t     token_type{static_cast<uint8_t>(TokenType::kPathValidation)};
     uint32_t    timestamp;  // unix seconds
     uint32_t    cid;        // connection id
+    uint8_t     encryption_mode{0}; // Context::EncryptionMode, 0=None
     uint32_t    version;    // peer utp version
     uint32_t    secret;     // local secret number
     uint16_t    family;     // peer address family
@@ -65,7 +66,7 @@ struct TokenMeta {
     }
 };
 
-static const size_t TOKEN_META_SIZE = 1 + 4 + 4 + 4 + 4 + 2 + 16; // 35 bytes
+static const size_t TOKEN_META_SIZE = 1 + 4 + 4 + 1 + 4 + 4 + 2 + 16; // 36 bytes
 static const std::string TOKEN_AAD_PATH("UTP-PathToken-AAD");
 static const std::string TOKEN_AAD_0RTT("UTP-0RTTToken-AAD");
 

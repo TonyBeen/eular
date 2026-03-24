@@ -19,14 +19,20 @@
 #include "context/context_impl.h"
 #undef private
 
+#include "crypto/token.h"
 #include "utp/errno.h"
 #include "util/random.hpp"
+#include "util/time.h"
 
+using eular::utp::Address;
 using eular::utp::Config;
 using eular::utp::Connection;
 using eular::utp::ConnectionImpl;
 using eular::utp::Context;
 using eular::utp::ContextImpl;
+using eular::utp::TokenAuth;
+using eular::utp::TokenMeta;
+using eular::utp::TokenType;
 
 namespace {
 
@@ -89,6 +95,49 @@ ConnectionImpl::SP FindConnectedByRemote(const ContextImpl &ctx, uint16_t port)
     return ConnectionImpl::SP();
 }
 
+TokenMeta BuildZeroRttMeta(const Address &address,
+                           uint32_t timestamp,
+                           uint32_t cid,
+                           Context::EncryptionMode encryptionMode)
+{
+    TokenMeta meta;
+    meta.token_type = static_cast<uint8_t>(TokenType::kZeroRttResumption);
+    meta.timestamp = timestamp;
+    meta.cid = cid;
+    meta.encryption_mode = static_cast<uint8_t>(encryptionMode);
+    meta.version = 1;
+    meta.secret = 7;
+    meta.family = static_cast<uint16_t>(address.family());
+
+    if (address.isIPv4()) {
+        sockaddr_in addr4{};
+        REQUIRE(address.toSockAddrIn(addr4));
+        meta.host_v4 = addr4.sin_addr;
+    } else {
+        sockaddr_in6 addr6{};
+        REQUIRE(address.toSockAddrIn6(addr6));
+        meta.host_v6 = addr6.sin6_addr;
+    }
+
+    return meta;
+}
+
+std::vector<uint8_t> BuildZeroRttTicket(ContextImpl &ctx,
+                                        const Address &address,
+                                        uint32_t cid = 12345,
+                                        Context::EncryptionMode encryptionMode = Context::kEncryptionNone)
+{
+    TokenAuth *auth = ctx.tokenAuth();
+    REQUIRE(auth != nullptr);
+
+    const uint32_t nowSec = static_cast<uint32_t>(eular::utp::time::RealtimeMs() / 1000);
+    const TokenMeta meta = BuildZeroRttMeta(address, nowSec, cid, encryptionMode);
+
+    TokenAuth::TokenBuf tokenBuf{};
+    REQUIRE(auth->seal(meta, tokenBuf));
+    return std::vector<uint8_t>(tokenBuf.begin(), tokenBuf.end());
+}
+
 } // namespace
 
 TEST_CASE("Context integration: OnNewConnection allow completes passive handshake", "[Context][Integration]")
@@ -144,6 +193,54 @@ TEST_CASE("Context integration: OnNewConnection allow completes passive handshak
     REQUIRE(clientConnected);
     REQUIRE(accepted);
     REQUIRE(acceptStatus == UTP_ERR_OK);
+}
+
+TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Context][Integration]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    bool serverNotified = false;
+    bool serverConnected = false;
+    bool clientConnected = false;
+    int32_t acceptStatus = UTP_ERR_WOULD_BLOCK;
+
+    server.setOnNewConnection([&](const Context::NewConnectionInfo &) {
+        serverNotified = true;
+        acceptStatus = server.accept();
+        return acceptStatus == UTP_ERR_OK;
+    });
+    server.setOnConnected([&serverConnected](Connection::Ptr) {
+        serverConnected = true;
+    });
+    client.setOnConnected([&clientConnected](Connection::Ptr) {
+        clientConnected = true;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    const bool ok = PumpUntil(
+        loop,
+        [&]() { return HasConnectedConnection(server) && HasConnectedConnection(client); },
+        nullptr);
+
+    REQUIRE(ok);
+    REQUIRE(serverNotified);
+    REQUIRE(serverConnected);
+    REQUIRE(clientConnected);
+    REQUIRE(acceptStatus == UTP_ERR_OK);
+    REQUIRE(server.m_pendingIncomingQueue.empty());
 }
 
 TEST_CASE("Context integration: OnNewConnection reject returns connection close to client", "[Context][Integration]")
@@ -291,7 +388,7 @@ TEST_CASE("Context integration: mixed active and passive handshakes share one Co
     REQUIRE(outboundCid != 0);
 }
 
-TEST_CASE("Context integration: 0-RTT accepted stream data is replayed after passive promotion", "[Context][Integration][0RTT]")
+TEST_CASE("Context integration: 0-RTT accepted early data establishes directly", "[Context][Integration][0RTT]")
 {
     Config cfg;
     cfg.handshake_timeout = 300;
@@ -304,59 +401,66 @@ TEST_CASE("Context integration: 0-RTT accepted stream data is replayed after pas
     REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
     REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
 
-    bool patchedPendingZeroRtt = false;
-    bool earlyWriteSent = false;
-    uint32_t earlyStreamId = 0;
+    bool serverConnected = false;
+    bool clientConnected = false;
+    bool serverStreamCreated = false;
+    bool connectedBeforeStream = false;
+    Context::EncryptionMode observedEncryption = Context::kEncryptionNone;
+    uint32_t earlyStreamId = UINT32_MAX;
     const std::string earlyPayload = "hello-0rtt";
+    const std::vector<uint8_t> ticket = BuildZeroRttTicket(server,
+                                                           Address("127.0.0.1", BoundPort(client)),
+                                                           12345,
+                                                           Context::kEncryptionAesGcm256);
 
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+    server.setOnNewConnection([&](const Context::NewConnectionInfo &newInfo) {
+        observedEncryption = newInfo.encrypted;
         return true;
     });
+    server.setOnConnected([&](Connection::Ptr conn) {
+        serverConnected = true;
+        conn->registerStreamCreated([&](eular::utp::Stream *stream) {
+            REQUIRE(stream != nullptr);
+            connectedBeforeStream = serverConnected;
+            serverStreamCreated = true;
+            earlyStreamId = stream->id();
+        });
+    });
+    client.setOnConnected([&clientConnected](Connection::Ptr) {
+        clientConnected = true;
+    });
 
-    Context::ConnectInfo info;
+    Context::Connect0RttInfo info;
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 300;
-    info.enable_0rtt = true;
-    info.session_ticket.assign(16, 0x11);
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    info.session_ticket = ticket;
+    info.early_data.assign(earlyPayload.begin(), earlyPayload.end());
+    REQUIRE(client.connect0Rtt(info) == UTP_ERR_OK);
 
     const bool ok = PumpUntil(
         loop,
         [&]() {
             return FindConnectedByRemote(server, BoundPort(client)) != nullptr
                 && FindConnectedByRemote(client, BoundPort(server)) != nullptr
-                && earlyWriteSent;
+                && serverConnected
+                && clientConnected
+                && serverStreamCreated;
         },
-        [&]() {
-            if (!patchedPendingZeroRtt && !server.m_pendingIncoming.empty()) {
-                auto pendingIt = server.m_pendingIncoming.begin();
-                pendingIt->second.zeroRttOffered = true;
-                pendingIt->second.zeroRttAccepted = true;
-                patchedPendingZeroRtt = true;
-            }
-
-            ConnectionImpl::SP clientConn = FindConnectionByRemote(client, BoundPort(server));
-            if (!earlyWriteSent && clientConn != nullptr && clientConn->state() == ConnectionImpl::kStateInitialSent) {
-                const int32_t sid = clientConn->createStream();
-                REQUIRE(sid >= 0);
-                earlyStreamId = static_cast<uint32_t>(sid);
-
-                auto streamIt = clientConn->m_streams.find(static_cast<uint32_t>(sid));
-                REQUIRE(streamIt != clientConn->m_streams.end());
-                REQUIRE(streamIt->second != nullptr);
-                REQUIRE(streamIt->second->write(earlyPayload.data(), earlyPayload.size(), false)
-                        == static_cast<int32_t>(earlyPayload.size()));
-                earlyWriteSent = true;
-            }
-        },
+        nullptr,
         400,
         1);
 
     REQUIRE(ok);
+    REQUIRE(connectedBeforeStream);
+    REQUIRE(server.m_pendingIncoming.empty());
+    REQUIRE(server.m_pendingIncomingQueue.empty());
 
     ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(client));
     REQUIRE(serverConn != nullptr);
+    REQUIRE(observedEncryption == Context::kEncryptionAesGcm256);
+    REQUIRE(serverConn->connectInfo().encrypted == Context::kEncryptionAesGcm256);
+    REQUIRE(earlyStreamId == 0);
 
     auto serverStreamIt = serverConn->m_streams.find(earlyStreamId);
     REQUIRE(serverStreamIt != serverConn->m_streams.end());
@@ -366,9 +470,14 @@ TEST_CASE("Context integration: 0-RTT accepted stream data is replayed after pas
     const int32_t nread = serverStreamIt->second->read(readBuf.data(), readBuf.size());
     REQUIRE(nread == static_cast<int32_t>(earlyPayload.size()));
     REQUIRE(std::string(readBuf.data(), static_cast<size_t>(nread)) == earlyPayload);
+
+    const Context::Statistic stat = server.statistic();
+    REQUIRE(stat.zero_rtt_offered >= 1);
+    REQUIRE(stat.zero_rtt_accepted >= 1);
+    REQUIRE(stat.zero_rtt_rejected == 0);
 }
 
-TEST_CASE("Context integration: 0-RTT rejected ticket falls back without delivering early stream", "[Context][Integration][0RTT]")
+TEST_CASE("Context integration: 0-RTT rejected ticket closes client without delivering early stream", "[Context][Integration][0RTT]")
 {
     Config cfg;
     cfg.handshake_timeout = 300;
@@ -381,15 +490,15 @@ TEST_CASE("Context integration: 0-RTT rejected ticket falls back without deliver
     REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
     REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
 
-    bool accepted = false;
-    bool earlyWriteSent = false;
+    bool serverNotified = false;
+    bool clientConnected = false;
     int32_t zeroRttAcceptedEvents = 0;
     int32_t zeroRttRejectedEvents = 0;
     std::string lastZeroRttReason;
-    uint32_t earlyStreamId = 0;
     const std::string earlyPayload = "drop-me";
 
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+    server.setOnNewConnection([&serverNotified](const Context::NewConnectionInfo &) {
+        serverNotified = true;
         return true;
     });
     server.setOnZeroRttDecision([&](const Context::ZeroRttDecisionInfo &info) {
@@ -400,50 +509,36 @@ TEST_CASE("Context integration: 0-RTT rejected ticket falls back without deliver
             lastZeroRttReason = info.reason;
         }
     });
+    client.setOnConnected([&clientConnected](Connection::Ptr) {
+        clientConnected = true;
+    });
 
-    Context::ConnectInfo info;
+    Context::Connect0RttInfo info;
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 300;
-    info.enable_0rtt = true;
     info.session_ticket.assign(16, 0x5a);
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    info.early_data.assign(earlyPayload.begin(), earlyPayload.end());
+    REQUIRE(client.connect0Rtt(info) == UTP_ERR_OK);
 
     const bool ok = PumpUntil(
         loop,
         [&]() {
-            return FindConnectedByRemote(server, BoundPort(client)) != nullptr
-                && FindConnectedByRemote(client, BoundPort(server)) != nullptr
-                && earlyWriteSent;
-        },
-        [&]() {
-            if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                REQUIRE(server.accept() == UTP_ERR_OK);
-                accepted = true;
+            if (client.m_connections.empty()) {
+                return false;
             }
-
-            ConnectionImpl::SP clientConn = FindConnectionByRemote(client, BoundPort(server));
-            if (!earlyWriteSent && accepted && clientConn != nullptr && clientConn->state() == ConnectionImpl::kStateInitialSent) {
-                const int32_t sid = clientConn->createStream();
-                REQUIRE(sid >= 0);
-                earlyStreamId = static_cast<uint32_t>(sid);
-
-                auto streamIt = clientConn->m_streams.find(earlyStreamId);
-                REQUIRE(streamIt != clientConn->m_streams.end());
-                REQUIRE(streamIt->second != nullptr);
-                REQUIRE(streamIt->second->write(earlyPayload.data(), earlyPayload.size(), false)
-                        == static_cast<int32_t>(earlyPayload.size()));
-                earlyWriteSent = true;
-            }
+            return client.m_connections.begin()->second->state() == ConnectionImpl::kStateCloseReceived;
         },
+        nullptr,
         400,
         1);
 
     REQUIRE(ok);
-
-    ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(client));
-    REQUIRE(serverConn != nullptr);
-    REQUIRE(serverConn->m_streams.find(earlyStreamId) == serverConn->m_streams.end());
+    REQUIRE_FALSE(serverNotified);
+    REQUIRE_FALSE(clientConnected);
+    REQUIRE(server.m_connections.empty());
+    REQUIRE(server.m_pendingIncoming.empty());
+    REQUIRE(server.m_pendingIncomingQueue.empty());
 
     const Context::Statistic stat = server.statistic();
     REQUIRE(stat.zero_rtt_offered >= 1);

@@ -12,8 +12,11 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
+#include <vector>
 
 #include <utils/serialize.hpp>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include "utp/errno.h"
 #include "proto/proto.h"
@@ -42,6 +45,299 @@ static std::atomic<uint32_t>    g_contextId{0};
 static eular::utp::Config       g_defaultConfig;
 
 namespace {
+constexpr uint8_t   kResumptionStateMagic[4] = {'U', 'R', 'S', '1'};
+constexpr size_t    kResumptionNonceSize = 12;
+constexpr size_t    kResumptionTagSize = 16;
+constexpr size_t    kResumptionKeySize = 32;
+constexpr uint8_t   kResumptionFormatVersion = 1;
+
+const std::array<uint8_t, kResumptionKeySize> kDefaultResumptionSecret = {
+    0x33, 0x81, 0x7a, 0x14, 0x9d, 0xbe, 0x20, 0x4f,
+    0x72, 0x61, 0x99, 0xca, 0x5a, 0x3e, 0x1d, 0xb0,
+    0xa7, 0x25, 0xe3, 0x44, 0x8c, 0x9f, 0x10, 0x6d,
+    0xfa, 0x57, 0x02, 0x3b, 0xc4, 0x88, 0x6e, 0x11,
+};
+
+const std::string kResumptionAad("UTP-SessionResumptionState-V1");
+
+bool Base64EncodeStd(const std::vector<uint8_t> &input, std::string &output)
+{
+    if (input.empty()) {
+        output.clear();
+        return true;
+    }
+
+    const size_t outLen = 4 * ((input.size() + 2) / 3);
+    output.assign(outLen, '\0');
+    const int32_t len = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(&output[0]),
+                                        reinterpret_cast<const unsigned char *>(input.data()),
+                                        static_cast<int32_t>(input.size()));
+    if (len <= 0) {
+        output.clear();
+        return false;
+    }
+    output.resize(static_cast<size_t>(len));
+    return true;
+}
+
+bool Base64DecodeStd(const std::string &input, std::vector<uint8_t> &output)
+{
+    if (input.empty()) {
+        output.clear();
+        return true;
+    }
+
+    output.assign((input.size() / 4) * 3 + 3, 0);
+    const int32_t decodedLen = EVP_DecodeBlock(reinterpret_cast<unsigned char *>(output.data()),
+                                               reinterpret_cast<const unsigned char *>(input.data()),
+                                               static_cast<int32_t>(input.size()));
+    if (decodedLen < 0) {
+        output.clear();
+        return false;
+    }
+
+    size_t padding = 0;
+    if (!input.empty() && input.back() == '=') {
+        ++padding;
+    }
+    if (input.size() >= 2 && input[input.size() - 2] == '=') {
+        ++padding;
+    }
+
+    const size_t realLen = static_cast<size_t>(decodedLen) >= padding
+                         ? static_cast<size_t>(decodedLen) - padding
+                         : 0;
+    output.resize(realLen);
+    return true;
+}
+
+bool AeadSealResumption(const std::array<uint8_t, kResumptionKeySize> &key,
+                        const std::vector<uint8_t> &plaintext,
+                        std::vector<uint8_t> &sealed)
+{
+    sealed.clear();
+
+    std::array<uint8_t, kResumptionNonceSize> nonce{};
+    if (RAND_bytes(nonce.data(), static_cast<int32_t>(nonce.size())) != 1) {
+        return false;
+    }
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        int32_t status = EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
+        if (status != 1) {
+            break;
+        }
+
+        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, static_cast<int32_t>(nonce.size()), nullptr);
+        if (status != 1) {
+            break;
+        }
+
+        status = EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data());
+        if (status != 1) {
+            break;
+        }
+
+        int32_t aadOutLen = 0;
+        status = EVP_EncryptUpdate(ctx,
+                                   nullptr,
+                                   &aadOutLen,
+                                   reinterpret_cast<const uint8_t *>(kResumptionAad.data()),
+                                   static_cast<int32_t>(kResumptionAad.size()));
+        if (status != 1) {
+            break;
+        }
+
+        std::vector<uint8_t> ciphertext(plaintext.size() + kResumptionTagSize, 0);
+        int32_t outLen = 0;
+        status = EVP_EncryptUpdate(ctx,
+                                   ciphertext.data(),
+                                   &outLen,
+                                   plaintext.data(),
+                                   static_cast<int32_t>(plaintext.size()));
+        if (status != 1) {
+            break;
+        }
+
+        int32_t finalLen = 0;
+        status = EVP_EncryptFinal_ex(ctx, ciphertext.data() + outLen, &finalLen);
+        if (status != 1 || finalLen != 0) {
+            break;
+        }
+
+        std::array<uint8_t, kResumptionTagSize> tag{};
+        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, static_cast<int32_t>(tag.size()), tag.data());
+        if (status != 1) {
+            break;
+        }
+
+        ciphertext.resize(static_cast<size_t>(outLen));
+        sealed.reserve(4 + 1 + nonce.size() + ciphertext.size() + tag.size());
+        sealed.insert(sealed.end(), std::begin(kResumptionStateMagic), std::end(kResumptionStateMagic));
+        sealed.push_back(kResumptionFormatVersion);
+        sealed.insert(sealed.end(), nonce.begin(), nonce.end());
+        sealed.insert(sealed.end(), ciphertext.begin(), ciphertext.end());
+        sealed.insert(sealed.end(), tag.begin(), tag.end());
+        ok = true;
+    } while (false);
+
+    EVP_CIPHER_CTX_free(ctx);
+    return ok;
+}
+
+bool AeadOpenResumption(const std::array<uint8_t, kResumptionKeySize> &key,
+                        const std::vector<uint8_t> &sealed,
+                        std::vector<uint8_t> &plaintext)
+{
+    plaintext.clear();
+    if (sealed.size() < 4 + 1 + kResumptionNonceSize + kResumptionTagSize) {
+        return false;
+    }
+
+    if (std::memcmp(sealed.data(), kResumptionStateMagic, 4) != 0) {
+        return false;
+    }
+    if (sealed[4] != kResumptionFormatVersion) {
+        return false;
+    }
+
+    const uint8_t *nonce = sealed.data() + 5;
+    const uint8_t *ciphertext = nonce + kResumptionNonceSize;
+    const size_t ciphertextLen = sealed.size() - 5 - kResumptionNonceSize - kResumptionTagSize;
+    const uint8_t *tag = sealed.data() + sealed.size() - kResumptionTagSize;
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        int32_t status = EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
+        if (status != 1) {
+            break;
+        }
+
+        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, static_cast<int32_t>(kResumptionNonceSize), nullptr);
+        if (status != 1) {
+            break;
+        }
+
+        status = EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce);
+        if (status != 1) {
+            break;
+        }
+
+        int32_t aadOutLen = 0;
+        status = EVP_DecryptUpdate(ctx,
+                                   nullptr,
+                                   &aadOutLen,
+                                   reinterpret_cast<const uint8_t *>(kResumptionAad.data()),
+                                   static_cast<int32_t>(kResumptionAad.size()));
+        if (status != 1) {
+            break;
+        }
+
+        plaintext.resize(ciphertextLen, 0);
+        int32_t outLen = 0;
+        status = EVP_DecryptUpdate(ctx,
+                                   plaintext.data(),
+                                   &outLen,
+                                   ciphertext,
+                                   static_cast<int32_t>(ciphertextLen));
+        if (status != 1) {
+            break;
+        }
+
+        status = EVP_CIPHER_CTX_ctrl(ctx,
+                                     EVP_CTRL_AEAD_SET_TAG,
+                                     static_cast<int32_t>(kResumptionTagSize),
+                                     const_cast<uint8_t *>(tag));
+        if (status != 1) {
+            break;
+        }
+
+        int32_t finalLen = 0;
+        status = EVP_DecryptFinal_ex(ctx, plaintext.data() + outLen, &finalLen);
+        if (status != 1 || finalLen != 0) {
+            break;
+        }
+
+        plaintext.resize(static_cast<size_t>(outLen));
+        ok = true;
+    } while (false);
+
+    EVP_CIPHER_CTX_free(ctx);
+    return ok;
+}
+
+eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
+{
+    switch (mode) {
+    case eular::utp::Context::kEncryptionAesGcm256:
+        return eular::utp::kFrameCryptoAESGCM256;
+    case eular::utp::Context::kEncryptionAesGcm128:
+    default:
+        return eular::utp::kFrameCryptoAESGCM128;
+    }
+}
+
+eular::utp::Context::EncryptionMode FrameCryptoTypeToEncryptionMode(eular::utp::FrameCryptoType type)
+{
+    switch (type) {
+    case eular::utp::kFrameCryptoAESGCM256:
+        return eular::utp::Context::kEncryptionAesGcm256;
+    case eular::utp::kFrameCryptoAESGCM128:
+    default:
+        return eular::utp::Context::kEncryptionAesGcm128;
+    }
+}
+
+bool InitAesContextByCryptoType(eular::utp::FrameCryptoType type,
+                                const eular::utp::X25519Wrapper::PublicKey &peerPublicKey,
+                                const std::shared_ptr<eular::utp::X25519Wrapper> &x25519,
+                                const std::shared_ptr<eular::utp::AesGcmContext> &aesCtx,
+                                uint32_t noncePrefix)
+{
+    if (!x25519 || !aesCtx) {
+        return false;
+    }
+
+    if (type == eular::utp::kFrameCryptoAESGCM256) {
+        auto sharedSecret = x25519->deriveSharedSecret(peerPublicKey);
+        eular::utp::AesGcmContext::AesKey256 key256;
+        std::copy(sharedSecret.begin(), sharedSecret.end(), key256.begin());
+        return aesCtx->init(key256, noncePrefix);
+    }
+
+    auto sharedSecretShort = x25519->deriveSharedSecretShort(peerPublicKey);
+    eular::utp::AesGcmContext::AesKey128 key128;
+    std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
+    return aesCtx->init(key128, noncePrefix);
+}
+
+bool DecodeTokenEncryptionMode(uint8_t modeRaw, eular::utp::Context::EncryptionMode &mode)
+{
+    switch (modeRaw) {
+    case eular::utp::Context::kEncryptionNone:
+        mode = eular::utp::Context::kEncryptionNone;
+        return true;
+    case eular::utp::Context::kEncryptionAesGcm128:
+        mode = eular::utp::Context::kEncryptionAesGcm128;
+        return true;
+    case eular::utp::Context::kEncryptionAesGcm256:
+        mode = eular::utp::Context::kEncryptionAesGcm256;
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
 namespace eular {
@@ -91,6 +387,27 @@ void ContextImpl::setOnConnectionClosed(const Context::OnConnectionClosed &cb)
 void ContextImpl::setOnZeroRttDecision(const Context::OnZeroRttDecision &cb)
 {
     m_onZeroRttDecision = cb;
+}
+
+void ContextImpl::setOnSessionResumptionReady(const Context::OnSessionResumptionReady &cb)
+{
+    m_onSessionResumptionReady = cb;
+}
+
+void ContextImpl::setResumptionSecret(const std::vector<uint8_t> &secret)
+{
+    if (secret.size() != kResumptionKeySize) {
+        return;
+    }
+
+    std::memcpy(m_resumptionSecret.data(), secret.data(), kResumptionKeySize);
+    m_hasCustomResumptionSecret = true;
+}
+
+void ContextImpl::clearResumptionSecret()
+{
+    m_resumptionSecret.fill(0);
+    m_hasCustomResumptionSecret = false;
 }
 
 void ContextImpl::wantWrite(ConnectionImpl *conn)
@@ -279,9 +596,220 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
     base.encrypted = info.encrypted;
     base.enable_0rtt = true;
     base.session_ticket = info.session_ticket;
+    base.resumption_psk = info.resumption_psk;
     base.early_data = info.early_data;
     base.early_fin = info.early_fin;
+
+    if (base.encrypted != Context::kEncryptionNone && base.resumption_psk.size() != kResumptionKeySize) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "{} 0-rtt encrypted mode requires {}-byte resumption_psk, got {}",
+                      tag(),
+                      kResumptionKeySize,
+                      base.resumption_psk.size());
+        return -1;
+    }
+
+    const uint64_t nowSec = time::RealtimeMs() / 1000;
+    const uint64_t lifetime = std::max<uint32_t>(m_config.zero_rtt_token_max_lifetime, 1);
+    cacheSessionResumptionState(base, nowSec + lifetime);
     return connect(base);
+}
+
+int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInfo &info,
+                                          const std::string &state)
+{
+    if (info.ip.empty() || info.port == 0 || state.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "{} invalid connect0RttWithState input: {}:{} state_size={}",
+                      tag(),
+                      info.ip,
+                      info.port,
+                      state.size());
+        return -1;
+    }
+
+    Context::ConnectInfo base;
+    uint64_t expiresAt = 0;
+    int32_t status = parseSessionResumptionState(state, base, expiresAt);
+    if (status != UTP_ERR_OK) {
+        return -1;
+    }
+
+    const uint64_t nowSec = time::RealtimeMs() / 1000;
+    if (expiresAt > 0 && nowSec > expiresAt) {
+        SetLastErrorV(UTP_ERR_TIMEOUT,
+                      "{} session resumption state expired: now={}, expires_at={}",
+                      tag(),
+                      nowSec,
+                      expiresAt);
+        return -1;
+    }
+
+    base.ip = info.ip;
+    base.port = info.port;
+    base.timeout = info.timeout;
+    base.retries = info.retries;
+    base.enable_0rtt = true;
+    base.early_data = info.early_data;
+    base.early_fin = info.early_fin;
+
+    cacheSessionResumptionState(base, expiresAt);
+    return connect(base);
+}
+
+int32_t ContextImpl::exportSessionResumptionState(std::string &outState)
+{
+    if (!m_hasCachedResumptionState) {
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "{} no cached resumption state to export", tag());
+        return -1;
+    }
+    return buildSessionResumptionState(m_cachedResumptionInfo, m_cachedResumptionExpiresAt, outState);
+}
+
+void ContextImpl::cacheSessionResumptionState(const Context::ConnectInfo &info, uint64_t expiresAt)
+{
+    if (info.session_ticket.empty()) {
+        return;
+    }
+    if (info.encrypted != Context::kEncryptionNone && info.resumption_psk.size() != kResumptionKeySize) {
+        return;
+    }
+
+    m_cachedResumptionInfo = info;
+    m_cachedResumptionExpiresAt = expiresAt;
+    m_hasCachedResumptionState = true;
+    if (m_onSessionResumptionReady) {
+        m_onSessionResumptionReady();
+    }
+}
+
+std::array<uint8_t, 32> ContextImpl::activeResumptionSecret() const
+{
+    if (m_hasCustomResumptionSecret) {
+        return m_resumptionSecret;
+    }
+    return kDefaultResumptionSecret;
+}
+
+int32_t ContextImpl::buildSessionResumptionState(const Context::ConnectInfo &info,
+                                                 uint64_t expiresAt,
+                                                 std::string &outState) const
+{
+    if (info.session_ticket.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} cannot build state without session_ticket", tag());
+        return -1;
+    }
+    if (info.encrypted != Context::kEncryptionNone && info.resumption_psk.size() != kResumptionKeySize) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "{} encrypted state requires {}-byte resumption_psk, got {}",
+                      tag(),
+                      kResumptionKeySize,
+                      info.resumption_psk.size());
+        return -1;
+    }
+
+    const uint16_t ticketSize = static_cast<uint16_t>(std::min<size_t>(info.session_ticket.size(), UINT16_MAX));
+    const uint8_t pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumption_psk.size(), UINT8_MAX));
+
+    std::vector<uint8_t> plain(4 + 1 + 8 + 2 + ticketSize + 1 + pskSize, 0);
+    uint8_t *offset = plain.data();
+    size_t left = plain.size();
+    const uint32_t utpVersion = 1;
+    offset = Serialize::SerializeTo(offset, left, utpVersion);
+    offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(info.encrypted));
+    offset = Serialize::SerializeTo(offset, left, expiresAt);
+    offset = Serialize::SerializeTo(offset, left, ticketSize);
+    if (offset == nullptr || left < ticketSize) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "{} build state overflow on session_ticket", tag());
+        return -1;
+    }
+    std::memcpy(offset, info.session_ticket.data(), ticketSize);
+    offset += ticketSize;
+    left -= ticketSize;
+    offset = Serialize::SerializeTo(offset, left, pskSize);
+    if (offset == nullptr || left < pskSize) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "{} build state overflow on resumption_psk", tag());
+        return -1;
+    }
+    if (pskSize > 0) {
+        std::memcpy(offset, info.resumption_psk.data(), pskSize);
+    }
+
+    std::vector<uint8_t> sealed;
+    const auto key = activeResumptionSecret();
+    if (!AeadSealResumption(key, plain, sealed)) {
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to encrypt session resumption state", tag());
+        return -1;
+    }
+
+    if (!Base64EncodeStd(sealed, outState)) {
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to base64 encode session resumption state", tag());
+        return -1;
+    }
+    return UTP_ERR_OK;
+}
+
+int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
+                                                 Context::ConnectInfo &outInfo,
+                                                 uint64_t &expiresAt) const
+{
+    std::vector<uint8_t> sealed;
+    if (!Base64DecodeStd(state, sealed)) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid standard base64 session resumption state", tag());
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    std::vector<uint8_t> plain;
+    const auto key = activeResumptionSecret();
+    if (!AeadOpenResumption(key, sealed, plain)) {
+        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "{} failed to decrypt session resumption state", tag());
+        return UTP_ERR_CRYPTO_DECRYPTION;
+    }
+
+    const uint8_t *offset = plain.data();
+    size_t left = plain.size();
+    uint32_t version = 0;
+    uint8_t modeRaw = 0;
+    uint16_t ticketSize = 0;
+    uint8_t pskSize = 0;
+
+    offset = Serialize::DeserializeFrom(offset, left, version);
+    offset = Serialize::DeserializeFrom(offset, left, modeRaw);
+    offset = Serialize::DeserializeFrom(offset, left, expiresAt);
+    offset = Serialize::DeserializeFrom(offset, left, ticketSize);
+    if (offset == nullptr || left < ticketSize) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(ticket)", tag());
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    outInfo.session_ticket.assign(offset, offset + ticketSize);
+    offset += ticketSize;
+    left -= ticketSize;
+
+    offset = Serialize::DeserializeFrom(offset, left, pskSize);
+    if (offset == nullptr || left < pskSize) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(psk)", tag());
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    outInfo.resumption_psk.assign(offset, offset + pskSize);
+    Context::EncryptionMode mode = Context::kEncryptionNone;
+    if (!DecodeTokenEncryptionMode(modeRaw, mode)) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid encryption_mode in resumption state", tag());
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    outInfo.encrypted = mode;
+    if (outInfo.encrypted != Context::kEncryptionNone && outInfo.resumption_psk.size() != kResumptionKeySize) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "{} invalid resumption_psk size in encrypted state: {}",
+                      tag(),
+                      outInfo.resumption_psk.size());
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    (void)version;
+    return UTP_ERR_OK;
 }
 
 int32_t ContextImpl::accept()
@@ -392,7 +920,7 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         return UTP_ERR_OK;
     };
 
-    if (pending.encrypted) {
+    if (pending.encrypted != Context::kEncryptionNone) {
         if (!pending.x25519) {
             pending.x25519 = std::make_shared<X25519Wrapper>();
         }
@@ -405,7 +933,7 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         localTp.max_ack_delay = m_config.ack_delay;
 
         FrameCrypto crypto;
-        crypto.crypto_type = kFrameCryptoAESGCM128;
+        crypto.crypto_type = EncryptionModeToFrameCryptoType(pending.encrypted);
         crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
         crypto.tp = &localTp;
         crypto.eph_pubkey = const_cast<uint8_t *>(pending.x25519->publicKey().data());
@@ -557,7 +1085,8 @@ TokenAuth *ContextImpl::tokenAuth()
 bool ContextImpl::validateZeroRttTicket(const Address &peerAddress,
                                         const std::vector<uint8_t> &ticket,
                                         uint16_t validityPeriod,
-                                        uint32_t &ticketCid)
+                                        uint32_t &ticketCid,
+                                        Context::EncryptionMode &encryptionMode)
 {
     if (!peerAddress.isValid() || ticket.size() != TOKEN_SIZE) {
         return false;
@@ -610,6 +1139,10 @@ bool ContextImpl::validateZeroRttTicket(const Address &peerAddress,
     }
 
     if ((nowSec - tokenMeta.timestamp) > maxLifetime) {
+        return false;
+    }
+
+    if (!DecodeTokenEncryptionMode(tokenMeta.encryption_mode, encryptionMode)) {
         return false;
     }
 
@@ -929,23 +1462,30 @@ void ContextImpl::onReadEvent()
                     continue;
                 }
 
+                ++m_stat.zero_rtt_offered;
+
                 uint32_t ticketCid = 0;
+                Context::EncryptionMode ticketEncryptionMode = Context::kEncryptionNone;
                 if (!validateZeroRttTicket(msg.metaInfo.peerAddress,
                                            sessionToken.token,
                                            sessionToken.token_validity_period,
-                                           ticketCid)) {
+                                           ticketCid,
+                                           ticketEncryptionMode)) {
                     PendingIncomingConnection decision;
+                    decision.localCid = 0;
                     decision.peerAddress = msg.metaInfo.peerAddress;
                     decision.peerIp = msg.metaInfo.peerAddress.toIpString();
                     decision.peerCid = scid;
                     decision.zeroRttAccepted = false;
                     ++m_stat.zero_rtt_rejected;
                     reportZeroRttDecision(decision, false, "invalid_ticket");
+                    (void)sendPendingConnectionClose(decision, UTP_ERR_INVALID_PARAM, "invalid_ticket");
                     continue;
                 }
 
                 if (!rememberZeroRttNonce(ticketCid, pn)) {
                     PendingIncomingConnection decision;
+                    decision.localCid = 0;
                     decision.peerAddress = msg.metaInfo.peerAddress;
                     decision.peerIp = msg.metaInfo.peerAddress.toIpString();
                     decision.peerCid = scid;
@@ -953,6 +1493,37 @@ void ContextImpl::onReadEvent()
                     ++m_stat.zero_rtt_rejected;
                     ++m_stat.zero_rtt_replay_rejected;
                     reportZeroRttDecision(decision, false, "replay");
+                    (void)sendPendingConnectionClose(decision, UTP_ERR_CANCELLED, "replay");
+                    continue;
+                }
+
+                PendingIncomingConnection decision;
+                decision.localCid = 0;
+                decision.peerAddress = msg.metaInfo.peerAddress;
+                decision.peerIp = msg.metaInfo.peerAddress.toIpString();
+                decision.peerCid = scid;
+                decision.zeroRttAccepted = true;
+                ++m_stat.zero_rtt_accepted;
+                reportZeroRttDecision(decision, true, "accepted");
+
+                Context::NewConnectionInfo newInfo;
+                newInfo.remote_ip = msg.metaInfo.peerAddress.toIpString();
+                newInfo.remote_port = msg.metaInfo.peerAddress.port();
+                newInfo.local_cid = 0;
+                newInfo.peer_cid = scid;
+                newInfo.encrypted = ticketEncryptionMode;
+
+                bool accepted = true;
+                if (m_onNewConnection) {
+                    accepted = m_onNewConnection(newInfo);
+                }
+                if (!accepted) {
+                    PendingIncomingConnection decision;
+                    decision.localCid = 0;
+                    decision.peerAddress = msg.metaInfo.peerAddress;
+                    decision.peerIp = msg.metaInfo.peerAddress.toIpString();
+                    decision.peerCid = scid;
+                    (void)sendPendingConnectionClose(decision, UTP_ERR_CANCELLED, "connection rejected");
                     continue;
                 }
 
@@ -961,26 +1532,11 @@ void ContextImpl::onReadEvent()
                     continue;
                 }
 
-                Context::NewConnectionInfo newInfo;
-                newInfo.remote_ip = msg.metaInfo.peerAddress.toIpString();
-                newInfo.remote_port = msg.metaInfo.peerAddress.port();
-                newInfo.local_cid = localCid;
-                newInfo.peer_cid = scid;
-                newInfo.encrypted = false;
-
-                bool accepted = true;
-                if (m_onNewConnection) {
-                    accepted = m_onNewConnection(newInfo);
-                }
-                if (!accepted) {
-                    continue;
-                }
-
                 Context::ConnectInfo info;
                 info.ip = newInfo.remote_ip;
                 info.port = newInfo.remote_port;
                 info.timeout = m_config.handshake_timeout;
-                info.encrypted = false;
+                info.encrypted = ticketEncryptionMode;
 
                 ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, localCid);
                 if (conn->initPassive(info,
@@ -1007,13 +1563,13 @@ void ContextImpl::onReadEvent()
                 sendCtx.peerCid = scid;
                 sendCtx.peerAddress = msg.metaInfo.peerAddress;
                 sendCtx.peerIp = msg.metaInfo.peerAddress.toIpString();
-                sendCtx.encrypted = false;
+                sendCtx.encrypted = ticketEncryptionMode;
                 (void)sendPendingHandshake(sendCtx);
 
-                conn->onUdpPacket(msg);
                 if (m_onConnected) {
                     m_onConnected(conn);
                 }
+                conn->onUdpPacket(msg);
                 continue;
             }
 
@@ -1062,7 +1618,9 @@ void ContextImpl::onReadEvent()
             pending.peerCid = scid;
             pending.peerAddress = msg.metaInfo.peerAddress;
             pending.peerIp = msg.metaInfo.peerAddress.toIpString();
-            pending.encrypted = initialPacket.hasFrame(kFrameCrypto);
+            pending.encrypted = initialPacket.hasFrame(kFrameCrypto)
+                             ? Context::kEncryptionAesGcm128
+                             : Context::kEncryptionNone;
 
             size_t frameOffset = 0;
             while (frameOffset < initialPacket.payload_size) {
@@ -1073,13 +1631,14 @@ void ContextImpl::onReadEvent()
                     break;
                 }
 
-                if (frameType == kFrameCrypto && pending.encrypted && pending.aesCtx == nullptr) {
+                if (frameType == kFrameCrypto && pending.aesCtx == nullptr) {
                     TransportParams peerTp;
                     std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubKey{};
                     FrameCrypto crypto;
                     crypto.tp = &peerTp;
                     crypto.eph_pubkey = peerPubKey.data();
                     if (crypto.decode(frameData, frameLen) >= 0) {
+                        pending.encrypted = FrameCryptoTypeToEncryptionMode(crypto.crypto_type);
                         pending.peerTp = peerTp;
                         if (!pending.x25519) {
                             pending.x25519 = std::make_shared<X25519Wrapper>();
@@ -1089,13 +1648,13 @@ void ContextImpl::onReadEvent()
                             X25519Wrapper::PublicKey peerPublicKey;
                             std::memcpy(peerPublicKey.data(), peerPubKey.data(), peerPublicKey.size());
 
-                            auto sharedSecretShort = pending.x25519->deriveSharedSecretShort(peerPublicKey);
-                            AesGcmContext::AesKey128 key128;
-                            std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
-
                             pending.aesCtx = std::make_shared<AesGcmContext>();
                             const uint32_t noncePrefix = pending.localCid ^ pending.peerCid;
-                            if (!pending.aesCtx->init(key128, noncePrefix)) {
+                            if (!InitAesContextByCryptoType(crypto.crypto_type,
+                                                            peerPublicKey,
+                                                            pending.x25519,
+                                                            pending.aesCtx,
+                                                            noncePrefix)) {
                                 pending.aesCtx.reset();
                             }
                         } catch (const std::exception &) {
@@ -1113,10 +1672,19 @@ void ContextImpl::onReadEvent()
 
                     pending.zeroRttOffered = true;
                     ++m_stat.zero_rtt_offered;
+                    Context::EncryptionMode ticketEncryptionMode = Context::kEncryptionNone;
                     pending.zeroRttAccepted = validateZeroRttTicket(msg.metaInfo.peerAddress,
                                                                     sessionToken.token,
                                                                     sessionToken.token_validity_period,
-                                                                    pending.zeroRttTokenCid);
+                                                                    pending.zeroRttTokenCid,
+                                                                    ticketEncryptionMode);
+                    if (pending.zeroRttAccepted) {
+                        if (pending.encrypted == Context::kEncryptionNone) {
+                            pending.encrypted = ticketEncryptionMode;
+                        } else if (pending.encrypted != ticketEncryptionMode) {
+                            pending.zeroRttAccepted = false;
+                        }
+                    }
                     if (pending.zeroRttAccepted) {
                         ++m_stat.zero_rtt_accepted;
                         reportZeroRttDecision(pending, true, "accepted");
@@ -1130,6 +1698,8 @@ void ContextImpl::onReadEvent()
 
             m_pendingIncomingPeerIndex.emplace(key, localCid);
             m_pendingIncoming.emplace(localCid, pending);
+            m_pendingIncomingQueue.push_back(localCid);
+
             Context::NewConnectionInfo info;
             info.remote_ip = pending.peerIp;
             info.remote_port = pending.peerAddress.port();
@@ -1142,12 +1712,14 @@ void ContextImpl::onReadEvent()
                 accepted = m_onNewConnection(info);
             }
 
-            if (accepted) {
-                m_pendingIncomingQueue.push_back(localCid);
-            } else {
-                auto rejectIt = m_pendingIncoming.find(localCid);
-                if (rejectIt != m_pendingIncoming.end()) {
-                    (void)sendPendingConnectionClose(rejectIt->second, UTP_ERR_CANCELLED, "connection rejected");
+            auto queuedPendingIt = m_pendingIncoming.find(localCid);
+            const bool alreadyAccepted = queuedPendingIt != m_pendingIncoming.end()
+                                      && queuedPendingIt->second.handshakeSent;
+            if (!accepted && !alreadyAccepted) {
+                if (queuedPendingIt != m_pendingIncoming.end()) {
+                    (void)sendPendingConnectionClose(queuedPendingIt->second,
+                                                     UTP_ERR_CANCELLED,
+                                                     "connection rejected");
                 }
                 removePendingIncoming(localCid);
             }

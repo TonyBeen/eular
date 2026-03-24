@@ -18,6 +18,7 @@
 
 using eular::utp::Address;
 using eular::utp::Config;
+using eular::utp::Context;
 using eular::utp::ContextImpl;
 using eular::utp::TokenAuth;
 using eular::utp::TokenMeta;
@@ -31,6 +32,7 @@ TokenMeta BuildZeroRttMeta(const Address &address, uint32_t timestamp)
     meta.token_type = static_cast<uint8_t>(TokenType::kZeroRttResumption);
     meta.timestamp = timestamp;
     meta.cid = 12345;
+    meta.encryption_mode = static_cast<uint8_t>(Context::kEncryptionAesGcm256);
     meta.version = 1;
     meta.secret = 7;
     meta.family = static_cast<uint16_t>(address.family());
@@ -73,8 +75,10 @@ TEST_CASE("ContextImpl: validateZeroRttTicket accepts valid bound token", "[Cont
     std::vector<uint8_t> token = BuildToken(ctx.tokenAuth(), meta);
 
     uint32_t ticketCid = 0;
-    REQUIRE(ctx.validateZeroRttTicket(peer, token, 300, ticketCid));
+    Context::EncryptionMode mode = Context::kEncryptionNone;
+    REQUIRE(ctx.validateZeroRttTicket(peer, token, 300, ticketCid, mode));
     REQUIRE(ticketCid == meta.cid);
+    REQUIRE(mode == Context::kEncryptionAesGcm256);
 }
 
 TEST_CASE("ContextImpl: validateZeroRttTicket rejects peer mismatch", "[Context][0RTT]")
@@ -92,7 +96,8 @@ TEST_CASE("ContextImpl: validateZeroRttTicket rejects peer mismatch", "[Context]
     std::vector<uint8_t> token = BuildToken(ctx.tokenAuth(), meta);
 
     uint32_t ticketCid = 0;
-    REQUIRE_FALSE(ctx.validateZeroRttTicket(packetPeer, token, 300, ticketCid));
+    Context::EncryptionMode mode = Context::kEncryptionNone;
+    REQUIRE_FALSE(ctx.validateZeroRttTicket(packetPeer, token, 300, ticketCid, mode));
 }
 
 TEST_CASE("ContextImpl: validateZeroRttTicket rejects expired token", "[Context][0RTT]")
@@ -109,7 +114,8 @@ TEST_CASE("ContextImpl: validateZeroRttTicket rejects expired token", "[Context]
     std::vector<uint8_t> token = BuildToken(ctx.tokenAuth(), meta);
 
     uint32_t ticketCid = 0;
-    REQUIRE_FALSE(ctx.validateZeroRttTicket(peer, token, 10, ticketCid));
+    Context::EncryptionMode mode = Context::kEncryptionNone;
+    REQUIRE_FALSE(ctx.validateZeroRttTicket(peer, token, 10, ticketCid, mode));
 }
 
 TEST_CASE("ContextImpl: rememberZeroRttNonce rejects duplicates within replay window", "[Context][0RTT]")

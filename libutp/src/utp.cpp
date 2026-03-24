@@ -51,6 +51,31 @@ void Context::setOnZeroRttDecision(const OnZeroRttDecision &cb)
     m_impl->setOnZeroRttDecision(cb);
 }
 
+void Context::setOnSessionResumptionReady(const OnSessionResumptionReady &cb)
+{
+    m_impl->setOnSessionResumptionReady(cb);
+}
+
+void Context::setResumptionSecret(const std::vector<uint8_t> &secret)
+{
+    m_impl->setResumptionSecret(secret);
+}
+
+void Context::clearResumptionSecret()
+{
+    m_impl->clearResumptionSecret();
+}
+
+int32_t Context::exportSessionResumptionState(std::string &outState)
+{
+    return m_impl->exportSessionResumptionState(outState);
+}
+
+int32_t Context::connect0RttWithState(const Connect0RttWithStateInfo &info, const std::string &state)
+{
+    return m_impl->connect0RttWithState(info, state);
+}
+
 Context::Statistic Context::statistic() const
 {
     return m_impl->statistic();

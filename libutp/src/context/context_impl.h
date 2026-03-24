@@ -59,6 +59,9 @@ public:
     void setOnNewConnection(const Context::OnNewConnection &cb);
     void setOnConnectionClosed(const Context::OnConnectionClosed &cb);
     void setOnZeroRttDecision(const Context::OnZeroRttDecision &cb);
+    void setOnSessionResumptionReady(const Context::OnSessionResumptionReady &cb);
+    void setResumptionSecret(const std::vector<uint8_t> &secret);
+    void clearResumptionSecret();
     void wantWrite(ConnectionImpl *conn);
 
     event_base*     loop() const { return m_base; }
@@ -69,6 +72,8 @@ public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
     int32_t connect(const Context::ConnectInfo &info);
     int32_t connect0Rtt(const Context::Connect0RttInfo &info);
+    int32_t connect0RttWithState(const Context::Connect0RttWithStateInfo &info, const std::string &state);
+    int32_t exportSessionResumptionState(std::string &outState);
     int32_t accept();
 
 private:
@@ -77,7 +82,7 @@ private:
         uint32_t                peerCid{0};
         Address                 peerAddress;
         std::string             peerIp;
-        bool                    encrypted{false};
+        Context::EncryptionMode encrypted{Context::kEncryptionNone};
         bool                    zeroRttOffered{false};
         bool                    zeroRttAccepted{false};
         uint32_t                zeroRttTokenCid{0};
@@ -113,9 +118,18 @@ private:
     bool validateZeroRttTicket(const Address &peerAddress,
                                const std::vector<uint8_t> &ticket,
                                uint16_t validityPeriod,
-                               uint32_t &ticketCid);
+                               uint32_t &ticketCid,
+                               Context::EncryptionMode &encryptionMode);
     void purgeZeroRttReplayCache(uint64_t nowMs);
     bool rememberZeroRttNonce(uint32_t ticketCid, uint64_t nonce, uint64_t nowMs = 0);
+    int32_t buildSessionResumptionState(const Context::ConnectInfo &info,
+                                        uint64_t expiresAt,
+                                        std::string &outState) const;
+    int32_t parseSessionResumptionState(const std::string &state,
+                                        Context::ConnectInfo &outInfo,
+                                        uint64_t &expiresAt) const;
+    void cacheSessionResumptionState(const Context::ConnectInfo &info, uint64_t expiresAt);
+    std::array<uint8_t, 32> activeResumptionSecret() const;
 
 private:
     void onReadEvent();
@@ -136,6 +150,7 @@ private:
     Context::OnNewConnection    m_onNewConnection;
     Context::OnConnectionClosed m_onConnectionClosed;
     Context::OnZeroRttDecision  m_onZeroRttDecision;
+    Context::OnSessionResumptionReady m_onSessionResumptionReady;
 
     using ConnectionMap = std::unordered_map<uint32_t, ConnectionImpl::SP>; // cid -> ConnectionImpl
     ConnectionMap                   m_connections;          // 所有连接容器
@@ -147,6 +162,12 @@ private:
     std::list<uint32_t>             m_pendingIncomingQueue; // 回调通知后的待 accept 队列
     std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
     std::unique_ptr<TokenAuth>      m_tokenAuth;
+
+    std::array<uint8_t, 32>         m_resumptionSecret{};
+    bool                            m_hasCustomResumptionSecret{false};
+    bool                            m_hasCachedResumptionState{false};
+    Context::ConnectInfo            m_cachedResumptionInfo{};
+    uint64_t                        m_cachedResumptionExpiresAt{0};
 
     struct ZeroRttReplayKey {
         uint32_t ticketCid{0};

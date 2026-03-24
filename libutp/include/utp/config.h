@@ -28,9 +28,10 @@ public:
 
     // keepalive
     bool        enable_keepalive = true;    // 开启keepalive
-    uint32_t    keepalive_interval = 0;     // keepalive间隔时间(ms), 指定时间内未发送数据则发送keepalive包. 0表示采用 kMaxIdleTimeout - 3 * RTT
+    uint32_t    keepalive_interval = 0;     // 本地保活探测间隔(ms). 0表示使用 max_idle_timeout 作为本地基准；实际发送间隔会与对端TP(max_idle_timeout-RTT裕量)取较小值
     uint32_t    keepalive_timeout = 1500;   // keepalive超时时间(ms)
     uint16_t    keepalive_probes = 3;       // keepalive探测次数
+    uint32_t    max_idle_timeout = 30000;   // 本地默认空闲保活阈值(ms), 仅当 keepalive_interval=0 时作为本地基准
 
     // token / 0-rtt
     uint32_t    zero_rtt_token_max_lifetime = 600; // 0-RTT token 最长时效(s)
@@ -45,14 +46,13 @@ public:
     uint32_t    clock_granularity_us = 1;   // pacer时钟粒度(us), 影响RTT的测量精度和拥塞控制的性能
 
     // ack
+    uint8_t     ack_every_n_packets = 10;  // 连续收到多少个 ack-eliciting 包后立即回 Ack
     uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt
     uint8_t     max_ack_range_size = 149;   // 一个Ack帧可容纳的AckRange的数量
-    uint8_t     ack_delay_exponent = 3;     // ack延迟指数，ack延迟时间 = ack_delay << ack_dely_exponent us
-    uint16_t    ack_every_n_packets  = 10;  // 包号计数阈值
+    uint8_t     ack_delay_exponent = 3;     // ack延迟指数，ack延迟时间 = FrameAck::ack_delay << ack_dely_exponent us
     uint16_t    ack_delay = 150;            // 最大ack延迟时间(ms)
 
     // tp
-    uint32_t    max_idle_timeout = 30000;   // 最大空闲超时时间(ms), 30s
     uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
     uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
     uint16_t    init_max_streams_uni = 32;  // 初始单向流数量

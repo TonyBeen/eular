@@ -96,7 +96,8 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
         return false;
     }
     // AAD
-    status = EVP_EncryptUpdate(m_sealCtx, nullptr, nullptr,
+    int32_t aadOutLen = 0;
+    status = EVP_EncryptUpdate(m_sealCtx, nullptr, &aadOutLen,
                                reinterpret_cast<const uint8_t *>(tokenAad.data()),
                                static_cast<int32_t>(tokenAad.size()));
     if (status != 1) {
@@ -226,6 +227,7 @@ void TokenAuth::encode(const TokenMeta &meta, std::array<uint8_t, TOKEN_META_SIZ
     offset = Serialize::SerializeTo(offset, size, meta.token_type);
     offset = Serialize::SerializeTo(offset, size, meta.timestamp);
     offset = Serialize::SerializeTo(offset, size, meta.cid);
+    offset = Serialize::SerializeTo(offset, size, meta.encryption_mode);
     offset = Serialize::SerializeTo(offset, size, meta.version);
     offset = Serialize::SerializeTo(offset, size, meta.secret);
     offset = Serialize::SerializeTo(offset, size, meta.family);
@@ -239,6 +241,7 @@ void TokenAuth::decode(const std::array<uint8_t, TOKEN_META_SIZE> &plaintext, To
     offset = Serialize::DeserializeFrom(offset, size, meta.token_type);
     offset = Serialize::DeserializeFrom(offset, size, meta.timestamp);
     offset = Serialize::DeserializeFrom(offset, size, meta.cid);
+    offset = Serialize::DeserializeFrom(offset, size, meta.encryption_mode);
     offset = Serialize::DeserializeFrom(offset, size, meta.version);
     offset = Serialize::DeserializeFrom(offset, size, meta.secret);
     offset = Serialize::DeserializeFrom(offset, size, meta.family);

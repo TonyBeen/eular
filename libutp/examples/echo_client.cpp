@@ -172,7 +172,7 @@ int main(int argc, char **argv)
     info.ip = serverIp;
     info.port = serverPort;
     info.timeout = 5000;
-    info.encrypted = false;
+    info.encrypted = eular::utp::Context::kEncryptionNone;
     const int32_t connectStatus = ctx.connect(info);
     if (connectStatus != UTP_ERR_OK) {
         std::cerr << "[client] connect start failed: " << connectStatus << "\n";
