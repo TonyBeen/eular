@@ -40,6 +40,9 @@
 
 #include "crypto/x25519_wrapper.h"
 #include "crypto/aes_gcm_context.h"
+#include "crypto/base64.h"
+#include "crypto/resumption_state_codec.h"
+#include "crypto/token.h"
 
 #include "make_unique.hpp"
 
@@ -322,6 +325,24 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttC
     m_ackProfileBaselineSrttUs = 0;
     m_zeroRttEarlyDataSent = false;
     m_zeroRttEarlyStreamId = 0;
+    m_sessionTokenIssued = false;
+    m_hasCachedResumptionState = false;
+    m_cachedResumptionInfo = CachedResumptionState{};
+    m_cachedResumptionExpiresAt = 0;
+    if (m_zeroRttConfig.enabled()) {
+        CachedResumptionState cached;
+        cached.encrypted = info.encrypted;
+        cached.sessionTicket = m_zeroRttConfig.sessionTicket;
+        cached.resumptionPsk = m_zeroRttConfig.resumptionPsk;
+
+        uint64_t expiresAt = m_zeroRttConfig.expiresAtSec;
+        if (expiresAt == 0 && m_ctx && m_ctx->config()) {
+            const uint64_t nowSec = time::RealtimeMs() / 1000;
+            const uint64_t lifetime = std::max<uint32_t>(m_ctx->config()->zero_rtt_token_max_lifetime, 1);
+            expiresAt = nowSec + lifetime;
+        }
+        cacheSessionResumptionState(cached, expiresAt);
+    }
     stopAckTimer();
     m_keepaliveTimer.stop();
 
@@ -373,10 +394,15 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     m_ackProfileCandidateSinceUs = 0;
     m_ackProfileLastSentMs = 0;
     m_ackProfileBaselineSrttUs = 0;
+    m_sessionTokenIssued = false;
+    m_hasCachedResumptionState = false;
+    m_cachedResumptionInfo = CachedResumptionState{};
+    m_cachedResumptionExpiresAt = 0;
     stopAckTimer();
 
     m_state = State::kStateConnected;
     markPeerActivity(time::MonotonicUs());
+    scheduleWrite();
     return UTP_ERR_OK;
 }
 
@@ -570,6 +596,24 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             }
             break;
         }
+        case kFrameSessionToken: {
+            FrameSessionToken sessionToken;
+            if (sessionToken.decode(frameData, frameLen) >= 0 && m_ctx != nullptr && m_ctx->config() != nullptr) {
+                if (sessionToken.token.size() == TOKEN_SIZE && sessionToken.token_validity_period > 0) {
+                    CachedResumptionState cached;
+                    cached.encrypted = Context::kEncryptionNone;
+                    cached.sessionTicket = sessionToken.token;
+
+                    uint32_t lifetime = m_ctx->config()->zero_rtt_token_max_lifetime;
+                    lifetime = std::min<uint32_t>(lifetime, sessionToken.token_validity_period);
+                    if (lifetime > 0) {
+                        const uint64_t nowSec = time::RealtimeMs() / 1000;
+                        cacheSessionResumptionState(cached, nowSec + lifetime);
+                    }
+                }
+            }
+            break;
+        }
         case kFrameCrypto: {
             TransportParams peerTp;
             std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubkey{};
@@ -743,6 +787,13 @@ void ConnectionImpl::onWrite()
     }
 
     trySendZeroRttEarlyData();
+
+    if (m_state == State::kStateConnected) {
+        const int32_t tokenStatus = maybeSendSessionTokenPacket();
+        if (tokenStatus == UTP_ERR_WOULD_BLOCK) {
+            scheduleWrite();
+        }
+    }
 
     if (m_networkPath.needPathValidation() && !m_networkPath.hasInFlightChallenge()) {
         maybeSendPathChallenge();
@@ -1442,6 +1493,55 @@ int32_t ConnectionImpl::sendHandshakeDonePacket()
     return status;
 }
 
+int32_t ConnectionImpl::maybeSendSessionTokenPacket()
+{
+    if (m_sessionTokenIssued || m_isClientInitiator || m_state != State::kStateConnected) {
+        return UTP_ERR_OK;
+    }
+
+    if (m_ctx == nullptr || m_peerConnectionID == 0 || !m_peerAddress.isValid()) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
+    uint16_t validityPeriod = 0;
+    std::vector<uint8_t> token;
+    if (!m_ctx->buildZeroRttSessionToken(m_peerAddress,
+                                         m_localConnectionID,
+                                         m_connectInfo.encrypted,
+                                         validityPeriod,
+                                         token)) {
+        return UTP_ERR_OK;
+    }
+
+    CachedResumptionState cached;
+    cached.encrypted = m_connectInfo.encrypted;
+    cached.sessionTicket = token;
+    const uint64_t nowSec = time::RealtimeMs() / 1000;
+    cacheSessionResumptionState(cached, nowSec + validityPeriod);
+
+    FrameSessionToken frame;
+    frame.token = token;
+    frame.token_size = static_cast<uint8_t>(frame.token.size());
+    frame.token_validity_period = validityPeriod;
+
+    std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()), 0);
+    int32_t frameLen = frame.encode(payload.data(), payload.size());
+    if (frameLen < 0) {
+        return -1;
+    }
+
+    const int32_t status = sendPacket(UTP_TYPE_CTRL,
+                                      payload.data(),
+                                      static_cast<size_t>(frameLen),
+                                      0,
+                                      nullptr,
+                                      (1u << static_cast<uint32_t>(kFrameSessionToken)));
+    if (status == UTP_ERR_OK) {
+        m_sessionTokenIssued = true;
+    }
+    return status;
+}
+
 int32_t ConnectionImpl::sendInitialPacket()
 {
     std::vector<uint8_t> payload;
@@ -2108,6 +2208,11 @@ void ConnectionImpl::registerStreamCreated(const OnStreamCreated &cb)
     m_onStreamCreated = cb;
 }
 
+void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
+{
+    m_onSessionTokenReady = cb;
+}
+
 int32_t ConnectionImpl::streamCount(StreamType streamType) const
 {
     return static_cast<int32_t>(activeStreamCount(streamType));
@@ -2147,6 +2252,106 @@ Connection::Description ConnectionImpl::description() const
     desc.remoteHost = m_connectInfo.ip;
     desc.remotePort = m_connectInfo.port;
     return desc;
+}
+
+int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t> &outToken)
+{
+    if (!m_hasCachedResumptionState || m_cachedResumptionInfo.sessionTicket.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no cached session token", m_localConnectionID);
+        return -1;
+    }
+
+    outToken = m_cachedResumptionInfo.sessionTicket;
+    return UTP_ERR_OK;
+}
+
+int32_t ConnectionImpl::exportSessionResumptionState(std::string &outState)
+{
+    if (!m_hasCachedResumptionState) {
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no cached resumption state", m_localConnectionID);
+        return -1;
+    }
+
+    return buildSessionResumptionState(m_cachedResumptionInfo, m_cachedResumptionExpiresAt, outState);
+}
+
+void ConnectionImpl::cacheSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt)
+{
+    if (info.sessionTicket.empty()) {
+        return;
+    }
+    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
+        return;
+    }
+
+    m_cachedResumptionInfo = info;
+    m_cachedResumptionExpiresAt = expiresAt;
+    m_hasCachedResumptionState = true;
+    if (m_onSessionTokenReady) {
+        m_onSessionTokenReady();
+    }
+}
+
+int32_t ConnectionImpl::buildSessionResumptionState(const CachedResumptionState &info,
+                                                    uint64_t expiresAt,
+                                                    std::string &outState) const
+{
+    if (m_ctx == nullptr) {
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no context", m_localConnectionID);
+        return -1;
+    }
+    if (info.sessionTicket.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "connection {} cannot build state without session ticket", m_localConnectionID);
+        return -1;
+    }
+    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "connection {} encrypted state requires {}-byte psk, got {}",
+                      m_localConnectionID,
+                      ResumptionStateCodec::KEY_SIZE,
+                      info.resumptionPsk.size());
+        return -1;
+    }
+
+    const uint16_t ticketSize = static_cast<uint16_t>(std::min<size_t>(info.sessionTicket.size(), UINT16_MAX));
+    const uint8_t pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumptionPsk.size(), UINT8_MAX));
+    std::vector<uint8_t> plain(4 + 1 + 8 + 2 + ticketSize + 1 + pskSize, 0);
+
+    uint8_t *offset = plain.data();
+    size_t left = plain.size();
+    const uint32_t utpVersion = 1;
+    offset = Serialize::SerializeTo(offset, left, utpVersion);
+    offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(info.encrypted));
+    offset = Serialize::SerializeTo(offset, left, expiresAt);
+    offset = Serialize::SerializeTo(offset, left, ticketSize);
+    if (offset == nullptr || left < ticketSize) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "connection {} build state overflow on session ticket", m_localConnectionID);
+        return -1;
+    }
+    std::memcpy(offset, info.sessionTicket.data(), ticketSize);
+    offset += ticketSize;
+    left -= ticketSize;
+
+    offset = Serialize::SerializeTo(offset, left, pskSize);
+    if (offset == nullptr || left < pskSize) {
+        SetLastErrorV(UTP_ERR_OVERFLOW, "connection {} build state overflow on resumption psk", m_localConnectionID);
+        return -1;
+    }
+    if (pskSize > 0) {
+        std::memcpy(offset, info.resumptionPsk.data(), pskSize);
+    }
+
+    std::vector<uint8_t> sealed;
+    const auto key = m_ctx->resumptionSecret();
+    if (!ResumptionStateCodec::Seal(key, plain, sealed)) {
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "connection {} failed to seal resumption state", m_localConnectionID);
+        return -1;
+    }
+    if (!Base64::EncodeStd(sealed, outState)) {
+        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "connection {} failed to encode resumption state", m_localConnectionID);
+        return -1;
+    }
+    return UTP_ERR_OK;
 }
 
 int32_t ConnectionImpl::createStream(StreamType streamType)

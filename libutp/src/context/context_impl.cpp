@@ -217,11 +217,6 @@ void ContextImpl::setOnZeroRttDecision(const Context::OnZeroRttDecision &cb)
     m_onZeroRttDecision = cb;
 }
 
-void ContextImpl::setOnSessionTokenReady(const Context::OnSessionTokenReady &cb)
-{
-    m_onSessionTokenReady = cb;
-}
-
 void ContextImpl::setResumptionSecret(const std::vector<uint8_t> &secret)
 {
     if (secret.size() != ResumptionStateCodec::KEY_SIZE) {
@@ -453,14 +448,9 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
     zeroRtt.earlyData = info.early_data;
     zeroRtt.earlyFin = info.early_fin;
     zeroRtt.source = ConnectionImpl::ZeroRttConfig::kSourceSessionToken;
-
-    CachedResumptionState cached;
-    cached.encrypted = Context::kEncryptionNone;
-    cached.sessionTicket = info.session_ticket;
-
     const uint64_t nowSec = time::RealtimeMs() / 1000;
     const uint64_t lifetime = std::max<uint32_t>(m_config.zero_rtt_token_max_lifetime, 1);
-    cacheSessionResumptionState(cached, nowSec + lifetime);
+    zeroRtt.expiresAtSec = nowSec + lifetime;
 
     return connectInternal(base, &zeroRtt);
 }
@@ -509,50 +499,13 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
 
     ConnectionImpl::ZeroRttConfig zeroRtt;
     zeroRtt.sessionTicket = parsed.sessionTicket;
+    zeroRtt.resumptionPsk = parsed.resumptionPsk;
     zeroRtt.earlyData = info.early_data;
     zeroRtt.earlyFin = info.early_fin;
     zeroRtt.source = ConnectionImpl::ZeroRttConfig::kSourceResumptionState;
-
-    cacheSessionResumptionState(parsed, expiresAt);
+    zeroRtt.expiresAtSec = expiresAt;
 
     return connectInternal(base, &zeroRtt);
-}
-
-int32_t ContextImpl::exportSessionToken(std::vector<uint8_t> &outToken)
-{
-    if (!m_hasCachedResumptionState || m_cachedResumptionInfo.sessionTicket.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "{} no cached session token to export", tag());
-        return -1;
-    }
-
-    outToken = m_cachedResumptionInfo.sessionTicket;
-    return UTP_ERR_OK;
-}
-
-int32_t ContextImpl::exportSessionResumptionState(std::string &outState)
-{
-    if (!m_hasCachedResumptionState) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "{} no cached resumption state to export", tag());
-        return -1;
-    }
-    return buildSessionResumptionState(m_cachedResumptionInfo, m_cachedResumptionExpiresAt, outState);
-}
-
-void ContextImpl::cacheSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt)
-{
-    if (info.sessionTicket.empty()) {
-        return;
-    }
-    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
-        return;
-    }
-
-    m_cachedResumptionInfo = info;
-    m_cachedResumptionExpiresAt = expiresAt;
-    m_hasCachedResumptionState = true;
-    if (m_onSessionTokenReady) {
-        m_onSessionTokenReady();
-    }
 }
 
 ResumptionStateCodec::Key ContextImpl::activeResumptionSecret() const
@@ -563,63 +516,6 @@ ResumptionStateCodec::Key ContextImpl::activeResumptionSecret() const
     return kDefaultResumptionSecret;
 }
 
-int32_t ContextImpl::buildSessionResumptionState(const CachedResumptionState &info,
-                                                 uint64_t expiresAt,
-                                                 std::string &outState) const
-{
-    if (info.sessionTicket.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} cannot build state without session_ticket", tag());
-        return -1;
-    }
-    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "{} encrypted state requires {}-byte resumption_psk, got {}",
-                      tag(),
-                      ResumptionStateCodec::KEY_SIZE,
-                      info.resumptionPsk.size());
-        return -1;
-    }
-
-    const uint16_t ticketSize = static_cast<uint16_t>(std::min<size_t>(info.sessionTicket.size(), UINT16_MAX));
-    const uint8_t pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumptionPsk.size(), UINT8_MAX));
-
-    std::vector<uint8_t> plain(4 + 1 + 8 + 2 + ticketSize + 1 + pskSize, 0);
-    uint8_t *offset = plain.data();
-    size_t left = plain.size();
-    const uint32_t utpVersion = 1;
-    offset = Serialize::SerializeTo(offset, left, utpVersion);
-    offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(info.encrypted));
-    offset = Serialize::SerializeTo(offset, left, expiresAt);
-    offset = Serialize::SerializeTo(offset, left, ticketSize);
-    if (offset == nullptr || left < ticketSize) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "{} build state overflow on session_ticket", tag());
-        return -1;
-    }
-    std::memcpy(offset, info.sessionTicket.data(), ticketSize);
-    offset += ticketSize;
-    left -= ticketSize;
-    offset = Serialize::SerializeTo(offset, left, pskSize);
-    if (offset == nullptr || left < pskSize) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "{} build state overflow on resumption_psk", tag());
-        return -1;
-    }
-    if (pskSize > 0) {
-        std::memcpy(offset, info.resumptionPsk.data(), pskSize);
-    }
-
-    std::vector<uint8_t> sealed;
-    const auto key = activeResumptionSecret();
-    if (!ResumptionStateCodec::Seal(key, plain, sealed)) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to encrypt session resumption state", tag());
-        return -1;
-    }
-
-    if (!Base64::EncodeStd(sealed, outState)) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to base64 encode session resumption state", tag());
-        return -1;
-    }
-    return UTP_ERR_OK;
-}
 
 int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
                                                  CachedResumptionState &outInfo,
@@ -689,7 +585,6 @@ int32_t ContextImpl::accept()
     if (m_pendingIncomingQueue.empty()) {
         return UTP_ERR_WOULD_BLOCK;
     }
-
     const uint32_t localCid = m_pendingIncomingQueue.front();
     m_pendingIncomingQueue.pop_front();
 
@@ -725,6 +620,64 @@ int32_t ContextImpl::accept()
     m_pendingHandshakeTimer.start(m_config.handshake_timeout);
 
     return UTP_ERR_OK;
+}
+
+bool ContextImpl::buildZeroRttSessionToken(const Address &peerAddress,
+                                           uint32_t cid,
+                                           Context::EncryptionMode encrypted,
+                                           uint16_t &validityPeriod,
+                                           std::vector<uint8_t> &outToken)
+{
+    outToken.clear();
+    validityPeriod = 0;
+
+    if (!peerAddress.isValid() || cid == 0) {
+        return false;
+    }
+
+    const uint32_t maxLifetime = m_config.zero_rtt_token_max_lifetime;
+    if (maxLifetime == 0) {
+        return false;
+    }
+
+    TokenAuth *auth = tokenAuth();
+    if (auth == nullptr) {
+        return false;
+    }
+
+    TokenMeta meta;
+    meta.token_type = static_cast<uint8_t>(TokenType::kZeroRttResumption);
+    meta.timestamp = static_cast<uint32_t>(time::RealtimeMs() / 1000);
+    meta.cid = cid;
+    meta.encryption_mode = static_cast<uint8_t>(encrypted);
+    meta.version = 1;
+    meta.secret = 0;
+    meta.family = static_cast<uint16_t>(peerAddress.family());
+
+    if (peerAddress.isIPv4()) {
+        sockaddr_in addr4{};
+        if (!peerAddress.toSockAddrIn(addr4)) {
+            return false;
+        }
+        meta.host_v4 = addr4.sin_addr;
+    } else if (peerAddress.isIPv6()) {
+        sockaddr_in6 addr6{};
+        if (!peerAddress.toSockAddrIn6(addr6)) {
+            return false;
+        }
+        meta.host_v6 = addr6.sin6_addr;
+    } else {
+        return false;
+    }
+
+    TokenAuth::TokenBuf tokenBuf{};
+    if (!auth->seal(meta, tokenBuf)) {
+        return false;
+    }
+
+    validityPeriod = static_cast<uint16_t>(std::min<uint32_t>(maxLifetime, UINT16_MAX));
+    outToken.assign(tokenBuf.begin(), tokenBuf.end());
+    return true;
 }
 
 std::string ContextImpl::peerKey(const Address &peerAddress, uint32_t peerCid)

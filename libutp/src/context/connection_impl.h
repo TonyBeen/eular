@@ -56,9 +56,11 @@ public:
         };
 
         std::vector<uint8_t> sessionTicket;
+        std::vector<uint8_t> resumptionPsk;
         std::vector<uint8_t> earlyData;
         bool earlyFin{false};
         Source source{kSourceNone};
+        uint64_t expiresAtSec{0};
 
         bool enabled() const { return !sessionTicket.empty(); }
     };
@@ -100,10 +102,13 @@ public:
 
 public:
     void        registerStreamCreated(const OnStreamCreated &cb) override;
+    void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
     int32_t     streamCount(StreamType streamType = kStreamTypeAll) const override;
     int32_t     creatableStreamCount(StreamType streamType) const override;
     Statistic   statistic() const override;
     Description description() const override;
+    int32_t     exportSessionToken(std::vector<uint8_t> &outToken) override;
+    int32_t     exportSessionResumptionState(std::string &outState) override;
 
     int32_t     createStream(StreamType streamType = kStreamTypeBidirectional) override;
     Stream*     getStream(uint32_t streamId) override;
@@ -124,6 +129,17 @@ public:
     const std::string& lastErrorReason() const { return m_lastErrorReason; }
 
 private:
+    struct CachedResumptionState {
+        Context::EncryptionMode encrypted{Context::kEncryptionNone};
+        std::vector<uint8_t> sessionTicket;
+        std::vector<uint8_t> resumptionPsk;
+    };
+
+    void cacheSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt);
+    int32_t buildSessionResumptionState(const CachedResumptionState &info,
+                                        uint64_t expiresAt,
+                                        std::string &outState) const;
+
     void scheduleWrite();
     void collectClosedStreams();
     size_t activeStreamCount(StreamType streamType = kStreamTypeAll) const;
@@ -142,6 +158,7 @@ private:
                             size_t len,
                             bool fin);
     int32_t sendHandshakeDonePacket();
+    int32_t maybeSendSessionTokenPacket();
     int32_t sendInitialPacket();
     int32_t sendHandshakePacket(bool encrypted);
     int32_t buildAckPayload(std::vector<uint8_t> &payload, utp_time_t nowUs) const;
@@ -219,6 +236,7 @@ private:
     std::unique_ptr<SendControl>   m_sendCtl;
 
     OnStreamCreated         m_onStreamCreated;
+    OnSessionTokenReady     m_onSessionTokenReady;
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};
@@ -256,6 +274,10 @@ private:
     std::string             m_lastErrorReason;
     bool                    m_zeroRttEarlyDataSent{false};
     uint32_t                m_zeroRttEarlyStreamId{0};
+    bool                    m_sessionTokenIssued{false};
+    bool                    m_hasCachedResumptionState{false};
+    CachedResumptionState   m_cachedResumptionInfo{};
+    uint64_t                m_cachedResumptionExpiresAt{0};
     ZeroRttConfig           m_zeroRttConfig{};
 };
 

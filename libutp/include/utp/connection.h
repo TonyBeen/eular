@@ -12,6 +12,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <vector>
 
 #include <utp/platform.h>
 #include <utp/stream.h>
@@ -34,6 +35,7 @@ public:
     };
 
     using OnStreamCreated = std::function<void(Stream *)>;
+    using OnSessionTokenReady = std::function<void()>;
 
     struct Description {
         uint32_t        scid;
@@ -56,10 +58,13 @@ public:
     virtual ~Connection() = default;
 
     virtual void        registerStreamCreated(const OnStreamCreated &cb) = 0;
+    virtual void        setOnSessionTokenReady(const OnSessionTokenReady &cb) = 0;
     virtual int32_t     streamCount(StreamType streamType = kStreamTypeAll) const = 0;
     virtual int32_t     creatableStreamCount(StreamType streamType) const = 0;
     virtual Statistic   statistic() const = 0;
     virtual Description description() const = 0;
+    virtual int32_t     exportSessionToken(std::vector<uint8_t> &outToken) = 0;
+    virtual int32_t     exportSessionResumptionState(std::string &outState) = 0;
 
     virtual int32_t     createStream(StreamType streamType = kStreamTypeBidirectional) = 0;
     virtual Stream*     getStream(uint32_t streamId) = 0;

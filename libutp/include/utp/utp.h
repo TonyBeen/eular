@@ -120,7 +120,6 @@ public:
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
     using OnNewConnection = std::function<bool(const NewConnectionInfo &)>;
     using OnZeroRttDecision = std::function<void(const ZeroRttDecisionInfo &)>;
-    using OnSessionTokenReady = std::function<void()>;
 
     Context(event_base *base, Config *config = nullptr);
     ~Context();
@@ -143,17 +142,9 @@ public:
     void setOnConnectionClosed(const OnConnectionClosed &cb);
     // 0-RTT 接受/拒绝事件（如无效票据、重放拒绝）
     void setOnZeroRttDecision(const OnZeroRttDecision &cb);
-    // 收到新的 SessionToken 后通知应用，应用可主动调用 exportSessionToken()/exportSessionResumptionState()
-    void setOnSessionTokenReady(const OnSessionTokenReady &cb);
-
     // 设置会话恢复串封装密钥（32字节），未设置时使用SDK内置默认密钥
     void setResumptionSecret(const std::vector<uint8_t> &secret);
     void clearResumptionSecret();
-
-    // 导出最近一次可用的 SessionToken，供 connect0Rtt() 使用
-    int32_t exportSessionToken(std::vector<uint8_t> &outToken);
-    // 导出 opaque 会话恢复串（标准Base64），内容由SDK加密封装
-    int32_t exportSessionResumptionState(std::string &outState);
     // 使用 opaque 会话恢复串发起 0-RTT
     int32_t connect0RttWithState(const Connect0RttWithStateInfo &info, const std::string &state);
 
