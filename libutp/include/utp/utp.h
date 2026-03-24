@@ -50,6 +50,10 @@ public:
         uint64_t zero_rtt_accepted{0};
         uint64_t zero_rtt_rejected{0};
         uint64_t zero_rtt_replay_rejected{0};
+        uint64_t zero_rtt_invalid_ticket_rejected{0};
+        uint64_t path_validation_started{0};
+        uint64_t path_validation_succeeded{0};
+        uint64_t path_validation_failed{0};
     };
 
     struct ConnectInfo {

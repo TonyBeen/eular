@@ -15,11 +15,16 @@
 #include <event2/event.h>
 #include <event/loop.h>
 
+#include <utils/serialize.hpp>
+
 #define private public
 #include "context/context_impl.h"
 #undef private
 
 #include "crypto/token.h"
+#include "proto/proto.h"
+#include "proto/frame.h"
+#include "proto/frame/path.h"
 #include "utp/errno.h"
 #include "util/random.hpp"
 #include "util/time.h"
@@ -33,6 +38,10 @@ using eular::utp::ContextImpl;
 using eular::utp::TokenAuth;
 using eular::utp::TokenMeta;
 using eular::utp::TokenType;
+using eular::utp::UdpSocket;
+using eular::utp::FramePathChallenge;
+using eular::utp::FramePathResponse;
+using eular::utp::NetworkPath;
 
 namespace {
 
@@ -543,8 +552,350 @@ TEST_CASE("Context integration: 0-RTT rejected ticket closes client without deli
     const Context::Statistic stat = server.statistic();
     REQUIRE(stat.zero_rtt_offered >= 1);
     REQUIRE(stat.zero_rtt_rejected >= 1);
+    REQUIRE(stat.zero_rtt_invalid_ticket_rejected >= 1);
     REQUIRE(stat.zero_rtt_accepted == 0);
     REQUIRE(zeroRttAcceptedEvents == 0);
     REQUIRE(zeroRttRejectedEvents >= 1);
     REQUIRE(lastZeroRttReason == "invalid_ticket");
+}
+
+TEST_CASE("Context integration: SessionToken callback and export work after handshake", "[Context][Integration][SessionToken]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 300;
+    cfg.zero_rtt_token_max_lifetime = 600;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    bool accepted = false;
+    bool tokenReady = false;
+    Connection::Ptr clientConn;
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+
+    client.setOnConnected([&](Connection::Ptr conn) {
+        clientConn = conn;
+        conn->setOnSessionTokenReady([&]() {
+            tokenReady = true;
+        });
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 300;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    const bool ok = PumpUntil(
+        loop,
+        [&]() {
+            return accepted && tokenReady && clientConn != nullptr;
+        },
+        [&]() {
+            if (!accepted && !server.m_pendingIncomingQueue.empty()) {
+                accepted = (server.accept() == UTP_ERR_OK);
+            }
+        },
+        500,
+        1);
+
+    REQUIRE(ok);
+    REQUIRE(clientConn != nullptr);
+
+    std::vector<uint8_t> token;
+    REQUIRE(clientConn->exportSessionToken(token) == UTP_ERR_OK);
+    REQUIRE(token.size() == eular::utp::TOKEN_SIZE);
+
+    std::string state;
+    REQUIRE(clientConn->exportSessionResumptionState(state) == UTP_ERR_OK);
+    REQUIRE_FALSE(state.empty());
+}
+
+TEST_CASE("Context integration: 0-RTT replay is rejected and counted", "[Context][Integration][0RTT]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 300;
+    cfg.zero_rtt_token_max_lifetime = 600;
+    cfg.zero_rtt_replay_window = 60;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl clientA(loop.loop(), &cfg);
+    ContextImpl clientB(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(clientA.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(clientB.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    int32_t acceptedEvents = 0;
+    int32_t replayRejectedEvents = 0;
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+    server.setOnZeroRttDecision([&](const Context::ZeroRttDecisionInfo &info) {
+        if (info.accepted) {
+            ++acceptedEvents;
+            return;
+        }
+        if (info.reason == "replay") {
+            ++replayRejectedEvents;
+        }
+    });
+
+    const std::vector<uint8_t> ticket = BuildZeroRttTicket(server,
+                                                           Address("127.0.0.1", BoundPort(clientA)));
+
+    Context::Connect0RttInfo first;
+    first.ip = "127.0.0.1";
+    first.port = BoundPort(server);
+    first.timeout = 300;
+    first.session_ticket = ticket;
+    first.early_data = {'o', 'n', 'e'};
+    REQUIRE(clientA.connect0Rtt(first) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() { return acceptedEvents >= 1; },
+        nullptr,
+        500,
+        1));
+
+    Context::Connect0RttInfo second;
+    second.ip = "127.0.0.1";
+    second.port = BoundPort(server);
+    second.timeout = 300;
+    second.session_ticket = ticket;
+    second.early_data = {'t', 'w', 'o'};
+    REQUIRE(clientB.connect0Rtt(second) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() { return replayRejectedEvents >= 1; },
+        nullptr,
+        500,
+        1));
+
+    const Context::Statistic stat = server.statistic();
+    REQUIRE(stat.zero_rtt_offered >= 2);
+    REQUIRE(stat.zero_rtt_accepted >= 1);
+    REQUIRE(stat.zero_rtt_rejected >= 1);
+    REQUIRE(stat.zero_rtt_replay_rejected >= 1);
+}
+
+TEST_CASE("Context integration: path validation counters track started/succeeded/failed", "[Context][Integration][Path]")
+{
+    Config cfg;
+    cfg.keepalive_timeout = 1;
+    cfg.keepalive_probes = 1;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, &ctx.m_udpSocket, 0x12345678);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_peerAddress = Address("10.0.0.1", 10000);
+    conn.m_networkPath.bindPeerAddress(conn.m_peerAddress);
+
+    const Address candidate("10.0.0.1", 10001);
+
+    std::array<uint8_t, UTP_HEADER_SIZE + 1> pingPacket{};
+    uint8_t *offset = pingPacket.data();
+    size_t left = pingPacket.size();
+    const uint32_t scid = 0x87654321;
+    const uint32_t dcid = conn.m_localConnectionID;
+    const uint64_t pn = 1;
+    const uint16_t payloadLen = 1;
+    const uint8_t type = UTP_TYPE_CTRL;
+    const uint8_t reserve = 0;
+
+    offset = eular::Serialize::SerializeTo(offset, left, scid);
+    offset = eular::Serialize::SerializeTo(offset, left, dcid);
+    offset = eular::Serialize::SerializeTo(offset, left, pn);
+    offset = eular::Serialize::SerializeTo(offset, left, payloadLen);
+    offset = eular::Serialize::SerializeTo(offset, left, type);
+    offset = eular::Serialize::SerializeTo(offset, left, reserve);
+    REQUIRE(offset != nullptr);
+    REQUIRE(left == 1);
+    offset[0] = static_cast<uint8_t>(eular::utp::kFramePing);
+
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = pingPacket.data();
+    msg.len = static_cast<int32_t>(pingPacket.size());
+    msg.metaInfo.peerAddress = candidate;
+
+    conn.onUdpPacket(msg);
+
+    Context::Statistic stat = ctx.statistic();
+    REQUIRE(stat.path_validation_started >= 1);
+    REQUIRE(conn.m_networkPath.needPathValidation());
+
+    REQUIRE(conn.m_networkPath.hasInFlightChallenge());
+    FramePathResponse response;
+    response.data = conn.m_networkPath.m_pendingChallenge;
+
+    uint8_t responseBuf[FRAME_PATH_FRAME_SIZE] = {0};
+    const int32_t responseLen = response.encode(responseBuf, sizeof(responseBuf));
+    REQUIRE(responseLen > 0);
+    conn.handlePathResponseFrame(responseBuf, static_cast<size_t>(responseLen), candidate);
+
+    stat = ctx.statistic();
+    REQUIRE(stat.path_validation_succeeded >= 1);
+    REQUIRE(conn.m_peerAddress == candidate);
+
+    const Address activeAfterSuccess = conn.m_peerAddress;
+    const Address candidateFail("10.0.0.1", 10002);
+    REQUIRE(conn.m_networkPath.detectPeerAddressChange(candidateFail));
+    FramePathChallenge failChallenge;
+    REQUIRE(conn.m_networkPath.makePathChallenge(failChallenge, 0) == UTP_ERR_OK);
+
+    conn.onPathValidationTimeout();
+
+    stat = ctx.statistic();
+    REQUIRE(stat.path_validation_failed >= 1);
+    REQUIRE(conn.m_peerAddress == activeAfterSuccess);
+    REQUIRE(conn.m_networkPath.state() == NetworkPath::kPathValidated);
+}
+
+TEST_CASE("Context integration: handshake promotion preserves first stream callback", "[Context][Integration][Handshake]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 300;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    bool accepted = false;
+    bool serverConnected = false;
+    bool serverStreamCreated = false;
+    bool clientConnected = false;
+    bool wrote = false;
+    const std::string payload = "handshake-first-stream";
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+
+    server.setOnConnected([&](Connection::Ptr conn) {
+        serverConnected = true;
+        conn->registerStreamCreated([&](eular::utp::Stream *stream) {
+            REQUIRE(stream != nullptr);
+            serverStreamCreated = true;
+        });
+    });
+
+    client.setOnConnected([&](Connection::Ptr conn) {
+        clientConnected = true;
+        const int32_t sid = conn->createStream(Connection::kStreamTypeBidirectional);
+        REQUIRE(sid >= 0);
+        eular::utp::Stream *stream = conn->getStream(static_cast<uint32_t>(sid));
+        REQUIRE(stream != nullptr);
+        const int32_t n = stream->write(payload.data(), payload.size(), false);
+        REQUIRE(n == static_cast<int32_t>(payload.size()));
+        wrote = true;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 300;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    const bool ok = PumpUntil(
+        loop,
+        [&]() {
+            return accepted && serverConnected && clientConnected && wrote && serverStreamCreated;
+        },
+        [&]() {
+            if (!accepted && !server.m_pendingIncomingQueue.empty()) {
+                accepted = (server.accept() == UTP_ERR_OK);
+            }
+        },
+        500,
+        1);
+
+    REQUIRE(ok);
+    REQUIRE(serverStreamCreated);
+}
+
+TEST_CASE("Context integration: stream OnWritable fires again after queued data drains", "[Context][Integration][Stream]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() {
+            return FindConnectedByRemote(server, BoundPort(client)) != nullptr
+                && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
+        },
+        [&]() {
+            if (!server.m_pendingIncomingQueue.empty()) {
+                (void)server.accept();
+            }
+        },
+        300,
+        1));
+
+    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
+    REQUIRE(clientConn != nullptr);
+
+    const int32_t sid = clientConn->createStream(Connection::kStreamTypeBidirectional);
+    REQUIRE(sid >= 0);
+
+    auto streamIt = clientConn->m_streams.find(static_cast<uint32_t>(sid));
+    REQUIRE(streamIt != clientConn->m_streams.end());
+    REQUIRE(streamIt->second != nullptr);
+
+    eular::utp::StreamImpl::SP stream = streamIt->second;
+    REQUIRE(stream->writable());
+
+    int writableNotified = 0;
+    stream->setOnWritable([&]() {
+        ++writableNotified;
+    });
+    REQUIRE(writableNotified == 1);
+
+    static const uint8_t payload[] = {'p', 'i', 'n', 'g'};
+    REQUIRE(stream->m_sendBuffer.write(payload, sizeof(payload)) == sizeof(payload));
+    stream->m_sendQueue.push_back({0, sizeof(payload), false});
+    stream->m_sendQueuedBytes = eular::utp::StreamImpl::kDefaultBufferCapacity;
+    stream->m_sendBufferedOffset = sizeof(payload);
+
+    REQUIRE_FALSE(stream->writable());
+
+    clientConn->flushPendingStreamWrites();
+
+    REQUIRE(stream->m_sendQueue.empty());
+    REQUIRE(stream->m_sendQueuedBytes == eular::utp::StreamImpl::kDefaultBufferCapacity - sizeof(payload));
+    REQUIRE(stream->writable());
+    REQUIRE(writableNotified == 2);
 }

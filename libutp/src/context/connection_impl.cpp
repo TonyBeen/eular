@@ -500,8 +500,28 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
                            && (packet->header.pn - largestBeforeInsert - 1) >= m_ackReorderingThreshold;
     m_receiveHistory.insert(packet->header.pn, nowUs);
     m_peerConnectionID = packet->header.scid;
-    m_peerAddress = msg.metaInfo.peerAddress;
-    m_mtuDiscovery.setAddressFamily(m_peerAddress.family());
+
+    const bool closingState = m_state == State::kStateCloseSent
+                           || m_state == State::kStateCloseReceived;
+
+    const Address packetPeerAddress = msg.metaInfo.peerAddress;
+    bool fromActivePath = m_peerAddress.isValid() && (packetPeerAddress == m_peerAddress);
+
+    // 保守策略：地址变化先进入 candidate 校验，业务路径保持 active 不切换。
+    if (!fromActivePath && !closingState) {
+        if (m_networkPath.detectPeerAddressChange(packetPeerAddress)) {
+            if (m_ctx != nullptr) {
+                m_ctx->notePathValidationStarted();
+            }
+            maybeSendPathChallenge();
+        }
+    }
+
+    const bool fromCandidatePath = m_networkPath.needPathValidation()
+                                && m_networkPath.peerAddress().isValid()
+                                && (packetPeerAddress == m_networkPath.peerAddress());
+
+    m_mtuDiscovery.setAddressFamily(packetPeerAddress.family());
     packet->meta = msg.metaInfo;
 
     if (m_state == State::kStateConnected) {
@@ -534,13 +554,6 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         return;
     }
 
-    const bool closingState = m_state == State::kStateCloseSent
-                           || m_state == State::kStateCloseReceived;
-
-    if (!closingState && m_networkPath.detectPeerAddressChange(msg.metaInfo.peerAddress)) {
-        maybeSendPathChallenge();
-    }
-
     size_t frameOffset = 0;
     bool peerCloseReceived = false;
     while (frameOffset < packet->payload_size) {
@@ -553,6 +566,14 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
         // 进入关闭阶段后，只继续处理 ConnectionClose；其余帧直接忽略。
         if (closingState && frameType != kFrameConnectionClose) {
+            continue;
+        }
+
+        // candidate 路径在验证成功前仅处理路径验证帧，业务数据继续走 active 路径。
+        if (!fromActivePath && fromCandidatePath
+            && frameType != kFramePathChallenge
+            && frameType != kFramePathResponse
+            && frameType != kFrameConnectionClose) {
             continue;
         }
 
@@ -572,10 +593,10 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             break;
         }
         case kFramePathChallenge:
-            handlePathChallengeFrame(frameData, frameLen);
+            handlePathChallengeFrame(frameData, frameLen, packetPeerAddress);
             break;
         case kFramePathResponse:
-            handlePathResponseFrame(frameData, frameLen);
+            handlePathResponseFrame(frameData, frameLen, packetPeerAddress);
             break;
         case kFrameAck: {
             AckInfo ackInfo;
@@ -586,6 +607,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             ack._params = &m_peerTP;
             if (ack.decode(frameData, frameLen) >= 0 && m_sendCtl) {
                 m_sendCtl->onAckReceived(ackInfo, nowUs);
+                scheduleWrite();
             }
             break;
         }
@@ -724,6 +746,10 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         armHandshakeDoneTimer();
         m_connTimer.stop();
         markPeerActivity(nowUs);
+    }
+
+    if (m_state == State::kStateConnected) {
+        flushPendingStreamWrites();
     }
 }
 
@@ -1217,7 +1243,7 @@ void ConnectionImpl::flushPendingStreamWrites()
 {
     for (auto &entry : m_streams) {
         if (entry.second) {
-            const int32_t status = entry.second->flushPendingSends();
+            const int32_t status = entry.second->onConnectionWritable();
             if (status == UTP_ERR_WOULD_BLOCK) {
                 return;
             }
@@ -1670,7 +1696,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                    size_t payloadLen,
                                    uint16_t packetFlags,
                                    utp_packno_t *outPacketNo,
-                                   uint32_t frameTypeBitsOverride)
+                                   uint32_t frameTypeBitsOverride,
+                                   const Address *targetAddress)
 {
     return sendPacket(packetType,
                       payload,
@@ -1679,7 +1706,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                       0,
                       packetFlags,
                       outPacketNo,
-                      frameTypeBitsOverride);
+                      frameTypeBitsOverride,
+                      targetAddress);
 }
 
 int32_t ConnectionImpl::sendPacket(uint8_t packetType,
@@ -1689,14 +1717,16 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                    size_t payloadBodyLen,
                                    uint16_t packetFlags,
                                    utp_packno_t *outPacketNo,
-                                   uint32_t frameTypeBitsOverride)
+                                   uint32_t frameTypeBitsOverride,
+                                   const Address *targetAddress)
 {
     if (m_udpSocket == nullptr) {
         SetLastErrorV(UTP_ERR_SOCKET_WRITE, "udp socket is null");
         return -1;
     }
 
-    if (!m_peerAddress.isValid()) {
+    const Address &sendAddress = (targetAddress != nullptr) ? *targetAddress : m_peerAddress;
+    if (!sendAddress.isValid()) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "peer address is invalid");
         return -1;
     }
@@ -1857,7 +1887,7 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
             msg.slices[i].len = packet->slices[i].length;
         }
     }
-    msg.metaInfo.peerAddress = m_peerAddress;
+    msg.metaInfo.peerAddress = sendAddress;
 
     std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
     int32_t sent = m_udpSocket->send(msgVec);
@@ -1888,6 +1918,10 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
 
 bool ConnectionImpl::canSendOnCurrentPath(size_t packetLen, FrameType frameType) const
 {
+    // TODO(path-migration): 预留激进策略入口。
+    // 当前版本即使 Config.path_migration_mode = kPathMigrationAggressive，
+    // 也强制按保守策略执行：未验证路径仅允许受控发送，不提前切业务数据到新路径。
+    // 后续在双路径状态机完成后再启用激进行为。
     if (!m_networkPath.needPathValidation()) {
         return true;
     }
@@ -1927,7 +1961,18 @@ void ConnectionImpl::maybeSendPathChallenge()
         return;
     }
 
-    if (sendPacket(UTP_TYPE_CTRL, payload, static_cast<size_t>(frameLen)) != UTP_ERR_OK) {
+    const Address candidateAddress = m_networkPath.peerAddress();
+    if (!candidateAddress.isValid()) {
+        return;
+    }
+
+    if (sendPacket(UTP_TYPE_CTRL,
+                   payload,
+                   static_cast<size_t>(frameLen),
+                   0,
+                   nullptr,
+                   0,
+                   &candidateAddress) != UTP_ERR_OK) {
         return;
     }
 
@@ -1937,7 +1982,9 @@ void ConnectionImpl::maybeSendPathChallenge()
     m_pathValidationTimer.start(timeoutMs);
 }
 
-void ConnectionImpl::handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize)
+void ConnectionImpl::handlePathChallengeFrame(const uint8_t *frameData,
+                                              size_t frameSize,
+                                              const Address &fromAddress)
 {
     FramePathChallenge challenge;
     if (challenge.decode(frameData, frameSize) < 0) {
@@ -1952,18 +1999,35 @@ void ConnectionImpl::handlePathChallengeFrame(const uint8_t *frameData, size_t f
         return;
     }
 
-    sendPacket(UTP_TYPE_CTRL, payload, static_cast<size_t>(frameLen));
+    sendPacket(UTP_TYPE_CTRL,
+               payload,
+               static_cast<size_t>(frameLen),
+               0,
+               nullptr,
+               0,
+               &fromAddress);
 }
 
-void ConnectionImpl::handlePathResponseFrame(const uint8_t *frameData, size_t frameSize)
+void ConnectionImpl::handlePathResponseFrame(const uint8_t *frameData,
+                                             size_t frameSize,
+                                             const Address &fromAddress)
 {
+    if (!m_networkPath.needPathValidation() || fromAddress != m_networkPath.peerAddress()) {
+        return;
+    }
+
     FramePathResponse response;
     if (response.decode(frameData, frameSize) < 0) {
         return;
     }
 
     if (m_networkPath.onPathResponse(response)) {
+        // 校验成功后才切换 active 路径到 candidate。
+        m_peerAddress = m_networkPath.peerAddress();
         m_pathValidationTimer.stop();
+        if (m_ctx != nullptr) {
+            m_ctx->notePathValidationSucceeded();
+        }
     }
 }
 
@@ -1971,9 +2035,12 @@ void ConnectionImpl::onPathValidationTimeout()
 {
     if (m_networkPath.onTimeout(time::MonotonicMs())) {
         if (m_networkPath.state() == NetworkPath::kPathFailed) {
-            m_lastErrorCode = UTP_ERR_TIMEOUT;
-            m_lastErrorReason = "path validation timeout";
-            beginCloseSent(static_cast<uint16_t>(m_lastErrorCode), m_lastErrorReason);
+            // 保守策略：candidate 失败不关闭连接，回退/保持 active 路径。
+            if (m_ctx != nullptr) {
+                m_ctx->notePathValidationFailed();
+            }
+            m_networkPath.bindPeerAddress(m_peerAddress);
+            m_pathValidationTimer.stop();
         }
         return;
     }

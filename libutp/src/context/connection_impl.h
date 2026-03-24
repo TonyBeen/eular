@@ -177,7 +177,8 @@ private:
                        size_t payloadLen,
                        uint16_t packetFlags = 0,
                        utp_packno_t *outPacketNo = nullptr,
-                       uint32_t frameTypeBitsOverride = 0);
+                       uint32_t frameTypeBitsOverride = 0,
+                       const Address *targetAddress = nullptr);
     int32_t sendPacket(uint8_t packetType,
                        const void *payloadHead,
                        size_t payloadHeadLen,
@@ -185,11 +186,12 @@ private:
                        size_t payloadBodyLen,
                        uint16_t packetFlags,
                        utp_packno_t *outPacketNo = nullptr,
-                       uint32_t frameTypeBitsOverride = 0);
+                       uint32_t frameTypeBitsOverride = 0,
+                       const Address *targetAddress = nullptr);
     bool    canSendOnCurrentPath(size_t packetLen, FrameType frameType) const;
     void    maybeSendPathChallenge();
-    void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize);
-    void    handlePathResponseFrame(const uint8_t *frameData, size_t frameSize);
+    void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize, const Address &fromAddress);
+    void    handlePathResponseFrame(const uint8_t *frameData, size_t frameSize, const Address &fromAddress);
     void    onPathValidationTimeout();
     void    onHandshakeDoneTimeout();
     void    onKeepaliveTimeout();

@@ -11,7 +11,10 @@
 #include <cstring>
 
 #include "utp/errno.h"
+
+#define private public
 #include "context/stream_impl.h"
+#undef private
 
 using eular::utp::FrameStream;
 using eular::utp::StreamImpl;
@@ -127,6 +130,28 @@ TEST_CASE("StreamImpl: zero-copy write interface can reserve buffer", "[Stream]"
     std::memcpy(views[0].data, payload, sizeof(payload));
     REQUIRE(stream.commitWrite(sizeof(payload), false) == -UTP_ERR_INVALID_STATE);
     REQUIRE(stream.state() == eular::utp::Stream::kStateOpen);
+}
+
+TEST_CASE("StreamImpl: setOnWritable fires immediately when writable", "[Stream]")
+{
+    StreamImpl stream(nullptr, 16);
+
+    int writableNotified = 0;
+    stream.setOnWritable([&]() {
+        ++writableNotified;
+    });
+
+    REQUIRE(stream.writable());
+    REQUIRE(writableNotified == 1);
+}
+
+TEST_CASE("StreamImpl: writable reflects send queue capacity", "[Stream]")
+{
+    StreamImpl stream(nullptr, 17);
+
+    REQUIRE(stream.writable());
+    stream.m_sendQueuedBytes = StreamImpl::kDefaultBufferCapacity;
+    REQUIRE_FALSE(stream.writable());
 }
 
 TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")

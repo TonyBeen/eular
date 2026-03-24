@@ -15,6 +15,12 @@
 
 namespace eular {
 namespace utp {
+
+enum PathMigrationMode : uint8_t {
+    kPathMigrationConservative = 0, // 标准策略：验证完成前业务走旧路径
+    kPathMigrationAggressive = 1,   // 激进策略：可在新路径提前发数据（实验开关，当前实现未启用）
+};
+
 class Config {
 public:
     // dplpmtud
@@ -36,6 +42,9 @@ public:
     // token / 0-rtt
     uint32_t    zero_rtt_token_max_lifetime = 600; // 0-RTT token 最长时效(s)
     uint32_t    zero_rtt_replay_window = 10;       // 0-RTT 抗重放去重窗口(s)
+
+    // path migration
+    PathMigrationMode path_migration_mode = kPathMigrationConservative;
 
     // socket
     int32_t     recv_buf_size = 1024 * 1024;

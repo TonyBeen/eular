@@ -36,6 +36,7 @@ public:
     };
 
     using OnReadable = std::function<void()>;
+    using OnWritable = std::function<void()>;
     using OnClosed = std::function<void()>;
     using OnReset = std::function<void(uint16_t)>;
 
@@ -57,6 +58,7 @@ public:
     virtual bool resetReceived() const = 0;
 
     virtual void setOnReadable(const OnReadable &cb) = 0;
+    virtual void setOnWritable(const OnWritable &cb) = 0;
     virtual void setOnClosed(const OnClosed &cb) = 0;
     virtual void setOnReset(const OnReset &cb) = 0;
 };

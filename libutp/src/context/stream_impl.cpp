@@ -184,6 +184,10 @@ int32_t StreamImpl::write(const void *data, size_t len, bool fin)
         return StreamErr(UTP_ERR_INVALID_PARAM);
     }
 
+    if (len > appWriteCredit()) {
+        return StreamErr(UTP_ERR_WOULD_BLOCK);
+    }
+
     MutableBufferView views[2];
     size_t acquired = acquireWriteBuffer(views, len);
     if (acquired < len) {
@@ -226,8 +230,13 @@ size_t StreamImpl::acquireWriteBuffer(MutableBufferView views[2], size_t maxByte
         return 0;
     }
 
-    m_sendBuffer.ensureFree(maxBytes);
-    size_t count = m_sendBuffer.writableViews(views, maxBytes);
+    const size_t grant = std::min(maxBytes, appWriteCredit());
+    if (grant == 0) {
+        return 0;
+    }
+
+    m_sendBuffer.ensureFree(grant);
+    size_t count = m_sendBuffer.writableViews(views, grant);
     size_t total = 0;
     for (size_t i = 0; i < count; ++i) {
         total += views[i].len;
@@ -243,6 +252,10 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
 
     if (m_conn == nullptr) {
         return StreamErr(UTP_ERR_INVALID_STATE);
+    }
+
+    if (bytes > appWriteCredit()) {
+        return StreamErr(UTP_ERR_WOULD_BLOCK);
     }
 
     if (bytes > m_sendBuffer.freeSize()) {
@@ -337,7 +350,9 @@ bool StreamImpl::readable() const
 
 bool StreamImpl::writable() const
 {
-    return !m_localFinQueued && !m_resetByPeer;
+    return !m_localFinQueued
+        && !m_resetByPeer
+    && appWriteCredit() > 0;
 }
 
 void StreamImpl::close()
@@ -384,6 +399,12 @@ bool StreamImpl::resetReceived() const
 void StreamImpl::setOnReadable(const OnReadable &cb)
 {
     m_onReadable = cb;
+}
+
+void StreamImpl::setOnWritable(const OnWritable &cb)
+{
+    m_onWritable = cb;
+    maybeNotifyWritable(true);
 }
 
 void StreamImpl::setOnClosed(const OnClosed &cb)
@@ -549,6 +570,25 @@ int32_t StreamImpl::flushPendingSends()
     return UTP_ERR_OK;
 }
 
+int32_t StreamImpl::onConnectionWritable()
+{
+    const int32_t status = flushPendingSends();
+    if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
+        return status;
+    }
+
+    maybeNotifyWritable(true);
+    return status;
+}
+
+size_t StreamImpl::appWriteCredit() const
+{
+    if (m_sendQueuedBytes >= kDefaultBufferCapacity) {
+        return 0;
+    }
+    return kDefaultBufferCapacity - m_sendQueuedBytes;
+}
+
 void StreamImpl::drainRecvFragments()
 {
     while (true) {
@@ -588,6 +628,17 @@ void StreamImpl::maybeNotifyClosed()
             m_onClosed();
         }
     }
+}
+
+void StreamImpl::maybeNotifyWritable(bool force)
+{
+    if (!force || !m_onWritable || m_notifyingWritable || !writable()) {
+        return;
+    }
+
+    m_notifyingWritable = true;
+    m_onWritable();
+    m_notifyingWritable = false;
 }
 
 void StreamImpl::notifyResetOnce()

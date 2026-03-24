@@ -67,6 +67,10 @@ public:
     event_base*     loop() const { return m_base; }
     Config*         config() { return &m_config; }
     Context::Statistic statistic() const { return m_stat; }
+    void notePathValidationStarted();
+    void notePathValidationSucceeded();
+    void notePathValidationFailed();
+    void noteZeroRttInvalidTicketRejected();
 
 public:
     int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);

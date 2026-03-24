@@ -52,6 +52,7 @@ public:
     int32_t reset(uint16_t errorCode) override;
     bool resetReceived() const override;
     void setOnReadable(const OnReadable &cb) override;
+    void setOnWritable(const OnWritable &cb) override;
     void setOnClosed(const OnClosed &cb) override;
     void setOnReset(const OnReset &cb) override;
 
@@ -99,8 +100,11 @@ private:
 
 private:
     int32_t flushPendingSends();
+    int32_t onConnectionWritable();
+    size_t appWriteCredit() const;
     void drainRecvFragments();
     void maybeNotifyClosed();
+    void maybeNotifyWritable(bool force = false);
     void notifyResetOnce();
 
 private:
@@ -123,8 +127,10 @@ private:
     std::vector<PendingSendChunk> m_sendQueue;
     std::map<uint64_t, RecvFragment> m_recvFragments;
     OnReadable m_onReadable;
+    OnWritable m_onWritable;
     OnClosed m_onClosed;
     OnReset m_onReset;
+    bool m_notifyingWritable{false};
 };
 
 } // namespace utp

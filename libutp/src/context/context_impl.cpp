@@ -974,6 +974,26 @@ bool ContextImpl::validateZeroRttTicket(const Address &peerAddress,
     return true;
 }
 
+void ContextImpl::notePathValidationStarted()
+{
+    ++m_stat.path_validation_started;
+}
+
+void ContextImpl::notePathValidationSucceeded()
+{
+    ++m_stat.path_validation_succeeded;
+}
+
+void ContextImpl::notePathValidationFailed()
+{
+    ++m_stat.path_validation_failed;
+}
+
+void ContextImpl::noteZeroRttInvalidTicketRejected()
+{
+    ++m_stat.zero_rtt_invalid_ticket_rejected;
+}
+
 void ContextImpl::purgeZeroRttReplayCache(uint64_t nowMs)
 {
     if (m_zeroRttReplayCache.empty()) {
@@ -1245,10 +1265,10 @@ void ContextImpl::onReadEvent()
                 }
 
                 removePendingIncoming(dcid);
-                conn->onUdpPacket(msg);
                 if (m_onConnected) {
                     m_onConnected(conn);
                 }
+                conn->onUdpPacket(msg);
                 continue;
             }
 
@@ -1305,6 +1325,7 @@ void ContextImpl::onReadEvent()
                     decision.peerCid = scid;
                     decision.zeroRttAccepted = false;
                     ++m_stat.zero_rtt_rejected;
+                    noteZeroRttInvalidTicketRejected();
                     reportZeroRttDecision(decision, false, "invalid_ticket");
                     (void)sendPendingConnectionClose(decision, UTP_ERR_INVALID_PARAM, "invalid_ticket");
                     continue;
@@ -1523,6 +1544,7 @@ void ContextImpl::onReadEvent()
                     } else {
                         ++pending.zeroRttRejectedCount;
                         ++m_stat.zero_rtt_rejected;
+                        noteZeroRttInvalidTicketRejected();
                         reportZeroRttDecision(pending, false, "invalid_ticket");
                     }
                 }
@@ -1575,6 +1597,10 @@ void ContextImpl::onWriteEvent()
         ConnectionImpl::SP current = it->second;
         current->onWrite();
         handleConnectionState(current.get());
+    }
+
+    if (!m_wantWriteConns.empty()) {
+        m_writeEvent.start();
     }
 }
 
