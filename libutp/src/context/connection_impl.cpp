@@ -268,7 +268,7 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
 
 ConnectionImpl::~ConnectionImpl() = default;
 
-int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
+int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt)
 {
     if (m_state != State::kStateDisconnected) {
         return UTP_ERR_INVALID_STATE;
@@ -276,6 +276,28 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
 
     m_state = State::kStateWaitSendInitial;
     m_connectInfo = info;
+    m_zeroRttConfig = zeroRtt ? *zeroRtt : ZeroRttConfig{};
+    m_connectAttemptInfo.ip = info.ip;
+    m_connectAttemptInfo.port = info.port;
+    m_connectAttemptInfo.timeout = info.timeout;
+    m_connectAttemptInfo.retries = info.retries;
+    m_connectAttemptInfo.encrypted = info.encrypted;
+    m_connectAttemptInfo.session_token_size = static_cast<uint32_t>(m_zeroRttConfig.sessionTicket.size());
+    m_connectAttemptInfo.resumption_state_size = 0;
+    m_connectAttemptInfo.early_data_size = static_cast<uint32_t>(m_zeroRttConfig.earlyData.size());
+    m_connectAttemptInfo.early_fin = m_zeroRttConfig.earlyFin;
+    switch (m_zeroRttConfig.source) {
+    case ZeroRttConfig::kSourceSessionToken:
+        m_connectAttemptInfo.type = Context::kConnectAttemptZeroRttToken;
+        break;
+    case ZeroRttConfig::kSourceResumptionState:
+        m_connectAttemptInfo.type = Context::kConnectAttemptZeroRttState;
+        break;
+    case ZeroRttConfig::kSourceNone:
+    default:
+        m_connectAttemptInfo.type = Context::kConnectAttemptNormal;
+        break;
+    }
 
     Address peer(info.ip, info.port);
     if (!peer.isValid()) {
@@ -298,6 +320,8 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info)
     m_ackProfileCandidateSinceUs = 0;
     m_ackProfileLastSentMs = 0;
     m_ackProfileBaselineSrttUs = 0;
+    m_zeroRttEarlyDataSent = false;
+    m_zeroRttEarlyStreamId = 0;
     stopAckTimer();
     m_keepaliveTimer.stop();
 
@@ -322,12 +346,23 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     }
 
     m_connectInfo = info;
+    m_connectAttemptInfo.ip = info.ip;
+    m_connectAttemptInfo.port = info.port;
+    m_connectAttemptInfo.timeout = info.timeout;
+    m_connectAttemptInfo.retries = info.retries;
+    m_connectAttemptInfo.encrypted = info.encrypted;
+    m_connectAttemptInfo.type = Context::kConnectAttemptPassive;
+    m_connectAttemptInfo.session_token_size = 0;
+    m_connectAttemptInfo.resumption_state_size = 0;
+    m_connectAttemptInfo.early_data_size = 0;
+    m_connectAttemptInfo.early_fin = false;
     m_isClientInitiator = false;
     m_peerAddress = peerAddress;
     m_peerConnectionID = peerConnectionID;
     m_peerTP = peerTp;
     m_x25519 = x25519;
     m_aesCtx = aesCtx;
+    m_zeroRttConfig = ZeroRttConfig{};
 
     m_networkPath.bindPeerAddress(peerAddress);
     m_mtuDiscovery.setAddressFamily(peerAddress.family());
@@ -684,8 +719,7 @@ void ConnectionImpl::onWrite()
     }
 
     if (m_state == State::kStateWaitSendInitial) {
-        const bool zeroRttFirstPacket = m_connectInfo.enable_0rtt
-                                     && !m_connectInfo.session_ticket.empty();
+        const bool zeroRttFirstPacket = m_zeroRttConfig.enabled();
         if (!zeroRttFirstPacket) {
             int32_t status = sendInitialPacket();
             if (status != UTP_ERR_OK) {
@@ -726,9 +760,8 @@ void ConnectionImpl::onWrite()
 void ConnectionImpl::trySendZeroRttEarlyData()
 {
     const bool allowEarlyData = (m_state == State::kStateInitialSent)
-                             && m_connectInfo.enable_0rtt
-                             && !m_connectInfo.session_ticket.empty();
-    if (!allowEarlyData || m_zeroRttEarlyDataSent || m_connectInfo.early_data.empty()) {
+                             && m_zeroRttConfig.enabled();
+    if (!allowEarlyData || m_zeroRttEarlyDataSent || m_zeroRttConfig.earlyData.empty()) {
         return;
     }
 
@@ -738,9 +771,9 @@ void ConnectionImpl::trySendZeroRttEarlyData()
 
     const int32_t status = sendStreamFrame(m_zeroRttEarlyStreamId,
                                            0,
-                                           m_connectInfo.early_data.data(),
-                                           m_connectInfo.early_data.size(),
-                                           m_connectInfo.early_fin);
+                                           m_zeroRttConfig.earlyData.data(),
+                                           m_zeroRttConfig.earlyData.size(),
+                                           m_zeroRttConfig.earlyFin);
     if (status == UTP_ERR_OK) {
         m_zeroRttEarlyDataSent = true;
     }
@@ -1160,8 +1193,7 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
     }
 
     const bool allowEarlyData = (m_state == State::kStateInitialSent)
-                             && m_connectInfo.enable_0rtt
-                             && !m_connectInfo.session_ticket.empty();
+                             && m_zeroRttConfig.enabled();
     if (m_state != State::kStateConnected && !allowEarlyData) {
         return UTP_ERR_WOULD_BLOCK;
     }
@@ -1209,7 +1241,7 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
 
     if (allowEarlyData) {
         FrameSessionToken sessionToken;
-        sessionToken.token = m_connectInfo.session_ticket;
+        sessionToken.token = m_zeroRttConfig.sessionTicket;
         sessionToken.token_size = static_cast<uint8_t>(sessionToken.token.size());
 
         const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
@@ -1442,9 +1474,9 @@ int32_t ConnectionImpl::sendInitialPacket()
         payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
     }
 
-    if (m_connectInfo.enable_0rtt && !m_connectInfo.session_ticket.empty()) {
+    if (m_zeroRttConfig.enabled()) {
         FrameSessionToken sessionToken;
-        sessionToken.token = m_connectInfo.session_ticket;
+        sessionToken.token = m_zeroRttConfig.sessionTicket;
         sessionToken.token_size = static_cast<uint8_t>(sessionToken.token.size());
 
         const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
@@ -2124,8 +2156,7 @@ int32_t ConnectionImpl::createStream(StreamType streamType)
     }
 
     const bool allowEarlyData = (m_state == State::kStateInitialSent)
-                             && m_connectInfo.enable_0rtt
-                             && !m_connectInfo.session_ticket.empty();
+                             && m_zeroRttConfig.enabled();
     if (m_state != State::kStateConnected && !allowEarlyData) {
         return UTP_ERR_INVALID_STATE;
     }

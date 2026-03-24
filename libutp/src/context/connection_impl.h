@@ -48,6 +48,21 @@ public:
     using SP = std::shared_ptr<ConnectionImpl>;
     using WP = std::weak_ptr<ConnectionImpl>;
 
+    struct ZeroRttConfig {
+        enum Source : uint8_t {
+            kSourceNone = 0,
+            kSourceSessionToken,
+            kSourceResumptionState,
+        };
+
+        std::vector<uint8_t> sessionTicket;
+        std::vector<uint8_t> earlyData;
+        bool earlyFin{false};
+        Source source{kSourceNone};
+
+        bool enabled() const { return !sessionTicket.empty(); }
+    };
+
     enum State : uint8_t {
         kStateWaitSendInitial,      // 等待发送初始包
         kStateInitialSent,          // 已发送初始包
@@ -69,7 +84,7 @@ public:
     ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid);
     ~ConnectionImpl();
 
-    int32_t connect(const Context::ConnectInfo &info);
+    int32_t connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt = nullptr);
     int32_t initPassive(const Context::ConnectInfo &info,
                         const Address &peerAddress,
                         uint32_t peerConnectionID,
@@ -103,6 +118,7 @@ public:
     uint64_t    packetNumber() { return m_packetNumber++; }
     uint32_t    cid() const { return m_localConnectionID; }
     const Context::ConnectInfo& connectInfo() const { return m_connectInfo; }
+    const Context::ConnectAttemptInfo& connectAttemptInfo() const { return m_connectAttemptInfo; }
     State       state() const { return m_state; }
     int32_t     lastErrorCode() const { return m_lastErrorCode; }
     const std::string& lastErrorReason() const { return m_lastErrorReason; }
@@ -185,6 +201,7 @@ private:
     RttStats                m_rttStats;
 
     Context::ConnectInfo    m_connectInfo{};
+    Context::ConnectAttemptInfo m_connectAttemptInfo{};
     ev::EventTimer          m_connTimer;
     ev::EventTimer          m_scheduleTimer;
 
@@ -239,6 +256,7 @@ private:
     std::string             m_lastErrorReason;
     bool                    m_zeroRttEarlyDataSent{false};
     uint32_t                m_zeroRttEarlyStreamId{0};
+    ZeroRttConfig           m_zeroRttConfig{};
 };
 
 } // namespace utp

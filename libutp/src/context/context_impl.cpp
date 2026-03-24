@@ -15,8 +15,6 @@
 #include <vector>
 
 #include <utils/serialize.hpp>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
 
 #include "utp/errno.h"
 #include "proto/proto.h"
@@ -31,7 +29,9 @@
 #include "proto/frame/padding.h"
 #include "proto/frame/reset_stream.h"
 #include "context/connection_impl.h"
+#include "crypto/base64.h"
 #include "crypto/aes_gcm_context.h"
+#include "crypto/resumption_state_codec.h"
 #include "crypto/token.h"
 #include "crypto/x25519_wrapper.h"
 #include "util/error.h"
@@ -45,237 +45,12 @@ static std::atomic<uint32_t>    g_contextId{0};
 static eular::utp::Config       g_defaultConfig;
 
 namespace {
-constexpr uint8_t   kResumptionStateMagic[4] = {'U', 'R', 'S', '1'};
-constexpr size_t    kResumptionNonceSize = 12;
-constexpr size_t    kResumptionTagSize = 16;
-constexpr size_t    kResumptionKeySize = 32;
-constexpr uint8_t   kResumptionFormatVersion = 1;
-
-const std::array<uint8_t, kResumptionKeySize> kDefaultResumptionSecret = {
+const std::array<uint8_t, eular::utp::ResumptionStateCodec::KEY_SIZE> kDefaultResumptionSecret = {
     0x33, 0x81, 0x7a, 0x14, 0x9d, 0xbe, 0x20, 0x4f,
     0x72, 0x61, 0x99, 0xca, 0x5a, 0x3e, 0x1d, 0xb0,
     0xa7, 0x25, 0xe3, 0x44, 0x8c, 0x9f, 0x10, 0x6d,
     0xfa, 0x57, 0x02, 0x3b, 0xc4, 0x88, 0x6e, 0x11,
 };
-
-const std::string kResumptionAad("UTP-SessionResumptionState-V1");
-
-bool Base64EncodeStd(const std::vector<uint8_t> &input, std::string &output)
-{
-    if (input.empty()) {
-        output.clear();
-        return true;
-    }
-
-    const size_t outLen = 4 * ((input.size() + 2) / 3);
-    output.assign(outLen, '\0');
-    const int32_t len = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(&output[0]),
-                                        reinterpret_cast<const unsigned char *>(input.data()),
-                                        static_cast<int32_t>(input.size()));
-    if (len <= 0) {
-        output.clear();
-        return false;
-    }
-    output.resize(static_cast<size_t>(len));
-    return true;
-}
-
-bool Base64DecodeStd(const std::string &input, std::vector<uint8_t> &output)
-{
-    if (input.empty()) {
-        output.clear();
-        return true;
-    }
-
-    output.assign((input.size() / 4) * 3 + 3, 0);
-    const int32_t decodedLen = EVP_DecodeBlock(reinterpret_cast<unsigned char *>(output.data()),
-                                               reinterpret_cast<const unsigned char *>(input.data()),
-                                               static_cast<int32_t>(input.size()));
-    if (decodedLen < 0) {
-        output.clear();
-        return false;
-    }
-
-    size_t padding = 0;
-    if (!input.empty() && input.back() == '=') {
-        ++padding;
-    }
-    if (input.size() >= 2 && input[input.size() - 2] == '=') {
-        ++padding;
-    }
-
-    const size_t realLen = static_cast<size_t>(decodedLen) >= padding
-                         ? static_cast<size_t>(decodedLen) - padding
-                         : 0;
-    output.resize(realLen);
-    return true;
-}
-
-bool AeadSealResumption(const std::array<uint8_t, kResumptionKeySize> &key,
-                        const std::vector<uint8_t> &plaintext,
-                        std::vector<uint8_t> &sealed)
-{
-    sealed.clear();
-
-    std::array<uint8_t, kResumptionNonceSize> nonce{};
-    if (RAND_bytes(nonce.data(), static_cast<int32_t>(nonce.size())) != 1) {
-        return false;
-    }
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        return false;
-    }
-
-    bool ok = false;
-    do {
-        int32_t status = EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
-        if (status != 1) {
-            break;
-        }
-
-        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, static_cast<int32_t>(nonce.size()), nullptr);
-        if (status != 1) {
-            break;
-        }
-
-        status = EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data());
-        if (status != 1) {
-            break;
-        }
-
-        int32_t aadOutLen = 0;
-        status = EVP_EncryptUpdate(ctx,
-                                   nullptr,
-                                   &aadOutLen,
-                                   reinterpret_cast<const uint8_t *>(kResumptionAad.data()),
-                                   static_cast<int32_t>(kResumptionAad.size()));
-        if (status != 1) {
-            break;
-        }
-
-        std::vector<uint8_t> ciphertext(plaintext.size() + kResumptionTagSize, 0);
-        int32_t outLen = 0;
-        status = EVP_EncryptUpdate(ctx,
-                                   ciphertext.data(),
-                                   &outLen,
-                                   plaintext.data(),
-                                   static_cast<int32_t>(plaintext.size()));
-        if (status != 1) {
-            break;
-        }
-
-        int32_t finalLen = 0;
-        status = EVP_EncryptFinal_ex(ctx, ciphertext.data() + outLen, &finalLen);
-        if (status != 1 || finalLen != 0) {
-            break;
-        }
-
-        std::array<uint8_t, kResumptionTagSize> tag{};
-        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, static_cast<int32_t>(tag.size()), tag.data());
-        if (status != 1) {
-            break;
-        }
-
-        ciphertext.resize(static_cast<size_t>(outLen));
-        sealed.reserve(4 + 1 + nonce.size() + ciphertext.size() + tag.size());
-        sealed.insert(sealed.end(), std::begin(kResumptionStateMagic), std::end(kResumptionStateMagic));
-        sealed.push_back(kResumptionFormatVersion);
-        sealed.insert(sealed.end(), nonce.begin(), nonce.end());
-        sealed.insert(sealed.end(), ciphertext.begin(), ciphertext.end());
-        sealed.insert(sealed.end(), tag.begin(), tag.end());
-        ok = true;
-    } while (false);
-
-    EVP_CIPHER_CTX_free(ctx);
-    return ok;
-}
-
-bool AeadOpenResumption(const std::array<uint8_t, kResumptionKeySize> &key,
-                        const std::vector<uint8_t> &sealed,
-                        std::vector<uint8_t> &plaintext)
-{
-    plaintext.clear();
-    if (sealed.size() < 4 + 1 + kResumptionNonceSize + kResumptionTagSize) {
-        return false;
-    }
-
-    if (std::memcmp(sealed.data(), kResumptionStateMagic, 4) != 0) {
-        return false;
-    }
-    if (sealed[4] != kResumptionFormatVersion) {
-        return false;
-    }
-
-    const uint8_t *nonce = sealed.data() + 5;
-    const uint8_t *ciphertext = nonce + kResumptionNonceSize;
-    const size_t ciphertextLen = sealed.size() - 5 - kResumptionNonceSize - kResumptionTagSize;
-    const uint8_t *tag = sealed.data() + sealed.size() - kResumptionTagSize;
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        return false;
-    }
-
-    bool ok = false;
-    do {
-        int32_t status = EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
-        if (status != 1) {
-            break;
-        }
-
-        status = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, static_cast<int32_t>(kResumptionNonceSize), nullptr);
-        if (status != 1) {
-            break;
-        }
-
-        status = EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce);
-        if (status != 1) {
-            break;
-        }
-
-        int32_t aadOutLen = 0;
-        status = EVP_DecryptUpdate(ctx,
-                                   nullptr,
-                                   &aadOutLen,
-                                   reinterpret_cast<const uint8_t *>(kResumptionAad.data()),
-                                   static_cast<int32_t>(kResumptionAad.size()));
-        if (status != 1) {
-            break;
-        }
-
-        plaintext.resize(ciphertextLen, 0);
-        int32_t outLen = 0;
-        status = EVP_DecryptUpdate(ctx,
-                                   plaintext.data(),
-                                   &outLen,
-                                   ciphertext,
-                                   static_cast<int32_t>(ciphertextLen));
-        if (status != 1) {
-            break;
-        }
-
-        status = EVP_CIPHER_CTX_ctrl(ctx,
-                                     EVP_CTRL_AEAD_SET_TAG,
-                                     static_cast<int32_t>(kResumptionTagSize),
-                                     const_cast<uint8_t *>(tag));
-        if (status != 1) {
-            break;
-        }
-
-        int32_t finalLen = 0;
-        status = EVP_DecryptFinal_ex(ctx, plaintext.data() + outLen, &finalLen);
-        if (status != 1 || finalLen != 0) {
-            break;
-        }
-
-        plaintext.resize(static_cast<size_t>(outLen));
-        ok = true;
-    } while (false);
-
-    EVP_CIPHER_CTX_free(ctx);
-    return ok;
-}
 
 eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
 {
@@ -338,6 +113,50 @@ bool DecodeTokenEncryptionMode(uint8_t modeRaw, eular::utp::Context::EncryptionM
         return false;
     }
 }
+
+eular::utp::Context::ConnectAttemptInfo MakeConnectAttemptInfo(const eular::utp::Context::ConnectInfo &info)
+{
+    eular::utp::Context::ConnectAttemptInfo attempt;
+    attempt.ip = info.ip;
+    attempt.port = info.port;
+    attempt.timeout = info.timeout;
+    attempt.retries = info.retries;
+    attempt.encrypted = info.encrypted;
+    attempt.type = eular::utp::Context::kConnectAttemptNormal;
+    return attempt;
+}
+
+eular::utp::Context::ConnectAttemptInfo MakeConnectAttemptInfo(const eular::utp::Context::Connect0RttInfo &info)
+{
+    eular::utp::Context::ConnectAttemptInfo attempt;
+    attempt.ip = info.ip;
+    attempt.port = info.port;
+    attempt.timeout = info.timeout;
+    attempt.retries = info.retries;
+    attempt.encrypted = eular::utp::Context::kEncryptionNone;
+    attempt.type = eular::utp::Context::kConnectAttemptZeroRttToken;
+    attempt.session_token_size = static_cast<uint32_t>(info.session_ticket.size());
+    attempt.early_data_size = static_cast<uint32_t>(info.early_data.size());
+    attempt.early_fin = info.early_fin;
+    return attempt;
+}
+
+eular::utp::Context::ConnectAttemptInfo MakeConnectAttemptInfo(const eular::utp::Context::Connect0RttWithStateInfo &info,
+                                                               size_t stateSize,
+                                                               eular::utp::Context::EncryptionMode encrypted = eular::utp::Context::kEncryptionNone)
+{
+    eular::utp::Context::ConnectAttemptInfo attempt;
+    attempt.ip = info.ip;
+    attempt.port = info.port;
+    attempt.timeout = info.timeout;
+    attempt.retries = info.retries;
+    attempt.encrypted = encrypted;
+    attempt.type = eular::utp::Context::kConnectAttemptZeroRttState;
+    attempt.resumption_state_size = static_cast<uint32_t>(stateSize);
+    attempt.early_data_size = static_cast<uint32_t>(info.early_data.size());
+    attempt.early_fin = info.early_fin;
+    return attempt;
+}
 } // namespace
 
 namespace eular {
@@ -374,6 +193,15 @@ void ContextImpl::setOnConnectError(const Context::OnConnectError &cb)
     m_onConnectError = cb;
 }
 
+void ContextImpl::reportConnectError(int32_t errorCode,
+                                     const std::string &reason,
+                                     const Context::ConnectAttemptInfo &info)
+{
+    if (m_onConnectError) {
+        m_onConnectError(errorCode, reason, info);
+    }
+}
+
 void ContextImpl::setOnNewConnection(const Context::OnNewConnection &cb)
 {
     m_onNewConnection = cb;
@@ -389,18 +217,18 @@ void ContextImpl::setOnZeroRttDecision(const Context::OnZeroRttDecision &cb)
     m_onZeroRttDecision = cb;
 }
 
-void ContextImpl::setOnSessionResumptionReady(const Context::OnSessionResumptionReady &cb)
+void ContextImpl::setOnSessionTokenReady(const Context::OnSessionTokenReady &cb)
 {
-    m_onSessionResumptionReady = cb;
+    m_onSessionTokenReady = cb;
 }
 
 void ContextImpl::setResumptionSecret(const std::vector<uint8_t> &secret)
 {
-    if (secret.size() != kResumptionKeySize) {
+    if (secret.size() != ResumptionStateCodec::KEY_SIZE) {
         return;
     }
 
-    std::memcpy(m_resumptionSecret.data(), secret.data(), kResumptionKeySize);
+    std::memcpy(m_resumptionSecret.data(), secret.data(), ResumptionStateCodec::KEY_SIZE);
     m_hasCustomResumptionSecret = true;
 }
 
@@ -467,7 +295,7 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
             }
 
             if (m_onConnectError) {
-                m_onConnectError(errorCode, reason, current->connectInfo());
+                reportConnectError(errorCode, reason, current->connectAttemptInfo());
             }
         }
         return;
@@ -490,9 +318,7 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
             reason = "connection failed before established";
         }
 
-        if (m_onConnectError) {
-            m_onConnectError(errorCode, reason, current->connectInfo());
-        }
+        reportConnectError(errorCode, reason, current->connectAttemptInfo());
     } else {
         if (m_onConnectionClosed) {
             m_onConnectionClosed(current);
@@ -523,13 +349,33 @@ int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::strin
 
 int32_t ContextImpl::connect(const Context::ConnectInfo &info)
 {
+    return connectInternal(info, nullptr);
+}
+
+int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
+                                    const ConnectionImpl::ZeroRttConfig *zeroRtt)
+{
+    Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
+    if (zeroRtt != nullptr) {
+        attempt.session_token_size = static_cast<uint32_t>(zeroRtt->sessionTicket.size());
+        attempt.early_data_size = static_cast<uint32_t>(zeroRtt->earlyData.size());
+        attempt.early_fin = zeroRtt->earlyFin;
+        if (zeroRtt->source == ConnectionImpl::ZeroRttConfig::kSourceSessionToken) {
+            attempt.type = Context::kConnectAttemptZeroRttToken;
+        } else if (zeroRtt->source == ConnectionImpl::ZeroRttConfig::kSourceResumptionState) {
+            attempt.type = Context::kConnectAttemptZeroRttState;
+        }
+    }
+
     if (info.ip.empty() || info.port == 0) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid connect info: {}:{}", tag(), info.ip, info.port);
+        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
         return -1;
     }
 
     if (!m_udpSocket.isValid()) {
         SetLastErrorV(UTP_ERR_SOCKET_NOT_BOUND, "{} UDP socket is not bound", tag());
+        reportConnectError(UTP_ERR_SOCKET_NOT_BOUND, GetErrorString(), attempt);
         return -1;
     }
 
@@ -539,10 +385,12 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
             auto pendingIt = m_pendingConnections.find(conn.get());
             if (pendingIt != m_pendingConnections.end()) {
                 SetLastErrorV(UTP_ERR_IN_PROGRESS, "{} connection to {}:{} is already in progress", tag(), info.ip, info.port);
+                reportConnectError(UTP_ERR_IN_PROGRESS, GetErrorString(), attempt);
                 return -1;
             }
 
             SetLastErrorV(UTP_ERR_SOCKET_CONNECTED, "{} already connected to {}:{}", tag(), info.ip, info.port);
+            reportConnectError(UTP_ERR_SOCKET_CONNECTED, GetErrorString(), attempt);
             return -1;
         }
     }
@@ -550,12 +398,14 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
     uint32_t cid = 0;
     if (!allocLocalCid(cid)) {
         SetLastErrorV(UTP_ERR_NO_MEMORY, "{} allocate local cid failed", tag());
+        reportConnectError(UTP_ERR_NO_MEMORY, GetErrorString(), attempt);
         return -1;
     }
 
     ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, cid);
-    int32_t status = conn->connect(info);
+    int32_t status = conn->connect(info, zeroRtt);
     if (status != UTP_ERR_OK) {
+        reportConnectError(status, GetErrorString(), attempt);
         return status;
     }
 
@@ -566,6 +416,7 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
 
 int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
 {
+    const Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
     if (info.ip.empty() || info.port == 0 || info.session_ticket.empty()) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
                       "{} invalid 0-rtt connect info: {}:{} ticket={}",
@@ -573,6 +424,7 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
                       info.ip,
                       info.port,
                       info.session_ticket.size());
+        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
         return -1;
     }
 
@@ -585,6 +437,7 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
                       "{} 0-rtt first packet too large: {} bytes",
                       tag(),
                       UTP_HEADER_SIZE + payloadSize);
+        reportConnectError(UTP_ERR_OVERFLOW, GetErrorString(), attempt);
         return -1;
     }
 
@@ -593,31 +446,29 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
     base.port = info.port;
     base.timeout = info.timeout;
     base.retries = info.retries;
-    base.encrypted = info.encrypted;
-    base.enable_0rtt = true;
-    base.session_ticket = info.session_ticket;
-    base.resumption_psk = info.resumption_psk;
-    base.early_data = info.early_data;
-    base.early_fin = info.early_fin;
+    base.encrypted = Context::kEncryptionNone;
 
-    if (base.encrypted != Context::kEncryptionNone && base.resumption_psk.size() != kResumptionKeySize) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "{} 0-rtt encrypted mode requires {}-byte resumption_psk, got {}",
-                      tag(),
-                      kResumptionKeySize,
-                      base.resumption_psk.size());
-        return -1;
-    }
+    ConnectionImpl::ZeroRttConfig zeroRtt;
+    zeroRtt.sessionTicket = info.session_ticket;
+    zeroRtt.earlyData = info.early_data;
+    zeroRtt.earlyFin = info.early_fin;
+    zeroRtt.source = ConnectionImpl::ZeroRttConfig::kSourceSessionToken;
+
+    CachedResumptionState cached;
+    cached.encrypted = Context::kEncryptionNone;
+    cached.sessionTicket = info.session_ticket;
 
     const uint64_t nowSec = time::RealtimeMs() / 1000;
     const uint64_t lifetime = std::max<uint32_t>(m_config.zero_rtt_token_max_lifetime, 1);
-    cacheSessionResumptionState(base, nowSec + lifetime);
-    return connect(base);
+    cacheSessionResumptionState(cached, nowSec + lifetime);
+
+    return connectInternal(base, &zeroRtt);
 }
 
 int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInfo &info,
                                           const std::string &state)
 {
+    Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info, state.size());
     if (info.ip.empty() || info.port == 0 || state.empty()) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
                       "{} invalid connect0RttWithState input: {}:{} state_size={}",
@@ -625,15 +476,19 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
                       info.ip,
                       info.port,
                       state.size());
+        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
         return -1;
     }
 
     Context::ConnectInfo base;
+    CachedResumptionState parsed;
     uint64_t expiresAt = 0;
-    int32_t status = parseSessionResumptionState(state, base, expiresAt);
+    int32_t status = parseSessionResumptionState(state, parsed, expiresAt);
     if (status != UTP_ERR_OK) {
+        reportConnectError(status, GetErrorString(), attempt);
         return -1;
     }
+    attempt.encrypted = parsed.encrypted;
 
     const uint64_t nowSec = time::RealtimeMs() / 1000;
     if (expiresAt > 0 && nowSec > expiresAt) {
@@ -642,6 +497,7 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
                       tag(),
                       nowSec,
                       expiresAt);
+        reportConnectError(UTP_ERR_TIMEOUT, GetErrorString(), attempt);
         return -1;
     }
 
@@ -649,12 +505,28 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
     base.port = info.port;
     base.timeout = info.timeout;
     base.retries = info.retries;
-    base.enable_0rtt = true;
-    base.early_data = info.early_data;
-    base.early_fin = info.early_fin;
+    base.encrypted = parsed.encrypted;
 
-    cacheSessionResumptionState(base, expiresAt);
-    return connect(base);
+    ConnectionImpl::ZeroRttConfig zeroRtt;
+    zeroRtt.sessionTicket = parsed.sessionTicket;
+    zeroRtt.earlyData = info.early_data;
+    zeroRtt.earlyFin = info.early_fin;
+    zeroRtt.source = ConnectionImpl::ZeroRttConfig::kSourceResumptionState;
+
+    cacheSessionResumptionState(parsed, expiresAt);
+
+    return connectInternal(base, &zeroRtt);
+}
+
+int32_t ContextImpl::exportSessionToken(std::vector<uint8_t> &outToken)
+{
+    if (!m_hasCachedResumptionState || m_cachedResumptionInfo.sessionTicket.empty()) {
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "{} no cached session token to export", tag());
+        return -1;
+    }
+
+    outToken = m_cachedResumptionInfo.sessionTicket;
+    return UTP_ERR_OK;
 }
 
 int32_t ContextImpl::exportSessionResumptionState(std::string &outState)
@@ -666,24 +538,24 @@ int32_t ContextImpl::exportSessionResumptionState(std::string &outState)
     return buildSessionResumptionState(m_cachedResumptionInfo, m_cachedResumptionExpiresAt, outState);
 }
 
-void ContextImpl::cacheSessionResumptionState(const Context::ConnectInfo &info, uint64_t expiresAt)
+void ContextImpl::cacheSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt)
 {
-    if (info.session_ticket.empty()) {
+    if (info.sessionTicket.empty()) {
         return;
     }
-    if (info.encrypted != Context::kEncryptionNone && info.resumption_psk.size() != kResumptionKeySize) {
+    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
         return;
     }
 
     m_cachedResumptionInfo = info;
     m_cachedResumptionExpiresAt = expiresAt;
     m_hasCachedResumptionState = true;
-    if (m_onSessionResumptionReady) {
-        m_onSessionResumptionReady();
+    if (m_onSessionTokenReady) {
+        m_onSessionTokenReady();
     }
 }
 
-std::array<uint8_t, 32> ContextImpl::activeResumptionSecret() const
+ResumptionStateCodec::Key ContextImpl::activeResumptionSecret() const
 {
     if (m_hasCustomResumptionSecret) {
         return m_resumptionSecret;
@@ -691,25 +563,25 @@ std::array<uint8_t, 32> ContextImpl::activeResumptionSecret() const
     return kDefaultResumptionSecret;
 }
 
-int32_t ContextImpl::buildSessionResumptionState(const Context::ConnectInfo &info,
+int32_t ContextImpl::buildSessionResumptionState(const CachedResumptionState &info,
                                                  uint64_t expiresAt,
                                                  std::string &outState) const
 {
-    if (info.session_ticket.empty()) {
+    if (info.sessionTicket.empty()) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} cannot build state without session_ticket", tag());
         return -1;
     }
-    if (info.encrypted != Context::kEncryptionNone && info.resumption_psk.size() != kResumptionKeySize) {
+    if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
                       "{} encrypted state requires {}-byte resumption_psk, got {}",
                       tag(),
-                      kResumptionKeySize,
-                      info.resumption_psk.size());
+                      ResumptionStateCodec::KEY_SIZE,
+                      info.resumptionPsk.size());
         return -1;
     }
 
-    const uint16_t ticketSize = static_cast<uint16_t>(std::min<size_t>(info.session_ticket.size(), UINT16_MAX));
-    const uint8_t pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumption_psk.size(), UINT8_MAX));
+    const uint16_t ticketSize = static_cast<uint16_t>(std::min<size_t>(info.sessionTicket.size(), UINT16_MAX));
+    const uint8_t pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumptionPsk.size(), UINT8_MAX));
 
     std::vector<uint8_t> plain(4 + 1 + 8 + 2 + ticketSize + 1 + pskSize, 0);
     uint8_t *offset = plain.data();
@@ -723,7 +595,7 @@ int32_t ContextImpl::buildSessionResumptionState(const Context::ConnectInfo &inf
         SetLastErrorV(UTP_ERR_OVERFLOW, "{} build state overflow on session_ticket", tag());
         return -1;
     }
-    std::memcpy(offset, info.session_ticket.data(), ticketSize);
+    std::memcpy(offset, info.sessionTicket.data(), ticketSize);
     offset += ticketSize;
     left -= ticketSize;
     offset = Serialize::SerializeTo(offset, left, pskSize);
@@ -732,17 +604,17 @@ int32_t ContextImpl::buildSessionResumptionState(const Context::ConnectInfo &inf
         return -1;
     }
     if (pskSize > 0) {
-        std::memcpy(offset, info.resumption_psk.data(), pskSize);
+        std::memcpy(offset, info.resumptionPsk.data(), pskSize);
     }
 
     std::vector<uint8_t> sealed;
     const auto key = activeResumptionSecret();
-    if (!AeadSealResumption(key, plain, sealed)) {
+    if (!ResumptionStateCodec::Seal(key, plain, sealed)) {
         SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to encrypt session resumption state", tag());
         return -1;
     }
 
-    if (!Base64EncodeStd(sealed, outState)) {
+    if (!Base64::EncodeStd(sealed, outState)) {
         SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "{} failed to base64 encode session resumption state", tag());
         return -1;
     }
@@ -750,18 +622,18 @@ int32_t ContextImpl::buildSessionResumptionState(const Context::ConnectInfo &inf
 }
 
 int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
-                                                 Context::ConnectInfo &outInfo,
+                                                 CachedResumptionState &outInfo,
                                                  uint64_t &expiresAt) const
 {
     std::vector<uint8_t> sealed;
-    if (!Base64DecodeStd(state, sealed)) {
+    if (!Base64::DecodeStd(state, sealed)) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid standard base64 session resumption state", tag());
         return UTP_ERR_INVALID_PARAM;
     }
 
     std::vector<uint8_t> plain;
     const auto key = activeResumptionSecret();
-    if (!AeadOpenResumption(key, sealed, plain)) {
+    if (!ResumptionStateCodec::Open(key, sealed, plain)) {
         SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "{} failed to decrypt session resumption state", tag());
         return UTP_ERR_CRYPTO_DECRYPTION;
     }
@@ -782,7 +654,7 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
         return UTP_ERR_INVALID_PARAM;
     }
 
-    outInfo.session_ticket.assign(offset, offset + ticketSize);
+    outInfo.sessionTicket.assign(offset, offset + ticketSize);
     offset += ticketSize;
     left -= ticketSize;
 
@@ -792,7 +664,7 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
         return UTP_ERR_INVALID_PARAM;
     }
 
-    outInfo.resumption_psk.assign(offset, offset + pskSize);
+    outInfo.resumptionPsk.assign(offset, offset + pskSize);
     Context::EncryptionMode mode = Context::kEncryptionNone;
     if (!DecodeTokenEncryptionMode(modeRaw, mode)) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid encryption_mode in resumption state", tag());
@@ -800,11 +672,11 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
     }
 
     outInfo.encrypted = mode;
-    if (outInfo.encrypted != Context::kEncryptionNone && outInfo.resumption_psk.size() != kResumptionKeySize) {
+    if (outInfo.encrypted != Context::kEncryptionNone && outInfo.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
                       "{} invalid resumption_psk size in encrypted state: {}",
                       tag(),
-                      outInfo.resumption_psk.size());
+                      outInfo.resumptionPsk.size());
         return UTP_ERR_INVALID_PARAM;
     }
 
@@ -834,14 +706,13 @@ int32_t ContextImpl::accept()
     if (sendPendingHandshake(pending) != UTP_ERR_OK) {
         sendPendingConnectionClose(pending, UTP_ERR_INTERNAL_ERROR, "send handshake failed");
 
-        if (m_onConnectError) {
-            Context::ConnectInfo info;
-            info.ip = pending.peerIp;
-            info.port = pending.peerAddress.port();
-            info.timeout = m_config.handshake_timeout;
-            info.encrypted = pending.encrypted;
-            m_onConnectError(UTP_ERR_INTERNAL_ERROR, "send passive handshake failed", info);
-        }
+        Context::ConnectAttemptInfo info;
+        info.ip = pending.peerIp;
+        info.port = pending.peerAddress.port();
+        info.timeout = m_config.handshake_timeout;
+        info.encrypted = pending.encrypted;
+        info.type = Context::kConnectAttemptPassive;
+        reportConnectError(UTP_ERR_INTERNAL_ERROR, "send passive handshake failed", info);
 
         removePendingIncoming(localCid);
         return UTP_ERR_INTERNAL_ERROR;
@@ -1266,14 +1137,13 @@ void ContextImpl::processPendingHandshakeTimeouts()
         PendingIncomingConnection pending = it->second;
         (void)sendPendingConnectionClose(pending, UTP_ERR_TIMEOUT, "wait handshake done timeout");
 
-        if (m_onConnectError) {
-            Context::ConnectInfo info;
-            info.ip = pending.peerIp;
-            info.port = pending.peerAddress.port();
-            info.timeout = m_config.handshake_timeout;
-            info.encrypted = pending.encrypted;
-            m_onConnectError(UTP_ERR_TIMEOUT, "wait handshake done timeout", info);
-        }
+        Context::ConnectAttemptInfo info;
+        info.ip = pending.peerIp;
+        info.port = pending.peerAddress.port();
+        info.timeout = m_config.handshake_timeout;
+        info.encrypted = pending.encrypted;
+        info.type = Context::kConnectAttemptPassive;
+        reportConnectError(UTP_ERR_TIMEOUT, "wait handshake done timeout", info);
 
         removePendingIncoming(localCid);
     }
@@ -1409,11 +1279,15 @@ void ContextImpl::onReadEvent()
 
                 auto inserted = m_connections.emplace(pending.localCid, conn);
                 if (!inserted.second) {
-                    if (m_onConnectError) {
-                        m_onConnectError(UTP_ERR_CID_CONFLICT,
-                                         "local cid collision while promoting passive connection",
-                                         info);
-                    }
+                    Context::ConnectAttemptInfo attempt;
+                    attempt.ip = info.ip;
+                    attempt.port = info.port;
+                    attempt.timeout = info.timeout;
+                    attempt.encrypted = info.encrypted;
+                    attempt.type = Context::kConnectAttemptPassive;
+                    reportConnectError(UTP_ERR_CID_CONFLICT,
+                                       "local cid collision while promoting passive connection",
+                                       attempt);
                     continue;
                 }
 
@@ -1550,11 +1424,16 @@ void ContextImpl::onReadEvent()
 
                 auto inserted = m_connections.emplace(localCid, conn);
                 if (!inserted.second) {
-                    if (m_onConnectError) {
-                        m_onConnectError(UTP_ERR_CID_CONFLICT,
-                                         "local cid collision while creating 0-rtt connection",
-                                         info);
-                    }
+                    Context::ConnectAttemptInfo attempt;
+                    attempt.ip = info.ip;
+                    attempt.port = info.port;
+                    attempt.timeout = info.timeout;
+                    attempt.encrypted = info.encrypted;
+                    attempt.type = Context::kConnectAttemptPassive;
+                    attempt.session_token_size = static_cast<uint32_t>(sessionToken.token.size());
+                    reportConnectError(UTP_ERR_CID_CONFLICT,
+                                       "local cid collision while creating 0-rtt connection",
+                                       attempt);
                     continue;
                 }
 

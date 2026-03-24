@@ -44,7 +44,7 @@ TEST_CASE("ContextImpl: passive handshake timeout recycles pending entry", "[Con
     ContextImpl ctx(nullptr, &cfg);
 
     int32_t connectErrorCalls = 0;
-    ctx.setOnConnectError([&connectErrorCalls](int32_t, const std::string &, eular::utp::Context::ConnectInfo) {
+    ctx.setOnConnectError([&connectErrorCalls](int32_t, const std::string &, eular::utp::Context::ConnectAttemptInfo) {
         ++connectErrorCalls;
     });
 

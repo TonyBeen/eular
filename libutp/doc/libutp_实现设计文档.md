@@ -52,6 +52,7 @@
 - `Context`（`include/utp/utp.h`）：
   - 生命周期：`bind/connect/accept`
   - 回调：`OnConnected/OnConnectError/OnNewConnection/OnConnectionClosed`
+  - `OnConnectError` 统一参数为 `ConnectAttemptInfo`，同时覆盖同步前置失败与异步握手失败
   - `OnNewConnection` 当前签名为 `bool(const NewConnectionInfo&)`，返回值用于放行/拒绝被动连接
 - `Connection`（`include/utp/connection.h`）：
   - 连接统计、描述信息
@@ -414,12 +415,11 @@
 
 ### 16.3 协议与结构扩展建议
 
-1. `ConnectInfo` 增加可选恢复参数：
-  - `session_ticket`（字节串）
-  - `enable_0rtt`（开关）
-2. 在 Initial/Handshake 阶段携带 `SessionToken` 帧（或扩展 Crypto 附带字段），用于服务端恢复验证。
-3. 保留现有 `UTP_TYPE_0RTT`，用于客户端在握手未完成时发送早数据包。
-4. 配置新增 `zero_rtt_token_max_lifetime_s`（建议默认 600 秒）。
+1. `ConnectInfo` 保持普通建连语义，不再承载 0-RTT 私有字段。
+2. 新增独立 `Connect0RttInfo`，仅用于非加密 0-RTT 直连场景，包含 `session_ticket` 与可选早数据。
+3. 在 Initial/Handshake 阶段携带 `SessionToken` 帧（或扩展 Crypto 附带字段），用于服务端恢复验证。
+4. 保留现有 `UTP_TYPE_0RTT`，用于客户端在握手未完成时发送早数据包。
+5. 配置新增 `zero_rtt_token_max_lifetime_s`（建议默认 600 秒）。
 
 当前实现决策补充：
 1. `UTP_TYPE_0RTT` 首包不拆为双包模型，先采用单包布局。
@@ -428,14 +428,16 @@
 4. 接收端处理顺序固定为“先解析 SessionToken -> 验票并恢复早期密钥 -> 再解密后续应用数据帧”。
 5. SessionResumptionState 对外暴露为 opaque 字符串，使用标准 Base64（非 URL-safe）。
 6. SDK 支持 `Context` 级别设置会话恢复密钥；若用户未设置则使用 SDK 默认密钥。
-7. SDK 不提供对外解析 API，应用不感知封装内部字段。
-8. SDK 不做持久化；收到“可导出”通知后由用户主动调用导出接口并自行存储。
+7. SDK 提供 `exportSessionToken(...)`，供非加密 `connect0Rtt(...)` 直接复用票据。
+8. SDK 不提供对外解析 API，应用不感知封装内部字段。
+9. SDK 不做持久化；收到“SessionTokenReady”通知后由用户主动调用导出接口并自行存储。
 
 ### 16.4 客户端状态机（建议）
 
-1. `connect(enable_0rtt=true 且有 ticket)`：
+1. `connect0Rtt(ticket)`：
   - 发送 `UTP_TYPE_0RTT` 首包，payload 首帧为 `SessionToken`
-  - 若存在早数据，则放在 `SessionToken` 之后并使用恢复得到的早期 AEAD 上下文加密
+  - 该入口仅用于非加密 0-RTT；加密恢复统一走 `connect0RttWithState(...)`
+  - 若存在早数据，则放在 `SessionToken` 之后发送
 2. 收到服务端“接受 0-RTT”信号：
   - 早数据继续按正常 ACK/重传轨道推进
 3. 收到“拒绝 0-RTT”或握手参数不匹配：
@@ -462,15 +464,17 @@
 
 ### 16.7 关键代码落点（建议）
 
-1. API：`include/utp/utp.h` 的 `ConnectInfo` 扩展。
+1. API：`include/utp/utp.h` 中普通 `ConnectInfo` 与 0-RTT 专用结构拆分。
 2. 连接发送：`ConnectionImpl::connect/sendInitialPacket/sendPacket` 增加 0-RTT 分支。
 3. 收包解析：`ConnectionImpl::onUdpPacket` 增加 `UTP_TYPE_0RTT` 验证与分发。
 4. Token：复用 `crypto/token.*`，新增恢复上下文校验接口。
 5. 回调：为应用补充“0-RTT accepted/rejected”可观测事件（可选）。
 6. API：新增会话恢复能力接口：
   - `setResumptionSecret(...) / clearResumptionSecret()`
-  - `setOnSessionResumptionReady(...)`
+  - `setOnSessionTokenReady(...)`
+  - `exportSessionToken(...)`
   - `exportSessionResumptionState(...)`
+  - `connect0Rtt(...)` 仅用于非加密票据直连
   - `connect0RttWithState(...)`
 7. 错误语义：`connect0RttWithState` 返回前置校验错误码（如 Base64 解码失败、AEAD 解密失败、本地过期等）；服务端拒绝通过异步失败回调上报。
 

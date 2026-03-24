@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         });
     });
 
-    ctx.setOnConnectError([](int32_t code, const std::string &reason, eular::utp::Context::ConnectInfo info) {
+    ctx.setOnConnectError([](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
         std::cerr << "[server] connect error code=" << code
                   << " peer=" << info.ip << ":" << info.port
                   << " reason=" << reason << "\n";

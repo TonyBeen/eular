@@ -51,9 +51,9 @@ void Context::setOnZeroRttDecision(const OnZeroRttDecision &cb)
     m_impl->setOnZeroRttDecision(cb);
 }
 
-void Context::setOnSessionResumptionReady(const OnSessionResumptionReady &cb)
+void Context::setOnSessionTokenReady(const OnSessionTokenReady &cb)
 {
-    m_impl->setOnSessionResumptionReady(cb);
+    m_impl->setOnSessionTokenReady(cb);
 }
 
 void Context::setResumptionSecret(const std::vector<uint8_t> &secret)
@@ -64,6 +64,11 @@ void Context::setResumptionSecret(const std::vector<uint8_t> &secret)
 void Context::clearResumptionSecret()
 {
     m_impl->clearResumptionSecret();
+}
+
+int32_t Context::exportSessionToken(std::vector<uint8_t> &outToken)
+{
+    return m_impl->exportSessionToken(outToken);
 }
 
 int32_t Context::exportSessionResumptionState(std::string &outState)

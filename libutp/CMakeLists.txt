@@ -96,6 +96,8 @@ set(UTP_SOURCES
     src/context/send_ctl.cpp
     src/context/stream_impl.cpp
     src/crypto/aes_gcm_context.cpp
+    src/crypto/base64.cpp
+    src/crypto/resumption_state_codec.cpp
     src/crypto/token.cpp
     src/crypto/x25519_wrapper.cpp
     src/logger/logger.cpp
