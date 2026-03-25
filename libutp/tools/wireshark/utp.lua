@@ -40,6 +40,10 @@ f.pn = ProtoField.uint64("eular_utp.pn", "Packet Number", base.DEC)
 f.payload_len = ProtoField.uint16("eular_utp.payload_len", "Payload Length", base.DEC)
 f.packet_type = ProtoField.uint8("eular_utp.packet_type", "Packet Type", base.HEX, packet_type_names)
 f.reserve = ProtoField.uint8("eular_utp.reserve", "Reserve", base.HEX)
+f.payload_raw = ProtoField.bytes("eular_utp.payload.raw", "Payload Raw")
+f.payload_cipher = ProtoField.bytes("eular_utp.payload.cipher", "Encrypted Payload")
+f.payload_tag = ProtoField.bytes("eular_utp.payload.tag", "GCM Tag")
+f.payload_undecoded = ProtoField.bytes("eular_utp.payload.undecoded", "Undecoded Payload Tail")
 
 f.frame_index = ProtoField.uint16("eular_utp.frame.index", "Frame Index", base.DEC)
 f.frame_type = ProtoField.uint8("eular_utp.frame.type", "Frame Type", base.DEC, frame_type_names)
@@ -56,8 +60,10 @@ f.ack_count = ProtoField.uint8("eular_utp.ack.count", "Ack Range Count", base.DE
 f.ack_delay = ProtoField.uint16("eular_utp.ack.delay", "Ack Delay", base.DEC)
 f.ack_first_range = ProtoField.uint32("eular_utp.ack.first_range", "First Ack Range", base.DEC)
 f.ack_largest = ProtoField.uint64("eular_utp.ack.largest", "Ack Largest", base.DEC)
-f.ack_range_low = ProtoField.uint32("eular_utp.ack.range.low", "Ack Range Low", base.DEC)
-f.ack_range_high = ProtoField.uint32("eular_utp.ack.range.high", "Ack Range High", base.DEC)
+f.ack_gap = ProtoField.uint32("eular_utp.ack.range.gap", "Ack Gap", base.DEC)
+f.ack_range_len = ProtoField.uint32("eular_utp.ack.range.len", "Ack Range Length", base.DEC)
+f.ack_abs_low = ProtoField.uint64("eular_utp.ack.range.abs_low", "Absolute Ack Range Low", base.DEC)
+f.ack_abs_high = ProtoField.uint64("eular_utp.ack.range.abs_high", "Absolute Ack Range High", base.DEC)
 
 f.padding_len = ProtoField.uint16("eular_utp.padding.len", "Padding Length", base.DEC)
 
@@ -93,6 +99,11 @@ end
 
 local function packet_type_name(ptype)
     return packet_type_names[ptype] or string.format("Unknown(0x%02x)", ptype)
+end
+
+local function packet_can_be_encrypted(ptype)
+    -- INITIAL/HANDSHAKE 明文；0RTT/CONNECTION_CLOSE/CTRL 在建链后通常为密文。
+    return ptype == 0x03 or ptype == 0x04 or ptype == 0x05
 end
 
 local function parse_frame(payload, payload_offset, payload_len, tree, frame_index)
@@ -135,7 +146,9 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         end
         frame_len = 16 + payload(payload_offset + 1, 1):uint() * 8
     elseif frame_type == 11 then
-        frame_len = 67
+        -- FRAME_CRYPTO_SIZE = 1(type) + 1(crypto_type) + 1(tp_size)
+        --                   + 15(transport params fixed fields) + 32(pubkey) = 50
+        frame_len = 50
     elseif frame_type == 6 then
         frame_len = 15
     elseif frame_type == 13 then
@@ -168,15 +181,41 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 2 then
         local base = payload_offset
         local count = payload(base + 1, 1):uint()
+        local first_range = payload(base + 4, 4):uint()
+        local largest = payload(base + 8, 8):uint64()
         node:add(f.ack_count, payload(base + 1, 1))
         node:add(f.ack_delay, payload(base + 2, 2))
         node:add(f.ack_first_range, payload(base + 4, 4))
         node:add(f.ack_largest, payload(base + 8, 8))
+
+        -- Absolute range for first_ack_range: [largest - first_range + 1, largest]
+        if first_range > 0 then
+            local first_abs_low = largest - UInt64(first_range - 1)
+            local first_abs = node:add(payload(base + 4, 12), "Ack Range First (absolute)")
+            first_abs:add(f.ack_abs_low, first_abs_low)
+            first_abs:add(f.ack_abs_high, largest)
+        end
+
         local range_off = base + 16
+        local last_abs_low = nil
+        if first_range > 0 then
+            last_abs_low = largest - UInt64(first_range - 1)
+        end
         for i = 0, count - 1 do
             local r = node:add(payload(range_off, 8), string.format("Ack Range %d", i))
-            r:add(f.ack_range_low, payload(range_off, 4))
-            r:add(f.ack_range_high, payload(range_off + 4, 4))
+            local gap = payload(range_off, 4):uint()
+            local ack_len = payload(range_off + 4, 4):uint()
+            r:add(f.ack_gap, payload(range_off, 4))
+            r:add(f.ack_range_len, payload(range_off + 4, 4))
+
+            if last_abs_low ~= nil and ack_len > 0 then
+                -- Protocol semantics: high = prev_low - gap - 1, low = high - len + 1
+                local abs_high = last_abs_low - UInt64(gap) - UInt64(1)
+                local abs_low = abs_high - UInt64(ack_len - 1)
+                r:add(f.ack_abs_low, abs_low)
+                r:add(f.ack_abs_high, abs_high)
+                last_abs_low = abs_low
+            end
             range_off = range_off + 8
         end
     elseif frame_type == 3 then
@@ -252,11 +291,30 @@ function utp.dissector(buffer, pinfo, tree)
     local payload_tree = subtree:add(buffer(20, payload_len), "Payload Frames")
     local off = 0
     local frame_index = 0
+    local maybe_encrypted = packet_can_be_encrypted(packet_type)
     while off < payload_len do
         local consumed = parse_frame(buffer(20, payload_len), off, payload_len, payload_tree, frame_index)
         if consumed <= 0 then
-            payload_tree:add_expert_info(PI_MALFORMED, PI_ERROR,
-                string.format("Malformed frame at payload offset %d", off))
+            local payload_tvb = buffer(20, payload_len)
+            if maybe_encrypted then
+                if off == 0 then
+                    payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
+                        "Payload likely encrypted; frame parsing skipped")
+                    if payload_len > 16 then
+                        payload_tree:add(f.payload_cipher, payload_tvb(0, payload_len - 16))
+                        payload_tree:add(f.payload_tag, payload_tvb(payload_len - 16, 16))
+                    else
+                        payload_tree:add(f.payload_raw, payload_tvb)
+                    end
+                else
+                    payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
+                        string.format("Frame parsing stopped at payload offset %d; remaining bytes undecoded", off))
+                    payload_tree:add(f.payload_undecoded, payload_tvb(off, payload_len - off))
+                end
+            else
+                payload_tree:add_expert_info(PI_MALFORMED, PI_ERROR,
+                    string.format("Malformed frame at payload offset %d", off))
+            end
             break
         end
         off = off + consumed

@@ -433,8 +433,11 @@ int main(int argc, char **argv)
 
     ctx.setOnConnectionClosed([](eular::utp::Connection::Ptr conn) {
         const auto desc = conn->description();
-        std::cout << "[server] connection closed scid=" << desc.scid
-                  << " peer=" << desc.remoteHost << ":" << desc.remotePort << "\n";
+        std::cout << "[server] connection closed scid=" << desc.scid << " peer=" << desc.remoteHost << ":" << desc.remotePort << "\n";
+        const auto statistic = conn->statistic();
+        printf("[server] connection statistic scid=%u pmtu=%u rtt=%u rttvar=%u bw_estimate=%u rx_bytes=%lu tx_bytes=%lu rtx_bytes=%lu\n",
+               desc.scid, statistic.pmtu, statistic.rtt, statistic.rttvar, statistic.bw_estimate,
+               statistic.rx_bytes, statistic.tx_bytes, statistic.rtx_bytes);
     });
 
     const int32_t bindStatus = ctx.bind(bindIp, bindPort);

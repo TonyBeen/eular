@@ -219,6 +219,7 @@ int main(int argc, char **argv)
     bool sessionMaterialReady = false;
     bool uploadAckOk = false;
     bool md5CheckOk = false;
+    uint8_t reconnectMaterialRetry = 0;
 
     std::string uploadReplyLine;
     std::string md5ReplyLine;
@@ -309,53 +310,82 @@ int main(int argc, char **argv)
         }
 
         constexpr size_t kChunk = 1024;
-        if (uploadOffset >= uploadData.size()) {
-            return;
-        }
+        while (uploadOffset < uploadData.size()) {
+            const size_t left = uploadData.size() - uploadOffset;
+            const size_t toSend = left < kChunk ? left : kChunk;
+            const bool fin = (uploadOffset + toSend == uploadData.size());
+            const int32_t n = uploadStream->write(uploadData.data() + uploadOffset, toSend, fin);
+            if (n < 0) {
+                std::cout << "[client] upload write blocked/error n=" << n
+                          << " offset=" << uploadOffset
+                          << " remain=" << left << "\n";
+                return;
+            }
 
-        const size_t left = uploadData.size() - uploadOffset;
-        const size_t toSend = left < kChunk ? left : kChunk;
-        const bool fin = (uploadOffset + toSend == uploadData.size());
-        const int32_t n = uploadStream->write(uploadData.data() + uploadOffset, toSend, fin);
-        if (n < 0) {
-            std::cout << "[client] upload write blocked/error n=" << n
-                      << " offset=" << uploadOffset
-                      << " remain=" << left << "\n";
-            return;
-        }
+            if (n == 0) {
+                return;
+            }
 
-        uploadOffset += static_cast<size_t>(n);
-        if ((uploadOffset % (1024 * 1024)) == 0 || uploadOffset == uploadData.size()) {
-            std::cout << "[client] upload progress=" << uploadOffset << "/" << uploadData.size() << "\n";
-        }
+            uploadOffset += static_cast<size_t>(n);
+            if ((uploadOffset % (1024 * 1024)) == 0 || uploadOffset == uploadData.size()) {
+                std::cout << "[client] upload progress=" << uploadOffset << "/" << uploadData.size() << "\n";
+            }
 
-        if (fin && static_cast<size_t>(n) == toSend) {
-            uploadFinSent = true;
-            std::cout << "[client] upload payload sent bytes=" << uploadOffset << "\n";
+            if (fin && static_cast<size_t>(n) == toSend) {
+                uploadFinSent = true;
+                std::cout << "[client] upload payload sent bytes=" << uploadOffset << "\n";
+                return;
+            }
         }
     };
 
     reconnectTimer.reset(loop.loop(), [&]() {
-        if (!sessionMaterialReady || savedResumptionState.empty()) {
-            finishWithFailure("no resumption state available, cannot start 0-rtt");
+        if (savedResumptionState.empty() && savedSessionToken.empty()) {
+            if (reconnectMaterialRetry < 20) {
+                ++reconnectMaterialRetry;
+                std::cout << "[client] resumption material not ready, retry="
+                          << static_cast<uint32_t>(reconnectMaterialRetry) << "\n";
+                reconnectTimer.stop();
+                reconnectTimer.start(100);
+                return;
+            }
+
+            finishWithFailure("no resumption state/session token available, cannot start 0-rtt");
             return;
         }
+
+        reconnectMaterialRetry = 0;
 
         phase = kPhaseZeroRttQuery;
+        if (savedResumptionState.empty()) {
+            printf("no resumption state available, start 0-rtt without resumption state\n");
+            eular::utp::Context::Connect0RttInfo info;
+            info.ip = serverIp;
+            info.port = serverPort;
+            info.timeout = 5000;
+            info.session_ticket = savedSessionToken;
+            info.early_data.assign(md5Req.begin(), md5Req.end());
+            info.early_fin = true;
 
-        eular::utp::Context::Connect0RttWithStateInfo info;
-        info.ip = serverIp;
-        info.port = serverPort;
-        info.timeout = 5000;
-        info.early_data.assign(md5Req.begin(), md5Req.end());
-        info.early_fin = true;
+            const int32_t status = ctx.connect0Rtt(info);
+            if (status != UTP_ERR_OK) {
+                finishWithFailure("connect0Rtt failed: " + std::to_string(status));
+                return;
+            }
+        } else {
+            eular::utp::Context::Connect0RttWithStateInfo info;
+            info.ip = serverIp;
+            info.port = serverPort;
+            info.timeout = 5000;
+            info.early_data.assign(md5Req.begin(), md5Req.end());
+            info.early_fin = true;
 
-        const int32_t status = ctx.connect0RttWithState(info, savedResumptionState);
-        if (status != UTP_ERR_OK) {
-            finishWithFailure("connect0RttWithState failed: " + std::to_string(status));
-            return;
+            const int32_t status = ctx.connect0RttWithState(info, savedResumptionState);
+            if (status != UTP_ERR_OK) {
+                finishWithFailure("connect0RttWithState failed: " + std::to_string(status));
+                return;
+            }
         }
-
         std::cout << "[client] started 0-rtt reconnect with early request\n";
     });
 
@@ -437,9 +467,13 @@ int main(int argc, char **argv)
                                   << " accepted=" << ctxStat.zero_rtt_accepted
                                   << " rejected=" << ctxStat.zero_rtt_rejected << "\n";
 
-                        phase = kPhaseWaitReconnect;
-                        if (connPhase1) {
-                            connPhase1->close();
+                        if (sessionMaterialReady) {
+                            phase = kPhaseWaitReconnect;
+                            if (connPhase1) {
+                                connPhase1->close();
+                            }
+                        } else {
+                            std::cout << "[client] phase1 upload acked, waiting SessionToken before reconnect\n";
                         }
                         return;
                     }
@@ -457,6 +491,11 @@ int main(int argc, char **argv)
                     sessionMaterialReady = true;
                     std::cout << "[client] saved SessionToken size=" << savedSessionToken.size()
                               << " and resumption state size=" << savedResumptionState.size() << "\n";
+
+                    if (phase == kPhaseHandshakeUpload && uploadAckOk && connPhase1) {
+                        phase = kPhaseWaitReconnect;
+                        connPhase1->close();
+                    }
                 }
             });
 
@@ -541,7 +580,7 @@ int main(int argc, char **argv)
     info.ip = serverIp;
     info.port = serverPort;
     info.timeout = 5000;
-    info.encrypted = eular::utp::Context::kEncryptionAesGcm128;
+    info.encrypted = eular::utp::Context::kEncryptionNone;
 
     const int32_t connectStatus = ctx.connect(info);
     if (connectStatus != UTP_ERR_OK) {
