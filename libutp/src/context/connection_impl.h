@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <map>
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -207,6 +208,38 @@ private:
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
 
+    /// @brief 读取默认 stream 优先级（0最高，7最低）
+    uint8_t defaultStreamPriority() const;
+    /// @brief 读取当前调度策略（支持运行时热切换）
+    StreamSchedulerMode streamSchedulerMode() const;
+    /// @brief 对候选 stream 做基于 stream_id 的 RR 选取
+    StreamImpl::SP pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates,
+                                        uint32_t &cursor);
+    /// @brief DISABLED 模式：按 stream_id RR 选流
+    StreamImpl::SP pickNextWritableStreamDisabled();
+    /// @brief STRICT+Aging 模式选流
+    StreamImpl::SP pickNextWritableStreamStrict();
+    /// @brief DRR 模式选流
+    StreamImpl::SP pickNextWritableStreamDrr();
+    /// @brief 按当前模式统一选流入口
+    StreamImpl::SP pickNextWritableStream();
+    /// @brief STRICT 模式下更新 aging 等待轮次
+    void    updateStrictAgingState(uint32_t selectedStreamId);
+    /// @brief 清理无效调度状态（已关闭流/空队列）
+    void    pruneSchedulerState();
+    /// @brief 记录一次选流结果并累计指标
+    void    onSchedulerStreamSelected(const StreamImpl::SP &stream,
+                                      StreamSchedulerMode mode,
+                                      bool agingPromoted,
+                                      uint8_t effectivePriority,
+                                      uint32_t drrNeed,
+                                      uint32_t drrDeficitBefore,
+                                      uint32_t drrDeficitAfter);
+    /// @brief 记录一次 mode 热切换
+    void    noteSchedulerModeIfChanged(StreamSchedulerMode mode);
+    /// @brief 周期打印调度统计指标
+    void    maybeEmitSchedulerStats(utp_time_t nowUs);
+
 private:
     friend class SendControl;
     friend class StreamImpl;
@@ -281,6 +314,27 @@ private:
     CachedResumptionState   m_cachedResumptionInfo{};
     uint64_t                m_cachedResumptionExpiresAt{0};
     ZeroRttConfig           m_zeroRttConfig{};
+    /// @b Stream 调度状态
+    std::array<uint32_t, 8> m_strictRrCursor{{0}};     // STRICT: 每个优先级桶的 RR 游标
+    uint32_t                m_disabledRrCursor{0};     // DISABLED: 全局 RR 游标
+    uint32_t                m_drrCursor{0};            // DRR: 上次命中的 stream_id
+    std::unordered_map<uint32_t, uint32_t> m_drrDeficit; // DRR: 每个 stream 的 deficit(bytes)
+
+    /// @b Stream 调度指标
+    struct {
+        uint64_t            selectTotal{0};            // 总选流次数
+        uint64_t            selectDisabled{0};         // DISABLED 模式选流次数
+        uint64_t            selectStrict{0};           // STRICT 模式选流次数
+        uint64_t            selectDrr{0};              // DRR 模式选流次数
+        uint64_t            strictAgingPromoted{0};    // STRICT 中触发 aging 提升的次数
+        uint64_t            wouldBlock{0};             // 选中流发送返回 WOULD_BLOCK 的次数
+        uint64_t            emptyRounds{0};            // flush 中未选到可发流的轮次
+        uint64_t            modeSwitches{0};           // 调度模式热切换次数
+        uint64_t            drrDeficitRefills{0};      // DRR deficit 补充次数
+        uint64_t            drrDeficitConsumes{0};     // DRR deficit 消耗次数
+        utp_time_t          lastReportUs{0};           // 最近一次指标日志时间(us)
+        StreamSchedulerMode lastMode{kStreamSchedulerStrict}; // 最近观测到的模式
+    } m_schedulerStats;
 };
 
 } // namespace utp

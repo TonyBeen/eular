@@ -45,6 +45,7 @@
 #include "crypto/token.h"
 
 #include "make_unique.hpp"
+#include "logger/logger.h"
 
 namespace {
 
@@ -63,6 +64,9 @@ constexpr utp_time_t kAckProfilePromoteHoldUs = 3000000;
 constexpr utp_time_t kAckProfileRollbackHoldUs = 6000000;
 constexpr utp_time_t kLossFrequentWindowUs = 2000000;
 constexpr uint32_t kLossFrequentThreshold = 2;
+constexpr size_t kMaxStreamPriorityLevels = 8;
+constexpr size_t kMaxStreamSendBurstsPerFlush = 64;
+constexpr utp_time_t kSchedulerStatsLogIntervalUs = 2000000;
 
 struct AckProfileTuning {
     uint8_t ackThreshold;
@@ -127,6 +131,19 @@ bool StreamTypeMatchesId(Connection::StreamType streamType, uint32_t streamId)
 bool IsLocalInitiatedStream(uint32_t streamId, bool isClientInitiator)
 {
     return isClientInitiator ? STREAM_ID_IS_CLIENT(streamId) : STREAM_ID_IS_SERVER(streamId);
+}
+
+const char *StreamSchedulerModeToString(eular::utp::StreamSchedulerMode mode)
+{
+    switch (mode) {
+    case eular::utp::kStreamSchedulerDisabled:
+        return "DISABLED";
+    case eular::utp::kStreamSchedulerDrr:
+        return "DRR";
+    case eular::utp::kStreamSchedulerStrict:
+    default:
+        return "STRICT";
+    }
 }
 
 eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
@@ -1207,7 +1224,9 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
             return validateStatus;
         }
 
-        StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamFrame.stream_id);
+        StreamImpl::SP stream = std::make_shared<StreamImpl>(this,
+                                                              streamFrame.stream_id,
+                                                              defaultStreamPriority());
         m_streams.emplace(streamFrame.stream_id, stream);
         if (m_onIncomingStream) {
             m_onIncomingStream(stream.get());
@@ -1249,16 +1268,44 @@ int32_t ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId,
 
 void ConnectionImpl::flushPendingStreamWrites()
 {
-    for (auto &entry : m_streams) {
-        if (entry.second) {
-            const int32_t status = entry.second->onConnectionWritable();
-            if (status == UTP_ERR_WOULD_BLOCK) {
-                return;
-            }
+    const utp_time_t nowUs = time::MonotonicUs();
+    const StreamSchedulerMode mode = streamSchedulerMode();
+    noteSchedulerModeIfChanged(mode);
+
+    size_t sentBursts = 0;
+    while (sentBursts < kMaxStreamSendBurstsPerFlush) {
+        StreamImpl::SP stream = pickNextWritableStream();
+        if (!stream) {
+            ++m_schedulerStats.emptyRounds;
+            break;
         }
+
+        const int32_t status = stream->onConnectionWritable();
+        if (status == UTP_ERR_WOULD_BLOCK) {
+            ++m_schedulerStats.wouldBlock;
+            UTP_LOGD("connection %u scheduler backpressure: mode=%s stream=%u",
+                     m_localConnectionID,
+                     StreamSchedulerModeToString(mode),
+                     stream->id());
+            maybeEmitSchedulerStats(nowUs);
+            return;
+        }
+        if (status != UTP_ERR_OK) {
+            UTP_LOGW("connection %u scheduler stream write failed: mode=%s stream=%u status=%d",
+                     m_localConnectionID,
+                     StreamSchedulerModeToString(mode),
+                     stream->id(),
+                     status);
+            break;
+        }
+
+        updateStrictAgingState(stream->id());
+        ++sentBursts;
     }
 
+    pruneSchedulerState();
     collectClosedStreams();
+    maybeEmitSchedulerStats(nowUs);
 }
 
 int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
@@ -1500,7 +1547,9 @@ void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
             return;
         }
 
-        StreamImpl::SP stream = std::make_shared<StreamImpl>(this, resetFrame.stream_id);
+        StreamImpl::SP stream = std::make_shared<StreamImpl>(this,
+                                                              resetFrame.stream_id,
+                                                              defaultStreamPriority());
         m_streams.emplace(resetFrame.stream_id, stream);
         if (m_onIncomingStream) {
             m_onIncomingStream(stream.get());
@@ -2316,6 +2365,16 @@ Connection::Statistic ConnectionImpl::statistic() const
     stat.rttvar = static_cast<uint32_t>(m_rttStats.rttVar());
     stat.rx_bytes = m_bytesIn;
     stat.tx_bytes = m_bytesOut;
+    stat.scheduler_select_total = m_schedulerStats.selectTotal;
+    stat.scheduler_select_disabled = m_schedulerStats.selectDisabled;
+    stat.scheduler_select_strict = m_schedulerStats.selectStrict;
+    stat.scheduler_select_drr = m_schedulerStats.selectDrr;
+    stat.scheduler_strict_aging_promoted = m_schedulerStats.strictAgingPromoted;
+    stat.scheduler_would_block = m_schedulerStats.wouldBlock;
+    stat.scheduler_empty_rounds = m_schedulerStats.emptyRounds;
+    stat.scheduler_mode_switches = m_schedulerStats.modeSwitches;
+    stat.scheduler_drr_refills = m_schedulerStats.drrDeficitRefills;
+    stat.scheduler_drr_consumes = m_schedulerStats.drrDeficitConsumes;
     return stat;
 }
 
@@ -2467,10 +2526,347 @@ int32_t ConnectionImpl::createStream(StreamType streamType)
         return UTP_ERR_STREAM_ID_EXHAUSTED;
     }
 
-    StreamImpl::SP stream = std::make_shared<StreamImpl>(this, streamId);
+    StreamImpl::SP stream = std::make_shared<StreamImpl>(this,
+                                                          streamId,
+                                                          defaultStreamPriority());
     m_streams.emplace(streamId, stream);
 
     return static_cast<int32_t>(streamId);
+}
+
+uint8_t ConnectionImpl::defaultStreamPriority() const
+{
+    if (m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return Stream::kPriorityDefault;
+    }
+
+    return std::min<uint8_t>(m_ctx->config()->stream_default_priority, Stream::kPriorityLowest);
+}
+
+StreamSchedulerMode ConnectionImpl::streamSchedulerMode() const
+{
+    if (m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return kStreamSchedulerStrict;
+    }
+
+    return m_ctx->config()->stream_scheduler_mode;
+}
+
+StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates,
+                                                    uint32_t &cursor)
+{
+    if (candidates.empty()) {
+        return nullptr;
+    }
+
+    std::vector<uint32_t> ids;
+    ids.reserve(candidates.size());
+    for (const auto &stream : candidates) {
+        if (stream) {
+            ids.push_back(stream->id());
+        }
+    }
+    if (ids.empty()) {
+        return nullptr;
+    }
+
+    std::sort(ids.begin(), ids.end());
+    uint32_t selectedId = ids.front();
+    for (uint32_t id : ids) {
+        if (id > cursor) {
+            selectedId = id;
+            break;
+        }
+    }
+    cursor = selectedId;
+
+    auto it = m_streams.find(selectedId);
+    if (it == m_streams.end()) {
+        return nullptr;
+    }
+    return it->second;
+}
+
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled()
+{
+    std::vector<StreamImpl::SP> candidates;
+    candidates.reserve(m_streams.size());
+    for (const auto &entry : m_streams) {
+        if (entry.second && !entry.second->m_sendQueue.empty()) {
+            candidates.push_back(entry.second);
+        }
+    }
+
+    StreamImpl::SP selected = pickRoundRobinStream(candidates, m_disabledRrCursor);
+    if (selected) {
+        onSchedulerStreamSelected(selected,
+                                  kStreamSchedulerDisabled,
+                                  false,
+                                  selected->m_priority,
+                                  0,
+                                  0,
+                                  0);
+        UTP_LOGD("connection %u scheduler selected: mode=%s stream=%u prio=%u",
+                 m_localConnectionID,
+                 StreamSchedulerModeToString(kStreamSchedulerDisabled),
+                 selected->id(),
+                 static_cast<uint32_t>(selected->m_priority));
+    }
+
+    return selected;
+}
+
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict()
+{
+    std::array<std::vector<StreamImpl::SP>, kMaxStreamPriorityLevels> byPriority;
+    for (const auto &entry : m_streams) {
+        if (!entry.second || entry.second->m_sendQueue.empty()) {
+            continue;
+        }
+
+        const uint8_t basePriority = std::min<uint8_t>(entry.second->m_priority, Stream::kPriorityLowest);
+        const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+        const uint16_t agingThreshold = (cfg != nullptr && cfg->stream_aging_threshold > 0)
+                                     ? cfg->stream_aging_threshold
+                                     : 1;
+        const uint8_t agingStep = (cfg != nullptr && cfg->stream_aging_step > 0)
+                               ? cfg->stream_aging_step
+                               : 1;
+        const uint32_t promotions = (entry.second->m_schedWaitRounds / agingThreshold) * agingStep;
+        const uint8_t effectivePriority = (promotions >= basePriority)
+                                       ? Stream::kPriorityHighest
+                                       : static_cast<uint8_t>(basePriority - promotions);
+        byPriority[effectivePriority].push_back(entry.second);
+    }
+
+    for (size_t prio = 0; prio < kMaxStreamPriorityLevels; ++prio) {
+        StreamImpl::SP selected = pickRoundRobinStream(byPriority[prio], m_strictRrCursor[prio]);
+        if (selected) {
+            const bool agingPromoted = selected->m_schedWaitRounds > 0 && prio < selected->m_priority;
+            onSchedulerStreamSelected(selected,
+                                      kStreamSchedulerStrict,
+                                      agingPromoted,
+                                      static_cast<uint8_t>(prio),
+                                      0,
+                                      0,
+                                      0);
+            UTP_LOGD("connection %u scheduler selected: mode=%s stream=%u base_prio=%u effective_prio=%u wait_rounds=%u",
+                     m_localConnectionID,
+                     StreamSchedulerModeToString(kStreamSchedulerStrict),
+                     selected->id(),
+                     static_cast<uint32_t>(selected->m_priority),
+                     static_cast<uint32_t>(prio),
+                     selected->m_schedWaitRounds);
+            return selected;
+        }
+    }
+
+    return nullptr;
+}
+
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
+{
+    std::vector<StreamImpl::SP> candidates;
+    candidates.reserve(m_streams.size());
+    for (const auto &entry : m_streams) {
+        if (entry.second && !entry.second->m_sendQueue.empty()) {
+            candidates.push_back(entry.second);
+        }
+    }
+
+    if (candidates.empty()) {
+        return nullptr;
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [] (const StreamImpl::SP &a, const StreamImpl::SP &b) {
+        return a->id() < b->id();
+    });
+
+    const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    const uint32_t baseQuantum = (cfg != nullptr && cfg->stream_drr_quantum > 0)
+                              ? cfg->stream_drr_quantum
+                              : 1200;
+    const uint32_t deficitCap = (cfg != nullptr && cfg->stream_drr_deficit_cap > 0)
+                             ? cfg->stream_drr_deficit_cap
+                             : 64 * 1024;
+
+    const size_t size = candidates.size();
+    size_t startIndex = 0;
+    for (size_t i = 0; i < size; ++i) {
+        if (candidates[i]->id() > m_drrCursor) {
+            startIndex = i;
+            break;
+        }
+    }
+
+    for (size_t pass = 0; pass < 2; ++pass) {
+        for (size_t n = 0; n < size; ++n) {
+            const size_t idx = (startIndex + n) % size;
+            const StreamImpl::SP &stream = candidates[idx];
+            const uint32_t priorityWeight = static_cast<uint32_t>(Stream::kPriorityLowest - std::min<uint8_t>(stream->m_priority, Stream::kPriorityLowest) + 1);
+            const uint32_t quantum = baseQuantum * priorityWeight;
+
+            uint32_t &deficit = m_drrDeficit[stream->id()];
+            const uint32_t before = deficit;
+            if (deficit + quantum >= deficitCap) {
+                deficit = deficitCap;
+            } else {
+                deficit += quantum;
+            }
+            ++m_schedulerStats.drrDeficitRefills;
+
+            const uint32_t need = stream->m_sendQueue.front().bytes > 0
+                                ? static_cast<uint32_t>(std::min<size_t>(stream->m_sendQueue.front().bytes, UINT16_MAX))
+                                : 1u;
+            if (deficit >= need) {
+                const uint32_t afterRefill = deficit;
+                deficit -= need;
+                ++m_schedulerStats.drrDeficitConsumes;
+                m_drrCursor = stream->id();
+                onSchedulerStreamSelected(stream,
+                                          kStreamSchedulerDrr,
+                                          false,
+                                          stream->m_priority,
+                                          need,
+                                          before,
+                                          deficit);
+                UTP_LOGD("connection %u scheduler selected: mode=%s stream=%u prio=%u need=%u deficit_before=%u deficit_after_refill=%u deficit_after=%u",
+                         m_localConnectionID,
+                         StreamSchedulerModeToString(kStreamSchedulerDrr),
+                         stream->id(),
+                         static_cast<uint32_t>(stream->m_priority),
+                         need,
+                         before,
+                         afterRefill,
+                         deficit);
+                return stream;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+StreamImpl::SP ConnectionImpl::pickNextWritableStream()
+{
+    switch (streamSchedulerMode()) {
+    case kStreamSchedulerDisabled:
+        return pickNextWritableStreamDisabled();
+    case kStreamSchedulerDrr:
+        return pickNextWritableStreamDrr();
+    case kStreamSchedulerStrict:
+    default:
+        return pickNextWritableStreamStrict();
+    }
+}
+
+void ConnectionImpl::updateStrictAgingState(uint32_t selectedStreamId)
+{
+    if (streamSchedulerMode() != kStreamSchedulerStrict) {
+        return;
+    }
+
+    for (auto &entry : m_streams) {
+        if (!entry.second || entry.second->m_sendQueue.empty()) {
+            if (entry.second) {
+                entry.second->m_schedWaitRounds = 0;
+            }
+            continue;
+        }
+
+        if (entry.first == selectedStreamId) {
+            entry.second->m_schedWaitRounds = 0;
+            continue;
+        }
+
+        if (entry.second->m_schedWaitRounds < UINT32_MAX) {
+            ++entry.second->m_schedWaitRounds;
+        }
+    }
+}
+
+void ConnectionImpl::pruneSchedulerState()
+{
+    for (auto it = m_drrDeficit.begin(); it != m_drrDeficit.end();) {
+        auto streamIt = m_streams.find(it->first);
+        if (streamIt == m_streams.end() || !streamIt->second || streamIt->second->m_sendQueue.empty()) {
+            it = m_drrDeficit.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
+void ConnectionImpl::onSchedulerStreamSelected(const StreamImpl::SP &stream,
+                                               StreamSchedulerMode mode,
+                                               bool agingPromoted,
+                                               uint8_t effectivePriority,
+                                               uint32_t drrNeed,
+                                               uint32_t drrDeficitBefore,
+                                               uint32_t drrDeficitAfter)
+{
+    if (!stream) {
+        return;
+    }
+
+    ++m_schedulerStats.selectTotal;
+    switch (mode) {
+    case kStreamSchedulerDisabled:
+        ++m_schedulerStats.selectDisabled;
+        break;
+    case kStreamSchedulerDrr:
+        ++m_schedulerStats.selectDrr;
+        break;
+    case kStreamSchedulerStrict:
+    default:
+        ++m_schedulerStats.selectStrict;
+        break;
+    }
+
+    if (agingPromoted) {
+        ++m_schedulerStats.strictAgingPromoted;
+    }
+
+    (void)effectivePriority;
+    (void)drrNeed;
+    (void)drrDeficitBefore;
+    (void)drrDeficitAfter;
+}
+
+void ConnectionImpl::noteSchedulerModeIfChanged(StreamSchedulerMode mode)
+{
+    if (m_schedulerStats.lastMode == mode) {
+        return;
+    }
+
+    ++m_schedulerStats.modeSwitches;
+    UTP_LOGD("connection %u scheduler mode switch: %s -> %s",
+             m_localConnectionID,
+             StreamSchedulerModeToString(m_schedulerStats.lastMode),
+             StreamSchedulerModeToString(mode));
+    m_schedulerStats.lastMode = mode;
+}
+
+void ConnectionImpl::maybeEmitSchedulerStats(utp_time_t nowUs)
+{
+    if (m_schedulerStats.lastReportUs != 0
+        && nowUs - m_schedulerStats.lastReportUs < kSchedulerStatsLogIntervalUs) {
+        return;
+    }
+
+    m_schedulerStats.lastReportUs = nowUs;
+    UTP_LOGD("connection %u scheduler stats: total=%u disabled=%u strict=%u drr=%u aging_promoted=%u would_block=%u empty_rounds=%u mode_switches=%u drr_refill=%u drr_consume=%u",
+             m_localConnectionID,
+             static_cast<uint32_t>(m_schedulerStats.selectTotal),
+             static_cast<uint32_t>(m_schedulerStats.selectDisabled),
+             static_cast<uint32_t>(m_schedulerStats.selectStrict),
+             static_cast<uint32_t>(m_schedulerStats.selectDrr),
+             static_cast<uint32_t>(m_schedulerStats.strictAgingPromoted),
+             static_cast<uint32_t>(m_schedulerStats.wouldBlock),
+             static_cast<uint32_t>(m_schedulerStats.emptyRounds),
+             static_cast<uint32_t>(m_schedulerStats.modeSwitches),
+             static_cast<uint32_t>(m_schedulerStats.drrDeficitRefills),
+             static_cast<uint32_t>(m_schedulerStats.drrDeficitConsumes));
 }
 
 Stream* ConnectionImpl::getStream(uint32_t streamId)

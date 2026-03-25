@@ -21,6 +21,12 @@ enum PathMigrationMode : uint8_t {
     kPathMigrationAggressive = 1,   // 激进策略：可在新路径提前发数据（实验开关，当前实现未启用）
 };
 
+enum StreamSchedulerMode : uint8_t {
+    kStreamSchedulerDisabled = 0,
+    kStreamSchedulerStrict = 1,
+    kStreamSchedulerDrr = 2,
+};
+
 class Config {
 public:
     // dplpmtud
@@ -31,6 +37,9 @@ public:
     uint32_t    mtu_probe_interval = 300;   // 探测间隔时间(seconds), 5min
     uint16_t    mtu_probe_step = 16;        // mtu探测步长(增大此值可加快探测速度但会降低精度)
     uint16_t    mtu_probe_timeout = 2000;   // mtu探测超时时间(ms)
+    uint8_t     mtu_blackhole_loss_threshold = 3; // 黑洞判定：连续大包丢失阈值(次数)
+    uint16_t    mtu_blackhole_loss_window_ms = 3000; // 黑洞判定：连续丢失统计窗口(ms)
+    uint16_t    mtu_blackhole_cooldown_ms = 5000; // 黑洞回退后冷静期(ms)
 
     // keepalive
     bool        enable_keepalive = true;    // 开启keepalive
@@ -65,6 +74,14 @@ public:
     uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
     uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
     uint16_t    init_max_streams_uni = 32;  // 初始单向流数量
+
+    // stream scheduler
+    uint8_t     stream_default_priority = 4;           // 默认 stream 优先级 (0 最高, 7 最低)
+    StreamSchedulerMode stream_scheduler_mode = kStreamSchedulerStrict; // 调度模式，默认 Strict
+    uint16_t    stream_aging_threshold = 8;            // Strict+Aging：等待多少轮触发一次提升
+    uint8_t     stream_aging_step = 1;                 // Strict+Aging：每次触发提升档位数
+    uint16_t    stream_drr_quantum = 1200;             // DRR 基准量子 (bytes)
+    uint32_t    stream_drr_deficit_cap = 64 * 1024;    // DRR deficit 上限 (bytes)
 };
 
 } // namespace utp

@@ -247,3 +247,198 @@ TEST_CASE("ConnectionImpl: multi-stream ingress and reclamation regression", "[C
     conn.collectClosedStreams();
     REQUIRE(conn.streamCount() == 32 - static_cast<int32_t>(closed));
 }
+
+TEST_CASE("ConnectionImpl: strict scheduler picks higher priority stream first", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerStrict;
+    cfg.stream_aging_threshold = 1024;
+    cfg.stream_aging_step = 1;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1010);
+    conn.m_state = ConnectionImpl::kStateConnected;
+
+    StreamImpl::SP sHigh = std::make_shared<StreamImpl>(&conn, 4, 0);
+    StreamImpl::SP sMid = std::make_shared<StreamImpl>(&conn, 8, 4);
+    StreamImpl::SP sLow = std::make_shared<StreamImpl>(&conn, 12, 7);
+
+    StreamImpl::PendingSendChunk c;
+    c.offset = 0;
+    c.bytes = 32;
+    c.fin = false;
+    sHigh->m_sendQueue.push_back(c);
+    sMid->m_sendQueue.push_back(c);
+    sLow->m_sendQueue.push_back(c);
+
+    conn.m_streams.emplace(sHigh->id(), sHigh);
+    conn.m_streams.emplace(sMid->id(), sMid);
+    conn.m_streams.emplace(sLow->id(), sLow);
+
+    StreamImpl::SP selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == sHigh->id());
+    selected->m_sendQueue.clear();
+    conn.updateStrictAgingState(selected->id());
+
+    selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == sMid->id());
+    selected->m_sendQueue.clear();
+    conn.updateStrictAgingState(selected->id());
+
+    selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == sLow->id());
+}
+
+TEST_CASE("ConnectionImpl: strict scheduler aging promotes long-wait stream", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerStrict;
+    cfg.stream_aging_threshold = 1;
+    cfg.stream_aging_step = 4;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1011);
+    conn.m_state = ConnectionImpl::kStateConnected;
+
+    StreamImpl::SP sBase = std::make_shared<StreamImpl>(&conn, 4, 3);
+    StreamImpl::SP sAged = std::make_shared<StreamImpl>(&conn, 8, 7);
+
+    StreamImpl::PendingSendChunk c;
+    c.offset = 0;
+    c.bytes = 32;
+    c.fin = false;
+    sBase->m_sendQueue.push_back(c);
+    sAged->m_sendQueue.push_back(c);
+
+    conn.m_streams.emplace(sBase->id(), sBase);
+    conn.m_streams.emplace(sAged->id(), sAged);
+
+    StreamImpl::SP first = conn.pickNextWritableStream();
+    REQUIRE(first != nullptr);
+    REQUIRE(first->id() == sBase->id());
+    conn.updateStrictAgingState(first->id());
+
+    StreamImpl::SP second = conn.pickNextWritableStream();
+    REQUIRE(second != nullptr);
+    REQUIRE(second->id() == sAged->id());
+}
+
+TEST_CASE("ConnectionImpl: drr scheduler rotates equal-priority streams", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerDrr;
+    cfg.stream_drr_quantum = 64;
+    cfg.stream_drr_deficit_cap = 1024;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1012);
+    conn.m_state = ConnectionImpl::kStateConnected;
+
+    StreamImpl::SP s1 = std::make_shared<StreamImpl>(&conn, 4, 4);
+    StreamImpl::SP s2 = std::make_shared<StreamImpl>(&conn, 8, 4);
+
+    StreamImpl::PendingSendChunk c;
+    c.offset = 0;
+    c.bytes = 64;
+    c.fin = false;
+    s1->m_sendQueue.push_back(c);
+    s2->m_sendQueue.push_back(c);
+
+    conn.m_streams.emplace(s1->id(), s1);
+    conn.m_streams.emplace(s2->id(), s2);
+
+    StreamImpl::SP first = conn.pickNextWritableStream();
+    REQUIRE(first != nullptr);
+    REQUIRE(first->id() == s1->id());
+    first->m_sendQueue.clear();
+
+    StreamImpl::SP second = conn.pickNextWritableStream();
+    REQUIRE(second != nullptr);
+    REQUIRE(second->id() == s2->id());
+}
+
+TEST_CASE("ConnectionImpl: scheduler mode switch changes stream selection", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerDisabled;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1013);
+    conn.m_state = ConnectionImpl::kStateConnected;
+
+    StreamImpl::SP lowIdLowPrio = std::make_shared<StreamImpl>(&conn, 4, 7);
+    StreamImpl::SP highIdHighPrio = std::make_shared<StreamImpl>(&conn, 8, 0);
+
+    StreamImpl::PendingSendChunk c;
+    c.offset = 0;
+    c.bytes = 16;
+    c.fin = false;
+    lowIdLowPrio->m_sendQueue.push_back(c);
+    highIdHighPrio->m_sendQueue.push_back(c);
+
+    conn.m_streams.emplace(lowIdLowPrio->id(), lowIdLowPrio);
+    conn.m_streams.emplace(highIdHighPrio->id(), highIdHighPrio);
+
+    StreamImpl::SP selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == lowIdLowPrio->id());
+
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerStrict;
+    selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == highIdHighPrio->id());
+}
+
+TEST_CASE("StreamImpl: setPriority validates input range", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1014);
+    StreamImpl stream(&conn, 4, 4);
+
+    REQUIRE(stream.setPriority(0) == UTP_ERR_OK);
+    REQUIRE(stream.priority() == 0);
+    REQUIRE(stream.setPriority(7) == UTP_ERR_OK);
+    REQUIRE(stream.priority() == 7);
+    REQUIRE(stream.setPriority(8) == -UTP_ERR_INVALID_PARAM);
+}
+
+TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][Stream][Priority]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1015);
+    conn.m_schedulerStats.selectTotal = 11;
+    conn.m_schedulerStats.selectDisabled = 2;
+    conn.m_schedulerStats.selectStrict = 5;
+    conn.m_schedulerStats.selectDrr = 4;
+    conn.m_schedulerStats.strictAgingPromoted = 3;
+    conn.m_schedulerStats.wouldBlock = 7;
+    conn.m_schedulerStats.emptyRounds = 9;
+    conn.m_schedulerStats.modeSwitches = 1;
+    conn.m_schedulerStats.drrDeficitRefills = 13;
+    conn.m_schedulerStats.drrDeficitConsumes = 8;
+
+    const Connection::Statistic stat = conn.statistic();
+    REQUIRE(stat.scheduler_select_total == 11);
+    REQUIRE(stat.scheduler_select_disabled == 2);
+    REQUIRE(stat.scheduler_select_strict == 5);
+    REQUIRE(stat.scheduler_select_drr == 4);
+    REQUIRE(stat.scheduler_strict_aging_promoted == 3);
+    REQUIRE(stat.scheduler_would_block == 7);
+    REQUIRE(stat.scheduler_empty_rounds == 9);
+    REQUIRE(stat.scheduler_mode_switches == 1);
+    REQUIRE(stat.scheduler_drr_refills == 13);
+    REQUIRE(stat.scheduler_drr_consumes == 8);
+}

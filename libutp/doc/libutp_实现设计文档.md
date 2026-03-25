@@ -1,6 +1,6 @@
 # libutp 实现设计文档（实现对齐版）
 
-> 更新时间：2026-03-22  
+> 更新时间：2026-03-25  
 > 目的：对齐当前代码实现，明确“已实现能力 / 未接入能力 / 风险与注意事项 / 下一步优化方向”。
 
 > OpenSpec 基线（OpenSpec Baseline）：当前仓库已将能力从 5 个大块细分为 15 个 capability。后续协议行为变更应优先修改对应 capability spec，而不是只在实现说明文档里追加零散描述。  
@@ -98,6 +98,7 @@ Current OpenSpec capability list (Chinese-English):
   - `OnNewConnection` 当前签名为 `bool(const NewConnectionInfo&)`，返回值用于放行/拒绝被动连接
 - `Connection`（`include/utp/connection.h`）：
   - 连接统计、描述信息
+  - stream 调度可观测统计（`scheduler_*` 字段）
   - 流创建与查询入口（`createStream/getStream`）
 - `Stream`（`include/utp/stream.h`）：
   - 支持 `write/read` 与零拷贝 `acquire/commit` 接口
@@ -395,7 +396,7 @@ Current OpenSpec capability list (Chinese-English):
 2. 主动/被动连接共享同一连接表（key=本端 CID），CID 分配已同时规避已建立连接与被动 pending 冲突。
 3. `OnNewConnection` 返回 `false` 时会立即回 `ConnectionClose(UTP_ERR_CANCELLED)`。
 4. `HandshakeDone` 超时会回 `ConnectionClose(UTP_ERR_TIMEOUT)` 并触发 `OnConnectError`。
-5. 当前发送路径尚未提供 stream 级优先级调度（例如高优先级控制流优先于大吞吐流）；多流并发时仍主要依赖 FIFO/可发送性判断，可能导致交互流尾延迟偏高。
+5. stream 级优先级调度已接入（`DISABLED/STRICT/DRR`，默认 STRICT）；当前剩余工作在于高负载收益验证与指标看板化。
 
 ## 13.2 实现细节注意点
 
@@ -406,6 +407,47 @@ Current OpenSpec capability list (Chinese-English):
 5. `AesGcmContext::init` 成功路径应补全显式返回值（当前代码需关注）。
 6. `ContextImpl` pending 握手解码路径尚未复用 `PacketIn` 池（与主连接路径存在实现差异）。
 7. `keepalive_interval=0` 时当前按 `max_idle_timeout - 3*srtt` 近似推导，属于工程策略而非严格规范条款。
+
+## 13.3 可观测性（Stream 调度）
+
+当前已通过 `Connection::Statistic` 对外暴露 stream 调度累计指标，应用层可直接调用 `connection->statistic()` 获取：
+
+1. `scheduler_select_total`：总选流次数。
+2. `scheduler_select_disabled`：DISABLED 模式选流次数。
+3. `scheduler_select_strict`：STRICT 模式选流次数。
+4. `scheduler_select_drr`：DRR 模式选流次数。
+5. `scheduler_strict_aging_promoted`：STRICT 中因 aging 触发优先级提升的次数。
+6. `scheduler_would_block`：选中流发送返回 `WOULD_BLOCK` 的次数。
+7. `scheduler_empty_rounds`：flush 中未选到可发 stream 的轮次。
+8. `scheduler_mode_switches`：调度模式热切换次数。
+9. `scheduler_drr_refills`：DRR deficit 补充次数。
+10. `scheduler_drr_consumes`：DRR deficit 消耗次数。
+
+说明：
+- 上述字段为连接级累计值（非窗口瞬时值）。
+- 调试日志中的周期统计可用于和 `statistic()` 对照排障。
+
+## 13.4 MTU 探测策略（2026-03-25 更新）
+
+当前 MTU 探测从“线性步进”升级为“梯队跳跃 + 二分收敛 + 黑洞回退”策略，目标是在较少 RTT 内收敛并增强路径切换鲁棒性。
+
+策略要点：
+
+1. 梯队探测（Ladder Probing）
+  - 固定梯队：`1380 -> 1450 -> 1492 -> 1500`。
+  - 不包含 `1280`：默认首帧已按安全最小包长填充验证；若该最小包长都不可达，则连接应按异常路径处理而非继续上探。
+2. 二分收敛（Binary Search）
+  - 典型例子：`1450` 成功、`1492` 失败后，进入区间 `[1451, 1491]` 二分。
+  - `mtu_probe_step` 不再用于线性累加，而是用于“二分终止精度阈值”：当 `high - low <= mtu_probe_step` 时停止二分并收敛。
+3. 黑洞回退（MTU Blackhole Fallback）
+  - 当连续出现接近当前最大 MTU 的数据包丢失且无对应 ACK 前进时，判定可能发生 MTU 黑洞。
+  - 触发后将 `current_mtu` 快速回退到最小安全值 `1280`（IPv4/IPv6 统一），并在冷静期后重新启动梯队探测。
+
+与配置项关系：
+
+- `mtu_probe_interval`：稳定阶段或失败后的重试间隔。
+- `mtu_probe_timeout`：单次探测超时时间。
+- `mtu_probe_step`：二分收敛精度阈值（非线性步长）。
 
 ---
 

@@ -52,6 +52,18 @@ public:
         uint64_t        rx_bytes;
         uint64_t        tx_bytes;
         uint64_t        rtx_bytes;
+
+        // stream scheduler metrics
+        uint64_t        scheduler_select_total;          // 总选流次数
+        uint64_t        scheduler_select_disabled;       // DISABLED 模式选流次数
+        uint64_t        scheduler_select_strict;         // STRICT 模式选流次数
+        uint64_t        scheduler_select_drr;            // DRR 模式选流次数
+        uint64_t        scheduler_strict_aging_promoted; // STRICT 中 aging 提升次数
+        uint64_t        scheduler_would_block;           // 选中流发送返回 WOULD_BLOCK 次数
+        uint64_t        scheduler_empty_rounds;          // flush 未选到可发流次数
+        uint64_t        scheduler_mode_switches;         // 调度模式热切换次数
+        uint64_t        scheduler_drr_refills;           // DRR deficit 补充次数
+        uint64_t        scheduler_drr_consumes;          // DRR deficit 消耗次数
     };
 
     Connection() = default;

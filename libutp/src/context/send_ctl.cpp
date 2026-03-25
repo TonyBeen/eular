@@ -137,6 +137,17 @@ bool IsHandshakePacket(const eular::utp::PacketOut *pkt)
     return pkt != nullptr && (pkt->po_flags & eular::utp::PacketOutFlags::kPoHello);
 }
 
+bool IsMtuRelevantDataPacket(const eular::utp::PacketOut *pkt)
+{
+    if (pkt == nullptr) {
+        return false;
+    }
+    if (pkt->po_flags & eular::utp::PacketOutFlags::kPoMtuProbe) {
+        return false;
+    }
+    return (pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameStream))) != 0;
+}
+
 } // namespace
 
 namespace eular {
@@ -333,6 +344,8 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 
         if ((pkt->po_flags & PacketOutFlags::kPoMtuProbe) && m_conn != nullptr) {
             m_conn->m_mtuDiscovery.onProbeAck(pkt->packno, nowUs / 1000);
+        } else if (m_conn != nullptr && IsMtuRelevantDataPacket(pkt)) {
+            m_conn->m_mtuDiscovery.onDataPacketAck(PacketSentSize(pkt), nowUs / 1000);
         }
 
         unackedRemove(pkt);
@@ -709,6 +722,9 @@ bool SendControl::detectLosses(utp_time_t now)
             // NOTE mtu 探测包丢失
             if (0 == (pktOut->po_flags & PacketOutFlags::kPoMtuProbe)) {
                 largestLostPackNo = pktOut->packno;
+                if (m_conn != nullptr && IsMtuRelevantDataPacket(pktOut)) {
+                    m_conn->m_mtuDiscovery.onDataPacketLoss(PacketSentSize(pktOut), now / 1000);
+                }
                 lossRecord = handleRegularLostPacket(pktOut, next);
                 if (lossRecord) {
                     lossRecord->local_flags |= PacketOutLocalFlags::kPOLFacked;
@@ -727,6 +743,9 @@ bool SendControl::detectLosses(utp_time_t now)
             UTP_LOGD("%s loss by early retransmit detected, packet #" PRIu64,
                 m_tag.c_str(), pktOut->packno);
             largestLostPackNo = pktOut->packno;
+            if (m_conn != nullptr && IsMtuRelevantDataPacket(pktOut)) {
+                m_conn->m_mtuDiscovery.onDataPacketLoss(PacketSentSize(pktOut), now / 1000);
+            }
             if (srtt > 0) {
                 m_lossTo = srtt / 4;
             }
@@ -740,6 +759,9 @@ bool SendControl::detectLosses(utp_time_t now)
             if ((pktOut->frame_types & m_retxFrames)
                 && 0 == (pktOut->po_flags & PacketOutFlags::kPoMtuProbe)) {
                 largestLostPackNo = pktOut->packno;
+                if (m_conn != nullptr && IsMtuRelevantDataPacket(pktOut)) {
+                    m_conn->m_mtuDiscovery.onDataPacketLoss(PacketSentSize(pktOut), now / 1000);
+                }
             }
             hasLoss = (handleRegularLostPacket(pktOut, next) != nullptr) || hasLoss;
             continue;

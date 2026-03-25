@@ -35,7 +35,7 @@ public:
     static constexpr size_t kMaxSendQueueBytes = 4 * 1024 * 1024;
     static constexpr size_t kMaxRecvFragmentBytes = 4 * 1024 * 1024;
 
-    StreamImpl(ConnectionImpl *conn, uint32_t streamId);
+    StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority = Stream::kPriorityDefault);
     ~StreamImpl();
 
     uint32_t id() const override;
@@ -51,6 +51,8 @@ public:
     void close() override;
     int32_t reset(uint16_t errorCode) override;
     bool resetReceived() const override;
+    int32_t setPriority(uint8_t priority) override;
+    uint8_t priority() const override;
     void setOnReadable(const OnReadable &cb) override;
     void setOnWritable(const OnWritable &cb) override;
     void setOnClosed(const OnClosed &cb) override;
@@ -99,7 +101,7 @@ private:
     };
 
 private:
-    int32_t flushPendingSends();
+    int32_t flushPendingSends(size_t maxChunks = static_cast<size_t>(-1));
     int32_t onConnectionWritable();
     size_t appWriteCredit() const;
     void drainRecvFragments();
@@ -131,6 +133,10 @@ private:
     OnClosed m_onClosed;
     OnReset m_onReset;
     bool m_notifyingWritable{false};
+
+    /// @b Stream 调度属性
+    uint8_t m_priority{Stream::kPriorityDefault}; // stream 基础优先级(0最高,7最低)
+    uint32_t m_schedWaitRounds{0};                // STRICT 模式下累计等待轮次(用于 aging)
 };
 
 } // namespace utp

@@ -18,6 +18,10 @@ namespace utp {
 class Stream
 {
 public:
+    static constexpr uint8_t kPriorityHighest = 0;
+    static constexpr uint8_t kPriorityLowest = 7;
+    static constexpr uint8_t kPriorityDefault = 4;
+
     struct ConstBufferView {
         const void *data{nullptr};
         size_t      len{0};
@@ -56,6 +60,8 @@ public:
     virtual void close() = 0;
     virtual int32_t reset(uint16_t errorCode) = 0;
     virtual bool resetReceived() const = 0;
+    virtual int32_t setPriority(uint8_t priority) = 0;
+    virtual uint8_t priority() const = 0;
 
     virtual void setOnReadable(const OnReadable &cb) = 0;
     virtual void setOnWritable(const OnWritable &cb) = 0;

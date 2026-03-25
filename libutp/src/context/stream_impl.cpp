@@ -14,6 +14,7 @@
 
 #include "utp/errno.h"
 #include "context/connection_impl.h"
+#include "logger/logger.h"
 
 namespace eular {
 namespace utp {
@@ -163,9 +164,10 @@ size_t StreamImpl::RingBuffer::read(uint8_t *buffer, size_t len)
     return copied;
 }
 
-StreamImpl::StreamImpl(ConnectionImpl *conn, uint32_t streamId) :
+StreamImpl::StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority) :
     m_conn(conn),
     m_streamId(streamId),
+    m_priority(std::min<uint8_t>(priority, Stream::kPriorityLowest)),
     m_sendBuffer(kDefaultBufferCapacity),
     m_recvBuffer(kDefaultBufferCapacity)
 {
@@ -295,9 +297,13 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
         }
     }
 
-    const int32_t flushStatus = flushPendingSends();
+    const int32_t flushStatus = flushPendingSends(1);
     if (flushStatus != UTP_ERR_OK && flushStatus != UTP_ERR_WOULD_BLOCK) {
         return StreamErr(static_cast<utp_error_t>(flushStatus));
+    }
+
+    if (!m_sendQueue.empty() && m_conn != nullptr) {
+        m_conn->scheduleWrite();
     }
 
     maybeNotifyClosed();
@@ -394,6 +400,36 @@ int32_t StreamImpl::reset(uint16_t errorCode)
 bool StreamImpl::resetReceived() const
 {
     return m_resetByPeer;
+}
+
+int32_t StreamImpl::setPriority(uint8_t priority)
+{
+    if (priority < Stream::kPriorityHighest || priority > Stream::kPriorityLowest) {
+        UTP_LOGW("stream %u setPriority invalid value: %u", m_streamId, static_cast<uint32_t>(priority));
+        return StreamErr(UTP_ERR_INVALID_PARAM);
+    }
+
+    if (m_priority == priority) {
+        return UTP_ERR_OK;
+    }
+
+    const uint8_t oldPriority = m_priority;
+    m_priority = priority;
+    m_schedWaitRounds = 0;
+    UTP_LOGD("stream %u priority updated: %u -> %u",
+             m_streamId,
+             static_cast<uint32_t>(oldPriority),
+             static_cast<uint32_t>(m_priority));
+    if (m_conn != nullptr) {
+        m_conn->scheduleWrite();
+    }
+
+    return UTP_ERR_OK;
+}
+
+uint8_t StreamImpl::priority() const
+{
+    return m_priority;
 }
 
 void StreamImpl::setOnReadable(const OnReadable &cb)
@@ -509,13 +545,14 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
     return UTP_ERR_OK;
 }
 
-int32_t StreamImpl::flushPendingSends()
+int32_t StreamImpl::flushPendingSends(size_t maxChunks)
 {
     if (m_conn == nullptr) {
         return UTP_ERR_INVALID_STATE;
     }
 
-    while (!m_sendQueue.empty()) {
+    size_t sentChunks = 0;
+    while (!m_sendQueue.empty() && sentChunks < maxChunks) {
         PendingSendChunk &chunk = m_sendQueue.front();
 
         const uint8_t *payload = nullptr;
@@ -540,6 +577,7 @@ int32_t StreamImpl::flushPendingSends()
                                                        payloadLen,
                                                        frameFin);
         if (status == UTP_ERR_OK) {
+            ++sentChunks;
             if (payloadLen > 0) {
                 m_sendBuffer.consume(payloadLen);
                 chunk.offset += payloadLen;
@@ -563,6 +601,10 @@ int32_t StreamImpl::flushPendingSends()
 
         if (status == UTP_ERR_WOULD_BLOCK) {
             m_conn->scheduleWrite();
+            UTP_LOGD("stream %u send blocked, queue_bytes=%zu", m_streamId, m_sendQueuedBytes);
+        }
+        if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
+            UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, status);
         }
         return status;
     }
@@ -572,7 +614,7 @@ int32_t StreamImpl::flushPendingSends()
 
 int32_t StreamImpl::onConnectionWritable()
 {
-    const int32_t status = flushPendingSends();
+    const int32_t status = flushPendingSends(1);
     if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
         return status;
     }
