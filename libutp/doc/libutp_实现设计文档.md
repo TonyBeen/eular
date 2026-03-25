@@ -3,6 +3,9 @@
 > 更新时间：2026-03-22  
 > 目的：对齐当前代码实现，明确“已实现能力 / 未接入能力 / 风险与注意事项 / 下一步优化方向”。
 
+> OpenSpec 基线（OpenSpec Baseline）：当前仓库已将能力从 5 个大块细分为 15 个 capability。后续协议行为变更应优先修改对应 capability spec，而不是只在实现说明文档里追加零散描述。  
+> The current repository has decomposed the original 5 coarse capabilities into 15 fine-grained capabilities. Future protocol behavior changes should update the corresponding capability specs first, rather than only adding scattered notes in implementation docs.
+
 ---
 
 ## 1. 文档范围
@@ -18,6 +21,45 @@
 - 测试覆盖与已知限制
 
 不覆盖完整协议规范推导（详见仓库根目录 `协议设计文档.md` 的协议视角内容）。
+
+同时，本文件是实现对齐说明，不替代 OpenSpec 基线本身；规范基线以 `openspec/changes/current-libutp-specification/specs/` 下对应 capability 的 requirement 为准。
+
+当前 OpenSpec 能力清单（中英双语）如下：  
+Current OpenSpec capability list (Chinese-English):
+
+- 握手建立（Handshake Establishment）：主动侧握手成功后进入 Connected
+- 被动接入控制（Passive Accept Control）：pending、回调决策与 `accept()` 门控
+- 连接结果事件（Connection Outcome Events）：`OnConnected` / `OnConnectError` 的结果语义
+- 连接关闭收敛（Connection Close Convergence）：本端或对端关闭后收敛到终止态
+- 流发现与查询（Stream Discovery and Lookup）：`createStream/getStream` 的可发现性语义
+- 流 ID 准入（Stream ID Admission）：角色位、方向位与每类型配额校验
+- 流读/FIN/RESET 语义（Stream Read/FIN/Reset Semantics）：可读性、EOF 与重置信号
+- ACK 触发策略（ACK Trigger Policy）：包阈值与延迟定时器触发 ACK
+- AckFrequency 同步（AckFrequency Synchronization）：接收侧 ACK 策略与发送侧重排阈值联动
+- 丢包重传周期（Loss Retransmission Cycle）：丢包检测后以新发送尝试重传
+- 路径挑战生命周期（Path Challenge Lifecycle）：地址变化、挑战应答、重试与失败收敛
+- 路径放大限制（Path Amplification Limits）：validating 期间普通流量门控
+- 0-RTT 票据门禁（0-RTT Token Gating）：peer 绑定、有效期与元数据校验
+- 0-RTT 抗重放（0-RTT Replay Defense）：重放窗口内重复 tuple 拒绝
+- 0-RTT 决策可观测（0-RTT Decision Signaling）：会话材料导出与接受/拒绝事件
+
+中文能力名与 capability 目录名对应关系（Chinese Name -> Directory Name）：
+
+- 握手建立 -> `handshake-establishment`
+- 被动接入控制 -> `passive-accept-control`
+- 连接结果事件 -> `connection-outcome-events`
+- 连接关闭收敛 -> `connection-close-convergence`
+- 流发现与查询 -> `stream-discovery-and-lookup`
+- 流 ID 准入 -> `stream-id-admission`
+- 流读/FIN/RESET 语义 -> `stream-read-fin-reset`
+- ACK 触发策略 -> `ack-trigger-policy`
+- AckFrequency 同步 -> `ack-frequency-synchronization`
+- 丢包重传周期 -> `loss-retransmission-cycle`
+- 路径挑战生命周期 -> `path-challenge-lifecycle`
+- 路径放大限制 -> `path-amplification-limits`
+- 0-RTT 票据门禁 -> `zero-rtt-token-gating`
+- 0-RTT 抗重放 -> `zero-rtt-replay-defense`
+- 0-RTT 决策可观测 -> `zero-rtt-decision-signaling`
 
 ---
 
@@ -353,6 +395,7 @@
 2. 主动/被动连接共享同一连接表（key=本端 CID），CID 分配已同时规避已建立连接与被动 pending 冲突。
 3. `OnNewConnection` 返回 `false` 时会立即回 `ConnectionClose(UTP_ERR_CANCELLED)`。
 4. `HandshakeDone` 超时会回 `ConnectionClose(UTP_ERR_TIMEOUT)` 并触发 `OnConnectError`。
+5. 当前发送路径尚未提供 stream 级优先级调度（例如高优先级控制流优先于大吞吐流）；多流并发时仍主要依赖 FIFO/可发送性判断，可能导致交互流尾延迟偏高。
 
 ## 13.2 实现细节注意点
 
@@ -370,10 +413,14 @@
 
 ### P0（建议优先）
 
-1. 补齐被动建连相关测试（放行/拒绝、accept 后等待 HandshakeDone、超时回收）。
-2. 增加连接级端到端回归（主动/被动混合并发、CID 冲突回避场景）。
-3. 扩展 Stream 生命周期回收策略（已关闭流的对象回收与统计）。
-4. 0-RTT 可观测性增强：补充 accepted/rejected 事件与统计。
+1. Stream 级优先级（最高优先）分三阶段推进：
+  - 阶段 A：文档固化（本次）——明确缺失点、目标与约束。
+  - 阶段 B：设计评审——完成调度策略评审（严格优先级 vs. WFQ/DRR、饥饿保护、与拥塞窗口/ACK 交互）。
+  - 阶段 C：代码落地——实现发送调度器、配置项与可观测指标，并补齐回归测试。
+2. 补齐被动建连相关测试（放行/拒绝、accept 后等待 HandshakeDone、超时回收）。
+3. 增加连接级端到端回归（主动/被动混合并发、CID 冲突回避场景）。
+4. 扩展 Stream 生命周期回收策略（已关闭流的对象回收与统计）。
+5. 0-RTT 可观测性增强：补充 accepted/rejected 事件与统计。
 
 ### P1
 
@@ -393,6 +440,8 @@
 
 当前 `libutp` 已完成“连接骨架 + 主被动握手 + ACK 收发闭环 + 重传/拥塞控制 + 路径验证 + 基础内存池 + 包级加密接入”的主干能力。  
 尚未完成的重点转为“Stream 数据面端到端能力、Cubic 实现和更完整的连接级回归测试”。
+
+补充：当前最重要的协议能力缺口是“stream 级优先级调度”；已进入“先文档、后评审、再编码”的推进路径。
 
 ---
 

@@ -302,6 +302,65 @@ TEST_CASE("Context integration: OnNewConnection reject returns connection close 
     REQUIRE(server.m_pendingIncoming.empty());
 }
 
+TEST_CASE("Context integration: remote ConnectionClose converges to OnConnectionClosed callback", "[Context][Integration]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+
+    int32_t clientClosedCallbacks = 0;
+    client.setOnConnectionClosed([&](Connection::Ptr) {
+        ++clientClosedCallbacks;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() { return HasConnectedConnection(server) && HasConnectedConnection(client); },
+        [&]() {
+            if (!server.m_pendingIncomingQueue.empty()) {
+                (void)server.accept();
+            }
+        },
+        300,
+        1));
+
+    ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(client));
+    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
+    REQUIRE(serverConn != nullptr);
+    REQUIRE(clientConn != nullptr);
+
+    serverConn->close();
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() { return clientConn->state() == ConnectionImpl::kStateCloseReceived; },
+        nullptr,
+        300,
+        1));
+
+    clientConn->onCloseDrainTimeout();
+    client.handleConnectionState(clientConn.get());
+
+    REQUIRE(clientClosedCallbacks == 1);
+    REQUIRE(client.m_connections.empty());
+}
+
 TEST_CASE("Context integration: mixed active and passive handshakes share one Context and avoid pending cid", "[Context][Integration]")
 {
     Config cfg;
