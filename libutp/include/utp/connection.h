@@ -34,8 +34,9 @@ public:
         kStreamTypeAll = 0xFF,
     };
 
-    using OnIncomingStream = std::function<void(Stream *)>;
-    using OnSessionTokenReady = std::function<void()>;
+    using OnIncomingStream      = std::function<void(Stream *)>;
+    using OnSessionTokenReady   = std::function<void()>;
+    using OnConnectionError     = std::function<void(int32_t, const std::string &)>;
 
     struct Description {
         uint32_t        scid;
@@ -71,6 +72,7 @@ public:
 
     virtual void        setOnIncomingStream(const OnIncomingStream &cb) = 0;
     virtual void        setOnSessionTokenReady(const OnSessionTokenReady &cb) = 0;
+    virtual void        setOnConnectionError(const OnConnectionError &cb) = 0;
     virtual int32_t     streamCount(StreamType streamType = kStreamTypeAll) const = 0;
     virtual int32_t     creatableStreamCount(StreamType streamType) const = 0;
     virtual Statistic   statistic() const = 0;

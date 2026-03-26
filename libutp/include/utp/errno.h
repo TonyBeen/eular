@@ -12,8 +12,8 @@
 
 #include <utp/platform.h>
 
-typedef enum : uint16_t {
-    /* 通用错误 */
+enum : uint16_t {
+    // 通用错误
     UTP_ERR_OK                  = 0x0000,   // 无错误，正常关闭
     UTP_ERR_INVALID_PARAM,                  // 无效参数
     UTP_ERR_INTERNAL_ERROR,                 // 内部错误
@@ -40,6 +40,7 @@ typedef enum : uint16_t {
     UTP_ERR_SOCKET_READ,                    // 读取Socket错误
     UTP_ERR_SOCKET_WRITE,                   // 写入Socket错误
     UTP_ERR_SOCKET_CONNECTED,               // 已经连接
+    UTP_ERR_SOCKET_EVENT,                   // Socket事件错误
 
     // stream
     UTP_ERR_STREAM_CLOSED        = 0x0040,  // 流已关闭
@@ -64,7 +65,8 @@ typedef enum : uint16_t {
 
     /* 应用层错误 (0x0100 - 0xFFFF 由应用自定义) */
     UTP_ERR_APP_ERROR_BASE       = 0x0100,  // 应用层错误起始值
-} utp_error_t;
+};
+typedef uint32_t utp_error_t;
 
 UTP_API int32_t GetLastError();
 UTP_API const char* GetErrorString();

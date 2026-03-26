@@ -104,6 +104,7 @@ public:
 public:
     void        setOnIncomingStream(const OnIncomingStream &cb) override;
     void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
+    void        setOnConnectionError(const OnConnectionError &cb) override;
     int32_t     streamCount(StreamType streamType = kStreamTypeAll) const override;
     int32_t     creatableStreamCount(StreamType streamType) const override;
     Statistic   statistic() const override;
@@ -272,6 +273,7 @@ private:
 
     OnIncomingStream        m_onIncomingStream;
     OnSessionTokenReady     m_onSessionTokenReady;
+    OnConnectionError       m_onConnectionError;
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};

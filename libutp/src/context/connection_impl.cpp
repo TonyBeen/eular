@@ -1227,11 +1227,17 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
         StreamImpl::SP stream = std::make_shared<StreamImpl>(this,
                                                               streamFrame.stream_id,
                                                               defaultStreamPriority());
-        m_streams.emplace(streamFrame.stream_id, stream);
+        auto pair = m_streams.emplace(streamFrame.stream_id, stream);
+        if (!pair.second) {
+            if (m_onConnectionError) {
+                m_onConnectionError(UTP_ERR_INTERNAL_ERROR, "failed to insert new stream into map");
+            }
+            return UTP_ERR_INTERNAL_ERROR;
+        }
         if (m_onIncomingStream) {
             m_onIncomingStream(stream.get());
         }
-        it = m_streams.find(streamFrame.stream_id);
+        it = pair.first;
     }
 
     if (it == m_streams.end()) {
@@ -2335,6 +2341,11 @@ void ConnectionImpl::setOnIncomingStream(const OnIncomingStream &cb)
 void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
 {
     m_onSessionTokenReady = cb;
+}
+
+void ConnectionImpl::setOnConnectionError(const OnConnectionError& cb)
+{
+    m_onConnectionError = cb;
 }
 
 int32_t ConnectionImpl::streamCount(StreamType streamType) const
