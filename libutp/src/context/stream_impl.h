@@ -31,9 +31,9 @@ class StreamImpl : public Stream {
 public:
     using SP = std::shared_ptr<StreamImpl>;
 
-    static constexpr size_t kDefaultBufferCapacity = 64 * 1024;
-    static constexpr size_t kMaxSendQueueBytes = 4 * 1024 * 1024;
-    static constexpr size_t kMaxRecvFragmentBytes = 4 * 1024 * 1024;
+    static constexpr size_t kDefaultBufferCapacity  = 64 * 1024;
+    static constexpr size_t kMaxSendQueueBytes      = 4 * 1024 * 1024;
+    static constexpr size_t kMaxRecvFragmentBytes   = 4 * 1024 * 1024;
 
     StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority = Stream::kPriorityDefault);
     ~StreamImpl();
@@ -70,18 +70,18 @@ private:
         RingBuffer() = default;
         explicit RingBuffer(size_t capacity);
 
-        void ensureFree(size_t freeBytes);
-        size_t size() const { return m_size; }
-        size_t capacity() const { return m_buffer.size(); }
-        size_t freeSize() const { return capacity() - m_size; }
-        bool empty() const { return m_size == 0; }
+        void    ensureFree(size_t freeBytes);
+        size_t  size() const { return m_size; }
+        size_t  capacity() const { return m_buffer.size(); }
+        size_t  freeSize() const { return capacity() - m_size; }
+        bool    empty() const { return m_size == 0; }
 
-        size_t readableViews(ConstBufferView views[2], size_t maxBytes) const;
-        size_t writableViews(MutableBufferView views[2], size_t maxBytes);
-        void produce(size_t bytes);
-        void consume(size_t bytes);
-        size_t write(const uint8_t *data, size_t len);
-        size_t read(uint8_t *buffer, size_t len);
+        size_t  readableViews(ConstBufferView views[2], size_t maxBytes) const;
+        size_t  writableViews(MutableBufferView views[2], size_t maxBytes);
+        void    produce(size_t bytes);
+        void    consume(size_t bytes);
+        size_t  write(const uint8_t *data, size_t len);
+        size_t  read(uint8_t *buffer, size_t len);
 
     private:
         std::vector<uint8_t> m_buffer;
