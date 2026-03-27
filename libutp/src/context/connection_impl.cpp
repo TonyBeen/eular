@@ -2160,10 +2160,8 @@ uint32_t ConnectionImpl::handshakeDoneDelayMs() const
 
 void ConnectionImpl::onConnTimeout()
 {
-    if (m_state == State::kStateConnected
-        || m_state == State::kStateDisconnected
-        || m_state == State::kStateCloseSent
-        || m_state == State::kStatePtoTimedWait) {
+    if (m_state == State::kStateConnected || m_state == State::kStateDisconnected ||
+        m_state == State::kStateCloseSent || m_state == State::kStatePtoTimedWait) {
         return;
     }
 
