@@ -243,10 +243,6 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
         onConnTimeout();
     });
 
-    m_scheduleTimer.reset(ctx->loop(), [this] () {
-        onWrite();
-    });
-
     m_pathValidationTimer.reset(ctx->loop(), [this] () {
         onPathValidationTimeout();
     });
@@ -885,11 +881,6 @@ void ConnectionImpl::trySendZeroRttEarlyData()
     if (status == UTP_ERR_OK) {
         m_zeroRttEarlyDataSent = true;
     }
-}
-
-void ConnectionImpl::nextScheduleTime(utp_time_t timeNext)
-{
-    m_scheduleTimer.start(timeNext);
 }
 
 void ConnectionImpl::scheduleWrite()

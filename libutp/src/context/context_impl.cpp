@@ -279,9 +279,8 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
         return;
     }
 
-    if (state == ConnectionImpl::kStateCloseSent
-        || state == ConnectionImpl::kStateCloseReceived
-        || state == ConnectionImpl::kStatePtoTimedWait) {
+    if (state == ConnectionImpl::kStateCloseSent || state == ConnectionImpl::kStateCloseReceived ||
+        state == ConnectionImpl::kStatePtoTimedWait) {
         if (pendingIt != m_pendingConnections.end()) {
             m_pendingConnections.erase(pendingIt);
 
@@ -664,7 +663,7 @@ bool ContextImpl::buildZeroRttSessionToken(const Address &peerAddress,
     return true;
 }
 
-std::string ContextImpl::peerKey(const Address &peerAddress, uint32_t peerCid)
+std::string ContextImpl::PeerKey(const Address &peerAddress, uint32_t peerCid)
 {
     return peerAddress.toString() + "#" + std::to_string(peerCid);
 }
@@ -1056,7 +1055,7 @@ void ContextImpl::removePendingIncoming(uint32_t localCid)
         return;
     }
 
-    const std::string key = peerKey(it->second.peerAddress, it->second.peerCid);
+    const std::string key = PeerKey(it->second.peerAddress, it->second.peerCid);
     m_pendingIncomingPeerIndex.erase(key);
     m_waitHandshakeDone.erase(localCid);
     m_pendingIncomingQueue.remove(localCid);
@@ -1442,7 +1441,7 @@ void ContextImpl::onReadEvent()
                 continue;
             }
 
-            const std::string key = peerKey(msg.metaInfo.peerAddress, scid);
+            const std::string key = PeerKey(msg.metaInfo.peerAddress, scid);
             if (m_pendingIncomingPeerIndex.find(key) != m_pendingIncomingPeerIndex.end()) {
                 continue;
             }

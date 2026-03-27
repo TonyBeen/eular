@@ -116,24 +116,24 @@ private:
     };
 
 private:
-    static std::string peerKey(const Address &peerAddress, uint32_t peerCid);
-    void handleConnectionState(ConnectionImpl *conn);
+    static std::string PeerKey(const Address &peerAddress, uint32_t peerCid);
+    void    handleConnectionState(ConnectionImpl *conn);
     int32_t sendPendingHandshake(PendingIncomingConnection &pending);
     int32_t sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
     int32_t sendPendingPacket(PendingIncomingConnection &pending,
                               uint8_t packetType,
                               const void *payload,
                               size_t payloadLen);
-    bool decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
-                                     PendingIncomingConnection &pending,
-                                     PacketIn &packet);
-    void reportZeroRttDecision(const PendingIncomingConnection &pending,
-                               bool accepted,
-                               const std::string &reason);
-    bool allocLocalCid(uint32_t &cid);
-    void removePendingIncoming(uint32_t localCid);
-    void onPendingHandshakeTimeout();
-    void processPendingHandshakeTimeouts();
+    bool    decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
+                                        PendingIncomingConnection &pending,
+                                        PacketIn &packet);
+    void    reportZeroRttDecision(const PendingIncomingConnection &pending,
+                                  bool accepted,
+                                  const std::string &reason);
+    bool    allocLocalCid(uint32_t &cid);
+    void    removePendingIncoming(uint32_t localCid);
+    void    onPendingHandshakeTimeout();
+    void    processPendingHandshakeTimeouts();
     TokenAuth *tokenAuth();
     bool validateZeroRttTicket(const Address &peerAddress,
                                const std::vector<uint8_t> &ticket,
@@ -178,7 +178,7 @@ private:
     std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
     std::unique_ptr<TokenAuth>      m_tokenAuth;
 
-    std::array<uint8_t, 32>         m_resumptionSecret{};
+    std::array<uint8_t, 32>         m_resumptionSecret{};   // 0-RTT 加密会话恢复密钥
     bool                            m_hasCustomResumptionSecret{false};
 
     struct ZeroRttReplayKey {
@@ -192,9 +192,7 @@ private:
 
     struct ZeroRttReplayKeyHash {
         size_t operator()(const ZeroRttReplayKey &key) const {
-            return static_cast<size_t>(key.ticketCid)
-                ^ static_cast<size_t>(key.nonce)
-                ^ static_cast<size_t>(key.nonce >> 32);
+            return static_cast<size_t>(key.ticketCid) ^ static_cast<size_t>(key.nonce) ^ static_cast<size_t>(key.nonce >> 32);
         }
     };
 

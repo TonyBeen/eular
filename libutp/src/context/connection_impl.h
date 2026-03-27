@@ -98,9 +98,6 @@ public:
     void    onUdpPacket(const UdpSocket::MsgMetaInfo &msg);
     void    onWrite();
 
-    // @brief 下一次调度时间(ms), send control触发
-    void    nextScheduleTime(utp_time_t timeNext);
-
 public:
     void        setOnIncomingStream(const OnIncomingStream &cb) override;
     void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
@@ -259,7 +256,6 @@ private:
     Context::ConnectInfo    m_connectInfo{};
     Context::ConnectAttemptInfo m_connectAttemptInfo{};
     ev::EventTimer          m_connTimer;
-    ev::EventTimer          m_scheduleTimer;
 
     uint32_t                m_localConnectionID{};
     uint32_t                m_peerConnectionID{};

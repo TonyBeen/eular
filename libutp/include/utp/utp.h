@@ -119,6 +119,7 @@ public:
         bool        early_fin{false};
     };
 
+    // TODO 将 Connection::Ptr 改为 Connection *
     using OnConnected = std::function<void(Connection::Ptr)>;
     using OnConnectError = std::function<void(int32_t, const std::string &, ConnectAttemptInfo)>;
     using OnConnectionClosed = std::function<void(Connection::Ptr)>;
