@@ -120,6 +120,8 @@ public:
                                        const uint8_t *data,
                                        size_t len,
                                        bool fin);
+    void        updateTag(const std::string &tag);
+    const char* tag() const { return m_tag.c_str(); }
 
 public:
     uint64_t    packetNumber() { return m_packetNumber++; }
@@ -245,6 +247,7 @@ private:
     friend class SendControl;
     friend class StreamImpl;
 
+    std::string             m_tag;
     ContextImpl*            m_ctx{};
     UdpSocket*              m_udpSocket{};
     State                   m_state{kStateDisconnected};

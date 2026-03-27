@@ -354,7 +354,7 @@ int32_t ContextImpl::connect(const Context::ConnectInfo &info)
 }
 
 int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
-                                    const ConnectionImpl::ZeroRttConfig *zeroRtt)
+                                     const ConnectionImpl::ZeroRttConfig *zeroRtt)
 {
     Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
     if (zeroRtt != nullptr) {
@@ -370,13 +370,11 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
 
     if (info.ip.empty() || info.port == 0) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid connect info: {}:{}", tag(), info.ip, info.port);
-        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
         return -1;
     }
 
     if (!m_udpSocket.isValid()) {
         SetLastErrorV(UTP_ERR_SOCKET_NOT_BOUND, "{} UDP socket is not bound", tag());
-        reportConnectError(UTP_ERR_SOCKET_NOT_BOUND, GetErrorString(), attempt);
         return -1;
     }
 
@@ -386,12 +384,10 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
             auto pendingIt = m_pendingConnections.find(conn.get());
             if (pendingIt != m_pendingConnections.end()) {
                 SetLastErrorV(UTP_ERR_IN_PROGRESS, "{} connection to {}:{} is already in progress", tag(), info.ip, info.port);
-                reportConnectError(UTP_ERR_IN_PROGRESS, GetErrorString(), attempt);
                 return -1;
             }
 
             SetLastErrorV(UTP_ERR_SOCKET_CONNECTED, "{} already connected to {}:{}", tag(), info.ip, info.port);
-            reportConnectError(UTP_ERR_SOCKET_CONNECTED, GetErrorString(), attempt);
             return -1;
         }
     }
@@ -399,14 +395,12 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
     uint32_t cid = 0;
     if (!allocLocalCid(cid)) {
         SetLastErrorV(UTP_ERR_NO_MEMORY, "{} allocate local cid failed", tag());
-        reportConnectError(UTP_ERR_NO_MEMORY, GetErrorString(), attempt);
         return -1;
     }
 
     ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, cid);
     int32_t status = conn->connect(info, zeroRtt);
     if (status != UTP_ERR_OK) {
-        reportConnectError(status, GetErrorString(), attempt);
         return status;
     }
 
@@ -419,14 +413,7 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
 {
     const Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
     if (info.ip.empty() || info.port == 0 || info.session_ticket.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "{} invalid 0-rtt connect info: {}:{} ticket={}",
-                      tag(),
-                      info.ip,
-                      info.port,
-                      info.session_ticket.size());
-        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
-        return -1;
+        return -UTP_ERR_INVALID_PARAM;
     }
 
     size_t payloadSize = FRAME_SESSION_TOKEN_HDR_SIZE + info.session_ticket.size();
@@ -434,12 +421,7 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
         payloadSize += FRAME_STREAM_HDR_SIZE + info.early_data.size();
     }
     if (UTP_HEADER_SIZE + payloadSize > 1280) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "{} 0-rtt first packet too large: {} bytes",
-                      tag(),
-                      UTP_HEADER_SIZE + payloadSize);
-        reportConnectError(UTP_ERR_OVERFLOW, GetErrorString(), attempt);
-        return -1;
+        return -UTP_ERR_OVERFLOW;
     }
 
     Context::ConnectInfo base;
@@ -466,13 +448,8 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
 {
     Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info, state.size());
     if (info.ip.empty() || info.port == 0 || state.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "{} invalid connect0RttWithState input: {}:{} state_size={}",
-                      tag(),
-                      info.ip,
-                      info.port,
-                      state.size());
-        reportConnectError(UTP_ERR_INVALID_PARAM, GetErrorString(), attempt);
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid connect0RttWithState input: {}:{} state_size={}",
+                      tag(), info.ip, info.port, state.size());
         return -1;
     }
 
@@ -481,19 +458,22 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
     uint64_t expiresAt = 0;
     int32_t status = parseSessionResumptionState(state, parsed, expiresAt);
     if (status != UTP_ERR_OK) {
-        reportConnectError(status, GetErrorString(), attempt);
+        return -1;
+    }
+
+    Context::ConnectInfo base;
+    CachedResumptionState parsed;
+    uint64_t expiresAt = 0;
+    int32_t status = parseSessionResumptionState(state, parsed, expiresAt);
+    if (status != UTP_ERR_OK) {
         return -1;
     }
     attempt.encrypted = parsed.encrypted;
 
     const uint64_t nowSec = time::RealtimeMs() / 1000;
     if (expiresAt > 0 && nowSec > expiresAt) {
-        SetLastErrorV(UTP_ERR_TIMEOUT,
-                      "{} session resumption state expired: now={}, expires_at={}",
-                      tag(),
-                      nowSec,
-                      expiresAt);
-        reportConnectError(UTP_ERR_TIMEOUT, GetErrorString(), attempt);
+        SetLastErrorV(UTP_ERR_TIMEOUT, "{} session resumption state expired: now={}, expires_at={}",
+                      tag(), nowSec, expiresAt);
         return -1;
     }
 
@@ -530,14 +510,14 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
     std::vector<uint8_t> sealed;
     if (!Base64::DecodeStd(state, sealed)) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid standard base64 session resumption state", tag());
-        return UTP_ERR_INVALID_PARAM;
+        return -1;
     }
 
     std::vector<uint8_t> plain;
     const auto key = activeResumptionSecret();
     if (!ResumptionStateCodec::Open(key, sealed, plain)) {
         SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "{} failed to decrypt session resumption state", tag());
-        return UTP_ERR_CRYPTO_DECRYPTION;
+        return -1;
     }
 
     const uint8_t *offset = plain.data();
@@ -553,7 +533,7 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
     offset = Serialize::DeserializeFrom(offset, left, ticketSize);
     if (offset == nullptr || left < ticketSize) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(ticket)", tag());
-        return UTP_ERR_INVALID_PARAM;
+        return -1;
     }
 
     outInfo.sessionTicket.assign(offset, offset + ticketSize);
@@ -563,23 +543,21 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
     offset = Serialize::DeserializeFrom(offset, left, pskSize);
     if (offset == nullptr || left < pskSize) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(psk)", tag());
-        return UTP_ERR_INVALID_PARAM;
+        return -1;
     }
 
     outInfo.resumptionPsk.assign(offset, offset + pskSize);
     Context::EncryptionMode mode = Context::kEncryptionNone;
     if (!DecodeTokenEncryptionMode(modeRaw, mode)) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid encryption_mode in resumption state", tag());
-        return UTP_ERR_INVALID_PARAM;
+        return -1;
     }
 
     outInfo.encrypted = mode;
     if (outInfo.encrypted != Context::kEncryptionNone && outInfo.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "{} invalid resumption_psk size in encrypted state: {}",
-                      tag(),
-                      outInfo.resumptionPsk.size());
-        return UTP_ERR_INVALID_PARAM;
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid resumption_psk size in encrypted state: {}",
+                      tag(), outInfo.resumptionPsk.size());
+        return -1;
     }
 
     (void)version;

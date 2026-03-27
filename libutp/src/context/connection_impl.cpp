@@ -46,6 +46,7 @@
 
 #include "make_unique.hpp"
 #include "logger/logger.h"
+#include "connection_impl.h"
 
 namespace {
 
@@ -291,7 +292,8 @@ ConnectionImpl::~ConnectionImpl() = default;
 int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt)
 {
     if (m_state != State::kStateDisconnected) {
-        return UTP_ERR_INVALID_STATE;
+        SetLastErrorV(UTP_ERR_INVALID_STATE, "{} connection is not in disconnected state", tag());
+        return -1;
     }
 
     m_state = State::kStateWaitSendInitial;
@@ -364,7 +366,11 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttC
     m_keepaliveTimer.stop();
 
     m_ctx->wantWrite(this);
-    m_connTimer.start(info.timeout);
+    bool success = m_connTimer.start(info.timeout);
+    if (!success) {
+        SetLastErrorV(UTP_ERR_SOCKET_EVENT, "{} failed to start connection timer", tag());
+        return -1;
+    }
     return UTP_ERR_OK;
 }
 
@@ -1272,8 +1278,12 @@ int32_t ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId,
     return ingestStreamFrame(streamFrame);
 }
 
-void ConnectionImpl::flushPendingStreamWrites()
+void ConnectionImpl::updateTag(const std::string& tag)
 {
+    m_tag = tag + " Connection [" + std::to_string(m_localConnectionID) + "]";
+}
+
+void ConnectionImpl::flushPendingStreamWrites() {
     const utp_time_t nowUs = time::MonotonicUs();
     const StreamSchedulerMode mode = streamSchedulerMode();
     noteSchedulerModeIfChanged(mode);
@@ -1981,7 +1991,7 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
 
 bool ConnectionImpl::canSendOnCurrentPath(size_t packetLen, FrameType frameType) const
 {
-    // TODO(path-migration): 预留激进策略入口。
+    // TODO (path-migration): 预留激进策略入口。
     // 当前版本即使 Config.path_migration_mode = kPathMigrationAggressive，
     // 也强制按保守策略执行：未验证路径仅允许受控发送，不提前切业务数据到新路径。
     // 后续在双路径状态机完成后再启用激进行为。
