@@ -302,6 +302,64 @@ TEST_CASE("Context integration: OnNewConnection reject returns connection close 
     REQUIRE(server.m_pendingIncoming.empty());
 }
 
+TEST_CASE("Context integration: connect retries after first reject when retries > 0", "[Context][Integration]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    int32_t incomingAttempts = 0;
+    bool serverConnected = false;
+    bool clientConnected = false;
+    int32_t clientConnectErrors = 0;
+    bool accepted = false;
+
+    server.setOnNewConnection([&incomingAttempts](const Context::NewConnectionInfo &) {
+        ++incomingAttempts;
+        return incomingAttempts > 1;
+    });
+    server.setOnConnected([&serverConnected](Connection::Ptr) {
+        serverConnected = true;
+    });
+    client.setOnConnected([&clientConnected](Connection::Ptr) {
+        clientConnected = true;
+    });
+    client.setOnConnectError([&clientConnectErrors](int32_t, const std::string &, Context::ConnectAttemptInfo) {
+        ++clientConnectErrors;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    info.retries = 1;
+    REQUIRE(client.connect(info) == UTP_ERR_OK);
+
+    const bool ok = PumpUntil(
+        loop,
+        [&]() { return HasConnectedConnection(server) && HasConnectedConnection(client); },
+        [&]() {
+            if (!accepted && !server.m_pendingIncomingQueue.empty()) {
+                accepted = (server.accept() == UTP_ERR_OK);
+            }
+        },
+        5000,
+        1);
+
+    REQUIRE(ok);
+    REQUIRE(incomingAttempts >= 2);
+    REQUIRE(serverConnected);
+    REQUIRE(clientConnected);
+    REQUIRE(accepted);
+    REQUIRE(clientConnectErrors == 0);
+}
+
 TEST_CASE("Context integration: remote ConnectionClose converges to OnConnectionClosed callback", "[Context][Integration]")
 {
     Config cfg;

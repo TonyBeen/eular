@@ -91,6 +91,13 @@ private:
                             const Context::ConnectAttemptInfo &info);
     int32_t connectInternal(const Context::ConnectInfo &info,
                             const ConnectionImpl::ZeroRttConfig *zeroRtt = nullptr);
+    struct PendingConnectAttempt {
+        Context::ConnectInfo connectInfo{};
+        ConnectionImpl::ZeroRttConfig zeroRtt{};
+        bool hasZeroRtt{false};
+        int8_t retriesRemaining{0};
+    };
+    int32_t startPendingConnectAttempt(const PendingConnectAttempt &attempt);
     struct CachedResumptionState {
         Context::EncryptionMode encrypted{Context::kEncryptionNone};
         std::vector<uint8_t> sessionTicket;
@@ -169,7 +176,7 @@ private:
 
     using ConnectionMap = std::unordered_map<uint32_t, ConnectionImpl::SP>; // cid -> ConnectionImpl
     ConnectionMap                   m_connections;          // 所有连接容器
-    std::set<ConnectionImpl *>      m_pendingConnections;   // 正在连接队列
+    std::unordered_map<ConnectionImpl *, PendingConnectAttempt> m_pendingConnections; // 正在连接队列
     std::list<ConnectionImpl *>     m_wantWriteConns;       // 需要写数据的连接队列
 
     std::unordered_map<uint32_t, PendingIncomingConnection> m_pendingIncoming; // local cid -> pending incoming

@@ -332,6 +332,8 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttC
     m_mtuDiscovery.setAddressFamily(peer.family());
     m_lastErrorCode = UTP_ERR_OK;
     m_lastErrorReason.clear();
+    m_closeByPeer = false;
+    m_closedNotified = false;
     m_isClientInitiator = true;
     m_lastActivityUs = 0;
     m_keepaliveMissedProbes = 0;
@@ -417,6 +419,10 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     m_ackProfileCandidateSinceUs = 0;
     m_ackProfileLastSentMs = 0;
     m_ackProfileBaselineSrttUs = 0;
+    m_lastErrorCode = UTP_ERR_OK;
+    m_lastErrorReason.clear();
+    m_closeByPeer = false;
+    m_closedNotified = false;
     m_sessionTokenIssued = false;
     m_hasCachedResumptionState = false;
     m_cachedResumptionInfo = CachedResumptionState{};
@@ -706,6 +712,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         case kFrameConnectionClose:
             peerCloseReceived = true;
             m_state = kStateCloseReceived;
+            m_closeByPeer = true;
             if (m_lastErrorCode == UTP_ERR_OK) {
                 m_lastErrorCode = UTP_ERR_CANCELLED;
                 m_lastErrorReason = "peer closed connection";
@@ -812,9 +819,13 @@ void ConnectionImpl::onWrite()
         }
 
         m_closeFramePending = false;
+        m_lastErrorCode = closeStatus;
+        m_lastErrorReason = "send connection close failed";
+        notifyConnectionError(m_lastErrorCode, m_lastErrorReason, true);
         m_state = State::kStateDisconnected;
         stopAckTimer();
         m_keepaliveTimer.stop();
+        notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, m_closeByPeer);
         scheduleWrite();
         return;
     }
@@ -830,12 +841,14 @@ void ConnectionImpl::onWrite()
                 }
                 m_lastErrorCode = err;
                 m_lastErrorReason = "send initial packet failed";
+                notifyConnectionError(m_lastErrorCode, m_lastErrorReason, true);
                 m_state = State::kStateDisconnected;
                 m_connTimer.stop();
                 m_handshakeDoneTimer.stop();
                 m_pathValidationTimer.stop();
                 stopAckTimer();
                 m_keepaliveTimer.stop();
+                notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, false);
                 return;
             }
         }
@@ -1240,9 +1253,7 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
                                                               defaultStreamPriority());
         auto pair = m_streams.emplace(streamFrame.stream_id, stream);
         if (!pair.second) {
-            if (m_onConnectionError) {
-                m_onConnectionError(UTP_ERR_INTERNAL_ERROR, "failed to insert new stream into map");
-            }
+            notifyConnectionError(UTP_ERR_INTERNAL_ERROR, "failed to insert new stream into map", false);
             return UTP_ERR_INTERNAL_ERROR;
         }
         if (m_onIncomingStream) {
@@ -2294,10 +2305,12 @@ void ConnectionImpl::onConnTimeout()
 
     m_lastErrorCode = UTP_ERR_TIMEOUT;
     m_lastErrorReason = "connect timeout";
+    notifyConnectionError(m_lastErrorCode, m_lastErrorReason, true);
     m_state = State::kStateDisconnected;
     m_handshakeDoneTimer.stop();
     stopAckTimer();
     m_keepaliveTimer.stop();
+    notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, false);
     scheduleWrite();
 }
 
@@ -2357,6 +2370,7 @@ void ConnectionImpl::beginCloseSent(uint16_t errorCode, const std::string &reaso
 
     m_closeErrorCode = errorCode;
     m_closeReason = reason.empty() ? "local close" : reason;
+    m_closeByPeer = false;
     m_closeFramePending = true;
     m_closePeerResendCount = 0;
     m_closePtoUs = closePtoUs();
@@ -2465,6 +2479,8 @@ void ConnectionImpl::onCloseDrainTimeout()
     m_state = State::kStateDisconnected;
     stopAckTimer();
     m_keepaliveTimer.stop();
+    const int32_t closeCode = m_closeErrorCode == 0 ? UTP_ERR_CANCELLED : static_cast<int32_t>(m_closeErrorCode);
+    notifyConnectionClosed(closeCode, m_closeReason, m_closeByPeer);
     scheduleWrite();
 }
 
@@ -2478,9 +2494,47 @@ void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
     m_onSessionTokenReady = cb;
 }
 
-void ConnectionImpl::setOnConnectionError(const OnConnectionError& cb)
+void ConnectionImpl::setOnError(const OnError &cb)
 {
-    m_onConnectionError = cb;
+    m_onError = cb;
+}
+
+void ConnectionImpl::setOnClosed(const OnClosed &cb)
+{
+    m_onClosed = cb;
+}
+
+void ConnectionImpl::notifyConnectionError(int32_t errorCode, const std::string &reason, bool fatal)
+{
+    if (errorCode == UTP_ERR_OK) {
+        return;
+    }
+
+    if (m_onError) {
+        ConnectionErrorInfo info;
+        info.error_code = errorCode;
+        info.error_reason = reason;
+        info.fatal = fatal;
+        m_onError(info);
+    }
+}
+
+void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const std::string &reason, bool byPeer)
+{
+    if (m_closedNotified) {
+        return;
+    }
+
+    m_closedNotified = true;
+    if (!m_onClosed) {
+        return;
+    }
+
+    ConnectionCloseInfo info;
+    info.error_code = errorCode;
+    info.error_reason = reason;
+    info.by_peer = byPeer;
+    m_onClosed(info);
 }
 
 int32_t ConnectionImpl::streamCount(StreamType streamType) const

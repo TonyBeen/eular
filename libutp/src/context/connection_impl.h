@@ -105,7 +105,8 @@ public:
 public:
     void        setOnIncomingStream(const OnIncomingStream &cb) override;
     void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
-    void        setOnConnectionError(const OnConnectionError &cb) override;
+    void        setOnError(const OnError &cb) override;
+    void        setOnClosed(const OnClosed &cb) override;
     int32_t     streamCount(StreamType streamType = kStreamTypeAll) const override;
     int32_t     creatableStreamCount(StreamType streamType) const override;
     Statistic   statistic() const override;
@@ -218,6 +219,8 @@ private:
     uint32_t handshakeDoneDelayMs() const;
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
+    void    notifyConnectionError(int32_t errorCode, const std::string &reason, bool fatal);
+    void    notifyConnectionClosed(int32_t errorCode, const std::string &reason, bool byPeer);
 
     /// @brief 读取默认 stream 优先级（0最高，7最低）
     uint8_t defaultStreamPriority() const;
@@ -284,7 +287,8 @@ private:
 
     OnIncomingStream        m_onIncomingStream;
     OnSessionTokenReady     m_onSessionTokenReady;
-    OnConnectionError       m_onConnectionError;
+    OnError                 m_onError;
+    OnClosed                m_onClosed;
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};
@@ -321,6 +325,8 @@ private:
     bool                    m_isClientInitiator{true};
     int32_t                 m_lastErrorCode{0};
     std::string             m_lastErrorReason;
+    bool                    m_closeByPeer{false};
+    bool                    m_closedNotified{false};
     bool                    m_zeroRttEarlyDataSent{false};
     uint32_t                m_zeroRttEarlyStreamId{0};
     bool                    m_sessionTokenIssued{false};

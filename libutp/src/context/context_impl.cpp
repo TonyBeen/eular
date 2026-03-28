@@ -282,6 +282,10 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
     if (state == ConnectionImpl::kStateCloseSent || state == ConnectionImpl::kStateCloseReceived ||
         state == ConnectionImpl::kStatePtoTimedWait) {
         if (pendingIt != m_pendingConnections.end()) {
+            if (pendingIt->second.retriesRemaining > 0) {
+                return;
+            }
+
             m_pendingConnections.erase(pendingIt);
 
             int32_t errorCode = current->lastErrorCode();
@@ -294,9 +298,7 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
                 reason = "connection closed during handshake";
             }
 
-            if (m_onConnectError) {
-                reportConnectError(errorCode, reason, current->connectAttemptInfo());
-            }
+            reportConnectError(errorCode, reason, current->connectAttemptInfo());
         }
         return;
     }
@@ -306,7 +308,18 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
     }
 
     if (pendingIt != m_pendingConnections.end()) {
+        PendingConnectAttempt attempt = pendingIt->second;
+        const int32_t retriesLeft = static_cast<int32_t>(attempt.retriesRemaining);
         m_pendingConnections.erase(pendingIt);
+        m_connections.erase(it);
+
+        if (retriesLeft > 0) {
+            attempt.retriesRemaining = static_cast<int8_t>(retriesLeft - 1);
+            const int32_t retryStatus = startPendingConnectAttempt(attempt);
+            if (retryStatus == UTP_ERR_OK) {
+                return;
+            }
+        }
 
         int32_t errorCode = current->lastErrorCode();
         if (errorCode == UTP_ERR_OK) {
@@ -323,9 +336,28 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
         if (m_onConnectionClosed) {
             m_onConnectionClosed(current);
         }
+        m_connections.erase(it);
+    }
+}
+
+int32_t ContextImpl::startPendingConnectAttempt(const PendingConnectAttempt &attempt)
+{
+    uint32_t cid = 0;
+    if (!allocLocalCid(cid)) {
+        SetLastErrorV(UTP_ERR_NO_MEMORY, "{} allocate local cid failed", tag());
+        return -1;
     }
 
-    m_connections.erase(it);
+    ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, cid);
+    const ConnectionImpl::ZeroRttConfig *zeroRtt = attempt.hasZeroRtt ? &attempt.zeroRtt : nullptr;
+    const int32_t status = conn->connect(attempt.connectInfo, zeroRtt);
+    if (status != UTP_ERR_OK) {
+        return status;
+    }
+
+    m_pendingConnections[conn.get()] = attempt;
+    m_connections[cid] = std::move(conn);
+    return UTP_ERR_OK;
 }
 
 int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
@@ -391,21 +423,14 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
         }
     }
 
-    uint32_t cid = 0;
-    if (!allocLocalCid(cid)) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "{} allocate local cid failed", tag());
-        return -1;
+    PendingConnectAttempt pending;
+    pending.connectInfo = info;
+    pending.hasZeroRtt = (zeroRtt != nullptr);
+    if (zeroRtt != nullptr) {
+        pending.zeroRtt = *zeroRtt;
     }
-
-    ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, cid);
-    int32_t status = conn->connect(info, zeroRtt);
-    if (status != UTP_ERR_OK) {
-        return status;
-    }
-
-    m_pendingConnections.insert(conn.get());
-    m_connections[cid] = std::move(conn);
-    return status;
+    pending.retriesRemaining = std::max<int8_t>(info.retries, 0);
+    return startPendingConnectAttempt(pending);
 }
 
 int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
