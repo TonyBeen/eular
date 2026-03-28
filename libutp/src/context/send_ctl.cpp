@@ -512,6 +512,9 @@ void SendControl::appendUnacked(PacketOut *pkt)
     const uint32_t packetSize = PacketSentSize(pkt);
     TAILQ_INSERT_TAIL(&m_unackedPackets, pkt, po_next);
     pkt->po_flags |= PacketOutFlags::kPoUnAcked;
+    if (m_conn != nullptr) {
+        m_conn->onStreamPacketUnackedAdded(pkt);
+    }
     m_bytesUnackedAll += packetSize;
     m_nInflightAll++;
     if (pkt->frame_types & m_retxFrames) {
@@ -928,6 +931,10 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         return UTP_ERR_INVALID_PARAM;
     }
 
+    if (!m_conn->canSendStreamUnackedBytes(pkt->stream_data_size)) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
     const FrameType frameType = FirstFrameType(pkt->frame_types);
     if (!m_conn->canSendOnCurrentPath(pkt->data_size, frameType)) {
         return UTP_ERR_WOULD_BLOCK;
@@ -1010,6 +1017,9 @@ void SendControl::unackedRemove(PacketOut *pkt)
     const uint32_t packetSize = PacketSentSize(pkt);
     TAILQ_REMOVE(&m_unackedPackets, pkt, po_next);
     pkt->po_flags &= ~PacketOutFlags::kPoUnAcked;
+    if (m_conn != nullptr) {
+        m_conn->onStreamPacketUnackedRemoved(pkt);
+    }
     assert(m_bytesUnackedAll >= packetSize);
     m_bytesUnackedAll -= packetSize;
     --m_nInflightAll;

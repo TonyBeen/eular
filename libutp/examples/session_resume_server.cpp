@@ -283,8 +283,7 @@ int main(int argc, char **argv)
                         const std::string line = "UPLOAD_OK bytes=" + std::to_string(shared->latestBytes)
                                               + " md5=" + shared->latestMd5 + "\n";
                         (void)stream->write(line.data(), line.size(), true);
-                        std::cout << "[server] upload completed bytes=" << shared->latestBytes
-                                  << " md5=" << shared->latestMd5 << "\n";
+                        std::cout << "[server] upload completed bytes=" << shared->latestBytes << " md5=" << shared->latestMd5 << "\n";
                         sessions->erase(sid);
                         return;
                     }

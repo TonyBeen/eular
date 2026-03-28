@@ -460,13 +460,6 @@ int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInf
         return -1;
     }
 
-    Context::ConnectInfo base;
-    CachedResumptionState parsed;
-    uint64_t expiresAt = 0;
-    int32_t status = parseSessionResumptionState(state, parsed, expiresAt);
-    if (status != UTP_ERR_OK) {
-        return -1;
-    }
     attempt.encrypted = parsed.encrypted;
 
     const uint64_t nowSec = time::RealtimeMs() / 1000;

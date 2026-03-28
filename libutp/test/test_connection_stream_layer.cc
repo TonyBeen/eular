@@ -15,11 +15,14 @@
 #undef private
 
 #include "utp/errno.h"
+#include "proto/packet_out.h"
+#include "util/time.h"
 
 using eular::utp::Config;
 using eular::utp::Connection;
 using eular::utp::ConnectionImpl;
 using eular::utp::ContextImpl;
+using eular::utp::FrameStream;
 using eular::utp::Stream;
 using eular::utp::StreamImpl;
 
@@ -98,6 +101,43 @@ TEST_CASE("ConnectionImpl: streamCount counts only active streams", "[Connection
     REQUIRE(openStream->state() == Stream::kStateOpen);
     REQUIRE(closedStream->state() == Stream::kStateClosed);
     REQUIRE(conn.streamCount() == 1);
+}
+
+TEST_CASE("StreamImpl: configurable send buffer limit is enforced", "[Connection][Stream]")
+{
+    Config cfg;
+    cfg.stream_send_buffer_limit = 8 * 1024;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1020);
+    StreamImpl stream(&conn, 4);
+
+    REQUIRE(stream.appWriteCredit() == static_cast<size_t>(cfg.stream_send_buffer_limit));
+
+    stream.m_sendQueuedBytes = cfg.stream_send_buffer_limit;
+    REQUIRE(stream.appWriteCredit() == 0);
+    REQUIRE_FALSE(stream.writable());
+}
+
+TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")
+{
+    Config cfg;
+    cfg.stream_unacked_data_limit = 1024;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1021);
+    conn.m_streamUnackedDataBytes = 900;
+    REQUIRE(conn.canSendStreamUnackedBytes(100));
+    REQUIRE_FALSE(conn.canSendStreamUnackedBytes(200));
+
+    eular::utp::PacketOut pkt{};
+    pkt.stream_data_size = 256;
+    conn.onStreamPacketUnackedAdded(&pkt);
+    REQUIRE(conn.m_streamUnackedDataBytes == 1156);
+    conn.onStreamPacketUnackedRemoved(&pkt);
+    REQUIRE(conn.m_streamUnackedDataBytes == 900);
 }
 
 TEST_CASE("ConnectionImpl: ingress stream gate checks role and per-type limits", "[Connection][Stream]")
@@ -264,13 +304,9 @@ TEST_CASE("ConnectionImpl: strict scheduler picks higher priority stream first",
     StreamImpl::SP sMid = std::make_shared<StreamImpl>(&conn, 8, 4);
     StreamImpl::SP sLow = std::make_shared<StreamImpl>(&conn, 12, 7);
 
-    StreamImpl::PendingSendChunk c;
-    c.offset = 0;
-    c.bytes = 32;
-    c.fin = false;
-    sHigh->m_sendQueue.push_back(c);
-    sMid->m_sendQueue.push_back(c);
-    sLow->m_sendQueue.push_back(c);
+    sHigh->m_sendQueuedBytes = 32;
+    sMid->m_sendQueuedBytes = 32;
+    sLow->m_sendQueuedBytes = 32;
 
     conn.m_streams.emplace(sHigh->id(), sHigh);
     conn.m_streams.emplace(sMid->id(), sMid);
@@ -279,13 +315,13 @@ TEST_CASE("ConnectionImpl: strict scheduler picks higher priority stream first",
     StreamImpl::SP selected = conn.pickNextWritableStream();
     REQUIRE(selected != nullptr);
     REQUIRE(selected->id() == sHigh->id());
-    selected->m_sendQueue.clear();
+    selected->m_sendQueuedBytes = 0;
     conn.updateStrictAgingState(selected->id());
 
     selected = conn.pickNextWritableStream();
     REQUIRE(selected != nullptr);
     REQUIRE(selected->id() == sMid->id());
-    selected->m_sendQueue.clear();
+    selected->m_sendQueuedBytes = 0;
     conn.updateStrictAgingState(selected->id());
 
     selected = conn.pickNextWritableStream();
@@ -308,12 +344,8 @@ TEST_CASE("ConnectionImpl: strict scheduler aging promotes long-wait stream", "[
     StreamImpl::SP sBase = std::make_shared<StreamImpl>(&conn, 4, 3);
     StreamImpl::SP sAged = std::make_shared<StreamImpl>(&conn, 8, 7);
 
-    StreamImpl::PendingSendChunk c;
-    c.offset = 0;
-    c.bytes = 32;
-    c.fin = false;
-    sBase->m_sendQueue.push_back(c);
-    sAged->m_sendQueue.push_back(c);
+    sBase->m_sendQueuedBytes = 32;
+    sAged->m_sendQueuedBytes = 32;
 
     conn.m_streams.emplace(sBase->id(), sBase);
     conn.m_streams.emplace(sAged->id(), sAged);
@@ -343,12 +375,8 @@ TEST_CASE("ConnectionImpl: drr scheduler rotates equal-priority streams", "[Conn
     StreamImpl::SP s1 = std::make_shared<StreamImpl>(&conn, 4, 4);
     StreamImpl::SP s2 = std::make_shared<StreamImpl>(&conn, 8, 4);
 
-    StreamImpl::PendingSendChunk c;
-    c.offset = 0;
-    c.bytes = 64;
-    c.fin = false;
-    s1->m_sendQueue.push_back(c);
-    s2->m_sendQueue.push_back(c);
+    s1->m_sendQueuedBytes = 64;
+    s2->m_sendQueuedBytes = 64;
 
     conn.m_streams.emplace(s1->id(), s1);
     conn.m_streams.emplace(s2->id(), s2);
@@ -356,7 +384,7 @@ TEST_CASE("ConnectionImpl: drr scheduler rotates equal-priority streams", "[Conn
     StreamImpl::SP first = conn.pickNextWritableStream();
     REQUIRE(first != nullptr);
     REQUIRE(first->id() == s1->id());
-    first->m_sendQueue.clear();
+    first->m_sendQueuedBytes = 0;
 
     StreamImpl::SP second = conn.pickNextWritableStream();
     REQUIRE(second != nullptr);
@@ -376,12 +404,8 @@ TEST_CASE("ConnectionImpl: scheduler mode switch changes stream selection", "[Co
     StreamImpl::SP lowIdLowPrio = std::make_shared<StreamImpl>(&conn, 4, 7);
     StreamImpl::SP highIdHighPrio = std::make_shared<StreamImpl>(&conn, 8, 0);
 
-    StreamImpl::PendingSendChunk c;
-    c.offset = 0;
-    c.bytes = 16;
-    c.fin = false;
-    lowIdLowPrio->m_sendQueue.push_back(c);
-    highIdHighPrio->m_sendQueue.push_back(c);
+    lowIdLowPrio->m_sendQueuedBytes = 16;
+    highIdHighPrio->m_sendQueuedBytes = 16;
 
     conn.m_streams.emplace(lowIdLowPrio->id(), lowIdLowPrio);
     conn.m_streams.emplace(highIdHighPrio->id(), highIdHighPrio);
@@ -441,4 +465,116 @@ TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][S
     REQUIRE(stat.scheduler_mode_switches == 1);
     REQUIRE(stat.scheduler_drr_refills == 13);
     REQUIRE(stat.scheduler_drr_consumes == 8);
+}
+
+TEST_CASE("StreamImpl: coalescing defers tiny payload within window", "[Connection][Stream][Coalescing]")
+{
+    Config cfg;
+    cfg.stream_enable_coalescing = true;
+    cfg.stream_min_payload_before_immediate_send = 512;
+    cfg.stream_coalesce_delay_us = 5000;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1016);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+    StreamImpl stream(&conn, 4);
+
+    const utp_time_t nowUs = eular::utp::time::MonotonicUs();
+    stream.m_sendQueuedBytes = 128;
+    stream.m_lastSendQueuedAtUs = nowUs - 1000;
+
+    REQUIRE(stream.hasPendingSendWork());
+    REQUIRE(stream.shouldDeferSend(nowUs));
+    REQUIRE(stream.coalesceDelayRemainingUs(nowUs) > 0);
+}
+
+TEST_CASE("StreamImpl: coalescing bypasses threshold and expired window", "[Connection][Stream][Coalescing]")
+{
+    Config cfg;
+    cfg.stream_enable_coalescing = true;
+    cfg.stream_min_payload_before_immediate_send = 512;
+    cfg.stream_coalesce_delay_us = 5000;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1017);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+    StreamImpl stream(&conn, 4);
+
+    const utp_time_t nowUs = eular::utp::time::MonotonicUs();
+
+    stream.m_sendQueuedBytes = cfg.stream_min_payload_before_immediate_send;
+    stream.m_lastSendQueuedAtUs = nowUs - 500;
+    REQUIRE_FALSE(stream.shouldDeferSend(nowUs));
+
+    stream.m_sendQueuedBytes = 128;
+    stream.m_lastSendQueuedAtUs = nowUs - 6000;
+    REQUIRE_FALSE(stream.shouldDeferSend(nowUs));
+    REQUIRE(stream.coalesceDelayRemainingUs(nowUs) == 0);
+}
+
+TEST_CASE("StreamImpl: FIN path is never deferred by coalescing", "[Connection][Stream][Coalescing]")
+{
+    Config cfg;
+    cfg.stream_enable_coalescing = true;
+    cfg.stream_min_payload_before_immediate_send = 512;
+    cfg.stream_coalesce_delay_us = 5000;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1018);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+    StreamImpl stream(&conn, 4);
+
+    const utp_time_t nowUs = eular::utp::time::MonotonicUs();
+    stream.m_localFinQueued = true;
+    stream.m_localFinSent = false;
+    stream.m_sendQueuedBytes = 0;
+    stream.m_lastSendQueuedAtUs = nowUs - 1000;
+
+    REQUIRE(stream.hasPendingSendWork());
+    REQUIRE_FALSE(stream.shouldDeferSend(nowUs));
+}
+
+TEST_CASE("ConnectionImpl: scheduler skips deferred streams", "[Connection][Stream][Coalescing]")
+{
+    Config cfg;
+    cfg.stream_scheduler_mode = eular::utp::kStreamSchedulerDisabled;
+    cfg.stream_enable_coalescing = true;
+    cfg.stream_min_payload_before_immediate_send = 512;
+    cfg.stream_coalesce_delay_us = 5000;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1019);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+
+    StreamImpl::SP deferred = std::make_shared<StreamImpl>(&conn, 4, 4);
+    StreamImpl::SP ready = std::make_shared<StreamImpl>(&conn, 8, 4);
+    const utp_time_t nowUs = eular::utp::time::MonotonicUs();
+
+    deferred->m_sendQueuedBytes = 128;
+    deferred->m_lastSendQueuedAtUs = nowUs - 500;
+    ready->m_sendQueuedBytes = 128;
+    ready->m_lastSendQueuedAtUs = nowUs - 6000;
+
+    conn.m_streams.emplace(deferred->id(), deferred);
+    conn.m_streams.emplace(ready->id(), ready);
+
+    StreamImpl::SP selected = conn.pickNextWritableStream();
+    REQUIRE(selected != nullptr);
+    REQUIRE(selected->id() == ready->id());
+
+    ready->m_lastSendQueuedAtUs = nowUs - 500;
+    selected = conn.pickNextWritableStream();
+    REQUIRE(selected == nullptr);
 }

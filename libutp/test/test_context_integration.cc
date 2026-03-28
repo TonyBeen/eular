@@ -1073,16 +1073,13 @@ TEST_CASE("Context integration: stream OnWritable fires again after queued data 
 
     static const uint8_t payload[] = {'p', 'i', 'n', 'g'};
     REQUIRE(stream->m_sendBuffer.write(payload, sizeof(payload)) == sizeof(payload));
-    stream->m_sendQueue.push_back({0, sizeof(payload), false});
     stream->m_sendQueuedBytes = eular::utp::StreamImpl::kDefaultBufferCapacity;
-    stream->m_sendBufferedOffset = sizeof(payload);
 
     REQUIRE_FALSE(stream->writable());
 
     clientConn->flushPendingStreamWrites();
 
-    REQUIRE(stream->m_sendQueue.empty());
-    REQUIRE(stream->m_sendQueuedBytes == eular::utp::StreamImpl::kDefaultBufferCapacity - sizeof(payload));
+    REQUIRE(stream->m_sendQueuedBytes == 0);
     REQUIRE(stream->writable());
     REQUIRE(writableNotified == 2);
 }

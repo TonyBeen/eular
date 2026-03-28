@@ -40,6 +40,7 @@ class ContextImpl;
 class X25519Wrapper;
 class AesGcmContext;
 class SendControl;
+struct PacketOut;
 struct FrameAckFrequency;
 struct FrameResetStream;
 
@@ -98,6 +99,9 @@ public:
     void    onUdpPacket(const UdpSocket::MsgMetaInfo &msg);
     void    onWrite();
 
+    // @brief 下一次调度时间(ms), send control触发
+    void    nextScheduleTime(utp_time_t timeNext);
+
 public:
     void        setOnIncomingStream(const OnIncomingStream &cb) override;
     void        setOnSessionTokenReady(const OnSessionTokenReady &cb) override;
@@ -123,11 +127,16 @@ public:
 public:
     uint64_t    packetNumber() { return m_packetNumber++; }
     uint32_t    cid() const { return m_localConnectionID; }
+    const Config* config() const;
     const Context::ConnectInfo& connectInfo() const { return m_connectInfo; }
     const Context::ConnectAttemptInfo& connectAttemptInfo() const { return m_connectAttemptInfo; }
     State       state() const { return m_state; }
     int32_t     lastErrorCode() const { return m_lastErrorCode; }
     const std::string& lastErrorReason() const { return m_lastErrorReason; }
+    size_t      streamPayloadBudgetHint() const;
+    bool        canSendStreamUnackedBytes(size_t streamBytes) const;
+    void        onStreamPacketUnackedAdded(const PacketOut *pkt);
+    void        onStreamPacketUnackedRemoved(const PacketOut *pkt);
 
 private:
     struct CachedResumptionState {
@@ -179,7 +188,8 @@ private:
                        uint16_t packetFlags = 0,
                        utp_packno_t *outPacketNo = nullptr,
                        uint32_t frameTypeBitsOverride = 0,
-                       const Address *targetAddress = nullptr);
+                       const Address *targetAddress = nullptr,
+                       size_t streamDataBytes = 0);
     int32_t sendPacket(uint8_t packetType,
                        const void *payloadHead,
                        size_t payloadHeadLen,
@@ -188,7 +198,8 @@ private:
                        uint16_t packetFlags,
                        utp_packno_t *outPacketNo = nullptr,
                        uint32_t frameTypeBitsOverride = 0,
-                       const Address *targetAddress = nullptr);
+                       const Address *targetAddress = nullptr,
+                       size_t streamDataBytes = 0);
     bool    canSendOnCurrentPath(size_t packetLen, FrameType frameType) const;
     void    maybeSendPathChallenge();
     void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize, const Address &fromAddress);
@@ -256,6 +267,7 @@ private:
     Context::ConnectInfo    m_connectInfo{};
     Context::ConnectAttemptInfo m_connectAttemptInfo{};
     ev::EventTimer          m_connTimer;
+    ev::EventTimer          m_scheduleTimer;
 
     uint32_t                m_localConnectionID{};
     uint32_t                m_peerConnectionID{};
@@ -276,6 +288,7 @@ private:
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};
+    uint64_t                m_streamUnackedDataBytes{0};
     ev::EventTimer          m_pathValidationTimer;
     ev::EventTimer          m_handshakeDoneTimer;
     ev::EventTimer          m_ackTimer;

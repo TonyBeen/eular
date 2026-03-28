@@ -82,6 +82,11 @@ public:
     uint8_t     stream_aging_step = 1;                 // Strict+Aging：每次触发提升档位数
     uint16_t    stream_drr_quantum = 1200;             // DRR 基准量子 (bytes)
     uint32_t    stream_drr_deficit_cap = 64 * 1024;    // DRR deficit 上限 (bytes)
+    uint32_t    stream_send_buffer_limit = 64 * 1024;  // 单个 stream 写缓冲区上限(bytes)
+    bool        stream_enable_coalescing = true;       // 是否启用 tiny-write 聚合
+    uint16_t    stream_min_payload_before_immediate_send = 1200; // 小于该阈值时可进入聚合等待(bytes)
+    uint32_t    stream_coalesce_delay_us = 1000;       // tiny-write 聚合等待窗口(us)
+    uint32_t    stream_unacked_data_limit = 256 * 1024; // 在途未确认 STREAM 数据上限(bytes, 含首次发送与重传)
 };
 
 } // namespace utp

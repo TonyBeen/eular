@@ -57,7 +57,7 @@ TEST_CASE("ContextImpl: passive handshake timeout recycles pending entry", "[Con
     pending.acceptStartUs = eular::utp::time::MonotonicUs() - 10 * 1000; // 10ms ago
 
     ctx.m_pendingIncoming.emplace(pending.localCid, pending);
-    ctx.m_pendingIncomingPeerIndex.emplace(ContextImpl::peerKey(pending.peerAddress, pending.peerCid), pending.localCid);
+    ctx.m_pendingIncomingPeerIndex.emplace(ContextImpl::PeerKey(pending.peerAddress, pending.peerCid), pending.localCid);
     ctx.m_waitHandshakeDone.insert(pending.localCid);
     ctx.m_pendingIncomingQueue.push_back(pending.localCid);
 

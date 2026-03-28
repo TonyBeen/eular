@@ -90,6 +90,7 @@ struct PacketOut {
     uint16_t    encrypt_data_size;  // 加密后数据大小
     uint16_t    alloc_size;         // data 可用大小
     uint8_t     slice_count;        // 发送 slice 数量（基于 raw_data 偏移）
+    uint32_t    stream_data_size;   // 本包携带的 STREAM 业务数据字节数(用于在途未确认流量预算)
 
     uint8_t*        raw_data;       // 头部 + 多个帧数据缓存, 加密时需要预留16字节
     uint8_t*        encrypt_data;   // 加密后数据指针

@@ -243,6 +243,10 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
         onConnTimeout();
     });
 
+    m_scheduleTimer.reset(ctx->loop(), [this] () {
+        onWrite();
+    });
+
     m_pathValidationTimer.reset(ctx->loop(), [this] () {
         onPathValidationTimeout();
     });
@@ -883,6 +887,16 @@ void ConnectionImpl::trySendZeroRttEarlyData()
     }
 }
 
+const Config* ConnectionImpl::config() const
+{
+    return m_ctx ? m_ctx->config() : nullptr;
+}
+
+void ConnectionImpl::nextScheduleTime(utp_time_t timeNext)
+{
+    m_scheduleTimer.start(timeNext);
+}
+
 void ConnectionImpl::scheduleWrite()
 {
     if (m_ctx != nullptr) {
@@ -1279,11 +1293,39 @@ void ConnectionImpl::flushPendingStreamWrites() {
     const StreamSchedulerMode mode = streamSchedulerMode();
     noteSchedulerModeIfChanged(mode);
 
+    auto armDeferredWakeup = [&](utp_time_t baseNowUs) {
+        utp_time_t minRemainUs = 0;
+        for (const auto &entry : m_streams) {
+            if (!entry.second || !entry.second->hasPendingSendWork()) {
+                continue;
+            }
+
+            if (!entry.second->shouldDeferSend(baseNowUs)) {
+                continue;
+            }
+
+            const utp_time_t remainUs = entry.second->coalesceDelayRemainingUs(baseNowUs);
+            if (remainUs == 0) {
+                continue;
+            }
+
+            if (minRemainUs == 0 || remainUs < minRemainUs) {
+                minRemainUs = remainUs;
+            }
+        }
+
+        if (minRemainUs > 0) {
+            const utp_time_t delayMs = std::max<utp_time_t>(1, (minRemainUs + 999) / 1000);
+            nextScheduleTime(delayMs);
+        }
+    };
+
     size_t sentBursts = 0;
     while (sentBursts < kMaxStreamSendBurstsPerFlush) {
         StreamImpl::SP stream = pickNextWritableStream();
         if (!stream) {
             ++m_schedulerStats.emptyRounds;
+            armDeferredWakeup(time::MonotonicUs());
             break;
         }
 
@@ -1294,6 +1336,7 @@ void ConnectionImpl::flushPendingStreamWrites() {
                      m_localConnectionID,
                      StreamSchedulerModeToString(mode),
                      stream->id());
+            armDeferredWakeup(time::MonotonicUs());
             maybeEmitSchedulerStats(nowUs);
             return;
         }
@@ -1313,6 +1356,64 @@ void ConnectionImpl::flushPendingStreamWrites() {
     pruneSchedulerState();
     collectClosedStreams();
     maybeEmitSchedulerStats(nowUs);
+}
+
+size_t ConnectionImpl::streamPayloadBudgetHint() const
+{
+    size_t packetPayloadBudget = m_mtuDiscovery.currentMaxPacketSize();
+    if (packetPayloadBudget <= UTP_HEADER_SIZE) {
+        return 1;
+    }
+
+    packetPayloadBudget -= UTP_HEADER_SIZE;
+    if (m_aesCtx != nullptr) {
+        if (packetPayloadBudget <= AesGcmContext::GCM_TAG_SIZE) {
+            return 1;
+        }
+        packetPayloadBudget -= AesGcmContext::GCM_TAG_SIZE;
+    }
+
+    if (packetPayloadBudget <= FRAME_STREAM_HDR_SIZE) {
+        return 1;
+    }
+    return packetPayloadBudget - FRAME_STREAM_HDR_SIZE;
+}
+
+bool ConnectionImpl::canSendStreamUnackedBytes(size_t streamBytes) const
+{
+    if (streamBytes == 0) {
+        return true;
+    }
+
+    const Config *cfg = config();
+    const uint64_t limit = (cfg == nullptr) ? (256ull * 1024) : cfg->stream_unacked_data_limit;
+    if (limit == 0) {
+        return true;
+    }
+
+    return m_streamUnackedDataBytes + static_cast<uint64_t>(streamBytes) <= limit;
+}
+
+void ConnectionImpl::onStreamPacketUnackedAdded(const PacketOut *pkt)
+{
+    if (pkt == nullptr || pkt->stream_data_size == 0) {
+        return;
+    }
+
+    m_streamUnackedDataBytes += pkt->stream_data_size;
+}
+
+void ConnectionImpl::onStreamPacketUnackedRemoved(const PacketOut *pkt)
+{
+    if (pkt == nullptr || pkt->stream_data_size == 0) {
+        return;
+    }
+
+    if (m_streamUnackedDataBytes >= pkt->stream_data_size) {
+        m_streamUnackedDataBytes -= pkt->stream_data_size;
+    } else {
+        m_streamUnackedDataBytes = 0;
+    }
 }
 
 int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
@@ -1408,7 +1509,9 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                           payload.size(),
                           0,
                           nullptr,
-                          frameBits);
+                          frameBits,
+                          nullptr,
+                          len);
     }
 
     if (m_ackElicitingSinceLastAck > 0) {
@@ -1416,7 +1519,17 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         if (buildAckPayload(ackPayload, time::MonotonicUs()) == UTP_ERR_OK) {
             const size_t handshakeDoneBytes = piggybackHandshakeDone ? 1u : 0u;
             const size_t combinedSize = ackPayload.size() + header.size() + len + handshakeDoneBytes;
-            if (combinedSize <= UINT16_MAX) {
+            size_t packetPayloadBudget = m_mtuDiscovery.currentMaxPacketSize();
+            if (packetPayloadBudget > UTP_HEADER_SIZE) {
+                packetPayloadBudget -= UTP_HEADER_SIZE;
+            } else {
+                packetPayloadBudget = 0;
+            }
+            if (m_aesCtx != nullptr && packetPayloadBudget > AesGcmContext::GCM_TAG_SIZE) {
+                packetPayloadBudget -= AesGcmContext::GCM_TAG_SIZE;
+            }
+
+            if (combinedSize <= UINT16_MAX && combinedSize <= packetPayloadBudget) {
                 std::vector<uint8_t> payload;
                 payload.reserve(combinedSize);
                 payload.insert(payload.end(), ackPayload.begin(), ackPayload.end());
@@ -1439,7 +1552,9 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                                   payload.size(),
                                                   0,
                                                   nullptr,
-                                                  frameBits);
+                                                  frameBits,
+                                                  nullptr,
+                                                  len);
                 if (status == UTP_ERR_OK) {
                     m_ackElicitingSinceLastAck = 0;
                     m_ackPendingSinceUs = 0;
@@ -1471,7 +1586,11 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                           header.size(),
                                           streamBody.data(),
                                           streamBody.size(),
-                                          0);
+                                          0,
+                                          nullptr,
+                                          0,
+                                          nullptr,
+                                          len);
         if (status == UTP_ERR_OK) {
             m_handshakeDoneSent = true;
             m_handshakeDonePending = false;
@@ -1485,7 +1604,11 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                       header.size(),
                       data,
                       len,
-                      0);
+                      0,
+                      nullptr,
+                      0,
+                      nullptr,
+                      len);
 }
 
 int32_t ConnectionImpl::sendConnectionCloseFrame()
@@ -1761,7 +1884,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                    uint16_t packetFlags,
                                    utp_packno_t *outPacketNo,
                                    uint32_t frameTypeBitsOverride,
-                                   const Address *targetAddress)
+                                   const Address *targetAddress,
+                                   size_t streamDataBytes)
 {
     return sendPacket(packetType,
                       payload,
@@ -1771,7 +1895,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                       packetFlags,
                       outPacketNo,
                       frameTypeBitsOverride,
-                      targetAddress);
+                      targetAddress,
+                      streamDataBytes);
 }
 
 int32_t ConnectionImpl::sendPacket(uint8_t packetType,
@@ -1782,7 +1907,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                    uint16_t packetFlags,
                                    utp_packno_t *outPacketNo,
                                    uint32_t frameTypeBitsOverride,
-                                   const Address *targetAddress)
+                                   const Address *targetAddress,
+                                   size_t streamDataBytes)
 {
     if (m_udpSocket == nullptr) {
         SetLastErrorV(UTP_ERR_SOCKET_WRITE, "udp socket is null");
@@ -1858,6 +1984,15 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         return -1;
     }
 
+    if (!canSendStreamUnackedBytes(streamDataBytes)) {
+        SetLastErrorV(UTP_ERR_WOULD_BLOCK,
+                      "stream unacked data limit reached: pending={}, this={}, limit={}",
+                      m_streamUnackedDataBytes,
+                      streamDataBytes,
+                      config() ? config()->stream_unacked_data_limit : (256u * 1024u));
+        return -1;
+    }
+
     PacketOut *packet = m_mm.getPacketOut(static_cast<uint32_t>(packetLen));
     if (packet == nullptr || packet->raw_data == nullptr) {
         if (packet != nullptr) {
@@ -1876,6 +2011,7 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     packet->po_flags |= packetFlags;
     packet->slice_count = 0;
     packet->frame_types = frameTypeBits;
+    packet->stream_data_size = static_cast<uint32_t>(std::min<size_t>(streamDataBytes, UINT32_MAX));
 
     uint8_t *offset = packet->raw_data;
     size_t left = packet->alloc_size;
@@ -2599,10 +2735,11 @@ StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl
 
 StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled()
 {
+    const utp_time_t nowUs = time::MonotonicUs();
     std::vector<StreamImpl::SP> candidates;
     candidates.reserve(m_streams.size());
     for (const auto &entry : m_streams) {
-        if (entry.second && !entry.second->m_sendQueue.empty()) {
+        if (entry.second && entry.second->hasPendingSendWork() && !entry.second->shouldDeferSend(nowUs)) {
             candidates.push_back(entry.second);
         }
     }
@@ -2628,9 +2765,10 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled()
 
 StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict()
 {
+    const utp_time_t nowUs = time::MonotonicUs();
     std::array<std::vector<StreamImpl::SP>, kMaxStreamPriorityLevels> byPriority;
     for (const auto &entry : m_streams) {
-        if (!entry.second || entry.second->m_sendQueue.empty()) {
+        if (!entry.second || !entry.second->hasPendingSendWork() || entry.second->shouldDeferSend(nowUs)) {
             continue;
         }
 
@@ -2676,10 +2814,11 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict()
 
 StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
 {
+    const utp_time_t nowUs = time::MonotonicUs();
     std::vector<StreamImpl::SP> candidates;
     candidates.reserve(m_streams.size());
     for (const auto &entry : m_streams) {
-        if (entry.second && !entry.second->m_sendQueue.empty()) {
+        if (entry.second && entry.second->hasPendingSendWork() && !entry.second->shouldDeferSend(nowUs)) {
             candidates.push_back(entry.second);
         }
     }
@@ -2725,8 +2864,8 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
             }
             ++m_schedulerStats.drrDeficitRefills;
 
-            const uint32_t need = stream->m_sendQueue.front().bytes > 0
-                                ? static_cast<uint32_t>(std::min<size_t>(stream->m_sendQueue.front().bytes, UINT16_MAX))
+            const uint32_t need = stream->m_sendQueuedBytes > 0
+                                ? static_cast<uint32_t>(std::min<size_t>(stream->m_sendQueuedBytes, UINT16_MAX))
                                 : 1u;
             if (deficit >= need) {
                 const uint32_t afterRefill = deficit;
@@ -2777,7 +2916,7 @@ void ConnectionImpl::updateStrictAgingState(uint32_t selectedStreamId)
     }
 
     for (auto &entry : m_streams) {
-        if (!entry.second || entry.second->m_sendQueue.empty()) {
+        if (!entry.second || !entry.second->hasPendingSendWork()) {
             if (entry.second) {
                 entry.second->m_schedWaitRounds = 0;
             }
@@ -2799,7 +2938,7 @@ void ConnectionImpl::pruneSchedulerState()
 {
     for (auto it = m_drrDeficit.begin(); it != m_drrDeficit.end();) {
         auto streamIt = m_streams.find(it->first);
-        if (streamIt == m_streams.end() || !streamIt->second || streamIt->second->m_sendQueue.empty()) {
+        if (streamIt == m_streams.end() || !streamIt->second || !streamIt->second->hasPendingSendWork()) {
             it = m_drrDeficit.erase(it);
             continue;
         }

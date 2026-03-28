@@ -197,7 +197,7 @@ int main(int argc, char **argv)
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
     cfg.enable_keepalive = false;
-    cfg.enable_dplpmtud = false;
+    cfg.enable_dplpmtud = true;
 
     eular::utp::Context ctx(loop.loop(), &cfg);
 
@@ -310,21 +310,21 @@ int main(int argc, char **argv)
         }
 
         constexpr size_t kChunk = 1024;
+        size_t write_size = 0;
         while (uploadOffset < uploadData.size()) {
             const size_t left = uploadData.size() - uploadOffset;
             const size_t toSend = left < kChunk ? left : kChunk;
             const bool fin = (uploadOffset + toSend == uploadData.size());
             const int32_t n = uploadStream->write(uploadData.data() + uploadOffset, toSend, fin);
             if (n < 0) {
-                std::cout << "[client] upload write blocked/error n=" << n
-                          << " offset=" << uploadOffset
-                          << " remain=" << left << "\n";
-                return;
+                std::cout << "[client] upload write blocked/error n=" << n << " offset=" << uploadOffset << " remain=" << left << "\n";
+                break;
             }
 
             if (n == 0) {
-                return;
+                break;
             }
+            write_size += static_cast<size_t>(n);
 
             uploadOffset += static_cast<size_t>(n);
             if ((uploadOffset % (1024 * 1024)) == 0 || uploadOffset == uploadData.size()) {
@@ -334,9 +334,10 @@ int main(int argc, char **argv)
             if (fin && static_cast<size_t>(n) == toSend) {
                 uploadFinSent = true;
                 std::cout << "[client] upload payload sent bytes=" << uploadOffset << "\n";
-                return;
+                break;
             }
         }
+        printf("[client] upload write done bytes=%zu\n", write_size);
     };
 
     reconnectTimer.reset(loop.loop(), [&]() {
@@ -590,7 +591,7 @@ int main(int argc, char **argv)
 
     std::cout << "[client] phase1 start: encrypted handshake + upload "
               << uploadData.size() << " bytes\n";
-    watchdogTimer.start(3000, 3000);
+    watchdogTimer.start(2000, 2000);
     loop.dispatch();
 
     const bool allOk = uploadAckOk && md5CheckOk;

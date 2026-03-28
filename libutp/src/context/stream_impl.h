@@ -11,6 +11,7 @@
 #include <map>
 #include <vector>
 
+#include "utp/types.h"
 #include "utp/stream.h"
 #include "proto/frame/stream.h"
 
@@ -89,21 +90,19 @@ private:
         size_t m_size{0};
     };
 
-    struct PendingSendChunk {
-        uint64_t offset{0};
-        size_t bytes{0};
-        bool fin{false};
-    };
-
     struct RecvFragment {
         std::vector<uint8_t> data;
         bool fin{false};
     };
 
 private:
-    int32_t flushPendingSends(size_t maxChunks = static_cast<size_t>(-1));
+    int32_t flushPendingSends(size_t maxBytes = static_cast<size_t>(-1));
     int32_t onConnectionWritable();
     size_t  appWriteCredit() const;
+    uint64_t sendBufferedEndOffset() const;
+    bool    hasPendingSendWork() const;
+    bool    shouldDeferSend(utp_time_t nowUs) const;
+    utp_time_t coalesceDelayRemainingUs(utp_time_t nowUs) const;
     void    drainRecvFragments();
     void    maybeNotifyClosed();
     void    maybeNotifyWritable(bool force = false);
@@ -112,8 +111,7 @@ private:
 private:
     ConnectionImpl* m_conn{nullptr};
     uint32_t        m_streamId{0};
-    uint64_t        m_sendOffset{0};
-    uint64_t        m_sendBufferedOffset{0};
+    uint64_t        m_nextSendOffset{0}; // next unsent stream offset in sendBuffer
     uint64_t        m_recvOffset{0};
     bool            m_localFinQueued{false};
     bool            m_localFinSent{false};
@@ -124,9 +122,9 @@ private:
     uint16_t        m_resetErrorCode{0};
     size_t          m_sendQueuedBytes{0};
     size_t          m_recvFragmentsBytes{0};
+    utp_time_t      m_lastSendQueuedAtUs{0}; // enqueue timestamp for coalescing window(us)
     RingBuffer      m_sendBuffer;
     RingBuffer      m_recvBuffer;
-    std::vector<PendingSendChunk> m_sendQueue;
     std::map<uint64_t, RecvFragment> m_recvFragments;
     OnReadable      m_onReadable;
     OnWritable      m_onWritable;

@@ -224,6 +224,7 @@ if(UTP_BUILD_TESTS)
     enable_testing()
 
     set(UTP_TEST_SOURCES
+        test/test_connection_stream_layer.cc
         test/test_context_cid_alloc.cc
         test/test_context_integration.cc
         test/test_frame_ack_decode.cc

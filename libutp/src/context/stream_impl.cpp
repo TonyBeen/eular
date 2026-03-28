@@ -15,6 +15,7 @@
 #include "utp/errno.h"
 #include "context/connection_impl.h"
 #include "logger/logger.h"
+#include "util/time.h"
 
 namespace eular {
 namespace utp {
@@ -22,6 +23,24 @@ namespace utp {
 static inline int32_t StreamErr(utp_error_t err)
 {
     return -static_cast<int32_t>(err);
+}
+
+constexpr size_t kDefaultSendBudgetBytesPerWritable = 4 * 1024;
+
+static size_t StreamPayloadMtuBudget(const ConnectionImpl *conn)
+{
+    if (conn == nullptr) {
+        return 1;
+    }
+    return std::max<size_t>(conn->streamPayloadBudgetHint(), 1);
+}
+
+static size_t StreamSendBufferLimit(const ConnectionImpl *conn)
+{
+    if (conn == nullptr || conn->config() == nullptr || conn->config()->stream_send_buffer_limit == 0) {
+        return StreamImpl::kDefaultBufferCapacity;
+    }
+    return std::max<size_t>(conn->config()->stream_send_buffer_limit, 1);
 }
 
 StreamImpl::RingBuffer::RingBuffer(size_t capacity) :
@@ -168,7 +187,7 @@ StreamImpl::StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority
     m_conn(conn),
     m_streamId(streamId),
     m_priority(std::min<uint8_t>(priority, Stream::kPriorityLowest)),
-    m_sendBuffer(kDefaultBufferCapacity),
+    m_sendBuffer(StreamSendBufferLimit(conn)),
     m_recvBuffer(kDefaultBufferCapacity)
 {
 }
@@ -274,36 +293,27 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
 
     if (bytes > 0) {
         m_sendBuffer.produce(bytes);
-
-        PendingSendChunk chunk;
-        chunk.offset = m_sendBufferedOffset;
-        chunk.bytes = bytes;
-        chunk.fin = false;
-        m_sendQueue.push_back(chunk);
-        m_sendBufferedOffset += bytes;
         m_sendQueuedBytes += bytes;
+        m_lastSendQueuedAtUs = time::MonotonicUs();
     }
 
     if (fin) {
         m_localFinQueued = true;
-        if (!m_sendQueue.empty()) {
-            m_sendQueue.back().fin = true;
+    }
+
+    if (m_conn != nullptr) {
+        const utp_time_t nowUs = time::MonotonicUs();
+        if (shouldDeferSend(nowUs)) {
+            const utp_time_t remainUs = coalesceDelayRemainingUs(nowUs);
+            const utp_time_t delayMs = std::max<utp_time_t>(1, (remainUs + 999) / 1000);
+            m_conn->nextScheduleTime(delayMs);
         } else {
-            PendingSendChunk chunk;
-            chunk.offset = m_sendBufferedOffset;
-            chunk.bytes = 0;
-            chunk.fin = true;
-            m_sendQueue.push_back(chunk);
+            // Application writes only enqueue data. Actual send is driven by
+            // connection writable scheduling, so app can naturally hit
+            // WOULD_BLOCK once stream buffer credit is exhausted.
+            m_conn->scheduleWrite();
+            m_conn->nextScheduleTime(1);
         }
-    }
-
-    const int32_t flushStatus = flushPendingSends(1);
-    if (flushStatus != UTP_ERR_OK && flushStatus != UTP_ERR_WOULD_BLOCK) {
-        return StreamErr(static_cast<utp_error_t>(flushStatus));
-    }
-
-    if (!m_sendQueue.empty() && m_conn != nullptr) {
-        m_conn->scheduleWrite();
     }
 
     maybeNotifyClosed();
@@ -337,7 +347,7 @@ int32_t StreamImpl::consumeRead(size_t bytes)
 
 Stream::State StreamImpl::state() const
 {
-    if (m_localFinQueued && m_peerFin) {
+    if (m_localFinQueued && m_localFinSent && m_peerFin) {
         return kStateClosed;
     }
     if (m_localFinQueued) {
@@ -376,7 +386,7 @@ int32_t StreamImpl::reset(uint16_t errorCode)
         return StreamErr(UTP_ERR_STREAM_CLOSED);
     }
 
-    const int32_t status = m_conn->sendResetStreamFrame(m_streamId, errorCode, m_sendBufferedOffset);
+    const int32_t status = m_conn->sendResetStreamFrame(m_streamId, errorCode, sendBufferedEndOffset());
     if (status != UTP_ERR_OK) {
         if (status < 0) {
             return StreamErr(UTP_ERR_INTERNAL_ERROR);
@@ -387,7 +397,6 @@ int32_t StreamImpl::reset(uint16_t errorCode)
     m_localFinQueued = true;
     m_localFinSent = true;
     m_peerFin = true;
-    m_sendQueue.clear();
     m_sendQueuedBytes = 0;
     m_sendBuffer.consume(m_sendBuffer.size());
     m_recvFragments.clear();
@@ -530,7 +539,6 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
         m_resetByPeer = true;
     }
 
-    m_sendQueue.clear();
     m_sendQueuedBytes = 0;
     m_sendBuffer.consume(m_sendBuffer.size());
     m_recvFragments.clear();
@@ -545,56 +553,89 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
     return UTP_ERR_OK;
 }
 
-int32_t StreamImpl::flushPendingSends(size_t maxChunks)
+int32_t StreamImpl::flushPendingSends(size_t maxBytes)
 {
     if (m_conn == nullptr) {
         return UTP_ERR_INVALID_STATE;
     }
 
-    size_t sentChunks = 0;
-    while (!m_sendQueue.empty() && sentChunks < maxChunks) {
-        PendingSendChunk &chunk = m_sendQueue.front();
-
-        const uint8_t *payload = nullptr;
-        size_t payloadLen = 0;
-        bool frameFin = chunk.fin;
-
-        if (chunk.bytes > 0) {
-            ConstBufferView views[2];
-            const size_t count = m_sendBuffer.readableViews(views, chunk.bytes);
-            if (count == 0 || views[0].data == nullptr || views[0].len == 0) {
-                return UTP_ERR_INVALID_STATE;
+    size_t sentBytes = 0;
+    while (sentBytes < maxBytes) {
+        if (m_sendQueuedBytes == 0) {
+            if (!(m_localFinQueued && !m_localFinSent)) {
+                break;
             }
 
-            payload = static_cast<const uint8_t *>(views[0].data);
-            payloadLen = std::min<size_t>(std::min<size_t>(chunk.bytes, views[0].len), UINT16_MAX);
-            frameFin = chunk.fin && (payloadLen == chunk.bytes);
+            const int32_t finStatus = m_conn->sendStreamFrame(m_streamId,
+                                                              m_nextSendOffset,
+                                                              nullptr,
+                                                              0,
+                                                              true);
+            if (finStatus == UTP_ERR_OK) {
+                m_localFinSent = true;
+                continue;
+            }
+
+            if (finStatus == UTP_ERR_WOULD_BLOCK) {
+                m_conn->scheduleWrite();
+                UTP_LOGD("stream %u send blocked, queue_bytes=%zu", m_streamId, m_sendQueuedBytes);
+            } else {
+                UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, finStatus);
+            }
+            return finStatus;
         }
 
-        const int32_t status = m_conn->sendStreamFrame(m_streamId,
-                                                       chunk.offset,
-                                                       payload,
-                                                       payloadLen,
-                                                       frameFin);
-        if (status == UTP_ERR_OK) {
-            ++sentChunks;
-            if (payloadLen > 0) {
-                m_sendBuffer.consume(payloadLen);
-                chunk.offset += payloadLen;
-                chunk.bytes -= payloadLen;
-                if (m_sendQueuedBytes >= payloadLen) {
-                    m_sendQueuedBytes -= payloadLen;
-                } else {
-                    m_sendQueuedBytes = 0;
-                }
+        const size_t budgetLeft = maxBytes - sentBytes;
+        const uint8_t *payload = nullptr;
+        size_t payloadLen = 0;
+        bool frameFin = false;
+
+        ConstBufferView views[2];
+        const size_t count = m_sendBuffer.readableViews(views, std::min(m_sendQueuedBytes, budgetLeft));
+        if (count == 0 || views[0].data == nullptr || views[0].len == 0) {
+            // Self-heal bookkeeping drift: keep queued-bytes bounded by
+            // actual readable bytes to avoid stalling writable notifications.
+            m_sendQueuedBytes = std::min(m_sendQueuedBytes, m_sendBuffer.size());
+            if (m_sendQueuedBytes == 0) {
+                continue;
             }
+            return UTP_ERR_WOULD_BLOCK;
+        }
+
+        payload = static_cast<const uint8_t *>(views[0].data);
+        payloadLen = std::min<size_t>(views[0].len, UINT16_MAX);
+
+        int32_t status = UTP_ERR_WOULD_BLOCK;
+        size_t tryLen = std::min(payloadLen, StreamPayloadMtuBudget(m_conn));
+        while (tryLen > 0) {
+            frameFin = m_localFinQueued && !m_localFinSent && (tryLen == m_sendQueuedBytes);
+            status = m_conn->sendStreamFrame(m_streamId,
+                                             m_nextSendOffset,
+                                             payload,
+                                             tryLen,
+                                             frameFin);
+            if (status != UTP_ERR_WOULD_BLOCK || tryLen == 1) {
+                payloadLen = tryLen;
+                break;
+            }
+
+            // Coalesced payload may exceed current path/anti-amplification budget.
+            // Retry with smaller chunks to guarantee forward progress.
+            tryLen /= 2;
+        }
+
+        if (status == UTP_ERR_OK) {
+            m_sendBuffer.consume(payloadLen);
+            m_nextSendOffset += payloadLen;
+            if (m_sendQueuedBytes >= payloadLen) {
+                m_sendQueuedBytes -= payloadLen;
+            } else {
+                m_sendQueuedBytes = 0;
+            }
+            sentBytes += payloadLen;
 
             if (frameFin) {
                 m_localFinSent = true;
-            }
-
-            if (chunk.bytes == 0) {
-                m_sendQueue.erase(m_sendQueue.begin());
             }
             continue;
         }
@@ -614,7 +655,17 @@ int32_t StreamImpl::flushPendingSends(size_t maxChunks)
 
 int32_t StreamImpl::onConnectionWritable()
 {
-    const int32_t status = flushPendingSends(1);
+    if (m_conn != nullptr) {
+        const utp_time_t nowUs = time::MonotonicUs();
+        if (shouldDeferSend(nowUs)) {
+            const utp_time_t remainUs = coalesceDelayRemainingUs(nowUs);
+            const utp_time_t delayMs = std::max<utp_time_t>(1, (remainUs + 999) / 1000);
+            m_conn->nextScheduleTime(delayMs);
+            return UTP_ERR_OK;
+        }
+    }
+
+    const int32_t status = flushPendingSends(kDefaultSendBudgetBytesPerWritable);
     if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
         return status;
     }
@@ -625,10 +676,87 @@ int32_t StreamImpl::onConnectionWritable()
 
 size_t StreamImpl::appWriteCredit() const
 {
-    if (m_sendQueuedBytes >= kDefaultBufferCapacity) {
+    const size_t cap = StreamSendBufferLimit(m_conn);
+    if (m_sendQueuedBytes >= cap) {
         return 0;
     }
-    return kDefaultBufferCapacity - m_sendQueuedBytes;
+    return cap - m_sendQueuedBytes;
+}
+
+uint64_t StreamImpl::sendBufferedEndOffset() const
+{
+    return m_nextSendOffset + static_cast<uint64_t>(m_sendQueuedBytes);
+}
+
+bool StreamImpl::hasPendingSendWork() const
+{
+    return m_sendQueuedBytes > 0 || (m_localFinQueued && !m_localFinSent);
+}
+
+bool StreamImpl::shouldDeferSend(utp_time_t nowUs) const
+{
+    if (!hasPendingSendWork()) {
+        return false;
+    }
+
+    if (m_localFinQueued) {
+        return false;
+    }
+
+    if (m_conn == nullptr) {
+        return false;
+    }
+
+    // Before path validation and HandshakeDone convergence, anti-amplification
+    // credit is tight. Deferring here can accumulate payloads and repeatedly
+    // hit WOULD_BLOCK without making stream-level forward progress.
+    if (m_conn->m_networkPath.needPathValidation()) {
+        return false;
+    }
+    if (m_conn->m_handshakeDonePending && !m_conn->m_handshakeDoneSent) {
+        return false;
+    }
+    if (m_conn->m_bytesIn < 2048) {
+        return false;
+    }
+
+    const Config *cfg = m_conn->config();
+    if (cfg == nullptr || !cfg->stream_enable_coalescing) {
+        return false;
+    }
+
+    if (cfg->stream_coalesce_delay_us == 0) {
+        return false;
+    }
+
+    if (m_sendQueuedBytes >= cfg->stream_min_payload_before_immediate_send) {
+        return false;
+    }
+
+    if (m_lastSendQueuedAtUs == 0) {
+        return false;
+    }
+
+    return nowUs < (m_lastSendQueuedAtUs + cfg->stream_coalesce_delay_us);
+}
+
+utp_time_t StreamImpl::coalesceDelayRemainingUs(utp_time_t nowUs) const
+{
+    if (m_conn == nullptr) {
+        return 0;
+    }
+
+    const Config *cfg = m_conn->config();
+    if (cfg == nullptr || m_lastSendQueuedAtUs == 0) {
+        return 0;
+    }
+
+    const utp_time_t deadlineUs = m_lastSendQueuedAtUs + cfg->stream_coalesce_delay_us;
+    if (nowUs >= deadlineUs) {
+        return 0;
+    }
+
+    return deadlineUs - nowUs;
 }
 
 void StreamImpl::drainRecvFragments()

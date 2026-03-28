@@ -190,3 +190,17 @@ TEST_CASE("StreamImpl: reset frame notifies upper layer", "[Stream]")
     REQUIRE(resetCode == UTP_ERR_CANCELLED);
     REQUIRE(stream.state() == eular::utp::Stream::kStateClosed);
 }
+
+TEST_CASE("StreamImpl: queued local fin is not fully closed before send", "[Stream]")
+{
+    StreamImpl stream(nullptr, 22);
+
+    stream.m_peerFin = true;
+    stream.m_localFinQueued = true;
+    stream.m_localFinSent = false;
+
+    REQUIRE(stream.state() == eular::utp::Stream::kStateHalfClosedLocal);
+
+    stream.m_localFinSent = true;
+    REQUIRE(stream.state() == eular::utp::Stream::kStateClosed);
+}
