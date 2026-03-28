@@ -25,7 +25,9 @@ static inline int32_t StreamErr(utp_error_t err)
     return -static_cast<int32_t>(err);
 }
 
-constexpr size_t kDefaultSendBudgetBytesPerWritable = 4 * 1024;
+constexpr size_t kMinSendBudgetBytesPerWritable = 4 * 1024;
+constexpr size_t kMaxSendBudgetBytesPerWritable = 64 * 1024;
+constexpr size_t kDefaultMtuPacketsPerWritable  = 4;
 
 static size_t StreamPayloadMtuBudget(const ConnectionImpl *conn)
 {
@@ -33,6 +35,17 @@ static size_t StreamPayloadMtuBudget(const ConnectionImpl *conn)
         return 1;
     }
     return std::max<size_t>(conn->streamPayloadBudgetHint(), 1);
+}
+
+static size_t StreamWritableSendBudget(const ConnectionImpl *conn)
+{
+    // Budget one writable round by MTU-sized payload quanta, then clamp to
+    // avoid tiny rounds and to keep per-stream fairness under bursty loads.
+    const size_t mtuPayload = StreamPayloadMtuBudget(conn);
+    const size_t mtuBasedBudget = mtuPayload * kDefaultMtuPacketsPerWritable;
+    return std::clamp(mtuBasedBudget,
+                      kMinSendBudgetBytesPerWritable,
+                      kMaxSendBudgetBytesPerWritable);
 }
 
 static size_t StreamSendBufferLimit(const ConnectionImpl *conn)
@@ -665,7 +678,7 @@ int32_t StreamImpl::onConnectionWritable()
         }
     }
 
-    const int32_t status = flushPendingSends(kDefaultSendBudgetBytesPerWritable);
+    const int32_t status = flushPendingSends(StreamWritableSendBudget(m_conn));
     if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
         return status;
     }
