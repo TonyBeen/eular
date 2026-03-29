@@ -59,13 +59,13 @@ public:
     };
 
     struct Statistic {
-        uint32_t        pmtu;
-        uint32_t        rtt;
-        uint32_t        rttvar;
-        uint32_t        bw_estimate;
-        uint64_t        rx_bytes;
-        uint64_t        tx_bytes;
-        uint64_t        rtx_bytes;
+        uint32_t        pmtu;           // 路径 MTU，单位：bytes
+        uint32_t        rtt;            // 平滑 RTT（SRTT），单位：us
+        uint32_t        rttvar;         // RTT 抖动（RTTVAR），单位：us
+        uint32_t        bw_estimate;    // 估算带宽（pacing rate），单位：bytes/s
+        uint64_t        rx_bytes;       // 累计接收字节数，单位：bytes
+        uint64_t        tx_bytes;       // 累计发送字节数（含重传），单位：bytes
+        uint64_t        rtx_bytes;      // 累计重传字节数，单位：bytes
 
         // stream scheduler metrics
         uint64_t        scheduler_select_total;          // 总选流次数

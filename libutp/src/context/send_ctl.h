@@ -113,6 +113,8 @@ public:
 public:
     bool        canSend();
     uint64_t    bytesOutTotal() const;
+    uint64_t    bandwidthEstimate() const;
+    uint64_t    retransmittedBytes() const;
     int32_t     onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
     void        onCanWrite(utp_time_t nowUs);
     void        setReorderThreshold(uint32_t threshold);
@@ -166,6 +168,7 @@ private:
     uint64_t            m_bytesUnackedAll;              // 所有未确认的字节数 (包括重传和非重传)
     uint64_t            m_nInflightAll;                 // 飞行中的数据包总量, 包括一些非可重传包 (如 Ack-Only 包)
     uint64_t            m_nInflightRetrans;             // 飞行中可重传包的数量
+    uint64_t            m_bytesRetransTotal{0};         // 累计重传字节数
 
     /// @b 重传计数
     uint32_t            m_nConsecRtos;                  // 连续 RTO 次数, 用于计算RTO时指数退避

@@ -17,6 +17,7 @@ set(UTP_TEST_SOURCES
     test_mm.cc
     test_receive_history.cc
     test_stream_impl.cc
+    test_public_api_errno.cc
 )
 
 add_executable(utp_tests ${UTP_TEST_SOURCES})

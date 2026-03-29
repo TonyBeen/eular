@@ -9,6 +9,29 @@
 
 #include "version.h"
 #include "context/context_impl.h"
+#include "util/error.h"
+
+namespace {
+int32_t NormalizePublicStatus(int32_t status)
+{
+    if (status == UTP_ERR_OK) {
+        return 0;
+    }
+
+    if (status == -1) {
+        return -1;
+    }
+
+    if (status < 0) {
+        const utp_error_t legacyErr = static_cast<utp_error_t>(-status);
+        SetLastErrorV(legacyErr, "legacy negative status: {}", status);
+        return -1;
+    }
+
+    SetLastErrorV(static_cast<utp_error_t>(status), "legacy positive status: {}", status);
+    return -1;
+}
+} // namespace
 
 namespace eular {
 namespace utp {
@@ -63,7 +86,7 @@ void Context::clearResumptionSecret()
 
 int32_t Context::connect0RttWithState(const Connect0RttWithStateInfo &info, const std::string &state)
 {
-    return m_impl->connect0RttWithState(info, state);
+    return NormalizePublicStatus(m_impl->connect0RttWithState(info, state));
 }
 
 Context::Statistic Context::statistic() const
@@ -73,22 +96,22 @@ Context::Statistic Context::statistic() const
 
 int32_t Context::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
-    return m_impl->bind(ip, port, ifname);
+    return NormalizePublicStatus(m_impl->bind(ip, port, ifname));
 }
 
 int32_t Context::connect(const ConnectInfo &info)
 {
-    return m_impl->connect(info);
+    return NormalizePublicStatus(m_impl->connect(info));
 }
 
 int32_t Context::connect0Rtt(const Connect0RttInfo &info)
 {
-    return m_impl->connect0Rtt(info);
+    return NormalizePublicStatus(m_impl->connect0Rtt(info));
 }
 
 int32_t Context::accept()
 {
-    return m_impl->accept();
+    return NormalizePublicStatus(m_impl->accept());
 }
 
 } // namespace utp

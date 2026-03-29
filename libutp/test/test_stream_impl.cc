@@ -128,7 +128,8 @@ TEST_CASE("StreamImpl: zero-copy write interface can reserve buffer", "[Stream]"
 
     static const uint8_t payload[5] = {7, 8, 9, 10, 11};
     std::memcpy(views[0].data, payload, sizeof(payload));
-    REQUIRE(stream.commitWrite(sizeof(payload), false) == -UTP_ERR_INVALID_STATE);
+    REQUIRE(stream.commitWrite(sizeof(payload), false) == -1);
+    REQUIRE(GetLastError() == UTP_ERR_INVALID_STATE);
     REQUIRE(stream.state() == eular::utp::Stream::kStateOpen);
 }
 
@@ -160,7 +161,8 @@ TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")
     REQUIRE(stream.state() == eular::utp::Stream::kStateOpen);
     REQUIRE(stream.writable());
 
-    REQUIRE(stream.write("ab", 2, true) == -UTP_ERR_INVALID_STATE);
+    REQUIRE(stream.write("ab", 2, true) == -1);
+    REQUIRE(GetLastError() == UTP_ERR_INVALID_STATE);
 
     StreamImpl rxOnly(nullptr, 14);
     FrameStream fin;

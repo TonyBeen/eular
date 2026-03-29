@@ -768,15 +768,6 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         }
     }
 
-    if (m_state == State::kStateDisconnected && packet->header.types == UTP_TYPE_INITIAL) {
-        const bool encryptedHandshake = (m_aesCtx != nullptr);
-        if (sendHandshakePacket(encryptedHandshake) == UTP_ERR_OK) {
-            m_state = State::kStateConnected;
-            markPeerActivity(nowUs);
-        }
-        return;
-    }
-
     if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
         m_state = State::kStateConnected;
         m_handshakeDonePending = true;
@@ -1981,10 +1972,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     }
 
     if (isMtuProbePacket && wirePacketLen > m_mtuDiscovery.absoluteMaxPacketSize()) {
-        SetLastErrorV(UTP_ERR_WOULD_BLOCK,
-                      "mtu probe packet length {} exceeds probe ceiling {}",
-                      wirePacketLen,
-                      m_mtuDiscovery.absoluteMaxPacketSize());
+        SetLastErrorV(UTP_ERR_WOULD_BLOCK, "mtu probe packet length {} exceeds probe ceiling {}",
+                      wirePacketLen, m_mtuDiscovery.absoluteMaxPacketSize());
         return -1;
     }
 
@@ -2561,10 +2550,13 @@ Connection::Statistic ConnectionImpl::statistic() const
     Connection::Statistic stat;
     std::memset(&stat, 0, sizeof(stat));
     stat.pmtu = m_mtuDiscovery.pathMtu();
-    stat.rtt = static_cast<uint32_t>(m_rttStats.srtt());
-    stat.rttvar = static_cast<uint32_t>(m_rttStats.rttVar());
+    stat.rtt = static_cast<uint32_t>(std::min<uint64_t>(m_obsRttUs, UINT32_MAX));
+    stat.rttvar = static_cast<uint32_t>(std::min<uint64_t>(m_obsRttVarUs, UINT32_MAX));
+    const uint64_t bwEstimate = (m_sendCtl != nullptr) ? m_sendCtl->bandwidthEstimate() : 0;
+    stat.bw_estimate = static_cast<uint32_t>(std::min<uint64_t>(bwEstimate, UINT32_MAX));
     stat.rx_bytes = m_bytesIn;
     stat.tx_bytes = m_bytesOut;
+    stat.rtx_bytes = m_bytesRetrans;
     stat.scheduler_select_total = m_schedulerStats.selectTotal;
     stat.scheduler_select_disabled = m_schedulerStats.selectDisabled;
     stat.scheduler_select_strict = m_schedulerStats.selectStrict;
@@ -2691,25 +2683,41 @@ int32_t ConnectionImpl::buildSessionResumptionState(const CachedResumptionState 
 int32_t ConnectionImpl::createStream(StreamType streamType)
 {
     if (!IsSupportedStreamType(streamType)) {
-        return UTP_ERR_INVALID_PARAM;
+        SetLastErrorV(UTP_ERR_INVALID_PARAM, "connection {} unsupported stream type {}",
+                      m_localConnectionID,
+                      static_cast<uint32_t>(streamType));
+        return -1;
     }
 
     const bool allowEarlyData = (m_state == State::kStateInitialSent)
                              && m_zeroRttConfig.enabled();
     if (m_state != State::kStateConnected && !allowEarlyData) {
-        return UTP_ERR_INVALID_STATE;
+        SetLastErrorV(UTP_ERR_INVALID_STATE,
+                      "connection {} cannot create stream in state {}",
+                      m_localConnectionID,
+                      static_cast<uint32_t>(m_state));
+        return -1;
     }
 
     collectClosedStreams();
 
     const uint32_t maxStreams = streamLimit(streamType, true);
     if (activeLocalStreamCount(streamType) >= maxStreams) {
-        return UTP_ERR_STREAM_LIMIT_ERROR;
+        SetLastErrorV(UTP_ERR_STREAM_LIMIT_ERROR,
+                      "connection {} stream limit reached for type {}",
+                      m_localConnectionID,
+                      static_cast<uint32_t>(streamType));
+        return -1;
     }
 
     const uint32_t slot = streamIdSlot(streamType);
     if (slot >= STREAM_TYPES) {
-        return UTP_ERR_INVALID_PARAM;
+        SetLastErrorV(UTP_ERR_INVALID_PARAM,
+                      "connection {} invalid stream slot {} for type {}",
+                      m_localConnectionID,
+                      slot,
+                      static_cast<uint32_t>(streamType));
+        return -1;
     }
 
     uint32_t &nextStreamId = m_streamId[slot];
@@ -2723,7 +2731,11 @@ int32_t ConnectionImpl::createStream(StreamType streamType)
     nextStreamId += STREAM_TYPES;
 
     if (m_streams.find(streamId) != m_streams.end()) {
-        return UTP_ERR_STREAM_ID_EXHAUSTED;
+        SetLastErrorV(UTP_ERR_STREAM_ID_EXHAUSTED,
+                      "connection {} stream id exhausted: {}",
+                      m_localConnectionID,
+                      streamId);
+        return -1;
     }
 
     StreamImpl::SP stream = std::make_shared<StreamImpl>(this,

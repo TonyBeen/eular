@@ -15,6 +15,7 @@
 #include "utp/errno.h"
 #include "context/connection_impl.h"
 #include "logger/logger.h"
+#include "util/error.h"
 #include "util/time.h"
 
 namespace eular {
@@ -22,7 +23,12 @@ namespace utp {
 
 static inline int32_t StreamErr(utp_error_t err)
 {
-    return -static_cast<int32_t>(err);
+    if (err == UTP_ERR_OK) {
+        return UTP_ERR_OK;
+    }
+
+    SetLastErrorV(err, "stream operation failed: {}", static_cast<uint32_t>(err));
+    return -1;
 }
 
 constexpr size_t kMinSendBudgetBytesPerWritable = 4 * 1024;

@@ -214,6 +214,7 @@ void SendControl::init()
     m_bytesUnackedAll = 0;
     m_nInflightAll = 0;
     m_nInflightRetrans = 0;
+    m_bytesRetransTotal = 0;
     m_nConsecRtos = 0;
     m_nHandshake = 0;
     m_nTlp = 0;
@@ -295,6 +296,20 @@ uint64_t SendControl::bytesOutTotal() const
     return m_bytesScheduled + m_bytesUnackedAll;
 }
 
+uint64_t SendControl::bandwidthEstimate() const
+{
+    if (!m_congestion) {
+        return 0;
+    }
+
+    return m_congestion->getPacingRate(0);
+}
+
+uint64_t SendControl::retransmittedBytes() const
+{
+    return m_bytesRetransTotal;
+}
+
 int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 {
     bool hasAcked = false;
@@ -361,6 +376,27 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
             m_largestAckedPackNo = largestAckedThisRound;
         }
         m_largestAckedSentTime = largestAckedSentTimeThisRound;
+
+        if (m_conn != nullptr && nowUs > largestAckedSentTimeThisRound) {
+            uint64_t sampleRttUs = nowUs - largestAckedSentTimeThisRound;
+            const uint64_t ackDelayUs = static_cast<uint64_t>(ackInfo.ack_delay);
+            if (ackDelayUs > 0 && sampleRttUs > ackDelayUs) {
+                sampleRttUs -= ackDelayUs;
+            }
+
+            if (sampleRttUs > 0) {
+                if (m_conn->m_obsRttUs == 0) {
+                    m_conn->m_obsRttUs = sampleRttUs;
+                    m_conn->m_obsRttVarUs = sampleRttUs / 2;
+                } else {
+                    const uint64_t delta = (m_conn->m_obsRttUs > sampleRttUs)
+                                         ? (m_conn->m_obsRttUs - sampleRttUs)
+                                         : (sampleRttUs - m_conn->m_obsRttUs);
+                    m_conn->m_obsRttVarUs = (m_conn->m_obsRttVarUs * 3 + delta) / 4;
+                    m_conn->m_obsRttUs = (m_conn->m_obsRttUs * 7 + sampleRttUs) / 8;
+                }
+            }
+        }
     }
 
     if (hasAcked) {
@@ -988,6 +1024,8 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     }
 
     m_conn->m_bytesOut += pkt->data_size;
+    m_conn->m_bytesRetrans += pkt->data_size;
+    m_bytesRetransTotal += pkt->data_size;
 
     m_sendHistory.update(pkt->packno);
     if (m_congestion) {

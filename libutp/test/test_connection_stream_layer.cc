@@ -215,7 +215,8 @@ TEST_CASE("ConnectionImpl: passive side creates server-initiated stream id", "[C
     const int32_t uniStreamId = conn.createStream(Connection::kStreamTypeUnidirectional);
     REQUIRE(uniStreamId == 3);
 
-    REQUIRE(conn.createStream(Connection::kStreamTypeUnidirectional) == UTP_ERR_STREAM_LIMIT_ERROR);
+    REQUIRE(conn.createStream(Connection::kStreamTypeUnidirectional) == -1);
+    REQUIRE(GetLastError() == UTP_ERR_STREAM_LIMIT_ERROR);
 }
 
 TEST_CASE("ConnectionImpl: streamCount and creatableStreamCount support stream type", "[Connection][Stream]")
@@ -433,7 +434,8 @@ TEST_CASE("StreamImpl: setPriority validates input range", "[Connection][Stream]
     REQUIRE(stream.priority() == 0);
     REQUIRE(stream.setPriority(7) == UTP_ERR_OK);
     REQUIRE(stream.priority() == 7);
-    REQUIRE(stream.setPriority(8) == -UTP_ERR_INVALID_PARAM);
+    REQUIRE(stream.setPriority(8) == -1);
+    REQUIRE(GetLastError() == UTP_ERR_INVALID_PARAM);
 }
 
 TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][Stream][Priority]")
@@ -443,6 +445,9 @@ TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][S
     ContextImpl ctx(loop.loop(), &cfg);
 
     ConnectionImpl conn(&ctx, nullptr, 1015);
+    conn.m_obsRttUs = 12000;
+    conn.m_obsRttVarUs = 3000;
+    conn.m_bytesRetrans = 42;
     conn.m_schedulerStats.selectTotal = 11;
     conn.m_schedulerStats.selectDisabled = 2;
     conn.m_schedulerStats.selectStrict = 5;
@@ -465,6 +470,9 @@ TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][S
     REQUIRE(stat.scheduler_mode_switches == 1);
     REQUIRE(stat.scheduler_drr_refills == 13);
     REQUIRE(stat.scheduler_drr_consumes == 8);
+    REQUIRE(stat.rtt == 12000);
+    REQUIRE(stat.rttvar == 3000);
+    REQUIRE(stat.rtx_bytes == 42);
 }
 
 TEST_CASE("StreamImpl: coalescing defers tiny payload within window", "[Connection][Stream][Coalescing]")

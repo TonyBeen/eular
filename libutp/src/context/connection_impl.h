@@ -292,6 +292,9 @@ private:
 
     uint64_t                m_bytesIn{};
     uint64_t                m_bytesOut{};
+    uint64_t                m_bytesRetrans{};
+    uint64_t                m_obsRttUs{0};            // 统计用 SRTT(单位:us)，仅用于 Connection::Statistic 导出
+    uint64_t                m_obsRttVarUs{0};         // 统计用 RTTVAR(单位:us)，仅用于 Connection::Statistic 导出
     uint64_t                m_streamUnackedDataBytes{0};
     ev::EventTimer          m_pathValidationTimer;
     ev::EventTimer          m_handshakeDoneTimer;
