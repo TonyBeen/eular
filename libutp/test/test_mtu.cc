@@ -27,15 +27,32 @@ TEST_CASE("MtuDiscovery: initialize and conversion", "[Mtu]")
     mtu.init(&cfg, Address::IPv4);
 
     REQUIRE(mtu.enabled());
-    REQUIRE(mtu.pathMtu() == 1400);
-    REQUIRE(mtu.currentMaxPacketSize() == 1400 - 20 - 8);
+    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.currentMaxPacketSize() == 1280 - 20 - 8);
 
     REQUIRE(MtuDiscovery::PacketSizeFromMtu(1500, Address::IPv4) == 1472);
     REQUIRE(MtuDiscovery::MtuFromPacketSize(1472, Address::IPv4) == 1500);
     REQUIRE(MtuDiscovery::PacketSizeFromMtu(1500, Address::IPv6) == 1452);
 }
 
-TEST_CASE("MtuDiscovery: probe ack raises mtu", "[Mtu]")
+TEST_CASE("MtuDiscovery: disabled dplpmtud uses mtu_base", "[Mtu]")
+{
+    Config cfg;
+    cfg.enable_dplpmtud = false;
+    cfg.mtu_min = 1280;
+    cfg.mtu_max = 1500;
+    cfg.mtu_base = 1400;
+
+    MtuDiscovery mtu;
+    mtu.init(&cfg, Address::IPv4);
+
+    REQUIRE_FALSE(mtu.enabled());
+    REQUIRE(mtu.pathMtu() == 1400);
+    REQUIRE(mtu.currentMaxPacketSize() == 1400 - 20 - 8);
+    REQUIRE_FALSE(mtu.shouldProbe(0));
+}
+
+TEST_CASE("MtuDiscovery: probe ack defers mtu commit until probing converges", "[Mtu]")
 {
     Config cfg;
     cfg.enable_dplpmtud = true;
@@ -50,17 +67,23 @@ TEST_CASE("MtuDiscovery: probe ack raises mtu", "[Mtu]")
     mtu.init(&cfg, Address::IPv4);
 
     REQUIRE(mtu.shouldProbe(0));
-    REQUIRE(mtu.nextProbeMtu() == 1450);
+    REQUIRE(mtu.nextProbeMtu() == 1380);
+    REQUIRE(mtu.pathMtu() == 1280);
 
-    REQUIRE(mtu.onProbeSent(101, 1450, 10));
+    REQUIRE(mtu.onProbeSent(101, 1380, 10));
     REQUIRE(mtu.hasInFlightProbe());
     REQUIRE_FALSE(mtu.shouldProbe(20));
 
     REQUIRE(mtu.onProbeAck(101, 30));
     REQUIRE_FALSE(mtu.hasInFlightProbe());
-    REQUIRE(mtu.pathMtu() == 1450);
+    // 统一切换：单次探测成功后不立即修改 pathMtu
+    REQUIRE(mtu.pathMtu() == 1280);
     REQUIRE(mtu.shouldProbe(31));
-    REQUIRE(mtu.nextProbeMtu() == 1492);
+    REQUIRE(mtu.nextProbeMtu() == 1450);
+
+    REQUIRE(mtu.onProbeSent(102, 1450, 40));
+    REQUIRE(mtu.onProbeAck(102, 50));
+    REQUIRE(mtu.pathMtu() == 1280);
 }
 
 TEST_CASE("MtuDiscovery: probe loss backs off ceiling", "[Mtu]")
@@ -77,17 +100,19 @@ TEST_CASE("MtuDiscovery: probe loss backs off ceiling", "[Mtu]")
     MtuDiscovery mtu;
     mtu.init(&cfg, Address::IPv4);
 
-    REQUIRE(mtu.onProbeSent(200, 1450, 0));
+    REQUIRE(mtu.onProbeSent(200, 1380, 0));
     REQUIRE(mtu.onProbeAck(200, 10));
-    REQUIRE(mtu.pathMtu() == 1450);
+    REQUIRE(mtu.pathMtu() == 1280);
     REQUIRE(mtu.shouldProbe(11));
-    REQUIRE(mtu.nextProbeMtu() == 1492);
+    REQUIRE(mtu.nextProbeMtu() == 1450);
 
-    REQUIRE(mtu.onProbeSent(201, 1492, 20));
+    REQUIRE(mtu.onProbeSent(201, 1450, 20));
     REQUIRE(mtu.onProbeLost(201, 30));
-    REQUIRE(mtu.pathMtu() == 1450);
+    REQUIRE(mtu.pathMtu() == 1280);
     REQUIRE(mtu.shouldProbe(31));
-    REQUIRE(mtu.nextProbeMtu() == 1471);
+    const uint16_t next = mtu.nextProbeMtu();
+    REQUIRE(next > 1380);
+    REQUIRE(next < 1450);
 
     MtuDiscovery timeoutMtu;
     timeoutMtu.init(&cfg, Address::IPv4);
@@ -141,7 +166,7 @@ TEST_CASE("MtuDiscovery: integration path switch 1500 to 1280 recovers quickly",
             break;
         }
         const uint16_t probeMtu = mtu.nextProbeMtu();
-        REQUIRE(probeMtu > mtu.pathMtu());
+        REQUIRE(probeMtu > 1280);
         REQUIRE(mtu.onProbeSent(++probeNo, probeMtu, nowMs));
         nowMs += 20;
         REQUIRE(mtu.onProbeAck(probeNo, nowMs));

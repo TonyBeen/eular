@@ -47,7 +47,13 @@ void MtuDiscovery::init(const Config *config, Address::Family family)
 
     m_mtuMin = ClampValue<uint16_t>(cfgMin, ETHERNET_MTU_MIN, UTP_ETHERNET_MTU);
     m_mtuMax = ClampValue<uint16_t>(cfgMax, m_mtuMin, UTP_ETHERNET_MTU);
+    // 默认初始化使用 mtu_base，保证关闭 DPLPMTUD 时也能按配置运行。
     m_currentMtu = ClampValue<uint16_t>(cfgBase, m_mtuMin, m_mtuMax);
+
+    // 统一切换策略：开启 DPLPMTUD 时，探测阶段保持最小可用 MTU。
+    if (m_enabled) {
+        m_currentMtu = m_mtuMin;
+    }
     m_ceilingMtu = m_mtuMax;
     m_searchLowMtu = m_currentMtu;
     m_searchHighMtu = m_ceilingMtu;
@@ -94,33 +100,33 @@ void MtuDiscovery::setAddressFamily(Address::Family family)
 
 uint16_t MtuDiscovery::nextProbeMtu() const
 {
-    if (!m_enabled || m_currentMtu >= m_ceilingMtu) {
-        return m_currentMtu;
+    if (!m_enabled || m_searchLowMtu >= m_ceilingMtu) {
+        return m_searchLowMtu;
     }
 
-    uint16_t candidate = m_currentMtu;
+    uint16_t candidate = m_searchLowMtu;
     if (m_probePhase == kProbePhaseLadder) {
         candidate = nextLadderTarget();
-        if (candidate > m_currentMtu) {
+        if (candidate > m_searchLowMtu) {
             return candidate;
         }
 
         // 梯队走完后进入二分精修
         candidate = nextBinaryTarget();
-        if (candidate > m_currentMtu) {
+        if (candidate > m_searchLowMtu) {
             return candidate;
         }
-        return m_currentMtu;
+        return m_searchLowMtu;
     }
 
     if (m_probePhase == kProbePhaseBinary) {
         candidate = nextBinaryTarget();
-        if (candidate > m_currentMtu) {
+        if (candidate > m_searchLowMtu) {
             return candidate;
         }
     }
 
-    return m_currentMtu;
+    return m_searchLowMtu;
 }
 
 uint16_t MtuDiscovery::currentMaxPacketSize() const
@@ -144,7 +150,7 @@ bool MtuDiscovery::shouldProbe(utp_time_t nowMs) const
     if (nowMs < m_nextProbeTimeMs) {
         return false;
     }
-    return nextProbeMtu() > m_currentMtu;
+    return nextProbeMtu() > m_searchLowMtu;
 }
 
 bool MtuDiscovery::onProbeSent(utp_packno_t packNo, uint16_t probeMtu, utp_time_t nowMs)
@@ -154,16 +160,16 @@ bool MtuDiscovery::onProbeSent(utp_packno_t packNo, uint16_t probeMtu, utp_time_
     }
 
     const uint16_t clampedProbe = ClampValue<uint16_t>(probeMtu,
-                                                        static_cast<uint16_t>(m_currentMtu + 1),
+                                                        static_cast<uint16_t>(m_searchLowMtu + 1),
                                                         m_ceilingMtu);
-    if (clampedProbe <= m_currentMtu) {
+    if (clampedProbe <= m_searchLowMtu) {
         return false;
     }
 
     m_hasInFlightProbe = true;
 
     const uint16_t ladderTarget = nextLadderTarget();
-    if (m_probePhase == kProbePhaseLadder && (ladderTarget == m_currentMtu || clampedProbe != ladderTarget)) {
+    if (m_probePhase == kProbePhaseLadder && (ladderTarget == m_searchLowMtu || clampedProbe != ladderTarget)) {
         m_probePhase = kProbePhaseBinary;
     }
 
@@ -179,13 +185,12 @@ bool MtuDiscovery::onProbeAck(utp_packno_t packNo, utp_time_t nowMs)
         return false;
     }
 
-    m_currentMtu = std::max(m_currentMtu, m_inFlightProbeMtu);
-    m_searchLowMtu = std::max<uint16_t>(m_searchLowMtu, m_currentMtu);
+    m_searchLowMtu = std::max<uint16_t>(m_searchLowMtu, m_inFlightProbeMtu);
     m_lastLargeAckMs = nowMs;
     m_largeLossStreak = 0;
     clearInFlightProbe();
 
-    if (m_currentMtu >= m_mtuMax) {
+    if (m_searchLowMtu >= m_mtuMax) {
         m_currentMtu = m_mtuMax;
         m_ceilingMtu = m_mtuMax;
         m_searchLowMtu = m_currentMtu;
@@ -194,6 +199,7 @@ bool MtuDiscovery::onProbeAck(utp_packno_t packNo, utp_time_t nowMs)
         m_nextProbeTimeMs = nowMs + m_probeIntervalMs;
     } else if (m_probePhase == kProbePhaseBinary
             && m_searchHighMtu <= static_cast<uint16_t>(m_searchLowMtu + m_probeStep)) {
+        // 二分收敛完成后统一提交。
         m_currentMtu = m_searchLowMtu;
         m_ceilingMtu = m_searchLowMtu;
         m_probePhase = kProbePhaseStable;
@@ -221,6 +227,7 @@ bool MtuDiscovery::onProbeLost(utp_packno_t packNo, utp_time_t nowMs)
     clearInFlightProbe();
 
     if (m_searchHighMtu <= static_cast<uint16_t>(m_searchLowMtu + m_probeStep)) {
+        // 探测结束后统一提交到最后确认可达的 MTU。
         m_currentMtu = m_searchLowMtu;
         m_ceilingMtu = m_searchLowMtu;
         m_probePhase = kProbePhaseStable;
@@ -327,7 +334,7 @@ void MtuDiscovery::resetSearchWindow()
 uint16_t MtuDiscovery::nextLadderTarget() const
 {
     for (uint16_t ladder : kProbeLadderMtu) {
-        if (ladder <= m_currentMtu) {
+        if (ladder <= m_searchLowMtu) {
             continue;
         }
         if (ladder > m_ceilingMtu) {
@@ -342,24 +349,24 @@ uint16_t MtuDiscovery::nextLadderTarget() const
         return ladder;
     }
 
-    return m_currentMtu;
+    return m_searchLowMtu;
 }
 
 uint16_t MtuDiscovery::nextBinaryTarget() const
 {
     if (m_searchHighMtu <= m_searchLowMtu + m_probeStep) {
-        return m_currentMtu;
+        return m_searchLowMtu;
     }
 
     const uint16_t low = static_cast<uint16_t>(m_searchLowMtu + 1);
     const uint16_t high = m_searchHighMtu;
     if (low >= high) {
-        return m_currentMtu;
+        return m_searchLowMtu;
     }
 
     const uint16_t mid = static_cast<uint16_t>(low + (high - low) / 2);
-    if (mid <= m_currentMtu) {
-        return m_currentMtu;
+    if (mid <= m_searchLowMtu) {
+        return m_searchLowMtu;
     }
     return ClampValue<uint16_t>(mid, low, high);
 }

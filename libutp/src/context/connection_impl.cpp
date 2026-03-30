@@ -716,6 +716,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             if (m_lastErrorCode == UTP_ERR_OK) {
                 m_lastErrorCode = UTP_ERR_CANCELLED;
                 m_lastErrorReason = "peer closed connection";
+                notifyConnectionError(m_lastErrorCode, m_lastErrorReason, false);
             }
             break;
         default:
@@ -2397,6 +2398,7 @@ void ConnectionImpl::onKeepaliveTimeout()
     if (m_keepaliveMissedProbes >= maxProbes) {
         m_lastErrorCode = UTP_ERR_TIMEOUT;
         m_lastErrorReason = "keepalive timeout";
+        notifyConnectionError(m_lastErrorCode, m_lastErrorReason, true);
         beginCloseSent(static_cast<uint16_t>(m_lastErrorCode), m_lastErrorReason);
         return;
     }
