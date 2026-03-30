@@ -33,6 +33,30 @@ TEST_CASE("MtuDiscovery: initialize and conversion", "[Mtu]")
     REQUIRE(MtuDiscovery::PacketSizeFromMtu(1500, Address::IPv4) == 1472);
     REQUIRE(MtuDiscovery::MtuFromPacketSize(1472, Address::IPv4) == 1500);
     REQUIRE(MtuDiscovery::PacketSizeFromMtu(1500, Address::IPv6) == 1452);
+    REQUIRE(MtuDiscovery::NormalizeMtu(1200, Address::IPv4) == 1200);
+}
+
+TEST_CASE("MtuDiscovery: custom IPv4 mtu_min below 1280 is honored", "[Mtu]")
+{
+    Config cfg;
+    cfg.enable_dplpmtud = true;
+    cfg.mtu_min = 1200;
+    cfg.mtu_max = 1500;
+    cfg.mtu_base = 1300;
+    cfg.mtu_probe_step = 16;
+    cfg.mtu_probe_timeout = 100;
+
+    MtuDiscovery mtu;
+    mtu.init(&cfg, Address::IPv4);
+
+    REQUIRE(mtu.pathMtu() == 1300);
+    REQUIRE(mtu.currentMaxPacketSize() == 1300 - 20 - 8);
+
+    const uint16_t nearMaxPacket = mtu.currentMaxPacketSize();
+    REQUIRE_FALSE(mtu.onDataPacketLoss(nearMaxPacket, 1000));
+    REQUIRE_FALSE(mtu.onDataPacketLoss(nearMaxPacket, 1200));
+    REQUIRE(mtu.onDataPacketLoss(nearMaxPacket, 1400));
+    REQUIRE(mtu.pathMtu() == 1200);
 }
 
 TEST_CASE("MtuDiscovery: disabled dplpmtud uses mtu_base", "[Mtu]")

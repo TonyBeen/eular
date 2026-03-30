@@ -53,6 +53,8 @@ public:
     bool onDataPacketAck(uint16_t packetSize, utp_time_t nowMs);
     bool onDataPacketLoss(uint16_t packetSize, utp_time_t nowMs);
 
+    static uint16_t MinimumSupportedMtu(Address::Family family);
+    static uint16_t NormalizeMtu(uint16_t mtu, Address::Family family);
     static uint16_t PacketSizeFromMtu(uint16_t mtu, Address::Family family);
     static uint16_t MtuFromPacketSize(uint16_t packetSize, Address::Family family);
 

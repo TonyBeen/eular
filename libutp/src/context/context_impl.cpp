@@ -75,6 +75,38 @@ eular::utp::Context::EncryptionMode FrameCryptoTypeToEncryptionMode(eular::utp::
     }
 }
 
+
+int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
+                                         std::vector<uint8_t> &payload)
+{
+    if (targetPayloadSize <= payload.size()) {
+        return UTP_ERR_OK;
+    }
+
+    const size_t remain = targetPayloadSize - payload.size();
+    if (remain < FRAME_PADDING_HDR_SIZE) {
+        return UTP_ERR_OK;
+    }
+
+    eular::utp::FramePadding padding;
+    padding.padding_length = static_cast<uint16_t>(remain - FRAME_PADDING_HDR_SIZE);
+
+    const size_t oldSize = payload.size();
+    payload.resize(targetPayloadSize, 0);
+    const int32_t encoded = padding.encode(payload.data() + oldSize, remain);
+    if (encoded < 0 || static_cast<size_t>(encoded) != remain) {
+        return -1;
+    }
+
+    return UTP_ERR_OK;
+}
+
+uint16_t ConfiguredMinPacketSize(const eular::utp::Config &config,
+                                 eular::utp::Address::Family family)
+{
+    const uint16_t targetMtu = eular::utp::MtuDiscovery::NormalizeMtu(config.mtu_min, family);
+    return eular::utp::MtuDiscovery::PacketSizeFromMtu(targetMtu, family);
+}
 bool InitAesContextByCryptoType(eular::utp::FrameCryptoType type,
                                 const eular::utp::X25519Wrapper::PublicKey &peerPublicKey,
                                 const std::shared_ptr<eular::utp::X25519Wrapper> &x25519,
@@ -774,6 +806,14 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
             return -1;
         }
 
+        const uint16_t targetPacketSize = ConfiguredMinPacketSize(m_config, pending.peerAddress.family());
+        if (targetPacketSize > UTP_HEADER_SIZE) {
+            const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
+            if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
+                return -1;
+            }
+        }
+
         return sendPendingPacket(pending, UTP_TYPE_HANDSHAKE, payload.data(), payload.size());
     }
 
@@ -788,6 +828,14 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
 
     if (appendAckFrequency(payload) != UTP_ERR_OK) {
         return -1;
+    }
+
+    const uint16_t targetPacketSize = ConfiguredMinPacketSize(m_config, pending.peerAddress.family());
+    if (targetPacketSize > UTP_HEADER_SIZE) {
+        const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
+        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
+            return -1;
+        }
     }
 
     return sendPendingPacket(pending, UTP_TYPE_HANDSHAKE, payload.data(), payload.size());

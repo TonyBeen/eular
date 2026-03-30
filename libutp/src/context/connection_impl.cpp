@@ -228,6 +228,15 @@ int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
     return UTP_ERR_OK;
 }
 
+uint16_t ConfiguredMinPacketSize(const eular::utp::Config *config,
+                                 eular::utp::Address::Family family)
+{
+    const uint16_t targetMtu = eular::utp::MtuDiscovery::NormalizeMtu(
+        config == nullptr ? ETHERNET_MTU_MIN : config->mtu_min,
+        family);
+    return eular::utp::MtuDiscovery::PacketSizeFromMtu(targetMtu, family);
+}
+
 } // namespace
 
 namespace eular {
@@ -1819,7 +1828,7 @@ int32_t ConnectionImpl::sendInitialPacket()
     payload.insert(payload.end(), ackFreqPayload.begin(), ackFreqPayload.begin() + ackFreqSize);
 
     const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
-    const uint16_t targetPacketSize = MtuDiscovery::PacketSizeFromMtu(ETHERNET_MTU_MIN, family);
+    const uint16_t targetPacketSize = ConfiguredMinPacketSize(config(), family);
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
         if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
@@ -1874,6 +1883,15 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
         return -1;
     }
     payload.insert(payload.end(), ackFreqPayload.begin(), ackFreqPayload.begin() + ackFreqSize);
+
+    const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
+    const uint16_t targetPacketSize = ConfiguredMinPacketSize(config(), family);
+    if (targetPacketSize > UTP_HEADER_SIZE) {
+        const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
+        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
+            return -1;
+        }
+    }
 
     return sendPacket(UTP_TYPE_HANDSHAKE,
                       payload.data(),

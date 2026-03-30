@@ -197,7 +197,7 @@ int main(int argc, char **argv)
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
     cfg.enable_keepalive = false;
-    cfg.enable_dplpmtud = true;
+    cfg.enable_dplpmtud = false;
 
     eular::utp::Context ctx(loop.loop(), &cfg);
 

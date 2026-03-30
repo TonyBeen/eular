@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 
+#include "proto/proto.h"
 #include "utp/config.h"
 
 namespace {
@@ -45,7 +46,7 @@ void MtuDiscovery::init(const Config *config, Address::Family family)
     const uint16_t cfgMax = (config == nullptr) ? UTP_ETHERNET_MTU : config->mtu_max;
     const uint16_t cfgBase = (config == nullptr) ? ETHERNET_MTU_MID : config->mtu_base;
 
-    m_mtuMin = ClampValue<uint16_t>(cfgMin, ETHERNET_MTU_MIN, UTP_ETHERNET_MTU);
+    m_mtuMin = NormalizeMtu(cfgMin, family);
     m_mtuMax = ClampValue<uint16_t>(cfgMax, m_mtuMin, UTP_ETHERNET_MTU);
     m_mtuBase = ClampValue<uint16_t>(cfgBase, m_mtuMin, m_mtuMax);
     // 默认初始化使用 mtu_base，保证关闭 DPLPMTUD 时也能按配置运行。
@@ -83,6 +84,17 @@ void MtuDiscovery::init(const Config *config, Address::Family family)
     m_inFlightProbeDeadlineMs = 0;
 
     setAddressFamily(family);
+}
+
+uint16_t MtuDiscovery::MinimumSupportedMtu(Address::Family family)
+{
+    const uint16_t ipHeader = (family == Address::IPv6) ? IPV6_HEADER_SIZE : IPV4_HEADER_SIZE;
+    return static_cast<uint16_t>(ipHeader + UDP_HEADER_SIZE + UTP_HEADER_SIZE + 1);
+}
+
+uint16_t MtuDiscovery::NormalizeMtu(uint16_t mtu, Address::Family family)
+{
+    return ClampValue<uint16_t>(mtu, MinimumSupportedMtu(family), UTP_ETHERNET_MTU);
 }
 
 void MtuDiscovery::onPathValidated(utp_time_t nowMs)
@@ -394,7 +406,7 @@ uint16_t MtuDiscovery::nextBinaryTarget() const
 
 uint16_t MtuDiscovery::safetyMtu() const
 {
-    return ETHERNET_MTU_MIN;
+    return m_mtuMin;
 }
 
 } // namespace utp
