@@ -2225,6 +2225,7 @@ void ConnectionImpl::handlePathResponseFrame(const uint8_t *frameData,
     if (m_networkPath.onPathResponse(response)) {
         // 校验成功后才切换 active 路径到 candidate。
         m_peerAddress = m_networkPath.peerAddress();
+        m_mtuDiscovery.onPathValidated(time::MonotonicMs());
         m_pathValidationTimer.stop();
         if (m_ctx != nullptr) {
             m_ctx->notePathValidationSucceeded();

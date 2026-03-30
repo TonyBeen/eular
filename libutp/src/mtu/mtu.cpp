@@ -47,13 +47,9 @@ void MtuDiscovery::init(const Config *config, Address::Family family)
 
     m_mtuMin = ClampValue<uint16_t>(cfgMin, ETHERNET_MTU_MIN, UTP_ETHERNET_MTU);
     m_mtuMax = ClampValue<uint16_t>(cfgMax, m_mtuMin, UTP_ETHERNET_MTU);
+    m_mtuBase = ClampValue<uint16_t>(cfgBase, m_mtuMin, m_mtuMax);
     // 默认初始化使用 mtu_base，保证关闭 DPLPMTUD 时也能按配置运行。
-    m_currentMtu = ClampValue<uint16_t>(cfgBase, m_mtuMin, m_mtuMax);
-
-    // 统一切换策略：开启 DPLPMTUD 时，探测阶段保持最小可用 MTU。
-    if (m_enabled) {
-        m_currentMtu = m_mtuMin;
-    }
+    m_currentMtu = m_mtuBase;
     m_ceilingMtu = m_mtuMax;
     m_searchLowMtu = m_currentMtu;
     m_searchHighMtu = m_ceilingMtu;
@@ -87,6 +83,31 @@ void MtuDiscovery::init(const Config *config, Address::Family family)
     m_inFlightProbeDeadlineMs = 0;
 
     setAddressFamily(family);
+}
+
+void MtuDiscovery::onPathValidated(utp_time_t nowMs)
+{
+    m_currentMtu = m_mtuBase;
+    m_lastLargeAckMs = 0;
+    m_lastLargeLossMs = 0;
+    m_largeLossStreak = 0;
+    m_blackholeCooldownUntilMs = 0;
+    clearInFlightProbe();
+
+    if (!m_enabled) {
+        m_ceilingMtu = m_currentMtu;
+        m_searchLowMtu = m_currentMtu;
+        m_searchHighMtu = m_currentMtu;
+        m_probePhase = kProbePhaseStable;
+        m_nextProbeTimeMs = nowMs;
+        return;
+    }
+
+    m_ceilingMtu = m_mtuMax;
+    m_searchLowMtu = m_currentMtu;
+    m_searchHighMtu = m_ceilingMtu;
+    m_probePhase = kProbePhaseLadder;
+    m_nextProbeTimeMs = nowMs;
 }
 
 void MtuDiscovery::setAddressFamily(Address::Family family)

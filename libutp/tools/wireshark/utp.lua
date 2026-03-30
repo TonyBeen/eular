@@ -38,6 +38,8 @@ f.scid = ProtoField.uint32("eular_utp.scid", "SCID", base.HEX)
 f.dcid = ProtoField.uint32("eular_utp.dcid", "DCID", base.HEX)
 f.pn = ProtoField.uint64("eular_utp.pn", "Packet Number", base.DEC)
 f.payload_len = ProtoField.uint16("eular_utp.payload_len", "Payload Length", base.DEC)
+f.packet_len = ProtoField.uint16("eular_utp.packet_len", "UTP Packet Length", base.DEC)
+f.frame_count = ProtoField.uint16("eular_utp.frame_count", "Frame Count", base.DEC)
 f.packet_type = ProtoField.uint8("eular_utp.packet_type", "Packet Type", base.HEX, packet_type_names)
 f.reserve = ProtoField.uint8("eular_utp.reserve", "Reserve", base.HEX)
 f.payload_raw = ProtoField.bytes("eular_utp.payload.raw", "Payload Raw")
@@ -106,7 +108,17 @@ local function packet_can_be_encrypted(ptype)
     return ptype == 0x03 or ptype == 0x04 or ptype == 0x05
 end
 
-local function parse_frame(payload, payload_offset, payload_len, tree, frame_index)
+local function append_summary(summaries, text)
+    if text == nil or text == "" then
+        return
+    end
+    if #summaries >= 4 then
+        return
+    end
+    summaries[#summaries + 1] = text
+end
+
+local function parse_frame(payload, payload_offset, payload_len, tree, frame_index, summaries)
     if payload_offset >= payload_len then
         return 0
     end
@@ -169,15 +181,19 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
 
     if frame_type == 1 then
         local base = payload_offset
+        local flags = payload(base + 1, 1):uint()
+        local data_len = payload(base + 2, 2):uint()
+        local stream_id = payload(base + 4, 4):uint()
+        local has_fin = (flags % 2) ~= 0
         node:add(f.stream_flag, payload(base + 1, 1))
         node:add(f.stream_fin, payload(base + 1, 1))
         node:add(f.stream_data_len, payload(base + 2, 2))
         node:add(f.stream_id, payload(base + 4, 4))
         node:add(f.stream_offset, payload(base + 8, 8))
-        local data_len = payload(base + 2, 2):uint()
         if data_len > 0 then
             node:add(f.stream_data, payload(base + 16, data_len))
         end
+        append_summary(summaries, string.format("STREAM id=%u len=%u%s", stream_id, data_len, has_fin and " fin" or ""))
     elseif frame_type == 2 then
         local base = payload_offset
         local count = payload(base + 1, 1):uint()
@@ -195,6 +211,7 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
             first_abs:add(f.ack_abs_low, first_abs_low)
             first_abs:add(f.ack_abs_high, largest)
         end
+        append_summary(summaries, string.format("ACK largest=%s ranges=%u", tostring(largest), count + 1))
 
         local range_off = base + 16
         local last_abs_low = nil
@@ -220,6 +237,8 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         end
     elseif frame_type == 3 then
         node:add(f.padding_len, payload(payload_offset + 1, 2))
+        local padding_len = payload(payload_offset + 1, 2):uint()
+        append_summary(summaries, string.format("PADDING len=%u", padding_len))
     elseif frame_type == 4 then
         node:add(f.close_error, payload(payload_offset + 1, 2))
         local reason_len = payload(payload_offset + 3, 2):uint()
@@ -227,17 +246,21 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         if reason_len > 0 then
             node:add(f.close_reason, payload(payload_offset + 5, reason_len):string())
         end
+        append_summary(summaries, string.format("CLOSE err=%u", payload(payload_offset + 1, 2):uint()))
     elseif frame_type == 6 then
         node:add(f.reset_error, payload(payload_offset + 1, 2))
         node:add(f.reset_stream_id, payload(payload_offset + 3, 4))
         node:add(f.reset_final_size, payload(payload_offset + 7, 8))
+        append_summary(summaries, string.format("RESET sid=%u err=%u", payload(payload_offset + 3, 4):uint(), payload(payload_offset + 1, 2):uint()))
     elseif frame_type == 9 or frame_type == 10 then
         node:add(f.path_data, payload(payload_offset + 1, 8))
+        append_summary(summaries, frame_type == 9 and "PATH_CHALLENGE" or "PATH_RESPONSE")
     elseif frame_type == 11 then
         node:add(f.crypto_type, payload(payload_offset + 1, 1))
         node:add(f.crypto_tp_size, payload(payload_offset + 2, 1))
         node:add(f.crypto_tp_raw, payload(payload_offset + 3, 24))
         node:add(f.crypto_pubkey, payload(payload_offset + 27, 32))
+        append_summary(summaries, string.format("CRYPTO type=%u", payload(payload_offset + 1, 1):uint()))
     elseif frame_type == 12 then
         local token_size = payload(payload_offset + 1, 1):uint()
         node:add(f.token_size, payload(payload_offset + 1, 1))
@@ -245,13 +268,20 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         if token_size > 0 then
             node:add(f.token_data, payload(payload_offset + 4, token_size))
         end
+        append_summary(summaries, string.format("TOKEN len=%u", token_size))
     elseif frame_type == 13 then
         node:add(f.ack_freq_thresh, payload(payload_offset + 1, 1))
         node:add(f.ack_freq_reorder, payload(payload_offset + 2, 1))
         node:add(f.ack_freq_max_delay, payload(payload_offset + 3, 4))
         node:add(f.ack_freq_ts, payload(payload_offset + 7, 8))
+        append_summary(summaries, string.format("ACK_FREQUENCY n=%u", payload(payload_offset + 1, 1):uint()))
     elseif frame_type == 14 then
         node:add(f.version, payload(payload_offset + 1, 4))
+        append_summary(summaries, string.format("VERSION %u", payload(payload_offset + 1, 4):uint()))
+    elseif frame_type == 5 then
+        append_summary(summaries, "PING")
+    elseif frame_type == 15 then
+        append_summary(summaries, "HANDSHAKE_DONE")
     end
 
     return frame_len
@@ -265,26 +295,21 @@ function utp.dissector(buffer, pinfo, tree)
 
     local packet_type = buffer(18, 1):uint()
     local payload_len = buffer(16, 2):uint()
+    local utp_packet_len = 20 + payload_len
 
     if packet_type_names[packet_type] == nil then
         return 0
     end
-    if (20 + payload_len) > total_len then
+    if utp_packet_len > total_len then
         return 0
     end
-
-    pinfo.cols.protocol = "UTP"
-    pinfo.cols.info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x",
-        packet_type_name(packet_type),
-        tostring(buffer(8, 8):uint64()),
-        buffer(0, 4):uint(),
-        buffer(4, 4):uint())
 
     local subtree = tree:add(utp, buffer(), "Eular UTP Protocol")
     subtree:add(f.scid, buffer(0, 4))
     subtree:add(f.dcid, buffer(4, 4))
     subtree:add(f.pn, buffer(8, 8))
     subtree:add(f.payload_len, buffer(16, 2))
+    subtree:add(f.packet_len, utp_packet_len)
     subtree:add(f.packet_type, buffer(18, 1))
     subtree:add(f.reserve, buffer(19, 1))
 
@@ -292,14 +317,16 @@ function utp.dissector(buffer, pinfo, tree)
     local off = 0
     local frame_index = 0
     local maybe_encrypted = packet_can_be_encrypted(packet_type)
+    local frame_summaries = {}
     while off < payload_len do
-        local consumed = parse_frame(buffer(20, payload_len), off, payload_len, payload_tree, frame_index)
+        local consumed = parse_frame(buffer(20, payload_len), off, payload_len, payload_tree, frame_index, frame_summaries)
         if consumed <= 0 then
             local payload_tvb = buffer(20, payload_len)
             if maybe_encrypted then
                 if off == 0 then
                     payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
                         "Payload likely encrypted; frame parsing skipped")
+                    append_summary(frame_summaries, "ENCRYPTED")
                     if payload_len > 16 then
                         payload_tree:add(f.payload_cipher, payload_tvb(0, payload_len - 16))
                         payload_tree:add(f.payload_tag, payload_tvb(payload_len - 16, 16))
@@ -320,6 +347,22 @@ function utp.dissector(buffer, pinfo, tree)
         off = off + consumed
         frame_index = frame_index + 1
     end
+
+    subtree:add(f.frame_count, frame_index)
+
+    pinfo.cols.protocol = "UTP"
+    local info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x utp_len=%u payload=%u frames=%u",
+        packet_type_name(packet_type),
+        tostring(buffer(8, 8):uint64()),
+        buffer(0, 4):uint(),
+        buffer(4, 4):uint(),
+        utp_packet_len,
+        payload_len,
+        frame_index)
+    if #frame_summaries > 0 then
+        info = info .. " " .. table.concat(frame_summaries, ", ")
+    end
+    pinfo.cols.info = info
 
     return total_len
 end

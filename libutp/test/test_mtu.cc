@@ -27,8 +27,8 @@ TEST_CASE("MtuDiscovery: initialize and conversion", "[Mtu]")
     mtu.init(&cfg, Address::IPv4);
 
     REQUIRE(mtu.enabled());
-    REQUIRE(mtu.pathMtu() == 1280);
-    REQUIRE(mtu.currentMaxPacketSize() == 1280 - 20 - 8);
+    REQUIRE(mtu.pathMtu() == 1400);
+    REQUIRE(mtu.currentMaxPacketSize() == 1400 - 20 - 8);
 
     REQUIRE(MtuDiscovery::PacketSizeFromMtu(1500, Address::IPv4) == 1472);
     REQUIRE(MtuDiscovery::MtuFromPacketSize(1472, Address::IPv4) == 1500);
@@ -67,23 +67,23 @@ TEST_CASE("MtuDiscovery: probe ack defers mtu commit until probing converges", "
     mtu.init(&cfg, Address::IPv4);
 
     REQUIRE(mtu.shouldProbe(0));
-    REQUIRE(mtu.nextProbeMtu() == 1380);
-    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.nextProbeMtu() == 1450);
+    REQUIRE(mtu.pathMtu() == 1400);
 
-    REQUIRE(mtu.onProbeSent(101, 1380, 10));
+    REQUIRE(mtu.onProbeSent(101, 1450, 10));
     REQUIRE(mtu.hasInFlightProbe());
     REQUIRE_FALSE(mtu.shouldProbe(20));
 
     REQUIRE(mtu.onProbeAck(101, 30));
     REQUIRE_FALSE(mtu.hasInFlightProbe());
     // 统一切换：单次探测成功后不立即修改 pathMtu
-    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.pathMtu() == 1400);
     REQUIRE(mtu.shouldProbe(31));
-    REQUIRE(mtu.nextProbeMtu() == 1450);
+    REQUIRE(mtu.nextProbeMtu() == 1492);
 
-    REQUIRE(mtu.onProbeSent(102, 1450, 40));
+    REQUIRE(mtu.onProbeSent(102, 1492, 40));
     REQUIRE(mtu.onProbeAck(102, 50));
-    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.pathMtu() == 1400);
 }
 
 TEST_CASE("MtuDiscovery: probe loss backs off ceiling", "[Mtu]")
@@ -100,23 +100,23 @@ TEST_CASE("MtuDiscovery: probe loss backs off ceiling", "[Mtu]")
     MtuDiscovery mtu;
     mtu.init(&cfg, Address::IPv4);
 
-    REQUIRE(mtu.onProbeSent(200, 1380, 0));
+    REQUIRE(mtu.onProbeSent(200, 1450, 0));
     REQUIRE(mtu.onProbeAck(200, 10));
-    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.pathMtu() == 1400);
     REQUIRE(mtu.shouldProbe(11));
-    REQUIRE(mtu.nextProbeMtu() == 1450);
+    REQUIRE(mtu.nextProbeMtu() == 1492);
 
-    REQUIRE(mtu.onProbeSent(201, 1450, 20));
+    REQUIRE(mtu.onProbeSent(201, 1492, 20));
     REQUIRE(mtu.onProbeLost(201, 30));
-    REQUIRE(mtu.pathMtu() == 1280);
+    REQUIRE(mtu.pathMtu() == 1400);
     REQUIRE(mtu.shouldProbe(31));
     const uint16_t next = mtu.nextProbeMtu();
-    REQUIRE(next > 1380);
-    REQUIRE(next < 1450);
+    REQUIRE(next > 1450);
+    REQUIRE(next < 1492);
 
     MtuDiscovery timeoutMtu;
     timeoutMtu.init(&cfg, Address::IPv4);
-    REQUIRE(timeoutMtu.onProbeSent(301, 1450, 2000));
+    REQUIRE(timeoutMtu.onProbeSent(301, 1492, 2000));
     REQUIRE(timeoutMtu.onProbeTimeout(2200));
     REQUIRE_FALSE(timeoutMtu.hasInFlightProbe());
 }
@@ -140,6 +140,37 @@ TEST_CASE("MtuDiscovery: blackhole fallback to safety mtu", "[Mtu]")
     REQUIRE(mtu.onDataPacketLoss(nearMaxPacket, 1400) == true);
     REQUIRE(mtu.pathMtu() == 1280);
     REQUIRE_FALSE(mtu.shouldProbe(2000));
+}
+
+TEST_CASE("MtuDiscovery: path validation success resets to mtu_base and restarts probing", "[Mtu]")
+{
+    Config cfg;
+    cfg.enable_dplpmtud = true;
+    cfg.mtu_min = 1280;
+    cfg.mtu_max = 1500;
+    cfg.mtu_base = 1400;
+    cfg.mtu_probe_step = 16;
+
+    MtuDiscovery mtu;
+    mtu.init(&cfg, Address::IPv4);
+
+    REQUIRE(mtu.onProbeSent(100, 1450, 0));
+    REQUIRE(mtu.onProbeAck(100, 10));
+    REQUIRE(mtu.onProbeSent(101, 1492, 20));
+    REQUIRE(mtu.onProbeAck(101, 30));
+    REQUIRE(mtu.pathMtu() == 1400);
+
+    mtu.onPathValidated(2000);
+    REQUIRE(mtu.pathMtu() == 1400);
+    REQUIRE(mtu.shouldProbe(2000));
+    REQUIRE(mtu.nextProbeMtu() == 1450);
+
+    cfg.enable_dplpmtud = false;
+    MtuDiscovery disabledMtu;
+    disabledMtu.init(&cfg, Address::IPv4);
+    disabledMtu.onPathValidated(3000);
+    REQUIRE(disabledMtu.pathMtu() == 1400);
+    REQUIRE_FALSE(disabledMtu.shouldProbe(3000));
 }
 
 TEST_CASE("MtuDiscovery: integration path switch 1500 to 1280 recovers quickly", "[Mtu][Integration]")
@@ -166,7 +197,7 @@ TEST_CASE("MtuDiscovery: integration path switch 1500 to 1280 recovers quickly",
             break;
         }
         const uint16_t probeMtu = mtu.nextProbeMtu();
-        REQUIRE(probeMtu > 1280);
+        REQUIRE(probeMtu >= 1450);
         REQUIRE(mtu.onProbeSent(++probeNo, probeMtu, nowMs));
         nowMs += 20;
         REQUIRE(mtu.onProbeAck(probeNo, nowMs));

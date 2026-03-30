@@ -33,6 +33,7 @@ public:
     MtuDiscovery() = default;
 
     void init(const Config *config, Address::Family family);
+    void onPathValidated(utp_time_t nowMs);
     void setAddressFamily(Address::Family family);
 
     bool enabled() const { return m_enabled; }
@@ -75,6 +76,7 @@ private:
 
     uint16_t        m_mtuMin{ETHERNET_MTU_MIN};
     uint16_t        m_mtuMax{UTP_ETHERNET_MTU};
+    uint16_t        m_mtuBase{ETHERNET_MTU_MID};
     uint16_t        m_probeStep{16}; // 二分收敛阈值，不再用于线性累加
 
     uint32_t        m_probeIntervalMs{300000};

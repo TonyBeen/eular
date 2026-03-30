@@ -940,6 +940,10 @@ TEST_CASE("Context integration: path validation counters track started/succeeded
     Config cfg;
     cfg.keepalive_timeout = 1;
     cfg.keepalive_probes = 1;
+    cfg.enable_dplpmtud = true;
+    cfg.mtu_min = 1280;
+    cfg.mtu_base = 1400;
+    cfg.mtu_max = 1500;
 
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
@@ -994,6 +998,8 @@ TEST_CASE("Context integration: path validation counters track started/succeeded
     stat = ctx.statistic();
     REQUIRE(stat.path_validation_succeeded >= 1);
     REQUIRE(conn.m_peerAddress == candidate);
+    REQUIRE(conn.m_mtuDiscovery.pathMtu() == 1400);
+    REQUIRE(conn.m_mtuDiscovery.shouldProbe(eular::utp::time::MonotonicMs()));
 
     const Address activeAfterSuccess = conn.m_peerAddress;
     const Address candidateFail("10.0.0.1", 10002);
