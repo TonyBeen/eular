@@ -120,6 +120,37 @@ TEST_CASE("StreamImpl: configurable send buffer limit is enforced", "[Connection
     REQUIRE_FALSE(stream.writable());
 }
 
+TEST_CASE("ConnectionImpl: handshake done pending clears only on ack callback", "[Connection][Handshake]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1099);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    conn.m_handshakeDoneSent = true;
+
+    conn.onHandshakeDoneFrameAcked();
+    REQUIRE_FALSE(conn.m_handshakeDonePending);
+}
+
+TEST_CASE("ConnectionImpl: handshake barrier blocks regular stream send until handshake done acked", "[Connection][Handshake]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1100);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    conn.m_handshakeDoneSent = true;
+
+    const uint8_t data[] = {'h', 'i'};
+    const int32_t status = conn.sendStreamFrame(0, 0, data, sizeof(data), false);
+    REQUIRE(status == UTP_ERR_WOULD_BLOCK);
+}
+
 TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")
 {
     Config cfg;

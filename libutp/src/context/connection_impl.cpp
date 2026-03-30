@@ -602,6 +602,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
     size_t frameOffset = 0;
     bool peerCloseReceived = false;
+    bool hasHandshakeDoneFrame = false;
     while (frameOffset < packet->payload_size) {
         FrameType frameType = kFrameInvalid;
         const uint8_t *frameData = nullptr;
@@ -728,6 +729,9 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
                 notifyConnectionError(m_lastErrorCode, m_lastErrorReason, false);
             }
             break;
+        case kFrameHandshakeDone:
+            hasHandshakeDoneFrame = true;
+            break;
         default:
             break;
         }
@@ -767,14 +771,20 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     }
 
     if (!suppressAck) {
-        const uint32_t ackThreshold = std::max<uint32_t>(1, m_ackElicitingThreshold);
-        const bool ackCountReached = m_ackElicitingSinceLastAck >= ackThreshold;
-        if ((ackCountReached || reorderedGap) && m_ackElicitingSinceLastAck > 0) {
+        if (hasHandshakeDoneFrame && m_ackElicitingSinceLastAck > 0) {
             if (sendAckPacket(nowUs) != UTP_ERR_OK) {
-                armAckTimer(10);
+                armAckTimer(1);
             }
-        } else if (m_ackElicitingSinceLastAck > 0) {
-            armAckTimer(m_ackMaxDelayMs);
+        } else {
+            const uint32_t ackThreshold = std::max<uint32_t>(1, m_ackElicitingThreshold);
+            const bool ackCountReached = m_ackElicitingSinceLastAck >= ackThreshold;
+            if ((ackCountReached || reorderedGap) && m_ackElicitingSinceLastAck > 0) {
+                if (sendAckPacket(nowUs) != UTP_ERR_OK) {
+                    armAckTimer(10);
+                }
+            } else if (m_ackElicitingSinceLastAck > 0) {
+                armAckTimer(m_ackMaxDelayMs);
+            }
         }
     }
 
@@ -782,6 +792,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         m_state = State::kStateConnected;
         m_handshakeDonePending = true;
         m_handshakeDoneSent = false;
+        m_handshakeDoneLastPacketNo = 0;
         armHandshakeDoneTimer();
         m_connTimer.stop();
         markPeerActivity(nowUs);
@@ -1450,6 +1461,15 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         return UTP_ERR_WOULD_BLOCK;
     }
 
+    // 握手屏障：HandshakeDone 已发出但未确认前，阻断后续普通 Stream 外发，避免连锁丢包。
+    if (!allowEarlyData
+        && m_state == State::kStateConnected
+        && m_handshakeDonePending
+        && m_handshakeDoneSent
+        && (len > 0 || fin)) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
     if (len > UINT16_MAX) {
         return UTP_ERR_OVERFLOW;
     }
@@ -1487,7 +1507,6 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
 
     const bool piggybackHandshakeDone = (m_state == State::kStateConnected)
                                      && m_handshakeDonePending
-                                     && !m_handshakeDoneSent
                                      && len > 0;
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
 
@@ -1563,7 +1582,7 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                                   payload.data(),
                                                   payload.size(),
                                                   0,
-                                                  nullptr,
+                                                  piggybackHandshakeDone ? &m_handshakeDoneLastPacketNo : nullptr,
                                                   frameBits,
                                                   nullptr,
                                                   len);
@@ -1573,8 +1592,8 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                     stopAckTimer();
                     if (piggybackHandshakeDone) {
                         m_handshakeDoneSent = true;
-                        m_handshakeDonePending = false;
-                        m_handshakeDoneTimer.stop();
+                        m_handshakeDonePending = true;
+                        armHandshakeDoneTimer();
                     }
                 }
                 return status;
@@ -1599,14 +1618,15 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                           streamBody.data(),
                                           streamBody.size(),
                                           0,
-                                          nullptr,
-                                          0,
+                                          &m_handshakeDoneLastPacketNo,
+                                          (1u << static_cast<uint32_t>(kFrameStream))
+                                        | (1u << static_cast<uint32_t>(kFrameHandshakeDone)),
                                           nullptr,
                                           len);
         if (status == UTP_ERR_OK) {
             m_handshakeDoneSent = true;
-            m_handshakeDonePending = false;
-            m_handshakeDoneTimer.stop();
+            m_handshakeDonePending = true;
+            armHandshakeDoneTimer();
         }
         return status;
     }
@@ -1709,11 +1729,18 @@ void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
 int32_t ConnectionImpl::sendHandshakeDonePacket()
 {
     const uint8_t payload[1] = {static_cast<uint8_t>(kFrameHandshakeDone)};
-    const int32_t status = sendPacket(UTP_TYPE_CTRL, payload, sizeof(payload));
+    utp_packno_t outPacketNo = 0;
+    const int32_t status = sendPacket(UTP_TYPE_CTRL,
+                                      payload,
+                                      sizeof(payload),
+                                      0,
+                                      &outPacketNo,
+                                      (1u << static_cast<uint32_t>(kFrameHandshakeDone)));
     if (status == UTP_ERR_OK) {
         m_handshakeDoneSent = true;
-        m_handshakeDonePending = false;
-        m_handshakeDoneTimer.stop();
+        m_handshakeDonePending = true;
+        m_handshakeDoneLastPacketNo = outPacketNo;
+        armHandshakeDoneTimer();
     }
     return status;
 }
@@ -2272,7 +2299,7 @@ void ConnectionImpl::onPathValidationTimeout()
 
 void ConnectionImpl::onHandshakeDoneTimeout()
 {
-    if (!m_handshakeDonePending || m_handshakeDoneSent || m_state != State::kStateConnected) {
+    if (!m_handshakeDonePending || m_state != State::kStateConnected) {
         return;
     }
 
@@ -2281,6 +2308,16 @@ void ConnectionImpl::onHandshakeDoneTimeout()
         scheduleWrite();
         m_handshakeDoneTimer.start(10);
     }
+}
+
+void ConnectionImpl::onHandshakeDoneFrameAcked()
+{
+    if (!m_handshakeDonePending) {
+        return;
+    }
+
+    m_handshakeDonePending = false;
+    m_handshakeDoneTimer.stop();
 }
 
 void ConnectionImpl::armHandshakeDoneTimer()

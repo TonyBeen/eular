@@ -362,6 +362,10 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         } else if (m_conn != nullptr && IsMtuRelevantDataPacket(pkt)) {
             m_conn->m_mtuDiscovery.onDataPacketAck(PacketSentSize(pkt), nowUs / 1000);
         }
+        if (m_conn != nullptr
+            && (pkt->frame_types & (1u << static_cast<uint32_t>(kFrameHandshakeDone))) != 0) {
+            m_conn->onHandshakeDoneFrameAcked();
+        }
 
         unackedRemove(pkt);
         destroyPacket(pkt);

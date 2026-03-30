@@ -59,7 +59,7 @@ int main(int argc, char **argv)
     cfg.mtu_max = 1500;
     cfg.mtu_probe_interval = 1;
     cfg.mtu_probe_step = 16;
-    cfg.mtu_probe_timeout = 800;
+    cfg.mtu_probe_timeout = 3000;
 
     eular::utp::Context ctx(loop.loop(), &cfg);
     ServerState state;

@@ -217,6 +217,7 @@ private:
     void    beginCloseSent(uint16_t errorCode, const std::string &reason);
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
+    void    onHandshakeDoneFrameAcked();
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
     void    notifyConnectionError(int32_t errorCode, const std::string &reason, bool fatal);
@@ -305,6 +306,7 @@ private:
     MtuDiscovery            m_mtuDiscovery;
     bool                    m_handshakeDonePending{false};
     bool                    m_handshakeDoneSent{false};
+    utp_packno_t            m_handshakeDoneLastPacketNo{0};
     bool                    m_closeFramePending{false};
     uint16_t                m_closeErrorCode{0};
     std::string             m_closeReason{"local close"};

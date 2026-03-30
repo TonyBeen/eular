@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <array>
+#include <cstring>
 #include <thread>
 
 #include <event2/event.h>
@@ -24,6 +25,8 @@
 #include "crypto/token.h"
 #include "proto/proto.h"
 #include "proto/frame.h"
+#include "proto/frame/stream.h"
+#include "proto/packet_in.h"
 #include "proto/frame/path.h"
 #include "utp/errno.h"
 #include "util/random.hpp"
@@ -41,6 +44,8 @@ using eular::utp::TokenType;
 using eular::utp::UdpSocket;
 using eular::utp::FramePathChallenge;
 using eular::utp::FramePathResponse;
+using eular::utp::FrameStream;
+using eular::utp::PacketIn;
 using eular::utp::NetworkPath;
 
 namespace {
@@ -145,6 +150,33 @@ std::vector<uint8_t> BuildZeroRttTicket(ContextImpl &ctx,
     TokenAuth::TokenBuf tokenBuf{};
     REQUIRE(auth->seal(meta, tokenBuf));
     return std::vector<uint8_t>(tokenBuf.begin(), tokenBuf.end());
+}
+
+std::vector<uint8_t> BuildRawPacket(uint32_t scid,
+                                    uint32_t dcid,
+                                    uint64_t pn,
+                                    uint8_t packetType,
+                                    const std::vector<uint8_t> &payload)
+{
+    std::vector<uint8_t> packet(static_cast<size_t>(UTP_HEADER_SIZE) + payload.size(), 0);
+    uint8_t *offset = packet.data();
+    size_t left = packet.size();
+    const uint16_t payloadLen = static_cast<uint16_t>(payload.size());
+    const uint8_t reserve = 0;
+
+    offset = eular::Serialize::SerializeTo(offset, left, scid);
+    offset = eular::Serialize::SerializeTo(offset, left, dcid);
+    offset = eular::Serialize::SerializeTo(offset, left, pn);
+    offset = eular::Serialize::SerializeTo(offset, left, payloadLen);
+    offset = eular::Serialize::SerializeTo(offset, left, packetType);
+    offset = eular::Serialize::SerializeTo(offset, left, reserve);
+    REQUIRE(offset != nullptr);
+    REQUIRE(left == payload.size());
+
+    if (!payload.empty()) {
+        std::memcpy(offset, payload.data(), payload.size());
+    }
+    return packet;
 }
 
 } // namespace
@@ -1080,6 +1112,168 @@ TEST_CASE("Context integration: handshake promotion preserves first stream callb
     REQUIRE(serverStreamCreated);
 }
 
+TEST_CASE("Context integration: pending buffers replay once after delayed HandshakeDone", "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.ack_every_n_packets = 10;
+    cfg.handshake_timeout = 300;
+    cfg.pending_pre_handshake_buffer_packets = 8;
+    cfg.pending_pre_handshake_buffer_bytes = 4096;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    REQUIRE(ctx.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    const uint32_t localCid = 0x10002000;
+    const uint32_t peerCid = 0x20001000;
+    const Address peerAddr("127.0.0.1", 45454);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.acceptStartUs = eular::utp::time::MonotonicMs() * 1000;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+
+    auto buildStreamPayload = [](uint64_t offset, char byte, bool withHandshakeDone) {
+        FrameStream frame;
+        frame.stream_id = 0;
+        frame.stream_offset = offset;
+        frame.stream_data_length = 1;
+        frame.stream_data = &byte;
+
+        std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()), 0);
+        const int32_t frameLen = frame.encode(payload.data(), payload.size());
+        REQUIRE(frameLen > 0);
+        payload.resize(static_cast<size_t>(frameLen));
+        if (withHandshakeDone) {
+            payload.push_back(static_cast<uint8_t>(eular::utp::kFrameHandshakeDone));
+        }
+        return payload;
+    };
+
+    const std::vector<uint8_t> payloadA = buildStreamPayload(0, 'A', false);
+    const std::vector<uint8_t> payloadBWithDone = buildStreamPayload(1, 'B', true);
+
+    const std::vector<uint8_t> packetA = BuildRawPacket(peerCid, localCid, 10, UTP_TYPE_CTRL, payloadA);
+    const std::vector<uint8_t> packetADuplicate = BuildRawPacket(peerCid, localCid, 10, UTP_TYPE_CTRL, payloadA);
+    const std::vector<uint8_t> packetBWithDone = BuildRawPacket(peerCid, localCid, 11, UTP_TYPE_CTRL, payloadBWithDone);
+
+    auto deliverToPendingPath = [&](const std::vector<uint8_t> &packetBytes) {
+        auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+
+        UdpSocket::MsgMetaInfo msg{};
+        msg.data = packetBytes.data();
+        msg.len = packetBytes.size();
+        msg.metaInfo.peerAddress = peerAddr;
+
+        auto packetReleaser = [&](PacketIn *pkt) {
+            ctx.m_mm.putPacketIn(pkt);
+        };
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> decoded(
+            ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
+        REQUIRE(decoded != nullptr);
+
+        const bool decodeOk = ctx.decodeIncomingPendingPacket(msg, pendingIt->second, *decoded);
+        REQUIRE(decodeOk);
+
+        if (!decoded->hasFrame(eular::utp::kFrameHandshakeDone)) {
+            pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(packetBytes);
+            pendingIt->second.bufferedBeforeHandshakeDoneBytes += packetBytes.size();
+            return;
+        }
+
+        ContextImpl::PendingIncomingConnection snapshot = pendingIt->second;
+        Context::ConnectInfo info;
+        info.ip = snapshot.peerIp;
+        info.port = snapshot.peerAddress.port();
+        info.timeout = cfg.handshake_timeout;
+        info.encrypted = snapshot.encrypted;
+
+        ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(&ctx, &ctx.m_udpSocket, snapshot.localCid);
+        REQUIRE(conn->initPassive(info,
+                                  snapshot.peerAddress,
+                                  snapshot.peerCid,
+                                  snapshot.peerTp,
+                                  snapshot.x25519,
+                                  snapshot.aesCtx) == UTP_ERR_OK);
+        REQUIRE(ctx.m_connections.emplace(snapshot.localCid, conn).second);
+
+        ctx.removePendingIncoming(localCid);
+
+        for (const auto &cached : snapshot.bufferedBeforeHandshakeDone) {
+            UdpSocket::MsgMetaInfo replay{};
+            replay.data = cached.data();
+            replay.len = cached.size();
+            replay.metaInfo.peerAddress = peerAddr;
+            conn->onUdpPacket(replay);
+        }
+        conn->onUdpPacket(msg);
+    };
+
+    // Simulate delayed HandshakeDone with out-of-order and duplicate pre-handshake packets.
+    deliverToPendingPath(packetA);
+    deliverToPendingPath(packetADuplicate);
+    deliverToPendingPath(packetBWithDone);
+
+    auto connIt = ctx.m_connections.find(localCid);
+    REQUIRE(connIt != ctx.m_connections.end());
+    REQUIRE(connIt->second != nullptr);
+    REQUIRE(connIt->second->m_receiveHistory.largest() == 11);
+    REQUIRE(connIt->second->m_ackElicitingSinceLastAck == 0);
+
+    auto streamIt = connIt->second->m_streams.find(0);
+    REQUIRE(streamIt != connIt->second->m_streams.end());
+    REQUIRE(streamIt->second != nullptr);
+
+    std::array<char, 8> readBuf{};
+    const int32_t nread = streamIt->second->read(readBuf.data(), readBuf.size());
+    REQUIRE(nread == 2);
+    REQUIRE(std::string(readBuf.data(), static_cast<size_t>(nread)) == "AB");
+}
+
+TEST_CASE("Context integration: pending handshake retry count is capped by config", "[Context][Integration][Handshake][Config]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 1000;
+    cfg.pending_handshake_retry_interval_ms = 1;
+    cfg.pending_handshake_max_retries = 2;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    REQUIRE(ctx.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    const uint32_t localCid = 0x30004000;
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = 0x40003000;
+    pending.peerAddress = Address("127.0.0.1", 9);
+    pending.peerIp = pending.peerAddress.toIpString();
+    pending.acceptStartUs = eular::utp::time::MonotonicMs() * 1000;
+    pending.handshakeSent = true;
+    pending.lastHandshakeSentUs = 0;
+
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    for (int32_t i = 0; i < 6; ++i) {
+        auto it = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(it != ctx.m_pendingIncoming.end());
+        it->second.lastHandshakeSentUs = 0;
+        ctx.processPendingHandshakeTimeouts();
+    }
+
+    auto it = ctx.m_pendingIncoming.find(localCid);
+    REQUIRE(it != ctx.m_pendingIncoming.end());
+    REQUIRE(it->second.handshakeRetryCount == cfg.pending_handshake_max_retries);
+}
+
 TEST_CASE("Context integration: stream OnWritable fires again after queued data drains", "[Context][Integration][Stream]")
 {
     Config cfg;
@@ -1128,6 +1322,9 @@ TEST_CASE("Context integration: stream OnWritable fires again after queued data 
 
     eular::utp::StreamImpl::SP stream = streamIt->second;
     REQUIRE(stream->writable());
+
+    // Ensure stream flush path is not blocked by handshake barrier in this test.
+    clientConn->onHandshakeDoneFrameAcked();
 
     int writableNotified = 0;
     stream->setOnWritable([&]() {

@@ -1,7 +1,7 @@
 -- Eular UTP Wireshark Lua dissector
 -- Protocol layout comes from src/proto/proto.h and src/proto/frame/*.h
 
-local utp = Proto("eular_utp", "Eular UTP")
+local utp = Proto("UTP", "Eular UTP")
 
 local packet_type_names = {
     [0x00] = "NONE",

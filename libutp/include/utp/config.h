@@ -18,7 +18,7 @@ namespace utp {
 
 enum PathMigrationMode : uint8_t {
     kPathMigrationConservative = 0, // 标准策略：验证完成前业务走旧路径
-    kPathMigrationAggressive = 1,   // 激进策略：可在新路径提前发数据（实验开关，当前实现未启用）
+    kPathMigrationAggressive = 1,   // 激进策略：可在新路径提前发数据
 };
 
 enum StreamSchedulerMode : uint8_t {
@@ -72,6 +72,10 @@ public:
 
     // tp
     uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
+    uint16_t    pending_handshake_retry_interval_ms = 200; // pending 阶段重发 Handshake 周期(ms)
+    uint8_t     pending_handshake_max_retries = 6; // pending 阶段最多重发次数(0 表示不重发)
+    uint16_t    pending_pre_handshake_buffer_packets = 8; // pending 阶段缓存未携带 HandshakeDone 包数量上限
+    uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024; // pending 阶段缓存未携带 HandshakeDone 包字节上限
     uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
     uint16_t    init_max_streams_uni = 32;  // 初始单向流数量
 

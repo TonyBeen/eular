@@ -10,6 +10,7 @@
 
 #include <vector>
 #include <memory>
+#include <deque>
 #include <set>
 #include <tuple>
 #include <list>
@@ -116,7 +117,11 @@ private:
         uint32_t                zeroRttRejectedCount{0};
         uint64_t                packetNumber{1};
         utp_time_t              acceptStartUs{0};
+        utp_time_t              lastHandshakeSentUs{0};
         bool                    handshakeSent{false};
+        uint8_t                 handshakeRetryCount{0};
+        size_t                  bufferedBeforeHandshakeDoneBytes{0};
+        std::deque<std::vector<uint8_t>> bufferedBeforeHandshakeDone;
         TransportParams         peerTp{};
         std::shared_ptr<X25519Wrapper> x25519;
         std::shared_ptr<AesGcmContext> aesCtx;

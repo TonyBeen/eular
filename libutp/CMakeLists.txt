@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 project(libutp VERSION 1.0.0 LANGUAGES C CXX)
 
+include(CTest)
 include(GNUInstallDirs)
-
 include(CMakePackageConfigHelpers)
 
 set(CMAKE_C_STANDARD 11)

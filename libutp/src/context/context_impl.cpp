@@ -53,6 +53,26 @@ const std::array<uint8_t, eular::utp::ResumptionStateCodec::KEY_SIZE> kDefaultRe
     0xfa, 0x57, 0x02, 0x3b, 0xc4, 0x88, 0x6e, 0x11,
 };
 
+uint32_t PendingHandshakeRetryIntervalMs(const eular::utp::Config &cfg)
+{
+    return std::max<uint32_t>(cfg.pending_handshake_retry_interval_ms, 10);
+}
+
+uint8_t PendingHandshakeMaxRetries(const eular::utp::Config &cfg)
+{
+    return cfg.pending_handshake_max_retries;
+}
+
+size_t PendingPreHandshakeBufferMaxPackets(const eular::utp::Config &cfg)
+{
+    return std::max<size_t>(cfg.pending_pre_handshake_buffer_packets, 1);
+}
+
+size_t PendingPreHandshakeBufferMaxBytes(const eular::utp::Config &cfg)
+{
+    return std::max<size_t>(cfg.pending_pre_handshake_buffer_bytes, 1024);
+}
+
 eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
 {
     switch (mode) {
@@ -648,9 +668,11 @@ int32_t ContextImpl::accept()
 
     pending.handshakeSent = true;
     pending.acceptStartUs = time::MonotonicUs();
+    pending.lastHandshakeSentUs = pending.acceptStartUs;
+    pending.handshakeRetryCount = 0;
     m_waitHandshakeDone.insert(localCid);
     m_pendingHandshakeTimer.stop();
-    m_pendingHandshakeTimer.start(m_config.handshake_timeout);
+    m_pendingHandshakeTimer.start(PendingHandshakeRetryIntervalMs(m_config));
 
     return UTP_ERR_OK;
 }
@@ -1147,9 +1169,20 @@ void ContextImpl::processPendingHandshakeTimeouts()
             continue;
         }
 
-        const PendingIncomingConnection &pending = it->second;
+        PendingIncomingConnection &pending = it->second;
         if (pending.acceptStartUs == 0) {
             continue;
+        }
+
+        const uint64_t retryBaseUs = static_cast<uint64_t>(PendingHandshakeRetryIntervalMs(m_config)) * 1000ULL;
+        if (pending.handshakeSent
+            && pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)
+            && nowUs >= pending.lastHandshakeSentUs
+            && (nowUs - pending.lastHandshakeSentUs) >= retryBaseUs) {
+            if (sendPendingHandshake(pending) == UTP_ERR_OK) {
+                pending.lastHandshakeSentUs = nowUs;
+                ++pending.handshakeRetryCount;
+            }
         }
 
         if (nowUs >= pending.acceptStartUs && (nowUs - pending.acceptStartUs) >= timeoutUs) {
@@ -1182,7 +1215,7 @@ void ContextImpl::onPendingHandshakeTimeout()
 {
     processPendingHandshakeTimeouts();
     if (!m_waitHandshakeDone.empty()) {
-        m_pendingHandshakeTimer.start(m_config.handshake_timeout);
+        m_pendingHandshakeTimer.start(PendingHandshakeRetryIntervalMs(m_config));
     }
 }
 
@@ -1285,6 +1318,16 @@ void ContextImpl::onReadEvent()
                 UTP_LOGD_FMT("{} pending packet decode {}, handshake done: {}", tag(), (decodeOk ? "succeeded" : "failed"), handshakeDone);
 
                 if (!handshakeDone) {
+                    if (decodeOk
+                        && msg.data != nullptr
+                        && msg.len >= UTP_HEADER_SIZE
+                        && pendingIt->second.bufferedBeforeHandshakeDone.size() < PendingPreHandshakeBufferMaxPackets(m_config)
+                        && (pendingIt->second.bufferedBeforeHandshakeDoneBytes + static_cast<size_t>(msg.len)) <= PendingPreHandshakeBufferMaxBytes(m_config)) {
+                        std::vector<uint8_t> cached(static_cast<size_t>(msg.len));
+                        std::memcpy(cached.data(), msg.data, static_cast<size_t>(msg.len));
+                        pendingIt->second.bufferedBeforeHandshakeDoneBytes += static_cast<size_t>(msg.len);
+                        pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(std::move(cached));
+                    }
                     continue;
                 }
 
@@ -1323,6 +1366,17 @@ void ContextImpl::onReadEvent()
                 removePendingIncoming(dcid);
                 if (m_onConnected) {
                     m_onConnected(conn);
+                }
+                for (const auto &cached : pending.bufferedBeforeHandshakeDone) {
+                    if (cached.size() < UTP_HEADER_SIZE) {
+                        continue;
+                    }
+
+                    UdpSocket::MsgMetaInfo replay{};
+                    replay.data = cached.data();
+                    replay.len = cached.size();
+                    replay.metaInfo = msg.metaInfo;
+                    conn->onUdpPacket(replay);
                 }
                 conn->onUdpPacket(msg);
                 continue;
