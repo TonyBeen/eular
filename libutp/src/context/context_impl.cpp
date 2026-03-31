@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include "context/context_impl.h"
+#include "context/packet_decode_helper.h"
 
 #include <algorithm>
 #include <array>
@@ -888,65 +889,64 @@ bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                               PendingIncomingConnection &pending,
                                               PacketIn &packet)
 {
-    if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
-        return false;
+    return detail::DecodeUdpPacketWithOptionalAead(msg, m_mm, pending.aesCtx, packet);
+}
+
+ConnectionImpl::SP ContextImpl::createAndInsertPassiveConnection(uint32_t localCid,
+                                                                 const Context::ConnectInfo &info,
+                                                                 const Address &peerAddress,
+                                                                 uint32_t peerCid,
+                                                                 const TransportParams &peerTp,
+                                                                 const std::shared_ptr<X25519Wrapper> &x25519,
+                                                                 const std::shared_ptr<AesGcmContext> &aesCtx,
+                                                                 const std::string &collisionReason,
+                                                                 uint32_t sessionTokenSize)
+{
+    ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, localCid);
+    if (conn->initPassive(info,
+                          peerAddress,
+                          peerCid,
+                          peerTp,
+                          x25519,
+                          aesCtx) != UTP_ERR_OK) {
+        return ConnectionImpl::SP();
     }
 
-    std::memcpy(const_cast<uint8_t *>(packet.raw_data), msg.data, msg.len);
-    packet.raw_size = msg.len;
-    if (packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK) {
-        return true;
+    auto inserted = m_connections.emplace(localCid, conn);
+    if (!inserted.second) {
+        Context::ConnectAttemptInfo attempt;
+        attempt.ip = info.ip;
+        attempt.port = info.port;
+        attempt.timeout = info.timeout;
+        attempt.encrypted = info.encrypted;
+        attempt.type = Context::kConnectAttemptPassive;
+        attempt.session_token_size = sessionTokenSize;
+        reportConnectError(UTP_ERR_CID_CONFLICT, collisionReason, attempt);
+        return ConnectionImpl::SP();
     }
 
-    if (!pending.aesCtx) {
-        return false;
+    return conn;
+}
+
+void ContextImpl::replayBufferedPendingPackets(ConnectionImpl *conn,
+                                               const std::deque<std::vector<uint8_t>> &buffered,
+                                               const UdpSocket::MsgMetaInfo &templateMsg)
+{
+    if (conn == nullptr) {
+        return;
     }
 
-    auto packetReleaser = [this] (PacketIn *pkt) {
-        m_mm.putPacketIn(pkt);
-    };
-    std::unique_ptr<PacketIn, decltype(packetReleaser)> encryptedPacket(
-        m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
-    if (!encryptedPacket) {
-        return false;
+    for (const auto &cached : buffered) {
+        if (cached.size() < UTP_HEADER_SIZE) {
+            continue;
+        }
+
+        UdpSocket::MsgMetaInfo replay{};
+        replay.data = cached.data();
+        replay.len = cached.size();
+        replay.metaInfo = templateMsg.metaInfo;
+        conn->onUdpPacket(replay);
     }
-
-    std::memcpy(const_cast<uint8_t *>(encryptedPacket->raw_data), msg.data, msg.len);
-    encryptedPacket->raw_size = msg.len;
-
-    const uint8_t *offset = encryptedPacket->raw_data;
-    size_t left = encryptedPacket->raw_size;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.scid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.dcid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.pn);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.payload_length);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.types);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.reserve);
-    if (offset == nullptr) return false;
-
-    if (left < encryptedPacket->header.payload_length) {
-        return false;
-    }
-
-    encryptedPacket->payload = offset;
-    encryptedPacket->payload_size = encryptedPacket->header.payload_length;
-    if (pending.aesCtx->decrypt(encryptedPacket.get()) != UTP_ERR_OK) {
-        return false;
-    }
-
-    // PacketIn::decode overwrites raw_data/raw_size with the input buffer.
-    // Keep ownership single by decoding from packet's own storage.
-    std::memcpy(const_cast<uint8_t *>(packet.raw_data),
-                encryptedPacket->raw_data,
-                encryptedPacket->raw_size);
-    packet.raw_size = encryptedPacket->raw_size;
-
-    return packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK;
 }
 
 void ContextImpl::reportZeroRttDecision(const PendingIncomingConnection &pending,
@@ -1331,7 +1331,7 @@ void ContextImpl::onReadEvent()
                     continue;
                 }
 
-                PendingIncomingConnection pending = pendingIt->second;
+                PendingIncomingConnection pending = std::move(pendingIt->second);
 
                 Context::ConnectInfo info;
                 info.ip = pending.peerIp;
@@ -1339,27 +1339,16 @@ void ContextImpl::onReadEvent()
                 info.timeout = m_config.handshake_timeout;
                 info.encrypted = pending.encrypted;
 
-                ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, pending.localCid);
-                if (conn->initPassive(info,
-                                      pending.peerAddress,
-                                      pending.peerCid,
-                                      pending.peerTp,
-                                      pending.x25519,
-                                      pending.aesCtx) != UTP_ERR_OK) {
-                    continue;
-                }
-
-                auto inserted = m_connections.emplace(pending.localCid, conn);
-                if (!inserted.second) {
-                    Context::ConnectAttemptInfo attempt;
-                    attempt.ip = info.ip;
-                    attempt.port = info.port;
-                    attempt.timeout = info.timeout;
-                    attempt.encrypted = info.encrypted;
-                    attempt.type = Context::kConnectAttemptPassive;
-                    reportConnectError(UTP_ERR_CID_CONFLICT,
-                                       "local cid collision while promoting passive connection",
-                                       attempt);
+                ConnectionImpl::SP conn = createAndInsertPassiveConnection(
+                    pending.localCid,
+                    info,
+                    pending.peerAddress,
+                    pending.peerCid,
+                    pending.peerTp,
+                    pending.x25519,
+                    pending.aesCtx,
+                    "local cid collision while promoting passive connection");
+                if (!conn) {
                     continue;
                 }
 
@@ -1367,17 +1356,7 @@ void ContextImpl::onReadEvent()
                 if (m_onConnected) {
                     m_onConnected(conn);
                 }
-                for (const auto &cached : pending.bufferedBeforeHandshakeDone) {
-                    if (cached.size() < UTP_HEADER_SIZE) {
-                        continue;
-                    }
-
-                    UdpSocket::MsgMetaInfo replay{};
-                    replay.data = cached.data();
-                    replay.len = cached.size();
-                    replay.metaInfo = msg.metaInfo;
-                    conn->onUdpPacket(replay);
-                }
+                replayBufferedPendingPackets(conn.get(), pending.bufferedBeforeHandshakeDone, msg);
                 conn->onUdpPacket(msg);
                 continue;
             }
@@ -1391,9 +1370,7 @@ void ContextImpl::onReadEvent()
                 if (!packet) {
                     continue;
                 }
-                std::memcpy(const_cast<uint8_t *>(packet->raw_data), msg.data, msg.len);
-                packet->raw_size = msg.len;
-                if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
+                if (!detail::DecodeUdpPacketWithOptionalAead(msg, m_mm, nullptr, *packet)) {
                     continue;
                 }
 
@@ -1496,28 +1473,17 @@ void ContextImpl::onReadEvent()
                 info.timeout = m_config.handshake_timeout;
                 info.encrypted = ticketEncryptionMode;
 
-                ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, localCid);
-                if (conn->initPassive(info,
-                                      msg.metaInfo.peerAddress,
-                                      scid,
-                                      TransportParams{},
-                                      nullptr,
-                                      nullptr) != UTP_ERR_OK) {
-                    continue;
-                }
-
-                auto inserted = m_connections.emplace(localCid, conn);
-                if (!inserted.second) {
-                    Context::ConnectAttemptInfo attempt;
-                    attempt.ip = info.ip;
-                    attempt.port = info.port;
-                    attempt.timeout = info.timeout;
-                    attempt.encrypted = info.encrypted;
-                    attempt.type = Context::kConnectAttemptPassive;
-                    attempt.session_token_size = static_cast<uint32_t>(sessionToken.token.size());
-                    reportConnectError(UTP_ERR_CID_CONFLICT,
-                                       "local cid collision while creating 0-rtt connection",
-                                       attempt);
+                ConnectionImpl::SP conn = createAndInsertPassiveConnection(
+                    localCid,
+                    info,
+                    msg.metaInfo.peerAddress,
+                    scid,
+                    TransportParams{},
+                    nullptr,
+                    nullptr,
+                    "local cid collision while creating 0-rtt connection",
+                    static_cast<uint32_t>(sessionToken.token.size()));
+                if (!conn) {
                     continue;
                 }
 

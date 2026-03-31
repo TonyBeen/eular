@@ -93,6 +93,7 @@ set(UTP_SOURCES
     src/congestion/pacer.cpp
     src/context/connection_impl.cpp
     src/context/context_impl.cpp
+    src/context/packet_decode_helper.cpp
     src/context/send_ctl.cpp
     src/context/stream_impl.cpp
     src/crypto/aes_gcm_context.cpp

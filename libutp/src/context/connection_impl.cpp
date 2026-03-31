@@ -7,6 +7,7 @@
 
 #include "context/connection_impl.h"
 #include "context/context_impl.h"
+#include "context/packet_decode_helper.h"
 #include "context/send_ctl.h"
 
 #include <algorithm>
@@ -460,72 +461,8 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         return;
     }
 
-    std::memcpy(const_cast<uint8_t *>(packet->raw_data), msg.data, msg.len);
-    packet->raw_size = msg.len;
-
-    if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
-        if (!m_aesCtx) {
-            return;
-        }
-
-        std::unique_ptr<PacketIn, decltype(packetReleaser)> encryptedPacket(
-            m_mm.getPacketIn(static_cast<uint32_t>(msg.len)),
-            packetReleaser);
-        if (!encryptedPacket) {
-            return;
-        }
-
-        std::memcpy(const_cast<uint8_t *>(encryptedPacket->raw_data), msg.data, msg.len);
-        encryptedPacket->raw_size = msg.len;
-
-        const uint8_t *offset = encryptedPacket->raw_data;
-        size_t left = encryptedPacket->raw_size;
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.scid);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.dcid);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.pn);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.payload_length);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.types);
-        if (offset == nullptr) {
-            return;
-        }
-        offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.reserve);
-        if (offset == nullptr) {
-            return;
-        }
-
-        if (left < encryptedPacket->header.payload_length) {
-            return;
-        }
-
-        encryptedPacket->payload = offset;
-        encryptedPacket->payload_size = encryptedPacket->header.payload_length;
-        if (m_aesCtx->decrypt(encryptedPacket.get()) != UTP_ERR_OK) {
-            return;
-        }
-
-        // PacketIn::decode updates raw_data/raw_size to the input buffer.
-        // Decode into packet's own backing store to avoid aliasing two
-        // PacketIn objects to the same raw_data and double recycling.
-        std::memcpy(const_cast<uint8_t *>(packet->raw_data),
-                    encryptedPacket->raw_data,
-                    encryptedPacket->raw_size);
-        packet->raw_size = encryptedPacket->raw_size;
-
-        if (packet->decode(packet->raw_data, packet->raw_size) < 0) {
-            return;
-        }
+    if (!detail::DecodeUdpPacketWithOptionalAead(msg, m_mm, m_aesCtx, *packet)) {
+        return;
     }
 
     const bool isPassiveInitial = (m_state == State::kStateDisconnected)

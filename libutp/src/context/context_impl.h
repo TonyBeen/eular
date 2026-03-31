@@ -139,6 +139,18 @@ private:
     bool    decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                         PendingIncomingConnection &pending,
                                         PacketIn &packet);
+    ConnectionImpl::SP createAndInsertPassiveConnection(uint32_t localCid,
+                                                        const Context::ConnectInfo &info,
+                                                        const Address &peerAddress,
+                                                        uint32_t peerCid,
+                                                        const TransportParams &peerTp,
+                                                        const std::shared_ptr<X25519Wrapper> &x25519,
+                                                        const std::shared_ptr<AesGcmContext> &aesCtx,
+                                                        const std::string &collisionReason,
+                                                        uint32_t sessionTokenSize = 0);
+    void    replayBufferedPendingPackets(ConnectionImpl *conn,
+                                         const std::deque<std::vector<uint8_t>> &buffered,
+                                         const UdpSocket::MsgMetaInfo &templateMsg);
     void    reportZeroRttDecision(const PendingIncomingConnection &pending,
                                   bool accepted,
                                   const std::string &reason);
