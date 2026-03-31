@@ -114,6 +114,32 @@ static const char *mode2str[] = {
     [BbrV1::Mode::ProbeRTT] = "ProbeRTT",
 };
 
+BbrV1::BbrV1(const Config *cfg)
+{
+    if (cfg == nullptr) {
+        return;
+    }
+
+    m_configInitCwnd = std::max<uint64_t>(1, cfg->bbr_init_cwnd_mss) * kDefaultTCPMSS;
+    m_configMinCwnd = std::max<uint64_t>(1, cfg->bbr_min_cwnd_mss) * kDefaultTCPMSS;
+    if (m_configInitCwnd < m_configMinCwnd) {
+        m_configInitCwnd = m_configMinCwnd;
+    }
+
+    if (cfg->bbr_startup_high_gain > 1.0f && cfg->bbr_startup_high_gain <= 4.0f) {
+        m_configHighGain = cfg->bbr_startup_high_gain;
+    }
+    if (cfg->bbr_cwnd_gain >= 1.0f && cfg->bbr_cwnd_gain <= 4.0f) {
+        m_configCwndGain = cfg->bbr_cwnd_gain;
+    }
+    if (cfg->bbr_startup_growth_target > 1.0f && cfg->bbr_startup_growth_target <= 2.0f) {
+        m_startupGrowthTarget = cfg->bbr_startup_growth_target;
+    }
+    m_configStartupRounds = std::max<uint32_t>(1, cfg->bbr_startup_full_bw_rounds);
+    m_probeRttTimeUs = static_cast<uint64_t>(std::max<uint32_t>(50, cfg->bbr_probe_rtt_ms)) * 1000ULL;
+    m_minRttExpiryUs = static_cast<uint64_t>(std::max<uint32_t>(1000, cfg->bbr_min_rtt_expiry_ms)) * 1000ULL;
+}
+
 void BbrV1::onInit(RttStats *stats)
 {
     if (stats) {
@@ -129,16 +155,16 @@ void BbrV1::onInit(RttStats *stats)
     m_aggregationEpochStartTime = 0;
     m_minRtt = 0;
     m_minRttTimestamp = 0;
-    m_initCwnd = kInitialCongestionWindow * kDefaultTCPMSS;
-    m_cwnd = kInitialCongestionWindow * kDefaultTCPMSS;
+    m_initCwnd = m_configInitCwnd;
+    m_cwnd = m_configInitCwnd;
     m_maxCwnd = kDefaultMaxCongestionWindowPackets * kDefaultTCPMSS;
-    m_minCwnd = kDefaultMinimumCongestionWindow;
-    m_highGain = kDefaultHighGain;
-    m_highCwndGain = kDefaultHighGain;
-    m_drainGain = 1.0f / kDefaultHighGain;
+    m_minCwnd = m_configMinCwnd;
+    m_highGain = m_configHighGain;
+    m_highCwndGain = m_configHighGain;
+    m_drainGain = 1.0f / m_configHighGain;
     m_pacingRate = BW_ZERO();
     m_pacingGain = 1.0f;
-    m_nStartupRtts = kRoundTripsWithoutGrowthBeforeExitingStartup;
+    m_nStartupRtts = m_configStartupRounds;
     m_flags &= ~BBR_FLAG_EXIT_STARTUP_ON_LOSS;
     m_cycleCurrentOffset = 0;
     m_lastCycleStart = 0;
@@ -391,7 +417,7 @@ bool BbrV1::updateBandwidthAndMinRtt()
     }
 
     m_minRttSinceLastProbe = std::min(m_minRttSinceLastProbe, sampleMinRtt);
-    minRttExpired = m_minRtt != 0 && (m_ackState.ackTime > m_minRttTimestamp + kMinRttExpiry);
+    minRttExpired = m_minRtt != 0 && (m_ackState.ackTime > m_minRttTimestamp + m_minRttExpiryUs);
     if (minRttExpired || sampleMinRtt < m_minRtt || m_minRtt == 0) {
         if (minRttExpired && shouldExtendMinRttExpiry()) {
             UTP_LOGD("min rtt expiration extended, stay at: %" PRIu64, m_minRtt);
@@ -470,8 +496,8 @@ void BbrV1::calculatePacingRate()
     if (startup_rate_reduction_multiplier_ != 0 && hasEverDetectedLoss && (m_flags & BBR_FLAG_HAS_NON_APP_LIMITED)) {
         m_pacingRate = BW_TIMES(&targetRate, (1 - (m_startupBytesLost * startup_rate_reduction_multiplier_ * 1.0f / m_cwndGain)));
         // 确保pacing rate不会低于启动增长目标乘以带宽估计值。
-        if (BW_VALUE(&m_pacingRate) < BW_VALUE(&bw) * kStartupGrowthTarget) {
-            m_pacingRate = BW_TIMES(&bw, kStartupGrowthTarget);
+        if (BW_VALUE(&m_pacingRate) < BW_VALUE(&bw) * m_startupGrowthTarget) {
+            m_pacingRate = BW_TIMES(&bw, m_startupGrowthTarget);
         }
         return;
     }
@@ -601,7 +627,7 @@ void BbrV1::checkIsFullBwReached()
     }
 
     // 此次带宽希望较上次增加1.25倍
-    target = BW_TIMES(&m_bwAtLastRound, kStartupGrowthTarget);
+    target = BW_TIMES(&m_bwAtLastRound, m_startupGrowthTarget);
     // 获取当前观测到最大的带宽
     bw = BW(m_maxBandwidth.get());
     if (BW_VALUE(&bw) >= BW_VALUE(&target)) { // 带宽存在提升
@@ -667,7 +693,7 @@ void BbrV1::maybeEnterOrExitProbeRtt(uint64_t now, bool isRoundStart, bool minRt
             // 途中未确认字节数已小于目标值, 计划退出ProbeRTT
             if (bytestInflight < getProbeRttCwnd() + kMaxOutgoingPacketSize) {
                 m_flags &= ~BBR_FLAG_PROBE_RTT_ROUND_PASSED;
-                m_exitProbeRttAt = now + kProbeRttTime;
+                m_exitProbeRttAt = now + m_probeRttTimeUs;
                 UTP_LOGD("exit time set to %" PRIu64, m_exitProbeRttAt);
             }
         } else {
@@ -731,7 +757,7 @@ void BbrV1::setMode(Mode newMode)
 void BbrV1::enterProbeBWMode(uint64_t now)
 {
     setMode(Mode::ProbeBW);
-    m_cwndGain = kCwndGain;
+    m_cwndGain = m_configCwndGain;
 
     // 使用当前时间作为随机种子
     std::random_device rd;

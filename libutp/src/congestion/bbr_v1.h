@@ -14,6 +14,7 @@
 #include "congestion/rtt.h"
 #include "congestion/bw_sampler.h"
 #include "congestion/minmax.h"
+#include "utp/config.h"
 
 namespace eular {
 namespace utp {
@@ -72,7 +73,7 @@ public:
         bool                hasLosses{};
     };
 
-    BbrV1() = default;
+    explicit BbrV1(const Config *cfg = nullptr);
     ~BbrV1() = default;
 
     virtual void        onInit(RttStats *stats) override;
@@ -155,6 +156,15 @@ private:
     uint64_t            m_recoveryWindow; // 在丢包恢复期间使用的拥塞窗口大小
 
     AckState            m_ackState;
+
+    float               m_startupGrowthTarget{1.25f};
+    uint64_t            m_probeRttTimeUs{200000};
+    uint64_t            m_minRttExpiryUs{10000000};
+    uint64_t            m_configInitCwnd{32 * 1460ULL};
+    uint64_t            m_configMinCwnd{4 * 1460ULL};
+    float               m_configHighGain{2.885f};
+    float               m_configCwndGain{2.0f};
+    uint32_t            m_configStartupRounds{3};
 };
 
 } // namespace utp

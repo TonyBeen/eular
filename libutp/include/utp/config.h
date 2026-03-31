@@ -62,6 +62,18 @@ public:
     // congestion control
     int32_t     cc_algorithm = 0;           // 拥塞控制算法, 0表示默认算法(bbr), 1表示BBR算法, 2表示Cubic算法
     uint32_t    clock_granularity_us = 1;   // pacer时钟粒度(us), 影响RTT的测量精度和拥塞控制的性能
+    uint32_t    bbr_init_cwnd_mss = 32;     // BBR 初始拥塞窗口，单位 MSS
+    uint32_t    bbr_min_cwnd_mss = 4;       // BBR 最小拥塞窗口，单位 MSS
+    float       bbr_startup_high_gain = 2.885f; // BBR STARTUP 高增益
+    float       bbr_cwnd_gain = 2.0f;       // BBR PROBE_BW 阶段 cwnd 增益
+    float       bbr_startup_growth_target = 1.25f; // BBR 判断带宽持续增长的倍率阈值
+    uint32_t    bbr_startup_full_bw_rounds = 3; // BBR STARTUP 无增长后退出轮数
+    uint32_t    bbr_probe_rtt_ms = 200;     // BBR PROBE_RTT 最短驻留时长(ms)
+    uint32_t    bbr_min_rtt_expiry_ms = 10000; // BBR min_rtt 过期时间(ms)
+    double      cubic_beta = 0.7;           // CUBIC 丢包回退系数 beta，建议范围 (0, 1)
+    double      cubic_c = 0.4;              // CUBIC 曲线常数 C，建议范围 (0, 2]
+    uint32_t    cubic_init_cwnd_mss = 32;   // CUBIC 初始拥塞窗口，单位 MSS
+    uint32_t    cubic_min_cwnd_mss = 4;     // CUBIC 最小拥塞窗口，单位 MSS
 
     // ack
     uint8_t     ack_every_n_packets = 10;  // 连续收到多少个 ack-eliciting 包后立即回 Ack

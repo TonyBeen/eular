@@ -9,13 +9,14 @@
 #define __UTP_CONGESTION_CUBIC_H__
 
 #include "congestion/congestion.h"
+#include "utp/config.h"
 
 namespace eular {
 namespace utp {
 class Cubic : public Congestion
 {
 public:
-    Cubic();
+    explicit Cubic(const Config *cfg = nullptr);
     ~Cubic() override = default;
 
     void        onInit(RttStats *stats) override;
@@ -31,14 +32,31 @@ public:
 
 private:
     static constexpr uint64_t kDefaultMss = 1460;
-    static constexpr uint64_t kMinCwnd = 4 * kDefaultMss;
-    static constexpr uint64_t kInitCwnd = 32 * kDefaultMss;
     static constexpr uint64_t kMaxCwnd = 2000 * kDefaultMss;
+    static constexpr uint64_t kDefaultMinCwnd = 4 * kDefaultMss;
+    static constexpr uint64_t kDefaultInitCwnd = 32 * kDefaultMss;
+    static constexpr double kDefaultBeta = 0.7;
+    static constexpr double kDefaultCubicC = 0.4;
 
     RttStats    *m_rttStats{nullptr};
-    uint64_t    m_cwnd{kInitCwnd};
+    uint64_t    m_cwnd{kDefaultInitCwnd};
     uint64_t    m_ssthresh{kMaxCwnd};
     uint64_t    m_ackedBytes{0};
+    uint64_t    m_epochStartUs{0};
+    uint64_t    m_lastMaxCwnd{0};
+    uint64_t    m_originPointCwnd{0};
+    double      m_k{0.0};
+    double      m_beta{kDefaultBeta};
+    double      m_cubicC{kDefaultCubicC};
+    uint64_t    m_initCwnd{kDefaultInitCwnd};
+    uint64_t    m_minCwnd{kDefaultMinCwnd};
+
+    uint64_t    smoothedRttUs() const;
+    void        resetEpoch();
+    void        ensureEpoch(uint64_t nowUs);
+    uint64_t    cubicTargetCwnd(uint64_t nowUs) const;
+    uint64_t    cubicIncrement(uint64_t ackedBytes, uint64_t nowUs) const;
+    uint64_t    renoIncrement(uint64_t ackedBytes) const;
 };
 
 } // namespace utp

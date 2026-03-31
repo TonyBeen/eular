@@ -194,9 +194,9 @@ void SendControl::init()
 
     const Config *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
     if (cfg != nullptr && cfg->cc_algorithm == 2) {
-        m_congestion = std::dynamic_pointer_cast<Congestion>(std::make_shared<Cubic>());
+        m_congestion = std::dynamic_pointer_cast<Congestion>(std::make_shared<Cubic>(cfg));
     } else {
-        m_congestion = std::dynamic_pointer_cast<Congestion>(std::make_shared<BbrV1>());
+        m_congestion = std::dynamic_pointer_cast<Congestion>(std::make_shared<BbrV1>(cfg));
     }
 
     if (m_congestion && m_conn != nullptr) {
