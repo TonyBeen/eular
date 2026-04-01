@@ -76,7 +76,7 @@ public:
     uint32_t    cubic_min_cwnd_mss = 4;     // CUBIC 最小拥塞窗口，单位 MSS
 
     // ack
-    uint8_t     ack_every_n_packets = 10;  // 连续收到多少个 ack-eliciting 包后立即回 Ack
+    uint8_t     ack_every_n_packets = 10;   // 连续收到多少个 ack-eliciting 包后立即回 Ack
     uint32_t    time_threshold_ms = 3;      // 时间阈值 = 3 * rtt
     uint8_t     max_ack_range_size = 149;   // 一个Ack帧可容纳的AckRange的数量
     uint8_t     ack_delay_exponent = 3;     // ack延迟指数，ack延迟时间 = FrameAck::ack_delay << ack_dely_exponent us
@@ -85,7 +85,7 @@ public:
     // tp
     uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
     uint16_t    pending_handshake_retry_interval_ms = 200; // pending 阶段重发 Handshake 周期(ms)
-    uint8_t     pending_handshake_max_retries = 6; // pending 阶段最多重发次数(0 表示不重发)
+    uint8_t     pending_handshake_max_retries = 3; // pending 阶段最多重发次数(0 表示不重发)
     uint16_t    pending_pre_handshake_buffer_packets = 8; // pending 阶段缓存未携带 HandshakeDone 包数量上限
     uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024; // pending 阶段缓存未携带 HandshakeDone 包字节上限
     uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
@@ -103,6 +103,10 @@ public:
     uint16_t    stream_min_payload_before_immediate_send = 1200; // 小于该阈值时可进入聚合等待(bytes)
     uint32_t    stream_coalesce_delay_us = 1000;       // tiny-write 聚合等待窗口(us)
     uint32_t    stream_unacked_data_limit = 256 * 1024; // 在途未确认 STREAM 数据上限(bytes, 含首次发送与重传)
+
+    // connection scheduler (WDRR)
+    uint32_t    connection_wdrr_quantum = 1200;        // 连接级 WDRR 量子(bytes)
+    uint32_t    connection_wdrr_deficit_cap = 64 * 1024; // 连接级 WDRR deficit 上限(bytes)
 };
 
 } // namespace utp

@@ -146,6 +146,8 @@ void BbrV1::onInit(RttStats *stats)
         m_rttStats = stats;
     }
 
+    m_flags = 0;
+
     m_mode = Mode::StartUp;
     m_roundCount = 0;
 

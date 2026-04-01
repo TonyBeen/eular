@@ -15,6 +15,7 @@
 #include <tuple>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <event/timer.h>
 #include <event/poll.h>
@@ -158,6 +159,7 @@ private:
     void    removePendingIncoming(uint32_t localCid);
     void    onPendingHandshakeTimeout();
     void    processPendingHandshakeTimeouts();
+    void    refreshPendingHandshakeTimer();
     TokenAuth *tokenAuth();
     bool validateZeroRttTicket(const Address &peerAddress,
                                const std::vector<uint8_t> &ticket,
@@ -174,6 +176,8 @@ private:
 private:
     void onReadEvent();
     void onWriteEvent();
+    void removeFromWriteQueue(ConnectionImpl *conn);
+    bool findManagedConnection(ConnectionImpl *conn, ConnectionImpl::SP &outConn);
 
 private:
     std::string     m_tag;
@@ -194,7 +198,10 @@ private:
     using ConnectionMap = std::unordered_map<uint32_t, ConnectionImpl::SP>; // cid -> ConnectionImpl
     ConnectionMap                   m_connections;          // 所有连接容器
     std::unordered_map<ConnectionImpl *, PendingConnectAttempt> m_pendingConnections; // 正在连接队列
-    std::list<ConnectionImpl *>     m_wantWriteConns;       // 需要写数据的连接队列
+    std::list<ConnectionImpl *>     m_wantWriteConns;       // WDRR 活跃连接队列
+    std::unordered_set<ConnectionImpl *> m_wantWriteConnSet; // 活跃连接去重集合
+    std::unordered_map<ConnectionImpl *, uint32_t> m_wdrrDeficit; // 每连接 deficit(bytes)
+    bool                            m_inWriteDispatch{false};
 
     std::unordered_map<uint32_t, PendingIncomingConnection> m_pendingIncoming; // local cid -> pending incoming
     std::unordered_map<std::string, uint32_t> m_pendingIncomingPeerIndex;       // peer address+scid -> local cid

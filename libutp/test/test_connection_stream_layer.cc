@@ -7,7 +7,11 @@
 
 #include <catch2/catch.hpp>
 
+#include <chrono>
+#include <thread>
+
 #include <event/loop.h>
+#include <event2/event.h>
 
 #define private public
 #include "context/context_impl.h"
@@ -318,6 +322,57 @@ TEST_CASE("ConnectionImpl: multi-stream ingress and reclamation regression", "[C
 
     conn.collectClosedStreams();
     REQUIRE(conn.streamCount() == 32 - static_cast<int32_t>(closed));
+}
+
+TEST_CASE("ConnectionImpl: schedule timer enqueues context write instead of direct onWrite", "[Connection][Scheduler]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1201);
+    conn.m_state = ConnectionImpl::kStateConnected;
+
+    REQUIRE(ctx.m_wantWriteConns.empty());
+    REQUIRE(conn.m_schedulerStats.emptyRounds == 0);
+
+    conn.nextScheduleTime(1);
+
+    for (int i = 0; i < 10 && ctx.m_wantWriteConns.empty(); ++i) {
+        loop.dispatch(EVLOOP_NONBLOCK | EVLOOP_ONCE);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    REQUIRE_FALSE(ctx.m_wantWriteConns.empty());
+    REQUIRE(ctx.m_wantWriteConns.front() == &conn);
+    REQUIRE(conn.m_schedulerStats.emptyRounds == 0);
+}
+
+TEST_CASE("ContextImpl: onWriteEvent processes multiple connections in one fair round", "[Context][Scheduler]")
+{
+    Config cfg;
+    cfg.connection_wdrr_quantum = 1200;
+    cfg.connection_wdrr_deficit_cap = 64 * 1024;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    auto c1 = std::make_shared<ConnectionImpl>(&ctx, nullptr, 1301);
+    auto c2 = std::make_shared<ConnectionImpl>(&ctx, nullptr, 1302);
+    c1->m_state = ConnectionImpl::kStateConnected;
+    c2->m_state = ConnectionImpl::kStateConnected;
+
+    ctx.m_connections.emplace(c1->cid(), c1);
+    ctx.m_connections.emplace(c2->cid(), c2);
+
+    ctx.wantWrite(c1.get());
+    ctx.wantWrite(c2.get());
+    REQUIRE(ctx.m_wantWriteConns.size() == 2);
+
+    ctx.onWriteEvent();
+
+    REQUIRE(c1->m_schedulerStats.emptyRounds == 1);
+    REQUIRE(c2->m_schedulerStats.emptyRounds == 1);
+    REQUIRE(ctx.m_wantWriteConns.empty());
 }
 
 TEST_CASE("ConnectionImpl: strict scheduler picks higher priority stream first", "[Connection][Stream][Priority]")

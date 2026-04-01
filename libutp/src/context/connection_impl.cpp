@@ -254,7 +254,7 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
     });
 
     m_scheduleTimer.reset(ctx->loop(), [this] () {
-        onWrite();
+        scheduleWrite();
     });
 
     m_pathValidationTimer.reset(ctx->loop(), [this] () {
@@ -2275,7 +2275,7 @@ uint32_t ConnectionImpl::handshakeDoneDelayMs() const
         handshakeTimeoutMs = 1000;
     }
 
-    const uint32_t delayMs = handshakeTimeoutMs / 2;
+    const uint32_t delayMs = handshakeTimeoutMs / 3;
     return delayMs > 0 ? delayMs : 1;
 }
 

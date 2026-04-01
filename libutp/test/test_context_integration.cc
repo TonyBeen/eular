@@ -1255,7 +1255,7 @@ TEST_CASE("Context integration: pending handshake retry count is capped by confi
     pending.peerCid = 0x40003000;
     pending.peerAddress = Address("127.0.0.1", 9);
     pending.peerIp = pending.peerAddress.toIpString();
-    pending.acceptStartUs = eular::utp::time::MonotonicMs() * 1000;
+    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 900000;
     pending.handshakeSent = true;
     pending.lastHandshakeSentUs = 0;
 
@@ -1265,6 +1265,7 @@ TEST_CASE("Context integration: pending handshake retry count is capped by confi
     for (int32_t i = 0; i < 6; ++i) {
         auto it = ctx.m_pendingIncoming.find(localCid);
         REQUIRE(it != ctx.m_pendingIncoming.end());
+        it->second.acceptStartUs = eular::utp::time::MonotonicUs() - 900000;
         it->second.lastHandshakeSentUs = 0;
         ctx.processPendingHandshakeTimeouts();
     }

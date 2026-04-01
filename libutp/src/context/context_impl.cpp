@@ -59,6 +59,34 @@ uint32_t PendingHandshakeRetryIntervalMs(const eular::utp::Config &cfg)
     return std::max<uint32_t>(cfg.pending_handshake_retry_interval_ms, 10);
 }
 
+uint64_t PendingHandshakeTimeoutUs(const eular::utp::Config &cfg)
+{
+    return static_cast<uint64_t>(std::max<uint16_t>(cfg.handshake_timeout, 1)) * 1000ULL;
+}
+
+uint64_t PendingHandshakeRetryStartUs(const eular::utp::Config &cfg, utp_time_t acceptStartUs)
+{
+    if (acceptStartUs == 0) {
+        return UINT64_MAX;
+    }
+    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(cfg);
+    return static_cast<uint64_t>(acceptStartUs) + (timeoutUs * 2ULL) / 3ULL;
+}
+
+uint64_t PendingHandshakeRetryDueUs(const eular::utp::Config &cfg,
+                                    utp_time_t acceptStartUs,
+                                    utp_time_t lastHandshakeSentUs)
+{
+    if (acceptStartUs == 0) {
+        return UINT64_MAX;
+    }
+
+    const uint64_t retryBaseUs = static_cast<uint64_t>(PendingHandshakeRetryIntervalMs(cfg)) * 1000ULL;
+    const uint64_t startUs = PendingHandshakeRetryStartUs(cfg, acceptStartUs);
+    const uint64_t sendBaseUs = static_cast<uint64_t>(lastHandshakeSentUs) + retryBaseUs;
+    return std::max<uint64_t>(startUs, sendBaseUs);
+}
+
 uint8_t PendingHandshakeMaxRetries(const eular::utp::Config &cfg)
 {
     return cfg.pending_handshake_max_retries;
@@ -72,6 +100,17 @@ size_t PendingPreHandshakeBufferMaxPackets(const eular::utp::Config &cfg)
 size_t PendingPreHandshakeBufferMaxBytes(const eular::utp::Config &cfg)
 {
     return std::max<size_t>(cfg.pending_pre_handshake_buffer_bytes, 1024);
+}
+
+uint32_t ConnectionWdrQuantum(const eular::utp::Config &cfg)
+{
+    return std::max<uint32_t>(cfg.connection_wdrr_quantum, 256);
+}
+
+uint32_t ConnectionWdrDeficitCap(const eular::utp::Config &cfg)
+{
+    const uint32_t quantum = ConnectionWdrQuantum(cfg);
+    return std::max<uint32_t>(cfg.connection_wdrr_deficit_cap, quantum);
 }
 
 eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
@@ -293,16 +332,54 @@ void ContextImpl::wantWrite(ConnectionImpl *conn)
         return;
     }
 
-    auto exists = std::find(m_wantWriteConns.begin(), m_wantWriteConns.end(), conn);
-    if (exists != m_wantWriteConns.end()) {
+    if (m_wantWriteConnSet.find(conn) != m_wantWriteConnSet.end()) {
         return;
     }
 
     m_wantWriteConns.push_back(conn);
+    m_wantWriteConnSet.insert(conn);
+    (void)m_wdrrDeficit.emplace(conn, 0u);
+
+    if (!m_udpSocket.isValid()) {
+        return;
+    }
+
+    if (m_inWriteDispatch) {
+        return;
+    }
     if (m_writeEvent.hasPending()) {
         return;
     }
     m_writeEvent.start();
+}
+
+bool ContextImpl::findManagedConnection(ConnectionImpl *conn, ConnectionImpl::SP &outConn)
+{
+    if (conn == nullptr) {
+        return false;
+    }
+
+    auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
+        return entry.second.get() == conn;
+    });
+    if (it == m_connections.end()) {
+        outConn.reset();
+        return false;
+    }
+
+    outConn = it->second;
+    return true;
+}
+
+void ContextImpl::removeFromWriteQueue(ConnectionImpl *conn)
+{
+    if (conn == nullptr) {
+        return;
+    }
+
+    m_wantWriteConns.remove(conn);
+    m_wantWriteConnSet.erase(conn);
+    m_wdrrDeficit.erase(conn);
 }
 
 void ContextImpl::handleConnectionState(ConnectionImpl *conn)
@@ -311,14 +388,12 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
         return;
     }
 
-    auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
-        return entry.second.get() == conn;
-    });
-    if (it == m_connections.end()) {
+    ConnectionImpl::SP current;
+    if (!findManagedConnection(conn, current)) {
+        removeFromWriteQueue(conn);
         return;
     }
 
-    ConnectionImpl::SP current = it->second;
     const ConnectionImpl::State state = current->state();
 
     auto pendingIt = m_pendingConnections.find(current.get());
@@ -360,11 +435,18 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
         return;
     }
 
+    removeFromWriteQueue(current.get());
+
     if (pendingIt != m_pendingConnections.end()) {
         PendingConnectAttempt attempt = pendingIt->second;
         const int32_t retriesLeft = static_cast<int32_t>(attempt.retriesRemaining);
         m_pendingConnections.erase(pendingIt);
-        m_connections.erase(it);
+        auto eraseIt = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
+            return entry.second.get() == conn;
+        });
+        if (eraseIt != m_connections.end()) {
+            m_connections.erase(eraseIt);
+        }
 
         if (retriesLeft > 0) {
             attempt.retriesRemaining = static_cast<int8_t>(retriesLeft - 1);
@@ -389,7 +471,12 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
         if (m_onConnectionClosed) {
             m_onConnectionClosed(current);
         }
-        m_connections.erase(it);
+        auto eraseIt = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
+            return entry.second.get() == conn;
+        });
+        if (eraseIt != m_connections.end()) {
+            m_connections.erase(eraseIt);
+        }
     }
 }
 
@@ -672,8 +759,7 @@ int32_t ContextImpl::accept()
     pending.lastHandshakeSentUs = pending.acceptStartUs;
     pending.handshakeRetryCount = 0;
     m_waitHandshakeDone.insert(localCid);
-    m_pendingHandshakeTimer.stop();
-    m_pendingHandshakeTimer.start(PendingHandshakeRetryIntervalMs(m_config));
+    refreshPendingHandshakeTimer();
 
     return UTP_ERR_OK;
 }
@@ -1157,7 +1243,7 @@ void ContextImpl::processPendingHandshakeTimeouts()
     }
 
     const utp_time_t nowUs = time::MonotonicUs();
-    const uint64_t timeoutUs = static_cast<uint64_t>(m_config.handshake_timeout) * 1000ULL;
+    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(m_config);
 
     std::vector<uint32_t> expired;
     expired.reserve(m_waitHandshakeDone.size());
@@ -1174,11 +1260,13 @@ void ContextImpl::processPendingHandshakeTimeouts()
             continue;
         }
 
-        const uint64_t retryBaseUs = static_cast<uint64_t>(PendingHandshakeRetryIntervalMs(m_config)) * 1000ULL;
+        const uint64_t retryDueUs = PendingHandshakeRetryDueUs(m_config,
+                                                               pending.acceptStartUs,
+                                                               pending.lastHandshakeSentUs);
         if (pending.handshakeSent
             && pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)
-            && nowUs >= pending.lastHandshakeSentUs
-            && (nowUs - pending.lastHandshakeSentUs) >= retryBaseUs) {
+            && retryDueUs != UINT64_MAX
+            && static_cast<uint64_t>(nowUs) >= retryDueUs) {
             if (sendPendingHandshake(pending) == UTP_ERR_OK) {
                 pending.lastHandshakeSentUs = nowUs;
                 ++pending.handshakeRetryCount;
@@ -1211,18 +1299,69 @@ void ContextImpl::processPendingHandshakeTimeouts()
     }
 }
 
+void ContextImpl::refreshPendingHandshakeTimer()
+{
+    if (m_waitHandshakeDone.empty()) {
+        m_pendingHandshakeTimer.stop();
+        return;
+    }
+
+    const utp_time_t nowUs = time::MonotonicUs();
+    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(m_config);
+    uint64_t nextDueUs = UINT64_MAX;
+
+    for (uint32_t localCid : m_waitHandshakeDone) {
+        auto it = m_pendingIncoming.find(localCid);
+        if (it == m_pendingIncoming.end()) {
+            continue;
+        }
+
+        const PendingIncomingConnection &pending = it->second;
+        if (pending.acceptStartUs == 0) {
+            continue;
+        }
+
+        const uint64_t expireDueUs = static_cast<uint64_t>(pending.acceptStartUs) + timeoutUs;
+        if (expireDueUs < nextDueUs) {
+            nextDueUs = expireDueUs;
+        }
+
+        if (pending.handshakeSent && pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)) {
+            const uint64_t retryDueUs = PendingHandshakeRetryDueUs(m_config,
+                                                                   pending.acceptStartUs,
+                                                                   pending.lastHandshakeSentUs);
+            if (retryDueUs < nextDueUs) {
+                nextDueUs = retryDueUs;
+            }
+        }
+    }
+
+    if (nextDueUs == UINT64_MAX) {
+        m_pendingHandshakeTimer.stop();
+        return;
+    }
+
+    uint32_t delayMs = 1;
+    if (nextDueUs > static_cast<uint64_t>(nowUs)) {
+        const uint64_t deltaUs = nextDueUs - static_cast<uint64_t>(nowUs);
+        delayMs = static_cast<uint32_t>(std::max<uint64_t>(1, (deltaUs + 999ULL) / 1000ULL));
+    }
+
+    m_pendingHandshakeTimer.stop();
+    m_pendingHandshakeTimer.start(delayMs);
+}
+
 void ContextImpl::onPendingHandshakeTimeout()
 {
     processPendingHandshakeTimeouts();
-    if (!m_waitHandshakeDone.empty()) {
-        m_pendingHandshakeTimer.start(PendingHandshakeRetryIntervalMs(m_config));
-    }
+    refreshPendingHandshakeTimer();
 }
 
 void ContextImpl::onReadEvent()
 {
     while (true) {
         processPendingHandshakeTimeouts();
+        refreshPendingHandshakeTimer();
 
         std::vector<UdpSocket::MsgMetaInfo> msgVec;
         int32_t nread = m_udpSocket.recv(msgVec);
@@ -1659,30 +1798,51 @@ void ContextImpl::onReadEvent()
 
 void ContextImpl::onWriteEvent()
 {
-    std::list<ConnectionImpl *> conns;
-    conns.swap(m_wantWriteConns);
+    m_inWriteDispatch = true;
 
-    std::unordered_set<ConnectionImpl *> seen;
+    const uint32_t quantum = ConnectionWdrQuantum(m_config);
+    const uint32_t deficitCap = ConnectionWdrDeficitCap(m_config);
+    size_t roundBudget = m_wantWriteConns.size();
 
-    for (ConnectionImpl *conn : conns) {
+    while (roundBudget-- > 0 && !m_wantWriteConns.empty()) {
+        ConnectionImpl *conn = m_wantWriteConns.front();
+        m_wantWriteConns.pop_front();
+        m_wantWriteConnSet.erase(conn);
+
         if (conn == nullptr) {
             continue;
         }
-        if (!seen.insert(conn).second) {
+
+        ConnectionImpl::SP current;
+        if (!findManagedConnection(conn, current)) {
+            m_wdrrDeficit.erase(conn);
             continue;
         }
 
-        auto it = std::find_if(m_connections.begin(), m_connections.end(), [conn] (const ConnectionMap::value_type &entry) {
-            return entry.second.get() == conn;
-        });
-        if (it == m_connections.end()) {
-            continue;
-        }
+        auto deficitIt = m_wdrrDeficit.find(conn);
+        uint32_t deficit = (deficitIt == m_wdrrDeficit.end()) ? 0u : deficitIt->second;
+        deficit = std::min<uint32_t>(deficit + quantum, deficitCap);
+        m_wdrrDeficit[conn] = deficit;
 
-        ConnectionImpl::SP current = it->second;
+        const uint64_t txBefore = current->statistic().tx_bytes;
         current->onWrite();
         handleConnectionState(current.get());
+
+        ConnectionImpl::SP aliveConn;
+        if (!findManagedConnection(conn, aliveConn)) {
+            m_wdrrDeficit.erase(conn);
+            continue;
+        }
+
+        const uint64_t txAfter = aliveConn->statistic().tx_bytes;
+        const uint64_t sentBytes = (txAfter >= txBefore) ? (txAfter - txBefore) : 0;
+        const uint32_t sent = static_cast<uint32_t>(std::min<uint64_t>(sentBytes, UINT32_MAX));
+        uint32_t remain = m_wdrrDeficit[conn];
+        remain = (sent >= remain) ? 0u : (remain - sent);
+        m_wdrrDeficit[conn] = remain;
     }
+
+    m_inWriteDispatch = false;
 
     if (!m_wantWriteConns.empty()) {
         m_writeEvent.start();
