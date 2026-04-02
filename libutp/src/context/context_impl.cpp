@@ -117,6 +117,18 @@ uint32_t ConnectionWdrDeficitCap(const eular::utp::Config &cfg)
     return std::max<uint32_t>(cfg.connection_wdrr_deficit_cap, quantum);
 }
 
+eular::utp::ConnectionSchedulerMode ConnectionScheduler(const eular::utp::Config &cfg)
+{
+    switch (cfg.connection_scheduler_mode) {
+    case eular::utp::kConnectionSchedulerDisabled:
+    case eular::utp::kConnectionSchedulerStrict:
+    case eular::utp::kConnectionSchedulerWdrr:
+        return cfg.connection_scheduler_mode;
+    default:
+        return eular::utp::kConnectionSchedulerWdrr;
+    }
+}
+
 eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context::EncryptionMode mode)
 {
     switch (mode) {
@@ -1867,9 +1879,10 @@ void ContextImpl::onReadEvent()
 void ContextImpl::onWriteEvent()
 {
     m_inWriteDispatch = true;
+    size_t roundBudget = m_wantWriteConns.size();
+    const ConnectionSchedulerMode schedulerMode = ConnectionScheduler(m_config);
     const uint32_t quantum = ConnectionWdrQuantum(m_config);
     const uint32_t deficitCap = ConnectionWdrDeficitCap(m_config);
-    size_t roundBudget = m_wantWriteConns.size();
 
     while (roundBudget-- > 0 && !m_wantWriteConns.empty()) {
         ConnectionImpl *conn = m_wantWriteConns.front();
@@ -1886,12 +1899,15 @@ void ContextImpl::onWriteEvent()
             continue;
         }
 
-        auto deficitIt = m_wdrrDeficit.find(conn);
-        uint32_t deficit = (deficitIt == m_wdrrDeficit.end()) ? 0u : deficitIt->second;
-        deficit = std::min<uint32_t>(deficit + quantum, deficitCap);
-        m_wdrrDeficit[conn] = deficit;
-
         const uint64_t txBefore = current->statistic().tx_bytes;
+
+        if (schedulerMode == kConnectionSchedulerWdrr) {
+            auto deficitIt = m_wdrrDeficit.find(conn);
+            uint32_t deficit = (deficitIt == m_wdrrDeficit.end()) ? 0u : deficitIt->second;
+            deficit = std::min<uint32_t>(deficit + quantum, deficitCap);
+            m_wdrrDeficit[conn] = deficit;
+        }
+
         current->onWrite();
         handleConnectionState(current.get());
 
@@ -1901,12 +1917,16 @@ void ContextImpl::onWriteEvent()
             continue;
         }
 
-        const uint64_t txAfter = aliveConn->statistic().tx_bytes;
-        const uint64_t sentBytes = (txAfter >= txBefore) ? (txAfter - txBefore) : 0;
-        const uint32_t sent = static_cast<uint32_t>(std::min<uint64_t>(sentBytes, UINT32_MAX));
-        uint32_t remain = m_wdrrDeficit[conn];
-        remain = (sent >= remain) ? 0u : (remain - sent);
-        m_wdrrDeficit[conn] = remain;
+        if (schedulerMode == kConnectionSchedulerWdrr) {
+            const uint64_t txAfter = aliveConn->statistic().tx_bytes;
+            const uint64_t sentBytes = (txAfter >= txBefore) ? (txAfter - txBefore) : 0;
+            const uint32_t sent = static_cast<uint32_t>(std::min<uint64_t>(sentBytes, UINT32_MAX));
+            uint32_t remain = m_wdrrDeficit[conn];
+            remain = (sent >= remain) ? 0u : (remain - sent);
+            m_wdrrDeficit[conn] = remain;
+        } else {
+            m_wdrrDeficit.erase(conn);
+        }
     }
 
     m_inWriteDispatch = false;

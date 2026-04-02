@@ -27,6 +27,12 @@ enum StreamSchedulerMode : uint8_t {
     kStreamSchedulerDrr = 2,
 };
 
+enum ConnectionSchedulerMode : uint8_t {
+    kConnectionSchedulerDisabled = 0,
+    kConnectionSchedulerStrict = 1,
+    kConnectionSchedulerWdrr = 2,
+};
+
 class Config {
 public:
     // dplpmtud
@@ -105,6 +111,7 @@ public:
     uint32_t    stream_unacked_data_limit = 256 * 1024; // 在途未确认 STREAM 数据上限(bytes, 含首次发送与重传)
 
     // connection scheduler (WDRR)
+    ConnectionSchedulerMode connection_scheduler_mode = kConnectionSchedulerWdrr; // 连接级调度模式，默认 WDRR
     uint32_t    connection_wdrr_quantum = 1200;        // 连接级 WDRR 量子(bytes)
     uint32_t    connection_wdrr_deficit_cap = 64 * 1024; // 连接级 WDRR deficit 上限(bytes)
 };
