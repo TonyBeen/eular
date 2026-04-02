@@ -14,7 +14,6 @@
 #include <array>
 #include <cstring>
 #include <exception>
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -39,6 +38,7 @@
 #include "proto/frame/reset_stream.h"
 #include "proto/frame/handshake_done.h"
 #include "proto/frame/handshake_delay.h"
+#include "proto/frame/handshake_helper.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/transport_params.h"
 #include "proto/frame/connection_close.h"
@@ -199,41 +199,6 @@ int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
     ackFreq.normalize();
 
     const int32_t encoded = ackFreq.encode(buffer, size);
-    if (encoded < 0) {
-        return -1;
-    }
-
-    outSize = static_cast<size_t>(encoded);
-    return UTP_ERR_OK;
-}
-
-int32_t BuildHandshakeDoneFrame(utp_packno_t ackHandshakePn,
-                                uint8_t *buffer,
-                                size_t size,
-                                size_t &outSize)
-{
-    eular::utp::FrameHandshakeDone done;
-    done.ack_handshake_pn = ackHandshakePn;
-
-    const int32_t encoded = done.encode(buffer, size);
-    if (encoded < 0) {
-        return -1;
-    }
-
-    outSize = static_cast<size_t>(encoded);
-    return UTP_ERR_OK;
-}
-
-int32_t BuildHandshakeDelayFrame(utp_time_t delayUs,
-                                 uint8_t *buffer,
-                                 size_t size,
-                                 size_t &outSize)
-{
-    eular::utp::FrameHandshakeDelay delay;
-    delay.delay_time_us = static_cast<uint32_t>(
-        std::min<utp_time_t>(delayUs, static_cast<utp_time_t>(std::numeric_limits<uint32_t>::max())));
-
-    const int32_t encoded = delay.encode(buffer, size);
     if (encoded < 0) {
         return -1;
     }
@@ -1538,25 +1503,17 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
     size_t handshakeTrailerSize = 0;
 
     if (piggybackHandshakeDone) {
-        if (BuildHandshakeDoneFrame(m_peerHandshakePacketNo,
-                                    handshakeTrailer.data(),
-                                    handshakeTrailer.size(),
-                                    handshakeTrailerSize) != UTP_ERR_OK) {
-            return -1;
-        }
-
         const utp_time_t nowUs = time::MonotonicUs();
         const utp_time_t baseUs = (m_handshakeReceivedAtUs > 0 && nowUs >= m_handshakeReceivedAtUs)
                                 ? m_handshakeReceivedAtUs
                                 : nowUs;
-        size_t delaySize = 0;
-        if (BuildHandshakeDelayFrame(nowUs - baseUs,
-                                     handshakeTrailer.data() + handshakeTrailerSize,
-                                     handshakeTrailer.size() - handshakeTrailerSize,
-                                     delaySize) != UTP_ERR_OK) {
+        if (BuildHandshakeTrailer(m_peerHandshakePacketNo,
+                                  nowUs - baseUs,
+                                  handshakeTrailer.data(),
+                                  handshakeTrailer.size(),
+                                  handshakeTrailerSize) != UTP_ERR_OK) {
             return -1;
         }
-        handshakeTrailerSize += delaySize;
     }
 
     if (allowEarlyData) {
@@ -1781,25 +1738,17 @@ int32_t ConnectionImpl::sendHandshakeDonePacket()
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> payload{};
     size_t payloadSize = 0;
 
-    if (BuildHandshakeDoneFrame(m_peerHandshakePacketNo,
-                                payload.data(),
-                                payload.size(),
-                                payloadSize) != UTP_ERR_OK) {
-        return -1;
-    }
-
     const utp_time_t nowUs = time::MonotonicUs();
     const utp_time_t baseUs = (m_handshakeReceivedAtUs > 0 && nowUs >= m_handshakeReceivedAtUs)
                             ? m_handshakeReceivedAtUs
                             : nowUs;
-    size_t delaySize = 0;
-    if (BuildHandshakeDelayFrame(nowUs - baseUs,
-                                 payload.data() + payloadSize,
-                                 payload.size() - payloadSize,
-                                 delaySize) != UTP_ERR_OK) {
+    if (BuildHandshakeTrailer(m_peerHandshakePacketNo,
+                              nowUs - baseUs,
+                              payload.data(),
+                              payload.size(),
+                              payloadSize) != UTP_ERR_OK) {
         return -1;
     }
-    payloadSize += delaySize;
 
     utp_packno_t outPacketNo = 0;
     const int32_t status = sendPacket(UTP_TYPE_CTRL,

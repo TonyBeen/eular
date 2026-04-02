@@ -109,6 +109,7 @@ set(UTP_SOURCES
     src/proto/frame/crypto.cpp
     src/proto/frame/handshake_delay.cpp
     src/proto/frame/handshake_done.cpp
+    src/proto/frame/handshake_helper.cpp
     src/proto/frame/padding.cpp
     src/proto/frame/path.cpp
     src/proto/frame/reset_stream.cpp

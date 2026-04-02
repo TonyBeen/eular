@@ -27,6 +27,7 @@
 #include "proto/frame/ack_frequency.h"
 #include "proto/frame/handshake_delay.h"
 #include "proto/frame/handshake_done.h"
+#include "proto/frame/handshake_helper.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/connection_close.h"
@@ -900,21 +901,22 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
     };
 
     auto appendHandshakeDelay = [&pending](std::vector<uint8_t> &payload) -> int32_t {
-        FrameHandshakeDelay delay;
         const utp_time_t nowUs = time::MonotonicUs();
         const utp_time_t baseUs = (pending.initialReceivedUs > 0 && nowUs >= pending.initialReceivedUs)
                                 ? pending.initialReceivedUs
                                 : nowUs;
-        delay.delay_time_us = static_cast<uint32_t>(std::min<utp_time_t>(nowUs - baseUs, UINT32_MAX));
 
         const size_t oldSize = payload.size();
         payload.resize(oldSize + FRAME_HANDSHAKE_DELAY_SIZE, 0);
-        const int32_t encoded = delay.encode(payload.data() + oldSize, FRAME_HANDSHAKE_DELAY_SIZE);
-        if (encoded < 0) {
+        size_t encoded = 0;
+        if (BuildHandshakeDelayFrame(nowUs - baseUs,
+                                     payload.data() + oldSize,
+                                     FRAME_HANDSHAKE_DELAY_SIZE,
+                                     encoded) != UTP_ERR_OK) {
             return -1;
         }
 
-        payload.resize(oldSize + static_cast<size_t>(encoded));
+        payload.resize(oldSize + encoded);
         return UTP_ERR_OK;
     };
 

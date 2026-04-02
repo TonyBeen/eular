@@ -33,6 +33,7 @@ enum PacketFrameTypeBit : uint32_t {
     kFTBitVersion           = 1 << kFrameVersion,
     kFTBitHandshakeDone     = 1 << kFrameHandshakeDone,
     kFTBitTransportParams   = 1 << kFrameTransportParams,
+    kFTBitHandshakeDelay    = 1 << kFrameHandshakeDelay,
 };
 
 #define UTP_FRAME_RETX_MASK (   \
@@ -52,6 +53,7 @@ enum PacketFrameTypeBit : uint32_t {
     | kFTBitVersion             \
     | kFTBitHandshakeDone       \
     | kFTBitTransportParams     \
+    | kFTBitHandshakeDelay      \
 )
 
 static inline bool IsValidPackNo(uint64_t packno) {
