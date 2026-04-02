@@ -26,6 +26,7 @@
 #include "proto/proto.h"
 #include "proto/frame.h"
 #include "proto/frame/stream.h"
+#include "proto/frame/handshake_done.h"
 #include "proto/packet_in.h"
 #include "proto/frame/path.h"
 #include "utp/errno.h"
@@ -45,6 +46,7 @@ using eular::utp::UdpSocket;
 using eular::utp::FramePathChallenge;
 using eular::utp::FramePathResponse;
 using eular::utp::FrameStream;
+using eular::utp::FrameHandshakeDone;
 using eular::utp::PacketIn;
 using eular::utp::NetworkPath;
 
@@ -1135,12 +1137,13 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
     pending.peerIp = peerAddr.toIpString();
     pending.handshakeSent = true;
     pending.acceptStartUs = eular::utp::time::MonotonicMs() * 1000;
+    pending.lastHandshakePacketNo = 42;
     pending.peerTp.init_max_streams_bidi = 8;
     pending.peerTp.init_max_streams_uni = 8;
 
     ctx.m_pendingIncoming.emplace(localCid, pending);
 
-    auto buildStreamPayload = [](uint64_t offset, char byte, bool withHandshakeDone) {
+    auto buildStreamPayload = [&](uint64_t offset, char byte, bool withHandshakeDone) {
         FrameStream frame;
         frame.stream_id = 0;
         frame.stream_offset = offset;
@@ -1152,7 +1155,11 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
         REQUIRE(frameLen > 0);
         payload.resize(static_cast<size_t>(frameLen));
         if (withHandshakeDone) {
-            payload.push_back(static_cast<uint8_t>(eular::utp::kFrameHandshakeDone));
+            FrameHandshakeDone done;
+            done.ack_handshake_pn = pending.lastHandshakePacketNo;
+            const size_t oldSize = payload.size();
+            payload.resize(oldSize + FRAME_HANDSHAKE_DONE_SIZE, 0);
+            REQUIRE(done.encode(payload.data() + oldSize, FRAME_HANDSHAKE_DONE_SIZE) == FRAME_HANDSHAKE_DONE_SIZE);
         }
         return payload;
     };

@@ -25,6 +25,8 @@
 #include "proto/frame/crypto.h"
 #include "proto/frame/transport_params.h"
 #include "proto/frame/ack_frequency.h"
+#include "proto/frame/handshake_delay.h"
+#include "proto/frame/handshake_done.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/connection_close.h"
@@ -831,11 +833,14 @@ std::string ContextImpl::PeerKey(const Address &peerAddress, uint32_t peerCid)
 int32_t ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
                                        uint8_t packetType,
                                        const void *payload,
-                                       size_t payloadLen)
+                                       size_t payloadLen,
+                                       utp_packno_t *outPacketNo)
 {
     if (!pending.peerAddress.isValid() || payloadLen > UINT16_MAX) {
         return -1;
     }
+
+    const utp_packno_t packetNo = pending.packetNumber;
 
     std::vector<uint8_t> wire(UTP_HEADER_SIZE + payloadLen, 0);
     uint8_t *offset = wire.data();
@@ -865,7 +870,14 @@ int32_t ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
 
     std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
     int32_t sent = m_udpSocket.send(msgVec);
-    return (sent > 0) ? UTP_ERR_OK : -1;
+    if (sent > 0) {
+        if (outPacketNo != nullptr) {
+            *outPacketNo = packetNo;
+        }
+        return UTP_ERR_OK;
+    }
+
+    return -1;
 }
 
 int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
@@ -875,7 +887,7 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(m_config.ack_every_n_packets, UINT8_MAX));
         ackFreq.reordering_threshold = 3;
         ackFreq.max_ack_delay_ms = m_config.ack_delay;
-        ackFreq.timestamp = time::MonotonicMs();
+        ackFreq.normalize();
 
         const size_t oldSize = payload.size();
         payload.resize(oldSize + FRAME_ACK_FREQUENCY_SIZE, 0);
@@ -887,8 +899,27 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         return UTP_ERR_OK;
     };
 
+    auto appendHandshakeDelay = [&pending](std::vector<uint8_t> &payload) -> int32_t {
+        FrameHandshakeDelay delay;
+        const utp_time_t nowUs = time::MonotonicUs();
+        const utp_time_t baseUs = (pending.initialReceivedUs > 0 && nowUs >= pending.initialReceivedUs)
+                                ? pending.initialReceivedUs
+                                : nowUs;
+        delay.delay_time_us = static_cast<uint32_t>(std::min<utp_time_t>(nowUs - baseUs, UINT32_MAX));
+
+        const size_t oldSize = payload.size();
+        payload.resize(oldSize + FRAME_HANDSHAKE_DELAY_SIZE, 0);
+        const int32_t encoded = delay.encode(payload.data() + oldSize, FRAME_HANDSHAKE_DELAY_SIZE);
+        if (encoded < 0) {
+            return -1;
+        }
+
+        payload.resize(oldSize + static_cast<size_t>(encoded));
+        return UTP_ERR_OK;
+    };
+
     FrameVersion version;
-    version.version = 1;
+    version.version = UTP_PROTOCOL_VERSION;
     std::vector<uint8_t> payload(FRAME_VERSION_SIZE, 0);
     int32_t frameLen = version.encode(payload.data(), payload.size());
     if (frameLen < 0) {
@@ -934,6 +965,10 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         return -1;
     }
 
+    if (appendHandshakeDelay(payload) != UTP_ERR_OK) {
+        return -1;
+    }
+
     const uint16_t targetPacketSize = ConfiguredMinPacketSize(m_config, pending.peerAddress.family());
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
@@ -942,7 +977,17 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         }
     }
 
-    return sendPendingPacket(pending, UTP_TYPE_HANDSHAKE, payload.data(), payload.size());
+    utp_packno_t sentPacketNo = 0;
+    const int32_t status = sendPendingPacket(pending,
+                                             UTP_TYPE_HANDSHAKE,
+                                             payload.data(),
+                                             payload.size(),
+                                             &sentPacketNo);
+    if (status == UTP_ERR_OK) {
+        pending.lastHandshakePacketNo = sentPacketNo;
+    }
+
+    return status;
 }
 
 int32_t ContextImpl::sendPendingConnectionClose(PendingIncomingConnection &pending,
@@ -1447,7 +1492,24 @@ void ContextImpl::onReadEvent()
                 bool handshakeDone = false;
                 bool decodeOk = decodeIncomingPendingPacket(msg, pendingIt->second, *pendingPacket);
                 if (decodeOk) {
-                    handshakeDone = pendingPacket->hasFrame(kFrameHandshakeDone);
+                    size_t frameOffset = 0;
+                    while (frameOffset < pendingPacket->payload_size) {
+                        FrameType frameType = kFrameInvalid;
+                        const uint8_t *frameData = nullptr;
+                        size_t frameLen = 0;
+                        if (pendingPacket->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                            break;
+                        }
+
+                        if (frameType == kFrameHandshakeDone) {
+                            FrameHandshakeDone done;
+                            if (done.decode(frameData, frameLen) >= 0
+                                && done.ack_handshake_pn == pendingIt->second.lastHandshakePacketNo) {
+                                handshakeDone = true;
+                            }
+                            break;
+                        }
+                    }
                 }
                 UTP_LOGD_FMT("{} pending packet decode {}, handshake done: {}", tag(), (decodeOk ? "succeeded" : "failed"), handshakeDone);
 
@@ -1626,6 +1688,7 @@ void ContextImpl::onReadEvent()
                 sendCtx.peerCid = scid;
                 sendCtx.peerAddress = msg.metaInfo.peerAddress;
                 sendCtx.peerIp = msg.metaInfo.peerAddress.toIpString();
+                sendCtx.initialReceivedUs = time::MonotonicUs();
                 sendCtx.encrypted = ticketEncryptionMode;
                 (void)sendPendingHandshake(sendCtx);
 
@@ -1681,6 +1744,7 @@ void ContextImpl::onReadEvent()
             pending.peerCid = scid;
             pending.peerAddress = msg.metaInfo.peerAddress;
             pending.peerIp = msg.metaInfo.peerAddress.toIpString();
+            pending.initialReceivedUs = time::MonotonicUs();
             pending.encrypted = initialPacket.hasFrame(kFrameCrypto)
                              ? Context::kEncryptionAesGcm128
                              : Context::kEncryptionNone;

@@ -35,7 +35,6 @@ int32_t FrameAckFrequency::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, normalized.ack_eliciting_threshold);
     offset = Serialize::SerializeTo(offset, size, normalized.reordering_threshold);
     offset = Serialize::SerializeTo(offset, size, normalized.max_ack_delay_ms);
-    offset = Serialize::SerializeTo(offset, size, normalized.timestamp);
     if (offset == nullptr) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "encode ack frequency frame failed");
         return -1;
@@ -67,7 +66,6 @@ int32_t FrameAckFrequency::decode(const void *buffer, size_t size)
     offset = Serialize::DeserializeFrom(offset, size, ack_eliciting_threshold);
     offset = Serialize::DeserializeFrom(offset, size, reordering_threshold);
     offset = Serialize::DeserializeFrom(offset, size, max_ack_delay_ms);
-    offset = Serialize::DeserializeFrom(offset, size, timestamp);
     if (offset == nullptr) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "decode ack frequency frame failed");
         return -1;

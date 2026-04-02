@@ -14,6 +14,7 @@
 #include <array>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -36,6 +37,8 @@
 #include "proto/frame/ack.h"
 #include "proto/frame/stream.h"
 #include "proto/frame/reset_stream.h"
+#include "proto/frame/handshake_done.h"
+#include "proto/frame/handshake_delay.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/transport_params.h"
 #include "proto/frame/connection_close.h"
@@ -193,10 +196,44 @@ int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
     ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(ackEveryN, UINT8_MAX));
     ackFreq.reordering_threshold = 3;
     ackFreq.max_ack_delay_ms = config ? config->ack_delay : 150;
-    ackFreq.timestamp = eular::utp::time::MonotonicMs();
     ackFreq.normalize();
 
     const int32_t encoded = ackFreq.encode(buffer, size);
+    if (encoded < 0) {
+        return -1;
+    }
+
+    outSize = static_cast<size_t>(encoded);
+    return UTP_ERR_OK;
+}
+
+int32_t BuildHandshakeDoneFrame(utp_packno_t ackHandshakePn,
+                                uint8_t *buffer,
+                                size_t size,
+                                size_t &outSize)
+{
+    eular::utp::FrameHandshakeDone done;
+    done.ack_handshake_pn = ackHandshakePn;
+
+    const int32_t encoded = done.encode(buffer, size);
+    if (encoded < 0) {
+        return -1;
+    }
+
+    outSize = static_cast<size_t>(encoded);
+    return UTP_ERR_OK;
+}
+
+int32_t BuildHandshakeDelayFrame(utp_time_t delayUs,
+                                 uint8_t *buffer,
+                                 size_t size,
+                                 size_t &outSize)
+{
+    eular::utp::FrameHandshakeDelay delay;
+    delay.delay_time_us = static_cast<uint32_t>(
+        std::min<utp_time_t>(delayUs, static_cast<utp_time_t>(std::numeric_limits<uint32_t>::max())));
+
+    const int32_t encoded = delay.encode(buffer, size);
     if (encoded < 0) {
         return -1;
     }
@@ -711,7 +748,12 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             }
             break;
         case kFrameHandshakeDone:
-            hasHandshakeDoneFrame = true;
+            {
+                FrameHandshakeDone done;
+                if (done.decode(frameData, frameLen) >= 0) {
+                    hasHandshakeDoneFrame = true;
+                }
+            }
             break;
         default:
             break;
@@ -771,6 +813,8 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
     if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
         m_state = State::kStateConnected;
+        m_peerHandshakePacketNo = packet->header.pn;
+        m_handshakeReceivedAtUs = nowUs;
         m_handshakeDonePending = true;
         m_handshakeDoneSent = false;
         m_handshakeDoneLastPacketNo = 0;
@@ -1035,7 +1079,6 @@ int32_t ConnectionImpl::sendAckFrequencyUpdate(AckFrequencyProfile profile, utp_
     ackFreq.ack_eliciting_threshold = tuning.ackThreshold;
     ackFreq.reordering_threshold = tuning.reorderThreshold;
     ackFreq.max_ack_delay_ms = tuning.maxAckDelayMs;
-    ackFreq.timestamp = nowUs / 1000;
     ackFreq.normalize();
 
     std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> payload{};
@@ -1491,6 +1534,30 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                      && m_handshakeDonePending
                                      && len > 0;
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
+    std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> handshakeTrailer{};
+    size_t handshakeTrailerSize = 0;
+
+    if (piggybackHandshakeDone) {
+        if (BuildHandshakeDoneFrame(m_peerHandshakePacketNo,
+                                    handshakeTrailer.data(),
+                                    handshakeTrailer.size(),
+                                    handshakeTrailerSize) != UTP_ERR_OK) {
+            return -1;
+        }
+
+        const utp_time_t nowUs = time::MonotonicUs();
+        const utp_time_t baseUs = (m_handshakeReceivedAtUs > 0 && nowUs >= m_handshakeReceivedAtUs)
+                                ? m_handshakeReceivedAtUs
+                                : nowUs;
+        size_t delaySize = 0;
+        if (BuildHandshakeDelayFrame(nowUs - baseUs,
+                                     handshakeTrailer.data() + handshakeTrailerSize,
+                                     handshakeTrailer.size() - handshakeTrailerSize,
+                                     delaySize) != UTP_ERR_OK) {
+            return -1;
+        }
+        handshakeTrailerSize += delaySize;
+    }
 
     if (allowEarlyData) {
         FrameSessionToken sessionToken;
@@ -1530,8 +1597,7 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
     if (m_ackElicitingSinceLastAck > 0) {
         std::vector<uint8_t> ackPayload;
         if (buildAckPayload(ackPayload, time::MonotonicUs()) == UTP_ERR_OK) {
-            const size_t handshakeDoneBytes = piggybackHandshakeDone ? 1u : 0u;
-            const size_t combinedSize = ackPayload.size() + header.size() + len + handshakeDoneBytes;
+            const size_t combinedSize = ackPayload.size() + header.size() + len + handshakeTrailerSize;
             size_t packetPayloadBudget = m_mtuDiscovery.currentMaxPacketSize();
             if (packetPayloadBudget > UTP_HEADER_SIZE) {
                 packetPayloadBudget -= UTP_HEADER_SIZE;
@@ -1551,13 +1617,14 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                     payload.insert(payload.end(), data, data + len);
                 }
                 if (piggybackHandshakeDone) {
-                    payload.push_back(static_cast<uint8_t>(kFrameHandshakeDone));
+                    payload.insert(payload.end(), handshakeTrailer.begin(), handshakeTrailer.begin() + handshakeTrailerSize);
                 }
 
                 uint32_t frameBits = (1u << static_cast<uint32_t>(kFrameAck))
                                    | (1u << static_cast<uint32_t>(kFrameStream));
                 if (piggybackHandshakeDone) {
                     frameBits |= (1u << static_cast<uint32_t>(kFrameHandshakeDone));
+                    frameBits |= (1u << static_cast<uint32_t>(kFrameHandshakeDelay));
                 }
 
                 const int32_t status = sendPacket(packetType,
@@ -1590,9 +1657,9 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
 
     if (piggybackHandshakeDone) {
         std::vector<uint8_t> streamBody;
-        streamBody.reserve(len + 1);
+        streamBody.reserve(len + handshakeTrailerSize);
         streamBody.insert(streamBody.end(), data, data + len);
-        streamBody.push_back(static_cast<uint8_t>(kFrameHandshakeDone));
+        streamBody.insert(streamBody.end(), handshakeTrailer.begin(), handshakeTrailer.begin() + handshakeTrailerSize);
 
         const int32_t status = sendPacket(packetType,
                                           header.data(),
@@ -1602,7 +1669,8 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                                           0,
                                           &m_handshakeDoneLastPacketNo,
                                           (1u << static_cast<uint32_t>(kFrameStream))
-                                        | (1u << static_cast<uint32_t>(kFrameHandshakeDone)),
+                                                                                | (1u << static_cast<uint32_t>(kFrameHandshakeDone))
+                                                                                | (1u << static_cast<uint32_t>(kFrameHandshakeDelay)),
                                           nullptr,
                                           len);
         if (status == UTP_ERR_OK) {
@@ -1710,14 +1778,37 @@ void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
 
 int32_t ConnectionImpl::sendHandshakeDonePacket()
 {
-    const uint8_t payload[1] = {static_cast<uint8_t>(kFrameHandshakeDone)};
+    std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> payload{};
+    size_t payloadSize = 0;
+
+    if (BuildHandshakeDoneFrame(m_peerHandshakePacketNo,
+                                payload.data(),
+                                payload.size(),
+                                payloadSize) != UTP_ERR_OK) {
+        return -1;
+    }
+
+    const utp_time_t nowUs = time::MonotonicUs();
+    const utp_time_t baseUs = (m_handshakeReceivedAtUs > 0 && nowUs >= m_handshakeReceivedAtUs)
+                            ? m_handshakeReceivedAtUs
+                            : nowUs;
+    size_t delaySize = 0;
+    if (BuildHandshakeDelayFrame(nowUs - baseUs,
+                                 payload.data() + payloadSize,
+                                 payload.size() - payloadSize,
+                                 delaySize) != UTP_ERR_OK) {
+        return -1;
+    }
+    payloadSize += delaySize;
+
     utp_packno_t outPacketNo = 0;
     const int32_t status = sendPacket(UTP_TYPE_CTRL,
-                                      payload,
-                                      sizeof(payload),
+                                      payload.data(),
+                                      payloadSize,
                                       0,
                                       &outPacketNo,
-                                      (1u << static_cast<uint32_t>(kFrameHandshakeDone)));
+                                      (1u << static_cast<uint32_t>(kFrameHandshakeDone))
+                                    | (1u << static_cast<uint32_t>(kFrameHandshakeDelay)));
     if (status == UTP_ERR_OK) {
         m_handshakeDoneSent = true;
         m_handshakeDonePending = true;
@@ -1781,7 +1872,7 @@ int32_t ConnectionImpl::sendInitialPacket()
     std::vector<uint8_t> payload;
 
     FrameVersion version;
-    version.version = 1;
+    version.version = UTP_PROTOCOL_VERSION;
     std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
     int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
     if (frameLen < 0) {
@@ -1861,7 +1952,7 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
     std::vector<uint8_t> payload;
 
     FrameVersion version;
-    version.version = 1;
+    version.version = UTP_PROTOCOL_VERSION;
     std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
     int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
     if (frameLen < 0) {
@@ -2697,7 +2788,7 @@ int32_t ConnectionImpl::buildSessionResumptionState(const CachedResumptionState 
 
     uint8_t *offset = plain.data();
     size_t left = plain.size();
-    const uint32_t utpVersion = 1;
+    const uint32_t utpVersion = UTP_PROTOCOL_VERSION;
     offset = Serialize::SerializeTo(offset, left, utpVersion);
     offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(info.encrypted));
     offset = Serialize::SerializeTo(offset, left, expiresAt);

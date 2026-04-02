@@ -118,7 +118,9 @@ private:
         uint32_t                zeroRttRejectedCount{0};
         uint64_t                packetNumber{1};
         utp_time_t              acceptStartUs{0};
+        utp_time_t              initialReceivedUs{0};
         utp_time_t              lastHandshakeSentUs{0};
+        utp_packno_t            lastHandshakePacketNo{0};
         bool                    handshakeSent{false};
         uint8_t                 handshakeRetryCount{0};
         size_t                  bufferedBeforeHandshakeDoneBytes{0};
@@ -136,7 +138,8 @@ private:
     int32_t sendPendingPacket(PendingIncomingConnection &pending,
                               uint8_t packetType,
                               const void *payload,
-                              size_t payloadLen);
+                              size_t payloadLen,
+                              utp_packno_t *outPacketNo = nullptr);
     bool    decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                         PendingIncomingConnection &pending,
                                         PacketIn &packet);

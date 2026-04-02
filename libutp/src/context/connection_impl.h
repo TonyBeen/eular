@@ -308,6 +308,8 @@ private:
     bool                    m_handshakeDonePending{false};
     bool                    m_handshakeDoneSent{false};
     utp_packno_t            m_handshakeDoneLastPacketNo{0};
+    utp_packno_t            m_peerHandshakePacketNo{0};
+    utp_time_t              m_handshakeReceivedAtUs{0};
     bool                    m_closeFramePending{false};
     uint16_t                m_closeErrorCode{0};
     std::string             m_closeReason{"local close"};

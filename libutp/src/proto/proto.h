@@ -41,6 +41,7 @@
 #define UTP_DEFAULT_ACK_THRESHOLD        2  // 每2个包发一次 ACK
 #define UTP_DEFAULT_MAX_ACK_DELAY_MS     25 // 最大延迟 25ms
 #define UTP_DEFAULT_REORDER_THRESHOLD    3  // 乱序超过3个包立即 ACK
+#define UTP_PROTOCOL_VERSION             2
 
 namespace eular {
 namespace utp {

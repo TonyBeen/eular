@@ -18,6 +18,9 @@
 #define STREAM_IS_FIN(flag)    ((flag) & kFrameStreamFlagFin)
 #define STREAM_SET_FIN(flag)   ((flag) | kFrameStreamFlagFin)
 
+#define FRAME_HANDSHAKE_DONE_SIZE   (1 + 8) // type + ack_handshake_pn
+#define FRAME_HANDSHAKE_DELAY_SIZE  (1 + 4) // type + delay_time_us
+
 namespace eular {
 namespace utp {
 
@@ -39,6 +42,7 @@ enum FrameType : uint8_t {
     kFrameVersion,          // 版本协商帧
     kFrameHandshakeDone,    // 握手完成帧
     kFrameTransportParams,  // 传输参数帧
+    kFrameHandshakeDelay,   // 握手处理耗时帧
     kFrameMax,
 };
 

@@ -19,6 +19,8 @@
 #include "proto/frame/version.h"
 #include "proto/frame/ack_frequency.h"
 #include "proto/frame/transport_params.h"
+#include "proto/frame/handshake_delay.h"
+#include "proto/frame/handshake_done.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/connection_close.h"
 #include "proto/frame/crypto.h"
@@ -139,8 +141,10 @@ int32_t PacketIn::frameLength(const uint8_t *frameData,
 
     switch (frameType) {
     case kFramePing:
-    case kFrameHandshakeDone:
         frameLen = 1;
+        break;
+    case kFrameHandshakeDone:
+        frameLen = FRAME_HANDSHAKE_DONE_SIZE;
         break;
     case kFramePathChallenge:
     case kFramePathResponse:
@@ -190,6 +194,9 @@ int32_t PacketIn::frameLength(const uint8_t *frameData,
         break;
     case kFrameTransportParams:
         frameLen = FRAME_TRANSPORT_PARAMS_SIZE;
+        break;
+    case kFrameHandshakeDelay:
+        frameLen = FRAME_HANDSHAKE_DELAY_SIZE;
         break;
     default:
         return -1;

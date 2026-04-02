@@ -7,6 +7,7 @@ set(UTP_TEST_SOURCES
     test_frame_ack_decode.cc
     test_frame_reset_stream.cc
     test_frame_ack_frequency.cc
+    test_frame_handshake_aux.cc
     test_frame_crypto.cc
     test_frame_path.cc
     test_frame_session_token.cc

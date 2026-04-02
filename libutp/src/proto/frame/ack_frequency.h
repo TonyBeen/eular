@@ -11,7 +11,7 @@
 #include "proto/proto.h"
 #include "proto/frame.h"
 
-#define FRAME_ACK_FREQUENCY_SIZE (1 + 1 + 1 + 4 + 8)
+#define FRAME_ACK_FREQUENCY_SIZE (1 + 1 + 1 + 4)
 
 namespace eular {
 namespace utp {
@@ -37,7 +37,6 @@ public:
     uint8_t     ack_eliciting_threshold{10};
     uint8_t     reordering_threshold{3};
     uint32_t    max_ack_delay_ms{150};
-    uint64_t    timestamp{0};
 };
 
 } // namespace utp

@@ -30,6 +30,7 @@ local frame_type_names = {
     [14] = "Version",
     [15] = "HandshakeDone",
     [16] = "TransportParams",
+    [17] = "HandshakeDelay",
 }
 
 utp.prefs.udp_port = Pref.uint("UDP port", 9000, "UTP UDP port (0 disables auto registration)")
@@ -87,7 +88,8 @@ f.token_data = ProtoField.bytes("eular_utp.token.data", "Token")
 f.ack_freq_thresh = ProtoField.uint8("eular_utp.ack_frequency.ack_eliciting_threshold", "Ack Eliciting Threshold", base.DEC)
 f.ack_freq_reorder = ProtoField.uint8("eular_utp.ack_frequency.reordering_threshold", "Reordering Threshold", base.DEC)
 f.ack_freq_max_delay = ProtoField.uint32("eular_utp.ack_frequency.max_ack_delay_ms", "Max Ack Delay (ms)", base.DEC)
-f.ack_freq_ts = ProtoField.uint64("eular_utp.ack_frequency.timestamp", "AckFrequency Timestamp", base.DEC)
+f.handshake_done_ack_pn = ProtoField.uint64("eular_utp.handshake_done.ack_handshake_pn", "Acked Handshake Packet Number", base.DEC)
+f.handshake_delay_us = ProtoField.uint32("eular_utp.handshake_delay.delay_time_us", "Handshake Delay (us)", base.DEC)
 
 f.version = ProtoField.uint32("eular_utp.version", "Version", base.DEC)
 
@@ -134,7 +136,7 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     local frame_len = 0
 
     if frame_type == 5 or frame_type == 15 then
-        frame_len = 1
+        frame_len = (frame_type == 5) and 1 or 9
     elseif frame_type == 9 or frame_type == 10 then
         frame_len = 9
     elseif frame_type == 14 then
@@ -170,10 +172,13 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 6 then
         frame_len = 15
     elseif frame_type == 13 then
-        frame_len = 15
+        frame_len = 7
     elseif frame_type == 16 then
         -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 = 14
         frame_len = 14
+    elseif frame_type == 17 then
+        -- FRAME_HANDSHAKE_DELAY_SIZE = 1 + 4 = 5
+        frame_len = 5
     else
         return -1
     end
@@ -281,7 +286,6 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         node:add(f.ack_freq_thresh, payload(payload_offset + 1, 1))
         node:add(f.ack_freq_reorder, payload(payload_offset + 2, 1))
         node:add(f.ack_freq_max_delay, payload(payload_offset + 3, 4))
-        node:add(f.ack_freq_ts, payload(payload_offset + 7, 8))
         append_summary(summaries, string.format("ACK_FREQUENCY n=%u", payload(payload_offset + 1, 1):uint()))
     elseif frame_type == 14 then
         node:add(f.version, payload(payload_offset + 1, 4))
@@ -297,7 +301,11 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 5 then
         append_summary(summaries, "PING")
     elseif frame_type == 15 then
-        append_summary(summaries, "HANDSHAKE_DONE")
+        node:add(f.handshake_done_ack_pn, payload(payload_offset + 1, 8))
+        append_summary(summaries, string.format("HANDSHAKE_DONE ack_pn=%s", tostring(payload(payload_offset + 1, 8):uint64())))
+    elseif frame_type == 17 then
+        node:add(f.handshake_delay_us, payload(payload_offset + 1, 4))
+        append_summary(summaries, string.format("HANDSHAKE_DELAY us=%u", payload(payload_offset + 1, 4):uint()))
     end
 
     return frame_len

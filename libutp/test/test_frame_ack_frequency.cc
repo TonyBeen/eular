@@ -31,8 +31,6 @@ TEST_CASE("AckFrequency decode clamps zero fields to defaults", "[FrameAckFreque
     REQUIRE(offset != nullptr);
     offset = Serialize::SerializeTo(offset, left, static_cast<uint32_t>(0));
     REQUIRE(offset != nullptr);
-    offset = Serialize::SerializeTo(offset, left, static_cast<uint64_t>(123));
-    REQUIRE(offset != nullptr);
 
     FrameAckFrequency ackFreq;
     const int32_t decoded = ackFreq.decode(bytes.data(), bytes.size());
@@ -56,8 +54,6 @@ TEST_CASE("AckFrequency decode clamps oversized fields", "[FrameAckFrequency]")
     REQUIRE(offset != nullptr);
     offset = Serialize::SerializeTo(offset, left, static_cast<uint32_t>(5000));
     REQUIRE(offset != nullptr);
-    offset = Serialize::SerializeTo(offset, left, static_cast<uint64_t>(456));
-    REQUIRE(offset != nullptr);
 
     FrameAckFrequency ackFreq;
     const int32_t decoded = ackFreq.decode(bytes.data(), bytes.size());
@@ -73,7 +69,6 @@ TEST_CASE("AckFrequency encode normalizes invalid values", "[FrameAckFrequency]"
     ackFreq.ack_eliciting_threshold = 0;
     ackFreq.reordering_threshold = 0;
     ackFreq.max_ack_delay_ms = 0;
-    ackFreq.timestamp = 789;
 
     std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> bytes{};
     const int32_t encoded = ackFreq.encode(bytes.data(), bytes.size());
@@ -84,5 +79,4 @@ TEST_CASE("AckFrequency encode normalizes invalid values", "[FrameAckFrequency]"
     REQUIRE(decoded.ack_eliciting_threshold == FrameAckFrequency::kDefaultAckElicitingThreshold);
     REQUIRE(decoded.reordering_threshold == FrameAckFrequency::kDefaultReorderingThreshold);
     REQUIRE(decoded.max_ack_delay_ms == FrameAckFrequency::kDefaultMaxAckDelayMs);
-    REQUIRE(decoded.timestamp == 789);
 }
