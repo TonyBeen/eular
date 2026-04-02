@@ -698,7 +698,7 @@ utp_time_t SendControl::calculateTlpDelay() const
     if (m_nInflightAll > 1) {
         delay = 10000; // 10 ms is the minimum tail loss probe delay
     } else {
-        delay = srtt + srtt / 2 + m_conn->m_peerTP.max_ack_delay * 1000;
+        delay = srtt + srtt / 2 + static_cast<utp_time_t>(m_conn->m_peerAckMaxDelayMs) * 1000;
     }
 
     if (delay < 2 * srtt) {

@@ -10,6 +10,7 @@ set(UTP_TEST_SOURCES
     test_frame_crypto.cc
     test_frame_path.cc
     test_frame_session_token.cc
+    test_frame_transport_params.cc
     test_bbr_config.cc
     test_cubic.cc
     test_mtu.cc

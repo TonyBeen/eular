@@ -112,6 +112,7 @@ set(UTP_SOURCES
     src/proto/frame/reset_stream.cpp
     src/proto/frame/session_token.cpp
     src/proto/frame/stream.cpp
+    src/proto/frame/transport_params.cpp
     src/proto/frame/version.cpp
     src/proto/frame.cpp
     src/proto/packet_in.cpp

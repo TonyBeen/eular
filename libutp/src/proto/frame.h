@@ -38,6 +38,7 @@ enum FrameType : uint8_t {
     kFrameAckFrequency,     // 确认频率帧
     kFrameVersion,          // 版本协商帧
     kFrameHandshakeDone,    // 握手完成帧
+    kFrameTransportParams,  // 传输参数帧
     kFrameMax,
 };
 

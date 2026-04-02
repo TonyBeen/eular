@@ -23,6 +23,7 @@
 #include "proto/packet_in.h"
 #include "proto/frame/version.h"
 #include "proto/frame/crypto.h"
+#include "proto/frame/transport_params.h"
 #include "proto/frame/ack_frequency.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/stream.h"
@@ -886,46 +887,6 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         return UTP_ERR_OK;
     };
 
-    if (pending.encrypted != Context::kEncryptionNone) {
-        if (!pending.x25519) {
-            pending.x25519 = std::make_shared<X25519Wrapper>();
-        }
-
-        TransportParams localTp;
-        localTp.handshake_timeout = m_config.handshake_timeout;
-        localTp.init_max_streams_bidi = m_config.init_max_streams_bidi;
-        localTp.init_max_streams_uni = m_config.init_max_streams_uni;
-        localTp.ack_delay_exponent = m_config.ack_delay_exponent;
-        localTp.max_ack_delay = m_config.ack_delay;
-
-        FrameCrypto crypto;
-        crypto.crypto_type = EncryptionModeToFrameCryptoType(pending.encrypted);
-        crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
-        crypto.tp = &localTp;
-        crypto.eph_pubkey = const_cast<uint8_t *>(pending.x25519->publicKey().data());
-
-        std::vector<uint8_t> payload(FRAME_CRYPTO_SIZE, 0);
-        int32_t frameLen = crypto.encode(payload.data(), payload.size());
-        if (frameLen < 0) {
-            return -1;
-        }
-        payload.resize(static_cast<size_t>(frameLen));
-
-        if (appendAckFrequency(payload) != UTP_ERR_OK) {
-            return -1;
-        }
-
-        const uint16_t targetPacketSize = ConfiguredMinPacketSize(m_config, pending.peerAddress.family());
-        if (targetPacketSize > UTP_HEADER_SIZE) {
-            const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-            if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
-                return -1;
-            }
-        }
-
-        return sendPendingPacket(pending, UTP_TYPE_HANDSHAKE, payload.data(), payload.size());
-    }
-
     FrameVersion version;
     version.version = 1;
     std::vector<uint8_t> payload(FRAME_VERSION_SIZE, 0);
@@ -934,6 +895,40 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
         return -1;
     }
     payload.resize(static_cast<size_t>(frameLen));
+
+    TransportParams localTp;
+    localTp.handshake_timeout = m_config.handshake_timeout;
+    localTp.init_max_streams_bidi = m_config.init_max_streams_bidi;
+    localTp.init_max_streams_uni = m_config.init_max_streams_uni;
+    localTp.ack_delay_exponent = m_config.ack_delay_exponent;
+
+    FrameTransportParams transportParams;
+    transportParams.params = &localTp;
+    const size_t tpOffset = payload.size();
+    payload.resize(tpOffset + FRAME_TRANSPORT_PARAMS_SIZE, 0);
+    frameLen = transportParams.encode(payload.data() + tpOffset, FRAME_TRANSPORT_PARAMS_SIZE);
+    if (frameLen < 0) {
+        return -1;
+    }
+    payload.resize(tpOffset + static_cast<size_t>(frameLen));
+
+    if (pending.encrypted != Context::kEncryptionNone) {
+        if (!pending.x25519) {
+            pending.x25519 = std::make_shared<X25519Wrapper>();
+        }
+
+        FrameCrypto crypto;
+        crypto.crypto_type = EncryptionModeToFrameCryptoType(pending.encrypted);
+        crypto.eph_pubkey = const_cast<uint8_t *>(pending.x25519->publicKey().data());
+
+        const size_t cryptoOffset = payload.size();
+        payload.resize(cryptoOffset + FRAME_CRYPTO_SIZE, 0);
+        frameLen = crypto.encode(payload.data() + cryptoOffset, FRAME_CRYPTO_SIZE);
+        if (frameLen < 0) {
+            return -1;
+        }
+        payload.resize(cryptoOffset + static_cast<size_t>(frameLen));
+    }
 
     if (appendAckFrequency(payload) != UTP_ERR_OK) {
         return -1;
@@ -1699,15 +1694,22 @@ void ContextImpl::onReadEvent()
                     break;
                 }
 
-                if (frameType == kFrameCrypto && pending.aesCtx == nullptr) {
+                if (frameType == kFrameTransportParams) {
                     TransportParams peerTp;
+                    FrameTransportParams transportParams;
+                    transportParams.params = &peerTp;
+                    if (transportParams.decode(frameData, frameLen) >= 0) {
+                        pending.peerTp = peerTp;
+                    }
+                    continue;
+                }
+
+                if (frameType == kFrameCrypto && pending.aesCtx == nullptr) {
                     std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubKey{};
                     FrameCrypto crypto;
-                    crypto.tp = &peerTp;
                     crypto.eph_pubkey = peerPubKey.data();
                     if (crypto.decode(frameData, frameLen) >= 0) {
                         pending.encrypted = FrameCryptoTypeToEncryptionMode(crypto.crypto_type);
-                        pending.peerTp = peerTp;
                         if (!pending.x25519) {
                             pending.x25519 = std::make_shared<X25519Wrapper>();
                         }
@@ -1799,7 +1801,6 @@ void ContextImpl::onReadEvent()
 void ContextImpl::onWriteEvent()
 {
     m_inWriteDispatch = true;
-
     const uint32_t quantum = ConnectionWdrQuantum(m_config);
     const uint32_t deficitCap = ConnectionWdrDeficitCap(m_config);
     size_t roundBudget = m_wantWriteConns.size();

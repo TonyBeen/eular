@@ -37,6 +37,7 @@
 #include "proto/frame/stream.h"
 #include "proto/frame/reset_stream.h"
 #include "proto/frame/crypto.h"
+#include "proto/frame/transport_params.h"
 #include "proto/frame/connection_close.h"
 
 #include "crypto/x25519_wrapper.h"
@@ -204,6 +205,24 @@ int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
     return UTP_ERR_OK;
 }
 
+int32_t BuildTransportParamsFrame(const eular::utp::TransportParams &params,
+                                  uint8_t *buffer,
+                                  size_t size,
+                                  size_t &outSize)
+{
+    eular::utp::TransportParams local = params;
+    eular::utp::FrameTransportParams frame;
+    frame.params = &local;
+
+    const int32_t encoded = frame.encode(buffer, size);
+    if (encoded < 0) {
+        return -1;
+    }
+
+    outSize = static_cast<size_t>(encoded);
+    return UTP_ERR_OK;
+}
+
 int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
                                          std::vector<uint8_t> &payload)
 {
@@ -249,6 +268,8 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
     m_networkPath(ctx && ctx->config() ? ctx->config()->keepalive_timeout : 1500,
                   ctx && ctx->config() ? static_cast<uint8_t>(ctx->config()->keepalive_probes) : 3)
 {
+    bootstrapLocalTransportParams();
+
     m_connTimer.reset(ctx->loop(), [this] () {
         onConnTimeout();
     });
@@ -298,6 +319,23 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
 }
 
 ConnectionImpl::~ConnectionImpl() = default;
+
+void ConnectionImpl::bootstrapLocalTransportParams()
+{
+    m_loaclTP = TransportParams{};
+    if (m_ctx == nullptr || m_ctx->config() == nullptr) {
+        m_peerAckMaxDelayMs = FrameAckFrequency::kDefaultMaxAckDelayMs;
+        return;
+    }
+
+    const Config *cfg = m_ctx->config();
+    m_loaclTP.max_idle_timeout = cfg->max_idle_timeout;
+    m_loaclTP.handshake_timeout = cfg->handshake_timeout;
+    m_loaclTP.init_max_streams_bidi = cfg->init_max_streams_bidi;
+    m_loaclTP.init_max_streams_uni = cfg->init_max_streams_uni;
+    m_loaclTP.ack_delay_exponent = cfg->ack_delay_exponent;
+    m_peerAckMaxDelayMs = cfg->ack_delay;
+}
 
 int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt)
 {
@@ -602,6 +640,15 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             }
             break;
         }
+        case kFrameTransportParams: {
+            TransportParams peerTp;
+            FrameTransportParams frameTp;
+            frameTp.params = &peerTp;
+            if (frameTp.decode(frameData, frameLen) >= 0) {
+                m_peerTP = peerTp;
+            }
+            break;
+        }
         case kFrameSessionToken: {
             FrameSessionToken sessionToken;
             if (sessionToken.decode(frameData, frameLen) >= 0 && m_ctx != nullptr && m_ctx->config() != nullptr) {
@@ -621,14 +668,11 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             break;
         }
         case kFrameCrypto: {
-            TransportParams peerTp;
             std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubkey{};
 
             FrameCrypto crypto;
-            crypto.tp = &peerTp;
             crypto.eph_pubkey = peerPubkey.data();
             if (crypto.decode(frameData, frameLen) >= 0) {
-                m_peerTP = peerTp;
                 if (!m_x25519) {
                     m_x25519 = std::make_shared<X25519Wrapper>();
                 }
@@ -1008,6 +1052,7 @@ int32_t ConnectionImpl::sendAckFrequencyUpdate(AckFrequencyProfile profile, utp_
                                       (1u << static_cast<uint32_t>(kFrameAckFrequency)));
     if (status == UTP_ERR_OK) {
         m_ackProfileLastSentMs = nowUs / 1000;
+        m_peerAckMaxDelayMs = ackFreq.max_ack_delay_ms;
     }
 
     return status;
@@ -1735,6 +1780,22 @@ int32_t ConnectionImpl::sendInitialPacket()
 {
     std::vector<uint8_t> payload;
 
+    FrameVersion version;
+    version.version = 1;
+    std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
+    int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
+    if (frameLen < 0) {
+        return -1;
+    }
+    payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
+
+    std::array<uint8_t, FRAME_TRANSPORT_PARAMS_SIZE> tpPayload{};
+    size_t tpSize = 0;
+    if (BuildTransportParamsFrame(m_loaclTP, tpPayload.data(), tpPayload.size(), tpSize) != UTP_ERR_OK) {
+        return -1;
+    }
+    payload.insert(payload.end(), tpPayload.begin(), tpPayload.begin() + tpSize);
+
     if (m_connectInfo.encrypted != Context::kEncryptionNone) {
         if (!m_x25519) {
             m_x25519 = std::make_shared<X25519Wrapper>();
@@ -1742,25 +1803,14 @@ int32_t ConnectionImpl::sendInitialPacket()
 
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
-        crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
-        crypto.tp = &m_loaclTP;
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
         std::array<uint8_t, FRAME_CRYPTO_SIZE> cryptoPayload{};
-        int32_t frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
+        frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
         if (frameLen < 0) {
             return -1;
         }
         payload.insert(payload.end(), cryptoPayload.begin(), cryptoPayload.begin() + frameLen);
-    } else {
-        FrameVersion version;
-        version.version = 1;
-        std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
-        int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
-        if (frameLen < 0) {
-            return -1;
-        }
-        payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
     }
 
     if (m_zeroRttConfig.enabled()) {
@@ -1810,6 +1860,22 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
 {
     std::vector<uint8_t> payload;
 
+    FrameVersion version;
+    version.version = 1;
+    std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
+    int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
+    if (frameLen < 0) {
+        return -1;
+    }
+    payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
+
+    std::array<uint8_t, FRAME_TRANSPORT_PARAMS_SIZE> tpPayload{};
+    size_t tpSize = 0;
+    if (BuildTransportParamsFrame(m_loaclTP, tpPayload.data(), tpPayload.size(), tpSize) != UTP_ERR_OK) {
+        return -1;
+    }
+    payload.insert(payload.end(), tpPayload.begin(), tpPayload.begin() + tpSize);
+
     if (encrypted) {
         if (!m_x25519) {
             m_x25519 = std::make_shared<X25519Wrapper>();
@@ -1817,25 +1883,14 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
 
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
-        crypto.tp_size = static_cast<uint8_t>(TransportParams::kMaxNumeric);
-        crypto.tp = &m_loaclTP;
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
         std::array<uint8_t, FRAME_CRYPTO_SIZE> cryptoPayload{};
-        int32_t frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
+        frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
         if (frameLen < 0) {
             return -1;
         }
         payload.insert(payload.end(), cryptoPayload.begin(), cryptoPayload.begin() + frameLen);
-    } else {
-        FrameVersion version;
-        version.version = 1;
-        std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
-        int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
-        if (frameLen < 0) {
-            return -1;
-        }
-        payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
     }
 
     std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> ackFreqPayload{};
@@ -2267,10 +2322,12 @@ void ConnectionImpl::armHandshakeDoneTimer()
 uint32_t ConnectionImpl::handshakeDoneDelayMs() const
 {
     uint32_t handshakeTimeoutMs = 0;
-    if (m_ctx != nullptr && m_ctx->config() != nullptr && m_ctx->config()->handshake_timeout > 0) {
-        handshakeTimeoutMs = m_ctx->config()->handshake_timeout;
+    if ((m_peerTP.flags & TransportParams::kHandshakeTimeout) != 0 && m_peerTP.handshake_timeout > 0) {
+        handshakeTimeoutMs = m_peerTP.handshake_timeout;
     } else if (m_connectInfo.timeout > 0) {
         handshakeTimeoutMs = m_connectInfo.timeout;
+    } else if (m_ctx != nullptr && m_ctx->config() != nullptr && m_ctx->config()->handshake_timeout > 0) {
+        handshakeTimeoutMs = m_ctx->config()->handshake_timeout;
     } else {
         handshakeTimeoutMs = 1000;
     }
@@ -2421,7 +2478,7 @@ utp_time_t ConnectionImpl::closePtoUs() const
         granularityUs = std::max<utp_time_t>(1000, m_ctx->config()->clock_granularity_us);
     }
 
-    utp_time_t maxAckDelayUs = static_cast<utp_time_t>(m_peerTP.max_ack_delay) * 1000;
+    utp_time_t maxAckDelayUs = static_cast<utp_time_t>(m_peerAckMaxDelayMs) * 1000;
     utp_time_t ptoUs = srtt + std::max<utp_time_t>(4 * rttVar, granularityUs) + maxAckDelayUs;
     ptoUs = std::max<utp_time_t>(ptoUs, kMinPtoUs);
     ptoUs = std::min<utp_time_t>(ptoUs, kMaxPtoUs);

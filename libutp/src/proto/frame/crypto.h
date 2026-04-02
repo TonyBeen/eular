@@ -11,12 +11,10 @@
 #include <cstddef>
 
 #include "proto/frame.h"
-#include "util/transport_param.h"
 
 #define FRAME_CRYPTO_EPH_PUBKEY_SIZE    (32)
-#define FRAME_CRYPTO_TP_SIZE            (2 + 4 + 2 + 2 + 2 + 1 + 2)
 #define FRAME_CRYPTO_HDR_SIZE           (1 + 1 + 1)
-#define FRAME_CRYPTO_SIZE               (FRAME_CRYPTO_HDR_SIZE + FRAME_CRYPTO_TP_SIZE + FRAME_CRYPTO_EPH_PUBKEY_SIZE)
+#define FRAME_CRYPTO_SIZE               (FRAME_CRYPTO_HDR_SIZE + FRAME_CRYPTO_EPH_PUBKEY_SIZE)
 
 namespace eular {
 namespace utp {
@@ -31,8 +29,6 @@ public:
 
 public:
     FrameCryptoType     crypto_type;    // 加密算法类型
-    uint8_t             tp_size;        // tp参数个数
-    TransportParams*    tp;             // tp参数列表, 长度为tp_size
     void*               eph_pubkey;     // x25519 公钥
 };
 

@@ -155,6 +155,19 @@ TEST_CASE("ConnectionImpl: handshake barrier blocks regular stream send until ha
     REQUIRE(status == UTP_ERR_WOULD_BLOCK);
 }
 
+TEST_CASE("ConnectionImpl: handshake done delay uses peer transport timeout", "[Connection][Handshake]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 9000;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1101);
+    conn.m_peerTP.handshake_timeout = 6000;
+
+    REQUIRE(conn.handshakeDoneDelayMs() == 2000);
+}
+
 TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")
 {
     Config cfg;

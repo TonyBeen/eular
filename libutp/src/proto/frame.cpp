@@ -30,6 +30,7 @@ std::string FrameTypeToString(uint32_t type)
         [kFrameAckFrequency]    = "AckFrequency",
         [kFrameVersion]         = "Version",
         [kFrameHandshakeDone]   = "HandshakeDone",
+        [kFrameTransportParams] = "TransportParams",
     };
 
     if (type == kFrameInvalid) {

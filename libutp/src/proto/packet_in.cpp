@@ -18,6 +18,7 @@
 #include "proto/frame/path.h"
 #include "proto/frame/version.h"
 #include "proto/frame/ack_frequency.h"
+#include "proto/frame/transport_params.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/connection_close.h"
 #include "proto/frame/crypto.h"
@@ -186,6 +187,9 @@ int32_t PacketIn::frameLength(const uint8_t *frameData,
         break;
     case kFrameAckFrequency:
         frameLen = FRAME_ACK_FREQUENCY_SIZE;
+        break;
+    case kFrameTransportParams:
+        frameLen = FRAME_TRANSPORT_PARAMS_SIZE;
         break;
     default:
         return -1;

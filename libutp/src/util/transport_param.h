@@ -20,16 +20,14 @@ public:
         kInitMaxStreamsBidi = 1u << 2, // 初始双向流最大数量
         kInitMaxStreamsUni  = 1u << 3, // 初始单向流最大数量
         kAckDelayExponent   = 1u << 4, // ack延迟指数
-        kMaxAckDelay        = 1u << 5, // 最大ack延迟时间(ms)
-        kMaxNumeric         = 6,        // 参数个数
+        kMaxNumeric         = 5,        // 参数个数
     };
     static const uint16_t kDefaultFlags =
           kMaxIdleTimeout
         | kHandshakeTimeout
         | kInitMaxStreamsBidi
         | kInitMaxStreamsUni
-        | kAckDelayExponent
-        | kMaxAckDelay;
+        | kAckDelayExponent;
 
     template<typename T>
     void setParam(int32_t param, T value)
@@ -50,9 +48,6 @@ public:
         case kAckDelayExponent:
             ack_delay_exponent = value;
             break;
-        case kMaxAckDelay:
-            max_ack_delay = value;
-            break;
         default:
             return;
         }
@@ -69,7 +64,6 @@ public:
     uint16_t    init_max_streams_bidi{64};  // 对端允许的双向流最大数量
     uint16_t    init_max_streams_uni{32};   // 对端允许的单向流最大数量
     uint8_t     ack_delay_exponent{3};      // ack延迟时间的指数, ack_delay = 2^ack_delay_exponent ms
-    uint16_t    max_ack_delay{150};         // 150 ms
 };
 
 } // namespace utp

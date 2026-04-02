@@ -19,11 +19,10 @@ namespace utp {
 
 int32_t FrameCrypto::encode(void *buffer, size_t size) const
 {
-    if (buffer == nullptr || tp == nullptr || eph_pubkey == nullptr) {
+    if (buffer == nullptr || eph_pubkey == nullptr) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid crypto frame encode args: buffer={}, tp={}, eph_pubkey={}",
+                      "invalid crypto frame encode args: buffer={}, eph_pubkey={}",
                       buffer != nullptr,
-                      tp != nullptr,
                       eph_pubkey != nullptr);
         return -1;
     }
@@ -34,24 +33,14 @@ int32_t FrameCrypto::encode(void *buffer, size_t size) const
         return -1;
     }
 
-    const uint8_t encodeTpSize = tp_size == 0 ? static_cast<uint8_t>(TransportParams::kMaxNumeric) : tp_size;
-
     uint8_t *bufferOffset = static_cast<uint8_t *>(buffer);
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, FrameType::kFrameCrypto);
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, crypto_type);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, encodeTpSize);
-
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->flags);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->max_idle_timeout);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->handshake_timeout);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->init_max_streams_bidi);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->init_max_streams_uni);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->ack_delay_exponent);
-    bufferOffset = Serialize::SerializeTo(bufferOffset, size, tp->max_ack_delay);
+    bufferOffset = Serialize::SerializeTo(bufferOffset, size, static_cast<uint8_t>(0));
 
     if (bufferOffset == nullptr || size < FRAME_CRYPTO_EPH_PUBKEY_SIZE) {
         SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "failed to encode crypto frame transport params, left={} bytes",
+                      "failed to encode crypto frame public key, left={} bytes",
                       size);
         return -1;
     }
@@ -62,11 +51,10 @@ int32_t FrameCrypto::encode(void *buffer, size_t size) const
 
 int32_t FrameCrypto::decode(const void *buffer, size_t size)
 {
-    if (buffer == nullptr || tp == nullptr || eph_pubkey == nullptr) {
+    if (buffer == nullptr || eph_pubkey == nullptr) {
         SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid crypto frame decode args: buffer={}, tp={}, eph_pubkey={}",
+                      "invalid crypto frame decode args: buffer={}, eph_pubkey={}",
                       buffer != nullptr,
-                      tp != nullptr,
                       eph_pubkey != nullptr);
         return -1;
     }
@@ -94,19 +82,9 @@ int32_t FrameCrypto::decode(const void *buffer, size_t size)
         return -1;
     }
 
-    if (!deserialize(crypto_type) || !deserialize(tp_size)) {
+    uint8_t reserved = 0;
+    if (!deserialize(crypto_type) || !deserialize(reserved)) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode crypto frame header");
-        return -1;
-    }
-
-    if (!deserialize(tp->flags)
-        || !deserialize(tp->max_idle_timeout)
-        || !deserialize(tp->handshake_timeout)
-        || !deserialize(tp->init_max_streams_bidi)
-        || !deserialize(tp->init_max_streams_uni)
-        || !deserialize(tp->ack_delay_exponent)
-        || !deserialize(tp->max_ack_delay)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode crypto frame transport params");
         return -1;
     }
 

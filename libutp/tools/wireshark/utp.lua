@@ -29,6 +29,7 @@ local frame_type_names = {
     [13] = "AckFrequency",
     [14] = "Version",
     [15] = "HandshakeDone",
+    [16] = "TransportParams",
 }
 
 utp.prefs.udp_port = Pref.uint("UDP port", 9000, "UTP UDP port (0 disables auto registration)")
@@ -76,8 +77,7 @@ f.close_reason = ProtoField.string("eular_utp.close.reason", "Close Reason")
 f.path_data = ProtoField.bytes("eular_utp.path.data", "Path Data")
 
 f.crypto_type = ProtoField.uint8("eular_utp.crypto.type", "Crypto Type", base.DEC)
-f.crypto_tp_size = ProtoField.uint8("eular_utp.crypto.tp_size", "Transport Param Count", base.DEC)
-f.crypto_tp_raw = ProtoField.bytes("eular_utp.crypto.tp_raw", "Transport Params (raw)")
+f.crypto_reserved = ProtoField.uint8("eular_utp.crypto.reserved", "Reserved", base.HEX)
 f.crypto_pubkey = ProtoField.bytes("eular_utp.crypto.pubkey", "Ephemeral Public Key")
 
 f.token_size = ProtoField.uint8("eular_utp.token.size", "Token Size", base.DEC)
@@ -90,6 +90,13 @@ f.ack_freq_max_delay = ProtoField.uint32("eular_utp.ack_frequency.max_ack_delay_
 f.ack_freq_ts = ProtoField.uint64("eular_utp.ack_frequency.timestamp", "AckFrequency Timestamp", base.DEC)
 
 f.version = ProtoField.uint32("eular_utp.version", "Version", base.DEC)
+
+f.tp_flags = ProtoField.uint16("eular_utp.transport_params.flags", "TransportParams Flags", base.HEX)
+f.tp_max_idle_timeout = ProtoField.uint32("eular_utp.transport_params.max_idle_timeout", "Max Idle Timeout (ms)", base.DEC)
+f.tp_handshake_timeout = ProtoField.uint16("eular_utp.transport_params.handshake_timeout", "Handshake Timeout (ms)", base.DEC)
+f.tp_init_max_streams_bidi = ProtoField.uint16("eular_utp.transport_params.init_max_streams_bidi", "Init Max Streams Bidi", base.DEC)
+f.tp_init_max_streams_uni = ProtoField.uint16("eular_utp.transport_params.init_max_streams_uni", "Init Max Streams Uni", base.DEC)
+f.tp_ack_delay_exponent = ProtoField.uint8("eular_utp.transport_params.ack_delay_exponent", "Ack Delay Exponent", base.DEC)
 
 f.reset_error = ProtoField.uint16("eular_utp.reset.error", "Reset Error Code", base.DEC)
 f.reset_stream_id = ProtoField.uint32("eular_utp.reset.stream_id", "Reset Stream ID", base.DEC)
@@ -158,13 +165,15 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         end
         frame_len = 16 + payload(payload_offset + 1, 1):uint() * 8
     elseif frame_type == 11 then
-        -- FRAME_CRYPTO_SIZE = 1(type) + 1(crypto_type) + 1(tp_size)
-        --                   + 15(transport params fixed fields) + 32(pubkey) = 50
-        frame_len = 50
+        -- FRAME_CRYPTO_SIZE = 1(type) + 1(crypto_type) + 1(reserved) + 32(pubkey) = 35
+        frame_len = 35
     elseif frame_type == 6 then
         frame_len = 15
     elseif frame_type == 13 then
         frame_len = 15
+    elseif frame_type == 16 then
+        -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 = 14
+        frame_len = 14
     else
         return -1
     end
@@ -257,9 +266,8 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         append_summary(summaries, frame_type == 9 and "PATH_CHALLENGE" or "PATH_RESPONSE")
     elseif frame_type == 11 then
         node:add(f.crypto_type, payload(payload_offset + 1, 1))
-        node:add(f.crypto_tp_size, payload(payload_offset + 2, 1))
-        node:add(f.crypto_tp_raw, payload(payload_offset + 3, 24))
-        node:add(f.crypto_pubkey, payload(payload_offset + 27, 32))
+        node:add(f.crypto_reserved, payload(payload_offset + 2, 1))
+        node:add(f.crypto_pubkey, payload(payload_offset + 3, 32))
         append_summary(summaries, string.format("CRYPTO type=%u", payload(payload_offset + 1, 1):uint()))
     elseif frame_type == 12 then
         local token_size = payload(payload_offset + 1, 1):uint()
@@ -278,6 +286,14 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 14 then
         node:add(f.version, payload(payload_offset + 1, 4))
         append_summary(summaries, string.format("VERSION %u", payload(payload_offset + 1, 4):uint()))
+    elseif frame_type == 16 then
+        node:add(f.tp_flags, payload(payload_offset + 1, 2))
+        node:add(f.tp_max_idle_timeout, payload(payload_offset + 3, 4))
+        node:add(f.tp_handshake_timeout, payload(payload_offset + 7, 2))
+        node:add(f.tp_init_max_streams_bidi, payload(payload_offset + 9, 2))
+        node:add(f.tp_init_max_streams_uni, payload(payload_offset + 11, 2))
+        node:add(f.tp_ack_delay_exponent, payload(payload_offset + 13, 1))
+        append_summary(summaries, string.format("TP hs_to=%u", payload(payload_offset + 7, 2):uint()))
     elseif frame_type == 5 then
         append_summary(summaries, "PING")
     elseif frame_type == 15 then

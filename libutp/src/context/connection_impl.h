@@ -218,6 +218,7 @@ private:
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
     void    onHandshakeDoneFrameAcked();
+    void    bootstrapLocalTransportParams();
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
     void    notifyConnectionError(int32_t errorCode, const std::string &reason, bool fatal);
@@ -319,6 +320,7 @@ private:
     uint8_t                 m_ackElicitingThreshold{0};
     uint8_t                 m_ackReorderingThreshold{0};
     uint32_t                m_ackMaxDelayMs{0};
+    uint32_t                m_peerAckMaxDelayMs{UTP_DEFAULT_MAX_ACK_DELAY_MS};
     uint32_t                m_ackElicitingSinceLastAck{0};
     utp_time_t              m_ackPendingSinceUs{0};
     utp_time_t              m_lastAckFrequencyApplyMs{0};
