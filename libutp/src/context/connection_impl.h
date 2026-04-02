@@ -298,6 +298,10 @@ private:
     uint64_t                m_obsRttUs{0};            // 统计用 SRTT(单位:us)，仅用于 Connection::Statistic 导出
     uint64_t                m_obsRttVarUs{0};         // 统计用 RTTVAR(单位:us)，仅用于 Connection::Statistic 导出
     uint64_t                m_streamUnackedDataBytes{0};
+    mutable std::vector<uint8_t> m_ackPayloadScratch;
+    std::vector<uint8_t>    m_payloadScratch;
+    std::vector<uint8_t>    m_bodyScratch;
+    std::vector<UdpSocket::MsgMetaInfo> m_sendMsgScratch;
     ev::EventTimer          m_pathValidationTimer;
     ev::EventTimer          m_handshakeDoneTimer;
     ev::EventTimer          m_ackTimer;

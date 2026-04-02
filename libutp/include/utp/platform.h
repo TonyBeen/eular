@@ -44,6 +44,22 @@
     #error "unsupported system platform!"
 #endif
 
+#if defined(_MSC_VER)
+    #define UTP_COMPILER_MSVC 1
+#endif
+
+#if defined(__clang__)
+    #define UTP_COMPILER_CLANG 1
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+    #define UTP_COMPILER_GCC 1
+#endif
+
+#if defined(UTP_COMPILER_GCC) || defined(UTP_COMPILER_CLANG)
+    #define UTP_COMPILER_GNU_LIKE 1
+#endif
+
 #ifdef __cplusplus
     #define EXTERN_C_BEGIN extern "C" {
     #define EXTERN_C_END }

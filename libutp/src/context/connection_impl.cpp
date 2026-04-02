@@ -17,6 +17,10 @@
 #include <memory>
 #include <vector>
 
+#if defined(UTP_COMPILER_MSVC)
+#include <intrin.h>
+#endif
+
 #include <utils/serialize.hpp>
 
 #include "utp/errno.h"
@@ -73,6 +77,8 @@ constexpr uint32_t kLossFrequentThreshold = 2;
 constexpr size_t kMaxStreamPriorityLevels = 8;
 constexpr size_t kMaxStreamSendBurstsPerFlush = 64;
 constexpr utp_time_t kSchedulerStatsLogIntervalUs = 2000000;
+constexpr size_t kAckPayloadScratchSize = 1500;
+constexpr size_t kDefaultPayloadScratchCapacity = 2048;
 
 struct AckProfileTuning {
     uint8_t ackThreshold;
@@ -95,13 +101,70 @@ AckProfileTuning TuningForProfile(eular::utp::ConnectionImpl::AckFrequencyProfil
 
 FrameType FirstFrameTypeBit(uint32_t frameTypes)
 {
-    for (uint32_t i = 0; i < static_cast<uint32_t>(eular::utp::kFrameMax); ++i) {
-        if (frameTypes & (1u << i)) {
-            return static_cast<FrameType>(i);
-        }
+    if (frameTypes == 0) {
+        return eular::utp::kFrameInvalid;
     }
 
-    return eular::utp::kFrameInvalid;
+    uint32_t bitIndex = 0;
+#if defined(UTP_COMPILER_MSVC)
+    unsigned long firstSetBit = 0;
+    if (_BitScanForward(&firstSetBit, frameTypes) == 0) {
+        return eular::utp::kFrameInvalid;
+    }
+    bitIndex = static_cast<uint32_t>(firstSetBit);
+#elif defined(UTP_COMPILER_GNU_LIKE)
+    bitIndex = static_cast<uint32_t>(__builtin_ctz(frameTypes));
+#else
+    while (((frameTypes >> bitIndex) & 1u) == 0u) {
+        ++bitIndex;
+    }
+#endif
+
+    if (bitIndex >= static_cast<uint32_t>(eular::utp::kFrameMax)) {
+        return eular::utp::kFrameInvalid;
+    }
+
+    return static_cast<FrameType>(bitIndex);
+}
+
+bool ResetScratchBuffer(std::vector<uint8_t> &buffer, size_t size)
+{
+    if (buffer.size() != size) {
+        buffer.resize(size);
+    }
+    return true;
+}
+
+bool AppendRawBytes(std::vector<uint8_t> &buffer, const void *data, size_t len)
+{
+    if (len == 0) {
+        return true;
+    }
+    if (data == nullptr) {
+        return false;
+    }
+
+    const size_t oldSize = buffer.size();
+    buffer.resize(oldSize + len);
+    std::memcpy(buffer.data() + oldSize, data, len);
+    return true;
+}
+
+template <typename FrameT>
+int32_t AppendEncodedFrame(std::vector<uint8_t> &payload,
+                           const FrameT &frame,
+                           size_t maxFrameSize)
+{
+    const size_t oldSize = payload.size();
+    payload.resize(oldSize + maxFrameSize);
+    const int32_t encoded = frame.encode(payload.data() + oldSize, maxFrameSize);
+    if (encoded < 0) {
+        payload.resize(oldSize);
+        return -1;
+    }
+
+    payload.resize(oldSize + static_cast<size_t>(encoded));
+    return UTP_ERR_OK;
 }
 
 bool IsSupportedStreamType(Connection::StreamType streamType)
@@ -186,10 +249,8 @@ bool FrameCryptoTypeToEncryptionContext(eular::utp::FrameCryptoType type,
     return aesCtx->init(key128, noncePrefix);
 }
 
-int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
-                               uint8_t *buffer,
-                               size_t size,
-                               size_t &outSize)
+int32_t AppendAckFrequencyFrame(const eular::utp::Config *config,
+                                std::vector<uint8_t> &payload)
 {
     eular::utp::FrameAckFrequency ackFreq;
     const uint16_t ackEveryN = config ? config->ack_every_n_packets : 10;
@@ -198,31 +259,17 @@ int32_t BuildAckFrequencyFrame(const eular::utp::Config *config,
     ackFreq.max_ack_delay_ms = config ? config->ack_delay : 150;
     ackFreq.normalize();
 
-    const int32_t encoded = ackFreq.encode(buffer, size);
-    if (encoded < 0) {
-        return -1;
-    }
-
-    outSize = static_cast<size_t>(encoded);
-    return UTP_ERR_OK;
+    return AppendEncodedFrame(payload, ackFreq, FRAME_ACK_FREQUENCY_SIZE);
 }
 
-int32_t BuildTransportParamsFrame(const eular::utp::TransportParams &params,
-                                  uint8_t *buffer,
-                                  size_t size,
-                                  size_t &outSize)
+int32_t AppendTransportParamsFrame(const eular::utp::TransportParams &params,
+                                   std::vector<uint8_t> &payload)
 {
     eular::utp::TransportParams local = params;
     eular::utp::FrameTransportParams frame;
     frame.params = &local;
 
-    const int32_t encoded = frame.encode(buffer, size);
-    if (encoded < 0) {
-        return -1;
-    }
-
-    outSize = static_cast<size_t>(encoded);
-    return UTP_ERR_OK;
+    return AppendEncodedFrame(payload, frame, FRAME_TRANSPORT_PARAMS_SIZE);
 }
 
 int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
@@ -241,7 +288,7 @@ int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
     padding.padding_length = static_cast<uint16_t>(remain - FRAME_PADDING_HDR_SIZE);
 
     const size_t oldSize = payload.size();
-    payload.resize(targetPayloadSize, 0);
+    payload.resize(targetPayloadSize);
     const int32_t encoded = padding.encode(payload.data() + oldSize, remain);
     if (encoded < 0 || static_cast<size_t>(encoded) != remain) {
         return -1;
@@ -271,6 +318,10 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
                   ctx && ctx->config() ? static_cast<uint8_t>(ctx->config()->keepalive_probes) : 3)
 {
     bootstrapLocalTransportParams();
+    m_ackPayloadScratch.reserve(kAckPayloadScratchSize);
+    m_payloadScratch.reserve(kDefaultPayloadScratchCapacity);
+    m_bodyScratch.reserve(kDefaultPayloadScratchCapacity);
+    m_sendMsgScratch.reserve(1);
 
     m_connTimer.reset(ctx->loop(), [this] () {
         onConnTimeout();
@@ -931,7 +982,7 @@ int32_t ConnectionImpl::buildAckPayload(std::vector<uint8_t> &payload, utp_time_
     ackFrame._config = m_ctx->config();
     ackFrame._now = nowUs;
 
-    payload.assign(1500, 0);
+    ResetScratchBuffer(payload, kAckPayloadScratchSize);
     const int32_t ackLen = ackFrame.encode(payload.data(), payload.size());
     if (ackLen <= 0) {
         payload.clear();
@@ -949,14 +1000,13 @@ int32_t ConnectionImpl::sendAckPacket(utp_time_t nowUs)
         return UTP_ERR_OK;
     }
 
-    std::vector<uint8_t> ackPayload;
-    if (buildAckPayload(ackPayload, nowUs) != UTP_ERR_OK) {
+    if (buildAckPayload(m_ackPayloadScratch, nowUs) != UTP_ERR_OK) {
         return UTP_ERR_INVALID_STATE;
     }
 
     const int32_t status = sendPacket(UTP_TYPE_CTRL,
-                                      ackPayload.data(),
-                                      ackPayload.size(),
+                                      m_ackPayloadScratch.data(),
+                                      m_ackPayloadScratch.size(),
                                       0,
                                       nullptr,
                                       (1u << static_cast<uint32_t>(kFrameAck)));
@@ -1501,9 +1551,11 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> handshakeTrailer{};
     size_t handshakeTrailerSize = 0;
+    const utp_time_t nowUs = (piggybackHandshakeDone || m_ackElicitingSinceLastAck > 0)
+                           ? time::MonotonicUs()
+                           : 0;
 
     if (piggybackHandshakeDone) {
-        const utp_time_t nowUs = time::MonotonicUs();
         const utp_time_t baseUs = (m_handshakeReceivedAtUs > 0 && nowUs >= m_handshakeReceivedAtUs)
                                 ? m_handshakeReceivedAtUs
                                 : nowUs;
@@ -1525,25 +1577,26 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
         sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
 
-        std::vector<uint8_t> tokenPayload(static_cast<size_t>(sessionToken.frameSize()), 0);
-        const int32_t tokenLen = sessionToken.encode(tokenPayload.data(), tokenPayload.size());
+        m_payloadScratch.clear();
+        m_payloadScratch.resize(static_cast<size_t>(sessionToken.frameSize()));
+        const int32_t tokenLen = sessionToken.encode(m_payloadScratch.data(), m_payloadScratch.size());
         if (tokenLen < 0) {
             return -1;
         }
 
-        std::vector<uint8_t> payload;
-        payload.reserve(static_cast<size_t>(tokenLen) + header.size() + len);
-        payload.insert(payload.end(), tokenPayload.begin(), tokenPayload.begin() + tokenLen);
-        payload.insert(payload.end(), header.begin(), header.end());
-        if (len > 0 && data != nullptr) {
-            payload.insert(payload.end(), data, data + len);
+        m_payloadScratch.resize(static_cast<size_t>(tokenLen));
+        if (!AppendRawBytes(m_payloadScratch, header.data(), header.size())) {
+            return -1;
+        }
+        if (!AppendRawBytes(m_payloadScratch, data, len)) {
+            return -1;
         }
 
         const uint32_t frameBits = (1u << static_cast<uint32_t>(kFrameSessionToken))
                                 | (1u << static_cast<uint32_t>(kFrameStream));
         return sendPacket(UTP_TYPE_0RTT,
-                          payload.data(),
-                          payload.size(),
+                          m_payloadScratch.data(),
+                          m_payloadScratch.size(),
                           0,
                           nullptr,
                           frameBits,
@@ -1552,9 +1605,8 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
     }
 
     if (m_ackElicitingSinceLastAck > 0) {
-        std::vector<uint8_t> ackPayload;
-        if (buildAckPayload(ackPayload, time::MonotonicUs()) == UTP_ERR_OK) {
-            const size_t combinedSize = ackPayload.size() + header.size() + len + handshakeTrailerSize;
+        if (buildAckPayload(m_ackPayloadScratch, nowUs) == UTP_ERR_OK) {
+            const size_t combinedSize = m_ackPayloadScratch.size() + header.size() + len + handshakeTrailerSize;
             size_t packetPayloadBudget = m_mtuDiscovery.currentMaxPacketSize();
             if (packetPayloadBudget > UTP_HEADER_SIZE) {
                 packetPayloadBudget -= UTP_HEADER_SIZE;
@@ -1566,15 +1618,19 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
             }
 
             if (combinedSize <= UINT16_MAX && combinedSize <= packetPayloadBudget) {
-                std::vector<uint8_t> payload;
-                payload.reserve(combinedSize);
-                payload.insert(payload.end(), ackPayload.begin(), ackPayload.end());
-                payload.insert(payload.end(), header.begin(), header.end());
-                if (len > 0 && data != nullptr) {
-                    payload.insert(payload.end(), data, data + len);
+                m_payloadScratch.clear();
+                m_payloadScratch.reserve(combinedSize);
+                m_payloadScratch.insert(m_payloadScratch.end(),
+                                        m_ackPayloadScratch.begin(),
+                                        m_ackPayloadScratch.end());
+                if (!AppendRawBytes(m_payloadScratch, header.data(), header.size())) {
+                    return -1;
                 }
-                if (piggybackHandshakeDone) {
-                    payload.insert(payload.end(), handshakeTrailer.begin(), handshakeTrailer.begin() + handshakeTrailerSize);
+                if (!AppendRawBytes(m_payloadScratch, data, len)) {
+                    return -1;
+                }
+                if (!AppendRawBytes(m_payloadScratch, handshakeTrailer.data(), handshakeTrailerSize)) {
+                    return -1;
                 }
 
                 uint32_t frameBits = (1u << static_cast<uint32_t>(kFrameAck))
@@ -1585,8 +1641,8 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                 }
 
                 const int32_t status = sendPacket(packetType,
-                                                  payload.data(),
-                                                  payload.size(),
+                                                  m_payloadScratch.data(),
+                                                  m_payloadScratch.size(),
                                                   0,
                                                   piggybackHandshakeDone ? &m_handshakeDoneLastPacketNo : nullptr,
                                                   frameBits,
@@ -1606,23 +1662,27 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
             }
         }
 
-        const int32_t ackStatus = sendAckPacket(time::MonotonicUs());
+        const int32_t ackStatus = sendAckPacket(nowUs);
         if (ackStatus != UTP_ERR_OK && ackStatus != UTP_ERR_INVALID_STATE) {
             return ackStatus;
         }
     }
 
     if (piggybackHandshakeDone) {
-        std::vector<uint8_t> streamBody;
-        streamBody.reserve(len + handshakeTrailerSize);
-        streamBody.insert(streamBody.end(), data, data + len);
-        streamBody.insert(streamBody.end(), handshakeTrailer.begin(), handshakeTrailer.begin() + handshakeTrailerSize);
+        m_bodyScratch.clear();
+        m_bodyScratch.reserve(len + handshakeTrailerSize);
+        if (!AppendRawBytes(m_bodyScratch, data, len)) {
+            return -1;
+        }
+        if (!AppendRawBytes(m_bodyScratch, handshakeTrailer.data(), handshakeTrailerSize)) {
+            return -1;
+        }
 
         const int32_t status = sendPacket(packetType,
                                           header.data(),
                                           header.size(),
-                                          streamBody.data(),
-                                          streamBody.size(),
+                                          m_bodyScratch.data(),
+                                          m_bodyScratch.size(),
                                           0,
                                           &m_handshakeDoneLastPacketNo,
                                           (1u << static_cast<uint32_t>(kFrameStream))
@@ -1798,15 +1858,17 @@ int32_t ConnectionImpl::maybeSendSessionTokenPacket()
     frame.token_size = static_cast<uint8_t>(frame.token.size());
     frame.token_validity_period = validityPeriod;
 
-    std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()), 0);
-    int32_t frameLen = frame.encode(payload.data(), payload.size());
+    m_payloadScratch.clear();
+    m_payloadScratch.resize(static_cast<size_t>(frame.frameSize()));
+    int32_t frameLen = frame.encode(m_payloadScratch.data(), m_payloadScratch.size());
     if (frameLen < 0) {
         return -1;
     }
+    m_payloadScratch.resize(static_cast<size_t>(frameLen));
 
     const int32_t status = sendPacket(UTP_TYPE_CTRL,
-                                      payload.data(),
-                                      static_cast<size_t>(frameLen),
+                                      m_payloadScratch.data(),
+                                      m_payloadScratch.size(),
                                       0,
                                       nullptr,
                                       (1u << static_cast<uint32_t>(kFrameSessionToken)));
@@ -1818,23 +1880,25 @@ int32_t ConnectionImpl::maybeSendSessionTokenPacket()
 
 int32_t ConnectionImpl::sendInitialPacket()
 {
-    std::vector<uint8_t> payload;
+    m_payloadScratch.clear();
+    size_t reserveSize = FRAME_VERSION_SIZE
+                       + FRAME_TRANSPORT_PARAMS_SIZE
+                       + FRAME_CRYPTO_SIZE
+                       + FRAME_ACK_FREQUENCY_SIZE;
+    if (m_zeroRttConfig.enabled()) {
+        reserveSize += FRAME_SESSION_TOKEN_HDR_SIZE + m_zeroRttConfig.sessionTicket.size();
+    }
+    m_payloadScratch.reserve(reserveSize);
 
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
-    std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
-    int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
-    if (frameLen < 0) {
+    if (AppendEncodedFrame(m_payloadScratch, version, FRAME_VERSION_SIZE) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
 
-    std::array<uint8_t, FRAME_TRANSPORT_PARAMS_SIZE> tpPayload{};
-    size_t tpSize = 0;
-    if (BuildTransportParamsFrame(m_loaclTP, tpPayload.data(), tpPayload.size(), tpSize) != UTP_ERR_OK) {
+    if (AppendTransportParamsFrame(m_loaclTP, m_payloadScratch) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), tpPayload.begin(), tpPayload.begin() + tpSize);
 
     if (m_connectInfo.encrypted != Context::kEncryptionNone) {
         if (!m_x25519) {
@@ -1845,12 +1909,9 @@ int32_t ConnectionImpl::sendInitialPacket()
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
-        std::array<uint8_t, FRAME_CRYPTO_SIZE> cryptoPayload{};
-        frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
-        if (frameLen < 0) {
+        if (AppendEncodedFrame(m_payloadScratch, crypto, FRAME_CRYPTO_SIZE) != UTP_ERR_OK) {
             return -1;
         }
-        payload.insert(payload.end(), cryptoPayload.begin(), cryptoPayload.begin() + frameLen);
     }
 
     if (m_zeroRttConfig.enabled()) {
@@ -1862,59 +1923,53 @@ int32_t ConnectionImpl::sendInitialPacket()
         const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
         sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
 
-        std::vector<uint8_t> tokenPayload(static_cast<size_t>(sessionToken.frameSize()), 0);
-        const int32_t tokenLen = sessionToken.encode(tokenPayload.data(), tokenPayload.size());
+        const size_t oldSize = m_payloadScratch.size();
+        m_payloadScratch.resize(oldSize + static_cast<size_t>(sessionToken.frameSize()));
+        const int32_t tokenLen = sessionToken.encode(m_payloadScratch.data() + oldSize,
+                                                     m_payloadScratch.size() - oldSize);
         if (tokenLen < 0) {
             return -1;
         }
-
-        payload.insert(payload.end(), tokenPayload.begin(), tokenPayload.begin() + tokenLen);
+        m_payloadScratch.resize(oldSize + static_cast<size_t>(tokenLen));
     }
 
-    std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> ackFreqPayload{};
-    size_t ackFreqSize = 0;
-    if (BuildAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr,
-                               ackFreqPayload.data(),
-                               ackFreqPayload.size(),
-                               ackFreqSize) != UTP_ERR_OK) {
+    if (AppendAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr,
+                                m_payloadScratch) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), ackFreqPayload.begin(), ackFreqPayload.begin() + ackFreqSize);
 
     const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
     const uint16_t targetPacketSize = ConfiguredMinPacketSize(config(), family);
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
+        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, m_payloadScratch) != UTP_ERR_OK) {
             return -1;
         }
     }
 
     return sendPacket(UTP_TYPE_INITIAL,
-                      payload.data(),
-                      payload.size(),
+                      m_payloadScratch.data(),
+                      m_payloadScratch.size(),
                       PacketOutFlags::kPoHello);
 }
 
 int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
 {
-    std::vector<uint8_t> payload;
+    m_payloadScratch.clear();
+    m_payloadScratch.reserve(FRAME_VERSION_SIZE
+                           + FRAME_TRANSPORT_PARAMS_SIZE
+                           + FRAME_CRYPTO_SIZE
+                           + FRAME_ACK_FREQUENCY_SIZE);
 
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
-    std::array<uint8_t, FRAME_VERSION_SIZE> versionPayload{};
-    int32_t frameLen = version.encode(versionPayload.data(), versionPayload.size());
-    if (frameLen < 0) {
+    if (AppendEncodedFrame(m_payloadScratch, version, FRAME_VERSION_SIZE) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), versionPayload.begin(), versionPayload.begin() + frameLen);
 
-    std::array<uint8_t, FRAME_TRANSPORT_PARAMS_SIZE> tpPayload{};
-    size_t tpSize = 0;
-    if (BuildTransportParamsFrame(m_loaclTP, tpPayload.data(), tpPayload.size(), tpSize) != UTP_ERR_OK) {
+    if (AppendTransportParamsFrame(m_loaclTP, m_payloadScratch) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), tpPayload.begin(), tpPayload.begin() + tpSize);
 
     if (encrypted) {
         if (!m_x25519) {
@@ -1925,36 +1980,28 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
-        std::array<uint8_t, FRAME_CRYPTO_SIZE> cryptoPayload{};
-        frameLen = crypto.encode(cryptoPayload.data(), cryptoPayload.size());
-        if (frameLen < 0) {
+        if (AppendEncodedFrame(m_payloadScratch, crypto, FRAME_CRYPTO_SIZE) != UTP_ERR_OK) {
             return -1;
         }
-        payload.insert(payload.end(), cryptoPayload.begin(), cryptoPayload.begin() + frameLen);
     }
 
-    std::array<uint8_t, FRAME_ACK_FREQUENCY_SIZE> ackFreqPayload{};
-    size_t ackFreqSize = 0;
-    if (BuildAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr,
-                               ackFreqPayload.data(),
-                               ackFreqPayload.size(),
-                               ackFreqSize) != UTP_ERR_OK) {
+    if (AppendAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr,
+                                m_payloadScratch) != UTP_ERR_OK) {
         return -1;
     }
-    payload.insert(payload.end(), ackFreqPayload.begin(), ackFreqPayload.begin() + ackFreqSize);
 
     const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
     const uint16_t targetPacketSize = ConfiguredMinPacketSize(config(), family);
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
+        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, m_payloadScratch) != UTP_ERR_OK) {
             return -1;
         }
     }
 
     return sendPacket(UTP_TYPE_HANDSHAKE,
-                      payload.data(),
-                      payload.size(),
+                      m_payloadScratch.data(),
+                      m_payloadScratch.size(),
                       PacketOutFlags::kPoHello);
 }
 
@@ -2007,15 +2054,23 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         return -1;
     }
 
-    FrameType frameType = kFrameInvalid;
-    if (payloadHead != nullptr && payloadHeadLen > 0) {
-        frameType = static_cast<FrameType>(*(static_cast<const uint8_t *>(payloadHead)));
-    } else if (payloadBody != nullptr && payloadBodyLen > 0) {
-        frameType = static_cast<FrameType>(*(static_cast<const uint8_t *>(payloadBody)));
+    uint32_t frameTypeBits = frameTypeBitsOverride;
+    if (frameTypeBits == 0) {
+        FrameType frameType = kFrameInvalid;
+        if (payloadHead != nullptr && payloadHeadLen > 0) {
+            frameType = static_cast<FrameType>(*(static_cast<const uint8_t *>(payloadHead)));
+        } else if (payloadBody != nullptr && payloadBodyLen > 0) {
+            frameType = static_cast<FrameType>(*(static_cast<const uint8_t *>(payloadBody)));
+        }
+
+        if (frameType < kFrameMax) {
+            frameTypeBits = (1u << static_cast<uint32_t>(frameType));
+        }
     }
-    const uint32_t frameTypeBits = frameTypeBitsOverride != 0
-                                 ? frameTypeBitsOverride
-                                 : (frameType < kFrameMax ? (1u << static_cast<uint32_t>(frameType)) : 0u);
+
+    const FrameType effectiveFrameType = frameTypeBits != 0
+                                       ? FirstFrameTypeBit(frameTypeBits)
+                                       : kFrameInvalid;
     const bool isClosePacket = packetType == UTP_TYPE_CONNECTION_CLOSE
                             || (frameTypeBits & (1u << static_cast<uint32_t>(kFrameConnectionClose))) != 0;
     if (m_networkPath.state() == NetworkPath::kPathFailed && !isClosePacket) {
@@ -2023,14 +2078,12 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         return -1;
     }
 
-    const FrameType effectiveFrameType = frameTypeBits != 0 ? FirstFrameTypeBit(frameTypeBits) : frameType;
-
     const bool shouldEncrypt = (m_aesCtx != nullptr)
                             && ((packetFlags & PacketOutFlags::kPoNoEncrypt) == 0)
                             && packetType != UTP_TYPE_INITIAL
                             && packetType != UTP_TYPE_HANDSHAKE
-                            && frameType != kFrameCrypto
-                            && frameType != kFrameVersion;
+                            && effectiveFrameType != kFrameCrypto
+                            && effectiveFrameType != kFrameVersion;
     const size_t encryptOverhead = shouldEncrypt ? static_cast<size_t>(AesGcmContext::GCM_TAG_SIZE) : 0;
 
     size_t packetLen = UTP_HEADER_SIZE + payloadLen;
@@ -2041,11 +2094,12 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     }
 
     const bool isMtuProbePacket = (packetFlags & PacketOutFlags::kPoMtuProbe) != 0;
-    if (!isMtuProbePacket && wirePacketLen > m_mtuDiscovery.currentMaxPacketSize()) {
+    const size_t currentMaxPacketSize = m_mtuDiscovery.currentMaxPacketSize();
+    if (!isMtuProbePacket && wirePacketLen > currentMaxPacketSize) {
         SetLastErrorV(UTP_ERR_WOULD_BLOCK,
                       "packet length {} exceeds current path MTU budget {}",
                       wirePacketLen,
-                      m_mtuDiscovery.currentMaxPacketSize());
+                      currentMaxPacketSize);
         return -1;
     }
 
@@ -2058,7 +2112,7 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     if (!canSendOnCurrentPath(wirePacketLen, effectiveFrameType)) {
         SetLastErrorV(UTP_ERR_WOULD_BLOCK,
                       "anti-amplification limit reached while path validating, frame={}",
-                      frameTypeBits != 0 ? FrameTypeToString(frameTypeBits) : "Unknown");
+                      FrameTypeToString(effectiveFrameType));
         return -1;
     }
 
@@ -2167,8 +2221,9 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     }
     msg.metaInfo.peerAddress = sendAddress;
 
-    std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
-    int32_t sent = m_udpSocket->send(msgVec);
+    m_sendMsgScratch.resize(1);
+    m_sendMsgScratch[0] = msg;
+    int32_t sent = m_udpSocket->send(m_sendMsgScratch);
     if (sent <= 0) {
         m_mm.putPacketOut(packet);
         return -1;
