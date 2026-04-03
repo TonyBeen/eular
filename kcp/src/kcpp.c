@@ -1311,4 +1311,10 @@ void kcp_connection_get_statistic(struct KcpConnection *kcp_connection, kcp_stat
     statistic->srtt = kcp_connection->rx_srtt;
     statistic->rttvar = kcp_connection->rx_rttval;
     statistic->rto = kcp_connection->rx_rto;
+    statistic->bbr_mode = (int32_t)kcp_connection->bbr_mode;
+    statistic->cwnd = kcp_connection->cwnd;
+    statistic->target_cwnd = kcp_connection->bbr_target_cwnd;
+    statistic->min_rtt_us = kcp_connection->bbr_min_rtt_us;
+    statistic->btlbw_bytes_ps = kcp_connection->bbr_btlbw;
+    statistic->pacing_rate_bps = kcp_connection->bbr_pacing_rate;
 }

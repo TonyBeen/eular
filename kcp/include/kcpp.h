@@ -27,6 +27,14 @@ typedef struct KcpStatistic {
     int32_t         srtt;       // smoothed round trip time (us)
     int32_t         rttvar;     // round trip time variance (us)
     int32_t         rto;        // retransmission timeout (us)
+
+    // BBR runtime metrics
+    int32_t         bbr_mode;         // 1:start_up 2:drain 3:probe_bw 4:probe_rtt
+    int32_t         cwnd;             // packet unit
+    uint32_t        target_cwnd;      // packet unit
+    uint32_t        min_rtt_us;       // us
+    uint64_t        btlbw_bytes_ps;   // bytes/s
+    uint64_t        pacing_rate_bps;  // bytes/s
 } kcp_statistic_t;
 
 /// kcp callback

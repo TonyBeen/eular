@@ -142,8 +142,19 @@ typedef struct KcpSengment {
     uint64_t resendts;  // 重传时间戳
     uint32_t fastack;   // 快速重传
     uint32_t xmit;      // 传输次数
+
+    // BBR 采样字段
+    uint64_t tx_delivered;      // 发送该包时的 delivered bytes 快照
+    uint64_t tx_delivered_ts;   // 发送该包时的 delivered 时间戳(us)
     char     data[1];   // 数据
 } kcp_segment_t;
+
+typedef enum KcpBbrMode {
+    KCP_BBR_STARTUP = 1,
+    KCP_BBR_DRAIN,
+    KCP_BBR_PROBE_BW,
+    KCP_BBR_PROBE_RTT,
+} kcp_bbr_mode_t;
 
 typedef struct KcpAck {
     struct list_head node;
@@ -178,7 +189,6 @@ typedef struct KcpConnection {
     uint32_t ts_recent;     // 最近一次收到包的时间戳
     uint32_t ts_lastack;    // 最近一次收到ACK的时间戳
     uint64_t ts_flush;      // 下次刷新时间戳(ms)
-    int32_t ssthresh;       // 慢启动阈值，默认为IKCP_THRESH_INIT(2)
 
     // RTT相关
     int32_t rx_rttval;      // RTT 的偏差, 用于计算 RTT 的波动
@@ -216,6 +226,28 @@ typedef struct KcpConnection {
     // packet 计数
     uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号
     uint32_t incr;              // 可发送的最大数据量
+
+    // BBRv1 state
+    kcp_bbr_mode_t   bbr_mode;
+    uint8_t          bbr_cycle_idx;
+    uint8_t          bbr_full_bw_cnt;
+    bool             bbr_filled_pipe;
+    uint64_t         bbr_bw_filter[KCP_BBR_BW_FILTER_LEN]; // bytes/s
+    uint8_t          bbr_bw_filter_idx;
+    uint64_t         bbr_btlbw;          // bytes/s
+    uint64_t         bbr_full_bw;        // bytes/s
+    uint32_t         bbr_min_rtt_us;
+    uint64_t         bbr_min_rtt_stamp;
+    uint64_t         bbr_probe_rtt_done_stamp;
+    uint64_t         bbr_cycle_stamp;
+    uint64_t         bbr_delivered;      // delivered bytes
+    uint64_t         bbr_delivered_ts;   // delivered timestamp(us)
+    uint32_t         bbr_pacing_gain_num;
+    uint32_t         bbr_cwnd_gain_num;
+    uint32_t         bbr_target_cwnd;    // packet unit
+    uint64_t         bbr_pacing_rate;    // bytes/s
+    uint64_t         bbr_pacing_credit;  // bytes
+    uint64_t         bbr_last_send_ts;   // us
 
     // 数据队列
     struct list_head    snd_queue;      // 发送队列
