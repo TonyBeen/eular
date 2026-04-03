@@ -446,6 +446,54 @@ TEST_CASE("AckFrequency update is throttled within minimum interval", "[Ack][Int
     REQUIRE(clientConn->m_ackMaxDelayMs == 120);
 }
 
+TEST_CASE("Passive handshake inherits peer AckFrequency from pending initial parsing", "[Ack][Integration][Passive]")
+{
+    Config serverCfg;
+    serverCfg.handshake_timeout = 200;
+    serverCfg.ack_every_n_packets = 10;
+    serverCfg.ack_delay = 200;
+
+    Config clientCfg;
+    clientCfg.handshake_timeout = 200;
+    clientCfg.ack_every_n_packets = 50;
+    clientCfg.ack_delay = 77;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &serverCfg);
+    ContextImpl client(loop.loop(), &clientCfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
+        return true;
+    });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() {
+            return FindConnectedByRemote(server, BoundPort(client)) != nullptr
+                && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
+        },
+        [&]() {
+            (void)AcceptPending(server);
+        },
+        300,
+        1));
+
+    ConnectionImpl::SP serverConn = FindConnectedByRemote(server, BoundPort(client));
+    REQUIRE(serverConn != nullptr);
+    REQUIRE(serverConn->m_ackElicitingThreshold == 50);
+    REQUIRE(serverConn->m_ackReorderingThreshold == FrameAckFrequency::kDefaultReorderingThreshold);
+    REQUIRE(serverConn->m_ackMaxDelayMs == 77);
+}
+
 TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Integration]")
 {
     Config cfg;

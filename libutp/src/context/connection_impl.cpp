@@ -481,6 +481,7 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
                                    const Address &peerAddress,
                                    uint32_t peerConnectionID,
                                    const TransportParams &peerTp,
+                                   const FrameAckFrequency *peerAckFrequency,
                                    const std::shared_ptr<X25519Wrapper> &x25519,
                                    const std::shared_ptr<AesGcmContext> &aesCtx)
 {
@@ -528,6 +529,11 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     m_hasCachedResumptionState = false;
     m_cachedResumptionInfo = CachedResumptionState{};
     m_cachedResumptionExpiresAt = 0;
+    if (peerAckFrequency != nullptr) {
+        FrameAckFrequency ackFreq = *peerAckFrequency;
+        ackFreq.normalize();
+        applyAckFrequency(ackFreq, 0);
+    }
     stopAckTimer();
 
     m_state = State::kStateConnected;

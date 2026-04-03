@@ -93,6 +93,7 @@ public:
                         const Address &peerAddress,
                         uint32_t peerConnectionID,
                         const TransportParams &peerTp,
+                        const FrameAckFrequency *peerAckFrequency,
                         const std::shared_ptr<X25519Wrapper> &x25519,
                         const std::shared_ptr<AesGcmContext> &aesCtx);
 

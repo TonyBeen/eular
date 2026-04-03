@@ -24,6 +24,7 @@
 #include "utp/utp.h"
 #include "socket/udp.h"
 #include "context/connection_impl.h"
+#include "proto/frame/ack_frequency.h"
 #include "crypto/resumption_state_codec.h"
 
 #include "util/mm.h"
@@ -126,6 +127,8 @@ private:
         size_t                  bufferedBeforeHandshakeDoneBytes{0};
         std::deque<std::vector<uint8_t>> bufferedBeforeHandshakeDone;
         TransportParams         peerTp{};
+        FrameAckFrequency       peerAckFrequency{};
+        bool                    hasPeerAckFrequency{false};
         std::shared_ptr<X25519Wrapper> x25519;
         std::shared_ptr<AesGcmContext> aesCtx;
     };
@@ -143,11 +146,16 @@ private:
     bool    decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
                                         PendingIncomingConnection &pending,
                                         PacketIn &packet);
+    void    parsePendingNegotiationFrame(PendingIncomingConnection &pending,
+                                         uint8_t frameType,
+                                         const uint8_t *frameData,
+                                         size_t frameLen);
     ConnectionImpl::SP createAndInsertPassiveConnection(uint32_t localCid,
                                                         const Context::ConnectInfo &info,
                                                         const Address &peerAddress,
                                                         uint32_t peerCid,
                                                         const TransportParams &peerTp,
+                                                        const FrameAckFrequency *peerAckFrequency,
                                                         const std::shared_ptr<X25519Wrapper> &x25519,
                                                         const std::shared_ptr<AesGcmContext> &aesCtx,
                                                         const std::string &collisionReason,

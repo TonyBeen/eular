@@ -1032,11 +1032,37 @@ bool ContextImpl::decodeIncomingPendingPacket(const UdpSocket::MsgMetaInfo &msg,
     return detail::DecodeUdpPacketWithOptionalAead(msg, m_mm, pending.aesCtx, packet);
 }
 
+void ContextImpl::parsePendingNegotiationFrame(PendingIncomingConnection &pending,
+                                               uint8_t frameType,
+                                               const uint8_t *frameData,
+                                               size_t frameLen)
+{
+    if (frameType == kFrameTransportParams) {
+        TransportParams peerTp;
+        FrameTransportParams transportParams;
+        transportParams.params = &peerTp;
+        if (transportParams.decode(frameData, frameLen) >= 0) {
+            pending.peerTp = peerTp;
+        }
+        return;
+    }
+
+    if (frameType == kFrameAckFrequency) {
+        FrameAckFrequency ackFreq;
+        if (ackFreq.decode(frameData, frameLen) >= 0) {
+            ackFreq.normalize();
+            pending.peerAckFrequency = ackFreq;
+            pending.hasPeerAckFrequency = true;
+        }
+    }
+}
+
 ConnectionImpl::SP ContextImpl::createAndInsertPassiveConnection(uint32_t localCid,
                                                                  const Context::ConnectInfo &info,
                                                                  const Address &peerAddress,
                                                                  uint32_t peerCid,
                                                                  const TransportParams &peerTp,
+                                                                 const FrameAckFrequency *peerAckFrequency,
                                                                  const std::shared_ptr<X25519Wrapper> &x25519,
                                                                  const std::shared_ptr<AesGcmContext> &aesCtx,
                                                                  const std::string &collisionReason,
@@ -1047,6 +1073,7 @@ ConnectionImpl::SP ContextImpl::createAndInsertPassiveConnection(uint32_t localC
                           peerAddress,
                           peerCid,
                           peerTp,
+                          peerAckFrequency,
                           x25519,
                           aesCtx) != UTP_ERR_OK) {
         return ConnectionImpl::SP();
@@ -1515,6 +1542,11 @@ void ContextImpl::onReadEvent()
                             break;
                         }
 
+                        parsePendingNegotiationFrame(pendingIt->second,
+                                                     static_cast<uint8_t>(frameType),
+                                                     frameData,
+                                                     frameLen);
+
                         if (frameType == kFrameHandshakeDone) {
                             FrameHandshakeDone done;
                             if (done.decode(frameData, frameLen) >= 0
@@ -1555,6 +1587,7 @@ void ContextImpl::onReadEvent()
                     pending.peerAddress,
                     pending.peerCid,
                     pending.peerTp,
+                    pending.hasPeerAckFrequency ? &pending.peerAckFrequency : nullptr,
                     pending.x25519,
                     pending.aesCtx,
                     "local cid collision while promoting passive connection");
@@ -1691,6 +1724,7 @@ void ContextImpl::onReadEvent()
                     TransportParams{},
                     nullptr,
                     nullptr,
+                    nullptr,
                     "local cid collision while creating 0-rtt connection",
                     static_cast<uint32_t>(sessionToken.token.size()));
                 if (!conn) {
@@ -1772,15 +1806,10 @@ void ContextImpl::onReadEvent()
                     break;
                 }
 
-                if (frameType == kFrameTransportParams) {
-                    TransportParams peerTp;
-                    FrameTransportParams transportParams;
-                    transportParams.params = &peerTp;
-                    if (transportParams.decode(frameData, frameLen) >= 0) {
-                        pending.peerTp = peerTp;
-                    }
-                    continue;
-                }
+                parsePendingNegotiationFrame(pending,
+                                             static_cast<uint8_t>(frameType),
+                                             frameData,
+                                             frameLen);
 
                 if (frameType == kFrameCrypto && pending.aesCtx == nullptr) {
                     std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubKey{};

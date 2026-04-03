@@ -1208,6 +1208,7 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
                                   snapshot.peerAddress,
                                   snapshot.peerCid,
                                   snapshot.peerTp,
+                                  snapshot.hasPeerAckFrequency ? &snapshot.peerAckFrequency : nullptr,
                                   snapshot.x25519,
                                   snapshot.aesCtx) == UTP_ERR_OK);
         REQUIRE(ctx.m_connections.emplace(snapshot.localCid, conn).second);
