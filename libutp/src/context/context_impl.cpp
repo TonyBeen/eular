@@ -183,6 +183,7 @@ uint16_t ConfiguredMinPacketSize(const eular::utp::Config &config,
     const uint16_t targetMtu = eular::utp::MtuDiscovery::NormalizeMtu(config.mtu_min, family);
     return eular::utp::MtuDiscovery::PacketSizeFromMtu(targetMtu, family);
 }
+
 bool InitAesContextByCryptoType(eular::utp::FrameCryptoType type,
                                 const eular::utp::X25519Wrapper::PublicKey &peerPublicKey,
                                 const std::shared_ptr<eular::utp::X25519Wrapper> &x25519,

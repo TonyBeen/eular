@@ -55,8 +55,11 @@ int main(int argc, char **argv)
     ev::EventLoop loop;
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
-    cfg.enable_keepalive = false;
-    cfg.enable_dplpmtud = false;
+    cfg.enable_keepalive = true;
+    cfg.enable_dplpmtud = true;
+    cfg.ack_every_n_packets = 30;
+    cfg.handshake_timeout = 3000;
+
     eular::utp::Context ctx(loop.loop(), &cfg);
     std::unordered_set<std::string> zeroRttAcceptedPeers;
 
