@@ -1,4 +1,4 @@
-file(GLOB TEST_SRC_LIST ${CMAKE_CURRENT_SOURCE_DIR}/*.cc)
+file(GLOB TEST_SRC_LIST CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cc)
 set(TEST_MAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cc)
 list(REMOVE_ITEM TEST_SRC_LIST ${TEST_MAIN_FILE})
 set(SELF_MAIN_TESTS test_mutex test_rbtree test_rwmutex test_timer)
@@ -24,4 +24,5 @@ foreach(test_file ${TEST_SRC_LIST})
 
     target_link_libraries(${test} ${LINK_LIBS})
     target_include_directories(${test} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME ${test} COMMAND ${test})
 endforeach(test_file)
