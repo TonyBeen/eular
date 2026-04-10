@@ -1,50 +1,53 @@
-#include <signal.h>
+#include <atomic>
 
-#include <utils/timer.h>
+#include "catch/catch.hpp"
+
 #include <utils/platform.h>
+#include <utils/timer.h>
 
 using namespace eular;
 
-TimerManager gTimerManager;
+namespace {
 
-void func(void *arg)
+bool wait_for_count_at_least(const std::atomic<int> &count, int expected, int timeoutMs)
 {
-    printf("func()\n");
+    for (int waited = 0; waited < timeoutMs; waited += 5) {
+        if (count.load() >= expected) {
+            return true;
+        }
+        eular_msleep(5);
+    }
+    return count.load() >= expected;
 }
 
-void func2(void *arg)
+} // namespace
+
+TEST_CASE("timer_manager_executes_one_shot_timer", "[timer]")
 {
-    printf("func2()\n");
+    TimerManager manager;
+    std::atomic<int> fired(0);
+
+    REQUIRE(manager.startTimer() == 0);
+    REQUIRE(manager.addTimer(30, [&]() {
+        ++fired;
+    }) != 0);
+
+    REQUIRE(wait_for_count_at_least(fired, 1, 1000));
+    manager.stopTimer();
+    CHECK(fired.load() == 1);
 }
 
-void test_main_loop()
+TEST_CASE("timer_manager_executes_recycle_timer_multiple_times", "[timer]")
 {
-    std::shared_ptr<void> ptr((new int(10)));
-    gTimerManager.addTimer(2000, std::bind(func2, ptr.get()), 1000);
-    gTimerManager.addTimer(6000, std::bind(func, nullptr), 2000);
-    gTimerManager.startTimer(true);
-}
+    TimerManager manager;
+    std::atomic<int> fired(0);
 
-void test_thread_loop()
-{
-    gTimerManager.startTimer();
-    gTimerManager.addTimer(2000, std::bind(func2, nullptr), 1000);
-    gTimerManager.addTimer(6000, std::bind(func, nullptr), 2000);
+    REQUIRE(manager.startTimer() == 0);
+    REQUIRE(manager.addTimer(20, [&]() {
+        ++fired;
+    }, 20) != 0);
 
-    eular_sleep(2);
-    gTimerManager.stopTimer();
-}
-
-void catchSignal(int sig)
-{
-    exit(0);
-}
-
-int main()
-{
-    signal(SIGSEGV, catchSignal);
-    test_thread_loop();
-
-    eular_sleep(1);
-    return 0;
+    REQUIRE(wait_for_count_at_least(fired, 3, 1000));
+    manager.stopTimer();
+    CHECK(fired.load() >= 3);
 }

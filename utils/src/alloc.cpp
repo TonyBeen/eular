@@ -76,9 +76,9 @@ void *AlignedRealloc(void *oldptr, size_t newsize, size_t oldsize, size_t alignm
     if (oldptr) {
         // 计算新的对齐偏移量
         int64_t newoffset = reinterpret_cast<char *>(faked_ptr) - static_cast<char *>(real);
-        
+
         // 如果两次分配的"对齐偏移量"不同, 说明 realloc 虽然搬运了原始数据, 
-        // 但数据相对于新对齐点的相对位置变了, 必须手动搬运数据。
+        // 但数据相对于新对齐点的相对位置变了, 必须手动搬运数据
         if (oldoffset != newoffset)
             memmove(faked_ptr, static_cast<char *>(real) + oldoffset,
                 (oldsize < newsize) ? oldsize : newsize);

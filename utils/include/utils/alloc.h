@@ -14,6 +14,9 @@
 
 #define CHECK_PTR(p) if (!(p)) { throw std::bad_alloc(); }
 
+// 将 size 向上对齐到 align 的倍数
+#define ALIGN_UP(size, align) (((size) + (align) - 1) & ~((align) - 1))
+
 void *Malloc(size_t size);
 void  Free(void *ptr);
 void *Realloc(void *ptr, size_t size);

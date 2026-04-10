@@ -1,74 +1,56 @@
-/*************************************************************************
-    > File Name: test_mutex_2.cc
-    > Author: hsz
-    > Brief:
-    > Created Time: Wed 23 Nov 2022 10:49:35 AM CST
- ************************************************************************/
+#include <atomic>
+#include <thread>
+#include <vector>
 
-/**
- * https://blog.csdn.net/weixin_32147807/article/details/116701847
- * 测试当某一线程在未解锁情况下异常退出时处理
- */
-
-#include <assert.h>
-#include <utils/thread.h>
+#include "catch/catch.hpp"
 #include <utils/mutex.h>
-#include <utils/platform.h>
 
-eular::Mutex gMutex;
-int count = 0;
+using namespace eular;
 
-eular::once_flag g_runOnce;
-
-void fnPrint()
+TEST_CASE("mutex_protects_shared_counter", "[mutex]")
 {
-    static uint32_t run_once = 0;
-    ++run_once;
-    assert(run_once == 1);
-}
+    Mutex mutex;
+    int counter = 0;
 
-void thread_1()
-{
-    uint32_t circle = 0;
-    while (circle++ < 10) {
-        eular::call_once(g_runOnce, fnPrint);
-        gMutex.lock();
-        ++count;
-        printf("tid = %d, ++count = %d\n", gettid(), count);
-        gMutex.unlock();
-        eular_msleep(500);
-    }
-}
-
-void thread_2()
-{
-    gMutex.lock();
-    printf("%s() thread %d exit without unlocking\n", __func__, gettid());
-}
-
-void thread_3()
-{
-    uint32_t circle = 0;
-    while (circle++ < 10) {
-        gMutex.lock();
-        if (count > 0) {
-            --count;
+    auto worker = [&]() {
+        for (int i = 0; i < 1000; ++i) {
+            mutex.lock();
+            ++counter;
+            mutex.unlock();
         }
-        printf("tid = %d, --count = %d\n", gettid(), count);
-        gMutex.unlock();
-        eular_msleep(400);
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back(worker);
     }
+    for (std::thread &thread : threads) {
+        thread.join();
+    }
+
+    CHECK(counter == 4000);
 }
 
-int main(int argc, char **argv)
+TEST_CASE("call_once_runs_exactly_once", "[mutex][once]")
 {
-    eular::Thread th1(std::bind(thread_1));
-    eular::Thread th2(std::bind(thread_2));
-    th2.join();
-    eular_sleep(2);
-    eular::Thread th3(std::bind(thread_3));
-    th1.join();
-    th3.join();
+    once_flag flag;
+    std::atomic<int> invokeCount(0);
 
-    return 0;
+    auto worker = [&]() {
+        for (int i = 0; i < 16; ++i) {
+            call_once(flag, [&]() {
+                ++invokeCount;
+            });
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 8; ++i) {
+        threads.emplace_back(worker);
+    }
+    for (std::thread &thread : threads) {
+        thread.join();
+    }
+
+    CHECK(invokeCount.load() == 1);
 }

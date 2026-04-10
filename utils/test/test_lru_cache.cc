@@ -318,8 +318,8 @@ TEST_CASE_METHOD(LruCacheFixture, "ClearReuseOk", "[LruCache]") {
 }
 
 TEST_CASE_METHOD(LruCacheFixture, "Callback", "[LruCache]") {
-    eular::LruCache<SimpleKey, StringValue> cache(100);
     EntryRemovedCallback callback;
+    eular::LruCache<SimpleKey, StringValue> cache(100);
     cache.setOnEntryRemovedListener(&callback);
 
     cache.put(1, "one");
@@ -333,8 +333,8 @@ TEST_CASE_METHOD(LruCacheFixture, "Callback", "[LruCache]") {
 }
 
 TEST_CASE_METHOD(LruCacheFixture, "CallbackOnClear", "[LruCache]") {
-    eular::LruCache<SimpleKey, StringValue> cache(100);
     EntryRemovedCallback callback;
+    eular::LruCache<SimpleKey, StringValue> cache(100);
     cache.setOnEntryRemovedListener(&callback);
 
     cache.put(1, "one");
@@ -346,8 +346,8 @@ TEST_CASE_METHOD(LruCacheFixture, "CallbackOnClear", "[LruCache]") {
 }
 
 TEST_CASE_METHOD(LruCacheFixture, "CallbackRemovesKeyWorksOK", "[LruCache]") {
-    eular::LruCache<KeyWithPointer, StringValue> cache(1);
     InvalidateKeyCallback callback;
+    eular::LruCache<KeyWithPointer, StringValue> cache(1);
     cache.setOnEntryRemovedListener(&callback);
 
     KeyWithPointer key1;

@@ -58,7 +58,7 @@ TEST_CASE("test_resize_size", "[bitmap]") {
     REQUIRE(size <= bitMapObj.capacity());
 }
 
-TEST_CASE("test_clear", "[bitmap]") {
+TEST_CASE("bitmap_clear", "[bitmap]") {
     eular::BitMap bitMapObj(16);
 
     const uint32_t count = 2;

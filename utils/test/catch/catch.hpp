@@ -5287,7 +5287,7 @@ namespace Catch {
         unsigned int rngSeed = 0;
 
         bool benchmarkNoAnalysis = false;
-        unsigned int benchmarkSamples = 1; // NOTE 修改benchmark测试次数 100 -> 1
+        unsigned int benchmarkSamples = 10; // Project default for more stable benchmark results
         double benchmarkConfidenceInterval = 0.95;
         unsigned int benchmarkResamples = 100000;
         std::chrono::milliseconds::rep benchmarkWarmupTime = 100;
@@ -9907,7 +9907,7 @@ namespace Catch {
                 ( "waits for a keypress before exiting" )
             | Opt( config.benchmarkSamples, "samples" )
                 ["--benchmark-samples"]
-                ( "number of samples to collect (default: 100)" )
+                ( "number of samples to collect (default: 10)" )
             | Opt( config.benchmarkResamples, "resamples" )
                 ["--benchmark-resamples"]
                 ( "number of resamples for the bootstrap (default: 100000)" )

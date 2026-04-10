@@ -9,12 +9,42 @@
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
 #endif
 
+#include <numeric>
 #include <string>
 #include <random>
-#include <thread>
+#include <vector>
 
 #include "catch/catch.hpp"
 #include "utils/bimap.h"
+
+namespace {
+
+constexpr uint32_t kBenchmarkDataSize = 500000;
+constexpr uint32_t kBenchmarkSeed = 0x5EED1234u;
+
+std::vector<uint32_t> makeSequentialKeys(uint32_t size) {
+    std::vector<uint32_t> keys(size);
+    std::iota(keys.begin(), keys.end(), 0u);
+    return keys;
+}
+
+std::vector<uint32_t> makeShuffledKeys(uint32_t size, uint32_t seed) {
+    std::vector<uint32_t> keys = makeSequentialKeys(size);
+    std::mt19937 rng(seed);
+    std::shuffle(keys.begin(), keys.end(), rng);
+    return keys;
+}
+
+eular::BiMap<uint32_t, uint64_t> makeBenchmarkBimap(uint32_t size) {
+    eular::BiMap<uint32_t, uint64_t> bimap;
+    for (uint32_t i = 0; i < size; ++i) {
+        REQUIRE(bimap.insert(i, i));
+    }
+    REQUIRE(size == bimap.size());
+    return bimap;
+}
+
+} // namespace
 
 TEST_CASE("test_bimap_insert", "[BiMap]") {
     eular::BiMap<uint32_t, std::string> bimap = {
@@ -42,23 +72,20 @@ TEST_CASE("test_bimap_insert", "[BiMap]") {
 }
 
 TEST_CASE("insert benchmark", "[BiMap]") {
+    auto insertKeys = makeSequentialKeys(kBenchmarkDataSize);
 
-    {
-        uint32_t insertSize = 500000;
+    BENCHMARK_ADVANCED("BiMap insert avg/op (single insert into growing map, fixed-seed workload)")
+    (Catch::Benchmark::Chronometer meter) {
+        eular::BiMap<uint32_t, uint64_t> bimap;
+        REQUIRE(static_cast<uint32_t>(meter.runs()) <= kBenchmarkDataSize);
 
-        BENCHMARK("BiMap insert performance") {
-            eular::BiMap<uint32_t, uint64_t> bimap;
+        meter.measure([&](int i) {
+            const uint32_t key = insertKeys[static_cast<size_t>(i)];
+            REQUIRE(bimap.insert(key, key));
+        });
 
-            for (uint32_t i = 0; i < insertSize; ++i)
-            {
-                REQUIRE(bimap.insert(i, i));
-            }
-
-            REQUIRE(insertSize == bimap.size());
-
-            bimap.clear();
-        };
-    }
+        REQUIRE(bimap.size() == static_cast<size_t>(meter.runs()));
+    };
 }
 
 TEST_CASE("test find", "[BiMap]") {
@@ -85,43 +112,28 @@ TEST_CASE("test find", "[BiMap]") {
 }
 
 TEST_CASE("find benchmark", "[BiMap]") {
+    auto queryKeys = makeShuffledKeys(kBenchmarkDataSize, kBenchmarkSeed);
+    eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
 
-    {
-        uint32_t insertSize = 500000;
-
-        eular::BiMap<uint32_t, uint64_t> bimap;
-
-        for (uint32_t i = 0; i < insertSize; ++i)
-        {
-            REQUIRE(bimap.insert(i, i));
-        }
-
-        REQUIRE(insertSize == bimap.size());
-
-        BENCHMARK("BiMap find by key performance") {
-            std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
-            std::chrono::milliseconds mills =
-                std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
-            srand(mills.count());
-
-            uint32_t key = rand() % (insertSize - 1);
+    BENCHMARK_ADVANCED("BiMap find by key avg/op (500000 entries, fixed seed)")
+    (Catch::Benchmark::Chronometer meter) {
+        REQUIRE(static_cast<uint32_t>(meter.runs()) <= kBenchmarkDataSize);
+        meter.measure([&](int i) {
+            const uint32_t key = queryKeys[static_cast<size_t>(i)];
             auto it = bimap.find(key);
             REQUIRE(it.value() == key);
-        };
+        });
+    };
 
-        BENCHMARK("BiMap find by value performance") {
-            std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
-            std::chrono::milliseconds mills =
-                std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
-            srand(mills.count());
-
-            uint64_t value = rand() % (insertSize - 1);
+    BENCHMARK_ADVANCED("BiMap find by value avg/op (500000 entries, fixed seed)")
+    (Catch::Benchmark::Chronometer meter) {
+        REQUIRE(static_cast<uint32_t>(meter.runs()) <= kBenchmarkDataSize);
+        meter.measure([&](int i) {
+            const uint64_t value = queryKeys[static_cast<size_t>(i)];
             auto it = bimap.find(value);
             REQUIRE(it.key() == value);
-        };
-
-        bimap.clear();
-    }
+        });
+    };
 }
 
 TEST_CASE("test erase", "[BiMap]") {
@@ -151,45 +163,37 @@ TEST_CASE("test erase", "[BiMap]") {
 }
 
 TEST_CASE("erase benchmark", "[BiMap]") {
+    auto eraseKeys = makeShuffledKeys(kBenchmarkDataSize, kBenchmarkSeed + 1);
 
-    {
-        uint32_t insertSize = 500000;
+    BENCHMARK_ADVANCED("BiMap erase by key avg/op (500000 entries, fixed seed)")
+    (Catch::Benchmark::Chronometer meter) {
+        REQUIRE(static_cast<uint32_t>(meter.runs()) <= kBenchmarkDataSize);
+        eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
 
-        eular::BiMap<uint32_t, uint64_t> bimap;
-
-        for (uint32_t i = 0; i < insertSize; ++i)
-        {
-            REQUIRE(bimap.insert(i, i));
-        }
-
-        REQUIRE(insertSize == bimap.size());
-
-        BENCHMARK("BiMap erase by key performance") {
-            std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
-            std::chrono::milliseconds mills =
-                std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
-            srand(mills.count());
-
-            uint32_t key = rand() % (insertSize - 1);
+        meter.measure([&](int i) {
+            const uint32_t key = eraseKeys[static_cast<size_t>(i)];
             bimap.erase(key);
             auto it = bimap.find(key);
             REQUIRE(it == bimap.end());
-        };
+        });
 
-        BENCHMARK("BiMap erase by value performance") {
-            std::chrono::steady_clock::time_point tm = std::chrono::steady_clock::now();
-            std::chrono::milliseconds mills =
-                std::chrono::duration_cast<std::chrono::milliseconds>(tm.time_since_epoch());
-            srand(mills.count());
+        REQUIRE(bimap.size() == kBenchmarkDataSize - static_cast<size_t>(meter.runs()));
+    };
 
-            uint64_t value = rand() % (insertSize - 1);
+    BENCHMARK_ADVANCED("BiMap erase by value avg/op (500000 entries, fixed seed)")
+    (Catch::Benchmark::Chronometer meter) {
+        REQUIRE(static_cast<uint32_t>(meter.runs()) <= kBenchmarkDataSize);
+        eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
+
+        meter.measure([&](int i) {
+            const uint64_t value = eraseKeys[static_cast<size_t>(i)];
             bimap.erase(value);
             auto it = bimap.find(value);
             REQUIRE(it == bimap.end());
-        };
+        });
 
-        bimap.clear();
-    }
+        REQUIRE(bimap.size() == kBenchmarkDataSize - static_cast<size_t>(meter.runs()));
+    };
 }
 
 TEST_CASE("test foreach", "[BiMap]") {
