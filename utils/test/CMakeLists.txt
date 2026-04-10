@@ -12,10 +12,17 @@ endif()
 
 set(ALL_TEST_TARGETS)
 
+add_library(utils_test_main_obj OBJECT ${TEST_MAIN_FILE})
+target_compile_definitions(utils_test_main_obj PUBLIC ${TEST_DEFINITIONS} CATCH_CONFIG_ENABLE_BENCHMARKING)
+target_include_directories(utils_test_main_obj PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    target_compile_options(utils_test_main_obj PRIVATE /utf-8)
+endif()
+
 foreach(test_file ${TEST_SRC_LIST})
     get_filename_component(test ${test_file} NAME_WE)
 
-    add_executable(${test} ${test}.cc ${TEST_MAIN_FILE})
+    add_executable(${test} ${test_file} $<TARGET_OBJECTS:utils_test_main_obj>)
     target_compile_definitions(${test} PUBLIC ${TEST_DEFINITIONS} CATCH_CONFIG_ENABLE_BENCHMARKING)
 
     target_link_libraries(${test} ${LINK_LIBS})
