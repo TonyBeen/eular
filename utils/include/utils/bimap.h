@@ -12,6 +12,7 @@
 #include <initializer_list>
 #include <unordered_map>
 #include <map>
+#include <type_traits>
 #include <exception>
 #include <stdexcept>
 
@@ -99,22 +100,20 @@ public:
             return m_it->second;
         }
 
-        // NOTE 循环过程中更新键会产生未定义行为
+        // NOTE 遍历过程中更新 key 会改变迭代顺序, 可能导致遍历结果不可预期 (跳过或重复访问)
         bool update(const K &key)
         {
             checkIterator();
 
             auto newKeyIt = m_parent->find(key);
-            if (newKeyIt != m_parent->end())
-            {
+            if (newKeyIt != m_parent->end()) {
                 return false;
             }
 
             V value = m_it->second;
             m_parent->erase(m_it);
             bool result = m_parent->insert(key, value);
-            if (!result)
-            {
+            if (!result) {
                 m_it = m_parent->end();
                 return result;
             }
@@ -127,26 +126,26 @@ public:
         {
             checkIterator();
 
-            auto newHashV = m_parent->HashFunctionV(value);
-            auto foundIt = m_parent->m_indexMap.find(newHashV);
-            if (foundIt != m_parent->m_indexMap.end())
-            {
-                // 新值已存在
+            if (m_it->second == value) {
+                return true;
+            }
+
+            auto foundIt = m_parent->m_indexMap.find(&value);
+            if (foundIt != m_parent->m_indexMap.end()) { // 新值已存在
                 return false;
             }
 
             // 更新indexMap的数据
-            auto oldHashV = m_parent->HashFunctionV(m_it->second);
-            m_parent->m_indexMap.erase(oldHashV);
-            m_parent->m_indexMap[oldHashV] = const_cast<K *>(&(m_it->first));
+            const V *oldValuePtr = &(m_it->second);
+            m_parent->m_indexMap.erase(oldValuePtr);
+            m_it->second = value;
+            m_parent->m_indexMap.emplace(&(m_it->second), m_it);
             return true;
         }
 
     private:
-        inline void checkIterator() const
-        {
-            if (m_it == m_parent->m_storage.end())
-            {
+        inline void checkIterator() const {
+            if (m_it == m_parent->m_storage.end()) {
                 throw std::logic_error("The iterator reached the end");
             }
         }
@@ -207,10 +206,25 @@ private:
     void erase(MapIterator it);
 
 private:
-    HashV                               HashFunctionV;
-    // NOTE 当m_storage扩容时会导致m_indexMap记录的值全部失效, 故存储采用红黑树
-    MapStorage                          m_storage;
-    std::unordered_map<uint64_t, K *>   m_indexMap; // std::hash<V> -> K *
+    struct ValuePtrHash {
+        size_t operator()(const V *valuePtr) const
+        {
+            return HashV()(*valuePtr);
+        }
+    };
+
+    struct ValuePtrEqual {
+        bool operator()(const V *lhs, const V *rhs) const
+        {
+            return std::equal_to<V>()(*lhs, *rhs);
+        }
+    };
+
+private:
+    HashV           HashFunctionV;
+    // NOTE 反向索引：value pointer -> 主存储迭代器
+    MapStorage      m_storage;
+    std::unordered_map<const V *, MapIterator, ValuePtrHash, ValuePtrEqual> m_indexMap;
 };
 
 } // namespace eular

@@ -27,11 +27,11 @@ template <typename K, typename V, typename CompareK, typename HashV>
 inline BiMap<K, V, CompareK, HashV>::BiMap(const BiMap &other) :
     m_storage(other.m_storage)
 {
+    m_indexMap.clear();
     m_indexMap.reserve(m_storage.size());
     for (auto it = m_storage.begin(); it != m_storage.end(); ++it)
     {
-        auto hashV = HashFunctionV(it->second);
-        m_indexMap[hashV] = const_cast<K *>(&(it->first));
+        m_indexMap.emplace(&(it->second), it);
     }
 }
 
@@ -54,10 +54,11 @@ BiMap<K, V, CompareK, HashV> &BiMap<K, V, CompareK, HashV>::operator=(const BiMa
 {
     if (this != std::addressof(other)) {
         m_storage = other.m_storage;
+        m_indexMap.clear();
+        m_indexMap.reserve(m_storage.size());
         for (auto it = m_storage.begin(); it != m_storage.end(); ++it)
         {
-            auto hashV = HashFunctionV(it->second);
-            m_indexMap[hashV] = const_cast<K *>(&(it->first));
+            m_indexMap.emplace(&(it->second), it);
         }
     }
 
@@ -78,8 +79,7 @@ BiMap<K, V, CompareK, HashV> &BiMap<K, V, CompareK, HashV>::operator=(BiMap &&ot
 template <typename K, typename V, typename CompareK, typename HashV>
 bool BiMap<K, V, CompareK, HashV>::insert(const K &key, const V &value)
 {
-    auto hashV = HashFunctionV(value);
-    auto found = m_indexMap.find(hashV);
+    auto found = m_indexMap.find(&value);
     if (found != m_indexMap.end()) {
         // value已存在
         return false;
@@ -91,21 +91,13 @@ bool BiMap<K, V, CompareK, HashV>::insert(const K &key, const V &value)
         return false;
     }
 
-    K *pKey = const_cast<K *>(&(retPair.first->first));
-    m_indexMap[hashV] = pKey;
+    m_indexMap.emplace(&(retPair.first->second), retPair.first);
     return true;
 }
 
 template <typename K, typename V, typename CompareK, typename HashV>
 void BiMap<K, V, CompareK, HashV>::replaceValue(const K &key, const V &value)
 {
-    auto newHashV = HashFunctionV(value);
-    auto foundIt = m_indexMap.find(newHashV);
-    if (foundIt != m_indexMap.end())
-    {
-        throw std::logic_error("The same value already exists!");
-    }
-
     auto keyIt = m_storage.find(key);
     if (keyIt == m_storage.end())
     {
@@ -114,9 +106,20 @@ void BiMap<K, V, CompareK, HashV>::replaceValue(const K &key, const V &value)
         return;
     }
 
-    auto oldHashV = HashFunctionV(keyIt->second);
-    m_indexMap.erase(oldHashV);
-    m_indexMap[newHashV] = const_cast<K *>(&(keyIt->first));
+    if (keyIt->second == value) {
+        return;
+    }
+
+    auto foundIt = m_indexMap.find(&value);
+    if (foundIt != m_indexMap.end())
+    {
+        throw std::logic_error("The same value already exists!");
+    }
+
+    const V *oldValuePtr = &(keyIt->second);
+    m_indexMap.erase(oldValuePtr);
+    keyIt->second = value;
+    m_indexMap.emplace(&(keyIt->second), keyIt);
 }
 
 template <typename K, typename V, typename CompareK, typename HashV>
@@ -128,8 +131,7 @@ void BiMap<K, V, CompareK, HashV>::replaceKey(const V &value, const K &key)
         throw std::logic_error("The same key already exists!");
     }
 
-    auto hashV = HashFunctionV(value);
-    auto indexIt = m_indexMap.find(hashV);
+    auto indexIt = m_indexMap.find(&value);
     if (indexIt == m_indexMap.end())
     {
         // 不存在时则按插入处理
@@ -137,16 +139,17 @@ void BiMap<K, V, CompareK, HashV>::replaceKey(const V &value, const K &key)
         return;
     }
 
-    m_storage.erase(*(indexIt->second));
-    auto resultPair = m_storage.insert(std::make_pair(key, value));
+    V oldValue = indexIt->second->second;
+    m_storage.erase(indexIt->second);
+    auto resultPair = m_storage.insert(std::make_pair(key, oldValue));
     if (!resultPair.second)
     {
         // 未知的情况会进入此处
         throw std::logic_error("The same key already exists!");
     }
 
-    K *pKey = const_cast<K *>(&(resultPair.first->first));
-    m_indexMap[hashV] = pKey;
+    m_indexMap.erase(indexIt);
+    m_indexMap.emplace(&(resultPair.first->second), resultPair.first);
 }
 
 template <typename K, typename V, typename CompareK, typename HashV>
@@ -158,8 +161,7 @@ typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::er
         return iterator(this);
     }
 
-    auto hashV = HashFunctionV(keyIt->second);
-    m_indexMap.erase(hashV);
+    m_indexMap.erase(&(keyIt->second));
 
     auto nextIt = m_storage.erase(keyIt);
     return iterator(nextIt, this);
@@ -168,16 +170,14 @@ typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::er
 template <typename K, typename V, typename CompareK, typename HashV>
 typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::erase(const V &value)
 {
-    auto hashV = HashFunctionV(value);
-    auto indexIt = m_indexMap.find(hashV);
+    auto indexIt = m_indexMap.find(&value);
     if (indexIt == m_indexMap.end())
     {
         return iterator(this);
     }
 
-    K *pKey = indexIt->second;
+    auto eraseIt = indexIt->second;
     m_indexMap.erase(indexIt);
-    auto eraseIt = m_storage.find(*pKey);
     auto nextIt = m_storage.erase(eraseIt);
     return iterator(nextIt, this);
 }
@@ -186,11 +186,9 @@ template <typename K, typename V, typename CompareK, typename HashV>
 typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::erase(iterator it)
 {
     it.checkIterator();
-    auto hashV = HashFunctionV(it.m_it->second);
-    m_indexMap.erase(hashV);
+    m_indexMap.erase(&(it.m_it->second));
 
-    auto eraseIt = m_storage.find(it.m_it->first);
-    auto nextIt = m_storage.erase(eraseIt);
+    auto nextIt = m_storage.erase(it.m_it);
     return iterator(nextIt, this);
 }
 
@@ -204,14 +202,13 @@ typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::fi
 template <typename K, typename V, typename CompareK, typename HashV>
 typename BiMap<K, V, CompareK, HashV>::iterator BiMap<K, V, CompareK, HashV>::find(const V& value)
 {
-    auto it = m_indexMap.find(HashFunctionV(value));
+    auto it = m_indexMap.find(&value);
     if (it == m_indexMap.end())
     {
         return iterator(this);
     }
 
-    auto keyIt = m_storage.find(*(it->second));
-    return iterator(keyIt, this);
+    return iterator(it->second, this);
 }
 
 template <typename K, typename V, typename CompareK, typename HashV>
@@ -236,7 +233,7 @@ bool BiMap<K, V, CompareK, HashV>::contains(const K &key) const
 template <typename K, typename V, typename CompareK, typename HashV>
 bool BiMap<K, V, CompareK, HashV>::contains(const V &value) const
 {
-    auto it = m_indexMap.find(HashFunctionV(value));
+    auto it = m_indexMap.find(&value);
     return it != m_indexMap.end();
 }
 
@@ -267,9 +264,9 @@ void BiMap<K, V, CompareK, HashV>::erase(MapIterator it)
         return;
     }
 
-    auto hashV = HashFunctionV(it->Second);
+    auto valuePtr = &(it->second);
     m_storage.erase(it);
-    m_indexMap.erase(hashV);
+    m_indexMap.erase(valuePtr);
 }
 
 } // namespace eular
