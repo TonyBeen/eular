@@ -1,4 +1,4 @@
-/*************************************************************************
+﻿/*************************************************************************
     > File Name: test_lru_cache.cc
     > Author: eular
     > Brief:
@@ -46,10 +46,10 @@ struct ComplexKey {
     bool operator==(const ComplexKey& other) const { return k == other.k; }
     bool operator!=(const ComplexKey& other) const { return k != other.k; }
 
-    static ssize_t instanceCount;
+    static ptrdiff_t instanceCount;
 };
 
-ssize_t ComplexKey::instanceCount = 0;
+ptrdiff_t ComplexKey::instanceCount = 0;
 
 struct ComplexValue {
     int v;
@@ -58,10 +58,10 @@ struct ComplexValue {
     ComplexValue(const ComplexValue& other) : v(other.v) { instanceCount += 1; }
     ~ComplexValue() { instanceCount -= 1; }
 
-    static ssize_t instanceCount;
+    static ptrdiff_t instanceCount;
 };
 
-ssize_t ComplexValue::instanceCount = 0;
+ptrdiff_t ComplexValue::instanceCount = 0;
 
 // std::hash 特化：因为 LruCache 现在用 std::hash<TKey>
 } // namespace
@@ -98,7 +98,7 @@ namespace {
 struct KeyFailsOnCopy : public ComplexKey {
 public:
     KeyFailsOnCopy(const KeyFailsOnCopy& key) : ComplexKey(key) {
-        FAIL("KeyFailsOnCopy 被拷贝了（测试期望 get 不拷贝 key）");
+        FAIL("KeyFailsOnCopy should not be copied (get must not copy key)");
     }
     KeyFailsOnCopy(int key) : ComplexKey(key) {}
 };
@@ -125,7 +125,7 @@ public:
         lastKey = k;
         lastValue = v;
     }
-    ssize_t callbackCount;
+    ptrdiff_t callbackCount;
     SimpleKey lastKey;
     StringValue lastValue;
 };
@@ -149,7 +149,7 @@ struct LruCacheFixture {
         CHECK(ComplexValue::instanceCount == 0);
     }
 
-    static void assertInstanceCount(ssize_t keys, ssize_t values) {
+    static void assertInstanceCount(ptrdiff_t keys, ptrdiff_t values) {
         if (keys != ComplexKey::instanceCount || values != ComplexValue::instanceCount) {
             FAIL("Expected " << keys << " keys and " << values
                              << " values but there were actually "
@@ -228,13 +228,21 @@ TEST_CASE_METHOD(LruCacheFixture, "StressTest", "[LruCache]") {
     std::vector<char*> strings(kNumKeys);
     for (size_t i = 0; i < kNumKeys; i++) {
         strings[i] = (char*)malloc(16);
-        sprintf(strings[i], "%zu", i);
+        snprintf(strings[i], 16, "%zu", i);
     }
 
+#if defined(_WIN32)
+    std::srand(12345);
+#else
     srandom(12345);
+#endif
     int hitCount = 0;
     for (size_t i = 0; i < kNumIters; i++) {
+#if defined(_WIN32)
+        int index = static_cast<int>(static_cast<size_t>(std::rand()) % kNumKeys);
+#else
         int index = static_cast<int>(random() % kNumKeys);
+#endif
         uint32_t key = hash_int(index);
         const char* val = nullptr;
         auto ptr = cache.get(static_cast<int>(key));

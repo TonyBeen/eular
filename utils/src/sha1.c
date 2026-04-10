@@ -99,11 +99,16 @@ void SHA1_Init(SHA1_CTX *context)
 void SHA1_Update(SHA1_CTX *context, const uint8_t *data, size_t len)
 {
   size_t i, j;
+  uint32_t low_bits;
+  uint32_t high_bits;
 
   j = (context->count[0] >> 3) & 63;
-  if ((context->count[0] += len << 3) < (len << 3))
+  low_bits = (uint32_t)(len << 3);
+  high_bits = (uint32_t)(len >> 29);
+  context->count[0] += low_bits;
+  if (context->count[0] < low_bits)
     context->count[1]++;
-  context->count[1] += (len >> 29);
+  context->count[1] += high_bits;
   if ((j + len) > 63) {
     memcpy(&context->buffer[j], data, (i = 64 - j));
     SHA1Transform(context->state, context->buffer);

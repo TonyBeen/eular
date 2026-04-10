@@ -24,5 +24,8 @@ foreach(test_file ${TEST_SRC_LIST})
 
     target_link_libraries(${test} ${LINK_LIBS})
     target_include_directories(${test} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    if(MSVC)
+        target_compile_options(${test} PRIVATE /utf-8)
+    endif()
     add_test(NAME ${test} COMMAND ${test})
 endforeach(test_file)

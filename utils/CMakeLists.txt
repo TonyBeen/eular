@@ -56,7 +56,10 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set(MACRO_DEFINITIONS _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
     set(C_WARNING_FLAGS /utf-8)
     set(CXX_WARNING_FLAGS /utf-8)
-    set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include)
+    # Use libiconv headers from bundled source/build outputs, not 3rd/Windows.
+    set(3RD_INC_DIR
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libiconv_v1_18/include
+        ${CMAKE_CURRENT_BINARY_DIR}/3rd/libiconv_v1_18/include)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # 匹配 AppleClang 和 Clang
     set(MACRO_DEFINITIONS _GNU_SOURCE __USE_FILE_OFFSET64 _LARGEFILE64_SOURCE)
@@ -81,14 +84,6 @@ file(GLOB SRC_LIST CONFIGURE_DEPENDS "src/*.cpp")
 list(APPEND SRC_LIST        "src/printf.c")
 list(APPEND SRC_LIST        "src/sha1.c")
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(STATUS "X64")
-    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x64/)
-else()
-    message(STATUS "X86")
-    set(WIN_LINK_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/x86/)
-endif()
-
 function(utils_apply_common_target_settings target)
     target_compile_features(${target} PUBLIC cxx_std_11)
     set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -106,14 +101,8 @@ function(utils_apply_common_target_settings target)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_link_libraries(${target} PUBLIC pthread)
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-        target_include_directories(${target}
-            PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Windows/include/pthread4w
-        )
         target_link_libraries(${target}
             PRIVATE
-                $<$<CONFIG:Debug>:${WIN_LINK_LIB_PATH}/libpthreadVC3d.lib>
-                $<$<CONFIG:Release>:${WIN_LINK_LIB_PATH}/libpthreadVC3.lib>
                 ws2_32.lib)
     endif()
 
