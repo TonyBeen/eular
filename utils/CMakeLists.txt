@@ -69,6 +69,7 @@ list(APPEND HEADER_LIST     ${HPP_HEADER_LIST})
 
 file(GLOB SRC_LIST          "src/*.cpp")
 list(APPEND SRC_LIST        "src/printf.c")
+list(APPEND SRC_LIST        "src/sha1.c")
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(STATUS "X64")
