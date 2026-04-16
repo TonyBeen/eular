@@ -26,8 +26,8 @@
 // #error "undefined __WORDSIZE in hash.cpp"
 // #endif
 
-const uint32_t offset_basis = 2166136261U;
-const uint32_t prime = 16777619U;
+// const uint32_t offset_basis = 2166136261U;
+// const uint32_t prime = 16777619U;
 
 namespace eular {
 /*
@@ -275,7 +275,7 @@ bool HashData::grow(float maxLoadFactor)
         maxLoadFactor = 1.0f;
     }
 
-    const int threshold = std::max(1, static_cast<int>(m_numBuckets * maxLoadFactor));
+    const int threshold = (std::max)(1, static_cast<int>(m_numBuckets * maxLoadFactor));
     if (m_size >= threshold) {
         rehash(m_numBits + 1);
         return true;
