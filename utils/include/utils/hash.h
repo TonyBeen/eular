@@ -11,8 +11,10 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include <algorithm>
 #include <vector>
 #include <initializer_list>
+#include <type_traits>
 
 #include <utils/refcount.h>
 #include <utils/utils.h>
@@ -140,9 +142,9 @@ public:
     void clear();
 
     Val &at(const Key &key);
-    const Val &at(const Key &key, const Val &v = Val()) const;
+    Val at(const Key &key, const Val &v = Val()) const;
     Val &operator[](const Key &key) { detach(); return at(key); }
-    const Val operator[](const Key &key) const { return at(key); }
+    Val operator[](const Key &key) const { return at(key); }
 
     class const_iterator;
     class iterator
@@ -264,18 +266,21 @@ protected:
         return isValidNode(it.n);
     }
 
-    bool isVaildIterator(const const_iterator &it) const noexcept
+    bool isValidIterator(const const_iterator &it) const noexcept
     {
         return isValidNode(it.n);
     }
 
-    inline bool isValidNode(const Node *node) const noexcept
+    inline bool isValidNode(const HashData::Node *node) const noexcept
     {
 #if !defined(NDEBUG)
+        if (node == nullptr) {
+            return false;
+        }
         while (node->next) {
             node = node->next;
         }
-        return (static_cast<void *>(node) == data);
+        return static_cast<const void *>(node) == static_cast<const void *>(data);
 #else
         UNUSED(node);
         return true;
@@ -388,7 +393,7 @@ Val &HashMap<Key, Val>::at(const Key &key)
 }
 
 template <class Key, class Val>
-const Val &HashMap<Key, Val>::at(const Key &key, const Val &v) const
+Val HashMap<Key, Val>::at(const Key &key, const Val &v) const
 {
     Node **node = findNode(key, key.hash());
     if (*node == nodeEnd) {
@@ -407,18 +412,11 @@ typename HashMap<Key, Val>::iterator HashMap<Key, Val>::erase(const_iterator it)
     }
 
     if (data->ref.load() > 1) { // 当存在共享时需分离并找到it在新HashMap的位置
-        int bucketNum = (it.n->hash % data->numBuckets);
-        const_iterator bucketIterator(data->buckets[bucketNum]);
-        int stepsFromBucketStartToIte = 0;
-        while (bucketIterator != it) {
-            ++stepsFromBucketStartToIte;
-            ++bucketIterator;
-        }
+        Key key = concrete(it.n)->key;
         detach();
-        it = const_iterator(data->buckets[bucketNum]);
-        while (stepsFromBucketStartToIte > 0) {
-            --stepsFromBucketStartToIte;
-            ++it;
+        it = const_iterator(*findNode(key, key.hash()));
+        if (it == const_iterator(nodeEnd)) {
+            return end();
         }
     }
 
@@ -426,9 +424,9 @@ typename HashMap<Key, Val>::iterator HashMap<Key, Val>::erase(const_iterator it)
     ++ret;
 
     Node *node = concrete(it.n);
-    Node **ptr = reinterpret_cast<Node *>(&data->buckets[node->hash % data->numBuckets]);
+    Node **ptr = reinterpret_cast<Node **>(&data->buckets[node->hash % data->numBuckets]);
     while (*ptr != node) {
-        *ptr = (*ptr)->next;
+        ptr = &(*ptr)->next;
     }
 
     *ptr = node->next;

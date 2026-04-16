@@ -8,6 +8,9 @@
 #include "catch/catch.hpp"
 #include "utils/hash.h"
 
+#include <set>
+#include <type_traits>
+
 class Key : public eular::HashCmptBase
 {
 public:
@@ -22,6 +25,11 @@ public:
 
     int h{0};
 };
+
+static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int> &>().at(Key(1)))>::value,
+              "const HashMap::at should return by value to avoid dangling references");
+static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int> &>()[Key(1)])>::value,
+              "const HashMap::operator[] should return by value to avoid dangling references");
 
 TEST_CASE("test_construction", "[HashMap]") {
     // 测试默认构造函数
@@ -70,4 +78,130 @@ TEST_CASE("test_read_write_foreach_erase", "[HashMap]") {
         auto it = map1.find(Key(i));
         CHECK(it.value() == (num + i));
     }
+}
+
+TEST_CASE("test_iterate_across_buckets", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+    std::set<int> visited;
+
+    for (int i = 0; i < 64; ++i) {
+        map.insert(Key(i), i * 10);
+    }
+
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        visited.insert(it.key().h);
+        CHECK(it.value() == it.key().h * 10);
+    }
+
+    CHECK(visited.size() == 64);
+    for (int i = 0; i < 64; ++i) {
+        CHECK(visited.count(i) == 1);
+    }
+}
+
+TEST_CASE("test_erase_from_shared_iterator", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+    for (int i = 0; i < 8; ++i) {
+        map.insert(Key(i), i);
+    }
+
+    auto it = map.find(Key(3));
+    eular::HashMap<Key, int> shared(map);
+    auto next = map.erase(it);
+
+    CHECK(map.size() == 7);
+    CHECK(shared.size() == 8);
+    CHECK(map.find(Key(3)) == map.end());
+    CHECK(shared.find(Key(3)) != shared.end());
+    CHECK(next != map.end());
+}
+
+TEST_CASE("test_const_at_default_returns_value", "[HashMap]") {
+    const eular::HashMap<Key, int> map;
+    int value = map.at(Key(99), 1234);
+    CHECK(value == 1234);
+}
+
+TEST_CASE("test_iterator_increment_and_decrement", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+    for (int i = 0; i < 6; ++i) {
+        map.insert(Key(i), i * 10);
+    }
+
+    auto it = map.begin();
+    auto post = it++;
+    CHECK(post.key().h != it.key().h);
+    CHECK(map.find(post.key()) == post);
+
+    auto pre = ++it;
+    CHECK(pre == it);
+
+    auto tail = map.end();
+    --tail;
+    CHECK(tail != map.end());
+    auto tail_post = tail--;
+    CHECK(tail_post != tail);
+
+    std::set<int> visited;
+    for (auto walk = map.begin(); walk != map.end(); ++walk) {
+        visited.insert(walk.key().h);
+    }
+    CHECK(visited.size() == map.size());
+}
+
+TEST_CASE("test_begin_end_on_shared_copy_do_not_mutate_peer", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+    map.insert(Key(1), 10);
+    map.insert(Key(2), 20);
+
+    eular::HashMap<Key, int> shared(map);
+
+    auto begin = map.begin();
+    CHECK(begin != map.end());
+    int first_key = begin.key().h;
+    int original_value = begin.value();
+    begin.value() = 999;
+
+    CHECK(map.at(Key(first_key)) == 999);
+    CHECK(shared.at(Key(first_key)) == original_value);
+
+    auto end = map.end();
+    CHECK(end == map.end());
+    auto shared_begin = shared.begin();
+    int shared_value = shared_begin.value();
+    CHECK((shared_value == 10 || shared_value == 20));
+}
+
+TEST_CASE("test_duplicate_insert_keeps_existing_value", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+
+    auto first = map.insert(Key(7), 70);
+    auto second = map.insert(Key(7), 700);
+
+    CHECK(map.size() == 1);
+    CHECK(first == second);
+    CHECK(map.at(Key(7)) == 70);
+}
+
+TEST_CASE("test_erase_end_is_noop", "[HashMap]") {
+    eular::HashMap<Key, int> map;
+    map.insert(Key(1), 10);
+
+    auto next = map.erase(map.end());
+
+    CHECK(map.size() == 1);
+    CHECK(next == map.end());
+    CHECK(map.at(Key(1)) == 10);
+}
+
+TEST_CASE("test_const_operator_brackets_returns_copy", "[HashMap]") {
+    eular::HashMap<Key, int> source;
+    source.insert(Key(5), 50);
+
+    const eular::HashMap<Key, int> map(source);
+    int value = map[Key(5)];
+    int missing = map[Key(500)];
+
+    CHECK(value == 50);
+    CHECK(missing == 0);
 }

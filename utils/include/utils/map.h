@@ -5,8 +5,12 @@
     > Created Time: Thu 24 Nov 2022 04:29:18 PM CST
  ************************************************************************/
 
+#ifndef __EULAR_UTILS_MAP_H__
+#define __EULAR_UTILS_MAP_H__
+
 #include <assert.h>
 #include <initializer_list>
+#include <memory>
 
 #include <utils/map_node.h>
 #include <utils/exception.h>
@@ -83,8 +87,8 @@ public:
         friend class Map<Key, Val>;
         friend class const_iterator;
     public:
-        iterator() : currentNode(nullptr) { }
-        iterator(Node *n) : currentNode(n) { }
+        iterator() : currentNode(nullptr), owner(nullptr) { }
+        iterator(Node *n, Data *data) : currentNode(n), owner(data) { }
 
         inline const KeyType &key() const { return currentNode->key; }
         inline ValType &value() const { return currentNode->value; }
@@ -95,29 +99,30 @@ public:
         inline bool operator!=(const const_iterator &o) const { return currentNode != o.currentNode; }
 
         inline iterator &operator++() { // 前置++
-            currentNode = currentNode->nextNode();
+            currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return *this;
         }
 
         inline iterator operator++(int) { // 后置++
             iterator it = *this;
-            currentNode = currentNode->nextNode();
+            currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return it;
         }
 
         inline iterator &operator--() {
-            currentNode = currentNode->previousNode();
+            currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return *this;
         }
 
         inline iterator operator--(int) {
             iterator it = *this;
-            currentNode = currentNode->previousNode();
+            currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return it;
         }
     
     private:
         Node *currentNode;
+        Data *owner;
     };
     friend class iterator;
 
@@ -125,9 +130,9 @@ public:
         friend class Map<Key, Val>;
         friend class iterator;
     public:
-        const_iterator() : currentNode(nullptr) { }
-        const_iterator(const iterator &o) : currentNode(o.currentNode) { }
-        const_iterator(const Node *n) : currentNode(n) { }
+        const_iterator() : currentNode(nullptr), owner(nullptr) { }
+        const_iterator(const iterator &o) : currentNode(o.currentNode), owner(o.owner) { }
+        const_iterator(const Node *n, const Data *data) : currentNode(n), owner(const_cast<Data *>(data)) { }
 
         inline const KeyType &key() const { return currentNode->key; }
         inline const ValType &value() const { return currentNode->value; }
@@ -136,41 +141,42 @@ public:
         inline bool operator!=(const const_iterator &o) const { return currentNode != o.currentNode; }
 
         inline const_iterator &operator++() { // 前置++
-            currentNode = currentNode->nextNode();
+            currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return *this;
         }
 
         inline const_iterator operator++(int) { // 后置++
             const_iterator it = *this;
-            currentNode = currentNode->nextNode();
+            currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return it;
         }
 
         inline const_iterator &operator--() {
-            currentNode = currentNode->previousNode();
+            currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return *this;
         }
 
         inline const_iterator operator--(int) {
             const_iterator it = *this;
-            currentNode = currentNode->previousNode();
+            currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return it;
         }
 
     private:
         const Node *currentNode;
+        Data *owner;
     };
     friend class const_iterator;
 
     /* 返回iterator对红黑树做detach操作是因为iterator可以修改变量，会导致拷贝的那份也修改 */
-    inline iterator begin() { detach(); return iterator(mRBtree->begin()); }
-    inline const_iterator begin() const { return const_iterator(mRBtree->begin()); }
+    inline iterator begin() { detach(); return iterator(mRBtree->begin(), mRBtree); }
+    inline const_iterator begin() const { return const_iterator(mRBtree->begin(), mRBtree); }
     // inline iterator rbegin() { detach(); return iterator(mRBtree->rbegin()); }
-    inline const_iterator rbegin() const { return const_iterator(mRBtree->rbegin()); }
-    inline iterator end() { detach(); return iterator(mRBtree->end()); }
-    inline const_iterator end() const { return const_iterator(mRBtree->end()); }
+    inline const_iterator rbegin() const { return const_iterator(mRBtree->rbegin(), mRBtree); }
+    inline iterator end() { detach(); return iterator(mRBtree->end(), mRBtree); }
+    inline const_iterator end() const { return const_iterator(mRBtree->end(), mRBtree); }
     // inline iterator rend() { detach(); return iterator(mRBtree->rend()); }
-    inline const_iterator rend() const { return const_iterator(mRBtree->rend()); }
+    inline const_iterator rend() const { return const_iterator(mRBtree->rend(), mRBtree); }
 
     iterator insert(const KeyType &k, const ValType &v);
     // FIXME: 对于rbegin反向循环中使用erase会出现问题, 目前做法是禁用反向循环中的擦除行为
@@ -178,9 +184,9 @@ public:
     iterator erase(const iterator &it);
     iterator find(const KeyType &key);
     const_iterator find(const KeyType &key) const;
-    const ValType &value(const KeyType &key, const ValType &defaultValue = ValType()) const;
+    ValType value(const KeyType &key, const ValType &defaultValue = ValType()) const;
     ValType &operator[](const KeyType &key);
-    const ValType &operator[](const KeyType &key) const;
+    ValType operator[](const KeyType &key) const;
     void clear();
     size_t size() const { return mRBtree->size(); }
 
@@ -243,7 +249,7 @@ typename Map<Key, Val>::iterator Map<Key, Val>::insert(const KeyType &k, const V
 {
     detach();
     Node *newNode = mRBtree->insert(k, v);
-    return iterator(newNode);
+    return iterator(newNode, mRBtree);
 }
 
 template<typename Key, typename Val>
@@ -251,7 +257,7 @@ typename Map<Key, Val>::iterator Map<Key, Val>::erase(const KeyType &k)
 {
     detach();
     Node *next = mRBtree->erase(k);
-    return iterator(next);
+    return iterator(next, mRBtree);
 }
 
 /**
@@ -262,9 +268,23 @@ typename Map<Key, Val>::iterator Map<Key, Val>::erase(const KeyType &k)
 template<typename Key, typename Val>
 typename Map<Key, Val>::iterator Map<Key, Val>::erase(const iterator &it)
 {
-    detach();
-    Node *next = mRBtree->erase(it.currentNode, false);
-    return iterator(next);
+    if (mRBtree == nullptr || it.currentNode == mRBtree->end()) {
+        return iterator(mRBtree ? mRBtree->end() : nullptr, mRBtree);
+    }
+
+    if (mRBtree->reference.load() > 0) {
+        KeyType key = it.key();
+        detach();
+        Node *node = mRBtree->find(key);
+        if (node == nullptr) {
+            return iterator(mRBtree->end(), mRBtree);
+        }
+        Node *next = mRBtree->erase(node, true);
+        return iterator(next, mRBtree);
+    }
+
+    Node *next = mRBtree->erase(it.currentNode, true);
+    return iterator(next, mRBtree);
 }
 
 template<typename Key, typename Val>
@@ -272,18 +292,18 @@ typename Map<Key, Val>::iterator Map<Key, Val>::find(const KeyType &key)
 {
     detach();
     Node *node = mRBtree->find(key);
-    return iterator(node);
+    return iterator(node, mRBtree);
 }
 
 template<typename Key, typename Val>
 typename Map<Key, Val>::const_iterator Map<Key, Val>::find(const KeyType &key) const
 {
     Node *node = mRBtree->find(key);
-    return const_iterator(node);
+    return const_iterator(node, mRBtree);
 }
 
 template<typename Key, typename Val>
-const Val &Map<Key, Val>::value(const KeyType &key, const ValType &defaultValue) const
+Val Map<Key, Val>::value(const KeyType &key, const ValType &defaultValue) const
 {
     Node *n = mRBtree->find(key);
     return n ? n->value : defaultValue;
@@ -305,7 +325,7 @@ Val &Map<Key, Val>::operator[](const KeyType &key)
 }
 
 template<typename Key, typename Val>
-const Val &Map<Key, Val>::operator[](const KeyType &key) const
+Val Map<Key, Val>::operator[](const KeyType &key) const
 {
     return value(key);
 }
@@ -327,3 +347,5 @@ void Map<Key, Val>::clear()
 }
 
 } // namespace eular
+
+#endif // __EULAR_UTILS_MAP_H__

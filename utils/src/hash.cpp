@@ -248,7 +248,7 @@ void HashData::rehash(int hint)
             while (firstNode != end) {
                 uint32_t hash = firstNode->hash;
                 Node *lastNode = firstNode;
-                while (lastNode != end && lastNode->next->hash == hash) { // 找出相同hash值的末尾节点
+                while (lastNode->next != end && lastNode->next->hash == hash) { // 找出相同hash值的末尾节点
                     lastNode = lastNode->next;
                 }
 
@@ -295,36 +295,24 @@ HashData::Node *HashData::firstNode()
 HashData::Node *HashData::nextNode(Node *node)
 {
     assert(node);
-    union {
-        Node *next;
-        Node *e;
-        HashData *d;
-    };
-
-    next = node->next;
+    Node *next = node->next;
     assert(next);
 
-    printf("node = %p, next = %p, next->next = %p\n", node, next, next->next);
     if (next->next) { // 如果next是最后节点HashData，则next->next == nullptr
         return next;
     }
 
-    // 此时next为HashData的内存地址
-    int start = (node->hash % d->numBuckets) + 1;
-    printf("start = %d, buckets = %d\n", start, d->numBuckets);
-    if (start < d->numBuckets) {
-        Node *bucket = d->buckets[start]; // TODO 判断start是否会等于numBuckets
-        int n = d->numBuckets - start;
-        while (n--) { // 找到下一个存在数据的桶
-            if (bucket != e) {
-                printf("bucket = %p\n", bucket);
-                return bucket;
-            }
-            ++bucket;
+    HashData *data = reinterpret_cast<HashData *>(next);
+    Node *end = next;
+    int start = (node->hash % data->numBuckets) + 1;
+    for (int i = start; i < data->numBuckets; ++i) {
+        Node *bucket = data->buckets[i];
+        if (bucket != end) {
+            return bucket;
         }
     }
 
-    return e; // 未找到就返回结尾
+    return end; // 未找到就返回结尾
 }
 
 HashData::Node *HashData::previousNode(Node *node)
