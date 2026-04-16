@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 #include <initializer_list>
@@ -139,10 +140,10 @@ public:
     void reserve(size_t size);
     void clear();
 
-    Val &at(const Key &key);
-    Val at(const Key &key, const Val &v = Val()) const;
-    Val &operator[](const Key &key) { detach(); return at(key); }
-    Val operator[](const Key &key) const { return at(key); }
+    Val *at(const Key &key) noexcept;
+    const Val *at(const Key &key) const noexcept;
+    Val &operator[](const Key &key);
+    const Val &operator[](const Key &key) const;
 
     class const_iterator;
     class iterator
@@ -160,7 +161,7 @@ public:
 
         inline iterator() noexcept : m_node(nullptr) { }
         explicit inline iterator(void *node) noexcept : m_node(reinterpret_cast<HashData::Node *>(node)) { }
-    
+
         inline const Key &key() const noexcept { return concrete(m_node)->m_key; }
         inline Val &value() const noexcept { return concrete(m_node)->m_value; }
         inline Val &operator*() const noexcept { return concrete(m_node)->m_value; }
@@ -197,7 +198,7 @@ public:
         friend class iterator;
         friend class HashMap<Key, Val, Hash, KeyEqual>;
         HashData::Node *m_node;
-    
+
     public:
         typedef std::bidirectional_iterator_tag iterator_category;
         typedef uint64_t difference_type;
@@ -210,7 +211,7 @@ public:
             m_node(reinterpret_cast<HashData::Node *>(node)) { }
         inline const_iterator(const iterator &o) noexcept :
             m_node(o.m_node) { }
-        
+
         inline const Key &key() const noexcept { return concrete(m_node)->m_key; }
         inline const Val &value() const noexcept { return concrete(m_node)->m_value; }
         inline const Val &operator*() const noexcept { return concrete(m_node)->m_value; }
@@ -385,31 +386,56 @@ void HashMap<Key, Val, Hash, KeyEqual>::clear()
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>
-Val &HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key)
+Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) noexcept
+{
+    try {
+        detach();
+        uint32_t hashValue = hashKey(key);
+        Node **node = findNode(key, hashValue);
+        return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+template <class Key, class Val, class Hash, class KeyEqual>
+const Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) const noexcept
+{
+    try {
+        Node **node = findNode(key, hashKey(key));
+        return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+template <class Key, class Val, class Hash, class KeyEqual>
+Val &HashMap<Key, Val, Hash, KeyEqual>::operator[](const Key &key)
 {
     detach();
     uint32_t hashValue = hashKey(key);
     Node **node = findNode(key, hashValue);
     if (*node == m_nodeEnd) {
-        iterator it = insert(key, Val());
-        if (it == end()) {
-            throw std::exception();
+        if (m_data->grow()) {
+            node = findNode(key, hashValue);
         }
-        return *it;
+
+        Node *inserted = createNode(hashValue, key, Val(), node);
+        return inserted->m_value;
     }
 
     return (*node)->m_value;
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>
-Val HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key, const Val &v) const
+const Val &HashMap<Key, Val, Hash, KeyEqual>::operator[](const Key &key) const
 {
-    Node **node = findNode(key, hashKey(key));
-    if (*node == m_nodeEnd) {
-        return v;
+    const Val *value = at(key);
+    if (value) {
+        return *value;
     }
 
-    return (*node)->m_value;
+    throw std::out_of_range("HashMap::operator[] const key not found");
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>

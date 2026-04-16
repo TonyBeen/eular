@@ -34,10 +34,12 @@ struct ModKeyHash {
     }
 };
 
-static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>().at(Key(1)))>::value,
-              "const HashMap::at should return by value to avoid dangling references");
-static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>()[Key(1)])>::value,
-              "const HashMap::operator[] should return by value to avoid dangling references");
+static_assert(std::is_pointer<decltype(std::declval<eular::HashMap<Key, int, KeyHash> &>().at(Key(1)))>::value,
+              "HashMap::at should return pointer in mutable context");
+static_assert(std::is_pointer<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>().at(Key(1)))>::value,
+              "const HashMap::at should return pointer");
+static_assert(std::is_reference<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>()[Key(1)])>::value,
+              "const HashMap::operator[] should return const reference");
 
 TEST_CASE("test_construction", "[HashMap]") {
     // 测试默认构造函数
@@ -50,7 +52,9 @@ TEST_CASE("test_construction", "[HashMap]") {
     CHECK(map2.size() == map.size());
     {
         const auto &mm = map2;
-        CHECK(mm.at(Key(10)) == num);
+        const int *value = mm.at(Key(10));
+        REQUIRE(value != nullptr);
+        CHECK(*value == num);
     }
 
     // 测试初始化列表构造
@@ -77,10 +81,13 @@ TEST_CASE("test_read_write_foreach_erase", "[HashMap]") {
     }
     CHECK(map1.size() == recyle);
 
-    map1.at(Key(begin)) = num * recyle;
-    const auto &v = map1.at(Key(begin));
-    CHECK(v == num * recyle);
-    map1.at(Key(begin)) = num;
+    REQUIRE(map1.at(Key(begin)) != nullptr);
+    *map1.at(Key(begin)) = num * recyle;
+    const int *v = map1.at(Key(begin));
+    REQUIRE(v != nullptr);
+    CHECK(*v == num * recyle);
+    REQUIRE(map1.at(Key(begin)) != nullptr);
+    *map1.at(Key(begin)) = num;
 
     for (int i = 0; i < recyle; ++i) {
         auto it = map1.find(Key(i));
@@ -126,8 +133,8 @@ TEST_CASE("test_erase_from_shared_iterator", "[HashMap]") {
 
 TEST_CASE("test_const_at_default_returns_value", "[HashMap]") {
     const eular::HashMap<Key, int, KeyHash> map;
-    int value = map.at(Key(99), 1234);
-    CHECK(value == 1234);
+    const int *value = map.at(Key(99));
+    CHECK(value == nullptr);
 }
 
 TEST_CASE("test_iterator_increment_and_decrement", "[HashMap]") {
@@ -170,8 +177,12 @@ TEST_CASE("test_begin_end_on_shared_copy_do_not_mutate_peer", "[HashMap]") {
     int original_value = begin.value();
     begin.value() = 999;
 
-    CHECK(map.at(Key(first_key)) == 999);
-    CHECK(shared.at(Key(first_key)) == original_value);
+    const int *left = map.at(Key(first_key));
+    const int *right = shared.at(Key(first_key));
+    REQUIRE(left != nullptr);
+    REQUIRE(right != nullptr);
+    CHECK(*left == 999);
+    CHECK(*right == original_value);
 
     auto end = map.end();
     CHECK(end == map.end());
@@ -188,7 +199,9 @@ TEST_CASE("test_duplicate_insert_keeps_existing_value", "[HashMap]") {
 
     CHECK(map.size() == 1);
     CHECK(first == second);
-    CHECK(map.at(Key(7)) == 70);
+    const int *value = map.at(Key(7));
+    REQUIRE(value != nullptr);
+    CHECK(*value == 70);
 }
 
 TEST_CASE("test_erase_end_is_noop", "[HashMap]") {
@@ -199,19 +212,20 @@ TEST_CASE("test_erase_end_is_noop", "[HashMap]") {
 
     CHECK(map.size() == 1);
     CHECK(next == map.end());
-    CHECK(map.at(Key(1)) == 10);
+    const int *value = map.at(Key(1));
+    REQUIRE(value != nullptr);
+    CHECK(*value == 10);
 }
 
-TEST_CASE("test_const_operator_brackets_returns_copy", "[HashMap]") {
+TEST_CASE("test_const_operator_brackets_returns_reference", "[HashMap]") {
     eular::HashMap<Key, int, KeyHash> source;
     source.insert(Key(5), 50);
 
     const eular::HashMap<Key, int, KeyHash> map(source);
     int value = map[Key(5)];
-    int missing = map[Key(500)];
 
     CHECK(value == 50);
-    CHECK(missing == 0);
+    CHECK_THROWS_AS(map[Key(500)], std::out_of_range);
 }
 
 TEST_CASE("test_custom_hash_functor_support", "[HashMap]") {
@@ -225,5 +239,7 @@ TEST_CASE("test_custom_hash_functor_support", "[HashMap]") {
     CHECK(map.find(Key(1)) != map.end());
     CHECK(map.find(Key(5)) != map.end());
     CHECK(map.find(Key(9)) != map.end());
-    CHECK(map.at(Key(5)) == 50);
+    const int *value = map.at(Key(5));
+    REQUIRE(value != nullptr);
+    CHECK(*value == 50);
 }
