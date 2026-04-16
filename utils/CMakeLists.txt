@@ -11,6 +11,7 @@ include(CMakePackageConfigHelpers)
 
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
+option(UTILS_BIMAP_USE_STD_CONTAINER "Use std::map/std::unordered_map as BiMap backend" OFF)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 option(ENABLE_TEST "Enable test" OFF)
 option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
@@ -107,6 +108,11 @@ function(utils_apply_common_target_settings target)
     endif()
 
     target_compile_definitions(${target} PRIVATE ${MACRO_DEFINITIONS})
+    if(UTILS_BIMAP_USE_STD_CONTAINER)
+        target_compile_definitions(${target} PUBLIC UTILS_BIMAP_USE_STD_CONTAINER=1)
+    else()
+        target_compile_definitions(${target} PUBLIC UTILS_BIMAP_USE_STD_CONTAINER=0)
+    endif()
     target_compile_options(${target}
         PRIVATE
             ${COMMON_COMPILE_FLAGS}

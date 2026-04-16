@@ -10,19 +10,45 @@
 
 #include <string>
 #include <initializer_list>
-#include <unordered_map>
-#include <map>
 #include <type_traits>
 #include <exception>
 #include <stdexcept>
+
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
+#include <map>
+#include <unordered_map>
+#else
+#include <utils/map.h>
+#include <utils/hash.h>
+#endif
 
 namespace eular {
 template <typename K, typename V, typename CompareK = std::less<K>, typename HashV = std::hash<V>>
 class BiMap
 {
+private:
+    struct ValuePtrHash {
+        size_t operator()(const V *valuePtr) const {
+            return HashV()(*valuePtr);
+        }
+    };
+
+    struct ValuePtrEqual {
+        bool operator()(const V *lhs, const V *rhs) const {
+            return std::equal_to<V>()(*lhs, *rhs);
+        }
+    };
+
 public:
-    using MapStorage = typename std::map<K, V, CompareK>;
-    using MapIterator = typename MapStorage::iterator;
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
+    using MapStorage     = std::map<K, V, CompareK>;
+    using MapIterator    = typename MapStorage::iterator;
+    using HashMapStorage = std::unordered_map<const V *, MapIterator, ValuePtrHash, ValuePtrEqual>;
+#else
+    using MapStorage     = Map<K, V, CompareK>;
+    using MapIterator    = typename MapStorage::iterator;
+    using HashMapStorage = HashMap<const V *, MapIterator, ValuePtrHash, ValuePtrEqual>;
+#endif
 
     static_assert(std::is_same<typename std::result_of<HashV(V)>::type, std::size_t>::value,
                   "HashV must be a function object type that takes a V and returns a size_t");
@@ -91,13 +117,21 @@ public:
         inline const K &key() const
         {
             checkIterator();
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
             return m_it->first;
+#else
+            return m_it.key();
+#endif
         }
 
         inline const V &value() const
         {
             checkIterator();
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
             return m_it->second;
+#else
+            return m_it.value();
+#endif
         }
 
         // NOTE 遍历过程中更新 key 会改变迭代顺序, 可能导致遍历结果不可预期 (跳过或重复访问)
@@ -110,7 +144,11 @@ public:
                 return false;
             }
 
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
             V value = m_it->second;
+#else
+            V value = m_it.value();
+#endif
             m_parent->erase(m_it);
             bool result = m_parent->insert(key, value);
             if (!result) {
@@ -126,9 +164,15 @@ public:
         {
             checkIterator();
 
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
             if (m_it->second == value) {
                 return true;
             }
+#else
+            if (m_it.value() == value) {
+                return true;
+            }
+#endif
 
             auto foundIt = m_parent->m_indexMap.find(&value);
             if (foundIt != m_parent->m_indexMap.end()) { // 新值已存在
@@ -136,10 +180,17 @@ public:
             }
 
             // 更新indexMap的数据
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
             const V *oldValuePtr = &(m_it->second);
-            m_parent->m_indexMap.erase(oldValuePtr);
+            m_parent->eraseValueIndex(oldValuePtr);
             m_it->second = value;
-            m_parent->m_indexMap.emplace(&(m_it->second), m_it);
+            m_parent->insertValueIndex(&(m_it->second), m_it);
+#else
+            const V *oldValuePtr = &(m_it.value());
+            m_parent->eraseValueIndex(oldValuePtr);
+            m_it.value() = value;
+            m_parent->insertValueIndex(&(m_it.value()), m_it);
+#endif
             return true;
         }
 
@@ -203,28 +254,35 @@ public:
     void clear();
 
 private:
-    void erase(MapIterator it);
+    inline void insertValueIndex(const V *valuePtr, const MapIterator &it)
+    {
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
+        m_indexMap.emplace(valuePtr, it);
+#else
+        m_indexMap.insert(valuePtr, it);
+#endif
+    }
+
+    inline void eraseValueIndex(const V *valuePtr)
+    {
+#if defined(UTILS_BIMAP_USE_STD_CONTAINER) && (UTILS_BIMAP_USE_STD_CONTAINER)
+        m_indexMap.erase(valuePtr);
+#else
+        auto it = m_indexMap.find(valuePtr);
+        if (it != m_indexMap.end()) {
+            m_indexMap.erase(it);
+        }
+#endif
+    }
 
 private:
-    struct ValuePtrHash {
-        size_t operator()(const V *valuePtr) const
-        {
-            return HashV()(*valuePtr);
-        }
-    };
-
-    struct ValuePtrEqual {
-        bool operator()(const V *lhs, const V *rhs) const
-        {
-            return std::equal_to<V>()(*lhs, *rhs);
-        }
-    };
+    void erase(MapIterator it);
 
 private:
     HashV           HashFunctionV;
     // NOTE 反向索引：value pointer -> 主存储迭代器
     MapStorage      m_storage;
-    std::unordered_map<const V *, MapIterator, ValuePtrHash, ValuePtrEqual> m_indexMap;
+    HashMapStorage  m_indexMap;
 };
 
 } // namespace eular

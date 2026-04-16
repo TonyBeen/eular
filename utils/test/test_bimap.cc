@@ -19,7 +19,7 @@
 
 namespace {
 
-constexpr uint32_t kBenchmarkDataSize = 500000;
+constexpr uint32_t kBenchmarkDataSize = 100000;
 constexpr uint32_t kBenchmarkSeed = 0x5EED1234u;
 
 struct ValueWithCollision {
@@ -141,7 +141,7 @@ TEST_CASE("find benchmark", "[BiMap]") {
     auto queryKeys = makeShuffledKeys(kBenchmarkDataSize, kBenchmarkSeed);
     eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
 
-    BENCHMARK_ADVANCED("BiMap find by key avg/op (500000 entries, fixed seed)")
+    BENCHMARK_ADVANCED("BiMap find by key avg/op (100000 entries, fixed seed)")
     (Catch::Benchmark::Chronometer meter) {
         meter.measure([&](int i) {
             const uint32_t key = queryKeys[static_cast<size_t>(i) % queryKeys.size()];
@@ -150,7 +150,7 @@ TEST_CASE("find benchmark", "[BiMap]") {
         });
     };
 
-    BENCHMARK_ADVANCED("BiMap find by value avg/op (500000 entries, fixed seed)")
+    BENCHMARK_ADVANCED("BiMap find by value avg/op (100000 entries, fixed seed)")
     (Catch::Benchmark::Chronometer meter) {
         meter.measure([&](int i) {
             const uint64_t value = queryKeys[static_cast<size_t>(i) % queryKeys.size()];
@@ -189,7 +189,7 @@ TEST_CASE("test erase", "[BiMap]") {
 TEST_CASE("erase benchmark", "[BiMap]") {
     auto eraseKeys = makeShuffledKeys(kBenchmarkDataSize, kBenchmarkSeed + 1);
 
-    BENCHMARK_ADVANCED("BiMap erase by key avg/op (500000 entries, fixed seed)")
+    BENCHMARK_ADVANCED("BiMap erase by key avg/op (100000 entries, fixed seed)")
     (Catch::Benchmark::Chronometer meter) {
         eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
 
@@ -201,7 +201,7 @@ TEST_CASE("erase benchmark", "[BiMap]") {
         });
     };
 
-    BENCHMARK_ADVANCED("BiMap erase by value avg/op (500000 entries, fixed seed)")
+    BENCHMARK_ADVANCED("BiMap erase by value avg/op (100000 entries, fixed seed)")
     (Catch::Benchmark::Chronometer meter) {
         eular::BiMap<uint32_t, uint64_t> bimap = makeBenchmarkBimap(kBenchmarkDataSize);
 
