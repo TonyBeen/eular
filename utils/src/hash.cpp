@@ -269,9 +269,14 @@ void HashData::rehash(int hint)
     }
 }
 
-bool HashData::grow()
+bool HashData::grow(float maxLoadFactor)
 {
-    if (m_size >= m_numBuckets) {
+    if (maxLoadFactor <= 0.0f) {
+        maxLoadFactor = 1.0f;
+    }
+
+    const int threshold = std::max(1, static_cast<int>(m_numBuckets * maxLoadFactor));
+    if (m_size >= threshold) {
         rehash(m_numBits + 1);
         return true;
     }

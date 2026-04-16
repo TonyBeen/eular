@@ -212,16 +212,9 @@ MapNode<Key, Val> *MapData<Key, Val, Compare>::prevNode(const Node *curr)
 template <typename Key, typename Val, typename Compare>
 MapNode<Key, Val> *MapData<Key, Val, Compare>::insert(const Key &key, const Val &val)
 {
-    MapNode<Key, Val> *newMapNode = createNode(key, val);
-    if (newMapNode == nullptr) {
-        return nullptr;
-    }
-
-    rb_node *newNode = &newMapNode->__rb_node;
     rb_root *root = &__rb_root;
     struct rb_node **node = &(root->rb_node);
     struct rb_node *parent = nullptr;
-    bool exists = false;
     while (nullptr != (*node)) {
         parent = *node;
         MapNode<Key, Val> *p = MapNode<Key, Val>::map_node_entry(parent);
@@ -230,18 +223,19 @@ MapNode<Key, Val> *MapData<Key, Val, Compare>::insert(const Key &key, const Val 
         } else if (isLess(p->key, key)) {
             node = &(*node)->rb_right;
         } else {
-            exists = true;
-            freeNode(newMapNode);
-            newMapNode = nullptr;
-            break;
+            return nullptr;
         }
     }
 
-    if (!exists) {
-        rb_link_node(newNode, parent, node);
-        rb_insert_color(newNode, root);
-        ++node_count;
+    MapNode<Key, Val> *newMapNode = createNode(key, val);
+    if (newMapNode == nullptr) {
+        return nullptr;
     }
+
+    rb_node *newNode = &newMapNode->__rb_node;
+    rb_link_node(newNode, parent, node);
+    rb_insert_color(newNode, root);
+    ++node_count;
 
     return newMapNode;
 }

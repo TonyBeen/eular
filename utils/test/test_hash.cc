@@ -11,6 +11,7 @@
 #include <set>
 #include <functional>
 #include <type_traits>
+#include <unordered_map>
 
 struct Key
 {
@@ -33,6 +34,15 @@ struct ModKeyHash {
         return static_cast<size_t>(key.h % 4);
     }
 };
+
+struct ThrowingKeyHash {
+    size_t operator()(const Key &) const
+    {
+        throw std::runtime_error("hash error");
+    }
+};
+
+static constexpr int kHashBenchmarkDataSize = 100000;
 
 static_assert(std::is_pointer<decltype(std::declval<eular::HashMap<Key, int, KeyHash> &>().at(Key(1)))>::value,
               "HashMap::at should return pointer in mutable context");
@@ -242,4 +252,70 @@ TEST_CASE("test_custom_hash_functor_support", "[HashMap]") {
     const int *value = map.at(Key(5));
     REQUIRE(value != nullptr);
     CHECK(*value == 50);
+}
+
+TEST_CASE("test_at_propagates_hasher_exceptions", "[HashMap]") {
+    eular::HashMap<Key, int, ThrowingKeyHash> map;
+    CHECK_THROWS_AS(map.at(Key(1)), std::runtime_error);
+
+    const eular::HashMap<Key, int, ThrowingKeyHash> cmap;
+    CHECK_THROWS_AS(cmap.at(Key(1)), std::runtime_error);
+}
+
+TEST_CASE("test_adjustable_max_load_factor", "[HashMap]") {
+    eular::HashMap<Key, int, KeyHash> map;
+    map.max_load_factor(0.5f);
+    CHECK(map.max_load_factor() == Approx(0.5f));
+
+    for (int i = 0; i < 9; ++i) {
+        map.insert(Key(i), i);
+    }
+
+    CHECK(map.capacity() > 17);
+}
+
+TEST_CASE("benchmark_hashmap_insert", "[HashMap][benchmark]") {
+    BENCHMARK("HashMap insert performance") {
+        eular::HashMap<Key, int, KeyHash> map;
+        for (int i = 0; i < kHashBenchmarkDataSize; ++i) {
+            map.insert(Key(i), i);
+        }
+        return map.size();
+    };
+}
+
+TEST_CASE("benchmark_std_unordered_map_insert", "[HashMap][benchmark]") {
+    BENCHMARK("std::unordered_map insert performance") {
+        std::unordered_map<Key, int, KeyHash> map;
+        for (int i = 0; i < kHashBenchmarkDataSize; ++i) {
+            map.emplace(Key(i), i);
+        }
+        return map.size();
+    };
+}
+
+TEST_CASE("benchmark_hashmap_find", "[HashMap][benchmark]") {
+    eular::HashMap<Key, int, KeyHash> map;
+    for (int i = 0; i < kHashBenchmarkDataSize; ++i) {
+        map.insert(Key(i), i);
+    }
+
+    BENCHMARK("HashMap find performance") {
+        int index = kHashBenchmarkDataSize / 2;
+        auto it = map.find(Key(index));
+        return it != map.end() ? it.value() : -1;
+    };
+}
+
+TEST_CASE("benchmark_std_unordered_map_find", "[HashMap][benchmark]") {
+    std::unordered_map<Key, int, KeyHash> map;
+    for (int i = 0; i < kHashBenchmarkDataSize; ++i) {
+        map.emplace(Key(i), i);
+    }
+
+    BENCHMARK("std::unordered_map find performance") {
+        int index = kHashBenchmarkDataSize / 2;
+        auto it = map.find(Key(index));
+        return it != map.end() ? it->second : -1;
+    };
 }

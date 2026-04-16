@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <assert.h>
+#include <map>
 #include <type_traits>
 
 #include <utils/map.h>
@@ -42,6 +43,8 @@ struct DescendingString8Compare {
         return lhs > rhs;
     }
 };
+
+static constexpr int kMapBenchmarkDataSize = 100000;
 
 TEST_CASE("test_insert", "[map]") {
     eular::Map<eular::String8, int> mapObj;
@@ -334,6 +337,26 @@ TEST_CASE("test_custom_compare_orders_map", "[map]") {
     CHECK(it.key() == "alpha");
 }
 
+TEST_CASE("test_nonconst_find_does_not_detach", "[map]") {
+    eular::Map<eular::String8, MergeTrackedValue> mapObj;
+    mapObj.insert("alpha", MergeTrackedValue(1));
+    mapObj.insert("bravo", MergeTrackedValue(2));
+
+    eular::Map<eular::String8, MergeTrackedValue> shared(mapObj);
+    MergeTrackedValue::copyCount = 0;
+    const auto &constMapObj = mapObj;
+    const auto &constShared = shared;
+
+    auto it = mapObj.find("alpha");
+    REQUIRE(it != constMapObj.end());
+    CHECK(it.value().value == 1);
+    CHECK(MergeTrackedValue::copyCount == 0);
+
+    auto sharedIt = shared.find("alpha");
+    REQUIRE(sharedIt != constShared.end());
+    CHECK(sharedIt.value().value == 1);
+}
+
 TEST_CASE("test_clear", "[map]") {
     eular::Map<eular::String8, int> mapObj;
     mapObj.insert("hello", 100);
@@ -342,4 +365,50 @@ TEST_CASE("test_clear", "[map]") {
 
     mapObj.clear();
     CHECK(mapObj.size() == 0);
+}
+
+TEST_CASE("benchmark_map_insert", "[map][benchmark]") {
+    BENCHMARK("Map insert performance") {
+        eular::Map<int, int> mapObj;
+        for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+            mapObj.insert(i, i);
+        }
+        return mapObj.size();
+    };
+}
+
+TEST_CASE("benchmark_std_map_insert", "[map][benchmark]") {
+    BENCHMARK("std::map insert performance") {
+        std::map<int, int> mapObj;
+        for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+            mapObj.emplace(i, i);
+        }
+        return mapObj.size();
+    };
+}
+
+TEST_CASE("benchmark_map_find", "[map][benchmark]") {
+    eular::Map<int, int> mapObj;
+    for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+        mapObj.insert(i, i);
+    }
+
+    BENCHMARK("Map find performance") {
+        int index = kMapBenchmarkDataSize / 2;
+        auto it = mapObj.find(index);
+        return it != mapObj.end() ? it.value() : -1;
+    };
+}
+
+TEST_CASE("benchmark_std_map_find", "[map][benchmark]") {
+    std::map<int, int> mapObj;
+    for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+        mapObj.emplace(i, i);
+    }
+
+    BENCHMARK("std::map find performance") {
+        int index = kMapBenchmarkDataSize / 2;
+        auto it = mapObj.find(index);
+        return it != mapObj.end() ? it->second : -1;
+    };
 }

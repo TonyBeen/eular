@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <limits>
 #include <initializer_list>
 #include <type_traits>
 
@@ -45,7 +46,7 @@ struct HashData
                             int nodeSize, int nodeAlign);
     void free_helper(void (*node_delete)(Node *));
     void rehash(int hint);
-    bool grow();
+    bool grow(float maxLoadFactor);
 
     Node *firstNode();
     static Node *nextNode(Node *node);
@@ -75,11 +76,14 @@ class HashMap
     typedef HashNode<Key, Val> Node;
     typedef Hash Hasher;
     typedef KeyEqual KeyEqualer;
+    static constexpr bool kAtNoexcept =
+        noexcept(std::declval<const Hasher &>()(std::declval<const Key &>())) &&
+        noexcept(std::declval<const KeyEqualer &>()(std::declval<const Key &>(), std::declval<const Key &>()));
 
 public:
-    HashMap() noexcept : m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual() {}
+    HashMap() noexcept : m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual(), m_maxLoadFactor(1.0f) {}
     HashMap(std::initializer_list<std::pair<Key, Val>> list) :
-        m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual()
+        m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual(), m_maxLoadFactor(1.0f)
     {
         m_data->rehash(-std::max<int>(list.size(), 1));
         for (typename std::initializer_list<std::pair<Key, Val>>::const_iterator it = list.begin();
@@ -88,7 +92,7 @@ public:
         }
     }
     HashMap(const HashMap &other) noexcept :
-        m_data(other.m_data), m_hasher(other.m_hasher), m_keyEqual(other.m_keyEqual)
+        m_data(other.m_data), m_hasher(other.m_hasher), m_keyEqual(other.m_keyEqual), m_maxLoadFactor(other.m_maxLoadFactor)
     {
         m_data->m_ref.ref();
     }
@@ -102,13 +106,16 @@ public:
             m_data = otherData;
             m_hasher = other.m_hasher;
             m_keyEqual = other.m_keyEqual;
+            m_maxLoadFactor = other.m_maxLoadFactor;
         }
         return *this;
     }
     HashMap(HashMap &&other) noexcept :
-        m_data(other.m_data), m_hasher(std::move(other.m_hasher)), m_keyEqual(std::move(other.m_keyEqual))
+        m_data(other.m_data), m_hasher(std::move(other.m_hasher)), m_keyEqual(std::move(other.m_keyEqual)),
+        m_maxLoadFactor(other.m_maxLoadFactor)
     {
         other.m_data = const_cast<HashData *>(&HashData::shared_null);
+        other.m_maxLoadFactor = 1.0f;
     }
     HashMap &operator=(HashMap &&other) noexcept
     {
@@ -127,21 +134,31 @@ public:
 
     void swap(HashMap &other) noexcept(noexcept(std::swap(m_data, other.m_data)) &&
                                        noexcept(std::swap(m_hasher, other.m_hasher)) &&
-                                       noexcept(std::swap(m_keyEqual, other.m_keyEqual)))
+                                       noexcept(std::swap(m_keyEqual, other.m_keyEqual)) &&
+                                       noexcept(std::swap(m_maxLoadFactor, other.m_maxLoadFactor)))
     {
         std::swap(m_data, other.m_data);
         std::swap(m_hasher, other.m_hasher);
         std::swap(m_keyEqual, other.m_keyEqual);
+        std::swap(m_maxLoadFactor, other.m_maxLoadFactor);
     }
 
     inline int size() const noexcept { return m_data->m_size; }
     inline bool empty() const noexcept { return m_data->m_size == 0; }
     inline int capacity() const noexcept { return m_data->m_numBuckets; }
+    inline float max_load_factor() const noexcept { return m_maxLoadFactor; }
+    void max_load_factor(float factor)
+    {
+        if (factor <= 0.0f || factor > static_cast<float>(std::numeric_limits<int>::max())) {
+            throw std::invalid_argument("HashMap::max_load_factor expects factor > 0");
+        }
+        m_maxLoadFactor = factor;
+    }
     void reserve(size_t size);
     void clear();
 
-    Val *at(const Key &key) noexcept;
-    const Val *at(const Key &key) const noexcept;
+    Val *at(const Key &key) noexcept(kAtNoexcept);
+    const Val *at(const Key &key) const noexcept(kAtNoexcept);
     Val &operator[](const Key &key);
     const Val &operator[](const Key &key) const;
 
@@ -308,6 +325,7 @@ private:
     };
     Hasher      m_hasher;
     KeyEqualer  m_keyEqual;
+    float       m_maxLoadFactor;
 };
 
 template <class Key, class Val, class Hash, class KeyEqual>
@@ -386,27 +404,19 @@ void HashMap<Key, Val, Hash, KeyEqual>::clear()
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>
-Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) noexcept
+Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) noexcept(kAtNoexcept)
 {
-    try {
-        detach();
-        uint32_t hashValue = hashKey(key);
-        Node **node = findNode(key, hashValue);
-        return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
-    } catch (...) {
-        return nullptr;
-    }
+    detach();
+    uint32_t hashValue = hashKey(key);
+    Node **node = findNode(key, hashValue);
+    return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>
-const Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) const noexcept
+const Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) const noexcept(kAtNoexcept)
 {
-    try {
-        Node **node = findNode(key, hashKey(key));
-        return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
-    } catch (...) {
-        return nullptr;
-    }
+    Node **node = findNode(key, hashKey(key));
+    return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
 }
 
 template <class Key, class Val, class Hash, class KeyEqual>
@@ -416,7 +426,7 @@ Val &HashMap<Key, Val, Hash, KeyEqual>::operator[](const Key &key)
     uint32_t hashValue = hashKey(key);
     Node **node = findNode(key, hashValue);
     if (*node == m_nodeEnd) {
-        if (m_data->grow()) {
+        if (m_data->grow(m_maxLoadFactor)) {
             node = findNode(key, hashValue);
         }
 
@@ -491,7 +501,7 @@ typename HashMap<Key, Val, Hash, KeyEqual>::iterator HashMap<Key, Val, Hash, Key
     uint32_t hashValue = hashKey(key);
     Node **node = findNode(key, hashValue);
     if (*node == m_nodeEnd) {
-        if (m_data->grow()) {
+        if (m_data->grow(m_maxLoadFactor)) {
             node = findNode(key, hashValue);
         }
 

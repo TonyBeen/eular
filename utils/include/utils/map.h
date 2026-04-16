@@ -292,7 +292,6 @@ typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const it
 template<typename Key, typename Val, typename Compare>
 typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::find(const KeyType &key)
 {
-    detach();
     Node *node = mRBtree->find(key);
     return iterator(node, mRBtree);
 }
