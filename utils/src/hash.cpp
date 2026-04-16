@@ -104,18 +104,18 @@ static int countBits(int hint)
 
 static const uint8_t minNumBits = 4;
 const HashData HashData::shared_null = {
-    0,              // fakeNode
-    {},             // buckets
-    { UINT32_MAX }, // ref
-    0,              // size
-    0,              // nodeSize
-    minNumBits,     // numBits
-    0               // numBuckets
+    0,              // m_fakeNode
+    {},             // m_buckets
+    { UINT32_MAX }, // m_ref
+    0,              // m_size
+    0,              // m_nodeSize
+    minNumBits,     // m_numBits
+    0               // m_numBuckets
 };
 
 void *HashData::allocateNode(int align)
 {
-    void *ptr = AlignedAlloc(nodeSize, align);
+    void *ptr = AlignedAlloc(m_nodeSize, align);
     CHECK_PTR(ptr);
     return ptr;
 }
@@ -136,32 +136,32 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
     d = new (std::nothrow)HashData();
     CHECK_PTR(d);
 
-    d->fakeNode = nullptr;
-    d->ref.ref();
-    d->size = size;
-    d->nodeSize = anodeSize;
+    d->m_fakeNode = nullptr;
+    d->m_ref.ref();
+    d->m_size = m_size;
+    d->m_nodeSize = anodeSize;
     if (this == &shared_null) {
-        d->numBits = minNumBits;
-        d->numBuckets = primeForNumBits(minNumBits);
+        d->m_numBits = minNumBits;
+        d->m_numBuckets = primeForNumBits(minNumBits);
     } else {
-        d->numBits = numBits;
-        d->numBuckets = numBuckets;
+        d->m_numBits = m_numBits;
+        d->m_numBuckets = m_numBuckets;
     }
 
     try {
-        d->buckets.resize(d->numBuckets, end);
+        d->m_buckets.resize(d->m_numBuckets, end);
     } catch (...) {
-        d->numBuckets = 0;
+        d->m_numBuckets = 0;
         d->free_helper(node_delete);
         throw Exception(ERROR_MSG("std::vector resize error."));
     }
 
-    if (numBuckets) {
+    if (m_numBuckets) {
         // NOTE QT的hash表采用单向链表来扩容冲突的值
         Node *this_node = reinterpret_cast<Node *>(this);
-        for (int i = 0; i < numBuckets; ++i) {
-            Node **newNode = &d->buckets[i];
-            Node *oldNode = this->buckets[i];
+        for (int i = 0; i < m_numBuckets; ++i) {
+            Node **newNode = &d->m_buckets[i];
+            Node *oldNode = this->m_buckets[i];
 
             while (oldNode != this_node) {
                 try {
@@ -173,11 +173,11 @@ HashData *HashData::detach_helper(void (*node_duplicate)(Node *, void *),
                         throw Exception(ERROR_MSG("node_duplicate error"));
                     }
                     *newNode = dup;
-                    newNode = &dup->next;
-                    oldNode = oldNode->next;
+                    newNode = &dup->m_next;
+                    oldNode = oldNode->m_next;
                 } catch (...) {
                     *newNode = end;
-                    d->numBuckets = i + 1;
+                    d->m_numBuckets = i + 1;
                     d->free_helper(node_delete);
                     throw Exception(ERROR_MSG("unknow error"));
                 }
@@ -198,10 +198,10 @@ void HashData::free_helper(void (*node_delete)(Node *))
 {
     if (node_delete) {
         Node *this_node = reinterpret_cast<Node *>(this);
-        for (size_t i = 0; i < buckets.size(); ++i) {
-            Node *curr = buckets[i];
+        for (size_t i = 0; i < m_buckets.size(); ++i) {
+            Node *curr = m_buckets[i];
             while (curr != this_node) {
-                Node *next = curr->next;
+                Node *next = curr->m_next;
                 node_delete(curr);
                 freeNode(curr);
                 curr = next;
@@ -209,7 +209,7 @@ void HashData::free_helper(void (*node_delete)(Node *))
         }
     }
 
-    buckets.clear();
+    m_buckets.clear();
     delete this;
 }
 
@@ -223,19 +223,19 @@ void HashData::rehash(int hint)
         hint = countBits(-hint);
         if (hint < minNumBits)
             hint = minNumBits;
-        while (primeForNumBits(hint) < (numBuckets >> 1))
+        while (primeForNumBits(hint) < (m_numBuckets >> 1))
             ++hint;
     } else if (hint < minNumBits) {
         hint = minNumBits;
     }
 
-    if (numBits != hint) {
+    if (m_numBits != hint) {
         Node *end = reinterpret_cast<Node *>(this);
-        int oldNumBuckets = numBuckets;
+        int oldNumBuckets = m_numBuckets;
 
         int nb = primeForNumBits(hint);
-        numBits = hint;
-        numBuckets = nb;
+        m_numBits = hint;
+        m_numBuckets = nb;
         std::vector<Node *> newBuckets;
         try {
             newBuckets.resize(nb, end);
@@ -244,35 +244,35 @@ void HashData::rehash(int hint)
         }
 
         for (int i = 0; i < oldNumBuckets; ++i) {
-            Node *firstNode = buckets[i];
+            Node *firstNode = m_buckets[i];
             while (firstNode != end) {
-                uint32_t hash = firstNode->hash;
+                uint32_t hash = firstNode->m_hash;
                 Node *lastNode = firstNode;
-                while (lastNode->next != end && lastNode->next->hash == hash) { // 找出相同hash值的末尾节点
-                    lastNode = lastNode->next;
+                while (lastNode->m_next != end && lastNode->m_next->m_hash == hash) { // 找出相同hash值的末尾节点
+                    lastNode = lastNode->m_next;
                 }
 
-                Node *afterLastNode = lastNode->next; // maybe afterLastNode == end
-                Node **beforeFirstNode = &newBuckets[hash % numBuckets];
+                Node *afterLastNode = lastNode->m_next; // maybe afterLastNode == end
+                Node **beforeFirstNode = &newBuckets[hash % m_numBuckets];
                 while (*beforeFirstNode != end) { // 找到新桶的最后一个节点
-                    beforeFirstNode = &(*beforeFirstNode)->next;
+                    beforeFirstNode = &(*beforeFirstNode)->m_next;
                 }
 
                 // 链表尾插
-                lastNode->next = *beforeFirstNode;
+                lastNode->m_next = *beforeFirstNode;
                 *beforeFirstNode = firstNode;
                 firstNode = afterLastNode;
             }
         }
 
-        buckets.swap(newBuckets);
+        m_buckets.swap(newBuckets);
     }
 }
 
 bool HashData::grow()
 {
-    if (size >= numBuckets) {
-        rehash(numBits + 1);
+    if (m_size >= m_numBuckets) {
+        rehash(m_numBits + 1);
         return true;
     }
 
@@ -282,8 +282,8 @@ bool HashData::grow()
 HashData::Node *HashData::firstNode()
 {
     Node *end = reinterpret_cast<Node *>(this);
-    for (int i = 0; i < numBuckets; ++i) {
-        Node *bucket = this->buckets[i];
+    for (int i = 0; i < m_numBuckets; ++i) {
+        Node *bucket = this->m_buckets[i];
         if (bucket != end) {
             return bucket;
         }
@@ -295,18 +295,18 @@ HashData::Node *HashData::firstNode()
 HashData::Node *HashData::nextNode(Node *node)
 {
     assert(node);
-    Node *next = node->next;
+    Node *next = node->m_next;
     assert(next);
 
-    if (next->next) { // 如果next是最后节点HashData，则next->next == nullptr
+    if (next->m_next) { // 如果next是最后节点HashData，则next->next == nullptr
         return next;
     }
 
     HashData *data = reinterpret_cast<HashData *>(next);
     Node *end = next;
-    int start = (node->hash % data->numBuckets) + 1;
-    for (int i = start; i < data->numBuckets; ++i) {
-        Node *bucket = data->buckets[i];
+    int start = (node->m_hash % data->m_numBuckets) + 1;
+    for (int i = start; i < data->m_numBuckets; ++i) {
+        Node *bucket = data->m_buckets[i];
         if (bucket != end) {
             return bucket;
         }
@@ -323,25 +323,25 @@ HashData::Node *HashData::previousNode(Node *node)
     };
 
     end = node;
-    while (end->next) { // 找出HashData的地址
-        end = end->next;
+    while (end->m_next) { // 找出HashData的地址
+        end = end->m_next;
     }
 
     int start = 0;
     if (node == end) { // 如果node是结尾，返回最后一个桶的索引
-        start = data->numBuckets - 1;
+        start = data->m_numBuckets - 1;
     } else { // 否则就找出当前node所在的桶
-        start = node->hash % data->numBuckets;
+        start = node->m_hash % data->m_numBuckets;
     }
 
     Node *sentinel = node;
     Node *bucket = nullptr;
     while (start >= 0) { // TODO 当node为第一个桶的第一个节点时
-        bucket = data->buckets[start];
+        bucket = data->m_buckets[start];
         if (bucket != sentinel) { // 参数node不为桶的第一个元素时
             Node *prev = bucket;
-            while (prev->next != sentinel) {
-                prev = prev->next;
+            while (prev->m_next != sentinel) {
+                prev = prev->m_next;
             }
             return prev;
         }
@@ -351,43 +351,6 @@ HashData::Node *HashData::previousNode(Node *node)
     }
 
     return end;
-}
-
-uint32_t HashCmptBase::compute(const uint8_t *key, uint32_t size)
-{
-    uint32_t _Val = offset_basis;
-    for (size_t _Idx = 0; _Idx < size; ++_Idx) {
-        _Val ^= static_cast<uint32_t>(key[_Idx]);
-        _Val *= prime;
-    }
-
-    return _Val;
-}
-
-static inline uint32_t ReadU32(const void *p)
-{
-    uint32_t tmp;
-    memcpy(&tmp, p, sizeof tmp);
-    return tmp;
-}
-
-uint32_t HashCmptBase::compute2(const void *key, uint32_t size)
-{
-    uint32_t hash = 0;
-    uint32_t n = size;
-    while (n >= 4) {
-        hash ^= ReadU32(key);
-        key = (uint8_t *)key + sizeof(uint32_t);
-        hash = (hash << 13) | (hash >> 19);
-        n -= 4;
-    }
-    while (n != 0) {
-        hash ^= *(uint8_t *)key;
-        key = (uint8_t *)key + sizeof(uint8_t);
-        hash = (hash << 8) | (hash >> 24);
-        n--;
-    }
-    return hash;
 }
 
 } // namespace eular

@@ -20,6 +20,29 @@ static_assert(!std::is_reference<decltype(std::declval<const eular::Map<eular::S
 static_assert(!std::is_reference<decltype(std::declval<const eular::Map<eular::String8, int> &>()["x"])>::value,
               "Map::operator[] const should return by value to avoid dangling references");
 
+struct MergeTrackedValue {
+    MergeTrackedValue(int v = 0) : value(v) { }
+    MergeTrackedValue(const MergeTrackedValue &other) : value(other.value) { ++copyCount; }
+    MergeTrackedValue &operator=(const MergeTrackedValue &other)
+    {
+        value = other.value;
+        ++copyCount;
+        return *this;
+    }
+
+    int value;
+    static int copyCount;
+};
+
+int MergeTrackedValue::copyCount = 0;
+
+struct DescendingString8Compare {
+    bool operator()(const eular::String8 &lhs, const eular::String8 &rhs) const
+    {
+        return lhs > rhs;
+    }
+};
+
 TEST_CASE("test_insert", "[map]") {
     eular::Map<eular::String8, int> mapObj;
     mapObj.insert("hello", 100);
@@ -245,6 +268,70 @@ TEST_CASE("test_const_operator_brackets_returns_copy", "[map]") {
 
     CHECK(value == 100);
     CHECK(missing == 0);
+}
+
+TEST_CASE("test_merge_moves_unique_nodes_without_extra_copy", "[map]") {
+    eular::Map<eular::String8, MergeTrackedValue> dst;
+    eular::Map<eular::String8, MergeTrackedValue> src;
+
+    dst.insert("keep", MergeTrackedValue(1));
+    dst.insert("dup", MergeTrackedValue(2));
+    src.insert("dup", MergeTrackedValue(20));
+    src.insert("move", MergeTrackedValue(30));
+
+    auto moveIt = src.find("move");
+    REQUIRE(moveIt != src.end());
+    MergeTrackedValue *movedPtr = &moveIt.value();
+
+    MergeTrackedValue::copyCount = 0;
+    dst.merge(src);
+
+    CHECK(MergeTrackedValue::copyCount == 0);
+    CHECK(dst.size() == 3);
+    CHECK(src.size() == 1);
+    CHECK(dst.find("move") != dst.end());
+    CHECK(src.find("move") == src.end());
+    CHECK(src.find("dup") != src.end());
+    CHECK(dst.find("dup").value().value == 2);
+    CHECK(&dst.find("move").value() == movedPtr);
+}
+
+TEST_CASE("test_merge_preserves_shared_copies", "[map]") {
+    eular::Map<eular::String8, int> dst;
+    eular::Map<eular::String8, int> src;
+    dst.insert("left", 1);
+    src.insert("right", 2);
+
+    eular::Map<eular::String8, int> dstShared(dst);
+    eular::Map<eular::String8, int> srcShared(src);
+
+    dst.merge(src);
+
+    CHECK(dst.size() == 2);
+    CHECK(src.size() == 0);
+
+    const auto &constDstShared = dstShared;
+    const auto &constSrcShared = srcShared;
+    CHECK(constDstShared.find("right") == constDstShared.end());
+    CHECK(constSrcShared.find("right") != constSrcShared.end());
+    CHECK(constSrcShared.find("right").value() == 2);
+}
+
+TEST_CASE("test_custom_compare_orders_map", "[map]") {
+    eular::Map<eular::String8, int, DescendingString8Compare> mapObj;
+    mapObj.insert("alpha", 1);
+    mapObj.insert("charlie", 3);
+    mapObj.insert("bravo", 2);
+
+    auto it = mapObj.begin();
+    REQUIRE(it != mapObj.end());
+    CHECK(it.key() == "charlie");
+    ++it;
+    REQUIRE(it != mapObj.end());
+    CHECK(it.key() == "bravo");
+    ++it;
+    REQUIRE(it != mapObj.end());
+    CHECK(it.key() == "alpha");
 }
 
 TEST_CASE("test_clear", "[map]") {

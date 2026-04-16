@@ -16,11 +16,12 @@
 #include <utils/exception.h>
 
 namespace eular {
-template<typename Key, typename Val>
+template<typename Key, typename Val, typename Compare = std::less<Key>>
 class Map {
     typedef Key KeyType;
     typedef Val ValType;
-    using Data = detail::MapData<KeyType, ValType>;
+    typedef Compare CompareType;
+    using Data = detail::MapData<KeyType, ValType, CompareType>;
     using Node = detail::MapNode<KeyType, ValType>;
 
 public:
@@ -34,7 +35,7 @@ public:
         }
     }
 
-    Map(const Map<KeyType, ValType> &other) :
+    Map(const Map<KeyType, ValType, CompareType> &other) :
         mRBtree(nullptr)
     {
         mRBtree = other.mRBtree;
@@ -44,7 +45,7 @@ public:
         }
     }
 
-    Map(Map<KeyType, ValType> &&other) :
+    Map(Map<KeyType, ValType, CompareType> &&other) :
         mRBtree(nullptr)
     {
         if (this != std::addressof(other)) {
@@ -58,7 +59,7 @@ public:
         destroy();
     }
 
-    Map &operator=(const Map<KeyType, ValType> &other)
+    Map &operator=(const Map<KeyType, ValType, CompareType> &other)
     {
         if (this == std::addressof(other)) {
             return *this;
@@ -71,7 +72,7 @@ public:
         return *this;
     }
 
-    Map &operator=(Map<KeyType, ValType> &&other)
+    Map &operator=(Map<KeyType, ValType, CompareType> &&other)
     {
         if (this == std::addressof(other)) {
             return *this;
@@ -84,37 +85,37 @@ public:
 
     class const_iterator;
     class iterator {
-        friend class Map<Key, Val>;
+        friend class Map<Key, Val, Compare>;
         friend class const_iterator;
     public:
-        iterator() : currentNode(nullptr), owner(nullptr) { }
-        iterator(Node *n, Data *data) : currentNode(n), owner(data) { }
+        iterator() noexcept : currentNode(nullptr), owner(nullptr) { }
+        iterator(Node *n, Data *data) noexcept : currentNode(n), owner(data) { }
 
-        inline const KeyType &key() const { return currentNode->key; }
-        inline ValType &value() const { return currentNode->value; }
-        inline ValType *operator->() const { return &currentNode->value; }
-        inline bool operator==(const iterator &o) const { return currentNode == o.currentNode; }
-        inline bool operator!=(const iterator &o) const { return currentNode != o.currentNode; }
-        inline bool operator==(const const_iterator &o) const { return currentNode == o.currentNode; }
-        inline bool operator!=(const const_iterator &o) const { return currentNode != o.currentNode; }
+        inline const KeyType &key() const noexcept { return currentNode->key; }
+        inline ValType &value() const noexcept { return currentNode->value; }
+        inline ValType *operator->() const noexcept { return &currentNode->value; }
+        inline bool operator==(const iterator &o) const noexcept { return currentNode == o.currentNode; }
+        inline bool operator!=(const iterator &o) const noexcept { return currentNode != o.currentNode; }
+        inline bool operator==(const const_iterator &o) const noexcept { return currentNode == o.currentNode; }
+        inline bool operator!=(const const_iterator &o) const noexcept { return currentNode != o.currentNode; }
 
-        inline iterator &operator++() { // 前置++
+        inline iterator &operator++() noexcept { // 前置++
             currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return *this;
         }
 
-        inline iterator operator++(int) { // 后置++
+        inline iterator operator++(int) noexcept { // 后置++
             iterator it = *this;
             currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return it;
         }
 
-        inline iterator &operator--() {
+        inline iterator &operator--() noexcept {
             currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return *this;
         }
 
-        inline iterator operator--(int) {
+        inline iterator operator--(int) noexcept {
             iterator it = *this;
             currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return it;
@@ -127,36 +128,36 @@ public:
     friend class iterator;
 
     class const_iterator {
-        friend class Map<Key, Val>;
+        friend class Map<Key, Val, Compare>;
         friend class iterator;
     public:
-        const_iterator() : currentNode(nullptr), owner(nullptr) { }
-        const_iterator(const iterator &o) : currentNode(o.currentNode), owner(o.owner) { }
-        const_iterator(const Node *n, const Data *data) : currentNode(n), owner(const_cast<Data *>(data)) { }
+        const_iterator() noexcept : currentNode(nullptr), owner(nullptr) { }
+        const_iterator(const iterator &o) noexcept : currentNode(o.currentNode), owner(o.owner) { }
+        const_iterator(const Node *n, const Data *data) noexcept : currentNode(n), owner(const_cast<Data *>(data)) { }
 
-        inline const KeyType &key() const { return currentNode->key; }
-        inline const ValType &value() const { return currentNode->value; }
-        inline const ValType *operator->() const { return &currentNode->value; }
-        inline bool operator==(const const_iterator &o) const { return currentNode == o.currentNode; }
-        inline bool operator!=(const const_iterator &o) const { return currentNode != o.currentNode; }
+        inline const KeyType &key() const noexcept { return currentNode->key; }
+        inline const ValType &value() const noexcept { return currentNode->value; }
+        inline const ValType *operator->() const noexcept { return &currentNode->value; }
+        inline bool operator==(const const_iterator &o) const noexcept { return currentNode == o.currentNode; }
+        inline bool operator!=(const const_iterator &o) const noexcept { return currentNode != o.currentNode; }
 
-        inline const_iterator &operator++() { // 前置++
+        inline const_iterator &operator++() noexcept { // 前置++
             currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return *this;
         }
 
-        inline const_iterator operator++(int) { // 后置++
+        inline const_iterator operator++(int) noexcept { // 后置++
             const_iterator it = *this;
             currentNode = owner ? owner->nextNode(currentNode) : nullptr;
             return it;
         }
 
-        inline const_iterator &operator--() {
+        inline const_iterator &operator--() noexcept {
             currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return *this;
         }
 
-        inline const_iterator operator--(int) {
+        inline const_iterator operator--(int) noexcept {
             const_iterator it = *this;
             currentNode = owner ? owner->prevNode(currentNode) : nullptr;
             return it;
@@ -170,13 +171,13 @@ public:
 
     /* 返回iterator对红黑树做detach操作是因为iterator可以修改变量，会导致拷贝的那份也修改 */
     inline iterator begin() { detach(); return iterator(mRBtree->begin(), mRBtree); }
-    inline const_iterator begin() const { return const_iterator(mRBtree->begin(), mRBtree); }
+    inline const_iterator begin() const noexcept { return const_iterator(mRBtree->begin(), mRBtree); }
     // inline iterator rbegin() { detach(); return iterator(mRBtree->rbegin()); }
-    inline const_iterator rbegin() const { return const_iterator(mRBtree->rbegin(), mRBtree); }
+    inline const_iterator rbegin() const noexcept { return const_iterator(mRBtree->rbegin(), mRBtree); }
     inline iterator end() { detach(); return iterator(mRBtree->end(), mRBtree); }
-    inline const_iterator end() const { return const_iterator(mRBtree->end(), mRBtree); }
+    inline const_iterator end() const noexcept { return const_iterator(mRBtree->end(), mRBtree); }
     // inline iterator rend() { detach(); return iterator(mRBtree->rend()); }
-    inline const_iterator rend() const { return const_iterator(mRBtree->rend(), mRBtree); }
+    inline const_iterator rend() const noexcept { return const_iterator(mRBtree->rend(), mRBtree); }
 
     iterator insert(const KeyType &k, const ValType &v);
     // FIXME: 对于rbegin反向循环中使用erase会出现问题, 目前做法是禁用反向循环中的擦除行为
@@ -188,20 +189,21 @@ public:
     ValType &operator[](const KeyType &key);
     ValType operator[](const KeyType &key) const;
     void clear();
-    size_t size() const { return mRBtree->size(); }
+    void merge(Map<KeyType, ValType, CompareType> &other);
+    size_t size() const noexcept { return mRBtree->size(); }
 
 protected:
     void detach();
-    bool isDetached() const { return mRBtree->reference.load() == 0; }
+    bool isDetached() const noexcept { return mRBtree->reference.load() == 0; }
     void detach_helper();
     void destroy();
 
 private:
-    detail::MapData<KeyType, ValType> *mRBtree;
+    detail::MapData<KeyType, ValType, CompareType> *mRBtree;
 };
 
-template<typename Key, typename Val>
-void Map<Key, Val>::detach()
+template<typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::detach()
 {
     if (mRBtree && mRBtree->reference.load() > 0) {
        detach_helper();
@@ -210,8 +212,8 @@ void Map<Key, Val>::detach()
     }
 }
 
-template<typename Key, typename Val>
-void Map<Key, Val>::detach_helper()
+template<typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::detach_helper()
 {
     Data *data = Data::create();
     mRBtree->reference.deref();
@@ -224,8 +226,8 @@ void Map<Key, Val>::detach_helper()
     mRBtree = data;
 }
 
-template<typename Key, typename Val>
-void Map<Key, Val>::destroy()
+template<typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::destroy()
 {
     if (mRBtree) {
         if (mRBtree->reference.load() > 0) {
@@ -244,16 +246,16 @@ void Map<Key, Val>::destroy()
  * @param v 值
  * @return 成功返回新节点的iterator，失败返回end()
  */
-template<typename Key, typename Val>
-typename Map<Key, Val>::iterator Map<Key, Val>::insert(const KeyType &k, const ValType &v)
+template<typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::insert(const KeyType &k, const ValType &v)
 {
     detach();
     Node *newNode = mRBtree->insert(k, v);
     return iterator(newNode, mRBtree);
 }
 
-template<typename Key, typename Val>
-typename Map<Key, Val>::iterator Map<Key, Val>::erase(const KeyType &k)
+template<typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const KeyType &k)
 {
     detach();
     Node *next = mRBtree->erase(k);
@@ -265,8 +267,8 @@ typename Map<Key, Val>::iterator Map<Key, Val>::erase(const KeyType &k)
  * @param it iterator对象
  * @return 返回下一节点位置，如果是删除最后一个节点位置则会返回end，如果不存此iterator也会返回end
  */
-template<typename Key, typename Val>
-typename Map<Key, Val>::iterator Map<Key, Val>::erase(const iterator &it)
+template<typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const iterator &it)
 {
     if (mRBtree == nullptr || it.currentNode == mRBtree->end()) {
         return iterator(mRBtree ? mRBtree->end() : nullptr, mRBtree);
@@ -287,30 +289,30 @@ typename Map<Key, Val>::iterator Map<Key, Val>::erase(const iterator &it)
     return iterator(next, mRBtree);
 }
 
-template<typename Key, typename Val>
-typename Map<Key, Val>::iterator Map<Key, Val>::find(const KeyType &key)
+template<typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::find(const KeyType &key)
 {
     detach();
     Node *node = mRBtree->find(key);
     return iterator(node, mRBtree);
 }
 
-template<typename Key, typename Val>
-typename Map<Key, Val>::const_iterator Map<Key, Val>::find(const KeyType &key) const
+template<typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::const_iterator Map<Key, Val, Compare>::find(const KeyType &key) const
 {
     Node *node = mRBtree->find(key);
     return const_iterator(node, mRBtree);
 }
 
-template<typename Key, typename Val>
-Val Map<Key, Val>::value(const KeyType &key, const ValType &defaultValue) const
+template<typename Key, typename Val, typename Compare>
+Val Map<Key, Val, Compare>::value(const KeyType &key, const ValType &defaultValue) const
 {
     Node *n = mRBtree->find(key);
     return n ? n->value : defaultValue;
 }
 
-template<typename Key, typename Val>
-Val &Map<Key, Val>::operator[](const KeyType &key)
+template<typename Key, typename Val, typename Compare>
+Val &Map<Key, Val, Compare>::operator[](const KeyType &key)
 {
     detach();
     Node *n = mRBtree->find(key);
@@ -324,25 +326,55 @@ Val &Map<Key, Val>::operator[](const KeyType &key)
     return n->value;
 }
 
-template<typename Key, typename Val>
-Val Map<Key, Val>::operator[](const KeyType &key) const
+template<typename Key, typename Val, typename Compare>
+Val Map<Key, Val, Compare>::operator[](const KeyType &key) const
 {
     return value(key);
 }
 
-template<typename Key, typename Val>
-void Map<Key, Val>::clear()
+template<typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::clear()
 {
     if (mRBtree == nullptr) {
-        mRBtree = detail::MapData<Key, Val>::create();
+        mRBtree = detail::MapData<Key, Val, Compare>::create();
         return;
     }
 
     if (mRBtree->reference.load() > 0) {
         mRBtree->reference.deref();
-        mRBtree = detail::MapData<Key, Val>::create();
+        mRBtree = detail::MapData<Key, Val, Compare>::create();
     } else {
         mRBtree->clear();
+    }
+}
+
+template<typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::merge(Map<KeyType, ValType, Compare> &other)
+{
+    if (this == std::addressof(other) || other.mRBtree == nullptr || other.mRBtree->size() == 0) {
+        return;
+    }
+
+    if (mRBtree == nullptr) {
+        mRBtree = Data::create();
+    }
+
+    detach();
+    other.detach();
+
+    if (mRBtree->size() == 0) {
+        std::swap(mRBtree, other.mRBtree);
+        other.mRBtree = Data::create();
+        return;
+    }
+
+    for (Node *node = other.mRBtree->begin(); node != other.mRBtree->end(); ) {
+        Node *next = other.mRBtree->nextNode(node);
+        if (mRBtree->find(node->key) == nullptr) {
+            Node *moved = other.mRBtree->extract(node, false);
+            mRBtree->insertNode(moved);
+        }
+        node = next;
     }
 }
 

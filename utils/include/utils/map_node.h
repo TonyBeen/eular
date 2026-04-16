@@ -81,7 +81,7 @@ struct MapDataBase {
     static void FreeData(MapDataBase *d);
 };
 
-template <typename Key, typename Val>
+template <typename Key, typename Val, typename Compare = std::less<Key> >
 struct MapData : public MapDataBase {
     typedef MapNode<Key, Val> Node;
 
@@ -123,6 +123,7 @@ struct MapData : public MapDataBase {
      * @return 创建内存失败时返回null，如果键不存在则返回新节点地址，如果存在，返回存在的节点地址
      */
     Node *insert(const Key &key, const Val &val);
+    Node *insertNode(Node *node);
     Node *find(const Key &key);
 
     /**
@@ -132,6 +133,7 @@ struct MapData : public MapDataBase {
      */
     Node *erase(const Key &key);
     Node *erase(const Node *, bool check = true);
+    Node *extract(const Node *, bool check = true);
 
     void clear();
 
@@ -168,11 +170,21 @@ struct MapData : public MapDataBase {
     }
 
 private:
+    static bool isLess(const Key &lhs, const Key &rhs)
+    {
+        return Compare()(lhs, rhs);
+    }
+
+    static bool isEqual(const Key &lhs, const Key &rhs)
+    {
+        return !isLess(lhs, rhs) && !isLess(rhs, lhs);
+    }
+
     MapData() {}
 };
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::nextNode(const Node *curr)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::nextNode(const Node *curr)
 {
     Node *lastNode = MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root));
     if (curr == lastNode || curr == end()) {
@@ -182,8 +194,8 @@ MapNode<Key, Val> *MapData<Key, Val>::nextNode(const Node *curr)
     return const_cast<Node *>(curr)->nextNode();
 }
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::prevNode(const Node *curr)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::prevNode(const Node *curr)
 {
     Node *lastNode = MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root));
     if (begin() == curr) {
@@ -197,8 +209,8 @@ MapNode<Key, Val> *MapData<Key, Val>::prevNode(const Node *curr)
     return const_cast<Node *>(curr)->previousNode();
 }
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::insert(const Key &key, const Val &val)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::insert(const Key &key, const Val &val)
 {
     MapNode<Key, Val> *newMapNode = createNode(key, val);
     if (newMapNode == nullptr) {
@@ -213,11 +225,11 @@ MapNode<Key, Val> *MapData<Key, Val>::insert(const Key &key, const Val &val)
     while (nullptr != (*node)) {
         parent = *node;
         MapNode<Key, Val> *p = MapNode<Key, Val>::map_node_entry(parent);
-        if (std::less<const Key &>()(key, p->key)) { // key < p->key
+        if (isLess(key, p->key)) {
             node = &(*node)->rb_left;
-        } else if (std::greater<const Key &>()(key, p->key)) { // key > p->key
+        } else if (isLess(p->key, key)) {
             node = &(*node)->rb_right;
-        } else { // key == p->key
+        } else {
             exists = true;
             freeNode(newMapNode);
             newMapNode = nullptr;
@@ -234,8 +246,8 @@ MapNode<Key, Val> *MapData<Key, Val>::insert(const Key &key, const Val &val)
     return newMapNode;
 }
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::find(const Key &key)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::find(const Key &key)
 {
     rb_root *root = &__rb_root;
     struct rb_node *curr = root->rb_node;
@@ -243,11 +255,11 @@ MapNode<Key, Val> *MapData<Key, Val>::find(const Key &key)
     bool exist = false;
     while (curr) {
         currNode = MapNode<Key, Val>::map_node_entry(curr);
-        if (std::less<const Key &>()(key, currNode->key)) { // key < currNode->key
+        if (isLess(key, currNode->key)) {
             curr = curr->rb_left;
-        } else if (std::greater<const Key &>()(key, currNode->key)) { // key > currNode->key
+        } else if (isLess(currNode->key, key)) {
             curr = curr->rb_right;
-        } else { // key == currNode->key
+        } else {
             exist = true;
             break;
         }
@@ -256,8 +268,37 @@ MapNode<Key, Val> *MapData<Key, Val>::find(const Key &key)
     return exist ? currNode : nullptr;
 }
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::erase(const Key &key)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::insertNode(Node *newMapNode)
+{
+    if (newMapNode == nullptr) {
+        return nullptr;
+    }
+
+    rb_node *newNode = &newMapNode->__rb_node;
+    rb_root *root = &__rb_root;
+    struct rb_node **node = &(root->rb_node);
+    struct rb_node *parent = nullptr;
+    while (*node != nullptr) {
+        parent = *node;
+        MapNode<Key, Val> *p = MapNode<Key, Val>::map_node_entry(parent);
+        if (isLess(newMapNode->key, p->key)) {
+            node = &(*node)->rb_left;
+        } else if (isLess(p->key, newMapNode->key)) {
+            node = &(*node)->rb_right;
+        } else {
+            return p;
+        }
+    }
+
+    rb_link_node(newNode, parent, node);
+    rb_insert_color(newNode, root);
+    ++node_count;
+    return newMapNode;
+}
+
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::erase(const Key &key)
 {
     MapNode<Key, Val> *ret = find(key);
     if (ret == nullptr) {
@@ -267,8 +308,8 @@ MapNode<Key, Val> *MapData<Key, Val>::erase(const Key &key)
     return erase(ret, false);
 }
 
-template <typename Key, typename Val>
-MapNode<Key, Val> *MapData<Key, Val>::erase(const Node *currNode, bool check)
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::erase(const Node *currNode, bool check)
 {
     if (currNode == end()) {
         return end();
@@ -287,8 +328,29 @@ MapNode<Key, Val> *MapData<Key, Val>::erase(const Node *currNode, bool check)
     return next;
 }
 
-template <typename Key, typename Val>
-void MapData<Key, Val>::clear()
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val> *MapData<Key, Val, Compare>::extract(const Node *currNode, bool check)
+{
+    if (currNode == end()) {
+        return nullptr;
+    }
+
+    Node *curr = const_cast<Node *>(currNode);
+    if (check && MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
+        throw eular::Exception("node is not in this rbtree");
+    }
+
+    rb_erase(&curr->__rb_node, &__rb_root);
+    curr->__rb_node.rb_parent = nullptr;
+    curr->__rb_node.rb_left = nullptr;
+    curr->__rb_node.rb_right = nullptr;
+    curr->__rb_node.rb_color = RB_RED;
+    --node_count;
+    return curr;
+}
+
+template <typename Key, typename Val, typename Compare>
+void MapData<Key, Val, Compare>::clear()
 {
     rb_root *root = &__rb_root;
     rb_node *node = nullptr;

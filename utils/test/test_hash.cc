@@ -9,32 +9,40 @@
 #include "utils/hash.h"
 
 #include <set>
+#include <functional>
 #include <type_traits>
 
-class Key : public eular::HashCmptBase
+struct Key
 {
-public:
-    Key(int v) : h(v) { }
-    virtual uint32_t hash() const 
-    {
-        const uint8_t *ptr = reinterpret_cast<const uint8_t *>(&h);
-        return eular::HashCmptBase::compute(ptr, sizeof(h));
-    }
-
+    Key(int v = 0) : h(v) { }
     bool operator==(const Key &o) const { return this->h == o.h; }
 
     int h{0};
 };
 
-static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int> &>().at(Key(1)))>::value,
+struct KeyHash {
+    size_t operator()(const Key &key) const
+    {
+        return std::hash<int>()(key.h);
+    }
+};
+
+struct ModKeyHash {
+    size_t operator()(const Key &key) const
+    {
+        return static_cast<size_t>(key.h % 4);
+    }
+};
+
+static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>().at(Key(1)))>::value,
               "const HashMap::at should return by value to avoid dangling references");
-static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int> &>()[Key(1)])>::value,
+static_assert(!std::is_reference<decltype(std::declval<const eular::HashMap<Key, int, KeyHash> &>()[Key(1)])>::value,
               "const HashMap::operator[] should return by value to avoid dangling references");
 
 TEST_CASE("test_construction", "[HashMap]") {
     // 测试默认构造函数
     int num = 100;
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     map.insert(Key(10), num);
 
     // 测试拷贝构造函数
@@ -46,7 +54,7 @@ TEST_CASE("test_construction", "[HashMap]") {
     }
 
     // 测试初始化列表构造
-    eular::HashMap<Key, int> map3 = {{10, 10}, {20, 20}};
+    eular::HashMap<Key, int, KeyHash> map3 = {{Key(10), 10}, {Key(20), 20}};
     CHECK(map3.size() == 2);
 
     // 测试移动赋值函数
@@ -63,7 +71,7 @@ TEST_CASE("test_read_write_foreach_erase", "[HashMap]") {
     int num = 100;
     int begin = 0;
     int recyle = 10;
-    eular::HashMap<Key, int> map1;
+    eular::HashMap<Key, int, KeyHash> map1;
     for (int i = begin; i < recyle; ++i) {
         map1.insert(Key(i), num + i);
     }
@@ -81,7 +89,7 @@ TEST_CASE("test_read_write_foreach_erase", "[HashMap]") {
 }
 
 TEST_CASE("test_iterate_across_buckets", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     std::set<int> visited;
 
     for (int i = 0; i < 64; ++i) {
@@ -100,13 +108,13 @@ TEST_CASE("test_iterate_across_buckets", "[HashMap]") {
 }
 
 TEST_CASE("test_erase_from_shared_iterator", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     for (int i = 0; i < 8; ++i) {
         map.insert(Key(i), i);
     }
 
     auto it = map.find(Key(3));
-    eular::HashMap<Key, int> shared(map);
+    eular::HashMap<Key, int, KeyHash> shared(map);
     auto next = map.erase(it);
 
     CHECK(map.size() == 7);
@@ -117,13 +125,13 @@ TEST_CASE("test_erase_from_shared_iterator", "[HashMap]") {
 }
 
 TEST_CASE("test_const_at_default_returns_value", "[HashMap]") {
-    const eular::HashMap<Key, int> map;
+    const eular::HashMap<Key, int, KeyHash> map;
     int value = map.at(Key(99), 1234);
     CHECK(value == 1234);
 }
 
 TEST_CASE("test_iterator_increment_and_decrement", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     for (int i = 0; i < 6; ++i) {
         map.insert(Key(i), i * 10);
     }
@@ -150,11 +158,11 @@ TEST_CASE("test_iterator_increment_and_decrement", "[HashMap]") {
 }
 
 TEST_CASE("test_begin_end_on_shared_copy_do_not_mutate_peer", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     map.insert(Key(1), 10);
     map.insert(Key(2), 20);
 
-    eular::HashMap<Key, int> shared(map);
+    eular::HashMap<Key, int, KeyHash> shared(map);
 
     auto begin = map.begin();
     CHECK(begin != map.end());
@@ -173,7 +181,7 @@ TEST_CASE("test_begin_end_on_shared_copy_do_not_mutate_peer", "[HashMap]") {
 }
 
 TEST_CASE("test_duplicate_insert_keeps_existing_value", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
 
     auto first = map.insert(Key(7), 70);
     auto second = map.insert(Key(7), 700);
@@ -184,7 +192,7 @@ TEST_CASE("test_duplicate_insert_keeps_existing_value", "[HashMap]") {
 }
 
 TEST_CASE("test_erase_end_is_noop", "[HashMap]") {
-    eular::HashMap<Key, int> map;
+    eular::HashMap<Key, int, KeyHash> map;
     map.insert(Key(1), 10);
 
     auto next = map.erase(map.end());
@@ -195,13 +203,27 @@ TEST_CASE("test_erase_end_is_noop", "[HashMap]") {
 }
 
 TEST_CASE("test_const_operator_brackets_returns_copy", "[HashMap]") {
-    eular::HashMap<Key, int> source;
+    eular::HashMap<Key, int, KeyHash> source;
     source.insert(Key(5), 50);
 
-    const eular::HashMap<Key, int> map(source);
+    const eular::HashMap<Key, int, KeyHash> map(source);
     int value = map[Key(5)];
     int missing = map[Key(500)];
 
     CHECK(value == 50);
     CHECK(missing == 0);
+}
+
+TEST_CASE("test_custom_hash_functor_support", "[HashMap]") {
+    eular::HashMap<Key, int, ModKeyHash> map;
+
+    map.insert(Key(1), 10);
+    map.insert(Key(5), 50);
+    map.insert(Key(9), 90);
+
+    CHECK(map.size() == 3);
+    CHECK(map.find(Key(1)) != map.end());
+    CHECK(map.find(Key(5)) != map.end());
+    CHECK(map.find(Key(9)) != map.end());
+    CHECK(map.at(Key(5)) == 50);
 }
