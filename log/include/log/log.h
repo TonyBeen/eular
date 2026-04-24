@@ -2,6 +2,7 @@
 #define _LOG_H_
 
 #include "log_level.h"
+#include "log_write.h"
 #include <stdarg.h>
 
 #ifndef LOGD

@@ -30,6 +30,8 @@ public:
     LogFormat& operator=(const LogFormat&) = delete;
 
     static std::string Format(const LogEvent *ev);
+    static std::string Format(const LogEvent *ev, bool enableColor);
+    static const char *LevelColor(LogLevel::Level level);
 
 private:
 };

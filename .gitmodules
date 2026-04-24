@@ -16,3 +16,6 @@
 [submodule "stun/3rd_party/mosquitto"]
 	path = stun/3rd_party/mosquitto
 	url = https://github.com/eclipse-mosquitto/mosquitto.git
+[submodule "log/3rd_party/zlog"]
+	path = log/3rd_party/zlog
+	url = https://github.com/HardySimpson/zlog.git

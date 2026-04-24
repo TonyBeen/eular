@@ -31,52 +31,70 @@
 
 
 namespace eular {
-std::string LogFormat::Format(const LogEvent *ev)
+const char *LogFormat::LevelColor(LogLevel::Level level)
 {
-    std::string ret;
-    char output[PERFIX_SIZE] = {0};
-    size_t msglen = strlen(ev->msg);
-    ret.resize(msglen + PERFIX_SIZE + CLR_MAX_SIZE);
-    const char *color = nullptr;
-    ret = "";
+    const char *color = CLR_CLR;
 
 #define XXX(level, clr) \
     case level:         \
         color = clr;    \
         break;          \
 
-    switch (ev->level) {
+    switch (level) {
         COLOR_MAP(XXX)
 
         default:
+            color = CLR_CLR;
             break;
     }
 #undef XXX
 
-    if (ev->enableColor) {
+    return color;
+}
+
+std::string LogFormat::Format(const LogEvent *ev, bool enableColor)
+{
+    if (ev == nullptr || ev->msg == nullptr) {
+        return std::string();
+    }
+
+    std::string ret;
+    char output[PERFIX_SIZE] = {0};
+    const size_t msglen = strlen(ev->msg);
+    ret.reserve(msglen + PERFIX_SIZE + CLR_MAX_SIZE + 8);
+
+    const char *color = LevelColor(ev->level);
+
+    if (enableColor) {
         snprintf(output, PERFIX_SIZE, "%s", color);
         ret += output;
     }
 
     // time pid tid level tag:
-    struct tm *pTime = localtime(&(ev->time.tv_sec));
+    struct tm tmv;
+    localtime_r(&(ev->time.tv_sec), &tmv);
     snprintf(output, PERFIX_SIZE, "%.2d-%.2d %.2d:%.2d:%.2d.%.3ld %5d %5ld %s %s: ",
-        pTime->tm_mon + 1, pTime->tm_mday, pTime->tm_hour, pTime->tm_min, pTime->tm_sec, ev->time.tv_usec / 1000,
+        tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec, ev->time.tv_usec / 1000,
         ev->pid, ev->tid, LogLevel::ToFormatString(ev->level).c_str(), ev->tag);
 
     ret += output;
     ret += ev->msg;
-    if (ev->msg[msglen - 1] != '\n') {
+    if (msglen == 0 || ev->msg[msglen - 1] != '\n') {
         ret += "\n";
     }
 
     // 清空颜色
-    if (ev->enableColor) {
+    if (enableColor) {
         snprintf(output, PERFIX_SIZE, "%s", CLR_CLR);
         ret += output;
     }
 
     return ret;
+}
+
+std::string LogFormat::Format(const LogEvent *ev)
+{
+    return Format(ev, ev != nullptr ? ev->enableColor : false);
 }
 
 } // namespace eular

@@ -1,8 +1,11 @@
 #include "log.h"
 #include "log_main.h"
+#ifdef LOG_ENABLE_CALLSTACK
 #include "callstack.h"
+#endif
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <assert.h>
 #include <time.h>
 #include <atomic>
@@ -13,12 +16,13 @@
 
 #define MSG_BUF_SIZE    (1024)
 #define EXPAND_SIZE     (8)     // for \n \0
+#define FAST_MSG_BUF_SIZE (4096)
 
 namespace eular {
 static LogManager *gLogManager = nullptr;
 static std::atomic<int32_t> gLevel{LogLevel::LEVEL_DEBUG};
 static volatile bool gEnableLogoutColor = true;
-static thread_local char g_logBuffer[MSG_BUF_SIZE + EXPAND_SIZE] = {0};
+static thread_local char g_logBuffer[FAST_MSG_BUF_SIZE + EXPAND_SIZE] = {0};
 
 namespace log {
 void getLogManager()
@@ -78,7 +82,6 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
     }
 
     char *out = g_logBuffer;
-    bool needFree = false;
     LogEvent ev;
     struct timeval tv;
     gettimeofday(&tv, nullptr);
@@ -95,28 +98,18 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
     va_list ap, tmpArgs;
     va_start(ap, fmt);
     va_copy(tmpArgs, ap);
-    int32_t n = vsnprintf(nullptr, 0, fmt, tmpArgs);
+    const int32_t formatSize = vsnprintf(out, FAST_MSG_BUF_SIZE, fmt, tmpArgs);
     va_end(tmpArgs);
-
-    uint32_t outSize = MSG_BUF_SIZE;
-    if (n > MSG_BUF_SIZE) { // 扩充buffer
-        outSize = n;
-        needFree = true;
-        out = (char *)malloc(outSize + EXPAND_SIZE);
-        if (out == nullptr) {
-            out = g_logBuffer;
-            outSize = MSG_BUF_SIZE;
-            needFree = false;
-        }
-    }
-    int32_t formatSize = vsnprintf(out, outSize, fmt, ap);
     va_end(ap);
     if (formatSize < 0) {
         perror("vsnprintf error");
-        goto need_free;
+        return;
     }
 
-    len = formatSize;
+    len = static_cast<size_t>(formatSize);
+    if (len >= FAST_MSG_BUF_SIZE) {
+        len = FAST_MSG_BUF_SIZE - 1;
+    }
     if (len && out[len - 1] != '\n') {
         out[len] = '\n';
         ++len;
@@ -127,11 +120,6 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
     log::getLogManager();
     if (gLogManager) {
         gLogManager->WriteLog(&ev);
-    }
-
-need_free:
-    if (needFree) {
-        free(out);
     }
 }
 
@@ -172,17 +160,14 @@ void log_write_assertv(const LogEvent *ev)
 {
     log::getLogManager();
     if (gLogManager != nullptr) {
-        std::string msgString = LogFormat::Format(ev);
-        std::list<LogWrite*> logWriteList = gLogManager->GetLogWrite();
-        for (LogManager::LogWriteIt it = logWriteList.begin(); it != logWriteList.end(); ++it) {
-            if (*it != nullptr) {
-                (*it)->WriteToFile(msgString);
-            }
-        }
+        gLogManager->WriteLog(ev);
+        gLogManager->Flush();
     }
+#ifdef LOG_ENABLE_CALLSTACK
     CallStack cs;
     cs.update(2, 2);
     cs.log("Stack", LogLevel::LEVEL_ERROR);
+#endif
     abort();
 }
 

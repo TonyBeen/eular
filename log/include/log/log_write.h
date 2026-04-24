@@ -43,6 +43,12 @@ class ProcessMutex;
 namespace eular {
 class LogWrite : public NonCopyAndAssign {
 public:
+    enum : int32_t {
+        STDOUT = static_cast<int32_t>(OutputType::STDOUT),
+        FILEOUT = static_cast<int32_t>(OutputType::FILEOUT),
+        CONSOLEOUT = static_cast<int32_t>(OutputType::CONSOLEOUT),
+    };
+
     LogWrite();
     virtual ~LogWrite();
 
