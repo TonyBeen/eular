@@ -77,12 +77,19 @@ endif()
 add_library(log STATIC ${LOG_SOURCES})
 add_library(eular::log ALIAS log)
 
+add_library(log_obj OBJECT ${LOG_SOURCES})
+add_library(eular::log_obj ALIAS log_obj)
+
 if(TARGET zlog_vendor)
     target_sources(log PRIVATE $<TARGET_OBJECTS:zlog_vendor>)
+    target_sources(log_obj PRIVATE $<TARGET_OBJECTS:zlog_vendor>)
 endif()
 
 target_compile_features(log PUBLIC cxx_std_11)
 set_target_properties(log PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+target_compile_features(log_obj PUBLIC cxx_std_11)
+set_target_properties(log_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(log
     PUBLIC
@@ -91,17 +98,33 @@ target_include_directories(log
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+target_include_directories(log_obj
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/log>
+)
+
 target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/log)
 target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party)
+
+target_include_directories(log_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(log_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/log)
+target_include_directories(log_obj PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party)
 
 target_link_libraries(log
     PUBLIC
         ${LOG_EXTRA_LIBS}
 )
 
+target_link_libraries(log_obj
+    PUBLIC
+        ${LOG_EXTRA_LIBS}
+)
+
 if(NOT WIN32 AND UNWIND_LIB)
     target_compile_definitions(log PRIVATE LOG_ENABLE_CALLSTACK=1)
+    target_compile_definitions(log_obj PRIVATE LOG_ENABLE_CALLSTACK=1)
 endif()
 
 if(LOG_BUILD_TESTLOG)
