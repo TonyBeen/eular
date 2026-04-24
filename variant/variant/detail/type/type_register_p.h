@@ -72,7 +72,7 @@ public:
     RTTR_INLINE std::vector<type_data*>& get_type_data_storage();
     RTTR_INLINE std::vector<type>& get_type_storage();
     RTTR_INLINE flat_map<std::string, type>& get_orig_name_to_id();
-    RTTR_INLINE flat_map<std::string, type, hash>& get_custom_name_to_id();
+    RTTR_INLINE type find_custom_name(const std::string& name) const;
 
     static type_register_private& get_instance();
 
@@ -142,11 +142,14 @@ private:
     std::set<registration_manager*>                             m_registration_manager_list;
 
     flat_map<std::string, type, hash>                           m_custom_name_to_id;
+    std::shared_ptr<const flat_map<std::string, type, hash>>    m_custom_name_to_id_snapshot;
     flat_map<std::string, type>                                 m_orig_name_to_id;
     std::vector<type>                                           m_type_list;
     std::vector<type_data*>                                     m_type_data_storage;
 
     std::mutex                                                  m_mutex;
+
+    RTTR_INLINE void refresh_custom_name_snapshot();
 };
 
 } // end namespace detail

@@ -1,0 +1,364 @@
+# variant
+
+## 简介
+
+variant 模块提供一个轻量级的运行时类型容器 `rttr::variant`，以及与之配套的 `rttr::type` 类型信息接口。
+
+它的目标不是替代 `std::variant`，而是提供：
+
+- 单值类型擦除存储
+- 运行时类型查询
+- 基础标量类型之间的显式转换
+- 包装类型与被包装值之间的转换
+- 指针、数组、枚举、`nullptr` 等类型的统一承载
+
+当前实现为头文件库，CMake 中以 `INTERFACE` 方式导出。
+
+## 主要能力
+
+### 1. 值存储与生命周期管理
+
+`rttr::variant` 支持以下基本能力：
+
+- 默认构造无效对象
+- 从任意可拷贝类型构造
+- 拷贝构造、移动构造
+- 拷贝赋值、移动赋值、自赋值
+- `clear()` 清空内容
+- `swap()` 交换内容
+- `is_valid()` / `operator bool()` 判断是否持有有效值
+
+实现层对小对象采用内联存储，对大对象采用堆分配，能够减少小标量和小型 POD 的额外分配成本。
+
+### 2. 类型查询
+
+`rttr::variant` 提供以下类型查询接口：
+
+- `get_type()` 获取当前存储值的运行时类型
+- `is_type<T>()` 判断当前值是否恰好为 `T`
+- `get_raw_type()` 获取去掉包装后的原始类型
+- `get_ptr()` 获取当前对象地址
+- `get_raw_ptr()` 获取原始对象地址
+
+`rttr::type` 提供以下元信息能力：
+
+- `type::get<T>()` 获取类型对象
+- `type::get(obj)` 从对象推导类型对象
+- `type::get_by_name(name)` 按名称查询类型
+- `get_name()` 获取类型名
+- `get_sizeof()` 获取类型大小
+- `get_id()` 获取进程内唯一类型 ID
+- `get_raw_type()` 获取原始类型
+- `get_wrapped_type()` 获取包装后的被包裹类型
+- `is_valid()` 判断类型是否有效
+- `is_class()` 判断是否类类型
+- `is_template_instantiation()` 判断是否模板实例
+- `is_enumeration()` 判断是否枚举
+- `is_array()` 判断是否原生数组
+- `is_associative_container()` 判断是否关联容器
+- `is_sequential_container()` 判断是否顺序容器
+- `is_pointer()` 判断是否指针
+- `is_arithmetic()` 判断是否算术类型
+- `is_wrapper()` 判断是否包装类型
+- `create_variant(argument)` 从参数创建对应类型的 `variant`
+
+### 3. 值提取
+
+支持以下提取方式：
+
+- `get_value<T>()` 以引用方式提取当前保存的值
+- `get_wrapped_value<T>()` 提取包装对象中的被包装值
+- `variant_cast<T>()` 以值、引用、指针或右值引用方式提取
+
+支持的 `variant_cast` 形式包括：
+
+- `variant_cast<T>(variant*)`
+- `variant_cast<T>(const variant*)`
+- `variant_cast<T>(variant&)`
+- `variant_cast<T>(const variant&)`
+- `variant_cast<T>(variant&&)`
+
+### 4. 包装值处理
+
+`variant` 支持包装值相关操作：
+
+- `extract_wrapped_value()` 从 wrapper 中提取被包装对象并返回新 `variant`
+- `create_wrapped_value(type)` 根据目标 wrapper 类型创建包装后的 `variant`
+- `can_convert()` / `convert()` 在 wrapper 和 wrapped value 之间进行转换
+
+默认识别的包装类型：
+
+- `std::reference_wrapper<T>`
+- `std::shared_ptr<T>`
+- `std::unique_ptr<T>`
+- `std::weak_ptr<T>`
+
+## 支持的类型与转换能力
+
+### 1. 直接支持存储的类型类别
+
+从实现和测试覆盖来看，当前支持存储以下类型：
+
+- `bool`
+- `char`
+- `int8_t` / `int16_t` / `int32_t` / `int64_t`
+- `uint8_t` / `uint16_t` / `uint32_t` / `uint64_t`
+- `float` / `double`
+- `std::string`
+- 枚举类型
+- 指针类型
+- `std::nullptr_t`
+- 原生数组
+- 普通类类型
+- 非 trivial 但可拷贝类型
+- wrapper 类型
+
+### 2. 通用转换接口
+
+当前支持以下转换入口：
+
+- `can_convert<T>()`
+- `can_convert(type)`
+- `convert(T& value)`
+- `convert<T>(bool* ok = nullptr)`
+- `convert(type)`
+- `convert(type, variant&)`
+
+### 3. 快捷转换函数
+
+提供以下快捷接口：
+
+- `to_bool()`
+- `to_int()`
+- `to_int8()`
+- `to_int16()`
+- `to_int32()`
+- `to_int64()`
+- `to_uint8()`
+- `to_uint16()`
+- `to_uint32()`
+- `to_uint64()`
+- `to_float()`
+- `to_double()`
+- `to_string()`
+
+### 4. 已覆盖的转换来源
+
+测试用例已经覆盖以下来源到目标类型的转换行为：
+
+- 空 `variant`
+- `bool`
+- `char`
+- `std::string`
+- `int`
+- `float`
+- `double`
+- `int8_t`
+- `int16_t`
+- `int32_t`
+- `int64_t`
+- `uint8_t`
+- `uint16_t`
+- `uint32_t`
+- `uint64_t`
+- 枚举
+
+### 5. 标量转换范围
+
+当前实现与测试已经覆盖以下方向：
+
+- 各类整数之间的范围检查转换
+- 浮点到整数的范围检查转换
+- 整数和浮点到 `std::string` 的转换
+- `std::string` 到整数、浮点、布尔的解析转换
+- 布尔与数值类型之间的互转
+- 枚举到底层数值类型和字符串的部分转换
+
+对应的快捷函数测试覆盖如下：
+
+- `to_bool()`
+- `to_int8()`
+- `to_int16()`
+- `to_int32()`
+- `to_int64()`
+- `to_uint8()`
+- `to_uint16()`
+- `to_uint32()`
+- `to_uint64()`
+- `to_float()`
+- `to_double()`
+- `to_string()`
+
+另外，`variant_conv_test.cc` 对以下通用转换做了补充验证：
+
+- `to_int()`
+- `convert<int>()`
+- `convert<std::string>()`
+- `convert<float>()`
+- `convert<double>()`
+- `convert<std::nullptr_t>()`
+- wrapper 转 wrapped value
+- wrapped value 转 wrapper
+
+### 6. 包装类型转换支持
+
+当前源码和测试体现出的包装转换能力如下：
+
+- `std::reference_wrapper<T>` 可提取被引用对象
+- `std::shared_ptr<T>` 可提取其裸指针
+- `variant` 可以保存 `std::reference_wrapper<int>`、`std::reference_wrapper<int*>`、`std::reference_wrapper<int** const>`
+- `variant` 可以读取 `std::unique_ptr<int>` 包装后的被包装对象
+
+已明确验证的限制：
+
+- 普通值 `int` 不能直接转为 `std::shared_ptr<int>` / `std::unique_ptr<int>` / `std::reference_wrapper<int>` / `std::weak_ptr<int>`
+- 裸指针不能自动转换为 `std::shared_ptr<T>` 或 `std::unique_ptr<T>`，避免错误接管对象所有权
+- 类型不匹配的指针不能转为错误元素类型的 `std::shared_ptr<U>`
+
+## 并发语义
+
+### 1. `type::get_by_name()` 的线程安全模型
+
+当前 `type::get_by_name()` 使用“写时复制快照”方案保证并发安全：
+
+- 写路径在内部锁保护下更新可变名称表
+- 写完成后发布一份新的只读快照
+- 读路径只查询当前快照，不直接访问可变容器
+
+这样做的目的有两个：
+
+- 避免 `get_by_name()` 与 `custom_name()` 并发时的数据竞争
+- 避免所有读请求都争抢同一把互斥锁，减少查询热点上的性能损失
+
+### 2. 可见性保证
+
+当前实现对名称查询的并发可见性保证如下：
+
+- `custom_name()` 返回之后，后续新发起的 `get_by_name()` 查询必须看到新值
+- 与写操作并发重叠、且在新快照发布前已经开始的查询，可能仍然看到旧快照
+- 不会看到“半写入”或损坏状态，只会看到一个完整的旧快照或完整的新快照
+
+也就是说，当前语义是：
+
+- 对“写返回后的新查询”提供可见性保证
+- 对“与写重叠的旧查询”允许返回旧结果
+- 不允许出现未定义行为、容器损坏或脏读
+
+### 3. 查询失败的语义
+
+在并发改名期间，如果某个查询拿到的是旧快照，而查询名称只存在于新快照中，那么 `get_by_name()` 的表现是：
+
+- 返回无效 `type`
+
+这表示“当前所见快照中不存在该名称”，而不是类型系统损坏。
+
+同样地，如果新旧名称正在切换：
+
+- 某些重叠查询可能看到旧名称仍然有效
+- 某些重叠查询可能看到新名称尚未生效
+
+但不会读到非法内存。
+
+### 4. 为什么不直接给读路径加同一把锁
+
+如果给 `get_by_name()` 直接加上与 `custom_name()` 相同的互斥锁，那么可以得到简单的串行化语义，但代价是：
+
+- 所有名称查询都会被锁串行化
+- 读多写少场景下吞吐下降明显
+- 查询热点会出现锁竞争
+
+当前保留快照方案，是因为它更适合本模块“查询频繁、写入稀少”的使用方式。
+
+### 5. 内存与性能权衡
+
+快照方案的代价和收益如下：
+
+- 收益：读路径不需要阻塞在互斥锁上，查询开销较低
+- 代价：每次名称表写入后，需要复制一份只读快照
+- 结果：自定义名称索引会额外保留一份快照副本，因此这部分内存会增加
+
+换句话说，当前方案是用“写时复制的额外内存和写入成本”换取“读路径更低的同步开销”。
+
+### 6. 适用边界
+
+当前并发语义适用于以下场景：
+
+- 类型注册与改名主要发生在初始化阶段
+- 运行期以 `get_by_name()` 查询为主
+- 允许与写操作重叠的旧查询看到旧结果
+- 要求写操作返回后，后续新查询必须看到新结果
+
+如果业务要求更强的全局时序语义，例如：
+
+- 改名过程中不允许任何查询继续看到旧值
+
+那么应考虑把模型改为互斥锁或读写锁，而不是当前的快照发布模型。
+
+## 数组与存储策略
+
+原生数组会被复制到 `variant` 中，而不是仅保存首元素指针。
+
+当前实现区分两类数组策略：
+
+- 小数组：直接内联存放
+- 大数组：堆上分配副本后保存指针
+
+测试中已验证布尔数组可以被复制存储并通过 `get_value<bool[N]>()` 取回。
+
+## `nullptr` 支持
+
+当前支持：
+
+- 直接存储 `nullptr`
+- 复制 `nullptr` 类型的 `variant`
+- 将空指针转换为 `std::nullptr_t`
+- 使用 `is_nullptr()` 识别空指针值
+
+## 示例场景
+
+典型用法包括：
+
+- 保存一个运行时才知道类型的配置值
+- 将字符串配置转换为整型、浮点或布尔值
+- 在统一容器中保存整数、字符串、枚举和对象
+- 对外暴露统一的动态值接口，再由调用方按类型提取
+- 处理包装对象，如引用包装器或智能指针包装器
+
+## 使用注意事项
+
+以下行为需要调用方自行保证正确：
+
+- `get_value<T>()` 必须与真实存储类型完全匹配
+- `get_wrapped_value<T>()` 必须与真实被包装类型匹配
+- `variant_cast<T>()` 只应在确认类型匹配后使用
+- 从 `variant` 中拿到的引用或指针，不能在 `variant.clear()`、重新赋值或析构后继续使用
+
+也就是说，本模块适合用作“运行时动态值容器”，但不负责对错误的类型提取做运行时保护。
+
+## 测试覆盖
+
+当前测试主要覆盖：
+
+- 构造、拷贝、移动、赋值、自赋值、交换
+- 小对象/大对象存储策略
+- 非 trivial 类型复制与移动
+- `nullptr` 类型行为
+- `variant_cast` 的各种重载形式
+- `get_value()` / `get_wrapped_value()`
+- 标量类型的多方向转换
+- wrapped value 和 wrapper 之间的转换
+- `type::get_by_name()` 与 `custom_name()` 的并发压力测试
+
+测试文件位于：
+
+- `test/variant/variant_ctor_test.cc`
+- `test/variant/variant_assign_test.cc`
+- `test/variant/variant_misc_test.cc`
+- `test/variant/variant_cast_test.cc`
+- `test/variant/variant_conv_test.cc`
+- `test/variant/variant_conv_to_*.cc`
+- `test/variant/type_get_by_name_concurrent_test.cc`
+
+另外，仓库中还提供了一个独立的并发复现程序，可用于线程消毒器验证：
+
+- `test/get_by_name_tsan_repro.cpp`

@@ -67,8 +67,9 @@ RTTR_INLINE void type_register_private::register_custom_name(type& t, const std:
 
     update_custom_name(custom_name.c_str(), t);
 
-    // we have to make a copy of the list, because we also perform an insertion with 'update_custom_name'
-    auto tmp_type_list = m_custom_name_to_id.value_data();
+    // use the immutable snapshot here to avoid iterating over a container that may be mutated later.
+    auto snapshot = std::atomic_load(&m_custom_name_to_id_snapshot);
+    auto tmp_type_list = snapshot ? snapshot->value_data() : std::vector<type>{};
     for (auto& tt : tmp_type_list)
     {
         if (tt == t || !tt.is_template_instantiation())
@@ -89,6 +90,7 @@ RTTR_INLINE type_register_private::type_register_private()
 :   m_type_list({ type(get_invalid_type_data()) }),
     m_type_data_storage({ get_invalid_type_data() })
 {
+    refresh_custom_name_snapshot();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -250,6 +252,7 @@ RTTR_INLINE type_data* type_register_private::register_name_if_neccessary(type_d
 
     m_orig_name_to_id.insert(std::make_pair(info->type_name, type(info)));
     m_custom_name_to_id.insert(std::make_pair(info->type_name, type(info)));
+    refresh_custom_name_snapshot();
 
     m_type_list.emplace_back(type(info));
     return nullptr;
@@ -303,6 +306,7 @@ RTTR_INLINE void type_register_private::unregister_type(type_data* info)
 
         m_orig_name_to_id.erase(info->type_name);
         m_custom_name_to_id.erase(info->type_name);
+        refresh_custom_name_snapshot();
     }
 }
 
@@ -356,7 +360,17 @@ RTTR_INLINE void type_register_private::update_custom_name(std::string new_name,
 
         type_name = std::move(new_name);
         m_custom_name_to_id.insert(std::make_pair(type_name, t));
+        refresh_custom_name_snapshot();
     }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+
+RTTR_INLINE void type_register_private::refresh_custom_name_snapshot()
+{
+    std::atomic_store(&m_custom_name_to_id_snapshot,
+                      std::shared_ptr<const flat_map<std::string, type, hash>>(
+                          new flat_map<std::string, type, hash>(m_custom_name_to_id)));
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -401,9 +415,17 @@ RTTR_INLINE flat_map<std::string, type>& type_register_private::get_orig_name_to
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-RTTR_INLINE flat_map<std::string, type, hash>& type_register_private::get_custom_name_to_id()
+RTTR_INLINE type type_register_private::find_custom_name(const std::string& name) const
 {
-    return m_custom_name_to_id;
+    auto snapshot = std::atomic_load(&m_custom_name_to_id_snapshot);
+    if (!snapshot)
+        return get_invalid_type();
+
+    auto ret = snapshot->find(name);
+    if (ret != snapshot->end())
+        return (*ret);
+
+    return get_invalid_type();
 }
 
 } // end namespace detail

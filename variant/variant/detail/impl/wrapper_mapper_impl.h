@@ -148,6 +148,17 @@ using is_wrapper = std::integral_constant<bool, !std::is_same<invalid_wrapper_ty
 //////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
+struct is_owning_wrapper : std::false_type { };
+
+template<typename T>
+struct is_owning_wrapper<std::shared_ptr<T>> : std::true_type { };
+
+template<typename T>
+struct is_owning_wrapper<std::unique_ptr<T>> : std::true_type { };
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+template<typename T>
 using wrapper_address_return_type_t = conditional_t<is_wrapper<T>::value,
                                                     raw_addressof_return_type_t< wrapper_mapper_t< T > >,
                                                     raw_addressof_return_type_t<T>>;

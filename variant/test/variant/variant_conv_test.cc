@@ -32,6 +32,35 @@
 
 using namespace rttr;
 
+struct lifetime_probe
+{
+    lifetime_probe(int v) : value(v) {}
+
+    ~lifetime_probe()
+    {
+        ++destructor_count;
+    }
+
+    static void reset_counters()
+    {
+        destructor_count = 0;
+        delete_count = 0;
+    }
+
+    static void operator delete(void* ptr) noexcept
+    {
+        ++delete_count;
+        ::operator delete(ptr);
+    }
+
+    static int destructor_count;
+    static int delete_count;
+    int value;
+};
+
+int lifetime_probe::destructor_count = 0;
+int lifetime_probe::delete_count = 0;
+
 struct point
 {
     point(int x, int y) : _x(x), _y(y) {}
@@ -582,41 +611,93 @@ TEST_CASE("variant test - convert from wrapped value", "[variant]")
 
 TEST_CASE("variant test - convert to wrapped value", "[variant]")
 {
-    SECTION("valid conversion")
+    SECTION("raw pointer cannot convert to shared_ptr in place")
     {
         auto raw_ptr = new int(42);
         variant var = raw_ptr;
 
-        REQUIRE(var.can_convert(type::get<std::shared_ptr<int>>()) == true);
+        REQUIRE(var.can_convert(type::get<std::shared_ptr<int>>()) == false);
 
         auto result = var.convert(type::get<std::shared_ptr<int>>());
-        CHECK(result == true);
-        CHECK(var.get_type() == type::get<std::shared_ptr<int>>());
-        CHECK(var.get_value<std::shared_ptr<int>>().get() == raw_ptr);
+        CHECK(result == false);
+        CHECK(var.get_type() == type::get<int*>());
+
+        delete raw_ptr;
     }
 
-    SECTION("convert and return wrapper")
+    SECTION("raw pointer cannot convert and return shared_ptr")
     {
         auto raw_ptr = new int(42);
         variant var = raw_ptr;
 
-        CHECK(var.can_convert<std::shared_ptr<int>>() == true);
+        CHECK(var.can_convert<std::shared_ptr<int>>() == false);
 
         bool ok = false;
         auto ptr = var.convert<std::shared_ptr<int>>(&ok);
-        CHECK(ok == true);
-        CHECK(ptr.get() == raw_ptr);
+        CHECK(ok == false);
+        CHECK(ptr.get() == nullptr);
         CHECK(var.get_type() == type::get<int*>());
+
+        delete raw_ptr;
     }
 
-    SECTION("convert to existing wrapper")
+    SECTION("raw pointer cannot convert to existing shared_ptr")
     {
         auto raw_ptr = new int(42);
         variant var = raw_ptr;
         std::shared_ptr<int> ptr;
-        CHECK(var.convert(ptr)  == true);
-        CHECK(ptr.get()         == raw_ptr);
+        CHECK(var.convert(ptr)  == false);
+        CHECK(ptr.get()         == nullptr);
         CHECK(var.get_type()    == type::get<int*>());
+
+        delete raw_ptr;
+    }
+
+    SECTION("failed shared_ptr conversion does not delete raw pointer")
+    {
+        lifetime_probe::reset_counters();
+        auto raw_ptr = new lifetime_probe(42);
+
+        {
+            variant var = raw_ptr;
+
+            bool ok = false;
+            auto ptr = var.convert<std::shared_ptr<lifetime_probe>>(&ok);
+
+            REQUIRE(ok == false);
+            REQUIRE(ptr.get() == nullptr);
+            CHECK(lifetime_probe::destructor_count == 0);
+            CHECK(lifetime_probe::delete_count == 0);
+        }
+
+        CHECK(lifetime_probe::destructor_count == 0);
+        CHECK(lifetime_probe::delete_count == 0);
+
+        delete raw_ptr;
+        CHECK(lifetime_probe::destructor_count == 1);
+        CHECK(lifetime_probe::delete_count == 1);
+    }
+
+    SECTION("failed in-place shared_ptr conversion leaves raw pointer untouched")
+    {
+        lifetime_probe::reset_counters();
+        auto raw_ptr = new lifetime_probe(7);
+
+        {
+            variant var = raw_ptr;
+
+            REQUIRE(var.convert(type::get<std::shared_ptr<lifetime_probe>>()) == false);
+            REQUIRE(var.get_type() == type::get<lifetime_probe*>());
+            CHECK(lifetime_probe::destructor_count == 0);
+            CHECK(lifetime_probe::delete_count == 0);
+        }
+
+        CHECK(lifetime_probe::destructor_count == 0);
+        CHECK(lifetime_probe::delete_count == 0);
+
+        delete raw_ptr;
+        CHECK(lifetime_probe::destructor_count == 1);
+        CHECK(lifetime_probe::delete_count == 1);
     }
 
     SECTION("invalid conversion")
