@@ -143,7 +143,7 @@ int32_t ToZlogLevel(int32_t level)
     }
 }
 
-void EmitFormatted(const std::string &consoleFormatted, const std::string &fileFormatted, int32_t level)
+void EmitEvent(const eular::LogEvent &ev, int32_t level)
 {
     ZlogBackendState &state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -153,14 +153,32 @@ void EmitFormatted(const std::string &consoleFormatted, const std::string &fileF
     }
 
     const uint32_t mask = state.outputMask.load(std::memory_order_acquire);
-    const int32_t zlevel = ToZlogLevel(level);
-    if ((mask & kStdoutMask) && state.stdoutCategory != nullptr) {
-        zlog(state.stdoutCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
-            __LINE__, zlevel, "%s", consoleFormatted.c_str());
+    const bool writeStdout = ((mask & kStdoutMask) != 0u) && state.stdoutCategory != nullptr;
+    const bool writeFile = ((mask & kFileMask) != 0u) && state.fileCategory != nullptr;
+    if (!writeStdout && !writeFile) {
+        return;
     }
-    if ((mask & kFileMask) && state.fileCategory != nullptr) {
+
+    const int32_t zlevel = ToZlogLevel(level);
+    std::string plain;
+    if (writeFile || !ev.enableColor) {
+        plain = eular::LogFormat::Format(&ev, false);
+    }
+
+    if (writeStdout) {
+        if (ev.enableColor) {
+            const std::string console = eular::LogFormat::Format(&ev, true);
+            zlog(state.stdoutCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
+                __LINE__, zlevel, "%s", console.c_str());
+        } else {
+            zlog(state.stdoutCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
+                __LINE__, zlevel, "%s", plain.c_str());
+        }
+    }
+
+    if (writeFile) {
         zlog(state.fileCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
-            __LINE__, zlevel, "%s", fileFormatted.c_str());
+            __LINE__, zlevel, "%s", plain.c_str());
     }
 }
 
@@ -170,8 +188,7 @@ void log_write_assertv(const eular::LogEvent *ev)
         abort();
     }
 
-    const std::string plain = eular::LogFormat::Format(ev, false);
-    EmitFormatted(plain, plain, static_cast<int32_t>(ev->level));
+    EmitEvent(*ev, static_cast<int32_t>(ev->level));
 #ifdef LOG_ENABLE_CALLSTACK
     eular::CallStack cs;
     cs.update(2, 2);
@@ -257,9 +274,7 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
     }
 
     ev.msg = msgBuffer;
-    const std::string plain = eular::LogFormat::Format(&ev, false);
-    const std::string console = eular::LogFormat::Format(&ev, ev.enableColor);
-    EmitFormatted(console, plain, level);
+    EmitEvent(ev, level);
 }
 
 void log_write_assert(int32_t level, const char *expr, const char *tag, const char *fmt, ...)
