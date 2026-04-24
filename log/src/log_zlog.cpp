@@ -174,7 +174,7 @@ void log_write_assertv(const eular::LogEvent *ev)
 #ifdef LOG_ENABLE_CALLSTACK
     eular::CallStack cs;
     cs.update(2, 2);
-    cs.log("Stack", eular::LogLevel::LEVEL_ERROR);
+    cs.log("Stack", static_cast<log_level_t>(eular::LogLevel::LEVEL_ERROR));
 #endif
     abort();
 }
@@ -185,7 +185,7 @@ namespace eular {
 
 namespace log {
 
-void InitLog(LogLevel::Level lev)
+void InitLog(int32_t lev)
 {
     ZlogBackendState &state = GetState();
     state.level.store(lev, std::memory_order_release);
@@ -196,7 +196,7 @@ void InitLog(LogLevel::Level lev)
     EnsureInitializedLocked(state);
 }
 
-void SetLevel(LogLevel::Level lev)
+void SetLevel(int32_t lev)
 {
     GetState().level.store(lev, std::memory_order_release);
 }

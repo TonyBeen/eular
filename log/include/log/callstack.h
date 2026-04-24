@@ -8,10 +8,11 @@
 #ifndef __ALIAS_CALLSTACK_H__
 #define __ALIAS_CALLSTACK_H__
 
-#include "log_level.h"
 #include <stdio.h>
 #include <string>
 #include <vector>
+
+#include <log/level.h>
 
 namespace eular {
 
@@ -27,8 +28,7 @@ public:
     // ignoreDepth: 可忽略的起始调用函数层级；ignoreEnd：可忽略的最后调用函数层级
     void update(uint32_t ignoreDepth = 2, uint32_t ignoreEnd = 0);
 
-    void log(const char* logtag,
-             LogLevel::Level level = LogLevel::LEVEL_DEBUG) const;
+    void log(const char* logtag, log_level_t level = LEVEL_DEBUG) const;
 
     // Return a string (possibly very long) containing the complete stack trace.
     std::string toString() const;

@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(log LANGUAGES C CXX)
+project(log VERSION 1.0.0 LANGUAGES C CXX)
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +14,8 @@ option(LOG_BUILD_STATIC "Build liblog as static library" ON)
 option(LOG_BUILD_TESTLOG "Build testlog binary" ON)
 option(LOG_BUILD_LOGCAT "Build logcat binary" ON)
 option(LOG_BUILD_CALLSTACK_TEST "Build test_callstack binary" OFF)
+option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
+option(LOG_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
@@ -29,6 +34,11 @@ endif()
 
 set(LOG_SOURCES)
 set(LOG_EXTRA_LIBS Threads::Threads)
+set(LOG_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/log/log.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/log/level.h
+)
+set(LOG_HAVE_CALLSTACK OFF)
 
 if(WIN32)
     list(APPEND LOG_SOURCES
@@ -44,35 +54,45 @@ else()
         "${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/zlog/src/zlog_win.c"
     )
 
-    add_library(zlog_vendor STATIC ${ZLOG_SOURCES})
+    add_library(zlog_vendor OBJECT ${ZLOG_SOURCES})
     set_target_properties(zlog_vendor PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_include_directories(zlog_vendor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/zlog/src)
-    target_link_libraries(zlog_vendor PUBLIC Threads::Threads)
+    target_include_directories(zlog_vendor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/zlog/src)
 
     list(APPEND LOG_SOURCES
         src/log_zlog.cpp
         src/log_format.cpp
     )
-    list(APPEND LOG_EXTRA_LIBS zlog_vendor)
 
     find_library(UNWIND_LIB unwind)
     if(UNWIND_LIB)
         list(APPEND LOG_SOURCES src/callstack.cpp)
-        list(APPEND LOG_EXTRA_LIBS ${UNWIND_LIB})
+        list(APPEND LOG_EXTRA_LIBS unwind)
+        list(APPEND LOG_PUBLIC_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/log/callstack.h)
+        set(LOG_HAVE_CALLSTACK ON)
     else()
         message(WARNING "libunwind not found; callstack dump is disabled")
     endif()
 endif()
 
 add_library(log STATIC ${LOG_SOURCES})
+add_library(eular::log ALIAS log)
+
+if(TARGET zlog_vendor)
+    target_sources(log PRIVATE $<TARGET_OBJECTS:zlog_vendor>)
+endif()
+
+target_compile_features(log PUBLIC cxx_std_11)
+set_target_properties(log PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(log
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/log>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/log>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/log)
 target_include_directories(log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party)
 
 target_link_libraries(log
@@ -92,11 +112,43 @@ endif()
 if(LOG_BUILD_LOGCAT AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(logcat examples/logcat.cc)
     target_include_directories(logcat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(logcat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/log)
     target_include_directories(logcat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party)
     target_link_libraries(logcat PRIVATE log Threads::Threads)
 endif()
 
-if(LOG_BUILD_CALLSTACK_TEST)
+if(LOG_BUILD_CALLSTACK_TEST AND LOG_HAVE_CALLSTACK)
     add_executable(test_callstack.out test/test_callstack.cc)
     target_link_libraries(test_callstack.out PRIVATE log Threads::Threads)
+endif()
+
+if(LOG_SUBMODULE_ENABLE_INSTALL)
+    install(TARGETS log
+        EXPORT logTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    install(FILES ${LOG_PUBLIC_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/log)
+
+    install(EXPORT logTargets
+        NAMESPACE eular::
+        FILE logTargets.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/log)
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/logConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/logConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/log)
+
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/logConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/logConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/logConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/log)
 endif()

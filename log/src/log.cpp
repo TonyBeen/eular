@@ -37,13 +37,13 @@ void getLogManager()
     gLogManager = LogManager::getInstance();
 }
 
-void InitLog(LogLevel::Level lev)
+void InitLog(int32_t lev)
 {
     getLogManager();
     gLevel.store(lev, std::memory_order_release);
 }
 
-void SetLevel(LogLevel::Level lev)
+void SetLevel(int32_t lev)
 {
     getLogManager();
     gLevel.store(lev, std::memory_order_release);

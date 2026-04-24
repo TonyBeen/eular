@@ -71,10 +71,10 @@ void CallStack::update(uint32_t ignoreDepth, uint32_t ignoreEnd)
     }
 }
 
-void CallStack::log(const char* logtag, LogLevel::Level level) const
+void CallStack::log(const char* logtag, log_level_t level) const
 {
     for (size_t i = mSkipEnd; i < mStackFrame.size() - mSkip; ++i) {
-        log_write(level, logtag, "%s\n", mStackFrame[i].c_str());
+        eular::log_write(level, logtag, "%s\n", mStackFrame[i].c_str());
     }
 }
 
