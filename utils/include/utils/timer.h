@@ -16,6 +16,7 @@
 
 #include <utils/sysdef.h>
 #include <utils/mutex.h>
+#include <utils/semaphore.h>
 #include <utils/thread.h>
 #include <utils/singleton.h>
 
@@ -127,7 +128,7 @@ protected:
     void onNotify();
 
 private:
-    Sem     mSignal;
+    Semaphore mSignal;
     RWMutex mRWMutex;
     int32_t mSockPair[2];
 

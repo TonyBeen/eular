@@ -12,16 +12,12 @@
 #include <errno.h>
 #include <assert.h>
 
-#include <sys/stat.h>
-#include <fcntl.h>
-
 #if !defined(OS_WINDOWS)
 #include <pthread.h>
 #endif
 
 #if defined(OS_APPLE)
 #include <os/lock.h>
-#include <dispatch/dispatch.h>
 #endif
 
 #include "utils/errors.h"
@@ -30,6 +26,7 @@
 #include "src/mutex.hpp"
 
 namespace eular {
+
 // @see https://codebrowser.dev/glibc/glibc/nptl/pthread_spin_lock.c.html
 
 struct SpinLock::SpinLockImpl {
@@ -382,230 +379,6 @@ void RWMutex::unlock()
         }
 #endif
     }
-#endif
-}
-
-struct Sem::SemImpl {
-#ifdef OS_WINDOWS
-    HANDLE _sem;    // 信号量
-#elif defined(OS_LINUX) || defined(OS_APPLE)
-    sem_t* _sem;    // 信号量
-#if defined(OS_APPLE)
-    dispatch_semaphore_t _semApple; // 匿名信号量
-#endif
-#endif // OS_WINDOWS
-};
-
-Sem::Sem(const char *semPath, uint8_t val) :
-    mFilePath(semPath),
-    isNamedSemaphore(true)
-{
-    mImpl = std::unique_ptr<SemImpl>(new SemImpl);
-#if defined(OS_LINUX) || defined(OS_APPLE)
-    if (semPath == nullptr) {
-        throw Exception("the first param can not be null");
-    }
-
-    // 如果信号量已存在，则后两个参数会忽略，详见man sem_open
-    mImpl->_sem = sem_open(semPath, O_CREAT | O_RDWR, 0664, val);
-    if (mImpl->_sem == SEM_FAILED) {
-        String8 erorMsg = String8::Format("sem_open failed. [%d, %s]", errno, strerror(errno));
-        throw Exception(erorMsg);
-    }
-#elif defined(OS_WINDOWS)
-    mImpl->_sem = CreateSemaphoreA(
-        NULL,
-        val,
-        val,
-        semPath
-    );
-    if (mImpl->_sem == nullptr) {
-        int32_t status = GetLastError();
-        String8 erorMsg = String8::Format("CreateSemaphoreA failed. [%d, %s]", status, FormatErrno(status));
-        throw Exception(erorMsg);
-    }
-#endif
-}
-
-Sem::Sem(uint8_t valBase) :
-    isNamedSemaphore(false)
-{
-    mImpl = std::unique_ptr<SemImpl>(new SemImpl);
-#if defined(OS_LINUX)
-    mImpl->_sem = new (std::nothrow)sem_t;
-    if (mImpl->_sem == nullptr) {
-        throw Exception("new sem_t error. no more memory");
-    }
-
-    if (sem_init(mImpl->_sem, false, valBase)) {
-        throw Exception(String8::Format("%s() sem_init error %d, %s", __func__, errno, strerror(errno)));
-    }
-#elif defined(OS_APPLE)
-    mImpl->_semApple = dispatch_semaphore_create((intptr_t)valBase);
-    if (!mImpl->_semApple) {
-        throw Exception("dispatch_semaphore_create error. no more memory");
-    }
-#else
-    mImpl->_sem = CreateSemaphoreA(
-        NULL,
-        valBase,
-        valBase,
-        nullptr
-    );
-    if (mImpl->_sem == nullptr) {
-        int32_t status = GetLastError();
-        String8 erorMsg = String8::Format("CreateSemaphoreA failed. [%d, %s]", status, FormatErrno(status));
-        throw Exception(erorMsg);
-    }
-#endif
-}
-
-Sem::~Sem()
-{
-    if (mImpl->_sem != nullptr) {
-#ifdef OS_WINDOWS
-        CloseHandle(mImpl->_sem);
-#else
-        if (isNamedSemaphore) {
-            sem_close(mImpl->_sem);
-            sem_unlink(mFilePath.c_str());
-        }
-#endif
-
-#if defined(OS_LINUX)
-        else {
-            sem_destroy(mImpl->_sem);
-            delete mImpl->_sem;
-        }
-#elif defined(OS_APPLE)
-        else {
-            dispatch_release(mImpl->_semApple);
-            mImpl->_semApple = nullptr;
-        }
-#endif // OS_WINDOWS
-        mImpl->_sem = nullptr;
-    }
-}
-
-// see https://stackoverflow.com/questions/2013181/gdb-causes-sem-wait-to-fail-with-eintr-error
-bool Sem::post()
-{
-#if defined(OS_WINDOWS)
-    BOOL state = ReleaseSemaphore(mImpl->_sem, 1, nullptr);
-    if (!state) {
-        errno = GetLastError();
-    }
-    return state != 0;
-#else
-    int32_t rt = 0;
-    do {
-        rt = sem_post(mImpl->_sem);
-    } while (rt == -1 && errno == EINTR);
-    return 0 == rt;
-#endif
-}
-
-bool Sem::wait()
-{
-#if defined(OS_WINDOWS)
-    DWORD status = WaitForSingleObject(mImpl->_sem, INFINITE);
-    if (status != WAIT_OBJECT_0) {
-        errno = GetLastError();
-        return false;
-    }
-    return true;
-#elif defined(OS_LINUX)
-    int32_t rt = 0;
-    do {
-        rt = sem_wait(mImpl->_sem);
-    } while (rt == -1 && errno == EINTR);
-    return 0 == rt;
-#elif defined(OS_APPLE)
-    if (isNamedSemaphore) {
-        int32_t rt = 0;
-        do {
-            rt = sem_wait(mImpl->_sem);
-        } while (rt == -1 && errno == EINTR);
-        return 0 == rt;
-    } else {
-        dispatch_semaphore_wait(mImpl->_semApple, DISPATCH_TIME_FOREVER);
-        return 0;
-    }
-#endif
-}
-
-bool Sem::trywait()
-{
-#if defined(OS_WINDOWS)
-    DWORD status = WaitForSingleObject(mImpl->_sem, 0);
-    if (status != WAIT_OBJECT_0) {
-        errno = GetLastError();
-        return false;
-    }
-    return true;
-#elif defined(OS_LINUX)
-    int32_t rt = 0;
-    do {
-        rt = sem_trywait(mImpl->_sem);
-    } while (rt == -1 && errno == EINTR);
-    return 0 == rt;
-#elif defined(OS_APPLE)
-    if (isNamedSemaphore) {
-        int32_t rt = 0;
-        do {
-            rt = sem_trywait(mImpl->_sem);
-        } while (rt == -1 && errno == EINTR);
-        return 0 == rt;
-    } else {
-        dispatch_semaphore_wait(mImpl->_semApple, DISPATCH_TIME_NOW);
-        return 0;
-    }
-#endif
-}
-
-bool Sem::timedwait(uint32_t ms)
-{
-#if defined(OS_WINDOWS)
-    DWORD status = WaitForSingleObject(mImpl->_sem, ms);
-    if (status != WAIT_OBJECT_0) {
-        errno = GetLastError();
-        return false;
-    }
-    return true;
-#elif defined(OS_LINUX)
-    struct timespec expire;
-    clock_gettime(CLOCK_REALTIME, &expire);
-    expire.tv_sec += ms / 1000;
-    expire.tv_nsec += static_cast<long>(ms % 1000) * 1000000;
-    if (expire.tv_nsec >= 1000000000) {
-        ++expire.tv_sec;
-        expire.tv_nsec -= 1000000000;
-    }
-    int32_t rt = 0;
-    do {
-        rt = sem_timedwait(mImpl->_sem, &expire);
-    } while (rt == -1 && errno == EINTR);
-    return 0 == rt;
-#elif defined(OS_APPLE)
-    if (isNamedSemaphore) {
-        struct timespec expire;
-        clock_gettime(CLOCK_REALTIME, &expire);
-        expire.tv_sec += ms / 1000;
-        expire.tv_nsec += static_cast<long>(ms % 1000) * 1000000;
-        if (expire.tv_nsec >= 1000000000) {
-            ++expire.tv_sec;
-            expire.tv_nsec -= 1000000000;
-        }
-        int32_t rt = 0;
-        do {
-            rt = sem_timedwait(mImpl->_sem, &expire);
-        } while (rt == -1 && errno == EINTR);
-        return 0 == rt;
-    }
-
-    int64_t nanos = static_cast<int64_t>(ms) * 1000000;
-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, nanos);
-    return dispatch_semaphore_wait(mImpl->_semApple, timeout) == 0;
 #endif
 }
 

@@ -31,8 +31,8 @@ struct ThreadBase::ThreadImpl {
 #else
     pthread_t           _pthread_tid{};
 #endif
-    Sem                 _sem_block; // 阻塞线程结束
-    Sem                 _sem_wait;  // 用于等待线程创建完毕
+    Semaphore           _sem_block; // 阻塞线程结束
+    Semaphore           _sem_wait;  // 用于等待线程创建完毕
 
     std::atomic<uint32_t>   _th_status{};
     std::atomic<bool>       _exit_status{};

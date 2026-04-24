@@ -14,8 +14,7 @@
 #include <memory>
 
 #include <utils/string8.h>
-#include <utils/mutex.h>
-#include <utils/condition.h>
+#include <utils/semaphore.h>
 #include <utils/utils.h>
 
 namespace eular {
@@ -85,7 +84,7 @@ private:
     eular::String8                  mThreadName;    // 线程名字
     std::function<void()>           mCallback;      // 线程执行函数
     uint8_t                         mShouldJoin;    // 1为由用户回收线程，0为自动回收
-    eular::Sem                      mSemaphore;
+    eular::Semaphore                mSemaphore;
 };
 
 } // namespace eular
