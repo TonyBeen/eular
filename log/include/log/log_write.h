@@ -10,7 +10,6 @@
 
 #include "log_event.h"
 #include <string>
-#include <error.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,16 +87,16 @@ public:
 
     virtual int32_t      WriteToFile(std::string msg) override;
     virtual int32_t      WriteToFile(const LogEvent &ev) override;
-    virtual std::string  getFileName();
-    virtual uint32_t     getFileSize();
-    virtual uint32_t     getFileMode();
-    virtual bool         setFileMode(uint32_t mode);
-    virtual uint32_t     getFileFlag();
-    virtual bool         setFileFlag(uint32_t flag);
+    virtual std::string  getFileName() override;
+    virtual uint32_t     getFileSize() override;
+    virtual uint32_t     getFileMode() override;
+    virtual bool         setFileMode(uint32_t mode) override;
+    virtual uint32_t     getFileFlag() override;
+    virtual bool         setFileFlag(uint32_t flag) override;
 
-    virtual bool         CreateNewFile(std::string fileName);
-    virtual bool         CloseFile();
-    virtual uint16_t     type() const { return static_cast<uint16_t>(OutputType::STDOUT); }
+    virtual bool         CreateNewFile(std::string fileName) override;
+    virtual bool         CloseFile() override;
+    virtual uint16_t     type() const override { return static_cast<uint16_t>(OutputType::STDOUT); }
 
 private:
     bool isInterrupt;
@@ -111,16 +110,16 @@ public:
     void                 maintainFile();
     virtual int32_t      WriteToFile(std::string msg) override;
     virtual int32_t      WriteToFile(const LogEvent &ev) override;
-    virtual std::string  getFileName();
-    virtual uint32_t     getFileSize();
-    virtual uint32_t     getFileMode();
-    virtual bool         setFileMode(uint32_t mode);
-    virtual uint32_t     getFileFlag();
-    virtual bool         setFileFlag(uint32_t flag);
+    virtual std::string  getFileName() override;
+    virtual uint32_t     getFileSize() override;
+    virtual uint32_t     getFileMode() override;
+    virtual bool         setFileMode(uint32_t mode) override;
+    virtual uint32_t     getFileFlag() override;
+    virtual bool         setFileFlag(uint32_t flag) override;
 
-    virtual bool         CreateNewFile(std::string fileName);
-    virtual bool         CloseFile();
-    virtual uint16_t     type() const { return static_cast<uint16_t>(OutputType::FILEOUT); }
+    virtual bool         CreateNewFile(std::string fileName) override;
+    virtual bool         CloseFile() override;
+    virtual uint16_t     type() const override { return static_cast<uint16_t>(OutputType::FILEOUT); }
 
 private:
     bool        isInterrupt;
@@ -139,16 +138,16 @@ public:
 
     int32_t      WriteToFile(std::string msg) override;
     int32_t      WriteToFile(const LogEvent &ev) override;
-    std::string  getFileName();
-    uint32_t     getFileSize();
-    uint32_t     getFileMode();
-    bool         setFileMode(uint32_t mode);
-    uint32_t     getFileFlag();
-    bool         setFileFlag(uint32_t flag);
+    std::string  getFileName() override;
+    uint32_t     getFileSize() override;
+    uint32_t     getFileMode() override;
+    bool         setFileMode(uint32_t mode) override;
+    uint32_t     getFileFlag() override;
+    bool         setFileFlag(uint32_t flag) override;
 
-    bool         CreateNewFile(std::string fileName);
-    bool         CloseFile();
-    uint16_t     type() const { return static_cast<uint16_t>(OutputType::CONSOLEOUT); }
+    bool         CreateNewFile(std::string fileName) override;
+    bool         CloseFile() override;
+    uint16_t     type() const override { return static_cast<uint16_t>(OutputType::CONSOLEOUT); }
 
 protected:
     void         InitParams();

@@ -12,14 +12,19 @@
 #include <string.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 #include <atomic>
 #include <mutex>
 #include <string>
 
+#ifdef __APPLE__
+#include <pthread.h>
+#define gettid() static_cast<uint64_t>(pthread_mach_thread_np(pthread_self()))
+#else
+#include <sys/syscall.h>
 #ifndef gettid
-#define gettid() syscall(__NR_gettid)
+#define gettid() static_cast<uint64_t>(syscall(__NR_gettid))
+#endif
 #endif
 
 namespace {

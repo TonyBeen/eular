@@ -3,15 +3,20 @@
 #ifdef LOG_ENABLE_CALLSTACK
 #include "callstack.h"
 #endif
-#include <sys/syscall.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <assert.h>
 #include <time.h>
 #include <atomic>
 
+#ifdef __APPLE__
+#include <pthread.h>
+#define gettid() static_cast<uint64_t>(pthread_mach_thread_np(pthread_self()))
+#else
+#include <sys/syscall.h>
 #ifndef gettid
-#define gettid() syscall(__NR_gettid)
+#define gettid() static_cast<uint64_t>(syscall(__NR_gettid))
+#endif
 #endif
 
 #define MSG_BUF_SIZE    (1024)

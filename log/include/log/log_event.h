@@ -19,7 +19,7 @@ namespace eular {
 struct LogEvent {
     struct timeval  time;       // 时间
     int             pid;        // 进程ID
-    pthread_t       tid;        // 线程ID
+    uint64_t        tid;        // 线程ID
     LogLevel::Level level;      // 日志级别
     char            tag[LOG_TAG_SIZE];  // tag
     char *          msg;        // 日志消息
