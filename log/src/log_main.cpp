@@ -19,7 +19,6 @@ namespace {
 static const uint32_t kSinkStdout = 1u << 0;
 static const uint32_t kSinkFile = 1u << 1;
 static const uint32_t kDefaultSinks = kSinkStdout;
-static const uint64_t kMaxFileSize = 5ULL * 1024ULL * 1024ULL;
 
 static bool EnsureDir(const std::string &path)
 {
@@ -62,8 +61,13 @@ LogManager::LogManager()
     : mRunning(true),
       mOutputMask(kDefaultSinks),
       mDropped(0),
+    mFileStem("log"),
+      mMaxFileSize(0),
+      mMaxFileCount(0),
+      mReopenFile(false),
       mFileFd(-1),
-      mFileSize(0)
+      mFileSize(0),
+      mRotateSequence(0)
 {
     mWorker = std::thread(&LogManager::workerLoop, this);
     ::atexit(deleteInstance);
@@ -82,10 +86,21 @@ LogManager::~LogManager()
     }
 }
 
-void LogManager::setPath(const std::string &path)
+void LogManager::setPath(const std::string &path, const std::string &fileStem)
 {
-    std::lock_guard<std::mutex> lock(mPathMutex);
-    mBasePath = path;
+    {
+        std::lock_guard<std::mutex> lock(mPathMutex);
+        mBasePath = path;
+        mFileStem = fileStem.empty() ? "log" : fileStem;
+    }
+    mReopenFile.store(true, std::memory_order_release);
+}
+
+void LogManager::setFileRotation(uint64_t maxFileSize, uint32_t maxFileCount)
+{
+    mMaxFileSize.store(maxFileSize, std::memory_order_release);
+    mMaxFileCount.store(maxFileCount, std::memory_order_release);
+    mReopenFile.store(true, std::memory_order_release);
 }
 
 void LogManager::WriteLog(const LogEvent *event)
@@ -170,6 +185,13 @@ void LogManager::workerLoop()
                 (void)n;
             }
             if (sinks & kSinkFile) {
+                if (mReopenFile.exchange(false, std::memory_order_acq_rel)) {
+                    if (mFileFd >= 0) {
+                        close(mFileFd);
+                        mFileFd = -1;
+                    }
+                    mFileSize = 0;
+                }
                 rotateFileIfNeeded(item.plain.size());
                 if (ensureFileOpened()) {
                     ssize_t n = ::write(mFileFd, item.plain.data(), item.plain.size());
@@ -199,20 +221,69 @@ std::string LogManager::resolveBasePath() const
     return path;
 }
 
-std::string LogManager::buildLogFileName() const
+static std::string BuildFileName(const std::string &fileStem)
+{
+    return fileStem + ".log";
+}
+
+std::string LogManager::buildActiveLogPath() const
+{
+    std::lock_guard<std::mutex> lock(mPathMutex);
+    const std::string path = mBasePath.empty() ? "~/log" : mBasePath;
+    std::string resolved = path;
+    if (!resolved.empty() && resolved[resolved.size() - 1] == '/') {
+        resolved.pop_back();
+    }
+    if (!resolved.empty() && resolved[0] == '~') {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw && pw->pw_dir) {
+            resolved = std::string(pw->pw_dir) + resolved.substr(1);
+        }
+    }
+    return resolved + "/" + BuildFileName(mFileStem.empty() ? "log" : mFileStem);
+}
+
+std::string LogManager::buildArchiveLogPath(uint32_t index) const
+{
+    std::lock_guard<std::mutex> lock(mPathMutex);
+    std::string path = mBasePath.empty() ? "~/log" : mBasePath;
+    if (!path.empty() && path[path.size() - 1] == '/') {
+        path.pop_back();
+    }
+    if (!path.empty() && path[0] == '~') {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw && pw->pw_dir) {
+            path = std::string(pw->pw_dir) + path.substr(1);
+        }
+    }
+    const std::string stem = mFileStem.empty() ? "log" : mFileStem;
+    return path + "/" + stem + "-" + std::to_string(index) + ".log";
+}
+
+std::string LogManager::buildUnlimitedArchiveLogPath()
 {
     time_t now = time(nullptr);
     struct tm tmv;
     localtime_r(&now, &tmv);
-    char name[64] = {0};
-    snprintf(name, sizeof(name), "log-%04d%02d%02d-%02d%02d%02d.log",
+    char suffix[96] = {0};
+    std::string base = resolveBasePath();
+    std::string stem;
+    {
+        std::lock_guard<std::mutex> lock(mPathMutex);
+        stem = mFileStem.empty() ? "log" : mFileStem;
+    }
+    snprintf(suffix,
+             sizeof(suffix),
+             "/%s-%04d%02d%02d-%02d%02d%02d-%llu.log",
+             stem.c_str(),
              tmv.tm_year + 1900,
              tmv.tm_mon + 1,
              tmv.tm_mday,
              tmv.tm_hour,
              tmv.tm_min,
-             tmv.tm_sec);
-    return std::string(name);
+             tmv.tm_sec,
+             static_cast<unsigned long long>(mRotateSequence++));
+    return base + suffix;
 }
 
 bool LogManager::ensureFileOpened()
@@ -226,7 +297,7 @@ bool LogManager::ensureFileOpened()
         return false;
     }
 
-    const std::string full = base + "/" + buildLogFileName();
+    const std::string full = buildActiveLogPath();
     mFileFd = ::open(full.c_str(), O_CREAT | O_APPEND | O_WRONLY, 0664);
     if (mFileFd < 0) {
         return false;
@@ -246,13 +317,28 @@ void LogManager::rotateFileIfNeeded(size_t incoming)
         return;
     }
 
-    if (mFileSize + incoming <= kMaxFileSize) {
+    const uint64_t maxFileSize = mMaxFileSize.load(std::memory_order_acquire);
+    if (maxFileSize == 0 || mFileSize + incoming <= maxFileSize) {
         return;
     }
+
+    const std::string active = buildActiveLogPath();
+    const uint32_t maxFileCount = mMaxFileCount.load(std::memory_order_acquire);
 
     close(mFileFd);
     mFileFd = -1;
     mFileSize = 0;
+
+    if (maxFileCount == 0) {
+        (void)::rename(active.c_str(), buildUnlimitedArchiveLogPath().c_str());
+    } else {
+        (void)::unlink(buildArchiveLogPath(maxFileCount - 1).c_str());
+        for (uint32_t i = maxFileCount - 1; i > 0; --i) {
+            (void)::rename(buildArchiveLogPath(i - 1).c_str(), buildArchiveLogPath(i).c_str());
+        }
+        (void)::rename(active.c_str(), buildArchiveLogPath(0).c_str());
+    }
+
     (void)ensureFileOpened();
 }
 

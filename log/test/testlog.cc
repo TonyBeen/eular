@@ -20,7 +20,7 @@ void *thread(void *)
 int main()
 {
     log_set_level(LEVEL_DEBUG);
-    log_set_path("./");
+    log_set_path("./", "log");
     log_enable_color(1);
     log_add_output_node(FILEOUT);
 

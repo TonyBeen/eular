@@ -49,11 +49,34 @@ void SetLevel(int32_t lev)
     gLevel.store(lev, std::memory_order_release);
 }
 
-void SetPath(const char *path)
+std::string NormalizeFileStem(const char *fileName)
+{
+    if (fileName == nullptr || fileName[0] == '\0') {
+        return "log";
+    }
+
+    std::string stem(fileName);
+    static const std::string kSuffix = ".log";
+    if (stem.size() >= kSuffix.size() &&
+        stem.compare(stem.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+        stem.erase(stem.size() - kSuffix.size());
+    }
+    return stem.empty() ? "log" : stem;
+}
+
+void SetPath(const char *path, const char *fileName)
 {
     getLogManager();
     if (gLogManager != nullptr) {
-        gLogManager->setPath(path);
+        gLogManager->setPath(path == nullptr ? "" : path, NormalizeFileStem(fileName));
+    }
+}
+
+void SetFileRotation(uint64_t maxFileSize, uint32_t maxFileCount)
+{
+    getLogManager();
+    if (gLogManager != nullptr) {
+        gLogManager->setFileRotation(maxFileSize, maxFileCount);
     }
 }
 
@@ -185,9 +208,14 @@ void log_set_level(log_level_t lev)
     eular::log::SetLevel(static_cast<int32_t>(lev));
 }
 
-void log_set_path(const char *path)
+void log_set_path(const char *path, const char *file_name)
 {
-    eular::log::SetPath(path);
+    eular::log::SetPath(path, file_name);
+}
+
+void log_set_file_rotation(uint64_t max_file_size, uint32_t max_file_count)
+{
+    eular::log::SetFileRotation(max_file_size, max_file_count);
 }
 
 void log_enable_color(int32_t flag)

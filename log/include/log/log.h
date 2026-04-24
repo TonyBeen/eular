@@ -57,9 +57,17 @@ extern "C" {
 void log_set_level(log_level_t lev);
 
 /**
- * @brief 设置日志输出路径。建议使用全局路径, 使用相对路径时取决于bash执行时的路径, 相对不稳定
+ * @brief 设置日志输出目录和文件名前缀。会自动追加 .log 后缀。
+ *        例如 path="/tmp/app", file_name="server" 时活动文件为 /tmp/app/server.log
  */
-void log_set_path(const char *path);
+void log_set_path(const char *path, const char *file_name);
+
+/**
+ * @brief 配置文件输出轮转策略。
+ * @param max_file_size 单个活动日志文件的最大字节数。传 0 表示不按大小轮转。
+ * @param max_file_count 轮转后保留的归档文件数量。传 0 表示在开启大小轮转时保留全部归档。
+ */
+void log_set_file_rotation(uint64_t max_file_size, uint32_t max_file_count);
 
 /**
  * @brief 使输出在stdout的日志携带颜色

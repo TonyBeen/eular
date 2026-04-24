@@ -28,7 +28,8 @@ public:
     LogManager(const LogManager&) = delete;
     LogManager& operator=(const LogManager&) = delete;
 
-    void setPath(const std::string &path);
+    void setPath(const std::string &path, const std::string &fileStem);
+    void setFileRotation(uint64_t maxFileSize, uint32_t maxFileCount);
     void WriteLog(const LogEvent *event);
     void Flush();
     static LogManager *getInstance();
@@ -48,7 +49,9 @@ private:
     void workerLoop();
     bool ensureFileOpened();
     void rotateFileIfNeeded(size_t incoming);
-    std::string buildLogFileName() const;
+    std::string buildActiveLogPath() const;
+    std::string buildArchiveLogPath(uint32_t index) const;
+    std::string buildUnlimitedArchiveLogPath();
     std::string resolveBasePath() const;
 
 private:
@@ -61,8 +64,13 @@ private:
     std::thread                     mWorker;
     mutable std::mutex              mPathMutex;
     std::string                     mBasePath;
+    std::string                     mFileStem;
+    std::atomic<uint64_t>           mMaxFileSize;
+    std::atomic<uint32_t>           mMaxFileCount;
+    std::atomic<bool>               mReopenFile;
     int                             mFileFd;
     uint64_t                        mFileSize;
+    uint64_t                        mRotateSequence;
 };
 } // namespace eular
 #endif // __LOG_MAIN_H__

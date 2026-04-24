@@ -45,7 +45,7 @@ int main(int argc, char **argv)
     }
 
     log_set_level(LEVEL_INFO);
-    log_set_path("./");
+    log_set_path("./", "log");
     log_del_output_node(STDOUT);
     log_add_output_node(FILEOUT);
 

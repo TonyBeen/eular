@@ -38,7 +38,10 @@ struct ZlogBackendState {
     std::atomic<uint32_t> outputMask{kStdoutMask};
     std::atomic<bool> enableColor{true};
     std::string basePath{"./"};
+    std::string fileStem{"log"};
     std::string filePath{"./log.log"};
+    uint64_t maxFileSize{0};
+    uint32_t maxFileCount{0};
     zlog_category_t *stdoutCategory{nullptr};
     zlog_category_t *fileCategory{nullptr};
     bool initialized{false};
@@ -61,6 +64,24 @@ std::string NormalizeBasePath(const std::string &path)
     return path + "/";
 }
 
+std::string NormalizeFileStem(const char *fileName)
+{
+    if (fileName == nullptr || fileName[0] == '\0') {
+        return "log";
+    }
+
+    std::string stem(fileName);
+    static const std::string kSuffix = ".log";
+    if (stem.size() >= kSuffix.size() &&
+        stem.compare(stem.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+        stem.erase(stem.size() - kSuffix.size());
+    }
+    if (stem.empty()) {
+        return "log";
+    }
+    return stem;
+}
+
 std::string EscapeConfString(const std::string &value)
 {
     std::string escaped;
@@ -74,16 +95,34 @@ std::string EscapeConfString(const std::string &value)
     return escaped;
 }
 
-std::string BuildConfigString(const std::string &filePath)
+std::string BuildArchivePath(const std::string &filePath)
+{
+    static const std::string kSuffix = ".log";
+    if (filePath.size() >= kSuffix.size() &&
+        filePath.compare(filePath.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+        return filePath.substr(0, filePath.size() - kSuffix.size()) + "-#r.log";
+    }
+    return filePath + "-#r";
+}
+
+std::string BuildConfigString(const ZlogBackendState &state)
 {
     std::string config;
-    config.reserve(filePath.size() + 128);
+    config.reserve(state.filePath.size() * 2 + 192);
     config += "[formats]\n";
     config += "raw = \"%m\"\n";
     config += "[rules]\n";
     config += "eular_stdout.DEBUG >stdout; raw\n";
     config += "eular_file.DEBUG \"";
-    config += EscapeConfString(filePath);
+    config += EscapeConfString(state.filePath);
+    if (state.maxFileSize > 0) {
+        config += "\", ";
+        config += std::to_string(state.maxFileSize);
+        config += " * ";
+        config += std::to_string(state.maxFileCount);
+        config += " ~ \"";
+        config += EscapeConfString(BuildArchivePath(state.filePath));
+    }
     config += "\"; raw\n";
     return config;
 }
@@ -100,7 +139,7 @@ void EnsureInitializedLocked(ZlogBackendState &state)
         return;
     }
 
-    const std::string config = BuildConfigString(state.filePath);
+    const std::string config = BuildConfigString(state);
     if (zlog_init_from_string(config.c_str()) != 0) {
         fprintf(stderr, "zlog_init_from_string failed\n");
         return;
@@ -117,7 +156,7 @@ void ReloadLocked(ZlogBackendState &state)
         return;
     }
 
-    const std::string config = BuildConfigString(state.filePath);
+    const std::string config = BuildConfigString(state);
     if (zlog_reload_from_string(config.c_str()) != 0) {
         fprintf(stderr, "zlog_reload_from_string failed\n");
         return;
@@ -206,7 +245,7 @@ void log_set_level(log_level_t lev)
     GetState().level.store(static_cast<int32_t>(lev), std::memory_order_release);
 }
 
-void log_set_path(const char *path)
+void log_set_path(const char *path, const char *file_name)
 {
     ZlogBackendState &state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -216,7 +255,17 @@ void log_set_path(const char *path)
     } else {
         state.basePath = NormalizeBasePath(path);
     }
-    state.filePath = state.basePath + "log.log";
+    state.fileStem = NormalizeFileStem(file_name);
+    state.filePath = state.basePath + state.fileStem + ".log";
+    ReloadLocked(state);
+}
+
+void log_set_file_rotation(uint64_t max_file_size, uint32_t max_file_count)
+{
+    ZlogBackendState &state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.maxFileSize = max_file_size;
+    state.maxFileCount = max_file_count;
     ReloadLocked(state);
 }
 
