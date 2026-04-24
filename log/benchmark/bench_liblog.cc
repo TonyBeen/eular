@@ -52,16 +52,16 @@ int main(int argc, char **argv)
     std::string logMsg;
     logMsg.reserve(256);
 
-    uint64_t total_ns = 0;
+    size_t total_ns = 0;
     for (int i = 0; i < recycle; i++)
     {
         logMsg = std::to_string(i) + ": " + generate_random_string(128);
         const auto begin = std::chrono::high_resolution_clock::now();
         LOGW("%s", logMsg.c_str());
         const auto end = std::chrono::high_resolution_clock::now();
-        total_ns += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
+        total_ns += static_cast<size_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
     }
 
-    printf("Average log call elapsed time: %luns (recycle=%d)\n", total_ns / static_cast<uint64_t>(recycle), recycle);
+    printf("Average log call elapsed time: %zuns (recycle=%d)\n", total_ns / static_cast<size_t>(recycle), recycle);
     return 0;
 }
