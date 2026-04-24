@@ -7,4 +7,4 @@ target_link_libraries(variant_example
         variant
 )
 
-target_compile_features(variant_example PRIVATE cxx_std_14)
+target_compile_features(variant_example PRIVATE cxx_std_11)
