@@ -73,7 +73,7 @@ std::string LogFormat::Format(const LogEvent *ev, bool enableColor)
     // time pid tid level tag:
     struct tm tmv;
     localtime_r(&(ev->time.tv_sec), &tmv);
-    snprintf(output, PERFIX_SIZE, "%.2d-%.2d %.2d:%.2d:%.2d.%.3d %5d %5llu %s %s: ",
+    snprintf(output, PERFIX_SIZE, "%.2d-%.2d %.2d:%.2d:%.2d.%.3d %5d %5u %s %s: ",
         tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(ev->time.tv_usec / 1000),
         ev->pid, ev->tid, LogLevel::ToFormatString(ev->level).c_str(), ev->tag);
 

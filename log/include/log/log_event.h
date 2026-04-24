@@ -17,13 +17,13 @@
 
 namespace eular {
 struct LogEvent {
-    struct timeval  time;       // 时间
-    int             pid;        // 进程ID
-    uint64_t        tid;        // 线程ID
-    LogLevel::Level level;      // 日志级别
+    struct timeval  time;               // 时间
+    int             pid;                // 进程ID
+    uint32_t        tid;                // 线程ID
+    LogLevel::Level level;              // 日志级别
     char            tag[LOG_TAG_SIZE];  // tag
-    char *          msg;        // 日志消息
-    bool            enableColor;// 是否启用颜色
+    char *          msg;                // 日志消息
+    bool            enableColor;        // 是否启用颜色
 };
 
 static inline LogEvent LogEventDump(const LogEvent *ev)
