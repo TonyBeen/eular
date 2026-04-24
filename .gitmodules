@@ -13,3 +13,6 @@
 [submodule "libutp/3rd/boringssl"]
 	path = libutp/3rd/boringssl
 	url = git@github.com:google/boringssl.git
+[submodule "stun/3rd_party/mosquitto"]
+	path = stun/3rd_party/mosquitto
+	url = https://github.com/eclipse-mosquitto/mosquitto.git
