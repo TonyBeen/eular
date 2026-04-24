@@ -2,6 +2,14 @@ cmake_minimum_required(VERSION 3.10)
 
 project(stun-msg VERSION 0.1.0)
 
+add_subdirectory(cjson_compat)
+
+set(CMAKE_MODULE_PATH
+    ${CMAKE_CURRENT_SOURCE_DIR}/cjson_compat/cmake
+    ${CMAKE_MODULE_PATH}
+)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} PARENT_SCOPE)
+
 # set(CMAKE_C_FLAGS ${CMAKE_CXX_FLAGS})
 # set(CMAKE_C_FLAGS_DEBUG ${CMAKE_CXX_FLAGS_DEBUG})
 # set(CMAKE_C_FLAGS_RELEASE ${CMAKE_CXX_FLAGS_RELEASE})

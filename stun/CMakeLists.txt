@@ -13,6 +13,13 @@ option(BUILD_SHARED_LIBS "Build shared library" OFF)
 # C++ standard
 set(CMAKE_CXX_STANDARD 11)
 
+find_package(Libevent REQUIRED)
+
+set(STUN_LIBEVENT_LIBS ${LIBEVENT_LIBRARIES})
+if(NOT STUN_LIBEVENT_LIBS)
+    set(STUN_LIBEVENT_LIBS ${LIBEVENT_STATIC_LIBRARIES})
+endif()
+
 # Output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -30,6 +37,8 @@ endif()
 set(SOURCES
     src/socket_address.cpp
     src/stun.cpp
+    src/ntrs_codec.cpp
+    src/mqtt_client.cpp
 )
 
 # Add library/executable
@@ -49,6 +58,30 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 # 3rd party
 add_subdirectory(3rd_party)
+
+# Build libmosquitto only (no broker/tools/tests) from vendored source.
+set(WITH_BROKER OFF CACHE BOOL "" FORCE)
+set(WITH_CLIENTS OFF CACHE BOOL "" FORCE)
+set(WITH_APPS OFF CACHE BOOL "" FORCE)
+set(WITH_PLUGINS OFF CACHE BOOL "" FORCE)
+set(WITH_DOCS OFF CACHE BOOL "" FORCE)
+set(WITH_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_LIB_CPP OFF CACHE BOOL "" FORCE)
+set(WITH_STATIC_LIBRARIES OFF CACHE BOOL "" FORCE)
+set(WITH_CTRL_SHELL OFF CACHE BOOL "" FORCE)
+add_subdirectory(3rd_party/mosquitto EXCLUDE_FROM_ALL)
+
+# Link against libmosquitto and OpenSSL
+target_link_libraries(${PROJECT_NAME} PUBLIC
+    libmosquitto
+    ${STUN_LIBEVENT_LIBS}
+    pthread
+    crypto
+)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/mosquitto/include
+    ${LIBEVENT_INCLUDE_DIRS}
+)
 
 # Testing
 if(BUILD_EXAMPLES)

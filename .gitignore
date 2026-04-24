@@ -16,3 +16,4 @@ test/xml/*
 
 build
 .claude
+.crossnote

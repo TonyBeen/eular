@@ -1,6 +1,7 @@
 list(APPEND EXAMPLES
     kcp_server.out
     kcp_client.out
+    ntrs_kcp_client.out
     kcp_sendfile.out
     kcp_file_server.out
 )
@@ -10,6 +11,10 @@ target_link_libraries(kcp_server.out kcpp_static ${LIBEVENT_STATIC_LIBRARIES} pt
 
 add_executable(kcp_client.out kcp_client.c)
 target_link_libraries(kcp_client.out kcpp_static ${LIBEVENT_STATIC_LIBRARIES} pthread)
+
+add_executable(ntrs_kcp_client.out ntrs_kcp_client.cc)
+target_compile_options(ntrs_kcp_client.out PRIVATE -std=c++11)
+target_link_libraries(ntrs_kcp_client.out kcpp_static ${LIBEVENT_STATIC_LIBRARIES} pthread)
 
 add_executable(kcp_sendfile.out kcp_sendfile.cc file_info.cc)
 target_link_libraries(kcp_sendfile.out kcpp_static ${LIBEVENT_STATIC_LIBRARIES} pthread)
