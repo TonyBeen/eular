@@ -19,11 +19,11 @@
 
 #ifdef __APPLE__
 #include <pthread.h>
-#define gettid() static_cast<uint64_t>(pthread_mach_thread_np(pthread_self()))
+#define gettid() static_cast<uint32_t>(pthread_mach_thread_np(pthread_self()))
 #else
 #include <sys/syscall.h>
 #ifndef gettid
-#define gettid() static_cast<uint64_t>(syscall(__NR_gettid))
+#define gettid() static_cast<uint32_t>(syscall(__NR_gettid))
 #endif
 #endif
 
