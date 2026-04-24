@@ -6,53 +6,62 @@
  ************************************************************************/
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <chrono>
 #include <string>
 #include <random>
 
-#include <utils/elapsed_time.h>
 #include <log/log.h>
 
 #define LOG_TAG "bench"
 
-std::string generate_random_string(int length)
+std::string generate_random_string(size_t length)
 {
-    std::string visible_chars = 
+    static const std::string visible_chars =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':,.<>?";
+    static thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<size_t> dis(0, visible_chars.size() - 1);
 
     std::string random_string;
     random_string.reserve(length);
 
-    // 生成指定长度随机字符串
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint8_t> dis(0, visible_chars.length() - 1);
-
-    for (int i = 0; i < length; i++) {
+    for (size_t i = 0; i < length; i++) {
         random_string += visible_chars[dis(gen)];
     }
 
     return random_string;
 }
 
-int main()
+int main(int argc, char **argv)
 {
-    eular::log::InitLog(eular::LogLevel::LEVEL_INFO);
-    eular::log::SetPath("./");
-    eular::log::delOutputNode(eular::LogWrite::STDOUT);
-    eular::log::addOutputNode(eular::LogWrite::FILEOUT);
-
-    std::string logMsg(512, '\0');
-
     int recycle = 50000;
-    eular::ElapsedTime et(ElapsedTimeType::NANOSECOND);
+    if (argc > 1) {
+        recycle = atoi(argv[1]);
+        if (recycle <= 0) {
+            recycle = 50000;
+        }
+    }
+
+    log_set_level(LEVEL_INFO);
+    log_set_path("./");
+    log_del_output_node(STDOUT);
+    log_add_output_node(FILEOUT);
+
+    std::string logMsg;
+    logMsg.reserve(256);
+
+    uint64_t total_ns = 0;
     for (int i = 0; i < recycle; i++)
     {
         logMsg = std::to_string(i) + ": " + generate_random_string(128);
-        et.start();
+        const auto begin = std::chrono::high_resolution_clock::now();
         LOGW("%s", logMsg.c_str());
-        et.stop();
+        const auto end = std::chrono::high_resolution_clock::now();
+        total_ns += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
     }
 
-    printf("Elapsed time: %luns\n", et.elapsedTime() / recycle);
+    printf("Average log call elapsed time: %luns (recycle=%d)\n", total_ns / static_cast<uint64_t>(recycle), recycle);
     return 0;
 }

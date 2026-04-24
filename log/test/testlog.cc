@@ -19,10 +19,10 @@ void *thread(void *)
 
 int main()
 {
-    eular::log::InitLog(eular::LogLevel::LEVEL_DEBUG);
-    eular::log::SetPath("./");
-    eular::log::EnableLogColor(true);
-    eular::log::addOutputNode(eular::LogWrite::FILEOUT);
+    log_set_level(LEVEL_DEBUG);
+    log_set_path("./");
+    log_enable_color(1);
+    log_add_output_node(FILEOUT);
 
     LOGD("**************");
     LOGI("**************");

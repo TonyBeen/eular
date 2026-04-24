@@ -1,4 +1,4 @@
-#include "log.h"
+#include "log/log.h"
 #include "log_format.h"
 #ifdef LOG_ENABLE_CALLSTACK
 #include "callstack.h"
@@ -28,13 +28,13 @@
 #endif
 
 namespace {
-constexpr uint32_t kStdoutMask = (1u << static_cast<uint32_t>(eular::OutputType::STDOUT));
-constexpr uint32_t kFileMask = (1u << static_cast<uint32_t>(eular::OutputType::FILEOUT));
+constexpr uint32_t kStdoutMask = (1u << static_cast<uint32_t>(STDOUT));
+constexpr uint32_t kFileMask = (1u << static_cast<uint32_t>(FILEOUT));
 constexpr int32_t kMsgBufferSize = 4096;
 
 struct ZlogBackendState {
     std::mutex mutex;
-    std::atomic<int32_t> level{eular::LogLevel::LEVEL_DEBUG};
+    std::atomic<int32_t> level{LEVEL_DEBUG};
     std::atomic<uint32_t> outputMask{kStdoutMask};
     std::atomic<bool> enableColor{true};
     std::string basePath{"./"};
@@ -127,23 +127,23 @@ void ReloadLocked(ZlogBackendState &state)
 
 int32_t ToZlogLevel(int32_t level)
 {
-    switch (static_cast<eular::LogLevel::Level>(level)) {
-    case eular::LogLevel::LEVEL_DEBUG:
+    switch (level) {
+    case LEVEL_DEBUG:
         return ZLOG_LEVEL_DEBUG;
-    case eular::LogLevel::LEVEL_INFO:
+    case LEVEL_INFO:
         return ZLOG_LEVEL_INFO;
-    case eular::LogLevel::LEVEL_WARN:
+    case LEVEL_WARN:
         return ZLOG_LEVEL_WARN;
-    case eular::LogLevel::LEVEL_ERROR:
+    case LEVEL_ERROR:
         return ZLOG_LEVEL_ERROR;
-    case eular::LogLevel::LEVEL_FATAL:
+    case LEVEL_FATAL:
         return ZLOG_LEVEL_FATAL;
     default:
         return ZLOG_LEVEL_DEBUG;
     }
 }
 
-void EmitFormatted(const std::string &formatted, int32_t level)
+void EmitFormatted(const std::string &consoleFormatted, const std::string &fileFormatted, int32_t level)
 {
     ZlogBackendState &state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -156,11 +156,11 @@ void EmitFormatted(const std::string &formatted, int32_t level)
     const int32_t zlevel = ToZlogLevel(level);
     if ((mask & kStdoutMask) && state.stdoutCategory != nullptr) {
         zlog(state.stdoutCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
-            __LINE__, zlevel, "%s", formatted.c_str());
+            __LINE__, zlevel, "%s", consoleFormatted.c_str());
     }
     if ((mask & kFileMask) && state.fileCategory != nullptr) {
         zlog(state.fileCategory, __FILE__, sizeof(__FILE__) - 1, __func__, sizeof(__func__) - 1,
-            __LINE__, zlevel, "%s", formatted.c_str());
+            __LINE__, zlevel, "%s", fileFormatted.c_str());
     }
 }
 
@@ -170,38 +170,26 @@ void log_write_assertv(const eular::LogEvent *ev)
         abort();
     }
 
-    EmitFormatted(eular::LogFormat::Format(ev, false), static_cast<int32_t>(ev->level));
+    const std::string plain = eular::LogFormat::Format(ev, false);
+    EmitFormatted(plain, plain, static_cast<int32_t>(ev->level));
 #ifdef LOG_ENABLE_CALLSTACK
     eular::CallStack cs;
     cs.update(2, 2);
-    cs.log("Stack", static_cast<log_level_t>(eular::LogLevel::LEVEL_ERROR));
+    cs.log("Stack", LEVEL_ERROR);
 #endif
     abort();
 }
 
 } // namespace
 
-namespace eular {
+extern "C" {
 
-namespace log {
-
-void InitLog(int32_t lev)
+void log_set_level(log_level_t lev)
 {
-    ZlogBackendState &state = GetState();
-    state.level.store(lev, std::memory_order_release);
-
-    std::lock_guard<std::mutex> lock(state.mutex);
-    state.basePath = NormalizeBasePath(state.basePath);
-    state.filePath = state.basePath + "log.log";
-    EnsureInitializedLocked(state);
+    GetState().level.store(static_cast<int32_t>(lev), std::memory_order_release);
 }
 
-void SetLevel(int32_t lev)
-{
-    GetState().level.store(lev, std::memory_order_release);
-}
-
-void SetPath(const char *path)
+void log_set_path(const char *path)
 {
     ZlogBackendState &state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -215,30 +203,28 @@ void SetPath(const char *path)
     ReloadLocked(state);
 }
 
-void EnableLogColor(bool flag)
+void log_enable_color(int32_t flag)
 {
-    GetState().enableColor.store(flag, std::memory_order_release);
+    GetState().enableColor.store(flag != 0, std::memory_order_release);
 }
 
-void addOutputNode(int32_t type)
+void log_add_output_node(output_type_t type)
 {
-    if (type < 0 || type >= static_cast<int32_t>(OutputType::UNKNOW)) {
+    if (type < 0 || type >= UNKNOW) {
         return;
     }
     uint32_t mask = (1u << static_cast<uint32_t>(type));
     GetState().outputMask.fetch_or(mask, std::memory_order_acq_rel);
 }
 
-void delOutputNode(int32_t type)
+void log_del_output_node(output_type_t type)
 {
-    if (type < 0 || type >= static_cast<int32_t>(OutputType::UNKNOW)) {
+    if (type < 0 || type >= UNKNOW) {
         return;
     }
     uint32_t mask = (1u << static_cast<uint32_t>(type));
     GetState().outputMask.fetch_and(~mask, std::memory_order_acq_rel);
 }
-
-} // namespace log
 
 void log_write(int32_t level, const char *tag, const char *fmt, ...)
 {
@@ -247,11 +233,11 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
         return;
     }
 
-    LogEvent ev;
+    eular::LogEvent ev;
     struct timeval tv;
     gettimeofday(&tv, nullptr);
 
-    ev.level = static_cast<LogLevel::Level>(level);
+    ev.level = static_cast<log_level_t>(level);
     ev.enableColor = state.enableColor.load(std::memory_order_acquire);
     ev.time = tv;
     ev.pid = getpid();
@@ -271,7 +257,9 @@ void log_write(int32_t level, const char *tag, const char *fmt, ...)
     }
 
     ev.msg = msgBuffer;
-    EmitFormatted(LogFormat::Format(&ev, ev.enableColor), level);
+    const std::string plain = eular::LogFormat::Format(&ev, false);
+    const std::string console = eular::LogFormat::Format(&ev, ev.enableColor);
+    EmitFormatted(console, plain, level);
 }
 
 void log_write_assert(int32_t level, const char *expr, const char *tag, const char *fmt, ...)
@@ -281,11 +269,11 @@ void log_write_assert(int32_t level, const char *expr, const char *tag, const ch
         return;
     }
 
-    LogEvent ev;
+    eular::LogEvent ev;
     struct timeval tv;
     gettimeofday(&tv, nullptr);
 
-    ev.level = static_cast<LogLevel::Level>(level);
+    ev.level = static_cast<log_level_t>(level);
     ev.enableColor = false;
     ev.time = tv;
     ev.pid = getpid();
@@ -310,4 +298,4 @@ void log_write_assert(int32_t level, const char *expr, const char *tag, const ch
     log_write_assertv(&ev);
 }
 
-} // namespace eular
+}

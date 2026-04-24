@@ -1,4 +1,4 @@
-#include "log.h"
+#include "log/log.h"
 #include "log_main.h"
 #ifdef LOG_ENABLE_CALLSTACK
 #include "callstack.h"
@@ -177,3 +177,56 @@ void log_write_assertv(const LogEvent *ev)
 }
 
 } // namespace eular
+
+extern "C" {
+
+void log_set_level(log_level_t lev)
+{
+    eular::log::SetLevel(static_cast<int32_t>(lev));
+}
+
+void log_set_path(const char *path)
+{
+    eular::log::SetPath(path);
+}
+
+void log_enable_color(int32_t flag)
+{
+    eular::log::EnableLogColor(flag != 0);
+}
+
+void log_add_output_node(output_type_t type)
+{
+    eular::log::addOutputNode(static_cast<int32_t>(type));
+}
+
+void log_del_output_node(output_type_t type)
+{
+    eular::log::delOutputNode(static_cast<int32_t>(type));
+}
+
+void log_write(int32_t level, const char *tag, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+
+    char msg[4096] = {0};
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    eular::log_write(level, tag, "%s", msg);
+}
+
+void log_write_assert(int32_t level, const char *expr, const char *tag, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+
+    char msg[4096] = {0};
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    eular::log_write_assert(level, expr, tag, "%s", msg);
+}
+
+}
