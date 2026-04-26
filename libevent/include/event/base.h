@@ -36,4 +36,18 @@
 struct event;
 struct event_base;
 
+#if defined(_WIN32) || defined(_WIN64)
+    #ifdef EVENT_WRAPPER_SHARED
+        #define EVENT_WRAPPER_API __declspec(dllexport)
+    #elif defined(EVENT_WRAPPER_STATIC)
+        #define EVENT_WRAPPER_API
+    #else
+        #define EVENT_WRAPPER_API __declspec(dllimport)
+    #endif
+#elif defined(__GNUC__) || defined(__clang__)
+    #define EVENT_WRAPPER_API __attribute__((visibility("default")))
+#else
+    #define EVENT_WRAPPER_API
+#endif
+
 #endif // __EVENT_BASE_H__

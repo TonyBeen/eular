@@ -17,7 +17,7 @@
 #include <event/loop.h>
 
 namespace ev {
-class EventAsync
+class EVENT_WRAPPER_API EventAsync
 {
     DISALLOW_COPY_AND_ASSIGN(EventAsync);
     DISALLOW_MOVE(EventAsync);

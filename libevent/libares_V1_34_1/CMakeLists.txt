@@ -35,6 +35,7 @@ SET (CARES_LIB_VERSIONINFO "21:1:19")
 
 OPTION (CARES_STATIC        "Build as a static library"                                             ON)
 OPTION (CARES_SHARED        "Build as a shared library"                                             OFF)
+OPTION (CARES_OBJECT        "Build as an object library for embedding"                             OFF)
 OPTION (CARES_INSTALL       "Create installation targets (chain builders may want to disable this)" ON)
 OPTION (CARES_STATIC_PIC    "Build the static library as PIC (position independent)"                ON)
 OPTION (CARES_BUILD_TESTS   "Build and run tests"                                                   OFF)

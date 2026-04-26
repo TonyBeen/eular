@@ -14,7 +14,7 @@
 #include <event/loop.h>
 
 namespace ev {
-class EventTimer
+class EVENT_WRAPPER_API EventTimer
 {
     DISALLOW_COPY_AND_ASSIGN(EventTimer);
     DISALLOW_MOVE(EventTimer);

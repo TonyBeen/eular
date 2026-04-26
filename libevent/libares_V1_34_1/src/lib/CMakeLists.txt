@@ -8,6 +8,38 @@ include(${PROJECT_BINARY_DIR}/src/lib/Makefile.inc.cmake)
 # Write ares_config.h configuration file.  This is used only for the build.
 CONFIGURE_FILE (ares_config.h.cmake ${PROJECT_BINARY_DIR}/ares_config.h)
 
+# Build the object library (for embedding into parent shared/static libraries)
+IF (CARES_OBJECT)
+        SET (OBJNAME ${PROJECT_NAME}_objects)
+
+        ADD_LIBRARY (${OBJNAME} OBJECT ${CSOURCES})
+
+        SET_TARGET_PROPERTIES (${OBJNAME} PROPERTIES
+                EXPORT_NAME                  cares_object
+                C_STANDARD                   90
+        )
+
+        IF (ANDROID)
+                SET_TARGET_PROPERTIES (${OBJNAME} PROPERTIES C_STANDARD 99)
+        ENDIF ()
+
+        TARGET_INCLUDE_DIRECTORIES (${OBJNAME}
+                PUBLIC "$<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>"
+                       "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>"
+                       "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        )
+
+        TARGET_COMPILE_DEFINITIONS (${OBJNAME} PRIVATE HAVE_CONFIG_H=1 CARES_BUILDING_LIBRARY)
+
+        # Propagate c-ares dependent libs to final consumers linking this object target.
+        TARGET_LINK_LIBRARIES (${OBJNAME} PUBLIC ${CARES_DEPENDENT_LIBS})
+
+        # For chain building in super-projects.
+        ADD_LIBRARY (${PROJECT_NAME}::cares_object ALIAS ${OBJNAME})
+ENDIF ()
+
 # Build the dynamic/shared library
 IF (CARES_SHARED)
 	ADD_LIBRARY (${PROJECT_NAME} SHARED ${CSOURCES})

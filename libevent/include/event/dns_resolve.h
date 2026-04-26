@@ -20,13 +20,22 @@
 #define DNS_TIMEOUT -1
 #define DNS_FAILED  -2
 
+#ifndef EVENT_WRAPPER_USE_CARES
+#define EVENT_WRAPPER_USE_CARES 0
+#endif
+
+#if EVENT_WRAPPER_USE_CARES
 struct ares_addrinfo;
+#else
+struct addrinfo;
+struct evdns_base;
+#endif
 
 namespace ev {
 class DNSManager;
 class DNSResolverInternal;
 
-struct DNSResult {
+struct EVENT_WRAPPER_API DNSResult {
     std::string address;
     uint64_t    resolvedTimeMS = UINT64_MAX; // 解析时间
     uint32_t    ttl;
@@ -34,7 +43,7 @@ struct DNSResult {
 };
 using DNSResultVec = std::vector<DNSResult>;
 
-class DNSResolver
+class EVENT_WRAPPER_API DNSResolver
 {
     friend class DNSManager;
 public:
@@ -64,15 +73,21 @@ public:
 private:
     bool initChannel();
     void onResolveTimeout(const std::string &domain);
+#if EVENT_WRAPPER_USE_CARES
     static void OnSocketStateChanged(void *data, socket_t sock, int readable, int writable);
     static void OnDnsCallback(void *arg, int status, int timeouts, ares_addrinfo *res);
+#else
+    static void OnDnsCallback(int status, addrinfo *res, void *arg);
+    static bool ApplyNameServers(evdns_base *dnsBase, const std::string &domainServer);
+#endif
+    static std::string Trim(const std::string &value);
 
 private:
     std::shared_ptr<DNSResolverInternal> m_internal;
 };
 
 class DNSManagerInternal;
-class DNSManager
+class EVENT_WRAPPER_API DNSManager
 {
     friend class DNSResolver;
 public:

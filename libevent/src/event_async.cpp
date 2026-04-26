@@ -104,10 +104,10 @@ bool EventAsync::notify(const std::string &key) noexcept
         auto sendSize = ::send(m_sockPair[SOCK_PAIR_SEND], key.c_str(), key.size() + 1, kSendFlag);
         if (sendSize > 0) {
             return true;
-        } else if (sendSize == 0) { // 对端关闭
+        } else if (sendSize == 0) { // send() 不应返回 0，防御性处理
             return false;
-        } else { // 发送缓存满了
-            return WouldBlock() ? false : true;
+        } else { // 发送失败
+            return false;
         }
     }
 
@@ -122,7 +122,7 @@ void EventAsync::reset(event_base *loop)
         m_event = nullptr;
     }
 
-    if (m_sockPair[SOCK_PAIR_RECV] > 0) {
+    if (m_sockPair[SOCK_PAIR_RECV] >= 0) {
         evutil_closesocket(m_sockPair[SOCK_PAIR_RECV]);
         evutil_closesocket(m_sockPair[SOCK_PAIR_SEND]);
         m_sockPair[SOCK_PAIR_RECV] = -1;

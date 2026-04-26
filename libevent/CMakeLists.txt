@@ -10,6 +10,7 @@ include(GNUInstallDirs)
 
 option(EVENT_DYNAMIC_LIB "Build dynamic library" ON)
 option(EVENT_STATIC_LIB "Build static library" ON)
+option(EVENT_USE_CARES "Use c-ares backend for DNSResolver" OFF)
 option(BUILD_EXAMPLES "Compile sample program" OFF)
 option(BUILD_TEST "Compile sample program" OFF)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
@@ -51,7 +52,19 @@ set(HEADERS
 # libevent
 add_subdirectory(libevent_V2_1_10)
 # 异步DNS解析库
-add_subdirectory(libares_V1_34_1)
+if(EVENT_USE_CARES)
+    # Build c-ares as embedded object library and do not install c-ares artifacts.
+    set(CARES_INSTALL OFF CACHE BOOL "" FORCE)
+    set(CARES_STATIC OFF CACHE BOOL "" FORCE)
+    set(CARES_SHARED OFF CACHE BOOL "" FORCE)
+    set(CARES_OBJECT ON CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(libares_V1_34_1)
+    if(EVENT_DYNAMIC_LIB)
+        set_target_properties(c-ares_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endif()
 # nghttp2
 # add_subdirectory(nghttp2_V1_61_0)
 
@@ -60,7 +73,6 @@ if(EVENT_STATIC_LIB)
     add_library(event_wrapper_static STATIC ${SOURCES} ${HEADERS})
     add_library(eular::event_wrapper_static ALIAS event_wrapper_static)
 
-    set_target_properties(event_wrapper_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(event_wrapper_static
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -70,9 +82,24 @@ if(EVENT_STATIC_LIB)
     target_link_libraries(event_wrapper_static
         PUBLIC
             event_static
-        PRIVATE
-            c-ares::cares_static
     )
+    if(EVENT_USE_CARES)
+        target_sources(event_wrapper_static PRIVATE $<TARGET_OBJECTS:c-ares_objects>)
+        target_include_directories(event_wrapper_static PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/libares_V1_34_1/include
+            ${CMAKE_CURRENT_BINARY_DIR}/libares_V1_34_1
+        )
+        if(DEFINED CARES_DEPENDENT_LIBS)
+            target_link_libraries(event_wrapper_static PRIVATE ${CARES_DEPENDENT_LIBS})
+        endif()
+    endif()
+
+    if(EVENT_USE_CARES)
+        target_compile_definitions(event_wrapper_static PRIVATE EVENT_WRAPPER_USE_CARES=1)
+    else()
+        target_compile_definitions(event_wrapper_static PRIVATE EVENT_WRAPPER_USE_CARES=0)
+    endif()
+
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(event_wrapper_static PUBLIC pthread)
     endif()
@@ -80,6 +107,7 @@ if(EVENT_STATIC_LIB)
     target_compile_options(
         event_wrapper_static PRIVATE
         ${CXX_COMPILER_FLAGS}
+        $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-fvisibility=hidden -fvisibility-inlines-hidden>
     )
 
     set_property(TARGET event_wrapper_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -105,23 +133,45 @@ if(EVENT_DYNAMIC_LIB)
     target_link_libraries(event_wrapper
         PUBLIC
             event_static
-        PRIVATE
-            c-ares::cares_static
     )
+    if(EVENT_USE_CARES)
+        target_sources(event_wrapper PRIVATE $<TARGET_OBJECTS:c-ares_objects>)
+        target_include_directories(event_wrapper PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/libares_V1_34_1/include
+            ${CMAKE_CURRENT_BINARY_DIR}/libares_V1_34_1
+        )
+        if(DEFINED CARES_DEPENDENT_LIBS)
+            target_link_libraries(event_wrapper PRIVATE ${CARES_DEPENDENT_LIBS})
+        endif()
+    endif()
+
+    if(EVENT_USE_CARES)
+        target_compile_definitions(event_wrapper PRIVATE EVENT_WRAPPER_USE_CARES=1)
+    else()
+        target_compile_definitions(event_wrapper PRIVATE EVENT_WRAPPER_USE_CARES=0)
+    endif()
+
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(event_wrapper PUBLIC pthread)
     endif()
 
+    target_compile_definitions(event_wrapper PRIVATE EVENT_WRAPPER_SHARED)
     target_compile_options(
         event_wrapper PRIVATE
         ${CXX_COMPILER_FLAGS}
+        $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-fvisibility=hidden -fvisibility-inlines-hidden>
+    )
+
+    target_link_options(
+        event_wrapper PRIVATE
+        $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wl,--exclude-libs,ALL>
     )
 
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         set_target_properties (
             event_wrapper
             PROPERTIES
-            LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+            LINK_FLAGS "-Wl,-z,now,-z,relro"
         )
     endif ()
 
@@ -138,18 +188,24 @@ endif()
 
 include(CMakePackageConfigHelpers)
 
+if(EVENT_USE_CARES)
+    set(EVENT_WRAPPER_NEED_CARES_FIND_PACKAGE "find_package(c-ares REQUIRED)")
+else()
+    set(EVENT_WRAPPER_NEED_CARES_FIND_PACKAGE "")
+endif()
+
 # 生成 xxxConfigVersion.cmake文件
 write_basic_package_version_file(
-	${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
-	VERSION ${PROJECT_VERSION}
-	COMPATIBILITY SameMajorVersion
+        ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
 )
 
 # 用于生成 xxxConfig.cmake文件
 configure_package_config_file(
-	${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in
-	${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-	INSTALL_DESTINATION lib/cmake/${PROJECT_NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
+        INSTALL_DESTINATION lib/cmake/${PROJECT_NAME}
 )
 
 if(BUILD_EXAMPLES)

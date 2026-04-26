@@ -14,7 +14,7 @@
 #include <event/loop.h>
 
 namespace ev {
-class EventPoll
+class EVENT_WRAPPER_API EventPoll
 {
     DISALLOW_COPY_AND_ASSIGN(EventPoll);
 public:
@@ -58,7 +58,7 @@ public:
     bool hasPending() const;
 
 private:
-    static uint32_t EventParse(event_t eventFlag);
+    static short EventParse(event_t eventFlag);
     void clean();
 
 private:

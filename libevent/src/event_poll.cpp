@@ -34,8 +34,8 @@ int32_t EventPoll::reset(event_base *loop, socket_t sock, event_t flag, EventCB 
         return -1;
     }
 
-    uint32_t eventFlag = EventParse(flag);
-    if (eventFlag == static_cast<uint32_t>(Event::None)) {
+    short eventFlag = EventParse(flag);
+    if (eventFlag == static_cast<short>(Event::None)) {
         errno = EINVAL;
         return -1;
     }
@@ -43,7 +43,7 @@ int32_t EventPoll::reset(event_base *loop, socket_t sock, event_t flag, EventCB 
     clean();
 
     m_cb = std::move(cb);
-    m_ev = event_new(loop, sock, (short)eventFlag, [] (evutil_socket_t sock, short flag, void *ptr) {
+    m_ev = event_new(loop, sock, eventFlag, [] (evutil_socket_t sock, short flag, void *ptr) {
         EventPoll *self = static_cast<EventPoll *>(ptr);
         event_t evFlag = Event::None;
         if (flag & EV_READ) {
@@ -84,13 +84,13 @@ bool EventPoll::hasPending() const
     return flags != 0;
 }
 
-uint32_t EventPoll::EventParse(event_t eventFlag)
+short EventPoll::EventParse(event_t eventFlag)
 {
     uint32_t persistEventMask = static_cast<uint32_t>(Event::Read | Event::Write);
     uint32_t onceEventMask = static_cast<uint32_t>(Event::ReadOnce | Event::WriteOnce);
 
     uint32_t flag = static_cast<uint32_t>(eventFlag);
-    uint32_t event = static_cast<uint32_t>(Event::None);
+    short event = static_cast<short>(Event::None);
 
     bool isPersist = (flag & persistEventMask) && !(flag & onceEventMask);
     if (isPersist) {

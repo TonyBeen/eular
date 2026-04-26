@@ -12,7 +12,7 @@
 #include <event/base.h>
 
 namespace ev {
-class EventLoop
+class EVENT_WRAPPER_API EventLoop
 {
     DISALLOW_COPY_AND_ASSIGN(EventLoop);
 public:
