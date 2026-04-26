@@ -49,9 +49,8 @@ static size_t StreamWritableSendBudget(const ConnectionImpl *conn)
     // avoid tiny rounds and to keep per-stream fairness under bursty loads.
     const size_t mtuPayload = StreamPayloadMtuBudget(conn);
     const size_t mtuBasedBudget = mtuPayload * kDefaultMtuPacketsPerWritable;
-    return std::clamp(mtuBasedBudget,
-                      kMinSendBudgetBytesPerWritable,
-                      kMaxSendBudgetBytesPerWritable);
+    return (std::max)(kMinSendBudgetBytesPerWritable,
+                      (std::min)(mtuBasedBudget, kMaxSendBudgetBytesPerWritable));
 }
 
 static size_t StreamSendBufferLimit(const ConnectionImpl *conn)

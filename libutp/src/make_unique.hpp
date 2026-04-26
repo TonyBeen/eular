@@ -10,7 +10,7 @@
 
 #include <memory>
 
-#if __cplusplus < 201402L
+#if __cplusplus < 201402L && !defined(_MSC_VER)
 
 namespace std {
 namespace detail {
@@ -53,6 +53,6 @@ template <class T, class... Args>
 typename detail::unique_if<T>::Unsupported make_unique(Args&&...) = delete;
 } // namespace std
 
-#endif // __cplusplus < 201402L
+#endif // __cplusplus < 201402L && !defined(_MSC_VER)
 
 #endif // __UTP_MAKE_UNIQUE_HPP__

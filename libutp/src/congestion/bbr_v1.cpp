@@ -108,10 +108,10 @@ namespace eular {
 namespace utp {
 
 static const char *mode2str[] = {
-    [BbrV1::Mode::StartUp]  = "StartUp",
-    [BbrV1::Mode::Drain]    = "Drain",
-    [BbrV1::Mode::ProbeBW]  = "ProbeBW",
-    [BbrV1::Mode::ProbeRTT] = "ProbeRTT",
+    "StartUp",
+    "Drain",
+    "ProbeBW",
+    "ProbeRTT",
 };
 
 BbrV1::BbrV1(const Config *cfg)
@@ -120,8 +120,8 @@ BbrV1::BbrV1(const Config *cfg)
         return;
     }
 
-    m_configInitCwnd = std::max<uint64_t>(1, cfg->bbr_init_cwnd_mss) * kDefaultTCPMSS;
-    m_configMinCwnd = std::max<uint64_t>(1, cfg->bbr_min_cwnd_mss) * kDefaultTCPMSS;
+    m_configInitCwnd = (std::max<uint64_t>)(1, cfg->bbr_init_cwnd_mss) * kDefaultTCPMSS;
+    m_configMinCwnd = (std::max<uint64_t>)(1, cfg->bbr_min_cwnd_mss) * kDefaultTCPMSS;
     if (m_configInitCwnd < m_configMinCwnd) {
         m_configInitCwnd = m_configMinCwnd;
     }
@@ -135,9 +135,9 @@ BbrV1::BbrV1(const Config *cfg)
     if (cfg->bbr_startup_growth_target > 1.0f && cfg->bbr_startup_growth_target <= 2.0f) {
         m_startupGrowthTarget = cfg->bbr_startup_growth_target;
     }
-    m_configStartupRounds = std::max<uint32_t>(1, cfg->bbr_startup_full_bw_rounds);
-    m_probeRttTimeUs = static_cast<uint64_t>(std::max<uint32_t>(50, cfg->bbr_probe_rtt_ms)) * 1000ULL;
-    m_minRttExpiryUs = static_cast<uint64_t>(std::max<uint32_t>(1000, cfg->bbr_min_rtt_expiry_ms)) * 1000ULL;
+    m_configStartupRounds = (std::max<uint32_t>)(1, cfg->bbr_startup_full_bw_rounds);
+    m_probeRttTimeUs = static_cast<uint64_t>((std::max<uint32_t>)(50, cfg->bbr_probe_rtt_ms)) * 1000ULL;
+    m_minRttExpiryUs = static_cast<uint64_t>((std::max<uint32_t>)(1000, cfg->bbr_min_rtt_expiry_ms)) * 1000ULL;
 }
 
 void BbrV1::onInit(RttStats *stats)
@@ -352,7 +352,7 @@ uint64_t BbrV1::getTargetCwnd(float_t gain)
         cwnd = gain * m_initCwnd;
     }
 
-    return std::max(cwnd, m_minCwnd);
+    return (std::max)(cwnd, m_minCwnd);
 }
 
 bool BbrV1::inRecovery()
@@ -545,7 +545,7 @@ void BbrV1::calculateRecoveryWindow(uint64_t bytesAcked, uint64_t bytestLost, ui
     // 初始化恢复窗口
     if (m_recoveryWindow == 0) {
         m_recoveryWindow = bytestInflight + bytesAcked;
-        m_recoveryWindow = std::max(m_minCwnd, m_recoveryWindow);
+        m_recoveryWindow = (std::max)(m_minCwnd, m_recoveryWindow);
         return;
     }
 
@@ -562,12 +562,12 @@ void BbrV1::calculateRecoveryWindow(uint64_t bytesAcked, uint64_t bytestLost, ui
     }
 
     // 最低限检查
-    m_recoveryWindow = std::max(bytestInflight + bytesAcked, m_recoveryWindow);
+    m_recoveryWindow = (std::max)(bytestInflight + bytesAcked, m_recoveryWindow);
     if (FLAG_quic_bbr_one_mss_conservation) {
-        m_recoveryWindow = std::max(m_recoveryWindow, bytestInflight + kMaxSegmentSize);
+        m_recoveryWindow = (std::max)(m_recoveryWindow, bytestInflight + kMaxSegmentSize);
     }
 
-    m_recoveryWindow = std::max(m_minCwnd, m_recoveryWindow);
+    m_recoveryWindow = (std::max)(m_minCwnd, m_recoveryWindow);
 }
 
 uint64_t BbrV1::updateAckAggregationBytes(uint64_t bytesAcked)
@@ -764,8 +764,8 @@ void BbrV1::enterProbeBWMode(uint64_t now)
     // 使用当前时间作为随机种子
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint8_t> dist(0, std::numeric_limits<uint8_t>::max());
-    uint8_t randomValue = dist(gen);
+    std::uniform_int_distribution<unsigned int> dist(0, (std::numeric_limits<uint8_t>::max)());
+    uint8_t randomValue = static_cast<uint8_t>(dist(gen));
 
     m_cycleCurrentOffset = randomValue % (kGainCycleLength - 1);
     // 跳过1是因为0.75是减小, 当前轮次无法做到后续在增大

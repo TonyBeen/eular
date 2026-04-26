@@ -264,7 +264,7 @@ TEST_CASE("ConnectionImpl: passive side creates server-initiated stream id", "[C
     REQUIRE(uniStreamId == 3);
 
     REQUIRE(conn.createStream(Connection::kStreamTypeUnidirectional) == -1);
-    REQUIRE(GetLastError() == UTP_ERR_STREAM_LIMIT_ERROR);
+    REQUIRE(utp_get_last_error() == UTP_ERR_STREAM_LIMIT_ERROR);
 }
 
 TEST_CASE("ConnectionImpl: streamCount and creatableStreamCount support stream type", "[Connection][Stream]")
@@ -534,7 +534,7 @@ TEST_CASE("StreamImpl: setPriority validates input range", "[Connection][Stream]
     REQUIRE(stream.setPriority(7) == UTP_ERR_OK);
     REQUIRE(stream.priority() == 7);
     REQUIRE(stream.setPriority(8) == -1);
-    REQUIRE(GetLastError() == UTP_ERR_INVALID_PARAM);
+    REQUIRE(utp_get_last_error() == UTP_ERR_INVALID_PARAM);
 }
 
 TEST_CASE("ConnectionImpl: statistic exports scheduler metrics", "[Connection][Stream][Priority]")

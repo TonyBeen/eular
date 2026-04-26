@@ -383,7 +383,7 @@ size_t Address::hash() const noexcept
     } else if (m_family == Family:: IPv6) {
         for (size_t i = 0; i < kIPv6AddrLen; i += sizeof(size_t)) {
             size_t chunk = 0;
-            memcpy(&chunk, m_addr.v6 + i, std:: min(sizeof(size_t), kIPv6AddrLen - i));
+            memcpy(&chunk, m_addr.v6 + i, (std::min)(sizeof(size_t), kIPv6AddrLen - i));
             h ^= chunk;
         }
     }

@@ -104,7 +104,7 @@ int main(int argc, char **argv)
         if (acceptStatus != 0) {
             std::cerr << "[server] accept failed ip=" << info.remote_ip
                       << ":" << info.remote_port
-                      << " err=" << GetLastError() << "\n";
+                      << " err=" << utp_get_last_error() << "\n";
             return false;
         }
         return true;
@@ -124,8 +124,8 @@ int main(int argc, char **argv)
                     const int32_t n = stream->read(buf.data(), buf.size());
                     if (n > 0) {
                         const int32_t wn = stream->write(buf.data(), static_cast<size_t>(n), false);
-                        if (wn < 0 && GetLastError() != UTP_ERR_WOULD_BLOCK) {
-                            std::cerr << "[server] echo write failed err=" << GetLastError() << "\n";
+                        if (wn < 0 && utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
+                            std::cerr << "[server] echo write failed err=" << utp_get_last_error() << "\n";
                         }
                         continue;
                     }
@@ -159,7 +159,7 @@ int main(int argc, char **argv)
     });
 
     if (ctx.bind(bindIp, bindPort) != 0) {
-        std::cerr << "[server] bind failed err=" << GetLastError() << "\n";
+        std::cerr << "[server] bind failed err=" << utp_get_last_error() << "\n";
         return 1;
     }
 

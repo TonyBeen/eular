@@ -336,7 +336,7 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
             int32_t wlen = MultiByteToWideChar(CP_UTF8, 0, ifname, -1, NULL, 0);
             std::wstring wIfname;
             wIfname.resize(wlen);
-            MultiByteToWideChar(CP_UTF8, 0, ifname, -1, wIfname.data(), wIfname.size());
+            MultiByteToWideChar(CP_UTF8, 0, ifname, -1, &wIfname[0], static_cast<int32_t>(wIfname.size()));
             if (wIfname == pCurr->FriendlyName) {
                 mtu = (int)pCurr->Mtu;
                 break;

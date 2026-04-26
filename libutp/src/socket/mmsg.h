@@ -8,8 +8,7 @@
 #ifndef __UTP_SOCKET_MMSG_H__
 #define __UTP_SOCKET_MMSG_H__
 
-#include <netinet/in.h>
-#include <sys/socket.h>
+#include "commom.h"
 
 #include "mtu/mtu.h"
 

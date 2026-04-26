@@ -31,7 +31,7 @@ bool PacketOut::addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime)
         attempts_head = attempt;
     }
     attempts_tail = attempt;
-    if (attempts_count < std::numeric_limits<uint16_t>::max()) {
+    if (attempts_count < (std::numeric_limits<uint16_t>::max)()) {
         ++attempts_count;
     }
 

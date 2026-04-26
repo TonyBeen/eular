@@ -8,7 +8,7 @@ include(CMakePackageConfigHelpers)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -151,6 +151,12 @@ set(UTP_SOURCES
 
 add_library(utp_static STATIC ${UTP_SOURCES} ${UTP_PUBLIC_HEADERS})
 add_library(eular::utp ALIAS utp_static)
+
+target_compile_definitions(utp_static
+    PUBLIC
+        UTP_STATIC
+        $<$<BOOL:${MSVC}>:NOMINMAX>
+)
 
 target_include_directories(utp_static
     PUBLIC

@@ -68,7 +68,7 @@ enum : uint16_t {
 };
 typedef uint32_t utp_error_t;
 
-UTP_API int32_t GetLastError();
-UTP_API const char* GetErrorString();
+UTP_API int32_t     utp_get_last_error();
+UTP_API const char* utp_get_error_string();
 
 #endif // __UTP_ERRNO_H__

@@ -19,15 +19,17 @@
     #include <ws2ipdef.h>
     #include <iphlpapi.h>
     #include <mswsock.h>
-    #include <Windows.h>
     #include "queue.h" // 3rd
+
+    #ifdef X509_NAME
+    #undef X509_NAME
+    #endif
 
     #pragma comment(lib, "ws2_32.lib")
     #pragma comment(lib, "iphlpapi.lib")
     #pragma comment(lib, "mswsock.lib")
 
     typedef SOCKET      socket_t;
-    typedef SSIZE_T     ssize_t;
     typedef WSAMSG      msghdr_t;
 
 #elif defined(OS_LINUX)

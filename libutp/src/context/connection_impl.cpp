@@ -894,7 +894,7 @@ void ConnectionImpl::onWrite()
         if (!zeroRttFirstPacket) {
             int32_t status = sendInitialPacket();
             if (status != UTP_ERR_OK) {
-                int32_t err = GetLastError();
+                int32_t err = utp_get_last_error();
                 if (err <= 0) {
                     err = UTP_ERR_SOCKET_WRITE;
                 }
@@ -1736,7 +1736,7 @@ int32_t ConnectionImpl::sendConnectionCloseFrame()
         return UTP_ERR_OK;
     }
 
-    int32_t err = GetLastError();
+    int32_t err = utp_get_last_error();
     if (err <= 0) {
         err = UTP_ERR_SOCKET_WRITE;
     }
@@ -1766,7 +1766,7 @@ int32_t ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCo
         return UTP_ERR_OK;
     }
 
-    int32_t err = GetLastError();
+    int32_t err = utp_get_last_error();
     if (err <= 0) {
         err = UTP_ERR_SOCKET_WRITE;
     }

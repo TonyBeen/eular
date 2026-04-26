@@ -251,7 +251,7 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
 #elif defined(OS_WINDOWS)
     static std::once_flag flagWSARecvMsg;
     static LPFN_WSARECVMSG lpfnWSARecvMsg = nullptr;
-    std::call_once(flagWSARecvMsg, []() {
+    std::call_once(flagWSARecvMsg, [this]() {
         GUID guidWSARecvMsg = WSAID_WSARECVMSG;
         DWORD dwBytesReturned = 0;
         int32_t result = ::WSAIoctl(m_sock, SIO_GET_EXTENSION_FUNCTION_POINTER,
@@ -270,7 +270,7 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
     char cmsgbuf[WSA_CMSG_SPACE(sizeof(in6_pktinfo))] = {0};
     WSAMSG msg;
     WSABUF iov;
-    iov.buf = m_recvBuffer.data();
+    iov.buf = reinterpret_cast<char *>(m_recvBuffer.data());
     iov.len = static_cast<ULONG>(m_recvBuffer.capacity());
     msg.name = (LPSOCKADDR)&remoteAddr;
     msg.namelen = addrLen;

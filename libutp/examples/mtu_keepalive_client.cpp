@@ -118,7 +118,7 @@ int main(int argc, char **argv)
         const std::vector<uint8_t> payload = MakePayload(n);
         const int32_t wn = stream->write(payload.data(), payload.size(), false);
         if (wn < 0) {
-            const int32_t err = GetLastError();
+            const int32_t err = utp_get_last_error();
             if (err == UTP_ERR_WOULD_BLOCK) {
                 sendTimer.start(5);
                 return;
@@ -175,7 +175,7 @@ int main(int argc, char **argv)
 
         const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
         if (sid < 0) {
-            std::cerr << "[client] createStream failed err=" << GetLastError() << "\n";
+            std::cerr << "[client] createStream failed err=" << utp_get_last_error() << "\n";
             conn->close();
             return;
         }
@@ -225,7 +225,7 @@ int main(int argc, char **argv)
     });
 
     if (ctx.bind("0.0.0.0", 0) != 0) {
-        std::cerr << "[client] bind failed err=" << GetLastError() << "\n";
+        std::cerr << "[client] bind failed err=" << utp_get_last_error() << "\n";
         return 1;
     }
 
@@ -236,7 +236,7 @@ int main(int argc, char **argv)
     info.encrypted = eular::utp::Context::kEncryptionNone;
 
     if (ctx.connect(info) != 0) {
-        std::cerr << "[client] connect start failed err=" << GetLastError() << "\n";
+        std::cerr << "[client] connect start failed err=" << utp_get_last_error() << "\n";
         return 1;
     }
 

@@ -23,7 +23,7 @@ TEST_CASE("Context public API maps WOULD_BLOCK to -1 with errno", "[Context][API
 
     REQUIRE(server.bind("127.0.0.1", 0, "") == 0);
     REQUIRE(server.accept() == -1);
-    REQUIRE(GetLastError() == UTP_ERR_WOULD_BLOCK);
+    REQUIRE(utp_get_last_error() == UTP_ERR_WOULD_BLOCK);
 }
 
 TEST_CASE("Context public API maps invalid 0-RTT input to -1 with errno", "[Context][API][Errno]")
@@ -37,5 +37,5 @@ TEST_CASE("Context public API maps invalid 0-RTT input to -1 with errno", "[Cont
     info.port = 0;
 
     REQUIRE(client.connect0Rtt(info) == -1);
-    REQUIRE(GetLastError() == UTP_ERR_INVALID_PARAM);
+    REQUIRE(utp_get_last_error() == UTP_ERR_INVALID_PARAM);
 }

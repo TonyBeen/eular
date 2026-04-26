@@ -14,6 +14,9 @@
 #include <event/loop.h>
 #include <event/timer.h>
 
+#ifdef X509_NAME
+#undef X509_NAME
+#endif
 #include <openssl/evp.h>
 
 #include <utils/CLI11.hpp>
