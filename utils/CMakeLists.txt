@@ -17,10 +17,8 @@ option(ENABLE_TEST "Enable test" OFF)
 option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
 option(UTILS_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
 
-# Keep compatibility with ENABLE_TEST while adopting standard BUILD_TESTING/CTest flow.
-if(ENABLE_TEST)
-    set(BUILD_TESTING ON CACHE BOOL "Enable building tests" FORCE)
-endif()
+# Keep BUILD_TESTING strictly aligned with ENABLE_TEST.
+set(BUILD_TESTING ${ENABLE_TEST} CACHE BOOL "Enable building tests" FORCE)
 include(CTest)
 
 if (NOT UTILS_STATIC_LIB AND NOT UTILS_DYNAMIC_LIB)
