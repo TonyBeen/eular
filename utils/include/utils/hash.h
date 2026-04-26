@@ -149,7 +149,7 @@ public:
     inline float max_load_factor() const noexcept { return m_maxLoadFactor; }
     void max_load_factor(float factor)
     {
-        if (factor <= 0.0f || factor > static_cast<float>(std::numeric_limits<int>::max())) {
+        if (factor <= 0.0f || factor > static_cast<float>((std::numeric_limits<int>::max)())) {
             throw std::invalid_argument("HashMap::max_load_factor expects factor > 0");
         }
         m_maxLoadFactor = factor;

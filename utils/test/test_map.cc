@@ -5,6 +5,8 @@
     > Created Time: Mon 05 Dec 2022 09:58:35 AM CST
  ************************************************************************/
 
+#include <utils/platform.h>
+
 #include <iostream>
 #include <stdio.h>
 #include <assert.h>

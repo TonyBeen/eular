@@ -75,7 +75,7 @@ void clear_tree(rb_root *root)
 
 TEST_CASE("rbtree_insert_and_navigation", "[rbtree]")
 {
-    rb_root root = RB_ROOT;
+    rb_root root{};
 
     rb_node *inserted = insert(&root, 10);
     REQUIRE(inserted != nullptr);
@@ -88,14 +88,15 @@ TEST_CASE("rbtree_insert_and_navigation", "[rbtree]")
 
 TEST_CASE("rbtree_inorder_traversal_is_sorted", "[rbtree]")
 {
-    rb_root root = RB_ROOT;
+    rb_root root{};
     const int values[] = {10, 4, 15, 12, 1, 7};
     for (int value : values) {
         REQUIRE(insert(&root, value) != nullptr);
     }
 
     const std::vector<int> ordered = inorder_values(&root);
-    CHECK(ordered == std::vector<int>{1, 4, 7, 10, 12, 15});
+    const std::vector<int> expected{1, 4, 7, 10, 12, 15};
+    CHECK(ordered == expected);
     REQUIRE(root.rb_node != nullptr);
     CHECK(root.rb_node->rb_parent == nullptr);
 
