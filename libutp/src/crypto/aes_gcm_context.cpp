@@ -102,7 +102,7 @@ int32_t AesGcmContext::encrypt(PacketOut *packet)
     const size_t plainPayloadLen = static_cast<size_t>(packet->data_size - UTP_HEADER_SIZE);
     const size_t cipherPayloadLen = plainPayloadLen + GCM_TAG_SIZE;
     const size_t encryptedPacketLen = UTP_HEADER_SIZE + cipherPayloadLen;
-    if (encryptedPacketLen > std::numeric_limits<uint16_t>::max()) {
+    if (encryptedPacketLen > (std::numeric_limits<uint16_t>::max)()) {
         SetLastErrorV(UTP_ERR_OVERFLOW,
                       "encrypted packet too large: {}",
                       encryptedPacketLen);
@@ -213,7 +213,7 @@ int32_t AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, c
         return -1;
     }
 
-    if (plaintext_len > std::numeric_limits<int>::max() || aad_len > std::numeric_limits<int>::max()) {
+    if (plaintext_len > (std::numeric_limits<int>::max)() || aad_len > (std::numeric_limits<int>::max)()) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "encrypt input is too large");
         return -1;
     }
@@ -291,7 +291,7 @@ int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len,
         return -1;
     }
 
-    if (ciphertext_len > std::numeric_limits<int>::max() || aad_len > std::numeric_limits<int>::max()) {
+    if (ciphertext_len > (std::numeric_limits<int>::max)() || aad_len > (std::numeric_limits<int>::max)()) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "decrypt input is too large");
         return -1;
     }

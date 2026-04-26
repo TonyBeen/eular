@@ -302,7 +302,7 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
         return StreamErr(UTP_ERR_OVERFLOW);
     }
 
-    if (bytes > std::numeric_limits<uint32_t>::max()) {
+    if (bytes > (std::numeric_limits<uint32_t>::max)()) {
         return StreamErr(UTP_ERR_OVERFLOW);
     }
 

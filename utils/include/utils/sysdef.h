@@ -108,7 +108,9 @@
     #define _WINSOCK_DEPRECATED_NO_WARNINGS
     #endif
 
+    #ifndef ssize_t
     typedef long ssize_t;
+    #endif
 #endif
 
 #define COMPILER_MSVC       1
