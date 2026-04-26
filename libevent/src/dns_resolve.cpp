@@ -16,6 +16,10 @@
 #include <thread>
 #include <unordered_map>
 
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#endif
+
 #if EVENT_WRAPPER_USE_CARES
 #include <ares.h>
 #else

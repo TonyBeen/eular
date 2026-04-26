@@ -7,6 +7,7 @@
 
 #include "event/async.h"
 #include <assert.h>
+#include <limits>
 #include <event2/event.h>
 
 #define SOCK_PAIR_RECV 0
@@ -61,6 +62,10 @@ bool EventAsync::addAsync(const std::string &name, AsyncCallback cb)
         return false;
     }
 
+    if (name.size() > static_cast<size_t>((std::numeric_limits<unsigned short>::max)())) {
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(m_mapMtx);
     auto ret = m_asyncMap.emplace(name, std::move(cb));
     return ret.second;
@@ -101,7 +106,8 @@ bool EventAsync::notify(const std::string &key) noexcept
 #else
         static const int kSendFlag = 0;
 #endif
-        auto sendSize = ::send(m_sockPair[SOCK_PAIR_SEND], key.c_str(), key.size() + 1, kSendFlag);
+        const size_t payloadSize = key.size() + 1;
+        auto sendSize = ::send(m_sockPair[SOCK_PAIR_SEND], key.c_str(), static_cast<int32_t>(payloadSize), kSendFlag);
         if (sendSize > 0) {
             return true;
         } else if (sendSize == 0) { // send() 不应返回 0，防御性处理
@@ -151,7 +157,7 @@ void EventAsync::reset(event_base *loop)
                 if (nRecv > 0) {
                     eventDomain.append(buffer, nRecv);
                 } else {
-                    if (errno != EAGAIN) {
+                    if (!WouldBlock()) {
                         perror("recv error");
                     }
                     break;

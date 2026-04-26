@@ -99,6 +99,7 @@ if(EVENT_STATIC_LIB)
     else()
         target_compile_definitions(event_wrapper_static PRIVATE EVENT_WRAPPER_USE_CARES=0)
     endif()
+    target_compile_definitions(event_wrapper_static PRIVATE EVENT_WRAPPER_STATIC)
 
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(event_wrapper_static PUBLIC pthread)
@@ -107,6 +108,7 @@ if(EVENT_STATIC_LIB)
     target_compile_options(
         event_wrapper_static PRIVATE
         ${CXX_COMPILER_FLAGS}
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /wd4251 /wd4819>
         $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-fvisibility=hidden -fvisibility-inlines-hidden>
     )
 
@@ -159,11 +161,13 @@ if(EVENT_DYNAMIC_LIB)
     target_compile_options(
         event_wrapper PRIVATE
         ${CXX_COMPILER_FLAGS}
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /wd4251 /wd4819>
         $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-fvisibility=hidden -fvisibility-inlines-hidden>
     )
 
     target_link_options(
         event_wrapper PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/IGNORE:4098>
         $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wl,--exclude-libs,ALL>
     )
 
