@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include "config/ini.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <vector>
@@ -95,7 +96,6 @@ bool IniConfig::parser(const std::string &configPath)
         if (trim(line) == false) {
             continue;
         }
-        // printf("line = \"%s\"\n", line.c_str());
 
         pos = &line[0];
         char *left = strchr(pos, '[');
@@ -103,7 +103,6 @@ bool IniConfig::parser(const std::string &configPath)
         if (left && right && left < right) {
             nodeName = std::string(left + 1, right - left - 1);
             trim(nodeName);
-            // printf("node name = \"%s\"\n", nodeName.c_str());
             if (!nodeName.empty() && nodeName.find_first_not_of(escapeString) != std::string::npos) {
                 return false;
             }
@@ -119,7 +118,6 @@ bool IniConfig::parser(const std::string &configPath)
         std::string val(equalChar + 1);
         trim(key);
         trim(val);
-        // printf("key - value: [%s = %s]\n", key.c_str(), val.c_str());
         if (key.empty() || key.find_first_not_of(escapeString) != std::string::npos) {
             return false;
         }

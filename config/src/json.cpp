@@ -160,17 +160,6 @@ JsonNode JsonParser::getNode(const std::string &key) const noexcept
     return node;
 }
 
-void JsonParser::foreachNode() const noexcept
-{
-    if (m_private == nullptr || !m_private->initialized) {
-        return;
-    }
-
-    for (const auto &pair : m_private->pathNodeMap) {
-        printf("'%s' <===> %p\n", pair.first.c_str(), static_cast<void *>(pair.second));
-    }
-}
-
 std::string JsonParser::readFromFile(const char *filePath, ConfigResult &result)
 {
     std::string fileContent;

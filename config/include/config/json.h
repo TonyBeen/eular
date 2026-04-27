@@ -43,8 +43,6 @@ public:
 
     JsonNode        getNode(const std::string &key) const noexcept;
 
-    void            foreachNode() const noexcept;
-
 private:
     std::string readFromFile(const char *filePath, ConfigResult &result);
     ConfigResult loadFromStringInternal(const char *jsonContent, uint32_t size) noexcept;

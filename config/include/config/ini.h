@@ -24,19 +24,19 @@ namespace eular {
  * @brief 解析ini文件类
  * ini由节, 键, 值组成
  * 节键值都是字符串形式, 注释由;表示, 且只能注释单行. 节禁止重复, 但可以不存在, 键可以重复
- * 
+ *
  * 故解析后的键为"节.键". 如
- * 
+ *
  * [node]
  * host = 127.0.0.1
  * port = 2000
- * 
+ *
  * [node2]
  * host = 127.0.0.1
  * port = 2000
- * 
+ *
  * 解析后想要获取host的值可以使用node.host来获取,也可以用node2.host获取第二个host的值
- * 
+ *
  * 一行最多1024个字符, UTF-8编码
  */
 
@@ -59,7 +59,7 @@ public:
         }
 
         T converted = defaultVal;
-        if (!parseValue(text, converted)) {
+        if (!ParseValue(text, converted)) {
             return defaultVal;
         }
 
@@ -74,7 +74,7 @@ protected:
     void reset();
 
 private:
-    static std::string trimScalar(const std::string &value)
+    static std::string TrimScalar(const std::string &value)
     {
         size_t begin = value.find_first_not_of(" \t\r\n");
         if (begin == std::string::npos) {
@@ -86,9 +86,9 @@ private:
     }
 
     template<typename T>
-    static bool parseValue(const std::string &text, T &value)
+    static bool ParseValue(const std::string &text, T &value)
     {
-        std::string trimmed = trimScalar(text);
+        std::string trimmed = TrimScalar(text);
         if (trimmed.empty()) {
             return false;
         }
@@ -96,15 +96,15 @@ private:
         return c4::from_chars(c4::to_csubstr(trimmed), &value);
     }
 
-    static bool parseValue(const std::string &text, std::string &value)
+    static bool ParseValue(const std::string &text, std::string &value)
     {
         value = text;
         return true;
     }
 
-    static bool parseValue(const std::string &text, bool &value)
+    static bool ParseValue(const std::string &text, bool &value)
     {
-        std::string trimmed = trimScalar(text);
+        std::string trimmed = TrimScalar(text);
         if (trimmed.empty()) {
             return false;
         }
@@ -126,11 +126,12 @@ private:
         return c4::from_chars(c4::to_csubstr(trimmed), &value);
     }
 
-    static bool parseValue(const std::string &, const char *&)
+    static bool ParseValue(const std::string &, const char *&)
     {
         return false;
     }
 
+private:
     std::string mConfigFilePath;
     std::map<std::string, std::string> mConfigMap;
     std::map<std::string, std::map<std::string, std::string>> mSourceMap;

@@ -39,8 +39,7 @@ public:
         }
 
         T ret = defaultVal;
-        if (!parseValue(val, ret)) {
-            printf("XmlConfig::lookup<%s>(key = %s) conversion failed\n", typeid(T).name(), key.c_str());
+        if (!ParseValue(val, ret)) {
             return defaultVal;
         }
 
@@ -54,7 +53,7 @@ protected:
     std::string lookup(const std::string &key);
 
 private:
-    static std::string trimScalar(const std::string &value)
+    static std::string TrimScalar(const std::string &value)
     {
         size_t begin = value.find_first_not_of(" \t\r\n");
         if (begin == std::string::npos) {
@@ -66,9 +65,9 @@ private:
     }
 
     template<typename T>
-    static bool parseValue(const std::string &text, T &value)
+    static bool ParseValue(const std::string &text, T &value)
     {
-        std::string trimmed = trimScalar(text);
+        std::string trimmed = TrimScalar(text);
         if (trimmed.empty()) {
             return false;
         }
@@ -76,15 +75,15 @@ private:
         return c4::from_chars(c4::to_csubstr(trimmed), &value);
     }
 
-    static bool parseValue(const std::string &text, std::string &value)
+    static bool ParseValue(const std::string &text, std::string &value)
     {
         value = text;
         return true;
     }
 
-    static bool parseValue(const std::string &text, bool &value)
+    static bool ParseValue(const std::string &text, bool &value)
     {
-        std::string trimmed = trimScalar(text);
+        std::string trimmed = TrimScalar(text);
         if (trimmed.empty()) {
             return false;
         }
@@ -106,12 +105,12 @@ private:
         return c4::from_chars(c4::to_csubstr(trimmed), &value);
     }
 
-    static bool parseValue(const std::string &, const char *&)
+    static bool ParseValue(const std::string &, const char *&)
     {
         return false;
     }
 
-    void *m_mutex;
+private:
     std::map<std::string, std::string> m_xmlMap;
 };
 
