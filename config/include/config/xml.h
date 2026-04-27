@@ -17,9 +17,11 @@
 #include <c4/charconv.hpp>
 #include <c4/std/string.hpp>
 
+#include <config/exports.h>
+
 namespace eular {
 
-class XmlConfig
+class CONFIG_API XmlConfig
 {
 public:
     XmlConfig();

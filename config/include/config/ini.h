@@ -16,6 +16,8 @@
 #include <c4/charconv.hpp>
 #include <c4/std/string.hpp>
 
+#include <config/exports.h>
+
 namespace eular {
 
 /**
@@ -38,7 +40,7 @@ namespace eular {
  * 一行最多1024个字符, UTF-8编码
  */
 
-class IniConfig
+class CONFIG_API IniConfig
 {
 public:
     IniConfig();

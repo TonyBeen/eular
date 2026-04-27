@@ -8,26 +8,22 @@
 #ifndef __CONFIG_EXPORTS_H__
 #define __CONFIG_EXPORTS_H__
 
-#include <utils/sysdef.h>
-
-#if COMPILER_TYPE == COMPILER_MSVC
-    #ifndef CONFIG_STATIC
-        #ifdef CONFIG_EXPORTS
-            #define CONFIG_API __declspec(dllexport)
-        #else
-            #define CONFIG_API __declspec(dllimport)
-        #endif
-    #else
+#if defined(_MSC_VER)
+    #if defined(CONFIG_STATIC)
         #define CONFIG_API
+    #elif defined(CONFIG_EXPORTS)
+        #define CONFIG_API __declspec(dllexport)
+    #else
+        #define CONFIG_API __declspec(dllimport)
     #endif
-#elif COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG || COMPILER_TYPE == COMPILER_APPLECLANG
-    #ifndef CONFIG_STATIC
-        #define CONFIG_API __attribute__((visibility("default")))
-    #else
+#elif defined(__GNUC__) || defined(__clang__)
+    #if defined(CONFIG_STATIC)
         #define CONFIG_API
+    #else
+        #define CONFIG_API __attribute__((visibility("default")))
     #endif
 #else
-    #error "Unknown compiler type."
+    #define CONFIG_API
 #endif
 
 #endif // __CONFIG_EXPORTS_H__

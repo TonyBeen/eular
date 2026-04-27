@@ -18,6 +18,9 @@ option(CONFIG_BUILD_TESTS "Build config Catch tests" OFF)
 option(CONFIG_BUILD_EXAMPLES "Build config examples" OFF)
 option(CONFIG_BUILD_SHARED "Build shared config library" ON)
 option(CONFIG_BUILD_STATIC "Build static config library" ON)
+option(CONFIG_ENABLE_FUNCTION_SECTIONS "Enable -ffunction-sections and -fdata-sections for config targets" ON)
+option(CONFIG_ENABLE_GC_SECTIONS "Enable linker garbage collection of unused sections for Release/MinSizeRel" ON)
+option(CONFIG_ENABLE_HIDDEN_VISIBILITY "Enable -fvisibility=hidden for config shared/static targets" ON)
 
 if(NOT CONFIG_BUILD_SHARED AND NOT CONFIG_BUILD_STATIC)
     message(FATAL_ERROR "At least one of CONFIG_BUILD_SHARED or CONFIG_BUILD_STATIC must be ON")
@@ -72,6 +75,11 @@ set(CONFIG_PRIVATE_INCLUDE_DIRS
 set(CONFIG_C4CORE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/c4core/src)
 set(CONFIG_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
 
+set(CONFIG_USING_GNU_OR_CLANG OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    set(CONFIG_USING_GNU_OR_CLANG ON)
+endif()
+
 if(CONFIG_BUILD_SHARED)
     add_library(config_shared SHARED ${CONFIG_SOURCE_FILES} ${CONFIG_VENDOR_SOURCE_FILES})
     set_target_properties(config_shared PROPERTIES
@@ -97,6 +105,24 @@ if(CONFIG_BUILD_SHARED)
             Threads::Threads
     )
     add_library(config::shared ALIAS config_shared)
+
+    if(CONFIG_USING_GNU_OR_CLANG)
+        if(CONFIG_ENABLE_FUNCTION_SECTIONS)
+            target_compile_options(config_shared PRIVATE -ffunction-sections -fdata-sections)
+        endif()
+
+        if(CONFIG_ENABLE_HIDDEN_VISIBILITY)
+            target_compile_options(config_shared PRIVATE -fvisibility=hidden)
+        endif()
+
+        if(CONFIG_ENABLE_GC_SECTIONS)
+            if(COMMAND target_link_options)
+                target_link_options(config_shared PRIVATE "$<$<CONFIG:Release,MinSizeRel>:-Wl,--gc-sections>")
+            elseif(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease$|^[Mm]in[Ss]ize[Rr]el$")
+                set_property(TARGET config_shared APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--gc-sections")
+            endif()
+        endif()
+    endif()
 endif()
 
 if(CONFIG_BUILD_STATIC)
@@ -118,6 +144,16 @@ if(CONFIG_BUILD_STATIC)
             Threads::Threads
     )
     add_library(config::static ALIAS config_static)
+
+    if(CONFIG_USING_GNU_OR_CLANG)
+        if(CONFIG_ENABLE_FUNCTION_SECTIONS)
+            target_compile_options(config_static PRIVATE -ffunction-sections -fdata-sections)
+        endif()
+
+        if(CONFIG_ENABLE_HIDDEN_VISIBILITY)
+            target_compile_options(config_static PRIVATE -fvisibility=hidden)
+        endif()
+    endif()
 endif()
 
 if(NOT TARGET config::config)
