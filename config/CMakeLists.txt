@@ -194,10 +194,6 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
     PATTERN "node_private.hpp" EXCLUDE
 )
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/c4core/src/c4
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
-
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/3rd_party/yyjson/src/yyjson.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
