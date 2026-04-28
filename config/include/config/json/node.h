@@ -11,6 +11,7 @@
 #include <string>
 #include <stdint.h>
 #include <memory>
+#include <functional>
 
 #include <c4/charconv.hpp>
 #include <c4/std/string.hpp>
@@ -44,6 +45,9 @@ public:
 
     JsonNode        at(const std::string &key) const noexcept;
     JsonNode        at(uint32_t index) const noexcept;
+
+    void            foreachObject(const std::function<void(std::string &, const JsonNode &)> &visitor) const;
+    void            foreachArray(const std::function<void(uint32_t, const JsonNode &)> &visitor) const;
 
     std::string     scalar() const noexcept;
 

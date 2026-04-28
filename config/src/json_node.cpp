@@ -123,6 +123,60 @@ JsonNode JsonNode::at(uint32_t index) const noexcept
     return node;
 }
 
+void JsonNode::foreachObject(const std::function<void(std::string &, const JsonNode &)> &visitor) const
+{
+    if (!valid() || !isMap() || !visitor) {
+        return;
+    }
+
+    size_t idx = 0;
+    size_t max = 0;
+    yyjson_val *key = nullptr;
+    yyjson_val *val = nullptr;
+    yyjson_obj_foreach(m_private->node, idx, max, key, val) {
+        const char *keyText = yyjson_get_str(key);
+        size_t keySize = yyjson_get_len(key);
+        if (keyText == nullptr || keySize == 0 || val == nullptr) {
+            continue;
+        }
+
+        JsonNode child;
+        std::shared_ptr<JsonNodePrivate> nodePrivate = std::make_shared<JsonNodePrivate>();
+        nodePrivate->snapshot = m_private->snapshot;
+        nodePrivate->document = m_private->document;
+        nodePrivate->node = val;
+        child.m_private = nodePrivate;
+
+        std::string keyStr(keyText, keySize);
+        visitor(keyStr, child);
+    }
+}
+
+void JsonNode::foreachArray(const std::function<void(uint32_t, const JsonNode &)> &visitor) const
+{
+    if (!valid() || !isSequence() || !visitor) {
+        return;
+    }
+
+    size_t idx = 0;
+    size_t max = 0;
+    yyjson_val *val = nullptr;
+    yyjson_arr_foreach(m_private->node, idx, max, val) {
+        if (val == nullptr) {
+            continue;
+        }
+
+        JsonNode child;
+        std::shared_ptr<JsonNodePrivate> nodePrivate = std::make_shared<JsonNodePrivate>();
+        nodePrivate->snapshot = m_private->snapshot;
+        nodePrivate->document = m_private->document;
+        nodePrivate->node = val;
+        child.m_private = nodePrivate;
+
+        visitor(static_cast<uint32_t>(idx), child);
+    }
+}
+
 std::string JsonNode::scalar() const noexcept
 {
     if (!valid() || !isScalar()) {

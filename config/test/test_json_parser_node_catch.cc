@@ -7,6 +7,8 @@
 #include <config/json.h>
 
 #include <string>
+#include <map>
+#include <vector>
 
 namespace {
 std::string TestDataFilePath(const std::string &fileName)
@@ -54,8 +56,6 @@ TEST_CASE("JsonParser load/getNode/foreach full path", "[json][parser][node]")
 
     eular::ConfigResult loadFromStdStringRes = parser.loadFromString(json);
     REQUIRE(loadFromStdStringRes.code() == eular::CONFIG_OK);
-
-    parser.foreachNode();
 
     eular::JsonNode root = parser.getNode("$");
     REQUIRE(root.valid());
@@ -109,8 +109,6 @@ TEST_CASE("JsonParser load/getNode/foreach full path", "[json][parser][node]")
 
     parser.reset();
     CHECK_FALSE(parser.getNode("$").valid());
-    parser.foreachNode();
-
     eular::ConfigResult reloadAfterReset = parser.loadFromString(json);
     REQUIRE(reloadAfterReset.code() == eular::CONFIG_OK);
     REQUIRE(parser.getNode("$players.one").scalar() == "Kante");
@@ -162,4 +160,106 @@ TEST_CASE("JsonParser sequential update", "[json][parser][single-thread]")
     REQUIRE(parser.getNode("$counter").as<int>(0) == 3);
     REQUIRE(parser.getNode("$items[0]").as<int>(0) == 50);
     REQUIRE(parser.getNode("$flag").as<bool>(false) == true);
+}
+
+TEST_CASE("JsonNode foreachObject and foreachArray", "[json][node][foreach]")
+{
+    eular::JsonParser parser;
+    std::string json = std::string(
+        "{"
+        "\"title\":\"demo\","
+        "\"count\":2,"
+        "\"items\":[10,20,30],"
+        "\"player\":{\"name\":\"Alice\",\"online\":true}"
+        "}");
+
+    REQUIRE(parser.loadFromString(json).code() == eular::CONFIG_OK);
+    eular::JsonNode root = parser.getNode("$");
+    REQUIRE(root.valid());
+    REQUIRE(root.isMap());
+
+    std::map<std::string, std::string> objectScalars;
+    root.foreachObject([&](std::string &key, const eular::JsonNode &child) {
+        if (child.isScalar()) {
+            objectScalars[key] = child.scalar();
+        }
+    });
+
+    REQUIRE(objectScalars["title"] == "demo");
+    REQUIRE(objectScalars["count"] == "2");
+
+    eular::JsonNode items = root.at("items");
+    REQUIRE(items.valid());
+    REQUIRE(items.isSequence());
+
+    std::vector<std::string> arrayValues;
+    items.foreachArray([&](uint32_t index, const eular::JsonNode &child) {
+        REQUIRE(index < items.size());
+        REQUIRE(child.valid());
+        REQUIRE(child.isScalar());
+        arrayValues.push_back(child.scalar());
+    });
+
+    REQUIRE(arrayValues.size() == 3);
+    REQUIRE(arrayValues[0] == "10");
+    REQUIRE(arrayValues[1] == "20");
+    REQUIRE(arrayValues[2] == "30");
+}
+
+TEST_CASE("JsonNode recursive foreach traversal", "[json][node][foreach][recursive]")
+{
+    eular::JsonParser parser;
+    std::string json = std::string(
+        "{"
+        "\"meta\":{\"version\":1,\"name\":\"cfg\"},"
+        "\"users\":["
+            "{\"id\":101,\"roles\":[\"admin\",\"ops\"]},"
+            "{\"id\":202,\"roles\":[\"guest\"]}"
+        "],"
+        "\"enabled\":true"
+        "}");
+
+    REQUIRE(parser.loadFromString(json).code() == eular::CONFIG_OK);
+    eular::JsonNode root = parser.getNode("$");
+    REQUIRE(root.valid());
+
+    std::map<std::string, std::string> leaves;
+
+    std::function<void(const std::string &, const eular::JsonNode &)> walk;
+    walk = [&](const std::string &path, const eular::JsonNode &node) {
+        if (!node.valid()) {
+            return;
+        }
+
+        if (node.isScalar() || node.isNull()) {
+            leaves[path] = node.isNull() ? "null" : node.scalar();
+            return;
+        }
+
+        if (node.isMap()) {
+            node.foreachObject([&](std::string &key, const eular::JsonNode &child) {
+                std::string childPath = path.empty() ? key : (path + "." + key);
+                walk(childPath, child);
+            });
+            return;
+        }
+
+        if (node.isSequence()) {
+            node.foreachArray([&](uint32_t index, const eular::JsonNode &child) {
+                std::string childPath = path + "[" + std::to_string(index) + "]";
+                walk(childPath, child);
+            });
+        }
+    };
+
+    walk("$", root);
+
+    REQUIRE(leaves["$.meta.version"] == "1");
+    REQUIRE(leaves["$.meta.name"] == "cfg");
+    REQUIRE(leaves["$.users[0].id"] == "101");
+    REQUIRE(leaves["$.users[0].roles[0]"] == "admin");
+    REQUIRE(leaves["$.users[0].roles[1]"] == "ops");
+    REQUIRE(leaves["$.users[1].id"] == "202");
+    REQUIRE(leaves["$.users[1].roles[0]"] == "guest");
+    REQUIRE(leaves["$.enabled"] == "true");
 }
