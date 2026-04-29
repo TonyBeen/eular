@@ -20,9 +20,11 @@ namespace utp {
 class UTP_API Stream
 {
 public:
-    static constexpr uint8_t kPriorityHighest = 0;
-    static constexpr uint8_t kPriorityLowest = 7;
-    static constexpr uint8_t kPriorityDefault = 4;
+    enum {
+        kPriorityHighest = 0,
+        kPriorityLowest = 7,
+        kPriorityDefault = 4,
+    };
 
     struct ConstBufferView {
         const void *data{nullptr};

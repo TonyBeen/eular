@@ -137,7 +137,8 @@ int main(int argc, char **argv)
             });
         });
 
-        conn->setOnError([scid = d.scid](const eular::utp::Connection::ConnectionErrorInfo &info) {
+        const uint32_t scid = d.scid;
+        conn->setOnError([scid](const eular::utp::Connection::ConnectionErrorInfo &info) {
             std::cerr << "[server] conn error scid=" << scid
                       << " code=" << info.error_code
                       << " reason=" << info.error_reason

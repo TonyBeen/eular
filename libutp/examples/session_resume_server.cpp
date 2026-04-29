@@ -232,7 +232,7 @@ int main(int argc, char **argv)
 
             const uint32_t sid = stream->id();
             std::cout << "[server] incoming stream id=" << sid << "\n";
-            sessions->try_emplace(sid);
+            sessions->emplace(std::piecewise_construct, std::forward_as_tuple(sid), std::forward_as_tuple());
 
             stream->setOnReadable([conn, shared, sessions, stream]() {
                 if (stream == nullptr) {

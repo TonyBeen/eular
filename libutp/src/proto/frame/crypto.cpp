@@ -14,6 +14,14 @@
 #include "utp/errno.h"
 #include "util/error.h"
 
+namespace {
+template <typename T>
+inline bool DeserializeHelper(const uint8_t *&offset, size_t &sz, T &value) {
+    offset = eular::Serialize::DeserializeFrom(offset, sz, value);
+    return offset != nullptr;
+}
+}
+
 namespace eular {
 namespace utp {
 
@@ -69,13 +77,9 @@ int32_t FrameCrypto::decode(const void *buffer, size_t size)
 
     const size_t originalSize = size;
     const uint8_t *bufferOffset = static_cast<const uint8_t *>(buffer);
-    auto deserialize = [&] (auto &value) -> bool {
-        bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, value);
-        return bufferOffset != nullptr;
-    };
 
     FrameType frameType = FrameType::kFrameInvalid;
-    if (!deserialize(frameType) || frameType != FrameType::kFrameCrypto) {
+    if (!DeserializeHelper(bufferOffset, size, frameType) || frameType != FrameType::kFrameCrypto) {
         SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
                       "invalid crypto frame type: {}",
                       static_cast<uint8_t>(frameType));
@@ -83,7 +87,7 @@ int32_t FrameCrypto::decode(const void *buffer, size_t size)
     }
 
     uint8_t reserved = 0;
-    if (!deserialize(crypto_type) || !deserialize(reserved)) {
+    if (!DeserializeHelper(bufferOffset, size, crypto_type) || !DeserializeHelper(bufferOffset, size, reserved)) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode crypto frame header");
         return -1;
     }

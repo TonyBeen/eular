@@ -7,6 +7,7 @@
 
 #include "send_ctl.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -230,6 +231,11 @@ void SendControl::init()
     }
     m_cachedBpt._streamId = UINT32_MAX;
     m_reorderThresh = N_NACKS_BEFORE_RETX;
+    m_adaptiveReorder.baseThresh = m_reorderThresh;
+    m_adaptiveReorder.currentThresh = m_reorderThresh;
+    m_adaptiveReorder.consecutiveLossEvents = 0;
+    m_adaptiveReorder.ackedSinceLoss = 0;
+    m_adaptiveReorder.lastExpandUs = 0;
 }
 
 int32_t SendControl::packetSent(PacketOut *pkt)
@@ -314,6 +320,7 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 {
     bool hasAcked = false;
     bool hasLoss = false;
+    uint32_t ackedPacketsThisRound = 0;
     utp_packno_t largestAckedThisRound = 0;
     utp_time_t largestAckedSentTimeThisRound = 0;
     const utp_packno_t largestAckedBefore = m_largestAckedPackNo;
@@ -341,6 +348,7 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         }
 
         hasAcked = true;
+        ++ackedPacketsThisRound;
 
         if (pkt->packno >= largestAckedThisRound) {
             largestAckedThisRound = pkt->packno;
@@ -413,6 +421,13 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
     if (!TAILQ_EMPTY(&m_unackedPackets)) {
         if (hasAcked || ackProgress) {
             hasLoss = detectLosses(nowUs);
+
+            if (!hasLoss && hasAcked) {
+                const utp_time_t srtt = m_conn != nullptr ? m_conn->m_rttStats.srtt() : 0;
+                const utp_time_t rttvar = m_conn != nullptr ? m_conn->m_rttStats.rttVar() : 0;
+                updateReorderThresholdOnAck(ackedPacketsThisRound, srtt, rttvar);
+            }
+
             retransAlarm(nowUs);
 
             if (hasLoss && m_conn != nullptr) {
@@ -511,7 +526,97 @@ void SendControl::onCanWrite(utp_time_t nowUs)
 
 void SendControl::setReorderThreshold(uint32_t threshold)
 {
-    m_reorderThresh = std::max<uint32_t>(1, threshold);
+    const uint32_t normalized = std::max<uint32_t>(1, threshold);
+    m_adaptiveReorder.baseThresh = normalized;
+    m_adaptiveReorder.currentThresh = normalized;
+    m_adaptiveReorder.consecutiveLossEvents = 0;
+    m_adaptiveReorder.ackedSinceLoss = 0;
+    m_adaptiveReorder.lastExpandUs = 0;
+    m_reorderThresh = m_adaptiveReorder.currentThresh;
+}
+
+uint32_t SendControl::dynamicReorderThresholdCap(utp_time_t srtt, utp_time_t rttvar) const
+{
+    const uint32_t base = std::max<uint32_t>(1, m_adaptiveReorder.baseThresh);
+    if (srtt == 0) {
+        return base + 4;
+    }
+
+    const uint64_t ratioPct = std::min<uint64_t>(400, (static_cast<uint64_t>(rttvar) * 100) / srtt);
+    const uint32_t extra = 2 + static_cast<uint32_t>(ratioPct / 50);
+    return base + std::min<uint32_t>(12, extra);
+}
+
+void SendControl::updateReorderThresholdOnLoss(utp_time_t now, utp_time_t srtt, utp_time_t rttvar)
+{
+    m_adaptiveReorder.ackedSinceLoss = 0;
+    if (m_adaptiveReorder.consecutiveLossEvents < UINT32_MAX) {
+        ++m_adaptiveReorder.consecutiveLossEvents;
+    }
+
+    if (m_adaptiveReorder.consecutiveLossEvents < 2) {
+        return;
+    }
+
+    const utp_time_t minExpandInterval = std::max<utp_time_t>(1000, srtt > 0 ? (srtt / 4) : 0);
+    if (m_adaptiveReorder.lastExpandUs != 0
+        && now > m_adaptiveReorder.lastExpandUs
+        && (now - m_adaptiveReorder.lastExpandUs) < minExpandInterval) {
+        return;
+    }
+
+    const uint32_t cap = dynamicReorderThresholdCap(srtt, rttvar);
+    if (m_adaptiveReorder.currentThresh < cap) {
+        ++m_adaptiveReorder.currentThresh;
+        m_reorderThresh = m_adaptiveReorder.currentThresh;
+        m_adaptiveReorder.lastExpandUs = now;
+        m_adaptiveReorder.consecutiveLossEvents = 0;
+
+        UTP_LOGD("%s adaptive reorder threshold expanded to %u (cap=%u)",
+            m_tag.c_str(), m_reorderThresh, cap);
+    }
+}
+
+void SendControl::updateReorderThresholdOnAck(uint32_t ackedPackets, utp_time_t srtt, utp_time_t rttvar)
+{
+    if (ackedPackets == 0) {
+        return;
+    }
+
+    m_adaptiveReorder.consecutiveLossEvents = 0;
+    if (m_adaptiveReorder.ackedSinceLoss <= UINT32_MAX - ackedPackets) {
+        m_adaptiveReorder.ackedSinceLoss += ackedPackets;
+    } else {
+        m_adaptiveReorder.ackedSinceLoss = UINT32_MAX;
+    }
+
+    const uint32_t base = std::max<uint32_t>(1, m_adaptiveReorder.baseThresh);
+    const uint32_t cap = dynamicReorderThresholdCap(srtt, rttvar);
+    if (m_adaptiveReorder.currentThresh > cap) {
+        m_adaptiveReorder.currentThresh = cap;
+    }
+
+    if (m_adaptiveReorder.currentThresh <= base) {
+        m_adaptiveReorder.currentThresh = base;
+        m_reorderThresh = m_adaptiveReorder.currentThresh;
+        return;
+    }
+
+    const uint32_t shrinkAckThreshold = std::max<uint32_t>(8, m_adaptiveReorder.currentThresh * 2);
+    if (m_adaptiveReorder.ackedSinceLoss < shrinkAckThreshold) {
+        m_reorderThresh = m_adaptiveReorder.currentThresh;
+        return;
+    }
+
+    --m_adaptiveReorder.currentThresh;
+    if (m_adaptiveReorder.currentThresh < base) {
+        m_adaptiveReorder.currentThresh = base;
+    }
+    m_adaptiveReorder.ackedSinceLoss = 0;
+    m_reorderThresh = m_adaptiveReorder.currentThresh;
+
+    UTP_LOGD("%s adaptive reorder threshold shrank to %u (base=%u)",
+        m_tag.c_str(), m_reorderThresh, base);
 }
 
 bool SendControl::isLossFrequent(utp_time_t nowUs, utp_time_t windowUs, uint32_t threshold) const
@@ -740,10 +845,10 @@ utp_time_t SendControl::calculatePacketRto() const
 
 bool SendControl::detectLosses(utp_time_t now)
 {
-    (void)now;
     utp_packno_t largestLostPackNo = 0;
     utp_packno_t largestRetxPackNo = largestRetxPacketNo();
     utp_time_t srtt = m_conn != nullptr ? m_conn->m_rttStats.srtt() : 0;
+    utp_time_t rttvar = m_conn != nullptr ? m_conn->m_rttStats.rttVar() : 0;
     m_lossTo = 0;
     bool hasLoss = false;
 
@@ -817,6 +922,7 @@ bool SendControl::detectLosses(utp_time_t now)
 
     if (hasLoss) {
         recordLossSignal(now);
+        updateReorderThresholdOnLoss(now, srtt, rttvar);
     }
 
     return hasLoss;

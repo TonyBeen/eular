@@ -165,6 +165,9 @@ private:
     float               m_configHighGain{2.885f};
     float               m_configCwndGain{2.0f};
     uint32_t            m_configStartupRounds{3};
+    float               m_probeRttMultiplier{0.75f};
+    float               m_similarMinRttThreshold{1.125f};
+    std::vector<float>  m_pacingGains{1.25f, 0.75f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 } // namespace utp

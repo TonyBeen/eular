@@ -17,6 +17,13 @@
 namespace eular {
 namespace utp {
 
+constexpr uint8_t FrameAckFrequency::kDefaultAckElicitingThreshold;
+constexpr uint8_t FrameAckFrequency::kDefaultReorderingThreshold;
+constexpr uint32_t FrameAckFrequency::kDefaultMaxAckDelayMs;
+constexpr uint8_t FrameAckFrequency::kMaxAckElicitingThreshold;
+constexpr uint8_t FrameAckFrequency::kMaxReorderingThreshold;
+constexpr uint32_t FrameAckFrequency::kMaxAckDelayMsClamp;
+
 int32_t FrameAckFrequency::encode(void *buffer, size_t size) const
 {
     FrameAckFrequency normalized = *this;

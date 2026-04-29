@@ -138,6 +138,9 @@ private:
     utp_time_t  calculatePacketRto() const;
 
     bool        detectLosses(utp_time_t now);
+    uint32_t    dynamicReorderThresholdCap(utp_time_t srtt, utp_time_t rttvar) const;
+    void        updateReorderThresholdOnLoss(utp_time_t now, utp_time_t srtt, utp_time_t rttvar);
+    void        updateReorderThresholdOnAck(uint32_t ackedPackets, utp_time_t srtt, utp_time_t rttvar);
     utp_packno_t largestRetxPacketNo() const;
     PacketOut*  handleRegularLostPacket(PacketOut *pkt, PacketOut *&next);
     bool        handleLostMtuProbe(PacketOut *pkt);
@@ -215,6 +218,14 @@ private:
 
     uint32_t            m_reorderThresh;                // 重排序阈值 (包号差值), 用于丢包检测中的重排序容忍度
     std::deque<utp_time_t> m_lossSignalsUs;             // 最近丢包信号时间戳，用于频率判定
+
+    struct AdaptiveReorderState {
+        uint32_t        baseThresh{3};
+        uint32_t        currentThresh{3};
+        uint32_t        consecutiveLossEvents{0};
+        uint32_t        ackedSinceLoss{0};
+        utp_time_t      lastExpandUs{0};
+    } m_adaptiveReorder;
 };
 
 } // namespace utp

@@ -26,6 +26,8 @@ const std::string kResumptionAad("UTP-SessionResumptionState-V1");
 namespace eular {
 namespace utp {
 
+constexpr size_t ResumptionStateCodec::KEY_SIZE;
+
 bool ResumptionStateCodec::Seal(const Key &key,
                                 const std::vector<uint8_t> &plaintext,
                                 std::vector<uint8_t> &sealed)

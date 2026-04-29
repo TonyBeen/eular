@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 #include <utp/platform.h>
 
@@ -66,16 +67,19 @@ public:
     int32_t     send_buf_size = 1024 * 1024;
 
     // congestion control
-    int32_t     cc_algorithm = 0;           // 拥塞控制算法, 0表示默认算法(bbr), 1表示BBR算法, 2表示Cubic算法
-    uint32_t    clock_granularity_us = 1;   // pacer时钟粒度(us), 影响RTT的测量精度和拥塞控制的性能
-    uint32_t    bbr_init_cwnd_mss = 32;     // BBR 初始拥塞窗口，单位 MSS
-    uint32_t    bbr_min_cwnd_mss = 4;       // BBR 最小拥塞窗口，单位 MSS
-    float       bbr_startup_high_gain = 2.885f; // BBR STARTUP 高增益
-    float       bbr_cwnd_gain = 2.0f;       // BBR PROBE_BW 阶段 cwnd 增益
-    float       bbr_startup_growth_target = 1.25f; // BBR 判断带宽持续增长的倍率阈值
-    uint32_t    bbr_startup_full_bw_rounds = 3; // BBR STARTUP 无增长后退出轮数
-    uint32_t    bbr_probe_rtt_ms = 200;     // BBR PROBE_RTT 最短驻留时长(ms)
-    uint32_t    bbr_min_rtt_expiry_ms = 10000; // BBR min_rtt 过期时间(ms)
+    int32_t     cc_algorithm = 0;                       // 拥塞控制算法, 0表示默认算法(bbr), 1表示BBR算法, 2表示Cubic算法
+    uint32_t    clock_granularity_us = 1;               // pacer时钟粒度(us), 影响RTT的测量精度和拥塞控制的性能
+    uint32_t    bbr_init_cwnd_mss = 32;                 // BBR 初始拥塞窗口，单位 MSS
+    uint32_t    bbr_min_cwnd_mss = 4;                   // BBR 最小拥塞窗口，单位 MSS
+    float       bbr_startup_high_gain = 2.885f;         // BBR STARTUP 高增益
+    float       bbr_cwnd_gain = 2.0f;                   // BBR PROBE_BW 阶段 cwnd 增益
+    float       bbr_startup_growth_target = 1.25f;      // BBR 判断带宽持续增长的倍率阈值
+    uint32_t    bbr_startup_full_bw_rounds = 3;         // BBR STARTUP 无增长后退出轮数
+    uint32_t    bbr_probe_rtt_ms = 200;                 // BBR PROBE_RTT 最短驻留时长(ms)
+    uint32_t    bbr_min_rtt_expiry_ms = 10000;          // BBR min_rtt 过期时间(ms)
+    float       bbr_probe_rtt_multiplier = 0.75f;       // BBR ProbeRTT 阶段 BDP 增益系数
+    float       bbr_similar_min_rtt_threshold = 1.125f; // BBR 判断相似 RTT 的阈值系数
+    std::vector<float> bbr_pacing_gains = {1.25f, 0.75f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}; // BBR ProbeBW 阶段的 pacing 增益周期
     double      cubic_beta = 0.7;           // CUBIC 丢包回退系数 beta，建议范围 (0, 1)
     double      cubic_c = 0.4;              // CUBIC 曲线常数 C，建议范围 (0, 2]
     uint32_t    cubic_init_cwnd_mss = 32;   // CUBIC 初始拥塞窗口，单位 MSS
@@ -89,13 +93,13 @@ public:
     uint16_t    ack_delay = 150;            // 最大ack延迟时间(ms)
 
     // tp
-    uint16_t    handshake_timeout = 3000;   // 等待 HandshakeDown 超时时间(ms)
-    uint16_t    pending_handshake_retry_interval_ms = 200; // pending 阶段重发 Handshake 周期(ms)
-    uint8_t     pending_handshake_max_retries = 3; // pending 阶段最多重发次数(0 表示不重发)
-    uint16_t    pending_pre_handshake_buffer_packets = 8; // pending 阶段缓存未携带 HandshakeDone 包数量上限
+    uint16_t    handshake_timeout = 3000;                       // 等待 HandshakeDown 超时时间(ms)
+    uint16_t    pending_handshake_retry_interval_ms = 200;      // pending 阶段重发 Handshake 周期(ms)
+    uint8_t     pending_handshake_max_retries = 3;              // pending 阶段最多重发次数(0 表示不重发)
+    uint16_t    pending_pre_handshake_buffer_packets = 8;       // pending 阶段缓存未携带 HandshakeDone 包数量上限
     uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024; // pending 阶段缓存未携带 HandshakeDone 包字节上限
-    uint16_t    init_max_streams_bidi = 64; // 初始双向流数量
-    uint16_t    init_max_streams_uni = 32;  // 初始单向流数量
+    uint16_t    init_max_streams_bidi = 64;                     // 初始双向流数量
+    uint16_t    init_max_streams_uni = 32;                      // 初始单向流数量
 
     // stream scheduler
     uint8_t     stream_default_priority = 4;           // 默认 stream 优先级 (0 最高, 7 最低)
@@ -112,7 +116,7 @@ public:
 
     // connection scheduler (WDRR)
     ConnectionSchedulerMode connection_scheduler_mode = kConnectionSchedulerWdrr; // 连接级调度模式，默认 WDRR
-    uint32_t    connection_wdrr_quantum = 1200;        // 连接级 WDRR 量子(bytes)
+    uint32_t    connection_wdrr_quantum = 1200; // 连接级 WDRR 量子(bytes)
     uint32_t    connection_wdrr_deficit_cap = 64 * 1024; // 连接级 WDRR deficit 上限(bytes)
 };
 

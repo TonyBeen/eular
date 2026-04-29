@@ -138,6 +138,16 @@ BbrV1::BbrV1(const Config *cfg)
     m_configStartupRounds = (std::max<uint32_t>)(1, cfg->bbr_startup_full_bw_rounds);
     m_probeRttTimeUs = static_cast<uint64_t>((std::max<uint32_t>)(50, cfg->bbr_probe_rtt_ms)) * 1000ULL;
     m_minRttExpiryUs = static_cast<uint64_t>((std::max<uint32_t>)(1000, cfg->bbr_min_rtt_expiry_ms)) * 1000ULL;
+
+    if (cfg->bbr_probe_rtt_multiplier > 0.0f && cfg->bbr_probe_rtt_multiplier <= 1.0f) {
+        m_probeRttMultiplier = cfg->bbr_probe_rtt_multiplier;
+    }
+    if (cfg->bbr_similar_min_rtt_threshold >= 1.0f && cfg->bbr_similar_min_rtt_threshold <= 2.0f) {
+        m_similarMinRttThreshold = cfg->bbr_similar_min_rtt_threshold;
+    }
+    if (!cfg->bbr_pacing_gains.empty()) {
+        m_pacingGains = cfg->bbr_pacing_gains;
+    }
 }
 
 void BbrV1::onInit(RttStats *stats)
@@ -333,10 +343,9 @@ uint64_t BbrV1::getMinRtt()
 uint64_t BbrV1::getProbeRttCwnd()
 {
     if (m_flags & BBR_FLAG_PROBE_RTT_BASED_ON_BDP) {
-        return getTargetCwnd(kModerateProbeRttMultiplier);
-    } else {
-        return m_minCwnd;
+        return getTargetCwnd(m_probeRttMultiplier);
     }
+    return m_configMinCwnd;
 }
 
 uint64_t BbrV1::getTargetCwnd(float_t gain)
@@ -606,15 +615,15 @@ void BbrV1::updateGainCyclePhase(uint64_t bytestInflight)
     }
 
     if (shouldAdvanceGainCycling) {
-        m_cycleCurrentOffset = (m_cycleCurrentOffset + 1) % kGainCycleLength;
+        m_cycleCurrentOffset = (m_cycleCurrentOffset + 1) % m_pacingGains.size();
         m_lastCycleStart = now;
 
         if ((m_flags & BBR_FLAG_DRAIN_TO_TARGET) && m_pacingGain < 1.0f &&
-             kPacingGain[m_cycleCurrentOffset] == 1.0f && bytestInflight > getTargetCwnd(1.0f)) {
+             m_pacingGains[m_cycleCurrentOffset] == 1.0f && bytestInflight > getTargetCwnd(1.0f)) {
             return;
         }
 
-        m_pacingGain = kPacingGain[m_cycleCurrentOffset];
+        m_pacingGain = m_pacingGains[m_cycleCurrentOffset];
         UTP_LOGD("advanced gain cycle, pacing gain set to %.2f", m_pacingGain);
     }
 }
@@ -726,7 +735,7 @@ bool BbrV1::shouldExtendMinRttExpiry()
         return true;
     }
 
-    increasedSinceLastProbe = m_minRttSinceLastProbe > m_minRtt * kSimilarMinRttThreshold;
+    increasedSinceLastProbe = m_minRttSinceLastProbe > m_minRtt * m_similarMinRttThreshold;
     if ((m_flags & (BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT | BBR_FLAG_PROBE_RTT_SKIPPED_IF_SIMILAR_RTT)) == 
         (BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT | BBR_FLAG_PROBE_RTT_SKIPPED_IF_SIMILAR_RTT) &&
         !increasedSinceLastProbe) {
@@ -767,13 +776,13 @@ void BbrV1::enterProbeBWMode(uint64_t now)
     std::uniform_int_distribution<unsigned int> dist(0, (std::numeric_limits<uint8_t>::max)());
     uint8_t randomValue = static_cast<uint8_t>(dist(gen));
 
-    m_cycleCurrentOffset = randomValue % (kGainCycleLength - 1);
+    m_cycleCurrentOffset = randomValue % (m_pacingGains.size() - 1);
     // 跳过1是因为0.75是减小, 当前轮次无法做到后续在增大
     if (m_cycleCurrentOffset >= 1) {
         ++m_cycleCurrentOffset;
     }
     m_lastCycleStart = now;
-    m_pacingGain = kPacingGain[m_cycleCurrentOffset];
+    m_pacingGain = m_pacingGains[m_cycleCurrentOffset];
 }
 
 void BbrV1::enterStartupMode(uint64_t now)

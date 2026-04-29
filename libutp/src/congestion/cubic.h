@@ -31,12 +31,12 @@ public:
     void        onTimeout() override;
 
 private:
-    static constexpr uint64_t kDefaultMss = 1460;
-    static constexpr uint64_t kMaxCwnd = 2000 * kDefaultMss;
-    static constexpr uint64_t kDefaultMinCwnd = 4 * kDefaultMss;
-    static constexpr uint64_t kDefaultInitCwnd = 32 * kDefaultMss;
-    static constexpr double kDefaultBeta = 0.7;
-    static constexpr double kDefaultCubicC = 0.4;
+    const uint64_t kDefaultMss = 1460;
+    const uint64_t kMaxCwnd = 2000 * kDefaultMss;
+    const uint64_t kDefaultMinCwnd = 4 * kDefaultMss;
+    const uint64_t kDefaultInitCwnd = 32 * kDefaultMss;
+    const double kDefaultBeta = 0.7;
+    const double kDefaultCubicC = 0.4;
 
     RttStats    *m_rttStats{nullptr};
     uint64_t    m_cwnd{kDefaultInitCwnd};
