@@ -2074,9 +2074,7 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         }
     }
 
-    const FrameType effectiveFrameType = frameTypeBits != 0
-                                       ? FirstFrameTypeBit(frameTypeBits)
-                                       : kFrameInvalid;
+    const FrameType effectiveFrameType = frameTypeBits != 0 ? FirstFrameTypeBit(frameTypeBits) : kFrameInvalid;
     const bool isClosePacket = packetType == UTP_TYPE_CONNECTION_CLOSE
                             || (frameTypeBits & (1u << static_cast<uint32_t>(kFrameConnectionClose))) != 0;
     if (m_networkPath.state() == NetworkPath::kPathFailed && !isClosePacket) {

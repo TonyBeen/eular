@@ -12,7 +12,7 @@
 
 #include <utp/platform.h>
 
-enum : uint16_t {
+enum {
     // 通用错误
     UTP_ERR_OK                  = 0x0000,   // 无错误，正常关闭
     UTP_ERR_INVALID_PARAM,                  // 无效参数
@@ -26,7 +26,7 @@ enum : uint16_t {
     UTP_ERR_IN_PROGRESS,                    // 操作正在进行中
     UTP_ERR_WOULD_BLOCK,                    // 操作会阻塞
     UTP_ERR_INVALID_STATE,                  // 状态无效
-    UTP_ERR_CONNECTION_CLOSING,             // 连接正在关闭，数据面发送被禁止
+    UTP_ERR_CONNECTION_CLOSING,             // 连接正在关闭, 数据面发送被禁止
     UTP_ERR_CID_CONFLICT,                   // CID冲突
     UTP_ERR_OVERFLOW,                       // 溢出
     UTP_ERR_STREAM_LIMITED,                 // 流个数被限制(连接级, 触发ConnectionClose)

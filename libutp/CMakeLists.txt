@@ -135,7 +135,6 @@ set(UTP_SOURCES
     src/socket/packet.cpp
     src/socket/udp.cpp
     src/socket/util.cpp
-    src/stream.cpp
     src/util/ack_info.cpp
     src/util/errno.cpp
     src/util/error.cpp

@@ -30,8 +30,8 @@ public:
     };
 
     struct MutableBufferView {
-        void *data{nullptr};
-        size_t len{0};
+        void*   data{nullptr};
+        size_t  len{0};
     };
 
     enum State : uint8_t {
