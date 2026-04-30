@@ -31,6 +31,7 @@ enum PacketOutFlags : uint32_t {
     kPoSched        = (1 << 6), // 本包处于调度队列, 等待发送
     kPoLost         = (1 << 7), // 本包处于丢包队列, 等待重传
     kPoLossRecorded = (1 << 8), // 已记录丢包事件, 等待重传
+    kPoKeepPlaintext= (1 << 9), // 加密后仍保留 raw_data 明文，供重传改包号后再次加密
 };
 
 enum PacketOutLocalFlags : uint16_t {
@@ -64,11 +65,27 @@ struct PacketOutAttempt {
 };
 
 struct PacketOutSlice {
+    enum : uint8_t {
+        kSourceRawOffset = 0,
+        kSourceExternal = 1,
+    };
+
     uint16_t offset;
     uint16_t length;
+    const void *data;
+    uint8_t source;
+
+    const void *resolveData(const uint8_t *rawBase) const
+    {
+        if (source == kSourceExternal) {
+            return data;
+        }
+        return rawBase + offset;
+    }
 };
 
 static constexpr uint8_t PACKET_OUT_MAX_SLICES = 4;
+static constexpr uint8_t PACKET_OUT_MAX_FRAMES = 4;
 
 struct PacketOut {
     void                reset();
@@ -90,7 +107,11 @@ struct PacketOut {
     uint16_t    encrypt_data_size;  // 加密后数据大小
     uint16_t    alloc_size;         // data 可用大小
     uint8_t     slice_count;        // 发送 slice 数量（基于 raw_data 偏移）
+    uint8_t     frame_meta_count;   // 记录的逻辑帧数量
     uint32_t    stream_data_size;   // 本包携带的 STREAM 业务数据字节数(用于在途未确认流量预算)
+    uint16_t    transient_ack_size; // piggyback ACK 字节数(重传时可剔除)
+    uint32_t    stream_id;          // 本包关联的 stream id（仅携带 STREAM 数据时有效）
+    uint64_t    stream_offset;      // 本包中 STREAM 数据起始偏移（仅携带 STREAM 数据时有效）
 
     uint8_t*        raw_data;       // 头部 + 多个帧数据缓存, 加密时需要预留16字节
     uint8_t*        encrypt_data;   // 加密后数据指针
@@ -101,6 +122,7 @@ struct PacketOut {
     PacketOutAttempt* attempts_head;
     PacketOutAttempt* attempts_tail;
     uint16_t          attempts_count;
+    FrameMetaInfo     frame_meta[PACKET_OUT_MAX_FRAMES];
 
     union {
         FrameMetaInfo   one;

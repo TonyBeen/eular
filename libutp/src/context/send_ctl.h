@@ -144,6 +144,7 @@ private:
     utp_packno_t largestRetxPacketNo() const;
     PacketOut*  handleRegularLostPacket(PacketOut *pkt, PacketOut *&next);
     bool        handleLostMtuProbe(PacketOut *pkt);
+    int32_t     retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs);
     int32_t     retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs);
     void        unackedRemove(PacketOut *pkt);
 

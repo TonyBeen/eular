@@ -61,146 +61,6 @@ static size_t StreamSendBufferLimit(const ConnectionImpl *conn)
     return std::max<size_t>(conn->config()->stream_send_buffer_limit, 1);
 }
 
-StreamImpl::RingBuffer::RingBuffer(size_t capacity) :
-    m_buffer(std::max<size_t>(capacity, 1), 0)
-{
-}
-
-void StreamImpl::RingBuffer::ensureFree(size_t freeBytes)
-{
-    if (freeSize() >= freeBytes) {
-        return;
-    }
-
-    const size_t required = m_size + freeBytes;
-    size_t newCap = std::max<std::size_t>(m_buffer.empty() ? 1 : m_buffer.size(), 1);
-    while (newCap < required) {
-        newCap *= 2;
-    }
-
-    std::vector<uint8_t> newBuffer(newCap, 0);
-    ConstBufferView views[2];
-    const size_t count = readableViews(views, m_size);
-    size_t copied = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (views[i].data != nullptr && views[i].len > 0) {
-            std::memcpy(newBuffer.data() + copied, views[i].data, views[i].len);
-            copied += views[i].len;
-        }
-    }
-
-    m_buffer.swap(newBuffer);
-    m_head = 0;
-}
-
-size_t StreamImpl::RingBuffer::readableViews(ConstBufferView views[2], size_t maxBytes) const
-{
-    if (views == nullptr) {
-        return 0;
-    }
-
-    views[0] = {};
-    views[1] = {};
-    if (m_buffer.empty() || m_size == 0 || maxBytes == 0) {
-        return 0;
-    }
-
-    const size_t bytes = std::min(maxBytes, m_size);
-    const size_t first = std::min(bytes, m_buffer.size() - m_head);
-    views[0].data = m_buffer.data() + m_head;
-    views[0].len = first;
-
-    const size_t second = bytes - first;
-    if (second > 0) {
-        views[1].data = m_buffer.data();
-        views[1].len = second;
-        return 2;
-    }
-
-    return 1;
-}
-
-size_t StreamImpl::RingBuffer::writableViews(MutableBufferView views[2], size_t maxBytes)
-{
-    if (views == nullptr) {
-        return 0;
-    }
-
-    views[0] = {};
-    views[1] = {};
-    if (m_buffer.empty() || maxBytes == 0 || freeSize() == 0) {
-        return 0;
-    }
-
-    const size_t bytes = std::min(maxBytes, freeSize());
-    const size_t tail = (m_head + m_size) % m_buffer.size();
-    const size_t first = std::min(bytes, m_buffer.size() - tail);
-    views[0].data = m_buffer.data() + tail;
-    views[0].len = first;
-
-    const size_t second = bytes - first;
-    if (second > 0) {
-        views[1].data = m_buffer.data();
-        views[1].len = second;
-        return 2;
-    }
-
-    return 1;
-}
-
-void StreamImpl::RingBuffer::produce(size_t bytes)
-{
-    m_size = std::min(m_size + bytes, m_buffer.size());
-}
-
-void StreamImpl::RingBuffer::consume(size_t bytes)
-{
-    const size_t n = std::min(bytes, m_size);
-    if (!m_buffer.empty()) {
-        m_head = (m_head + n) % m_buffer.size();
-    }
-    m_size -= n;
-}
-
-size_t StreamImpl::RingBuffer::write(const uint8_t *data, size_t len)
-{
-    if (len == 0) {
-        return 0;
-    }
-
-    ensureFree(len);
-    MutableBufferView views[2];
-    const size_t count = writableViews(views, len);
-    size_t written = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (views[i].data != nullptr && views[i].len > 0) {
-            std::memcpy(views[i].data, data + written, views[i].len);
-            written += views[i].len;
-        }
-    }
-    produce(written);
-    return written;
-}
-
-size_t StreamImpl::RingBuffer::read(uint8_t *buffer, size_t len)
-{
-    if (buffer == nullptr || len == 0) {
-        return 0;
-    }
-
-    ConstBufferView views[2];
-    const size_t count = readableViews(views, len);
-    size_t copied = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (views[i].data != nullptr && views[i].len > 0) {
-            std::memcpy(buffer + copied, views[i].data, views[i].len);
-            copied += views[i].len;
-        }
-    }
-    consume(copied);
-    return copied;
-}
-
 StreamImpl::StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority) :
     m_conn(conn),
     m_streamId(streamId),
@@ -274,7 +134,6 @@ size_t StreamImpl::acquireWriteBuffer(MutableBufferView views[2], size_t maxByte
         return 0;
     }
 
-    m_sendBuffer.ensureFree(grant);
     size_t count = m_sendBuffer.writableViews(views, grant);
     size_t total = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -305,7 +164,7 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
         return StreamErr(UTP_ERR_OVERFLOW);
     }
 
-    if (m_sendQueuedBytes + bytes > kMaxSendQueueBytes) {
+    if (m_sendQueuedBytes + m_sendInFlightBytes + bytes > kMaxSendQueueBytes) {
         return StreamErr(UTP_ERR_STREAM_DATA_LIMITED);
     }
 
@@ -416,6 +275,9 @@ int32_t StreamImpl::reset(uint16_t errorCode)
     m_localFinSent = true;
     m_peerFin = true;
     m_sendQueuedBytes = 0;
+    m_sendInFlightBytes = 0;
+    m_sendAckedOffset = m_nextSendOffset;
+    m_sendAckedRanges.clear();
     m_sendBuffer.consume(m_sendBuffer.size());
     m_recvFragments.clear();
     m_recvFragmentsBytes = 0;
@@ -558,6 +420,9 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
     }
 
     m_sendQueuedBytes = 0;
+    m_sendInFlightBytes = 0;
+    m_sendAckedOffset = m_nextSendOffset;
+    m_sendAckedRanges.clear();
     m_sendBuffer.consume(m_sendBuffer.size());
     m_recvFragments.clear();
     m_recvFragmentsBytes = 0;
@@ -579,7 +444,24 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
 
     size_t sentBytes = 0;
     while (sentBytes < maxBytes) {
-        if (m_sendQueuedBytes == 0) {
+        const uint64_t inFlightBytesU64 = (m_nextSendOffset >= m_sendAckedOffset)
+                                       ? (m_nextSendOffset - m_sendAckedOffset)
+                                       : 0;
+        const size_t inFlightBytes = static_cast<size_t>(std::min<uint64_t>(inFlightBytesU64, m_sendBuffer.size()));
+        const size_t maxQueuedFromBuffer = m_sendBuffer.size() > inFlightBytes
+                                         ? (m_sendBuffer.size() - inFlightBytes)
+                                         : 0;
+        if (m_sendQueuedBytes > maxQueuedFromBuffer) {
+            m_sendQueuedBytes = maxQueuedFromBuffer;
+        }
+
+        const uint64_t queuedEndOffset = m_sendAckedOffset + static_cast<uint64_t>(m_sendQueuedBytes);
+        const uint64_t unsentBytesU64 = queuedEndOffset > m_nextSendOffset
+                                     ? (queuedEndOffset - m_nextSendOffset)
+                                     : 0;
+        const size_t unsentBytes = static_cast<size_t>(std::min<uint64_t>(unsentBytesU64, (std::numeric_limits<size_t>::max)()));
+
+        if (unsentBytes == 0) {
             if (!(m_localFinQueued && !m_localFinSent)) {
                 break;
             }
@@ -609,12 +491,12 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
         bool frameFin = false;
 
         ConstBufferView views[2];
-        const size_t count = m_sendBuffer.readableViews(views, std::min(m_sendQueuedBytes, budgetLeft));
+        const size_t startOffsetInBuffer = inFlightBytes;
+        const size_t count = m_sendBuffer.readableViewsFrom(views,
+                                                            startOffsetInBuffer,
+                                                            std::min(unsentBytes, budgetLeft));
         if (count == 0 || views[0].data == nullptr || views[0].len == 0) {
-            // Self-heal bookkeeping drift: keep queued-bytes bounded by
-            // actual readable bytes to avoid stalling writable notifications.
-            m_sendQueuedBytes = std::min(m_sendQueuedBytes, m_sendBuffer.size());
-            if (m_sendQueuedBytes == 0) {
+            if (unsentBytes == 0) {
                 continue;
             }
             return UTP_ERR_WOULD_BLOCK;
@@ -626,7 +508,7 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
         int32_t status = UTP_ERR_WOULD_BLOCK;
         size_t tryLen = std::min(payloadLen, StreamPayloadMtuBudget(m_conn));
         while (tryLen > 0) {
-            frameFin = m_localFinQueued && !m_localFinSent && (tryLen == m_sendQueuedBytes);
+            frameFin = m_localFinQueued && !m_localFinSent && (tryLen == unsentBytes);
             status = m_conn->sendStreamFrame(m_streamId,
                                              m_nextSendOffset,
                                              payload,
@@ -643,13 +525,13 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
         }
 
         if (status == UTP_ERR_OK) {
-            m_sendBuffer.consume(payloadLen);
             m_nextSendOffset += payloadLen;
             if (m_sendQueuedBytes >= payloadLen) {
                 m_sendQueuedBytes -= payloadLen;
             } else {
                 m_sendQueuedBytes = 0;
             }
+            m_sendInFlightBytes += payloadLen;
             sentBytes += payloadLen;
 
             if (frameFin) {
@@ -692,13 +574,74 @@ int32_t StreamImpl::onConnectionWritable()
     return status;
 }
 
+void StreamImpl::onPacketAcked(uint64_t streamOffset, size_t len)
+{
+    if (len == 0) {
+        return;
+    }
+
+    uint64_t start = streamOffset;
+    uint64_t end = streamOffset + static_cast<uint64_t>(len);
+    if (end <= m_sendAckedOffset) {
+        return;
+    }
+    if (start < m_sendAckedOffset) {
+        start = m_sendAckedOffset;
+    }
+
+    auto it = m_sendAckedRanges.lower_bound(start);
+    if (it != m_sendAckedRanges.begin()) {
+        auto prev = std::prev(it);
+        if (prev->second >= start) {
+            start = prev->first;
+            end = std::max(end, prev->second);
+            it = m_sendAckedRanges.erase(prev);
+        }
+    }
+
+    while (it != m_sendAckedRanges.end() && it->first <= end) {
+        end = std::max(end, it->second);
+        it = m_sendAckedRanges.erase(it);
+    }
+    m_sendAckedRanges[start] = end;
+
+    uint64_t advancedTo = m_sendAckedOffset;
+    auto begin = m_sendAckedRanges.begin();
+    if (begin != m_sendAckedRanges.end() && begin->first <= m_sendAckedOffset && begin->second > m_sendAckedOffset) {
+        advancedTo = begin->second;
+    }
+
+    if (advancedTo > m_sendAckedOffset) {
+        const size_t delta = static_cast<size_t>(std::min<uint64_t>(advancedTo - m_sendAckedOffset,
+                                                                     m_sendBuffer.size()));
+        if (delta > 0) {
+            m_sendBuffer.consume(delta);
+            m_sendAckedOffset += delta;
+            if (m_sendInFlightBytes >= delta) {
+                m_sendInFlightBytes -= delta;
+            } else {
+                m_sendInFlightBytes = 0;
+            }
+            maybeNotifyWritable(true);
+        }
+    }
+
+    while (!m_sendAckedRanges.empty()) {
+        auto front = m_sendAckedRanges.begin();
+        if (front->second <= m_sendAckedOffset) {
+            m_sendAckedRanges.erase(front);
+            continue;
+        }
+        break;
+    }
+}
+
 size_t StreamImpl::appWriteCredit() const
 {
     const size_t cap = StreamSendBufferLimit(m_conn);
-    if (m_sendQueuedBytes >= cap) {
-        return 0;
-    }
-    return cap - m_sendQueuedBytes;
+    const size_t used = m_sendQueuedBytes + m_sendInFlightBytes;
+    const size_t queueCredit = (used >= cap) ? 0 : (cap - used);
+    return std::min(queueCredit, m_sendBuffer.freeSize());
 }
 
 uint64_t StreamImpl::sendBufferedEndOffset() const

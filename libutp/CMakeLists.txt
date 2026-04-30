@@ -140,6 +140,7 @@ set(UTP_SOURCES
     src/util/error.cpp
     src/util/mm.cpp
     src/util/network_path.cpp
+    src/util/ring_buffer.cpp
     src/util/receive_history.cpp
     src/util/send_history.cpp
     src/util/time.cpp
@@ -260,6 +261,7 @@ if(UTP_BUILD_TESTS)
         test/test_packet_in.cc
         test/test_packet_out.cc
         test/test_receive_history.cc
+        test/test_ring_buffer.cc
         test/test_stream_impl.cc
     )
 

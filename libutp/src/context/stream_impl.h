@@ -14,6 +14,7 @@
 #include "utp/types.h"
 #include "utp/stream.h"
 #include "proto/frame/stream.h"
+#include "util/ring_buffer.h"
 
 #define STREAM_TYPES                4 
 
@@ -66,30 +67,6 @@ public:
 private:
     friend class ConnectionImpl;
 
-    class RingBuffer {
-    public:
-        RingBuffer() = default;
-        explicit RingBuffer(size_t capacity);
-
-        void    ensureFree(size_t freeBytes);
-        size_t  size() const { return m_size; }
-        size_t  capacity() const { return m_buffer.size(); }
-        size_t  freeSize() const { return capacity() - m_size; }
-        bool    empty() const { return m_size == 0; }
-
-        size_t  readableViews(ConstBufferView views[2], size_t maxBytes) const;
-        size_t  writableViews(MutableBufferView views[2], size_t maxBytes);
-        void    produce(size_t bytes);
-        void    consume(size_t bytes);
-        size_t  write(const uint8_t *data, size_t len);
-        size_t  read(uint8_t *buffer, size_t len);
-
-    private:
-        std::vector<uint8_t> m_buffer;
-        size_t m_head{0};
-        size_t m_size{0};
-    };
-
     struct RecvFragment {
         std::vector<uint8_t> data;
         bool fin{false};
@@ -98,6 +75,7 @@ private:
 private:
     int32_t flushPendingSends(size_t maxBytes = static_cast<size_t>(-1));
     int32_t onConnectionWritable();
+    void    onPacketAcked(uint64_t streamOffset, size_t len);
     size_t  appWriteCredit() const;
     uint64_t sendBufferedEndOffset() const;
     bool    hasPendingSendWork() const;
@@ -112,6 +90,7 @@ private:
     ConnectionImpl* m_conn{nullptr};
     uint32_t        m_streamId{0};
     uint64_t        m_nextSendOffset{0}; // next unsent stream offset in sendBuffer
+    uint64_t        m_sendAckedOffset{0};
     uint64_t        m_recvOffset{0};
     bool            m_localFinQueued{false};
     bool            m_localFinSent{false};
@@ -121,6 +100,7 @@ private:
     bool            m_closedNotified{false};
     uint16_t        m_resetErrorCode{0};
     size_t          m_sendQueuedBytes{0};
+    size_t          m_sendInFlightBytes{0};
     size_t          m_recvFragmentsBytes{0};
     utp_time_t      m_lastSendQueuedAtUs{0}; // enqueue timestamp for coalescing window(us)
     RingBuffer      m_sendBuffer;
@@ -131,6 +111,7 @@ private:
     OnClosed        m_onClosed;
     OnReset         m_onReset;
     bool            m_notifyingWritable{false};
+    std::map<uint64_t, uint64_t> m_sendAckedRanges;
 
     /// @b Stream 调度属性
     uint8_t m_priority{Stream::kPriorityDefault}; // stream 基础优先级(0最高,7最低)

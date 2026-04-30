@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -23,6 +24,7 @@
 
 #include "proto/proto.h"
 #include "proto/frame/padding.h"
+#include "proto/frame/stream.h"
 #include "utp/errno.h"
 #include "util/ack_info.h"
 #include "util/time.h"
@@ -89,6 +91,108 @@ bool RewritePacketNumber(eular::utp::ConnectionImpl *conn, eular::utp::PacketOut
     uint8_t *offset = pkt->raw_data + kPacketNumberOffset;
     size_t left = pkt->alloc_size - kPacketNumberOffset;
     return Serialize::SerializeTo(offset, left, pkt->packno) != nullptr;
+}
+
+bool RewritePayloadLength(eular::utp::PacketOut *pkt, uint16_t payloadLen)
+{
+    constexpr size_t kPayloadLengthOffset = offsetof(eular::utp::UTPHeaderProto, payload_length);
+    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->alloc_size < kPayloadLengthOffset + sizeof(payloadLen)) {
+        return false;
+    }
+
+    uint8_t *offset = pkt->raw_data + kPayloadLengthOffset;
+    size_t left = pkt->alloc_size - kPayloadLengthOffset;
+    return Serialize::SerializeTo(offset, left, payloadLen) != nullptr;
+}
+
+bool StripTransientAckPayload(eular::utp::PacketOut *pkt)
+{
+    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->transient_ack_size == 0) {
+        return true;
+    }
+    if ((pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameAck))) == 0) {
+        pkt->transient_ack_size = 0;
+        return true;
+    }
+
+    uint16_t ackOffset = UTP_HEADER_SIZE;
+    uint16_t ackLength = pkt->transient_ack_size;
+    bool ackMetaFound = false;
+    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
+        if (pkt->frame_meta[i].frame_type == eular::utp::kFrameAck) {
+            ackOffset = pkt->frame_meta[i].offset;
+            ackLength = pkt->frame_meta[i].length;
+            ackMetaFound = true;
+            break;
+        }
+    }
+
+    if (pkt->data_size < ackOffset + ackLength) {
+        return false;
+    }
+
+    const size_t payloadLen = static_cast<size_t>(pkt->data_size - UTP_HEADER_SIZE);
+    if (ackOffset < UTP_HEADER_SIZE || ackLength == 0) {
+        return false;
+    }
+
+    const size_t ackPayloadOffset = static_cast<size_t>(ackOffset - UTP_HEADER_SIZE);
+    if (payloadLen < ackPayloadOffset + ackLength) {
+        return false;
+    }
+
+    const size_t remainPayload = payloadLen - ackLength;
+    uint8_t *payloadBase = pkt->raw_data + UTP_HEADER_SIZE;
+    std::memmove(payloadBase + ackPayloadOffset,
+                 payloadBase + ackPayloadOffset + ackLength,
+                 payloadLen - (ackPayloadOffset + ackLength));
+
+    if (!RewritePayloadLength(pkt, static_cast<uint16_t>(remainPayload))) {
+        return false;
+    }
+
+    pkt->data_size = static_cast<uint16_t>(UTP_HEADER_SIZE + remainPayload);
+    pkt->transient_ack_size = 0;
+
+    uint32_t frameTypeBits = 0;
+    uint8_t writeIndex = 0;
+    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
+        eular::utp::FrameMetaInfo meta = pkt->frame_meta[i];
+        if (meta.frame_type == eular::utp::kFrameAck) {
+            continue;
+        }
+        if (meta.offset > ackOffset) {
+            meta.offset = static_cast<uint16_t>(meta.offset - ackLength);
+        }
+        pkt->frame_meta[writeIndex++] = meta;
+        if (meta.frame_type < eular::utp::kFrameMax) {
+            frameTypeBits |= (1u << static_cast<uint32_t>(meta.frame_type));
+            if (meta.frame_type == eular::utp::kFrameHandshakeDone) {
+                frameTypeBits |= (1u << static_cast<uint32_t>(eular::utp::kFrameHandshakeDelay));
+            }
+        }
+    }
+    pkt->frame_meta_count = writeIndex;
+    if (ackMetaFound) {
+        pkt->frame_types = frameTypeBits;
+    } else {
+        pkt->frame_types &= ~(1u << static_cast<uint32_t>(eular::utp::kFrameAck));
+    }
+
+    if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
+        std::free(pkt->encrypt_data);
+    }
+    pkt->encrypt_data = nullptr;
+    pkt->encrypt_data_size = 0;
+
+    pkt->slice_count = 0;
+    pkt->slices[pkt->slice_count++] = eular::utp::PacketOutSlice{0, static_cast<uint16_t>(UTP_HEADER_SIZE)};
+    if (remainPayload > 0 && pkt->slice_count < eular::utp::PACKET_OUT_MAX_SLICES) {
+        pkt->slices[pkt->slice_count++] = eular::utp::PacketOutSlice{static_cast<uint16_t>(UTP_HEADER_SIZE),
+                                                                      static_cast<uint16_t>(remainPayload)};
+    }
+
+    return true;
 }
 
 bool BuildMtuProbePayload(uint16_t packetSize,
@@ -373,6 +477,9 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         if (m_conn != nullptr
             && (pkt->frame_types & (1u << static_cast<uint32_t>(kFrameHandshakeDone))) != 0) {
             m_conn->onHandshakeDoneFrameAcked();
+        }
+        if (m_conn != nullptr && pkt->stream_data_size > 0) {
+            m_conn->onStreamPacketAcked(pkt);
         }
 
         unackedRemove(pkt);
@@ -1071,6 +1178,92 @@ bool SendControl::handleLostMtuProbe(PacketOut *pkt)
     return true;
 }
 
+int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs)
+{
+    if (pkt == nullptr || m_conn == nullptr) {
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    if ((pkt->frame_types & (1u << static_cast<uint32_t>(kFrameStream))) == 0 || pkt->stream_data_size == 0) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
+    const uint32_t supportedMask = (1u << static_cast<uint32_t>(kFrameStream))
+                                 | (1u << static_cast<uint32_t>(kFrameHandshakeDone))
+                                 | (1u << static_cast<uint32_t>(kFrameHandshakeDelay));
+    if ((pkt->frame_types & ~supportedMask) != 0) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
+    uint16_t streamFrameOffset = UTP_HEADER_SIZE;
+    uint16_t streamFrameLength = static_cast<uint16_t>(pkt->data_size > UTP_HEADER_SIZE
+                                                     ? (pkt->data_size - UTP_HEADER_SIZE)
+                                                     : 0);
+    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
+        if (pkt->frame_meta[i].frame_type == kFrameStream) {
+            streamFrameOffset = pkt->frame_meta[i].offset;
+            streamFrameLength = pkt->frame_meta[i].length;
+            break;
+        }
+    }
+
+    if (streamFrameOffset < UTP_HEADER_SIZE || pkt->data_size < streamFrameOffset + streamFrameLength) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    FrameStream frame;
+    const uint8_t *frameBytes = pkt->raw_data + streamFrameOffset;
+    if (frame.decode(frameBytes, streamFrameLength) < 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const size_t payloadBudget = std::max<size_t>(m_conn->streamPayloadBudgetHint(), 1);
+    if (payloadBudget >= frame.stream_data_length) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
+    const uint8_t *streamData = static_cast<const uint8_t *>(frame.stream_data);
+    if (frame.stream_data_length > 0 && streamData == nullptr) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const bool hasHandshakeDone = (pkt->frame_types & (1u << static_cast<uint32_t>(kFrameHandshakeDone))) != 0;
+    const uint64_t bytesOutBefore = m_conn->m_bytesOut;
+
+    size_t sentData = 0;
+    while (sentData < frame.stream_data_length) {
+        const size_t chunkLen = std::min(payloadBudget,
+                                         static_cast<size_t>(frame.stream_data_length - sentData));
+        const bool fin = STREAM_IS_FIN(frame.stream_flag) && (sentData + chunkLen == frame.stream_data_length);
+        const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
+                                                       frame.stream_offset + sentData,
+                                                       streamData + sentData,
+                                                       chunkLen,
+                                                       fin);
+        if (status != UTP_ERR_OK) {
+            return status;
+        }
+        sentData += chunkLen;
+    }
+
+    if (hasHandshakeDone) {
+        const int32_t hsStatus = m_conn->sendHandshakeDonePacket();
+        if (hsStatus != UTP_ERR_OK && hsStatus != UTP_ERR_WOULD_BLOCK) {
+            return hsStatus;
+        }
+    }
+
+    TAILQ_REMOVE(&m_lostPackets, pkt, po_next);
+    pkt->po_flags &= ~(PacketOutFlags::kPoLost | PacketOutFlags::kPoLossRecorded | PacketOutFlags::kPoResetPackNo);
+
+    const uint64_t retransBytes = m_conn->m_bytesOut - bytesOutBefore;
+    m_conn->m_bytesRetrans += retransBytes;
+    m_bytesRetransTotal += retransBytes;
+
+    destroyPacket(pkt);
+    return UTP_ERR_OK;
+}
+
 int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
 {
     if (pkt == nullptr || m_conn == nullptr || m_conn->m_udpSocket == nullptr) {
@@ -1081,25 +1274,40 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         return UTP_ERR_WOULD_BLOCK;
     }
 
+    if (pkt->stream_data_size > 0 && pkt->transient_ack_size > 0) {
+        if (!StripTransientAckPayload(pkt)) {
+            return UTP_ERR_INTERNAL_ERROR;
+        }
+    }
+
     const FrameType frameType = FirstFrameType(pkt->frame_types);
     if (!m_conn->canSendOnCurrentPath(pkt->data_size, frameType)) {
+        const int32_t splitStatus = retransmitSplitStreamPacket(pkt, nowUs);
+        if (splitStatus != UTP_ERR_WOULD_BLOCK) {
+            return splitStatus;
+        }
         return UTP_ERR_WOULD_BLOCK;
     }
 
     const utp_packno_t previousPackNo = pkt->packno;
-    if (pkt->po_flags & PacketOutFlags::kPoResetPackNo) {
+    const bool needResetPackNo = (pkt->po_flags & PacketOutFlags::kPoResetPackNo) != 0;
+    if (needResetPackNo) {
         if (!RewritePacketNumber(m_conn, pkt)) {
             return UTP_ERR_INTERNAL_ERROR;
         }
+    }
 
-        // Packet number participates in AEAD nonce/AAD; encrypted packets must
-        // be re-encrypted after packet number rewrite.
-        if ((pkt->po_flags & PacketOutFlags::kPoEncrypted) && m_conn->m_aesCtx) {
-            if (m_conn->m_aesCtx->encrypt(pkt) != UTP_ERR_OK) {
-                return UTP_ERR_CRYPTO_ENCRYPTION;
-            }
-            pkt->data_size = pkt->encrypt_data_size;
+    // Packet number participates in AEAD nonce/AAD; encrypted packets must
+    // be re-encrypted after packet number rewrite. Also regenerate if cached
+    // ciphertext was intentionally dropped to save unacked memory.
+    const bool needRegenerateCipher = (pkt->po_flags & PacketOutFlags::kPoEncrypted)
+                                   && m_conn->m_aesCtx
+                                   && (needResetPackNo || pkt->encrypt_data == nullptr);
+    if (needRegenerateCipher) {
+        if (m_conn->m_aesCtx->encrypt(pkt) != UTP_ERR_OK) {
+            return UTP_ERR_CRYPTO_ENCRYPTION;
         }
+        pkt->data_size = pkt->encrypt_data_size;
     }
 
     UdpSocket::MsgMetaInfo msg;
@@ -1112,7 +1320,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         msg.len = pkt->data_size;
         msg.slice_count = pkt->slice_count;
         for (uint8_t i = 0; i < pkt->slice_count && i < UdpSocket::kMaxMsgSlices; ++i) {
-            msg.slices[i].data = pkt->raw_data + pkt->slices[i].offset;
+            msg.slices[i].data = pkt->slices[i].resolveData(pkt->raw_data);
             msg.slices[i].len = pkt->slices[i].length;
         }
     }

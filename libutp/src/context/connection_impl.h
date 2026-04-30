@@ -139,8 +139,40 @@ public:
     bool        canSendStreamUnackedBytes(size_t streamBytes) const;
     void        onStreamPacketUnackedAdded(const PacketOut *pkt);
     void        onStreamPacketUnackedRemoved(const PacketOut *pkt);
+    void        onStreamPacketAcked(const PacketOut *pkt);
 
 private:
+    struct PayloadSegment {
+        const void *data;
+        size_t len;
+        bool external;
+
+        PayloadSegment()
+            : data(nullptr), len(0), external(false)
+        {
+        }
+
+        PayloadSegment(const void *segmentData, size_t segmentLen, bool isExternal)
+            : data(segmentData), len(segmentLen), external(isExternal)
+        {
+        }
+    };
+
+    struct FrameBuildMeta {
+        FrameType frameType;
+        uint16_t payloadBytes;
+
+        FrameBuildMeta()
+            : frameType(kFrameInvalid), payloadBytes(0)
+        {
+        }
+
+        FrameBuildMeta(FrameType type, uint16_t bytes)
+            : frameType(type), payloadBytes(bytes)
+        {
+        }
+    };
+
     struct CachedResumptionState {
         Context::EncryptionMode encrypted{Context::kEncryptionNone};
         std::vector<uint8_t> sessionTicket;
@@ -191,7 +223,12 @@ private:
                        utp_packno_t *outPacketNo = nullptr,
                        uint32_t frameTypeBitsOverride = 0,
                        const Address *targetAddress = nullptr,
-                       size_t streamDataBytes = 0);
+                       size_t streamDataBytes = 0,
+                       uint32_t streamId = 0,
+                       uint64_t streamOffset = 0,
+                       uint16_t transientAckBytes = 0,
+                       const FrameBuildMeta *frameMetas = nullptr,
+                       size_t frameMetaCount = 0);
     int32_t sendPacket(uint8_t packetType,
                        const void *payloadHead,
                        size_t payloadHeadLen,
@@ -201,7 +238,25 @@ private:
                        utp_packno_t *outPacketNo = nullptr,
                        uint32_t frameTypeBitsOverride = 0,
                        const Address *targetAddress = nullptr,
-                       size_t streamDataBytes = 0);
+                       size_t streamDataBytes = 0,
+                       uint32_t streamId = 0,
+                       uint64_t streamOffset = 0,
+                       uint16_t transientAckBytes = 0,
+                       const FrameBuildMeta *frameMetas = nullptr,
+                       size_t frameMetaCount = 0);
+    int32_t sendPacket(uint8_t packetType,
+                       const PayloadSegment *segments,
+                       size_t segmentCount,
+                       uint16_t packetFlags,
+                       utp_packno_t *outPacketNo = nullptr,
+                       uint32_t frameTypeBitsOverride = 0,
+                       const Address *targetAddress = nullptr,
+                       size_t streamDataBytes = 0,
+                       uint32_t streamId = 0,
+                       uint64_t streamOffset = 0,
+                       uint16_t transientAckBytes = 0,
+                       const FrameBuildMeta *frameMetas = nullptr,
+                       size_t frameMetaCount = 0);
     bool    canSendOnCurrentPath(size_t packetLen, FrameType frameType) const;
     void    maybeSendPathChallenge();
     void    handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize, const Address &fromAddress);

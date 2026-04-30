@@ -9,6 +9,7 @@
 #define __UTP_CRYPTO_AES_GCM_CONTEXT_H__
 
 #include <array>
+#include <cstddef>
 #include <memory>
 
 #include <openssl/evp.h>
@@ -30,6 +31,20 @@ public:
     using AesKey128 = std::array<uint8_t, 16>; // AES-128 key size
     using AesKey256 = std::array<uint8_t, 32>; // AES-256 key size
     using Nonce     = std::array<uint8_t, GCM_NONCE_SIZE>;
+    struct PlainSegment {
+        const uint8_t *data;
+        size_t len;
+
+        PlainSegment()
+            : data(nullptr), len(0)
+        {
+        }
+
+        PlainSegment(const uint8_t *segmentData, size_t segmentLen)
+            : data(segmentData), len(segmentLen)
+        {
+        }
+    };
     using Ptr       = std::unique_ptr<AesGcmContext>;
     using SP        = std::shared_ptr<AesGcmContext>;
 
@@ -79,6 +94,17 @@ public:
                     const uint8_t* aad, size_t aad_len,
                     uint64_t counter,
                     uint8_t* ciphertext, size_t* ciphertext_len);
+
+    /**
+     * @brief 对多段明文执行一次 AES-GCM 加密，密文连续输出
+     */
+    int32_t encryptScatter(const PlainSegment *segments,
+                           size_t segmentCount,
+                           const uint8_t *aad,
+                           size_t aad_len,
+                           uint64_t counter,
+                           uint8_t *ciphertext,
+                           size_t *ciphertext_len);
 
     /**
      * @brief 解密
