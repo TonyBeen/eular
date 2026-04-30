@@ -13,10 +13,9 @@
 #include <cstring>
 #include <vector>
 
-#include <utils/serialize.hpp>
-
 #include "context/context_impl.h"
 #include "context/connection_impl.h"
+#include "context/detail/packet_editor.h"
 #include "crypto/aes_gcm_context.h"
 
 #include "congestion/cubic.h"
@@ -42,8 +41,6 @@
 #define MAX_RESUBMITTED_ON_RTO 2
 
 namespace {
-
-using eular::Serialize;
 
 bool IsPackNoAcked(const eular::utp::AckInfo &ackInfo, utp_packno_t packno)
 {
@@ -71,128 +68,6 @@ eular::utp::FrameType FirstFrameType(uint32_t frameTypes)
     }
 
     return eular::utp::kFrameInvalid;
-}
-
-bool RewritePacketNumber(eular::utp::ConnectionImpl *conn, eular::utp::PacketOut *pkt)
-{
-    constexpr size_t kPacketNumberOffset = offsetof(eular::utp::UTPHeaderProto, pn);
-
-    if (conn == nullptr || pkt == nullptr || pkt->raw_data == nullptr) {
-        return false;
-    }
-    if (pkt->data_size < UTP_HEADER_SIZE) {
-        return false;
-    }
-    if (pkt->alloc_size < kPacketNumberOffset + sizeof(pkt->packno)) {
-        return false;
-    }
-
-    pkt->packno = conn->packetNumber();
-    uint8_t *offset = pkt->raw_data + kPacketNumberOffset;
-    size_t left = pkt->alloc_size - kPacketNumberOffset;
-    return Serialize::SerializeTo(offset, left, pkt->packno) != nullptr;
-}
-
-bool RewritePayloadLength(eular::utp::PacketOut *pkt, uint16_t payloadLen)
-{
-    constexpr size_t kPayloadLengthOffset = offsetof(eular::utp::UTPHeaderProto, payload_length);
-    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->alloc_size < kPayloadLengthOffset + sizeof(payloadLen)) {
-        return false;
-    }
-
-    uint8_t *offset = pkt->raw_data + kPayloadLengthOffset;
-    size_t left = pkt->alloc_size - kPayloadLengthOffset;
-    return Serialize::SerializeTo(offset, left, payloadLen) != nullptr;
-}
-
-bool StripTransientAckPayload(eular::utp::PacketOut *pkt)
-{
-    if (pkt == nullptr || pkt->raw_data == nullptr || pkt->transient_ack_size == 0) {
-        return true;
-    }
-    if ((pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameAck))) == 0) {
-        pkt->transient_ack_size = 0;
-        return true;
-    }
-
-    uint16_t ackOffset = UTP_HEADER_SIZE;
-    uint16_t ackLength = pkt->transient_ack_size;
-    bool ackMetaFound = false;
-    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
-        if (pkt->frame_meta[i].frame_type == eular::utp::kFrameAck) {
-            ackOffset = pkt->frame_meta[i].offset;
-            ackLength = pkt->frame_meta[i].length;
-            ackMetaFound = true;
-            break;
-        }
-    }
-
-    if (pkt->data_size < ackOffset + ackLength) {
-        return false;
-    }
-
-    const size_t payloadLen = static_cast<size_t>(pkt->data_size - UTP_HEADER_SIZE);
-    if (ackOffset < UTP_HEADER_SIZE || ackLength == 0) {
-        return false;
-    }
-
-    const size_t ackPayloadOffset = static_cast<size_t>(ackOffset - UTP_HEADER_SIZE);
-    if (payloadLen < ackPayloadOffset + ackLength) {
-        return false;
-    }
-
-    const size_t remainPayload = payloadLen - ackLength;
-    uint8_t *payloadBase = pkt->raw_data + UTP_HEADER_SIZE;
-    std::memmove(payloadBase + ackPayloadOffset,
-                 payloadBase + ackPayloadOffset + ackLength,
-                 payloadLen - (ackPayloadOffset + ackLength));
-
-    if (!RewritePayloadLength(pkt, static_cast<uint16_t>(remainPayload))) {
-        return false;
-    }
-
-    pkt->data_size = static_cast<uint16_t>(UTP_HEADER_SIZE + remainPayload);
-    pkt->transient_ack_size = 0;
-
-    uint32_t frameTypeBits = 0;
-    uint8_t writeIndex = 0;
-    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
-        eular::utp::FrameMetaInfo meta = pkt->frame_meta[i];
-        if (meta.frame_type == eular::utp::kFrameAck) {
-            continue;
-        }
-        if (meta.offset > ackOffset) {
-            meta.offset = static_cast<uint16_t>(meta.offset - ackLength);
-        }
-        pkt->frame_meta[writeIndex++] = meta;
-        if (meta.frame_type < eular::utp::kFrameMax) {
-            frameTypeBits |= (1u << static_cast<uint32_t>(meta.frame_type));
-            if (meta.frame_type == eular::utp::kFrameHandshakeDone) {
-                frameTypeBits |= (1u << static_cast<uint32_t>(eular::utp::kFrameHandshakeDelay));
-            }
-        }
-    }
-    pkt->frame_meta_count = writeIndex;
-    if (ackMetaFound) {
-        pkt->frame_types = frameTypeBits;
-    } else {
-        pkt->frame_types &= ~(1u << static_cast<uint32_t>(eular::utp::kFrameAck));
-    }
-
-    if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
-        std::free(pkt->encrypt_data);
-    }
-    pkt->encrypt_data = nullptr;
-    pkt->encrypt_data_size = 0;
-
-    pkt->slice_count = 0;
-    pkt->slices[pkt->slice_count++] = eular::utp::PacketOutSlice{0, static_cast<uint16_t>(UTP_HEADER_SIZE)};
-    if (remainPayload > 0 && pkt->slice_count < eular::utp::PACKET_OUT_MAX_SLICES) {
-        pkt->slices[pkt->slice_count++] = eular::utp::PacketOutSlice{static_cast<uint16_t>(UTP_HEADER_SIZE),
-                                                                      static_cast<uint16_t>(remainPayload)};
-    }
-
-    return true;
 }
 
 bool BuildMtuProbePayload(uint16_t packetSize,
@@ -1180,77 +1055,171 @@ bool SendControl::handleLostMtuProbe(PacketOut *pkt)
 
 int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs)
 {
+    (void)nowUs;
     if (pkt == nullptr || m_conn == nullptr) {
         return UTP_ERR_INVALID_PARAM;
     }
 
-    if ((pkt->frame_types & (1u << static_cast<uint32_t>(kFrameStream))) == 0 || pkt->stream_data_size == 0) {
+    if (pkt->raw_data == nullptr || pkt->data_size < UTP_HEADER_SIZE || pkt->frame_meta_count == 0) {
         return UTP_ERR_WOULD_BLOCK;
     }
 
-    const uint32_t supportedMask = (1u << static_cast<uint32_t>(kFrameStream))
-                                 | (1u << static_cast<uint32_t>(kFrameHandshakeDone))
-                                 | (1u << static_cast<uint32_t>(kFrameHandshakeDelay));
-    if ((pkt->frame_types & ~supportedMask) != 0) {
+    const size_t maxPacketSize = m_conn->m_mtuDiscovery.currentMaxPacketSize();
+    if (maxPacketSize <= UTP_HEADER_SIZE) {
         return UTP_ERR_WOULD_BLOCK;
     }
 
-    uint16_t streamFrameOffset = UTP_HEADER_SIZE;
-    uint16_t streamFrameLength = static_cast<uint16_t>(pkt->data_size > UTP_HEADER_SIZE
-                                                     ? (pkt->data_size - UTP_HEADER_SIZE)
-                                                     : 0);
-    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
-        if (pkt->frame_meta[i].frame_type == kFrameStream) {
-            streamFrameOffset = pkt->frame_meta[i].offset;
-            streamFrameLength = pkt->frame_meta[i].length;
-            break;
-        }
-    }
-
-    if (streamFrameOffset < UTP_HEADER_SIZE || pkt->data_size < streamFrameOffset + streamFrameLength) {
-        return UTP_ERR_INTERNAL_ERROR;
-    }
-
-    FrameStream frame;
-    const uint8_t *frameBytes = pkt->raw_data + streamFrameOffset;
-    if (frame.decode(frameBytes, streamFrameLength) < 0) {
-        return UTP_ERR_INTERNAL_ERROR;
-    }
-
-    const size_t payloadBudget = std::max<size_t>(m_conn->streamPayloadBudgetHint(), 1);
-    if (payloadBudget >= frame.stream_data_length) {
+    const size_t payloadBudget = maxPacketSize - UTP_HEADER_SIZE;
+    if (payloadBudget == 0) {
         return UTP_ERR_WOULD_BLOCK;
     }
 
-    const uint8_t *streamData = static_cast<const uint8_t *>(frame.stream_data);
-    if (frame.stream_data_length > 0 && streamData == nullptr) {
-        return UTP_ERR_INTERNAL_ERROR;
-    }
-
-    const bool hasHandshakeDone = (pkt->frame_types & (1u << static_cast<uint32_t>(kFrameHandshakeDone))) != 0;
+    const uint8_t packetType = *(pkt->raw_data + offsetof(UTPHeaderProto, types));
+    const uint16_t packetFlags = pkt->po_flags & (PacketOutFlags::kPoHello | PacketOutFlags::kPoNoEncrypt);
     const uint64_t bytesOutBefore = m_conn->m_bytesOut;
 
-    size_t sentData = 0;
-    while (sentData < frame.stream_data_length) {
-        const size_t chunkLen = std::min(payloadBudget,
-                                         static_cast<size_t>(frame.stream_data_length - sentData));
-        const bool fin = STREAM_IS_FIN(frame.stream_flag) && (sentData + chunkLen == frame.stream_data_length);
-        const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
-                                                       frame.stream_offset + sentData,
-                                                       streamData + sentData,
-                                                       chunkLen,
-                                                       fin);
+    std::vector<uint8_t> framePayload;
+    std::vector<ConnectionImpl::FrameBuildMeta> frameMetas;
+    framePayload.reserve(payloadBudget);
+    frameMetas.reserve(PACKET_OUT_MAX_FRAMES);
+    uint32_t frameTypeBits = 0;
+    bool sentAny = false;
+
+    auto includeFrameBit = [&frameTypeBits] (FrameType frameType) {
+        if (frameType < kFrameMax) {
+            frameTypeBits |= (1u << static_cast<uint32_t>(frameType));
+            if (frameType == kFrameHandshakeDone) {
+                frameTypeBits |= (1u << static_cast<uint32_t>(kFrameHandshakeDelay));
+            }
+        }
+    };
+
+    auto flushFramePacket = [&] () -> int32_t {
+        if (framePayload.empty()) {
+            return UTP_ERR_OK;
+        }
+
+        const int32_t status = m_conn->sendPacket(packetType,
+                                                   framePayload.data(),
+                                                   framePayload.size(),
+                                                   packetFlags,
+                                                   nullptr,
+                                                   frameTypeBits,
+                                                   nullptr,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   frameMetas.data(),
+                                                   frameMetas.size());
         if (status != UTP_ERR_OK) {
             return status;
         }
-        sentData += chunkLen;
+
+        sentAny = true;
+        framePayload.clear();
+        frameMetas.clear();
+        frameTypeBits = 0;
+        return UTP_ERR_OK;
+    };
+
+    for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
+        const FrameMetaInfo &meta = pkt->frame_meta[i];
+        if (meta.length == 0) {
+            continue;
+        }
+
+        const bool transientFrame = (meta.frame_flags & kFMTransientOnRetrans) != 0
+                                 || (meta.frame_type == kFrameAck && pkt->transient_ack_size > 0);
+        if (transientFrame) {
+            continue;
+        }
+
+        if (meta.offset < UTP_HEADER_SIZE || pkt->data_size < meta.offset + meta.length) {
+            return UTP_ERR_INTERNAL_ERROR;
+        }
+
+        const uint8_t *frameBytes = pkt->raw_data + meta.offset;
+        const size_t frameLen = meta.length;
+
+        if (meta.frame_type == kFrameStream) {
+            int32_t flushStatus = flushFramePacket();
+            if (flushStatus != UTP_ERR_OK) {
+                return flushStatus;
+            }
+
+            FrameStream frame;
+            if (frame.decode(frameBytes, frameLen) < 0) {
+                return UTP_ERR_INTERNAL_ERROR;
+            }
+
+            const uint8_t *streamData = static_cast<const uint8_t *>(frame.stream_data);
+            if (frame.stream_data_length > 0 && streamData == nullptr) {
+                return UTP_ERR_INTERNAL_ERROR;
+            }
+
+            const size_t streamChunkBudget = std::max<size_t>(m_conn->streamPayloadBudgetHint(), 1);
+            size_t sentData = 0;
+            if (frame.stream_data_length == 0 && STREAM_IS_FIN(frame.stream_flag)) {
+                const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
+                                                               frame.stream_offset,
+                                                               nullptr,
+                                                               0,
+                                                               true);
+                if (status != UTP_ERR_OK) {
+                    return status;
+                }
+                sentAny = true;
+                continue;
+            }
+
+            while (sentData < frame.stream_data_length) {
+                const size_t chunkLen = std::min(streamChunkBudget,
+                                                 static_cast<size_t>(frame.stream_data_length - sentData));
+                const bool fin = STREAM_IS_FIN(frame.stream_flag)
+                              && (sentData + chunkLen == frame.stream_data_length);
+                const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
+                                                               frame.stream_offset + sentData,
+                                                               streamData + sentData,
+                                                               chunkLen,
+                                                               fin);
+                if (status != UTP_ERR_OK) {
+                    return status;
+                }
+                sentAny = true;
+                sentData += chunkLen;
+            }
+
+            continue;
+        }
+
+        if (frameLen > payloadBudget) {
+            if ((meta.frame_flags & kFMDroppableOnMtu) != 0) {
+                continue;
+            }
+            return UTP_ERR_WOULD_BLOCK;
+        }
+
+        if (!framePayload.empty() && framePayload.size() + frameLen > payloadBudget) {
+            int32_t flushStatus = flushFramePacket();
+            if (flushStatus != UTP_ERR_OK) {
+                return flushStatus;
+            }
+        }
+
+        framePayload.insert(framePayload.end(), frameBytes, frameBytes + frameLen);
+        frameMetas.push_back(ConnectionImpl::FrameBuildMeta(meta.frame_type,
+                                                            static_cast<uint16_t>(frameLen)));
+        includeFrameBit(meta.frame_type);
     }
 
-    if (hasHandshakeDone) {
-        const int32_t hsStatus = m_conn->sendHandshakeDonePacket();
-        if (hsStatus != UTP_ERR_OK && hsStatus != UTP_ERR_WOULD_BLOCK) {
-            return hsStatus;
-        }
+    int32_t flushStatus = flushFramePacket();
+    if (flushStatus != UTP_ERR_OK) {
+        return flushStatus;
+    }
+
+    if (!sentAny) {
+        return UTP_ERR_WOULD_BLOCK;
     }
 
     TAILQ_REMOVE(&m_lostPackets, pkt, po_next);
@@ -1275,7 +1244,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     }
 
     if (pkt->stream_data_size > 0 && pkt->transient_ack_size > 0) {
-        if (!StripTransientAckPayload(pkt)) {
+        if (!detail::PacketEditor::StripTransientAckPayload(pkt)) {
             return UTP_ERR_INTERNAL_ERROR;
         }
     }
@@ -1292,7 +1261,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     const utp_packno_t previousPackNo = pkt->packno;
     const bool needResetPackNo = (pkt->po_flags & PacketOutFlags::kPoResetPackNo) != 0;
     if (needResetPackNo) {
-        if (!RewritePacketNumber(m_conn, pkt)) {
+        if (!detail::PacketEditor::RewritePacketNumber(m_conn, pkt)) {
             return UTP_ERR_INTERNAL_ERROR;
         }
     }

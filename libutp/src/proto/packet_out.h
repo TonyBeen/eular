@@ -40,6 +40,14 @@ enum PacketOutLocalFlags : uint16_t {
     kPOLFacked      = (1 << 2), // 被 FACK 检测出丢失
 };
 
+enum FrameMetaFlags : uint8_t {
+    kFMNone                 = 0,
+    kFMRetransMustKeep      = (1 << 0), // 重传重组时必须保留该帧
+    kFMTransientOnRetrans   = (1 << 1), // 重传时允许剔除(例如 piggyback ACK)
+    kFMDroppableOnMtu       = (1 << 2), // MTU 收缩时可直接丢弃
+    kFMSplittable           = (1 << 3), // 帧可拆分为多个包发送(当前仅 STREAM)
+};
+
 struct FrameMetaInfo {
     union {
         class StreamImpl*   stream; // 帧所属流, 含有流数据时才有效
@@ -48,6 +56,7 @@ struct FrameMetaInfo {
     uint16_t            offset;     // 帧数据偏移
     uint16_t            length;     // 帧数据长度
     FrameType           frame_type; // 帧类型
+    uint8_t             frame_flags;// FrameMetaFlags 位图
 };
 
 struct FrameMetaVec {
@@ -84,8 +93,8 @@ struct PacketOutSlice {
     }
 };
 
-static constexpr uint8_t PACKET_OUT_MAX_SLICES = 4;
-static constexpr uint8_t PACKET_OUT_MAX_FRAMES = 4;
+static constexpr uint8_t PACKET_OUT_MAX_SLICES = 8;
+static constexpr uint8_t PACKET_OUT_MAX_FRAMES = 8;
 
 struct PacketOut {
     void                reset();

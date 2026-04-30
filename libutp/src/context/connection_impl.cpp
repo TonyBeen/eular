@@ -9,6 +9,7 @@
 #include "context/context_impl.h"
 #include "context/packet_decode_helper.h"
 #include "context/send_ctl.h"
+#include "context/detail/frame_meta_policy.h"
 
 #include <algorithm>
 #include <array>
@@ -2075,10 +2076,7 @@ int32_t ConnectionImpl::sendHandshakePacket(bool encrypted)
         }
     }
 
-    return sendPacket(UTP_TYPE_HANDSHAKE,
-                      m_payloadScratch.data(),
-                      m_payloadScratch.size(),
-                      PacketOutFlags::kPoHello);
+    return sendPacket(UTP_TYPE_HANDSHAKE, m_payloadScratch.data(), m_payloadScratch.size(), PacketOutFlags::kPoHello);
 }
 
 int32_t ConnectionImpl::sendPacket(uint8_t packetType,
@@ -2369,6 +2367,8 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         packet->frame_meta[i].offset = framePayloadOffset;
         packet->frame_meta[i].length = frameMetas[i].payloadBytes;
         packet->frame_meta[i].fmi_u.data = 0;
+        packet->frame_meta[i].frame_flags = detail::FrameMetaPolicy::DefaultFlags(frameMetas[i].frameType,
+                                               transientAckBytes);
         packet->frame_meta_count = static_cast<uint8_t>(i + 1);
         framePayloadOffset = static_cast<uint16_t>(framePayloadOffset + frameMetas[i].payloadBytes);
     }

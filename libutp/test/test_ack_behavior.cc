@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -19,13 +20,21 @@
 
 #define private public
 #include "context/context_impl.h"
+#include "context/send_ctl.h"
 #undef private
 
-#include "context/send_ctl.h"
 #include "proto/proto.h"
 #include "proto/frame/ack_frequency.h"
+#include "proto/frame/handshake_done.h"
 #include "proto/frame/stream.h"
+#include "utp/errno.h"
 #include "util/time.h"
+
+namespace eular {
+namespace utp {
+static constexpr int32_t UTP_ERR_OK = ::UTP_ERR_OK;
+} // namespace utp
+} // namespace eular
 
 using eular::Serialize;
 using eular::utp::Config;
@@ -33,8 +42,11 @@ using eular::utp::ConnectionImpl;
 using eular::utp::Context;
 using eular::utp::ContextImpl;
 using eular::utp::FrameAckFrequency;
+using eular::utp::FrameHandshakeDone;
 using eular::utp::FrameStream;
 using eular::utp::FrameType;
+using eular::utp::PacketOut;
+using eular::utp::SendControl;
 
 namespace {
 
@@ -157,6 +169,105 @@ bool AcceptPending(ContextImpl &server)
         return server.accept() == eular::utp::UTP_ERR_OK;
     }
     return false;
+}
+
+utp_packno_t LargestUnackedPackNo(const SendControl *sendCtl)
+{
+    utp_packno_t maxPackNo = 0;
+    if (sendCtl == nullptr) {
+        return maxPackNo;
+    }
+
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &sendCtl->m_unackedPackets, po_next) {
+        if (pkt->packno > maxPackNo) {
+            maxPackNo = pkt->packno;
+        }
+    }
+    return maxPackNo;
+}
+
+size_t CountUnackedPacketsAfterWithBits(const SendControl *sendCtl,
+                                        utp_packno_t afterPackNo,
+                                        uint32_t frameBits,
+                                        bool requireAllBits = false)
+{
+    if (sendCtl == nullptr) {
+        return 0;
+    }
+
+    size_t count = 0;
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &sendCtl->m_unackedPackets, po_next) {
+        if (pkt->packno <= afterPackNo) {
+            continue;
+        }
+
+        if (requireAllBits) {
+            if ((pkt->frame_types & frameBits) == frameBits) {
+                ++count;
+            }
+        } else if ((pkt->frame_types & frameBits) != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+size_t SumUnackedStreamBytesAfter(const SendControl *sendCtl, utp_packno_t afterPackNo)
+{
+    if (sendCtl == nullptr) {
+        return 0;
+    }
+
+    size_t bytes = 0;
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &sendCtl->m_unackedPackets, po_next) {
+        if (pkt->packno <= afterPackNo) {
+            continue;
+        }
+        bytes += pkt->stream_data_size;
+    }
+    return bytes;
+}
+
+PacketOut *BuildLostPacket(ContextImpl &owner,
+                           ConnectionImpl::SP conn,
+                           const std::vector<uint8_t> &payload,
+                           const std::vector<eular::utp::FrameMetaInfo> &metas,
+                           uint32_t frameTypes,
+                           uint32_t streamDataBytes,
+                           uint16_t transientAckBytes)
+{
+    REQUIRE(conn != nullptr);
+
+    const std::vector<uint8_t> wire = BuildWirePacket(conn->cid(),
+                                                      conn->m_peerConnectionID,
+                                                      1,
+                                                      UTP_TYPE_CTRL,
+                                                      payload);
+    PacketOut *pkt = owner.m_mm.getPacketOut(static_cast<uint32_t>(wire.size()));
+    REQUIRE(pkt != nullptr);
+    REQUIRE(pkt->raw_data != nullptr);
+    REQUIRE(pkt->alloc_size >= wire.size());
+
+    std::memcpy(pkt->raw_data, wire.data(), wire.size());
+    pkt->data_size = static_cast<uint16_t>(wire.size());
+    pkt->frame_types = frameTypes;
+    pkt->stream_data_size = streamDataBytes;
+    pkt->transient_ack_size = transientAckBytes;
+    pkt->frame_meta_count = static_cast<uint8_t>(metas.size());
+    REQUIRE(metas.size() <= eular::utp::PACKET_OUT_MAX_FRAMES);
+
+    for (size_t i = 0; i < metas.size(); ++i) {
+        pkt->frame_meta[i] = metas[i];
+    }
+
+    pkt->po_flags |= eular::utp::PacketOutFlags::kPoLost;
+    pkt->po_flags |= eular::utp::PacketOutFlags::kPoLossRecorded;
+    pkt->po_flags |= eular::utp::PacketOutFlags::kPoResetPackNo;
+    TAILQ_INSERT_TAIL(&conn->m_sendCtl->m_lostPackets, pkt, po_next);
+    return pkt;
 }
 
 } // namespace
@@ -548,4 +659,225 @@ TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Inte
     REQUIRE(clientConn->m_ackProfileCurrent == ConnectionImpl::kAckProfileLatencySensitive);
     const uint32_t ackFrequencyBits = (1u << static_cast<uint32_t>(FrameType::kFrameAckFrequency));
     REQUIRE(HasUnackedPacketWithBits(clientConn->m_sendCtl.get(), ackFrequencyBits));
+}
+
+TEST_CASE("Retrans repack: transient ACK frame is stripped while STREAM is preserved", "[Retrans][Repack]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(loop,
+                      [&]() {
+                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
+                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
+                      },
+                      [&]() { (void)AcceptPending(server); },
+                      300,
+                      1));
+
+    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
+    REQUIRE(clientConn != nullptr);
+
+    const std::vector<uint8_t> ackBytes = {static_cast<uint8_t>(FrameType::kFrameAck), 0x00, 0x00, 0x00};
+    const std::string streamData = "repack-ack-strip";
+    std::vector<uint8_t> streamBytes = BuildStreamPayload(77, 0, streamData);
+
+    std::vector<uint8_t> payload;
+    payload.insert(payload.end(), ackBytes.begin(), ackBytes.end());
+    payload.insert(payload.end(), streamBytes.begin(), streamBytes.end());
+
+    std::vector<eular::utp::FrameMetaInfo> metas(2);
+    metas[0].offset = UTP_HEADER_SIZE;
+    metas[0].length = static_cast<uint16_t>(ackBytes.size());
+    metas[0].frame_type = FrameType::kFrameAck;
+    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMTransientOnRetrans | eular::utp::kFMDroppableOnMtu);
+    metas[0].fmi_u.data = 0;
+    metas[1].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size());
+    metas[1].length = static_cast<uint16_t>(streamBytes.size());
+    metas[1].frame_type = FrameType::kFrameStream;
+    metas[1].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
+    metas[1].fmi_u.data = 0;
+
+    PacketOut *lostPkt = BuildLostPacket(client,
+                                         clientConn,
+                                         payload,
+                                         metas,
+                                         (1u << static_cast<uint32_t>(FrameType::kFrameAck))
+                                       | (1u << static_cast<uint32_t>(FrameType::kFrameStream)),
+                                         streamData.size(),
+                                         static_cast<uint16_t>(ackBytes.size()));
+
+    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
+    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
+            == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(TAILQ_EMPTY(&clientConn->m_sendCtl->m_lostPackets));
+    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(), beforePackNo,
+                                             (1u << static_cast<uint32_t>(FrameType::kFrameAck))) == 0);
+    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(), beforePackNo,
+                                             (1u << static_cast<uint32_t>(FrameType::kFrameStream))) >= 1);
+}
+
+TEST_CASE("Retrans repack: large STREAM is split into multiple retrans packets", "[Retrans][Repack]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(loop,
+                      [&]() {
+                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
+                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
+                      },
+                      [&]() { (void)AcceptPending(server); },
+                      300,
+                      1));
+
+    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
+    REQUIRE(clientConn != nullptr);
+
+    // Shrink MTU budget to force stream chunking into multiple packets.
+    clientConn->m_mtuDiscovery.m_currentMtu = ETHERNET_MTU_MIN;
+
+    const std::string streamData(4096, 'x');
+    std::vector<uint8_t> streamBytes = BuildStreamPayload(88, 0, streamData);
+
+    std::vector<eular::utp::FrameMetaInfo> metas(1);
+    metas[0].offset = UTP_HEADER_SIZE;
+    metas[0].length = static_cast<uint16_t>(streamBytes.size());
+    metas[0].frame_type = FrameType::kFrameStream;
+    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
+    metas[0].fmi_u.data = 0;
+
+    PacketOut *lostPkt = BuildLostPacket(client,
+                                         clientConn,
+                                         streamBytes,
+                                         metas,
+                                         (1u << static_cast<uint32_t>(FrameType::kFrameStream)),
+                                         streamData.size(),
+                                         0);
+
+    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
+    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
+            == eular::utp::UTP_ERR_OK);
+
+    const size_t newStreamPackets = CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
+                                                                      beforePackNo,
+                                                                      (1u << static_cast<uint32_t>(FrameType::kFrameStream)));
+    REQUIRE(newStreamPackets >= 2);
+    REQUIRE(SumUnackedStreamBytesAfter(clientConn->m_sendCtl.get(), beforePackNo) == streamData.size());
+}
+
+TEST_CASE("Retrans repack: mixed frames keep mandatory control frame and drop transient ACK", "[Retrans][Repack]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 200;
+
+    ev::EventLoop loop;
+    ContextImpl server(loop.loop(), &cfg);
+    ContextImpl client(loop.loop(), &cfg);
+
+    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
+
+    Context::ConnectInfo info;
+    info.ip = "127.0.0.1";
+    info.port = BoundPort(server);
+    info.timeout = 200;
+    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(PumpUntil(loop,
+                      [&]() {
+                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
+                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
+                      },
+                      [&]() { (void)AcceptPending(server); },
+                      300,
+                      1));
+
+    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
+    REQUIRE(clientConn != nullptr);
+
+    const std::vector<uint8_t> ackBytes = {static_cast<uint8_t>(FrameType::kFrameAck), 0x00, 0x00, 0x00};
+    const std::string streamData = "mixed-control-stream";
+    std::vector<uint8_t> streamBytes = BuildStreamPayload(99, 0, streamData);
+
+    FrameHandshakeDone hsDone{};
+    std::vector<uint8_t> hsBytes(static_cast<size_t>(FRAME_HANDSHAKE_DONE_SIZE), 0);
+    REQUIRE(hsDone.encode(hsBytes.data(), hsBytes.size()) == FRAME_HANDSHAKE_DONE_SIZE);
+
+    std::vector<uint8_t> payload;
+    payload.insert(payload.end(), ackBytes.begin(), ackBytes.end());
+    payload.insert(payload.end(), streamBytes.begin(), streamBytes.end());
+    payload.insert(payload.end(), hsBytes.begin(), hsBytes.end());
+
+    std::vector<eular::utp::FrameMetaInfo> metas(3);
+    metas[0].offset = UTP_HEADER_SIZE;
+    metas[0].length = static_cast<uint16_t>(ackBytes.size());
+    metas[0].frame_type = FrameType::kFrameAck;
+    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMTransientOnRetrans | eular::utp::kFMDroppableOnMtu);
+    metas[0].fmi_u.data = 0;
+    metas[1].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size());
+    metas[1].length = static_cast<uint16_t>(streamBytes.size());
+    metas[1].frame_type = FrameType::kFrameStream;
+    metas[1].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
+    metas[1].fmi_u.data = 0;
+    metas[2].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size() + streamBytes.size());
+    metas[2].length = static_cast<uint16_t>(hsBytes.size());
+    metas[2].frame_type = FrameType::kFrameHandshakeDone;
+    metas[2].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep);
+    metas[2].fmi_u.data = 0;
+
+    PacketOut *lostPkt = BuildLostPacket(client,
+                                         clientConn,
+                                         payload,
+                                         metas,
+                                         (1u << static_cast<uint32_t>(FrameType::kFrameAck))
+                                       | (1u << static_cast<uint32_t>(FrameType::kFrameStream))
+                                       | (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone))
+                                       | (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDelay)),
+                                         streamData.size(),
+                                         static_cast<uint16_t>(ackBytes.size()));
+
+    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
+    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
+            == eular::utp::UTP_ERR_OK);
+
+    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
+                                             beforePackNo,
+                                             (1u << static_cast<uint32_t>(FrameType::kFrameAck))) == 0);
+    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
+                                             beforePackNo,
+                                             (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone))) >= 1);
+    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
+                                             beforePackNo,
+                                             (1u << static_cast<uint32_t>(FrameType::kFrameStream))) >= 1);
 }

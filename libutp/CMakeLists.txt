@@ -103,6 +103,8 @@ set(UTP_SOURCES
     src/congestion/pacer.cpp
     src/context/connection_impl.cpp
     src/context/context_impl.cpp
+    src/context/detail/frame_meta_policy.cpp
+    src/context/detail/packet_editor.cpp
     src/context/packet_decode_helper.cpp
     src/context/send_ctl.cpp
     src/context/stream_impl.cpp
@@ -260,6 +262,7 @@ if(UTP_BUILD_TESTS)
         test/test_network_path.cc
         test/test_packet_in.cc
         test/test_packet_out.cc
+        test/test_retrans_repack.cc
         test/test_receive_history.cc
         test/test_ring_buffer.cc
         test/test_stream_impl.cc
