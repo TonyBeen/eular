@@ -93,7 +93,7 @@ TEST_CASE("StreamImpl: peer fin returns EOF on empty read", "[Stream]")
     REQUIRE(stream.read(&buf, 1) == 0);
 }
 
-TEST_CASE("StreamImpl: zero-copy read interface exposes readable buffer", "[Stream]")
+TEST_CASE("StreamImpl: read views interface exposes readable buffer", "[Stream]")
 {
     StreamImpl stream(nullptr, 12);
 
@@ -107,13 +107,13 @@ TEST_CASE("StreamImpl: zero-copy read interface exposes readable buffer", "[Stre
     REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
 
     eular::utp::Stream::ConstBufferView views[2];
-    const size_t bytes = stream.acquireReadBuffer(views, 16);
+    const size_t bytes = stream.acquireReadViews(views, 16);
     REQUIRE(bytes == payload.size());
     REQUIRE(views[0].data != nullptr);
     REQUIRE(views[0].len == payload.size());
     REQUIRE(std::memcmp(views[0].data, payload.data(), payload.size()) == 0);
 
-    REQUIRE(stream.consumeRead(bytes) == static_cast<int32_t>(bytes));
+    REQUIRE(stream.commitReadViews(bytes) == static_cast<int32_t>(bytes));
     REQUIRE_FALSE(stream.readable());
 }
 

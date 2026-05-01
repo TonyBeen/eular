@@ -96,6 +96,7 @@ set(UTP_PUBLIC_HEADERS
 )
 
 set(UTP_SOURCES
+    3rd/rbtree.c
     src/congestion/bbr_v1.cpp
     src/congestion/bw_sampler.cpp
     src/congestion/cubic.cpp
@@ -266,6 +267,7 @@ if(UTP_BUILD_TESTS)
         test/test_receive_history.cc
         test/test_ring_buffer.cc
         test/test_stream_impl.cc
+        test/test_stream_zero_copy_views.cc
     )
 
     add_executable(utp_tests ${UTP_TEST_SOURCES})

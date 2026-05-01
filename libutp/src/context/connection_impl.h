@@ -191,7 +191,7 @@ private:
     uint32_t streamLimit(StreamType streamType, bool peerLimit) const;
     uint32_t streamIdSlot(StreamType streamType) const;
     int32_t validateIncomingStreamId(uint32_t streamId) const;
-    int32_t ingestStreamFrame(const FrameStream &streamFrame);
+    int32_t ingestStreamFrame(const FrameStream &streamFrame, PacketIn *packet = nullptr);
     void flushPendingStreamWrites();
     int32_t sendConnectionCloseFrame();
     int32_t sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize);

@@ -38,8 +38,12 @@ public:
 
     PacketOut*  getPacketOut(uint32_t size);
     PacketIn*   getPacketIn(uint32_t size);
+    RecvFragment* getRecvFragment();
     void        putPacketOut(PacketOut *pkt);
     void        putPacketIn(PacketIn *pkt);
+    void        putRecvFragment(RecvFragment *fragment);
+    void        retainPacketIn(PacketIn *pkt);
+    void        releasePacketIn(PacketIn *pkt);
 
 private:
     void poolStatsAllocated(PoolStats *stats, uint32_t allocated);
@@ -53,6 +57,7 @@ public:
     MaloCacheLine<StreamImpl>   stream_malo;
     MaloCacheLine<PacketIn>     packet_in_malo;
     MaloCacheLine<PacketOut>    packet_out_malo;
+    MaloCacheLine<RecvFragment> recv_fragment_malo;
 
     SLIST_HEAD(, PacketOutBuf)      packet_out_bufs[MM_OUT_BUCKETS];
     PoolStats                       packet_out_stats[MM_OUT_BUCKETS];

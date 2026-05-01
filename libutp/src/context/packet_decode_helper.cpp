@@ -8,7 +8,6 @@
 #include "context/packet_decode_helper.h"
 
 #include <cstring>
-#include <memory>
 
 #include <utils/serialize.hpp>
 
@@ -18,72 +17,101 @@ namespace eular {
 namespace utp {
 namespace detail {
 
-bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg,
-                                     MemoryManager &mm,
-                                     const std::shared_ptr<AesGcmContext> &aesCtx,
-                                     PacketIn &packet)
+namespace {
+
+constexpr size_t kPayloadLengthOffset = 16;
+
+bool ParseHeader(const uint8_t *data, size_t size, UTPHeaderProto &header, const uint8_t *&payload)
 {
+    if (data == nullptr || size < UTP_HEADER_SIZE) {
+        return false;
+    }
+
+    const uint8_t *offset = data;
+    size_t left = size;
+    offset = Serialize::DeserializeFrom(offset, left, header.scid);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, header.dcid);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, header.pn);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, header.payload_length);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, header.types);
+    if (offset == nullptr) return false;
+    offset = Serialize::DeserializeFrom(offset, left, header.reserve);
+    if (offset == nullptr) return false;
+
+    if (left < header.payload_length) {
+        return false;
+    }
+
+    payload = offset;
+    return true;
+}
+
+} // namespace
+
+bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryManager &mm,
+                                     const std::shared_ptr<AesGcmContext> &aesCtx, PacketIn &packet)
+{
+    UNUSED(mm);
     if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE || packet.raw_data == nullptr) {
         return false;
     }
 
-    std::memcpy(const_cast<uint8_t *>(packet.raw_data), msg.data, msg.len);
-    packet.raw_size = msg.len;
-    packet.meta = msg.metaInfo;
-    if (packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK) {
-        return true;
+    const uint8_t *msgData = static_cast<const uint8_t *>(msg.data);
+
+    UTPHeaderProto header{};
+    const uint8_t *payload = nullptr;
+    if (!ParseHeader(msgData, msg.len, header, payload)) {
+        return false;
     }
 
     if (!aesCtx) {
+        std::memcpy(const_cast<uint8_t *>(packet.raw_data), msgData, msg.len);
+        packet.raw_size = msg.len;
+        packet.meta = msg.metaInfo;
+        return packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK;
+    }
+
+    if (header.payload_length < AesGcmContext::GCM_TAG_SIZE) {
         return false;
     }
 
-    auto packetReleaser = [&mm] (PacketIn *pkt) {
-        mm.putPacketIn(pkt);
-    };
-    std::unique_ptr<PacketIn, decltype(packetReleaser)> encryptedPacket(
-        mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
-    if (!encryptedPacket || encryptedPacket->raw_data == nullptr) {
+    if (packet.alloc_size < UTP_HEADER_SIZE) {
         return false;
     }
 
-    std::memcpy(const_cast<uint8_t *>(encryptedPacket->raw_data), msg.data, msg.len);
-    encryptedPacket->raw_size = msg.len;
-
-    const uint8_t *offset = encryptedPacket->raw_data;
-    size_t left = encryptedPacket->raw_size;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.scid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.dcid);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.pn);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.payload_length);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.types);
-    if (offset == nullptr) return false;
-    offset = Serialize::DeserializeFrom(offset, left, encryptedPacket->header.reserve);
-    if (offset == nullptr) return false;
-
-    if (left < encryptedPacket->header.payload_length) {
+    const size_t plainCapacity = static_cast<size_t>(packet.alloc_size) - UTP_HEADER_SIZE;
+    size_t plainLen = plainCapacity;
+    if (plainLen + AesGcmContext::GCM_TAG_SIZE < header.payload_length) {
         return false;
     }
 
-    encryptedPacket->payload = offset;
-    encryptedPacket->payload_size = encryptedPacket->header.payload_length;
-    if (aesCtx->decrypt(encryptedPacket.get()) != UTP_ERR_OK) {
+    std::memcpy(const_cast<uint8_t *>(packet.raw_data), msgData, UTP_HEADER_SIZE);
+    if (aesCtx->decrypt(payload,
+                        header.payload_length,
+                        msgData,
+                        UTP_HEADER_SIZE,
+                        header.pn,
+                        const_cast<uint8_t *>(packet.raw_data) + UTP_HEADER_SIZE,
+                        &plainLen) != UTP_ERR_OK) {
         return false;
     }
 
-    // PacketIn::decode overwrites raw_data/raw_size with the input buffer.
-    // Decode from packet-owned storage to preserve single ownership semantics.
-    std::memcpy(const_cast<uint8_t *>(packet.raw_data),
-                encryptedPacket->raw_data,
-                encryptedPacket->raw_size);
-    packet.raw_size = encryptedPacket->raw_size;
+    const size_t decodedSize = UTP_HEADER_SIZE + plainLen;
+    if (decodedSize > static_cast<size_t>(packet.alloc_size) || decodedSize > msg.len) {
+        return false;
+    }
+
+    uint8_t *mutableRaw = const_cast<uint8_t *>(packet.raw_data);
+    mutableRaw[kPayloadLengthOffset] = static_cast<uint8_t>((plainLen >> 8) & 0xFFu);
+    mutableRaw[kPayloadLengthOffset + 1] = static_cast<uint8_t>(plainLen & 0xFFu);
+
+    packet.raw_size = decodedSize;
     packet.meta = msg.metaInfo;
-
-    return packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK;
+    return packet.decode(packet.raw_data, decodedSize) == UTP_ERR_OK;
 }
 
 } // namespace detail

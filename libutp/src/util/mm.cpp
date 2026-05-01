@@ -190,9 +190,21 @@ PacketIn *MemoryManager::getPacketIn(uint32_t size)
     }
 
     std::memset(packetIn, 0, sizeof(PacketIn));
+    packetIn->refcnt = 1;
     packetIn->alloc_size = g_packetInSizeVec[idx];
     packetIn->raw_data = reinterpret_cast<const uint8_t *>(pib);
     return packetIn;
+}
+
+RecvFragment *MemoryManager::getRecvFragment()
+{
+    RecvFragment *fragment = recv_fragment_malo.get();
+    if (!fragment) {
+        return nullptr;
+    }
+
+    std::memset(fragment, 0, sizeof(RecvFragment));
+    return fragment;
 }
 
 void MemoryManager::putPacketIn(PacketIn *pkt)
@@ -209,6 +221,7 @@ void MemoryManager::putPacketIn(PacketIn *pkt)
     // short-circuit on null raw_data/alloc_size and avoid double-free later.
     pkt->raw_data = nullptr;
     pkt->alloc_size = 0;
+    pkt->refcnt = 0;
     pkt->raw_size = 0;
     pkt->payload = nullptr;
     pkt->payload_size = 0;
@@ -220,6 +233,36 @@ void MemoryManager::putPacketIn(PacketIn *pkt)
         maybeShrinkPoolIn(idx);
     }
     packet_in_malo.put(pkt);
+}
+
+void MemoryManager::putRecvFragment(RecvFragment *fragment)
+{
+    if (fragment == nullptr) {
+        return;
+    }
+
+    recv_fragment_malo.put(fragment);
+}
+
+void MemoryManager::retainPacketIn(PacketIn *pkt)
+{
+    if (pkt == nullptr) {
+        return;
+    }
+
+    ++pkt->refcnt;
+}
+
+void MemoryManager::releasePacketIn(PacketIn *pkt)
+{
+    if (pkt == nullptr || pkt->refcnt == 0) {
+        return;
+    }
+
+    --pkt->refcnt;
+    if (pkt->refcnt == 0) {
+        putPacketIn(pkt);
+    }
 }
 
 void MemoryManager::poolStatsAllocated(PoolStats *stats, uint32_t allocated)

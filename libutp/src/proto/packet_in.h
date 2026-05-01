@@ -39,6 +39,7 @@ private:
                                size_t &frameLen);
 
 public:
+    uint32_t        refcnt{0};
     const uint8_t*  raw_data{nullptr};
     size_t          raw_size{0};
     uint16_t        alloc_size{0};

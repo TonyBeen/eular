@@ -15,7 +15,9 @@
 #include "utp/errno.h"
 #include "context/connection_impl.h"
 #include "logger/logger.h"
+#include "proto/packet_in.h"
 #include "util/error.h"
+#include "util/mm.h"
 #include "util/time.h"
 
 namespace eular {
@@ -65,12 +67,16 @@ StreamImpl::StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority
     m_conn(conn),
     m_streamId(streamId),
     m_priority(std::min<uint8_t>(priority, Stream::kPriorityLowest)),
-    m_sendBuffer(StreamSendBufferLimit(conn)),
-    m_recvBuffer(kDefaultBufferCapacity)
+    m_sendBuffer(StreamSendBufferLimit(conn))
 {
+    assert(m_conn != nullptr);
+    m_recvMm = &m_conn->m_mm;
 }
 
-StreamImpl::~StreamImpl() = default;
+StreamImpl::~StreamImpl()
+{
+    clearRecvFragments();
+}
 
 uint32_t StreamImpl::id() const
 {
@@ -113,14 +119,49 @@ int32_t StreamImpl::read(void *buffer, size_t capacity)
         return StreamErr(UTP_ERR_INVALID_PARAM);
     }
 
-    if (m_recvBuffer.empty()) {
+    const size_t contiguous = contiguousReadableBytes(capacity);
+    if (contiguous == 0) {
+        maybeAdvancePeerFin();
         return m_peerFin ? 0 : StreamErr(UTP_ERR_WOULD_BLOCK);
     }
 
-    const size_t n = m_recvBuffer.read(static_cast<uint8_t *>(buffer), capacity);
+    uint8_t *out = static_cast<uint8_t *>(buffer);
+    size_t copied = 0;
+    RecvFragment *fragment = firstFragment();
+    while (fragment != nullptr && copied < contiguous) {
+        const uint64_t logicalOffset = fragment->offset + fragment->consumed;
+        if (logicalOffset != m_recvOffset) {
+            break;
+        }
 
+        const size_t remaining = fragment->remaining();
+        if (remaining == 0) {
+            if (fragment->fin) {
+                m_peerFin = true;
+            }
+            eraseRecvFragment(fragment);
+            fragment = firstFragment();
+            continue;
+        }
+
+        const size_t n = std::min(remaining, contiguous - copied);
+        std::memcpy(out + copied, fragment->data + fragment->consumed, n);
+        fragment->consumed += n;
+        m_recvOffset += n;
+        copied += n;
+
+        if (fragment->remaining() == 0) {
+            if (fragment->fin) {
+                m_peerFin = true;
+            }
+            eraseRecvFragment(fragment);
+        }
+        fragment = firstFragment();
+    }
+
+    maybeAdvancePeerFin();
     maybeNotifyClosed();
-    return static_cast<int32_t>(n);
+    return static_cast<int32_t>(copied);
 }
 
 size_t StreamImpl::acquireWriteBuffer(MutableBufferView views[2], size_t maxBytes)
@@ -197,27 +238,80 @@ int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
     return static_cast<int32_t>(bytes);
 }
 
-size_t StreamImpl::acquireReadBuffer(ConstBufferView views[2], size_t maxBytes) const
+size_t StreamImpl::acquireReadViews(ConstBufferView views[2], size_t maxBytes) const
 {
     if (views == nullptr || maxBytes == 0) {
         return 0;
     }
 
-    size_t count = m_recvBuffer.readableViews(views, maxBytes);
+    views[0] = {};
+    views[1] = {};
+
     size_t total = 0;
-    for (size_t i = 0; i < count; ++i) {
-        total += views[i].len;
+    size_t idx = 0;
+    uint64_t expectedOffset = m_recvOffset;
+    for (RecvFragment *fragment = firstFragment();
+         fragment != nullptr && idx < 2 && total < maxBytes;
+         fragment = nextFragment(fragment)) {
+        const uint64_t logicalOffset = fragment->offset + fragment->consumed;
+        if (logicalOffset != expectedOffset) {
+            break;
+        }
+
+        const size_t remaining = fragment->remaining();
+        if (remaining == 0) {
+            if (fragment->fin) {
+                break;
+            }
+            continue;
+        }
+
+        const size_t n = std::min(remaining, maxBytes - total);
+        views[idx].data = fragment->data + fragment->consumed;
+        views[idx].len = n;
+        total += n;
+        expectedOffset += n;
+        ++idx;
     }
+
     return total;
 }
 
-int32_t StreamImpl::consumeRead(size_t bytes)
+int32_t StreamImpl::commitReadViews(size_t bytes)
 {
-    if (bytes > m_recvBuffer.size()) {
+    if (bytes == 0) {
+        maybeAdvancePeerFin();
+        maybeNotifyClosed();
+        return UTP_ERR_OK;
+    }
+
+    const size_t allowed = contiguousReadableBytes(bytes);
+    if (allowed < bytes) {
         return StreamErr(UTP_ERR_OVERFLOW);
     }
 
-    m_recvBuffer.consume(bytes);
+    size_t left = bytes;
+    while (left > 0) {
+        RecvFragment *fragment = firstFragment();
+        if (fragment == nullptr || (fragment->offset + fragment->consumed) != m_recvOffset) {
+            return StreamErr(UTP_ERR_OVERFLOW);
+        }
+
+        const size_t remaining = fragment->remaining();
+        const size_t n = std::min(remaining, left);
+        fragment->consumed += n;
+        m_recvOffset += n;
+        left -= n;
+
+        if (fragment->remaining() == 0) {
+            if (fragment->fin) {
+                m_peerFin = true;
+            }
+            eraseRecvFragment(fragment);
+        }
+    }
+
+    maybeAdvancePeerFin();
     maybeNotifyClosed();
     return static_cast<int32_t>(bytes);
 }
@@ -238,7 +332,7 @@ Stream::State StreamImpl::state() const
 
 bool StreamImpl::readable() const
 {
-    return !m_recvBuffer.empty();
+    return contiguousReadableBytes(1) > 0;
 }
 
 bool StreamImpl::writable() const
@@ -279,9 +373,7 @@ int32_t StreamImpl::reset(uint16_t errorCode)
     m_sendAckedOffset = m_nextSendOffset;
     m_sendAckedRanges.clear();
     m_sendBuffer.consume(m_sendBuffer.size());
-    m_recvFragments.clear();
-    m_recvFragmentsBytes = 0;
-    m_recvBuffer.consume(m_recvBuffer.size());
+    clearRecvFragments();
     maybeNotifyClosed();
     return UTP_ERR_OK;
 }
@@ -342,7 +434,7 @@ void StreamImpl::setOnReset(const OnReset &cb)
     m_onReset = cb;
 }
 
-int32_t StreamImpl::onFrame(const FrameStream &frame)
+int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
 {
     if (m_resetByPeer) {
         return UTP_ERR_STREAM_CLOSED;
@@ -359,11 +451,13 @@ int32_t StreamImpl::onFrame(const FrameStream &frame)
     uint64_t frameOffset = frame.stream_offset;
     uint16_t frameLength = frame.stream_data_length;
     const uint8_t *data = static_cast<const uint8_t *>(frame.stream_data);
+    const bool frameFin = STREAM_IS_FIN(frame.stream_flag);
+    const uint64_t frameEnd = frameOffset + frameLength;
 
     if (frameOffset < m_recvOffset) {
         const uint64_t trim = m_recvOffset - frameOffset;
         if (trim >= frameLength) {
-            if (STREAM_IS_FIN(frame.stream_flag) && frameOffset + frameLength == m_recvOffset) {
+            if (frameFin && frameEnd == m_recvOffset) {
                 m_peerFin = true;
                 maybeNotifyClosed();
             }
@@ -375,36 +469,131 @@ int32_t StreamImpl::onFrame(const FrameStream &frame)
         data += trim;
     }
 
-    RecvFragment fragment;
-    fragment.fin = STREAM_IS_FIN(frame.stream_flag);
-    fragment.data.resize(frameLength);
-    if (frameLength > 0) {
-        std::memcpy(fragment.data.data(), data, frameLength);
+    RecvFragment *insertedLast = nullptr;
+    const uint64_t originalEnd = frameOffset + frameLength;
+    uint64_t cursor = frameOffset;
+    const uint8_t *cursorData = data;
+
+    RecvFragment *prev = findPrev(cursor);
+    if (prev != nullptr) {
+        const uint64_t prevEnd = prev->offset + prev->len;
+        if (prevEnd > cursor) {
+            const uint64_t trim = std::min<uint64_t>(prevEnd - cursor, frameLength);
+            cursor += trim;
+            cursorData += trim;
+            frameLength = static_cast<uint16_t>(frameLength - trim);
+        }
     }
 
-    auto existing = m_recvFragments.find(frameOffset);
-    if (existing == m_recvFragments.end()) {
-        if (m_recvFragmentsBytes + frameLength > kMaxRecvFragmentBytes) {
-            return UTP_ERR_WOULD_BLOCK;
+    RecvFragment *iter = findLowerBound(cursor);
+    while (frameLength > 0) {
+        if (iter == nullptr || iter->offset >= (cursor + frameLength)) {
+            RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
+            if (fragment == nullptr) {
+                return UTP_ERR_INTERNAL_ERROR;
+            }
+            fragment->packet = packet;
+            fragment->data = cursorData;
+            fragment->len = frameLength;
+            fragment->consumed = 0;
+            fragment->offset = cursor;
+            fragment->fin = frameFin && (cursor + frameLength == originalEnd);
+
+            if (m_recvMm != nullptr && fragment->packet != nullptr && fragment->len > 0) {
+                m_recvMm->retainPacketIn(fragment->packet);
+            }
+
+            bool inserted = false;
+            int32_t status = insertRecvFragment(fragment, &inserted);
+            if (status != UTP_ERR_OK) {
+                releaseRecvFragment(fragment);
+                return status;
+            }
+
+            if (inserted) {
+                insertedLast = fragment;
+            }
+            break;
         }
-        m_recvFragments.emplace(frameOffset, std::move(fragment));
-        m_recvFragmentsBytes += frameLength;
-    } else if (existing->second.data.size() < frameLength) {
-        const size_t oldSize = existing->second.data.size();
-        const size_t nextBytes = m_recvFragmentsBytes - oldSize + frameLength;
-        if (nextBytes > kMaxRecvFragmentBytes) {
-            return UTP_ERR_WOULD_BLOCK;
+
+        if (iter->offset > cursor) {
+            const size_t chunk = static_cast<size_t>(std::min<uint64_t>(iter->offset - cursor, frameLength));
+            RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
+            if (fragment == nullptr) {
+                return UTP_ERR_INTERNAL_ERROR;
+            }
+            fragment->packet = packet;
+            fragment->data = cursorData;
+            fragment->len = chunk;
+            fragment->consumed = 0;
+            fragment->offset = cursor;
+            fragment->fin = false;
+
+            if (m_recvMm != nullptr && fragment->packet != nullptr && fragment->len > 0) {
+                m_recvMm->retainPacketIn(fragment->packet);
+            }
+
+            bool inserted = false;
+            int32_t status = insertRecvFragment(fragment, &inserted);
+            if (status != UTP_ERR_OK) {
+                releaseRecvFragment(fragment);
+                return status;
+            }
+
+            if (inserted) {
+                insertedLast = fragment;
+            }
+            cursor += chunk;
+            cursorData += chunk;
+            frameLength = static_cast<uint16_t>(frameLength - chunk);
+            continue;
         }
-        existing->second = std::move(fragment);
-        m_recvFragmentsBytes = nextBytes;
-    } else if (fragment.fin) {
-        existing->second.fin = true;
+
+        const uint64_t iterEnd = iter->offset + iter->len;
+        if (iterEnd <= cursor) {
+            iter = nextFragment(iter);
+            continue;
+        }
+
+        const uint64_t trim = std::min<uint64_t>(iterEnd - cursor, frameLength);
+        cursor += trim;
+        cursorData += trim;
+        frameLength = static_cast<uint16_t>(frameLength - trim);
+        iter = nextFragment(iter);
     }
 
-    const size_t beforeSize = m_recvBuffer.size();
-    drainRecvFragments();
+    if (frameFin) {
+        if (insertedLast != nullptr) {
+            insertedLast->fin = true;
+        } else {
+            RecvFragment *tail = findPrev(originalEnd + 1);
+            if (tail != nullptr && tail->offset + tail->len == originalEnd) {
+                tail->fin = true;
+            } else if (originalEnd == m_recvOffset) {
+                m_peerFin = true;
+            } else {
+                RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
+                if (fragment == nullptr) {
+                    return UTP_ERR_INTERNAL_ERROR;
+                }
+                fragment->packet = packet;
+                fragment->data = nullptr;
+                fragment->len = 0;
+                fragment->consumed = 0;
+                fragment->offset = originalEnd;
+                fragment->fin = true;
+                bool inserted = false;
+                int32_t status = insertRecvFragment(fragment, &inserted);
+                if (status != UTP_ERR_OK) {
+                    releaseRecvFragment(fragment);
+                    return status;
+                }
+            }
+        }
+    }
 
-    if (m_onReadable && m_recvBuffer.size() > beforeSize) {
+    maybeAdvancePeerFin();
+    if (m_onReadable && readable()) {
         m_onReadable();
     }
 
@@ -424,9 +613,7 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
     m_sendAckedOffset = m_nextSendOffset;
     m_sendAckedRanges.clear();
     m_sendBuffer.consume(m_sendBuffer.size());
-    m_recvFragments.clear();
-    m_recvFragmentsBytes = 0;
-    m_recvBuffer.consume(m_recvBuffer.size());
+    clearRecvFragments();
     m_localFinQueued = true;
     m_localFinSent = true;
     m_peerFin = true;
@@ -455,7 +642,7 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
             m_sendQueuedBytes = maxQueuedFromBuffer;
         }
 
-        const uint64_t queuedEndOffset = m_sendAckedOffset + static_cast<uint64_t>(m_sendQueuedBytes);
+        const uint64_t queuedEndOffset = m_nextSendOffset + static_cast<uint64_t>(m_sendQueuedBytes);
         const uint64_t unsentBytesU64 = queuedEndOffset > m_nextSendOffset
                                      ? (queuedEndOffset - m_nextSendOffset)
                                      : 0;
@@ -720,31 +907,193 @@ utp_time_t StreamImpl::coalesceDelayRemainingUs(utp_time_t nowUs) const
     return deadlineUs - nowUs;
 }
 
-void StreamImpl::drainRecvFragments()
+int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
+{
+    if (fragment == nullptr) {
+        return UTP_ERR_INVALID_PARAM;
+    }
+
+    if (inserted != nullptr) {
+        *inserted = false;
+    }
+
+    if (fragment->len > 0 && m_recvBufferedBytes + fragment->len > kMaxRecvFragmentBytes) {
+        return UTP_ERR_WOULD_BLOCK;
+    }
+
+    struct rb_node **link = &m_recvFragmentsTree.rb_node;
+    struct rb_node *parent = nullptr;
+    while (*link != nullptr) {
+        RecvFragment *current = rb_entry(*link, RecvFragment, treeNode);
+        parent = *link;
+        if (fragment->offset < current->offset) {
+            link = &(*link)->rb_left;
+        } else if (fragment->offset > current->offset) {
+            link = &(*link)->rb_right;
+        } else {
+            if (current->len >= fragment->len) {
+                releaseRecvFragment(fragment);
+                return UTP_ERR_OK;
+            }
+
+            rb_replace_node(&current->treeNode, &fragment->treeNode, &m_recvFragmentsTree);
+            m_recvBufferedBytes = m_recvBufferedBytes - current->remaining() + fragment->remaining();
+            releaseRecvFragment(current);
+            if (inserted != nullptr) {
+                *inserted = true;
+            }
+            return UTP_ERR_OK;
+        }
+    }
+
+    rb_link_node(&fragment->treeNode, parent, link);
+    rb_insert_color(&fragment->treeNode, &m_recvFragmentsTree);
+    m_recvBufferedBytes += fragment->remaining();
+    if (inserted != nullptr) {
+        *inserted = true;
+    }
+    return UTP_ERR_OK;
+}
+
+void StreamImpl::clearRecvFragments()
+{
+    RecvFragment *fragment = firstFragment();
+    while (fragment != nullptr) {
+        RecvFragment *next = nextFragment(fragment);
+        rb_erase(&fragment->treeNode, &m_recvFragmentsTree);
+        releaseRecvFragment(fragment);
+        fragment = next;
+    }
+    m_recvFragmentsTree = RB_ROOT;
+    m_recvBufferedBytes = 0;
+}
+
+RecvFragment* StreamImpl::findLowerBound(uint64_t offset) const
+{
+    struct rb_node *node = m_recvFragmentsTree.rb_node;
+    RecvFragment *candidate = nullptr;
+    while (node != nullptr) {
+        RecvFragment *fragment = rb_entry(node, RecvFragment, treeNode);
+        if (fragment->offset < offset) {
+            node = node->rb_right;
+        } else {
+            candidate = fragment;
+            node = node->rb_left;
+        }
+    }
+    return candidate;
+}
+
+RecvFragment* StreamImpl::findPrev(uint64_t offset) const
+{
+    RecvFragment *candidate = nullptr;
+    struct rb_node *node = m_recvFragmentsTree.rb_node;
+    while (node != nullptr) {
+        RecvFragment *fragment = rb_entry(node, RecvFragment, treeNode);
+        if (fragment->offset < offset) {
+            candidate = fragment;
+            node = node->rb_right;
+        } else {
+            node = node->rb_left;
+        }
+    }
+    return candidate;
+}
+
+RecvFragment* StreamImpl::firstFragment() const
+{
+    struct rb_node *node = rb_first(const_cast<struct rb_root *>(&m_recvFragmentsTree));
+    return node == nullptr ? nullptr : rb_entry(node, RecvFragment, treeNode);
+}
+
+RecvFragment* StreamImpl::nextFragment(const RecvFragment *fragment) const
+{
+    if (fragment == nullptr) {
+        return nullptr;
+    }
+
+    struct rb_node *node = rb_next(const_cast<struct rb_node *>(&fragment->treeNode));
+    return node == nullptr ? nullptr : rb_entry(node, RecvFragment, treeNode);
+}
+
+void StreamImpl::eraseRecvFragment(RecvFragment *fragment)
+{
+    if (fragment == nullptr) {
+        return;
+    }
+
+    rb_erase(&fragment->treeNode, &m_recvFragmentsTree);
+    const size_t rem = fragment->remaining();
+    if (m_recvBufferedBytes >= rem) {
+        m_recvBufferedBytes -= rem;
+    } else {
+        m_recvBufferedBytes = 0;
+    }
+    releaseRecvFragment(fragment);
+}
+
+void StreamImpl::releaseRecvFragment(RecvFragment *fragment)
+{
+    if (fragment == nullptr) {
+        return;
+    }
+
+    if (m_recvMm != nullptr && fragment->packet != nullptr && fragment->len > 0) {
+        m_recvMm->releasePacketIn(fragment->packet);
+    }
+    fragment->packet = nullptr;
+    if (m_recvMm != nullptr) {
+        m_recvMm->putRecvFragment(fragment);
+    }
+}
+
+void StreamImpl::maybeAdvancePeerFin()
 {
     while (true) {
-        auto it = m_recvFragments.find(m_recvOffset);
-        if (it == m_recvFragments.end()) {
+        RecvFragment *fragment = firstFragment();
+        if (fragment == nullptr
+            || (fragment->offset + fragment->consumed) != m_recvOffset
+            || fragment->remaining() > 0) {
             break;
         }
 
-        RecvFragment fragment = std::move(it->second);
-        if (m_recvFragmentsBytes >= fragment.data.size()) {
-            m_recvFragmentsBytes -= fragment.data.size();
-        } else {
-            m_recvFragmentsBytes = 0;
-        }
-        m_recvFragments.erase(it);
-
-        if (!fragment.data.empty()) {
-            m_recvBuffer.write(fragment.data.data(), fragment.data.size());
-        }
-
-        m_recvOffset += fragment.data.size();
-        if (fragment.fin) {
+        if (fragment->fin) {
             m_peerFin = true;
         }
+        eraseRecvFragment(fragment);
     }
+}
+
+size_t StreamImpl::contiguousReadableBytes(size_t maxBytes) const
+{
+    if (maxBytes == 0) {
+        return 0;
+    }
+
+    size_t total = 0;
+    uint64_t expectedOffset = m_recvOffset;
+    for (RecvFragment *fragment = firstFragment();
+         fragment != nullptr && total < maxBytes;
+         fragment = nextFragment(fragment)) {
+        const uint64_t logicalOffset = fragment->offset + fragment->consumed;
+        if (logicalOffset != expectedOffset) {
+            break;
+        }
+
+        const size_t rem = fragment->remaining();
+        if (rem == 0) {
+            if (fragment->fin) {
+                break;
+            }
+            continue;
+        }
+
+        const size_t n = std::min(rem, maxBytes - total);
+        total += n;
+        expectedOffset += n;
+    }
+
+    return total;
 }
 
 void StreamImpl::maybeNotifyClosed()
@@ -753,7 +1102,7 @@ void StreamImpl::maybeNotifyClosed()
         return;
     }
 
-    if (m_localFinQueued && m_localFinSent && m_peerFin && m_recvBuffer.empty()) {
+    if (m_localFinQueued && m_localFinSent && m_peerFin && m_recvBufferedBytes == 0) {
         m_closedNotified = true;
         if (m_onClosed) {
             m_onClosed();

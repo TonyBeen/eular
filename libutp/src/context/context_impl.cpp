@@ -1524,7 +1524,7 @@ void ContextImpl::onReadEvent()
                       tag(), dcid, scid, pn, packetType, (pendingIt != m_pendingIncoming.end() ? pendingIt->second.handshakeSent : false));
             if (pendingIt != m_pendingIncoming.end() && pendingIt->second.handshakeSent) {
                 auto packetReleaser = [this] (PacketIn *pkt) {
-                    m_mm.putPacketIn(pkt);
+                    m_mm.releasePacketIn(pkt);
                 };
                 std::unique_ptr<PacketIn, decltype(packetReleaser)> pendingPacket(
                     m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
@@ -1607,7 +1607,7 @@ void ContextImpl::onReadEvent()
 
             if (packetType == UTP_TYPE_0RTT) {
                 auto packetReleaser = [this] (PacketIn *pkt) {
-                    m_mm.putPacketIn(pkt);
+                    m_mm.releasePacketIn(pkt);
                 };
                 std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(
                     m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);

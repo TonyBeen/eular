@@ -22,6 +22,7 @@ set(UTP_TEST_SOURCES
     test_mm.cc
     test_receive_history.cc
     test_stream_impl.cc
+    test_stream_zero_copy_views.cc
     test_public_api_errno.cc
 )
 

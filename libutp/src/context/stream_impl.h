@@ -15,6 +15,7 @@
 #include "utp/stream.h"
 #include "proto/frame/stream.h"
 #include "util/ring_buffer.h"
+#include <rbtree.h>
 
 #define STREAM_TYPES                4 
 
@@ -28,6 +29,22 @@
 namespace eular {
 namespace utp {
 class ConnectionImpl;
+struct PacketIn;
+class MemoryManager;
+
+struct RecvFragment {
+    struct rb_node  treeNode;
+    PacketIn*       packet{nullptr};
+    const uint8_t*  data{nullptr};
+    size_t          len{0};
+    size_t          consumed{0};
+    uint64_t        offset{0};
+    bool            fin{false};
+
+    size_t remaining() const {
+        return len > consumed ? (len - consumed) : 0;
+    }
+};
 
 class StreamImpl : public Stream {
 public:
@@ -45,8 +62,8 @@ public:
     int32_t     read(void *buffer, size_t capacity) override;
     size_t      acquireWriteBuffer(MutableBufferView views[2], size_t maxBytes) override;
     int32_t     commitWrite(size_t bytes, bool fin) override;
-    size_t      acquireReadBuffer(ConstBufferView views[2], size_t maxBytes) const override;
-    int32_t     consumeRead(size_t bytes) override;
+    size_t      acquireReadViews(ConstBufferView views[2], size_t maxBytes) const override;
+    int32_t     commitReadViews(size_t bytes) override;
     State       state() const override;
     bool        readable() const override;
     bool        writable() const override;
@@ -61,16 +78,11 @@ public:
     void        setOnReset(const OnReset &cb) override;
 
     // Feed an incoming STREAM frame payload into this stream.
-    int32_t     onFrame(const FrameStream &frame);
+    int32_t     onFrame(const FrameStream &frame, PacketIn *packet = nullptr);
     int32_t     onReset(uint16_t errorCode, bool fromPeer);
 
 private:
     friend class ConnectionImpl;
-
-    struct RecvFragment {
-        std::vector<uint8_t> data;
-        bool fin{false};
-    };
 
 private:
     int32_t flushPendingSends(size_t maxBytes = static_cast<size_t>(-1));
@@ -81,7 +93,16 @@ private:
     bool    hasPendingSendWork() const;
     bool    shouldDeferSend(utp_time_t nowUs) const;
     utp_time_t coalesceDelayRemainingUs(utp_time_t nowUs) const;
-    void    drainRecvFragments();
+    int32_t insertRecvFragment(RecvFragment *fragment, bool *inserted = nullptr);
+    void    clearRecvFragments();
+    RecvFragment* findLowerBound(uint64_t offset) const;
+    RecvFragment* findPrev(uint64_t offset) const;
+    RecvFragment* firstFragment() const;
+    RecvFragment* nextFragment(const RecvFragment *fragment) const;
+    void    eraseRecvFragment(RecvFragment *fragment);
+    void    releaseRecvFragment(RecvFragment *fragment);
+    void    maybeAdvancePeerFin();
+    size_t  contiguousReadableBytes(size_t maxBytes) const;
     void    maybeNotifyClosed();
     void    maybeNotifyWritable(bool force = false);
     void    notifyResetOnce();
@@ -101,11 +122,12 @@ private:
     uint16_t        m_resetErrorCode{0};
     size_t          m_sendQueuedBytes{0};
     size_t          m_sendInFlightBytes{0};
-    size_t          m_recvFragmentsBytes{0};
+    size_t          m_recvBufferedBytes{0};
     utp_time_t      m_lastSendQueuedAtUs{0}; // enqueue timestamp for coalescing window(us)
+    MemoryManager*  m_recvMm{nullptr};
+    std::unique_ptr<MemoryManager> m_ownedRecvMm;
     RingBuffer      m_sendBuffer;
-    RingBuffer      m_recvBuffer;
-    std::map<uint64_t, RecvFragment> m_recvFragments;
+    struct rb_root  m_recvFragmentsTree{RB_ROOT};
     OnReadable      m_onReadable;
     OnWritable      m_onWritable;
     OnClosed        m_onClosed;

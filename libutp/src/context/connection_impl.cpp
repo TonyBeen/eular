@@ -554,7 +554,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     const utp_time_t nowUs = time::MonotonicUs();
 
     auto packetReleaser = [this] (PacketIn *packet) {
-        m_mm.putPacketIn(packet);
+        m_mm.releasePacketIn(packet);
     };
     std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(m_mm.getPacketIn(static_cast<uint32_t>(msg.len)), packetReleaser);
     if (!packet) {
@@ -665,7 +665,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         case kFrameStream: {
             FrameStream streamFrame;
             if (streamFrame.decode(frameData, frameLen) >= 0) {
-                (void)ingestStreamFrame(streamFrame);
+                (void)ingestStreamFrame(streamFrame, packet.get());
             }
             break;
         }
@@ -1300,7 +1300,7 @@ int32_t ConnectionImpl::validateIncomingStreamId(uint32_t streamId) const
     return UTP_ERR_OK;
 }
 
-int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
+int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame, PacketIn *packet)
 {
     auto it = m_streams.find(streamFrame.stream_id);
     if (it == m_streams.end()) {
@@ -1327,7 +1327,7 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame)
         return UTP_ERR_INTERNAL_ERROR;
     }
 
-    const int32_t status = it->second->onFrame(streamFrame);
+    const int32_t status = it->second->onFrame(streamFrame, packet);
     collectClosedStreams();
     return status;
 }
@@ -1352,7 +1352,7 @@ int32_t ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId,
     streamFrame.stream_id = streamId;
     streamFrame.stream_offset = streamOffset;
     streamFrame.stream_data = const_cast<uint8_t *>(data);
-    return ingestStreamFrame(streamFrame);
+    return ingestStreamFrame(streamFrame, nullptr);
 }
 
 void ConnectionImpl::updateTag(const std::string& tag)

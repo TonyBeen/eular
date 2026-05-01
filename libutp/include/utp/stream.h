@@ -56,8 +56,8 @@ public:
     virtual int32_t     read(void *buffer, size_t capacity) = 0;
     virtual size_t      acquireWriteBuffer(MutableBufferView views[2], size_t maxBytes) = 0;
     virtual int32_t     commitWrite(size_t bytes, bool fin = false) = 0;
-    virtual size_t      acquireReadBuffer(ConstBufferView views[2], size_t maxBytes) const = 0;
-    virtual int32_t     consumeRead(size_t bytes) = 0;
+    virtual size_t      acquireReadViews(ConstBufferView views[2], size_t maxBytes) const = 0;
+    virtual int32_t     commitReadViews(size_t bytes) = 0;
     virtual State       state() const = 0;
     virtual bool        readable() const = 0;
     virtual bool        writable() const = 0;

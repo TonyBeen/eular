@@ -2,6 +2,15 @@ set(UTP_EXAMPLE_COMMON_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+set(UTP_EXAMPLE_TARGETS
+    utp_echo_server
+    utp_echo_client
+    utp_session_resume_server
+    utp_session_resume_client
+    utp_mtu_keepalive_server
+    utp_mtu_keepalive_client
+)
+
 add_executable(utp_echo_server
     echo_server.cpp
 )
@@ -37,3 +46,9 @@ add_executable(utp_mtu_keepalive_client
 )
 target_include_directories(utp_mtu_keepalive_client PRIVATE ${UTP_EXAMPLE_COMMON_INCLUDE})
 target_link_libraries(utp_mtu_keepalive_client PRIVATE utp_static)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    foreach(_example_target IN LISTS UTP_EXAMPLE_TARGETS)
+        target_link_options(${_example_target} PRIVATE -static-libstdc++ -static-libgcc)
+    endforeach()
+endif()

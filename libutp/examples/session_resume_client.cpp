@@ -313,29 +313,57 @@ int main(int argc, char **argv)
             std::cout << "[client] upload header sent\n";
         }
 
-        constexpr size_t kChunk = 1024;
         size_t write_size = 0;
         while (uploadOffset < uploadData.size()) {
             const size_t left = uploadData.size() - uploadOffset;
-            const size_t toSend = left < kChunk ? left : kChunk;
-            const bool fin = (uploadOffset + toSend == uploadData.size());
-            const int32_t n = uploadStream->write(uploadData.data() + uploadOffset, toSend, fin);
-            if (n < 0) {
-                std::cout << "[client] upload write blocked/error n=" << n << " offset=" << uploadOffset << " remain=" << left << "\n";
+            eular::utp::Stream::MutableBufferView views[2];
+            const size_t grant = uploadStream->acquireWriteBuffer(views, left);
+            if (grant == 0) {
+                std::cout << "[client] upload write blocked offset=" << uploadOffset
+                          << " remain=" << left << "\n";
                 break;
             }
 
-            if (n == 0) {
+            size_t copied = 0;
+            for (size_t i = 0; i < 2 && copied < grant; ++i) {
+                if (views[i].data == nullptr || views[i].len == 0) {
+                    continue;
+                }
+
+                const size_t ncopy = std::min(views[i].len, grant - copied);
+                std::memcpy(views[i].data,
+                            uploadData.data() + uploadOffset + copied,
+                            ncopy);
+                copied += ncopy;
+            }
+
+            if (copied == 0) {
+                std::cout << "[client] upload acquireWriteBuffer returned empty views offset="
+                          << uploadOffset << " remain=" << left << "\n";
                 break;
             }
-            write_size += static_cast<size_t>(n);
 
-            uploadOffset += static_cast<size_t>(n);
+            const bool fin = (uploadOffset + copied == uploadData.size());
+            const int32_t committed = uploadStream->commitWrite(copied, fin);
+            if (committed < 0) {
+                std::cout << "[client] upload commit blocked/error n=" << committed
+                          << " offset=" << uploadOffset << " copied=" << copied
+                          << " remain=" << left << "\n";
+                break;
+            }
+
+            if (committed == 0) {
+                break;
+            }
+
+            write_size += static_cast<size_t>(committed);
+
+            uploadOffset += static_cast<size_t>(committed);
             if ((uploadOffset % (1024 * 1024)) == 0 || uploadOffset == uploadData.size()) {
                 std::cout << "[client] upload progress=" << uploadOffset << "/" << uploadData.size() << "\n";
             }
 
-            if (fin && static_cast<size_t>(n) == toSend) {
+            if (fin && static_cast<size_t>(committed) == copied) {
                 uploadFinSent = true;
                 std::cout << "[client] upload payload sent bytes=" << uploadOffset << "\n";
                 break;
