@@ -375,12 +375,11 @@ function utp.dissector(buffer, pinfo, tree)
     subtree:add(f.frame_count, frame_index)
 
     pinfo.cols.protocol = "UTP"
-    local info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x utp_len=%u payload=%u frames=%u",
+    local info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x payload=%u frames=%u",
         packet_type_name(packet_type),
         tostring(buffer(8, 8):uint64()),
         buffer(0, 4):uint(),
         buffer(4, 4):uint(),
-        utp_packet_len,
         payload_len,
         frame_index)
     if #frame_summaries > 0 then
