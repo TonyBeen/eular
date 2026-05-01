@@ -223,6 +223,11 @@ bool MtuDiscovery::onProbeAck(utp_packno_t packNo, utp_time_t nowMs)
     m_largeLossStreak = 0;
     clearInFlightProbe();
 
+    // 检查梯队是否已耗尽，若是则进入二分精修
+    if (m_probePhase == kProbePhaseLadder && nextLadderTarget() <= m_searchLowMtu) {
+        m_probePhase = kProbePhaseBinary;
+    }
+
     if (m_searchLowMtu >= m_mtuMax) {
         m_currentMtu = m_mtuMax;
         m_ceilingMtu = m_mtuMax;
@@ -232,7 +237,7 @@ bool MtuDiscovery::onProbeAck(utp_packno_t packNo, utp_time_t nowMs)
         m_nextProbeTimeMs = nowMs + m_probeIntervalMs;
     } else if (m_probePhase == kProbePhaseBinary
             && m_searchHighMtu <= static_cast<uint16_t>(m_searchLowMtu + m_probeStep)) {
-        // 二分收敛完成后统一提交。
+        // 收敛完成（包括梯队结束即收敛的情况）
         m_currentMtu = m_searchLowMtu;
         m_ceilingMtu = m_searchLowMtu;
         m_probePhase = kProbePhaseStable;
