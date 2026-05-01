@@ -101,7 +101,7 @@ Mutex::Mutex()
     pthread_mutexattr_init(&attr);
 #if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK_NP);  // for EDEADLK
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);  // for EDEADLK
 #elif defined(OS_APPLE)
     // macOS does not support robust mutexes
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);     // for EDEADLK
@@ -186,7 +186,7 @@ RecursiveMutex::RecursiveMutex()
     pthread_mutexattr_init(&attr);
 #if defined(OS_LINUX) || defined(OS_WINDOWS)
     pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);       // for pthread_mutex_lock will return EOWNERDEAD
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE_NP);   // for recursive
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);   // for recursive
 #elif defined(OS_APPLE)
     // macOS does not support robust mutexes
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);      // for recursive

@@ -170,6 +170,7 @@ int32_t Socket::Ioctl::SetPktInfoV6(socket_t sockfd, bool on)
                 sockfd, on, status, GetSystemErrnoMsg(status));
         return -1;
     }
+    return 0;
 #elif defined(OS_WINDOWS)
     DWORD enable = on ? 1 : 0;
     int32_t status = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_PKTINFO, (const char*)&enable, sizeof(enable));

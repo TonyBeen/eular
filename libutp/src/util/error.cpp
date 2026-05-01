@@ -7,6 +7,7 @@
 #include <stdarg.h>
 
 #include <array>
+#include <type_traits>
 
 #include <openssl/err.h>
 
@@ -42,6 +43,12 @@ int32_t GetSystemLastError()
 #endif
 }
 
+namespace {
+// Helper functions to handle both GNU and XSI versions of strerror_r
+inline char* strerror_r_helper(char* res, char* /*buf*/) { return res; }
+inline char* strerror_r_helper(int /*res*/, char* buf) { return buf; }
+}
+
 ErrnoMsg GetSystemErrnoMsg(int32_t status)
 {
     ErrnoMsg buf;
@@ -50,7 +57,7 @@ ErrnoMsg GetSystemErrnoMsg(int32_t status)
 #if defined(OS_WINDOWS)
     strerror_s(buffer.data(), buffer.size(), status);
 #else
-    char *errorMsg = strerror_r(status, buffer.data(), buffer.size());
+    char *errorMsg = strerror_r_helper(strerror_r(status, buffer.data(), buffer.size()), buffer.data());
     if (errorMsg && errorMsg != buffer.data()) {
         buffer[0] = '\0';
         strncat(buffer.data(), errorMsg, buffer.size() - 1);

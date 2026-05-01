@@ -7,6 +7,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <array>
 #include <chrono>
 #include <thread>
 
@@ -29,6 +30,8 @@ using eular::utp::ContextImpl;
 using eular::utp::FrameStream;
 using eular::utp::Stream;
 using eular::utp::StreamImpl;
+using eular::utp::Address;
+using eular::utp::UdpSocket;
 
 TEST_CASE("ConnectionImpl: getStream returns created stream pointer", "[Connection][Stream]")
 {
@@ -648,6 +651,43 @@ TEST_CASE("StreamImpl: FIN path is never deferred by coalescing", "[Connection][
 
     REQUIRE(stream.hasPendingSendWork());
     REQUIRE_FALSE(stream.shouldDeferSend(nowUs));
+}
+
+TEST_CASE("StreamImpl: flushPendingSends does not send early FIN before queued payload", "[Connection][Stream][Regression]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    UdpSocket sock(cfg);
+
+    REQUIRE(sock.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+
+    ConnectionImpl conn(&ctx, &sock, 1022);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_peerAddress = Address("127.0.0.1", 9);
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+
+    StreamImpl stream(&conn, 4);
+
+    std::array<uint8_t, 4096> payload{};
+    for (size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast<uint8_t>(i & 0xFFu);
+    }
+
+    REQUIRE(stream.write(payload.data(), payload.size(), false) == static_cast<int32_t>(payload.size()));
+
+    stream.m_nextSendOffset = 3072;
+    stream.m_sendAckedOffset = 0;
+    stream.m_sendInFlightBytes = 3072;
+    stream.m_sendQueuedBytes = 1024;
+    stream.m_localFinQueued = true;
+    stream.m_localFinSent = false;
+
+    REQUIRE(stream.flushPendingSends(2048) == UTP_ERR_OK);
+    REQUIRE(stream.m_nextSendOffset == payload.size());
+    REQUIRE(stream.m_sendQueuedBytes == 0);
+    REQUIRE(stream.m_localFinSent);
 }
 
 TEST_CASE("ConnectionImpl: scheduler skips deferred streams", "[Connection][Stream][Coalescing]")

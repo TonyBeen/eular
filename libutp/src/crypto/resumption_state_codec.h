@@ -9,6 +9,7 @@
 #define __UTP_CRYPTO_RESUMPTION_STATE_CODEC_H__
 
 #include <cstdint>
+#include <cstddef>
 #include <array>
 #include <vector>
 

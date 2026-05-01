@@ -62,7 +62,7 @@
     #include <ifaddrs.h>
     #include <linux/errqueue.h>
     #include <netinet/ip_icmp.h>
-    #include <sys/queue.h>
+    #include "queue.h"
 
     #ifndef SO_REUSEPORT
     #define SO_REUSEPORT 15
@@ -93,7 +93,7 @@
     #include <ifaddrs.h>
     #include <netinet/ip_icmp.h>
     #include <mach/mach_time.h>
-    #include <sys/queue.h>
+    #include "queue.h"
 #endif
 
 #endif // __UTP_COMMON_H__
