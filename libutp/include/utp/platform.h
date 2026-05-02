@@ -1,7 +1,7 @@
 /*************************************************************************
     > File Name: platform.h
     > Author: eular
-    > Brief:
+    > Brief: libutp 平台兼容性定义、宏开关与跨平台导出声明。
     > Created Time: Mon 08 Dec 2025 04:59:48 PM CST
  ************************************************************************/
 
@@ -70,6 +70,7 @@
     #define DEFAULT(x)
 #endif
 
+
 #ifdef OS_WINDOWS
     #if defined(UTP_STATIC)
         #define UTP_API
@@ -84,6 +85,7 @@
     #define UTP_API __attribute__((visibility("default")))
 #endif
 
+
 #if defined(__cplusplus) && __cplusplus >= 201103L
     #define UTP_THREAD_LOCAL thread_local
 #else
@@ -94,9 +96,15 @@
     #endif
 #endif
 
-// 让x介于min和max之间, x ∈ [min, max]
+
+/**
+ * @brief 让 x 介于 min 和 max 之间，即 x ∈ [min, max]
+ */
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
+/**
+ * @brief 标记变量未使用，消除编译器告警
+ */
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
 #endif
