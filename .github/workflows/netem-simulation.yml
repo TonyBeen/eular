@@ -1,0 +1,55 @@
+name: Network Simulation Test
+
+on:
+  push:
+    branches: [ develop, master ]
+  pull_request:
+    branches: [ develop, master ]
+  workflow_dispatch:
+
+jobs:
+  netem-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        iteration: [1, 2, 3, 4, 5]
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake iproute2
+
+    - name: Build libutp
+      run: |
+        mkdir -p libutp/build
+        cd libutp/build
+        cmake ..
+        make -j$(nproc)
+
+    - name: Run Netem Simulation
+      run: |
+        cd libutp
+        chmod +x test/scripts/netem_test.sh
+        sudo ./test/scripts/netem_test.sh ./build
+
+    - name: Print server logs on failure
+      if: failure()
+      run: |
+        if [ -f /tmp/utp_netem_server.log ]; then
+          echo "=== SERVER LOG START ==="
+          cat /tmp/utp_netem_server.log
+          echo "=== SERVER LOG END ==="
+        fi
+
+    - name: Archive server logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: server-logs-iteration-${{ matrix.iteration }}
+        path: /tmp/utp_netem_server.log

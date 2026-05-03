@@ -11,11 +11,16 @@
 #include <cstring>
 #include <limits>
 
+#include "util/fiu_local.h"
+
 namespace eular {
 namespace utp {
 
 bool PacketOut::addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime)
 {
+    if (fiu_fail("mem/packet_out_attempt/alloc")) {
+        return false;
+    }
     PacketOutAttempt *attempt = new (std::nothrow) PacketOutAttempt();
     if (attempt == nullptr) {
         return false;

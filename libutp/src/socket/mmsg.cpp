@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "util/error.h"
+#include "util/fiu_local.h"
 
 namespace eular {
 namespace utp {
@@ -38,7 +39,11 @@ void MultipleMsg::resize(uint32_t size, uint32_t mss)
     }
 
     size_t bufSize = bufferSize();
-    m_buffer = reinterpret_cast<char *>(malloc(bufSize));
+    if (fiu_fail("mem/mmsg/malloc")) {
+        m_buffer = nullptr;
+    } else {
+        m_buffer = reinterpret_cast<char *>(malloc(bufSize));
+    }
     if (!m_buffer) {
         SetLastErrorV(UTP_ERR_NO_MEMORY, "MultipleMsg::resize malloc failed! size={}", bufSize);
         return;

@@ -28,6 +28,20 @@ endif()
 
 option(UTP_BUILD_TESTS "Build libutp tests" OFF)
 option(UTP_USE_BUNDLED_BORINGSSL "Use bundled BoringSSL submodule" ON)
+option(UTP_ENABLE_FAULT_INJECTION "Enable Linux-only libfiu fault injection hooks" OFF)
+
+if(UTP_ENABLE_FAULT_INJECTION AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(WARNING "UTP_ENABLE_FAULT_INJECTION is Linux-only, disabling on ${CMAKE_SYSTEM_NAME}")
+    set(UTP_ENABLE_FAULT_INJECTION OFF CACHE BOOL "Enable Linux-only libfiu fault injection hooks" FORCE)
+endif()
+
+if(UTP_ENABLE_FAULT_INJECTION)
+    find_path(FIU_INCLUDE_DIR NAMES fiu.h)
+    find_library(FIU_LIBRARY NAMES fiu)
+    if(NOT FIU_INCLUDE_DIR OR NOT FIU_LIBRARY)
+        message(FATAL_ERROR "UTP_ENABLE_FAULT_INJECTION requires libfiu headers and library (fiu.h, -lfiu)")
+    endif()
+endif()
 
 set(UTP_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to the sibling utils project")
 set(UTP_EVENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libevent" CACHE PATH "Path to the sibling libevent wrapper project")
@@ -161,6 +175,10 @@ target_compile_definitions(utp_static
         $<$<BOOL:${MSVC}>:NOMINMAX>
 )
 
+if(UTP_ENABLE_FAULT_INJECTION)
+    target_compile_definitions(utp_static PRIVATE UTP_ENABLE_FAULT_INJECTION)
+endif()
+
 target_include_directories(utp_static
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -169,6 +187,7 @@ target_include_directories(utp_static
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/3rd"
+        $<$<BOOL:${UTP_ENABLE_FAULT_INJECTION}>:${FIU_INCLUDE_DIR}>
 )
 
 target_link_libraries(utp_static
@@ -178,6 +197,10 @@ target_link_libraries(utp_static
         $<BUILD_INTERFACE:crypto>
         $<BUILD_INTERFACE:ssl>
 )
+
+if(UTP_ENABLE_FAULT_INJECTION)
+    target_link_libraries(utp_static PUBLIC $<BUILD_INTERFACE:${FIU_LIBRARY}>)
+endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(utp_static PUBLIC $<BUILD_INTERFACE:dl>)
@@ -203,18 +226,6 @@ install(TARGETS utp_static
     EXPORT libutpTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-)
-
-install(FILES
-    "${CMAKE_BINARY_DIR}/lib/libutils_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/utils/3rd/libiconv_v1_18/libiconv.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/utils/3rd/libiconv_v1_18/libcharset.a"
-    "${CMAKE_BINARY_DIR}/lib/libevent_wrapper_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent/libevent_V2_1_10/lib/libevent.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent/libares_V1_34_1/src/lib/libcares_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/boringssl/libssl.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/boringssl/libcrypto.a"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
 
 install(FILES ${UTP_PUBLIC_HEADERS} DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/utp")
@@ -268,6 +279,8 @@ if(UTP_BUILD_TESTS)
         test/test_ring_buffer.cc
         test/test_stream_impl.cc
         test/test_stream_zero_copy_views.cc
+        test/test_fault_injection_mmsg.cc
+        test/test_fault_injection_new.cc
     )
 
     add_executable(utp_tests ${UTP_TEST_SOURCES})
@@ -280,6 +293,17 @@ if(UTP_BUILD_TESTS)
             "${UTP_EVENT_ROOT}/include"
     )
     target_link_libraries(utp_tests PRIVATE utp_static)
+
+    if(UTP_ENABLE_FAULT_INJECTION)
+        target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
+    endif()
+
+    add_test(NAME utp_tests COMMAND utp_tests)
+    target_link_libraries(utp_tests PRIVATE utp_static)
+
+    if(UTP_ENABLE_FAULT_INJECTION)
+        target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
+    endif()
 
     add_test(NAME utp_tests COMMAND utp_tests)
 endif()

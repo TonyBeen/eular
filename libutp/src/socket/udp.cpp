@@ -17,6 +17,7 @@
 #include "socket/util.h"
 #include "utp/config.h"
 #include "logger/logger.h"
+#include "util/fiu_local.h"
 
 namespace eular {
 namespace utp {
@@ -427,6 +428,10 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
                                 remoteLen);
         }
 
+        if (fiu_fail("net/udp/sendto")) {
+            errno = ENOBUFS;
+            nwritten = -1;
+        }
         if (nwritten < 0) {
             int32_t code = GetSystemLastError();
             if (code == EAGAIN || code == EWOULDBLOCK) {

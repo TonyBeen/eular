@@ -24,6 +24,8 @@ set(UTP_TEST_SOURCES
     test_stream_impl.cc
     test_stream_zero_copy_views.cc
     test_public_api_errno.cc
+    test_fault_injection_mmsg.cc
+    test_fault_injection_new.cc
 )
 
 add_executable(utp_tests ${UTP_TEST_SOURCES})
@@ -38,5 +40,9 @@ target_include_directories(utp_tests
 )
 
 target_link_libraries(utp_tests PRIVATE utp_static)
+
+if(UTP_ENABLE_FAULT_INJECTION)
+    target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
+endif()
 
 add_test(NAME utp_tests COMMAND utp_tests)
