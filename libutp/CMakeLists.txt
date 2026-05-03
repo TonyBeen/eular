@@ -228,18 +228,6 @@ install(TARGETS utp_static
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
 
-install(FILES
-    "${CMAKE_BINARY_DIR}/lib/libutils_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/utils/3rd/libiconv_v1_18/libiconv.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/utils/3rd/libiconv_v1_18/libcharset.a"
-    "${CMAKE_BINARY_DIR}/lib/libevent_wrapper_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent/libevent_V2_1_10/lib/libevent.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent/libares_V1_34_1/src/lib/libcares_static.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/boringssl/libssl.a"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/boringssl/libcrypto.a"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-)
-
 install(FILES ${UTP_PUBLIC_HEADERS} DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/utp")
 
 install(EXPORT libutpTargets
@@ -304,6 +292,13 @@ if(UTP_BUILD_TESTS)
             "${UTP_UTILS_ROOT}/include"
             "${UTP_EVENT_ROOT}/include"
     )
+    target_link_libraries(utp_tests PRIVATE utp_static)
+
+    if(UTP_ENABLE_FAULT_INJECTION)
+        target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
+    endif()
+
+    add_test(NAME utp_tests COMMAND utp_tests)
     target_link_libraries(utp_tests PRIVATE utp_static)
 
     if(UTP_ENABLE_FAULT_INJECTION)
