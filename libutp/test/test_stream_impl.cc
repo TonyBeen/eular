@@ -12,16 +12,27 @@
 
 #include "utp/errno.h"
 
+#include <event/loop.h>
 #define private public
+#include "context/context_impl.h"
+#include "context/connection_impl.h"
 #include "context/stream_impl.h"
 #undef private
 
 using eular::utp::FrameStream;
 using eular::utp::StreamImpl;
 
+struct StreamTestCtx {
+    eular::utp::Config      cfg;
+    ev::EventLoop           loop;
+    eular::utp::ContextImpl ctx;
+    eular::utp::ConnectionImpl conn;
+    StreamTestCtx() : ctx(loop.loop(), &cfg), conn(&ctx, nullptr, 9999) {}
+};
+
 TEST_CASE("StreamImpl: onFrame pushes data and read consumes", "[Stream]")
 {
-    StreamImpl stream(nullptr, 7);
+    StreamTestCtx _fix_7; StreamImpl stream(&_fix_7.conn, 7);
 
     std::array<uint8_t, 4> payload = {1, 2, 3, 4};
     FrameStream frame;
@@ -48,7 +59,7 @@ TEST_CASE("StreamImpl: onFrame pushes data and read consumes", "[Stream]")
 
 TEST_CASE("StreamImpl: out-of-order frame is rejected for now", "[Stream]")
 {
-    StreamImpl stream(nullptr, 9);
+    StreamTestCtx _fix_9; StreamImpl stream(&_fix_9.conn, 9);
 
     std::array<uint8_t, 2> payload = {9, 8};
     FrameStream frame;
@@ -77,7 +88,7 @@ TEST_CASE("StreamImpl: out-of-order frame is rejected for now", "[Stream]")
 
 TEST_CASE("StreamImpl: peer fin returns EOF on empty read", "[Stream]")
 {
-    StreamImpl stream(nullptr, 11);
+    StreamTestCtx _fix_11; StreamImpl stream(&_fix_11.conn, 11);
 
     FrameStream frame;
     frame.stream_id = 11;
@@ -95,7 +106,7 @@ TEST_CASE("StreamImpl: peer fin returns EOF on empty read", "[Stream]")
 
 TEST_CASE("StreamImpl: read views interface exposes readable buffer", "[Stream]")
 {
-    StreamImpl stream(nullptr, 12);
+    StreamTestCtx _fix_12; StreamImpl stream(&_fix_12.conn, 12);
 
     std::array<uint8_t, 3> payload = {4, 5, 6};
     FrameStream frame;
@@ -119,7 +130,7 @@ TEST_CASE("StreamImpl: read views interface exposes readable buffer", "[Stream]"
 
 TEST_CASE("StreamImpl: zero-copy write interface can reserve buffer", "[Stream]")
 {
-    StreamImpl stream(nullptr, 15);
+    StreamTestCtx _fix_15; StreamImpl stream(&_fix_15.conn, 15);
 
     eular::utp::Stream::MutableBufferView views[2];
     const size_t bytes = stream.acquireWriteBuffer(views, 32);
@@ -128,14 +139,13 @@ TEST_CASE("StreamImpl: zero-copy write interface can reserve buffer", "[Stream]"
 
     static const uint8_t payload[5] = {7, 8, 9, 10, 11};
     std::memcpy(views[0].data, payload, sizeof(payload));
-    REQUIRE(stream.commitWrite(sizeof(payload), false) == -1);
-    REQUIRE(utp_get_last_error() == UTP_ERR_INVALID_STATE);
+    REQUIRE(stream.commitWrite(sizeof(payload), false) == static_cast<int32_t>(sizeof(payload)));
     REQUIRE(stream.state() == eular::utp::Stream::kStateOpen);
 }
 
 TEST_CASE("StreamImpl: setOnWritable fires immediately when writable", "[Stream]")
 {
-    StreamImpl stream(nullptr, 16);
+    StreamTestCtx _fix_16; StreamImpl stream(&_fix_16.conn, 16);
 
     int writableNotified = 0;
     stream.setOnWritable([&]() {
@@ -148,7 +158,7 @@ TEST_CASE("StreamImpl: setOnWritable fires immediately when writable", "[Stream]
 
 TEST_CASE("StreamImpl: writable reflects send queue capacity", "[Stream]")
 {
-    StreamImpl stream(nullptr, 17);
+    StreamTestCtx _fix_17; StreamImpl stream(&_fix_17.conn, 17);
 
     REQUIRE(stream.writable());
     stream.m_sendQueuedBytes = StreamImpl::kDefaultBufferCapacity;
@@ -157,14 +167,18 @@ TEST_CASE("StreamImpl: writable reflects send queue capacity", "[Stream]")
 
 TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")
 {
-    StreamImpl stream(nullptr, 13);
+    StreamTestCtx _fix_13; StreamImpl stream(&_fix_13.conn, 13);
     REQUIRE(stream.state() == eular::utp::Stream::kStateOpen);
     REQUIRE(stream.writable());
 
-    REQUIRE(stream.write("ab", 2, true) == -1);
-    REQUIRE(utp_get_last_error() == UTP_ERR_INVALID_STATE);
+    // Writing with FIN queues the local FIN; operation succeeds
+    REQUIRE(stream.write("ab", 2, true) == 2);
+    REQUIRE_FALSE(stream.writable());
+    // Second write after FIN is queued must be rejected
+    REQUIRE(stream.write("c", 1, false) == -1);
+    REQUIRE(utp_get_last_error() == UTP_ERR_STREAM_CLOSED);
 
-    StreamImpl rxOnly(nullptr, 14);
+    StreamTestCtx _fix_14; StreamImpl rxOnly(&_fix_14.conn, 14);
     FrameStream fin;
     fin.stream_id = 14;
     fin.stream_offset = 0;
@@ -177,7 +191,7 @@ TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")
 
 TEST_CASE("StreamImpl: reset frame notifies upper layer", "[Stream]")
 {
-    StreamImpl stream(nullptr, 21);
+    StreamTestCtx _fix_21; StreamImpl stream(&_fix_21.conn, 21);
 
     bool resetNotified = false;
     uint16_t resetCode = 0;
@@ -195,7 +209,7 @@ TEST_CASE("StreamImpl: reset frame notifies upper layer", "[Stream]")
 
 TEST_CASE("StreamImpl: queued local fin is not fully closed before send", "[Stream]")
 {
-    StreamImpl stream(nullptr, 22);
+    StreamTestCtx _fix_22; StreamImpl stream(&_fix_22.conn, 22);
 
     stream.m_peerFin = true;
     stream.m_localFinQueued = true;

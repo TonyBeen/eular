@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "util/fiu_local.h"
+
 #define POOL_SAMPLE_PERIOD 1024
 
 namespace eular {
@@ -116,6 +118,10 @@ PacketOut *MemoryManager::getPacketOut(uint32_t size)
         SLIST_REMOVE_HEAD(&packet_out_bufs[idx], next_pob);
         poolStatsAllocated(&packet_out_stats[idx], 0);
     } else {
+        if (fiu_fail("mem/mm/packet_out_buf")) {
+            packet_out_malo.put(packetOut);
+            return nullptr;
+        }
         pob = (PacketOutBuf *)malloc(g_packetOutSizeVec[idx]);
         if (!pob) {
             packet_out_malo.put(packetOut);

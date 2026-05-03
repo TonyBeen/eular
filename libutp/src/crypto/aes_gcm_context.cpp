@@ -16,6 +16,8 @@
 #include <utp/errno.h>
 #include <util/error.h>
 
+#include "util/fiu_local.h"
+
 #include "proto/proto.h"
 #include "proto/packet_in.h"
 #include "proto/packet_out.h"
@@ -118,6 +120,12 @@ int32_t AesGcmContext::encrypt(PacketOut *packet)
         targetBuffer = packet->raw_data;
         inPlace = true;
     } else {
+        if (fiu_fail("crypto/encrypt_buf/malloc")) {
+            SetLastErrorV(UTP_ERR_NO_MEMORY,
+                          "allocate encrypted packet buffer failed, size={}",
+                          encryptedPacketLen);
+            return -1;
+        }
         targetBuffer = static_cast<uint8_t *>(std::malloc(encryptedPacketLen));
         if (targetBuffer == nullptr) {
             SetLastErrorV(UTP_ERR_NO_MEMORY,
@@ -242,6 +250,10 @@ int32_t AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, c
 
     Nonce nonce = buildNonce(counter);
 
+    if (fiu_fail("crypto/evp_ctx/alloc")) {
+        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
+        return -1;
+    }
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
         SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
@@ -342,6 +354,10 @@ int32_t AesGcmContext::encryptScatter(const PlainSegment *segments,
 
     Nonce nonce = buildNonce(counter);
 
+    if (fiu_fail("crypto/evp_ctx/alloc")) {
+        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
+        return -1;
+    }
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
         SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
