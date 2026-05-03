@@ -8,6 +8,7 @@
 #ifndef __UTP_CRYPTO_BASE64_H__
 #define __UTP_CRYPTO_BASE64_H__
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
