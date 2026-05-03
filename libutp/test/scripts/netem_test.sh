@@ -31,9 +31,22 @@ netem_clear() {
 }
 
 start_server() {
-    "$SERVER" --bind-ip 127.0.0.1 --bind-port "$PORT" >"$SERVER_LOG" 2>&1 &
+    # 确保旧日志被清理
+    > "$SERVER_LOG"
+    "$SERVER" --bind-ip 127.0.0.1 --bind-port "$PORT" >>"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
-    sleep 0.5
+    
+    # 增加等待时间，并循环检查日志是否出现 "listening" 关键字
+    local timeout=5
+    while [ $timeout -gt 0 ]; do
+        if grep -q "listening" "$SERVER_LOG"; then
+            break
+        fi
+        sleep 0.5
+        ((timeout--)) || true
+    done
+    # 额外再等一小会儿确保稳定
+    sleep 1
 }
 
 stop_server() {
