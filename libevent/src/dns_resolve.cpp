@@ -15,6 +15,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <stdexcept>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
