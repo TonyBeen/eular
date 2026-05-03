@@ -89,6 +89,10 @@ int32_t StreamImpl::write(const void *data, size_t len, bool fin)
         return StreamErr(UTP_ERR_INVALID_PARAM);
     }
 
+    if (m_localFinQueued) {
+        return StreamErr(UTP_ERR_STREAM_CLOSED);
+    }
+
     if (len > appWriteCredit()) {
         return StreamErr(UTP_ERR_WOULD_BLOCK);
     }

@@ -12,7 +12,10 @@
 #include "utp/errno.h"
 #include "proto/packet_in.h"
 
+#include <event/loop.h>
 #define private public
+#include "context/context_impl.h"
+#include "context/connection_impl.h"
 #include "context/stream_impl.h"
 #undef private
 
@@ -20,9 +23,17 @@ using eular::utp::FrameStream;
 using eular::utp::Stream;
 using eular::utp::StreamImpl;
 
+struct StreamTestCtx {
+    eular::utp::Config      cfg;
+    ev::EventLoop           loop;
+    eular::utp::ContextImpl ctx;
+    eular::utp::ConnectionImpl conn;
+    StreamTestCtx() : ctx(loop.loop(), &cfg), conn(&ctx, nullptr, 9999) {}
+};
+
 TEST_CASE("StreamImpl: acquireReadViews supports out-of-order reassembly", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 31);
+    StreamTestCtx _fix_31; StreamImpl stream(&_fix_31.conn, 31);
 
     std::array<uint8_t, 2> tail = {3, 4};
     FrameStream f1;
@@ -66,7 +77,7 @@ TEST_CASE("StreamImpl: acquireReadViews supports out-of-order reassembly", "[Str
 
 TEST_CASE("StreamImpl: read and read-views stay consistent", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 32);
+    StreamTestCtx _fix_32; StreamImpl stream(&_fix_32.conn, 32);
 
     std::array<uint8_t, 5> payload = {9, 8, 7, 6, 5};
     FrameStream frame;
@@ -93,7 +104,7 @@ TEST_CASE("StreamImpl: read and read-views stay consistent", "[Stream][ReadViews
 
 TEST_CASE("StreamImpl: out-of-order fin is delivered only when contiguous", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 33);
+    StreamTestCtx _fix_33; StreamImpl stream(&_fix_33.conn, 33);
 
     FrameStream fin;
     fin.stream_id = 33;
@@ -125,7 +136,7 @@ TEST_CASE("StreamImpl: out-of-order fin is delivered only when contiguous", "[St
 
 TEST_CASE("StreamImpl: overlapping fragments are trimmed without duplication", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 34);
+    StreamTestCtx _fix_34; StreamImpl stream(&_fix_34.conn, 34);
 
     std::array<uint8_t, 8> base = {1, 2, 3, 4, 5, 6, 7, 8};
     FrameStream first;
@@ -157,7 +168,7 @@ TEST_CASE("StreamImpl: overlapping fragments are trimmed without duplication", "
 
 TEST_CASE("StreamImpl: overlap chain keeps strictly contiguous output", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 35);
+    StreamTestCtx _fix_35; StreamImpl stream(&_fix_35.conn, 35);
 
     std::array<uint8_t, 8> p0 = {1, 2, 3, 4, 5, 6, 7, 8};     // [0,8)
     std::array<uint8_t, 8> p1 = {5, 6, 7, 8, 9, 10, 11, 12};   // [4,12)
@@ -208,7 +219,7 @@ TEST_CASE("StreamImpl: overlap chain keeps strictly contiguous output", "[Stream
 
 TEST_CASE("StreamImpl: multiple fragments can reference one PacketIn", "[Stream][ReadViews]")
 {
-    StreamImpl stream(nullptr, 36);
+    StreamTestCtx _fix_36; StreamImpl stream(&_fix_36.conn, 36);
 
     eular::utp::PacketIn packet;
 
