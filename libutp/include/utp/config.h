@@ -116,6 +116,9 @@ public:
     uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024; ///< 握手前缓冲区字节上限
     uint16_t    init_max_streams_bidi = 64;                     ///< 初始最大双向流数
     uint16_t    init_max_streams_uni = 32;                      ///< 初始最大单向流数
+    uint64_t    initial_max_data = 64ull * 1024ull * 1024ull;                        ///< 初始连接级流量控制窗口
+    uint64_t    initial_max_stream_data_bidi_local = 16ull * 1024ull * 1024ull;      ///< 对端可向本端双向流发送的初始窗口
+    uint64_t    initial_max_stream_data_bidi_remote = 16ull * 1024ull * 1024ull;     ///< 本端可向对端双向流发送的初始窗口
 
     // --- Stream Scheduler (流调度器) ---
     uint8_t     stream_default_priority = 4;           ///< 默认流优先级 (0-7)

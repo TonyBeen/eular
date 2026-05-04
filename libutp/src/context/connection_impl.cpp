@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -48,6 +49,10 @@
 #include "proto/frame/handshake_helper.h"
 #include "proto/frame/crypto.h"
 #include "proto/frame/transport_params.h"
+#include "proto/frame/max_data.h"
+#include "proto/frame/max_stream_data.h"
+#include "proto/frame/data_blocked.h"
+#include "proto/frame/stream_data_blocked.h"
 #include "proto/frame/connection_close.h"
 
 #include "crypto/x25519_wrapper.h"
@@ -82,6 +87,12 @@ constexpr size_t kMaxStreamSendBurstsPerFlush = 64;
 constexpr utp_time_t kSchedulerStatsLogIntervalUs = 2000000;
 constexpr size_t kAckPayloadScratchSize = 1500;
 constexpr size_t kDefaultPayloadScratchCapacity = 2048;
+constexpr uint64_t kDefaultInitialMaxStreamData = static_cast<uint64_t>(eular::utp::StreamImpl::kMaxRecvFragmentBytes);
+constexpr uint64_t kDefaultInitialMaxData = kDefaultInitialMaxStreamData * 4;
+constexpr uint64_t kMaxDataUpdateStep = 256ull * 1024;
+constexpr uint64_t kMaxStreamDataUpdateStep = 128ull * 1024;
+constexpr utp_time_t kFlowControlUpdateMinIntervalUs = 20000;
+constexpr utp_time_t kFlowControlBlockedMinIntervalUs = 50000;
 
 struct AckProfileTuning {
     uint8_t ackThreshold;
@@ -390,7 +401,24 @@ void ConnectionImpl::bootstrapLocalTransportParams()
     m_loaclTP.init_max_streams_bidi = cfg->init_max_streams_bidi;
     m_loaclTP.init_max_streams_uni = cfg->init_max_streams_uni;
     m_loaclTP.ack_delay_exponent = cfg->ack_delay_exponent;
+    m_loaclTP.initial_max_data = cfg->initial_max_data;
+    m_loaclTP.initial_max_stream_data_bidi_local = cfg->initial_max_stream_data_bidi_local;
+    m_loaclTP.initial_max_stream_data_bidi_remote = cfg->initial_max_stream_data_bidi_remote;
     m_peerAckMaxDelayMs = cfg->ack_delay;
+
+    m_peerMaxData = 0;
+    m_peerMaxStreamData.clear();
+    m_localMaxDataAdvertised = m_loaclTP.initial_max_data;
+    m_localMaxStreamDataAdvertised.clear();
+    m_localBytesConsumedTotal = 0;
+    m_localStreamBytesConsumed.clear();
+    m_streamDataSentTotal = 0;
+    m_streamMaxSentOffset.clear();
+    m_initialFlowControlAdvertised = false;
+    m_lastMaxDataSentUs = 0;
+    m_lastMaxStreamDataSentUs.clear();
+    m_lastDataBlockedSentUs = 0;
+    m_lastStreamDataBlockedSentUs.clear();
 }
 
 int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt)
@@ -712,6 +740,44 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
             frameTp.params = &peerTp;
             if (frameTp.decode(frameData, frameLen) >= 0) {
                 m_peerTP = peerTp;
+                const uint64_t peerInitialMaxData = peerTp.initial_max_data > 0
+                                                 ? peerTp.initial_max_data
+                                                 : kDefaultInitialMaxData;
+                handleMaxDataFrame(peerInitialMaxData);
+            }
+            break;
+        }
+        case kFrameMaxData: {
+            FrameMaxData frame;
+            if (frame.decode(frameData, frameLen) >= 0) {
+                handleMaxDataFrame(frame.maximum_data);
+            }
+            break;
+        }
+        case kFrameMaxStreamData: {
+            FrameMaxStreamData frame;
+            if (frame.decode(frameData, frameLen) >= 0) {
+                handleMaxStreamDataFrame(frame.stream_id, frame.maximum_stream_data);
+            }
+            break;
+        }
+        case kFrameDataBlocked: {
+            FrameDataBlocked frame;
+            if (frame.decode(frameData, frameLen) >= 0) {
+                (void)sendMaxDataFrame(m_localMaxDataAdvertised);
+            }
+            break;
+        }
+        case kFrameStreamDataBlocked: {
+            FrameStreamDataBlocked frame;
+            if (frame.decode(frameData, frameLen) >= 0) {
+                ensureFlowControlAdvertised(frame.stream_id);
+                const uint64_t advertised = m_localMaxStreamDataAdvertised.count(frame.stream_id) > 0
+                                         ? m_localMaxStreamDataAdvertised[frame.stream_id]
+                                         : (m_loaclTP.initial_max_stream_data_bidi_remote > 0
+                                            ? m_loaclTP.initial_max_stream_data_bidi_remote
+                                            : kDefaultInitialMaxStreamData);
+                (void)sendMaxStreamDataFrame(frame.stream_id, advertised);
             }
             break;
         }
@@ -1335,6 +1401,7 @@ int32_t ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame, Packet
         return UTP_ERR_INTERNAL_ERROR;
     }
 
+    ensureFlowControlAdvertised(streamFrame.stream_id);
     const int32_t status = it->second->onFrame(streamFrame, packet);
     collectClosedStreams();
     return status;
@@ -1545,6 +1612,43 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         return UTP_ERR_OVERFLOW;
     }
 
+    if (len > 0) {
+        ensureFlowControlAdvertised(streamId);
+
+        if (m_streamDataSentTotal > (std::numeric_limits<uint64_t>::max)() - static_cast<uint64_t>(len)) {
+            return UTP_ERR_OVERFLOW;
+        }
+
+        if (m_peerMaxData > 0
+            && m_streamDataSentTotal + static_cast<uint64_t>(len) > m_peerMaxData) {
+            const utp_time_t nowUs = time::MonotonicUs();
+            if (m_lastDataBlockedSentUs == 0
+                || (nowUs > m_lastDataBlockedSentUs
+                    && (nowUs - m_lastDataBlockedSentUs) >= kFlowControlBlockedMinIntervalUs)) {
+                if (sendDataBlockedFrame(m_peerMaxData) == UTP_ERR_OK) {
+                    m_lastDataBlockedSentUs = nowUs;
+                }
+            }
+            return UTP_ERR_WOULD_BLOCK;
+        }
+
+        const uint64_t streamDataLimit = peerStreamDataLimit(streamId);
+        const bool overStreamLimit = (streamOffset > streamDataLimit)
+                                  || (static_cast<uint64_t>(len) > (streamDataLimit - streamOffset));
+        if (overStreamLimit) {
+            const utp_time_t nowUs = time::MonotonicUs();
+            utp_time_t &lastBlockedUs = m_lastStreamDataBlockedSentUs[streamId];
+            if (lastBlockedUs == 0
+                || (nowUs > lastBlockedUs
+                    && (nowUs - lastBlockedUs) >= kFlowControlBlockedMinIntervalUs)) {
+                if (sendStreamDataBlockedFrame(streamId, streamDataLimit) == UTP_ERR_OK) {
+                    lastBlockedUs = nowUs;
+                }
+            }
+            return UTP_ERR_WOULD_BLOCK;
+        }
+    }
+
     FrameStream frame;
     frame.stream_flag = fin ? STREAM_SET_FIN(0) : 0;
     frame.stream_data_length = static_cast<uint16_t>(len);
@@ -1629,19 +1733,23 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
             FrameBuildMeta(kFrameSessionToken, static_cast<uint16_t>(m_payloadScratch.size() - header.size() - len)),
             FrameBuildMeta(kFrameStream, static_cast<uint16_t>(header.size() + len))
         };
-        return sendPacket(UTP_TYPE_0RTT,
-                          m_payloadScratch.data(),
-                          m_payloadScratch.size(),
-                          0,
-                          nullptr,
-                          frameBits,
-                          nullptr,
-                          len,
-                          streamId,
-                          streamOffset,
-                          0,
-                          frameMetas,
-                          sizeof(frameMetas) / sizeof(frameMetas[0]));
+        const int32_t status = sendPacket(UTP_TYPE_0RTT,
+                                         m_payloadScratch.data(),
+                                         m_payloadScratch.size(),
+                                         0,
+                                         nullptr,
+                                         frameBits,
+                                         nullptr,
+                                         len,
+                                         streamId,
+                                         streamOffset,
+                                         0,
+                                         frameMetas,
+                                         sizeof(frameMetas) / sizeof(frameMetas[0]));
+        if (status == UTP_ERR_OK && len > 0) {
+            onStreamDataSent(streamId, streamOffset, len);
+        }
+        return status;
     }
 
     if (m_ackElicitingSinceLastAck > 0) {
@@ -1715,6 +1823,9 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
                         m_handshakeDonePending = true;
                         armHandshakeDoneTimer();
                     }
+                    if (len > 0) {
+                        onStreamDataSent(streamId, streamOffset, len);
+                    }
                 }
                 return status;
             }
@@ -1765,6 +1876,9 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
             m_handshakeDoneSent = true;
             m_handshakeDonePending = true;
             armHandshakeDoneTimer();
+            if (len > 0) {
+                onStreamDataSent(streamId, streamOffset, len);
+            }
         }
         return status;
     }
@@ -1780,19 +1894,38 @@ int32_t ConnectionImpl::sendStreamFrame(uint32_t streamId,
         FrameBuildMeta(kFrameStream, static_cast<uint16_t>(header.size() + len))
     };
 
-    return sendPacket(packetType,
-                      streamSegments,
-                      streamSegmentCount,
-                      0,
-                      nullptr,
-                      0,
-                      nullptr,
-                      len,
-                      streamId,
-                      streamOffset,
-                      0,
-                      frameMetas,
-                      sizeof(frameMetas) / sizeof(frameMetas[0]));
+    const int32_t status = sendPacket(packetType,
+                                      streamSegments,
+                                      streamSegmentCount,
+                                      0,
+                                      nullptr,
+                                      0,
+                                      nullptr,
+                                      len,
+                                      streamId,
+                                      streamOffset,
+                                      0,
+                                      frameMetas,
+                                      sizeof(frameMetas) / sizeof(frameMetas[0]));
+    if (status == UTP_ERR_OK && len > 0) {
+        onStreamDataSent(streamId, streamOffset, len);
+    }
+    return status;
+}
+
+void ConnectionImpl::onStreamDataSent(uint32_t streamId, uint64_t streamOffset, size_t len)
+{
+    if (len == 0) {
+        return;
+    }
+
+    uint64_t newEndOffset = streamOffset + static_cast<uint64_t>(len);
+    uint64_t &maxSent = m_streamMaxSentOffset[streamId];
+    if (newEndOffset > maxSent) {
+        uint64_t delta = newEndOffset - maxSent;
+        m_streamDataSentTotal += delta;
+        maxSent = newEndOffset;
+    }
 }
 
 int32_t ConnectionImpl::sendConnectionCloseFrame()
@@ -1876,6 +2009,210 @@ void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
     }
 
     (void)it->second->onReset(resetFrame.error_code, true);
+}
+
+void ConnectionImpl::handleMaxDataFrame(uint64_t maximumData)
+{
+    if (maximumData > m_peerMaxData) {
+        m_peerMaxData = maximumData;
+    }
+}
+
+void ConnectionImpl::handleMaxStreamDataFrame(uint32_t streamId, uint64_t maximumStreamData)
+{
+    auto it = m_peerMaxStreamData.find(streamId);
+    if (it == m_peerMaxStreamData.end()) {
+        m_peerMaxStreamData.emplace(streamId, maximumStreamData);
+        return;
+    }
+
+    if (maximumStreamData > it->second) {
+        it->second = maximumStreamData;
+    }
+}
+
+uint64_t ConnectionImpl::peerStreamDataLimit(uint32_t streamId) const
+{
+    auto it = m_peerMaxStreamData.find(streamId);
+    if (it == m_peerMaxStreamData.end()) {
+        return m_peerTP.initial_max_stream_data_bidi_local > 0
+             ? m_peerTP.initial_max_stream_data_bidi_local
+             : kDefaultInitialMaxStreamData;
+    }
+
+    return it->second;
+}
+
+int32_t ConnectionImpl::sendMaxDataFrame(uint64_t maximumData)
+{
+    FrameMaxData frame;
+    frame.maximum_data = maximumData;
+
+    std::array<uint8_t, FRAME_MAX_DATA_SIZE> payload{};
+    const int32_t frameLen = frame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const int32_t status = sendPacket(UTP_TYPE_CTRL,
+                                      payload.data(),
+                                      static_cast<size_t>(frameLen),
+                                      0,
+                                      nullptr,
+                                      (1u << static_cast<uint32_t>(kFrameMaxData)));
+    if (status == UTP_ERR_OK) {
+        m_lastMaxDataSentUs = time::MonotonicUs();
+    }
+    return status;
+}
+
+int32_t ConnectionImpl::sendMaxStreamDataFrame(uint32_t streamId, uint64_t maximumStreamData)
+{
+    FrameMaxStreamData frame;
+    frame.stream_id = streamId;
+    frame.maximum_stream_data = maximumStreamData;
+
+    std::array<uint8_t, FRAME_MAX_STREAM_DATA_SIZE> payload{};
+    const int32_t frameLen = frame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    const int32_t status = sendPacket(UTP_TYPE_CTRL,
+                                      payload.data(),
+                                      static_cast<size_t>(frameLen),
+                                      0,
+                                      nullptr,
+                                      (1u << static_cast<uint32_t>(kFrameMaxStreamData)));
+    if (status == UTP_ERR_OK) {
+        m_lastMaxStreamDataSentUs[streamId] = time::MonotonicUs();
+    }
+    return status;
+}
+
+int32_t ConnectionImpl::sendDataBlockedFrame(uint64_t dataLimit)
+{
+    FrameDataBlocked frame;
+    frame.data_limit = dataLimit;
+
+    std::array<uint8_t, FRAME_DATA_BLOCKED_SIZE> payload{};
+    const int32_t frameLen = frame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    return sendPacket(UTP_TYPE_CTRL,
+                      payload.data(),
+                      static_cast<size_t>(frameLen),
+                      0,
+                      nullptr,
+                      (1u << static_cast<uint32_t>(kFrameDataBlocked)));
+}
+
+int32_t ConnectionImpl::sendStreamDataBlockedFrame(uint32_t streamId, uint64_t streamDataLimit)
+{
+    FrameStreamDataBlocked frame;
+    frame.stream_id = streamId;
+    frame.stream_data_limit = streamDataLimit;
+
+    std::array<uint8_t, FRAME_STREAM_DATA_BLOCKED_SIZE> payload{};
+    const int32_t frameLen = frame.encode(payload.data(), payload.size());
+    if (frameLen <= 0) {
+        return UTP_ERR_INTERNAL_ERROR;
+    }
+
+    return sendPacket(UTP_TYPE_CTRL,
+                      payload.data(),
+                      static_cast<size_t>(frameLen),
+                      0,
+                      nullptr,
+                      (1u << static_cast<uint32_t>(kFrameStreamDataBlocked)));
+}
+
+void ConnectionImpl::ensureFlowControlAdvertised(uint32_t streamId)
+{
+    if (m_state != State::kStateConnected || m_peerConnectionID == 0) {
+        return;
+    }
+
+    if (!m_initialFlowControlAdvertised) {
+        if (sendMaxDataFrame(m_localMaxDataAdvertised) == UTP_ERR_OK) {
+            m_initialFlowControlAdvertised = true;
+        }
+    }
+
+    if (streamId == UINT32_MAX) {
+        return;
+    }
+
+    auto it = m_localMaxStreamDataAdvertised.find(streamId);
+    if (it == m_localMaxStreamDataAdvertised.end()) {
+        const uint64_t initialStreamWindow = m_loaclTP.initial_max_stream_data_bidi_remote > 0
+                                          ? m_loaclTP.initial_max_stream_data_bidi_remote
+                                          : kDefaultInitialMaxStreamData;
+        m_localMaxStreamDataAdvertised.emplace(streamId, initialStreamWindow);
+        (void)sendMaxStreamDataFrame(streamId, initialStreamWindow);
+    }
+}
+
+void ConnectionImpl::onStreamBytesConsumed(uint32_t streamId, size_t bytes)
+{
+    if (bytes == 0) {
+        return;
+    }
+
+    m_localBytesConsumedTotal += static_cast<uint64_t>(bytes);
+    m_localStreamBytesConsumed[streamId] += static_cast<uint64_t>(bytes);
+
+    if (m_state != State::kStateConnected || m_peerConnectionID == 0) {
+        return;
+    }
+
+    ensureFlowControlAdvertised(streamId);
+
+    const utp_time_t nowUs = time::MonotonicUs();
+    const uint64_t baseMaxData = m_loaclTP.initial_max_data > 0
+                               ? m_loaclTP.initial_max_data
+                               : kDefaultInitialMaxData;
+    const uint64_t targetMaxData = baseMaxData + m_localBytesConsumedTotal;
+    if (targetMaxData > m_localMaxDataAdvertised) {
+        const uint64_t delta = targetMaxData - m_localMaxDataAdvertised;
+        const bool dueBySize = delta >= kMaxDataUpdateStep;
+        const bool dueByTime = (m_lastMaxDataSentUs == 0)
+                            || (nowUs > m_lastMaxDataSentUs
+                                && (nowUs - m_lastMaxDataSentUs) >= kFlowControlUpdateMinIntervalUs);
+        if (dueBySize || dueByTime) {
+            if (sendMaxDataFrame(targetMaxData) == UTP_ERR_OK) {
+                m_localMaxDataAdvertised = targetMaxData;
+            }
+        }
+    }
+
+    const uint64_t consumedByStream = m_localStreamBytesConsumed[streamId];
+    const uint64_t baseMaxStreamData = m_loaclTP.initial_max_stream_data_bidi_remote > 0
+                                    ? m_loaclTP.initial_max_stream_data_bidi_remote
+                                    : kDefaultInitialMaxStreamData;
+    const uint64_t targetMaxStreamData = baseMaxStreamData + consumedByStream;
+    uint64_t &advertised = m_localMaxStreamDataAdvertised[streamId];
+    if (advertised == 0) {
+        advertised = baseMaxStreamData;
+    }
+
+    if (targetMaxStreamData > advertised) {
+        const uint64_t delta = targetMaxStreamData - advertised;
+        const utp_time_t lastSentUs = m_lastMaxStreamDataSentUs.count(streamId) > 0
+                                   ? m_lastMaxStreamDataSentUs[streamId]
+                                   : 0;
+        const bool dueBySize = delta >= kMaxStreamDataUpdateStep;
+        const bool dueByTime = (lastSentUs == 0)
+                            || (nowUs > lastSentUs
+                                && (nowUs - lastSentUs) >= kFlowControlUpdateMinIntervalUs);
+        if (dueBySize || dueByTime) {
+            if (sendMaxStreamDataFrame(streamId, targetMaxStreamData) == UTP_ERR_OK) {
+                advertised = targetMaxStreamData;
+            }
+        }
+    }
 }
 
 int32_t ConnectionImpl::sendHandshakeDonePacket()

@@ -32,6 +32,10 @@ std::string FrameTypeToString(uint32_t type)
         "HandshakeDone",
         "TransportParams",
         "HandshakeDelay",
+        "MaxData",
+        "MaxStreamData",
+        "DataBlocked",
+        "StreamDataBlocked",
     };
 
     if (type == kFrameInvalid) {

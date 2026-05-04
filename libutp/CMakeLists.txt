@@ -137,6 +137,10 @@ set(UTP_SOURCES
     src/proto/frame/handshake_delay.cpp
     src/proto/frame/handshake_done.cpp
     src/proto/frame/handshake_helper.cpp
+    src/proto/frame/max_data.cpp
+    src/proto/frame/max_stream_data.cpp
+    src/proto/frame/data_blocked.cpp
+    src/proto/frame/stream_data_blocked.cpp
     src/proto/frame/padding.cpp
     src/proto/frame/path.cpp
     src/proto/frame/reset_stream.cpp
@@ -270,6 +274,7 @@ if(UTP_BUILD_TESTS)
         test/test_frame_path.cc
         test/test_frame_session_token.cc
         test/test_frame_transport_params.cc
+        test/test_frame_flow_control.cc
         test/test_mtu.cc
         test/test_network_path.cc
         test/test_packet_in.cc

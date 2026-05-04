@@ -43,6 +43,10 @@ enum FrameType : uint8_t {
     kFrameHandshakeDone,    // 握手完成帧
     kFrameTransportParams,  // 传输参数帧
     kFrameHandshakeDelay,   // 握手处理耗时帧
+    kFrameMaxData,          // 连接级流量控制窗口更新帧
+    kFrameMaxStreamData,    // 流级流量控制窗口更新帧
+    kFrameDataBlocked,      // 连接级流量控制受限帧
+    kFrameStreamDataBlocked,// 流级流量控制受限帧
     kFrameMax,
 };
 

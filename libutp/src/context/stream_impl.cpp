@@ -164,6 +164,9 @@ int32_t StreamImpl::read(void *buffer, size_t capacity)
     }
 
     maybeAdvancePeerFin();
+    if (copied > 0 && m_conn != nullptr) {
+        m_conn->onStreamBytesConsumed(m_streamId, copied);
+    }
     maybeNotifyClosed();
     return static_cast<int32_t>(copied);
 }
@@ -316,6 +319,9 @@ int32_t StreamImpl::commitReadViews(size_t bytes)
     }
 
     maybeAdvancePeerFin();
+    if (bytes > 0 && m_conn != nullptr) {
+        m_conn->onStreamBytesConsumed(m_streamId, bytes);
+    }
     maybeNotifyClosed();
     return static_cast<int32_t>(bytes);
 }

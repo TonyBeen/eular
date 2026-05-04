@@ -21,6 +21,10 @@
 #include "proto/frame/transport_params.h"
 #include "proto/frame/handshake_delay.h"
 #include "proto/frame/handshake_done.h"
+#include "proto/frame/max_data.h"
+#include "proto/frame/max_stream_data.h"
+#include "proto/frame/data_blocked.h"
+#include "proto/frame/stream_data_blocked.h"
 #include "proto/frame/session_token.h"
 #include "proto/frame/connection_close.h"
 #include "proto/frame/crypto.h"
@@ -197,6 +201,18 @@ int32_t PacketIn::frameLength(const uint8_t *frameData,
         break;
     case kFrameHandshakeDelay:
         frameLen = FRAME_HANDSHAKE_DELAY_SIZE;
+        break;
+    case kFrameMaxData:
+        frameLen = FRAME_MAX_DATA_SIZE;
+        break;
+    case kFrameMaxStreamData:
+        frameLen = FRAME_MAX_STREAM_DATA_SIZE;
+        break;
+    case kFrameDataBlocked:
+        frameLen = FRAME_DATA_BLOCKED_SIZE;
+        break;
+    case kFrameStreamDataBlocked:
+        frameLen = FRAME_STREAM_DATA_BLOCKED_SIZE;
         break;
     default:
         return -1;

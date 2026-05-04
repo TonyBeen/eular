@@ -42,6 +42,9 @@ int32_t FrameTransportParams::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, params->init_max_streams_bidi);
     offset = Serialize::SerializeTo(offset, size, params->init_max_streams_uni);
     offset = Serialize::SerializeTo(offset, size, params->ack_delay_exponent);
+    offset = Serialize::SerializeTo(offset, size, params->initial_max_data);
+    offset = Serialize::SerializeTo(offset, size, params->initial_max_stream_data_bidi_local);
+    offset = Serialize::SerializeTo(offset, size, params->initial_max_stream_data_bidi_remote);
     if (offset == nullptr) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "failed to encode transport params frame");
         return -1;
@@ -85,6 +88,9 @@ int32_t FrameTransportParams::decode(const void *buffer, size_t size)
     offset = Serialize::DeserializeFrom(offset, size, params->init_max_streams_bidi);
     offset = Serialize::DeserializeFrom(offset, size, params->init_max_streams_uni);
     offset = Serialize::DeserializeFrom(offset, size, params->ack_delay_exponent);
+    offset = Serialize::DeserializeFrom(offset, size, params->initial_max_data);
+    offset = Serialize::DeserializeFrom(offset, size, params->initial_max_stream_data_bidi_local);
+    offset = Serialize::DeserializeFrom(offset, size, params->initial_max_stream_data_bidi_remote);
     if (offset == nullptr) {
         SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode transport params frame");
         return -1;

@@ -11,7 +11,7 @@
 #include "proto/frame.h"
 #include "util/transport_param.h"
 
-#define FRAME_TRANSPORT_PARAMS_SIZE (1 + 2 + 4 + 2 + 2 + 2 + 1)
+#define FRAME_TRANSPORT_PARAMS_SIZE (1 + 2 + 4 + 2 + 2 + 2 + 1 + 8 + 8 + 8)
 
 namespace eular {
 namespace utp {

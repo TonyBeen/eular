@@ -196,11 +196,21 @@ private:
     int32_t sendConnectionCloseFrame();
     int32_t sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize);
     void    handleResetStreamFrame(const FrameResetStream &resetFrame);
+    void    handleMaxDataFrame(uint64_t maximumData);
+    void    handleMaxStreamDataFrame(uint32_t streamId, uint64_t maximumStreamData);
+    int32_t sendMaxDataFrame(uint64_t maximumData);
+    int32_t sendMaxStreamDataFrame(uint32_t streamId, uint64_t maximumStreamData);
+    int32_t sendDataBlockedFrame(uint64_t dataLimit);
+    int32_t sendStreamDataBlockedFrame(uint32_t streamId, uint64_t streamDataLimit);
+    void    ensureFlowControlAdvertised(uint32_t streamId);
+    void    onStreamBytesConsumed(uint32_t streamId, size_t bytes);
+    uint64_t peerStreamDataLimit(uint32_t streamId) const;
     int32_t sendStreamFrame(uint32_t streamId,
                             uint64_t streamOffset,
                             const uint8_t *data,
                             size_t len,
                             bool fin);
+    void    onStreamDataSent(uint32_t streamId, uint64_t streamOffset, size_t len);
     int32_t sendHandshakeDonePacket();
     int32_t maybeSendSessionTokenPacket();
     int32_t sendInitialPacket();
@@ -322,6 +332,15 @@ private:
     State                   m_state{kStateDisconnected};
     TransportParams         m_loaclTP{};
     TransportParams         m_peerTP{};
+    uint64_t                m_peerMaxData{0};
+    std::unordered_map<uint32_t, uint64_t> m_peerMaxStreamData;
+    uint64_t                m_localMaxDataAdvertised{0};
+    std::unordered_map<uint32_t, uint64_t> m_localMaxStreamDataAdvertised;
+    uint64_t                m_localBytesConsumedTotal{0};
+    std::unordered_map<uint32_t, uint64_t> m_localStreamBytesConsumed;
+    uint64_t                m_streamDataSentTotal{0};
+    std::unordered_map<uint32_t, uint64_t> m_streamMaxSentOffset;
+    bool                    m_initialFlowControlAdvertised{false};
     MemoryManager           m_mm;
     RttStats                m_rttStats;
 
@@ -391,6 +410,10 @@ private:
     utp_time_t              m_ackProfileCandidateSinceUs{0};
     utp_time_t              m_ackProfileLastSentMs{0};
     utp_time_t              m_ackProfileBaselineSrttUs{0};
+    utp_time_t              m_lastMaxDataSentUs{0};
+    std::unordered_map<uint32_t, utp_time_t> m_lastMaxStreamDataSentUs;
+    utp_time_t              m_lastDataBlockedSentUs{0};
+    std::unordered_map<uint32_t, utp_time_t> m_lastStreamDataBlockedSentUs;
     bool                    m_isClientInitiator{true};
     int32_t                 m_lastErrorCode{0};
     std::string             m_lastErrorReason;

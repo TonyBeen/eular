@@ -23,6 +23,9 @@ TEST_CASE("TransportParams frame: encode/decode", "[FrameTransportParams]")
     localTp.init_max_streams_bidi = 48;
     localTp.init_max_streams_uni = 24;
     localTp.ack_delay_exponent = 4;
+    localTp.initial_max_data = 7ull * 1024ull * 1024ull;
+    localTp.initial_max_stream_data_bidi_local = 3ull * 1024ull * 1024ull;
+    localTp.initial_max_stream_data_bidi_remote = 5ull * 1024ull * 1024ull;
 
     FrameTransportParams frame;
     frame.params = &localTp;
@@ -43,4 +46,7 @@ TEST_CASE("TransportParams frame: encode/decode", "[FrameTransportParams]")
     REQUIRE(peerTp.init_max_streams_bidi == localTp.init_max_streams_bidi);
     REQUIRE(peerTp.init_max_streams_uni == localTp.init_max_streams_uni);
     REQUIRE(peerTp.ack_delay_exponent == localTp.ack_delay_exponent);
+    REQUIRE(peerTp.initial_max_data == localTp.initial_max_data);
+    REQUIRE(peerTp.initial_max_stream_data_bidi_local == localTp.initial_max_stream_data_bidi_local);
+    REQUIRE(peerTp.initial_max_stream_data_bidi_remote == localTp.initial_max_stream_data_bidi_remote);
 }
