@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -44,13 +45,6 @@ std::string RandomString(size_t len)
     return out;
 }
 
-void PrintUsage(const char *argv0)
-{
-    std::cout << "Usage: " << argv0
-              << " [--server-ip 127.0.0.1] [--server-port 9000]"
-              << " [--interval-ms 1000] [--count 5] [--length 16]\n";
-}
-
 } // namespace
 
 int main(int argc, char **argv)
@@ -60,13 +54,17 @@ int main(int argc, char **argv)
     uint32_t intervalMs = 1000;
     uint32_t sendCount = 5;
     size_t msgLen = 16;
+    uint64_t totalBytes = 0;
+    bool quiet = false;
 
     CLI::App app("UTP echo client example");
     app.add_option("--server-ip", serverIp, "Server IP address")->check(CLI::ValidIPV4);
     app.add_option("--server-port", serverPort, "Server port")->check(CLI::Range(5000, 65535));
     app.add_option("--interval-ms", intervalMs, "Interval between messages in milliseconds")->check(CLI::Range(1, 15000));
-    app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 1024));
-    app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 1024));
+    app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 200000));
+    app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 16384));
+    app.add_option("--total-bytes", totalBytes, "Total bytes to send; if > 0, overrides --count")->check(CLI::Range(static_cast<uint64_t>(0), static_cast<uint64_t>(4294967296ULL)));
+    app.add_flag("--quiet", quiet, "Reduce per-message output for stress tests");
     CLI11_PARSE(app, argc, argv);
 
     std::signal(SIGINT, OnSignal);
@@ -77,6 +75,7 @@ int main(int argc, char **argv)
     cfg.handshake_timeout = 5000;
     cfg.enable_keepalive = false;
     cfg.enable_dplpmtud = false;
+    cfg.mtu_base = 1400;
     eular::utp::Context ctx(loop.loop(), &cfg);
 
     eular::utp::Connection::Ptr conn;
@@ -86,24 +85,59 @@ int main(int argc, char **argv)
 
     uint32_t sent = 0;
     uint32_t echoed = 0;
+    uint64_t sentBytes = 0;
+    uint64_t echoedBytes = 0;
+    bool sendDone = false;
+    bool closeIssued = false;
+    uint64_t drainStartMs = 0;
+    const uint64_t drainCheckIntervalMs = 1000;
+    const uint64_t drainMaxWaitMs = 180000;
+
+    const uint64_t targetBytes = (totalBytes > 0)
+        ? totalBytes
+        : (static_cast<uint64_t>(sendCount) * static_cast<uint64_t>(msgLen));
+
     ev::EventTimer stopTimer;
     stopTimer.reset(loop.loop(), [&]() {
         std::cout << "[client] exiting...\n";
         loop.breakLoop();
     });
 
+    ev::EventTimer drainTimer;
+    drainTimer.reset(loop.loop(), [&]() {
+        if (!closeIssued && connected && conn) {
+            std::cout << "[client] drain timeout, closing connection\n";
+            std::cout << "[client] done, sent_msgs=" << sent
+                      << ", echoed_msgs=" << echoed
+                      << ", sent_bytes=" << sentBytes
+                      << ", echoed_bytes=" << echoedBytes << "\n";
+            closeIssued = true;
+            conn->close();
+        }
+    });
+
     ev::EventTimer nextSendTimer;
     nextSendTimer.reset(loop.loop(), [&]() {
         if (!connectFailed && connected && stream != nullptr) {
-            if (sent >= sendCount) {
-                std::cout << "[client] done, sent=" << sent << ", echoed=" << echoed << "\n";
+            if (sendDone || sentBytes >= targetBytes || (totalBytes == 0 && sent >= sendCount)) {
                 nextSendTimer.stop();
-                conn->close();
+                if (!sendDone) {
+                    sendDone = true;
+                    drainStartMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+                    drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
+                }
                 return;
             }
 
-            const bool fin = (sent + 1 == sendCount);
-            const std::string payload = RandomString(msgLen);
+            size_t chunkLen = msgLen;
+            if (totalBytes > 0) {
+                const uint64_t remaining = targetBytes - sentBytes;
+                chunkLen = static_cast<size_t>(std::min<uint64_t>(remaining, static_cast<uint64_t>(msgLen)));
+            }
+            const bool fin = (sentBytes + static_cast<uint64_t>(chunkLen) >= targetBytes);
+
+            const std::string payload = RandomString(chunkLen);
             const int32_t nwrite = stream->write(payload.data(), payload.size(), fin);
             if (nwrite < 0) {
                 std::cerr << "[client] write failed: " << nwrite << "\n";
@@ -111,8 +145,24 @@ int main(int argc, char **argv)
             }
 
             ++sent;
-            std::cout << "[client] send #" << sent << ": \"" << payload << "\""
-                      << (fin ? " [fin]" : "") << "\n";
+            sentBytes += static_cast<uint64_t>(nwrite);
+
+            if (!quiet) {
+                std::cout << "[client] send #" << sent << ": \"" << payload << "\""
+                          << (fin ? " [fin]" : "") << "\n";
+            } else if (sent % 1000 == 0 || fin) {
+                std::cout << "[client] progress sent_msgs=" << sent
+                          << " sent_bytes=" << sentBytes
+                          << (fin ? " [fin]" : "") << "\n";
+            }
+
+            if (fin && !sendDone) {
+                sendDone = true;
+                nextSendTimer.stop();
+                drainStartMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+                drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
+            }
         }
     });
 
@@ -139,14 +189,27 @@ int main(int argc, char **argv)
         std::cout << "[client] local stream id=" << stream->id() << "\n";
         nextSendTimer.start(0, intervalMs);
         stream->setOnReadable([&]() {
-            std::vector<uint8_t> buffer(2048);
+            std::vector<uint8_t> buffer(65536);
             for (;;) {
                 const int32_t n = stream->read(buffer.data(), buffer.size());
                 if (n > 0) {
                     ++echoed;
-                    std::string msg(reinterpret_cast<const char *>(buffer.data()),
-                                    static_cast<size_t>(n));
-                    std::cout << "[client] echo #" << echoed << ": \"" << msg << "\"\n";
+                    echoedBytes += static_cast<uint64_t>(n);
+                    if (!quiet) {
+                        std::string msg(reinterpret_cast<const char *>(buffer.data()),
+                                        static_cast<size_t>(n));
+                        std::cout << "[client] echo #" << echoed << ": \"" << msg << "\"\n";
+                    }
+
+                    if (sendDone && !closeIssued && echoedBytes >= sentBytes) {
+                        drainTimer.stop();
+                        std::cout << "[client] done, sent_msgs=" << sent
+                                  << ", echoed_msgs=" << echoed
+                                  << ", sent_bytes=" << sentBytes
+                                  << ", echoed_bytes=" << echoedBytes << "\n";
+                        closeIssued = true;
+                        conn->close();
+                    }
                     continue;
                 }
                 break;
@@ -186,7 +249,10 @@ int main(int argc, char **argv)
     std::cout << "[client] connecting to " << serverIp << ":" << serverPort
               << ", interval=" << intervalMs << "ms"
               << ", count=" << sendCount
-              << ", length=" << msgLen << "\n";
+              << ", length=" << msgLen
+              << ", total_bytes=" << totalBytes
+              << ", target_bytes=" << targetBytes
+              << (quiet ? ", quiet=1" : ", quiet=0") << "\n";
 
     loop.dispatch();
     return 0;

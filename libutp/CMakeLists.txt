@@ -300,10 +300,4 @@ if(UTP_BUILD_TESTS)
 
     add_test(NAME utp_tests COMMAND utp_tests)
     target_link_libraries(utp_tests PRIVATE utp_static)
-
-    if(UTP_ENABLE_FAULT_INJECTION)
-        target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
-    endif()
-
-    add_test(NAME utp_tests COMMAND utp_tests)
 endif()

@@ -577,11 +577,11 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     }
 
     m_bytesIn += msg.len;
+    const utp_packno_t packetPn = packet->header.pn;
     const utp_packno_t largestBeforeInsert = m_receiveHistory.largest();
     const bool reorderedGap = largestBeforeInsert != 0
-                           && packet->header.pn > largestBeforeInsert + 1
-                           && (packet->header.pn - largestBeforeInsert - 1) >= m_ackReorderingThreshold;
-    m_receiveHistory.insert(packet->header.pn, nowUs);
+                           && packetPn > largestBeforeInsert + 1
+                           && (packetPn - largestBeforeInsert - 1) >= m_ackReorderingThreshold;
     m_peerConnectionID = packet->header.scid;
 
     const bool closingState = m_state == State::kStateCloseSent
@@ -640,6 +640,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     size_t frameOffset = 0;
     bool peerCloseReceived = false;
     bool hasHandshakeDoneFrame = false;
+    bool streamBackpressured = false;
     while (frameOffset < packet->payload_size) {
         FrameType frameType = kFrameInvalid;
         const uint8_t *frameData = nullptr;
@@ -665,7 +666,10 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         case kFrameStream: {
             FrameStream streamFrame;
             if (streamFrame.decode(frameData, frameLen) >= 0) {
-                (void)ingestStreamFrame(streamFrame, packet.get());
+                const int32_t streamStatus = ingestStreamFrame(streamFrame, packet.get());
+                if (streamStatus == UTP_ERR_WOULD_BLOCK) {
+                    streamBackpressured = true;
+                }
             }
             break;
         }
@@ -812,7 +816,11 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
                               || packet->header.types == UTP_TYPE_HANDSHAKE;
     const bool closePacket = packet->header.types == UTP_TYPE_CONNECTION_CLOSE
                           || packet->hasFrame(kFrameConnectionClose);
-    const bool suppressAck = handshakePacket || closePacket;
+    const bool suppressAck = handshakePacket || closePacket || streamBackpressured;
+
+    if (!suppressAck) {
+        m_receiveHistory.insert(packetPn, nowUs);
+    }
 
     if (!ackOnly && !suppressAck) {
         noteAckElicitingPacket(nowUs);

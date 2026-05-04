@@ -51,8 +51,8 @@ public:
     using SP = std::shared_ptr<StreamImpl>;
 
     static constexpr size_t kDefaultBufferCapacity  = 64 * 1024;
-    static constexpr size_t kMaxSendQueueBytes      = 4 * 1024 * 1024;
-    static constexpr size_t kMaxRecvFragmentBytes   = 4 * 1024 * 1024;
+    static constexpr size_t kMaxSendQueueBytes      = 64 * 1024 * 1024;
+    static constexpr size_t kMaxRecvFragmentBytes   = 16 * 1024 * 1024;
 
     StreamImpl(ConnectionImpl *conn, uint32_t streamId, uint8_t priority = Stream::kPriorityDefault);
     ~StreamImpl();

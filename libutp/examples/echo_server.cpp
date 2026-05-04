@@ -56,7 +56,8 @@ int main(int argc, char **argv)
     eular::utp::Config cfg;
     cfg.handshake_timeout = 5000;
     cfg.enable_keepalive = true;
-    cfg.enable_dplpmtud = true;
+    cfg.enable_dplpmtud = false;
+    cfg.mtu_base = 1400;
     cfg.ack_every_n_packets = 30;
     cfg.handshake_timeout = 3000;
 
@@ -121,21 +122,87 @@ int main(int argc, char **argv)
 
         conn->setOnIncomingStream([](eular::utp::Stream *stream) {
             std::cout << "[server] incoming stream id=" << stream->id() << "\n";
-            stream->setOnReadable([stream]() {
-                std::vector<uint8_t> buffer(2048);
+
+            // Pending echo buffer: data read but not yet written back.
+            // writeOffset tracks how many bytes have been flushed to stream->write().
+            struct EchoState {
+                std::vector<uint8_t> pending;
+                size_t writeOffset{0};
+                bool peerFin{false};
+
+                size_t unwritten() const { return pending.size() - writeOffset; }
+                void compact() {
+                    if (writeOffset > 0) {
+                        pending.erase(pending.begin(),
+                                      pending.begin() + static_cast<ptrdiff_t>(writeOffset));
+                        writeOffset = 0;
+                    }
+                }
+            };
+            auto state = std::make_shared<EchoState>();
+
+            // tryFlush: drain pending buffer into stream->write().
+            // Must be shared_ptr<function> for mutual lambda capture.
+            auto tryFlushPtr = std::make_shared<std::function<void()>>();
+            *tryFlushPtr = [stream, state, tryFlushPtr]() {
+                while (state->unwritten() > 0) {
+                    // stream->write() is all-or-nothing. Try a bounded chunk first,
+                    // then shrink on WOULD_BLOCK so tiny credits can still make progress.
+                    size_t tryLen = std::min(state->unwritten(), static_cast<size_t>(4096));
+                    int32_t nw = stream->write(
+                        state->pending.data() + state->writeOffset,
+                        tryLen, false);
+
+                    if (nw <= 0) {
+                        bool progressed = false;
+                        while (tryLen > 1) {
+                            tryLen /= 2;
+                            nw = stream->write(
+                                state->pending.data() + state->writeOffset,
+                                tryLen, false);
+                            if (nw > 0) {
+                                progressed = true;
+                                break;
+                            }
+                        }
+                        if (!progressed) {
+                            return;
+                        }
+                    }
+
+                    state->writeOffset += static_cast<size_t>(nw);
+                    // Compact when front waste exceeds 64KB.
+                    if (state->writeOffset >= 65536) {
+                        state->compact();
+                    }
+                }
+                state->compact();
+                if (state->peerFin) {
+                    stream->close();
+                }
+            };
+
+            stream->setOnWritable([stream, tryFlushPtr]() {
+                (*tryFlushPtr)();
+            });
+
+            stream->setOnReadable([stream, state, tryFlushPtr]() {
+                std::vector<uint8_t> buffer(4096);
                 for (;;) {
                     const int32_t n = stream->read(buffer.data(), buffer.size());
                     if (n > 0) {
-                        const std::string msg(reinterpret_cast<const char *>(buffer.data()),
-                                              static_cast<size_t>(n));
-                        std::cout << "[server] recv stream=" << stream->id() << " msg=\"" << msg << "\"\n";
-                        (void)stream->write(buffer.data(), static_cast<size_t>(n), false);
+                        state->pending.insert(state->pending.end(),
+                                              buffer.data(), buffer.data() + n);
+                        (*tryFlushPtr)();
                         continue;
                     }
 
                     if (n == 0) {
-                        // Peer sent FIN and no buffered data remains.
-                        stream->close();
+                        // Peer sent FIN.
+                        state->peerFin = true;
+                        if (state->pending.empty()) {
+                            stream->close();
+                        }
                     }
                     break;
                 }
