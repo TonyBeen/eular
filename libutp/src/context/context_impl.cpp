@@ -1070,13 +1070,7 @@ ConnectionImpl::SP ContextImpl::createAndInsertPassiveConnection(uint32_t localC
                                                                  uint32_t sessionTokenSize)
 {
     ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, localCid);
-    if (conn->initPassive(info,
-                          peerAddress,
-                          peerCid,
-                          peerTp,
-                          peerAckFrequency,
-                          x25519,
-                          aesCtx) != UTP_ERR_OK) {
+    if (conn->initPassive(info, peerAddress, peerCid, peerTp, peerAckFrequency, x25519, aesCtx) != UTP_ERR_OK) {
         return ConnectionImpl::SP();
     }
 

@@ -141,8 +141,7 @@ int main(int argc, char **argv)
         conn->setOnError([scid](const eular::utp::Connection::ConnectionErrorInfo &info) {
             std::cerr << "[server] conn error scid=" << scid
                       << " code=" << info.error_code
-                      << " reason=" << info.error_reason
-                      << " fatal=" << (info.fatal ? 1 : 0) << "\n";
+                      << " reason=" << info.error_reason << "\n";
         });
     });
 

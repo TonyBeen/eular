@@ -50,7 +50,6 @@ public:
     struct ConnectionErrorInfo {
         int32_t     error_code{0};      ///< 错误码
         std::string error_reason;       ///< 错误原因描述
-        bool        fatal{false};       ///< 是否为致命错误
     };
 
     /**

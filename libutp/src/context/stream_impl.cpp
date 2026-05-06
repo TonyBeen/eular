@@ -151,6 +151,7 @@ int32_t StreamImpl::read(void *buffer, size_t capacity)
         const size_t n = std::min(remaining, contiguous - copied);
         std::memcpy(out + copied, fragment->data + fragment->consumed, n);
         fragment->consumed += n;
+        m_recvBufferedBytes = (m_recvBufferedBytes >= n) ? (m_recvBufferedBytes - n) : 0;
         m_recvOffset += n;
         copied += n;
 
@@ -307,6 +308,7 @@ int32_t StreamImpl::commitReadViews(size_t bytes)
         const size_t remaining = fragment->remaining();
         const size_t n = std::min(remaining, left);
         fragment->consumed += n;
+        m_recvBufferedBytes = (m_recvBufferedBytes >= n) ? (m_recvBufferedBytes - n) : 0;
         m_recvOffset += n;
         left -= n;
 

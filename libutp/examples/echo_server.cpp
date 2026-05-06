@@ -1,8 +1,11 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -12,6 +15,11 @@
 #include <event/loop.h>
 #include <event/timer.h>
 
+#ifdef X509_NAME
+#undef X509_NAME
+#endif
+#include <openssl/evp.h>
+
 #include <utils/CLI11.hpp>
 
 #include <utp/errno.h>
@@ -19,7 +27,59 @@
 
 namespace {
 
-ev::EventLoop loop;
+class Md5Accumulator {
+public:
+    Md5Accumulator() {
+        m_ctx = EVP_MD_CTX_new();
+        if (m_ctx != nullptr) {
+            m_ok = (EVP_DigestInit_ex(m_ctx, EVP_md5(), nullptr) == 1);
+        }
+    }
+
+    ~Md5Accumulator() {
+        if (m_ctx != nullptr) {
+            EVP_MD_CTX_free(m_ctx);
+            m_ctx = nullptr;
+        }
+    }
+
+    bool valid() const { return m_ok; }
+
+    bool update(const uint8_t *data, size_t len) {
+        if (!m_ok || m_finalized) {
+            return false;
+        }
+        return EVP_DigestUpdate(m_ctx, data, len) == 1;
+    }
+
+    bool finalize(std::string &hexOut) {
+        if (!m_ok || m_finalized) {
+            return false;
+        }
+
+        uint8_t digest[EVP_MAX_MD_SIZE] = {0};
+        unsigned int digestLen = 0;
+        if (EVP_DigestFinal_ex(m_ctx, digest, &digestLen) != 1) {
+            return false;
+        }
+
+        static const char *kHex = "0123456789abcdef";
+        hexOut.clear();
+        hexOut.reserve(digestLen * 2);
+        for (unsigned int i = 0; i < digestLen; ++i) {
+            hexOut.push_back(kHex[digest[i] >> 4]);
+            hexOut.push_back(kHex[digest[i] & 0x0F]);
+        }
+
+        m_finalized = true;
+        return true;
+    }
+
+private:
+    EVP_MD_CTX *m_ctx{nullptr};
+    bool m_ok{false};
+    bool m_finalized{false};
+};
 
 std::string PeerKey(const std::string &ip, uint16_t port)
 {
@@ -35,6 +95,31 @@ void OnSignal(int)
 void PrintUsage(const char *argv0)
 {
     std::cout << "Usage: " << argv0 << " [--bind-ip 0.0.0.0] [--bind-port 9000]\n";
+}
+
+bool ParseUploadHeader(const std::string &line, uint64_t &expectedBytes)
+{
+    static const std::string kPrefix = "UPLOAD ";
+    if (line.rfind(kPrefix, 0) != 0) {
+        return false;
+    }
+
+    const std::string value = line.substr(kPrefix.size());
+    if (value.empty()) {
+        return false;
+    }
+    for (char ch : value) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+    }
+
+    try {
+        expectedBytes = std::stoull(value);
+    } catch (...) {
+        return false;
+    }
+    return expectedBytes > 0;
 }
 
 } // namespace
@@ -63,6 +148,13 @@ int main(int argc, char **argv)
 
     eular::utp::Context ctx(loop.loop(), &cfg);
     std::unordered_set<std::string> zeroRttAcceptedPeers;
+
+    size_t read_size = 0;
+    ev::EventTimer print_timer;
+    print_timer.reset(loop.loop(), [&]() {
+        printf("[server] total read so far: %zu bytes\n", read_size);
+    });
+    print_timer.start(1000, 1000);
 
     ctx.setOnNewConnection([&ctx](const eular::utp::Context::NewConnectionInfo &info) {
         const bool zeroRttPath = info.local_cid == 0;
@@ -120,91 +212,185 @@ int main(int argc, char **argv)
 
         zeroRttAcceptedPeers.erase(peer);
 
-        conn->setOnIncomingStream([](eular::utp::Stream *stream) {
+        conn->setOnIncomingStream([&](eular::utp::Stream *stream) {
             std::cout << "[server] incoming stream id=" << stream->id() << "\n";
 
-            // Pending echo buffer: data read but not yet written back.
-            // writeOffset tracks how many bytes have been flushed to stream->write().
-            struct EchoState {
-                std::vector<uint8_t> pending;
-                size_t writeOffset{0};
-                bool peerFin{false};
+            struct Session {
+                enum Phase : uint8_t {
+                    kReadHeader = 0,
+                    kReadPayload,
+                    kClosed,
+                };
 
-                size_t unwritten() const { return pending.size() - writeOffset; }
-                void compact() {
-                    if (writeOffset > 0) {
-                        pending.erase(pending.begin(),
-                                      pending.begin() + static_cast<ptrdiff_t>(writeOffset));
-                        writeOffset = 0;
-                    }
-                }
+                Phase phase{kReadHeader};
+                std::string headerBuffer;
+                uint64_t expectedBytes{0};
+                uint64_t receivedBytes{0};
+                Md5Accumulator md5;
+
+                std::vector<uint8_t> outbox;
+                size_t outboxOffset{0};
+                bool closeAfterFlush{false};
+                bool failed{false};
+                bool finSeen{false};
             };
-            auto state = std::make_shared<EchoState>();
+            auto session = std::make_shared<Session>();
 
-            // tryFlush: drain pending buffer into stream->write().
-            // Must be shared_ptr<function> for mutual lambda capture.
+            auto queueLine = [session](const std::string &line) {
+                session->outbox.insert(session->outbox.end(), line.begin(), line.end());
+            };
+
+            auto markFailed = [session, queueLine](const std::string &reason) {
+                if (session->failed) {
+                    return;
+                }
+                session->failed = true;
+                queueLine("ERR " + reason + "\n");
+                session->closeAfterFlush = true;
+            };
+
             auto tryFlushPtr = std::make_shared<std::function<void()>>();
-            *tryFlushPtr = [stream, state, tryFlushPtr]() {
-                while (state->unwritten() > 0) {
-                    // stream->write() is all-or-nothing. Try a bounded chunk first,
-                    // then shrink on WOULD_BLOCK so tiny credits can still make progress.
-                    size_t tryLen = std::min(state->unwritten(), static_cast<size_t>(4096));
-                    int32_t nw = stream->write(
-                        state->pending.data() + state->writeOffset,
-                        tryLen, false);
-
-                    if (nw <= 0) {
-                        bool progressed = false;
-                        while (tryLen > 1) {
-                            tryLen /= 2;
-                            nw = stream->write(
-                                state->pending.data() + state->writeOffset,
-                                tryLen, false);
-                            if (nw > 0) {
-                                progressed = true;
-                                break;
-                            }
-                        }
-                        if (!progressed) {
+            *tryFlushPtr = [stream, session, tryFlushPtr]() {
+                while (session->outboxOffset < session->outbox.size()) {
+                    const uint8_t *base = session->outbox.data() + session->outboxOffset;
+                    const size_t left = session->outbox.size() - session->outboxOffset;
+                    const int32_t nw = stream->write(base, left, false);
+                    if (nw < 0) {
+                        if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
                             return;
                         }
+                        std::cerr << "[server] write failed: " << utp_get_error_string() << "\n";
+                        session->closeAfterFlush = true;
+                        break;
                     }
-
-                    state->writeOffset += static_cast<size_t>(nw);
-                    // Compact when front waste exceeds 64KB.
-                    if (state->writeOffset >= 65536) {
-                        state->compact();
+                    if (nw == 0) {
+                        return;
                     }
+                    session->outboxOffset += static_cast<size_t>(nw);
                 }
-                state->compact();
-                if (state->peerFin) {
-                    stream->close();
+
+                if (session->outboxOffset >= session->outbox.size()) {
+                    session->outbox.clear();
+                    session->outboxOffset = 0;
+                    if (session->closeAfterFlush) {
+                        session->phase = Session::kClosed;
+                        stream->close();
+                    }
                 }
             };
 
-            stream->setOnWritable([stream, tryFlushPtr]() {
+            stream->setOnWritable([tryFlushPtr]() {
                 (*tryFlushPtr)();
             });
 
-            stream->setOnReadable([stream, state, tryFlushPtr]() {
-                std::vector<uint8_t> buffer(4096);
+            stream->setOnReadable([stream, session, queueLine, markFailed, tryFlushPtr, &read_size]() {
+                if (session->phase == Session::kClosed) {
+                    return;
+                }
+
+                std::vector<uint8_t> buffer(32 * 1024, 0);
                 for (;;) {
                     const int32_t n = stream->read(buffer.data(), buffer.size());
-                    if (n > 0) {
-                        state->pending.insert(state->pending.end(),
-                                              buffer.data(), buffer.data() + n);
-                        (*tryFlushPtr)();
-                        continue;
+                    if (n < 0) {
+                        break;
                     }
+                    read_size += n;
 
                     if (n == 0) {
-                        // Peer sent FIN.
-                        state->peerFin = true;
-                        if (state->pending.empty()) {
-                            stream->close();
+                        session->finSeen = true;
+                        if (!session->failed) {
+                            if (session->phase != Session::kReadPayload) {
+                                markFailed("missing_upload_header");
+                            } else if (session->receivedBytes != session->expectedBytes) {
+                                markFailed("size_mismatch");
+                            } else {
+                                std::string md5Hex;
+                                if (!session->md5.finalize(md5Hex)) {
+                                    markFailed("md5_finalize_failed");
+                                } else {
+                                    queueLine("DONE bytes=" + std::to_string(session->receivedBytes) + " md5=" + md5Hex + "\n");
+                                    session->closeAfterFlush = true;
+                                }
+                            }
+                        }
+
+                        (*tryFlushPtr)();
+                        break;
+                    }
+
+                    const uint8_t *chunk = buffer.data();
+                    size_t left = static_cast<size_t>(n);
+                    while (left > 0 && !session->failed) {
+                        if (session->phase == Session::kReadHeader) {
+                            const uint8_t *lf = static_cast<const uint8_t *>(std::memchr(chunk, '\n', left));
+                            if (lf == nullptr) {
+                                session->headerBuffer.append(reinterpret_cast<const char *>(chunk), left);
+                                if (session->headerBuffer.size() > 1024) {
+                                    markFailed("header_too_large");
+                                }
+                                left = 0;
+                                break;
+                            }
+
+                            const size_t headPartLen = static_cast<size_t>(lf - chunk);
+                            session->headerBuffer.append(reinterpret_cast<const char *>(chunk), headPartLen);
+                            if (!session->headerBuffer.empty() && session->headerBuffer.back() == '\r') {
+                                session->headerBuffer.pop_back();
+                            }
+
+                            uint64_t expected = 0;
+                            if (!ParseUploadHeader(session->headerBuffer, expected)) {
+                                markFailed("bad_upload_header");
+                                left = 0;
+                                break;
+                            }
+                            session->expectedBytes = expected;
+                            session->phase = Session::kReadPayload;
+                            session->headerBuffer.clear();
+                            if (!session->md5.valid()) {
+                                markFailed("md5_init_failed");
+                                left = 0;
+                                break;
+                            }
+
+                            const size_t consume = headPartLen + 1;
+                            chunk += consume;
+                            left -= consume;
+                            continue;
+                        }
+
+                        if (session->phase != Session::kReadPayload) {
+                            left = 0;
+                            break;
+                        }
+
+                        if (session->receivedBytes >= session->expectedBytes) {
+                            markFailed("payload_overflow");
+                            left = 0;
+                            break;
+                        }
+
+                        const uint64_t remain = session->expectedBytes - session->receivedBytes;
+                        const size_t consume = static_cast<size_t>(std::min<uint64_t>(remain, left));
+                        if (!session->md5.update(chunk, consume)) {
+                            markFailed("md5_update_failed");
+                            left = 0;
+                            break;
+                        }
+                        session->receivedBytes += static_cast<uint64_t>(consume);
+                        queueLine("ACK total=" + std::to_string(session->receivedBytes) + "\n");
+
+                        chunk += consume;
+                        left -= consume;
+
+                        if (left > 0 && session->receivedBytes >= session->expectedBytes) {
+                            markFailed("payload_overflow");
+                            left = 0;
+                            break;
                         }
                     }
-                    break;
+
+                    (*tryFlushPtr)();
                 }
             });
         });

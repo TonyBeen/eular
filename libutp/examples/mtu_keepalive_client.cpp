@@ -201,8 +201,7 @@ int main(int argc, char **argv)
 
         conn->setOnError([](const eular::utp::Connection::ConnectionErrorInfo &info) {
             std::cerr << "[client] conn error code=" << info.error_code
-                      << " reason=" << info.error_reason
-                      << " fatal=" << (info.fatal ? 1 : 0) << "\n";
+                      << " reason=" << info.error_reason << "\n";
         });
 
         sendTimer.start(1);

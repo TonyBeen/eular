@@ -284,10 +284,11 @@ private:
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
     void    onHandshakeDoneFrameAcked();
+    // 根据当前状态和配置生成本地 TP，供初始包使用
     void    bootstrapLocalTransportParams();
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
-    void    notifyConnectionError(int32_t errorCode, const std::string &reason, bool fatal);
+    void    notifyConnectionError(int32_t errorCode, const std::string &reason);
     void    notifyConnectionClosed(int32_t errorCode, const std::string &reason, bool byPeer);
 
     /// @brief 读取默认 stream 优先级（0最高，7最低）
@@ -295,8 +296,7 @@ private:
     /// @brief 读取当前调度策略（支持运行时热切换）
     StreamSchedulerMode streamSchedulerMode() const;
     /// @brief 对候选 stream 做基于 stream_id 的 RR 选取
-    StreamImpl::SP pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates,
-                                        uint32_t &cursor);
+    StreamImpl::SP pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates, uint32_t &cursor);
     /// @brief DISABLED 模式：按 stream_id RR 选流
     StreamImpl::SP pickNextWritableStreamDisabled();
     /// @brief STRICT+Aging 模式选流

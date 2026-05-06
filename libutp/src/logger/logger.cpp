@@ -95,6 +95,7 @@ void default_log_cb(int32_t level, const char *log, int32_t size)
     } else {
         printf("[%s]: %.*s\n", str_level, size, log);
     }
+    fflush(stdout);
 }
 
 void utp_set_log_cb(utp_log_callback_t log_cb)
