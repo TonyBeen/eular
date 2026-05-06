@@ -31,6 +31,10 @@ local frame_type_names = {
     [15] = "HandshakeDone",
     [16] = "TransportParams",
     [17] = "HandshakeDelay",
+    [18] = "MaxData",
+    [19] = "MaxStreamData",
+    [20] = "DataBlocked",
+    [21] = "StreamDataBlocked",
 }
 
 utp.prefs.udp_port = Pref.uint("UDP port", 9000, "UTP UDP port (0 disables auto registration)")
@@ -99,10 +103,20 @@ f.tp_handshake_timeout = ProtoField.uint16("eular_utp.transport_params.handshake
 f.tp_init_max_streams_bidi = ProtoField.uint16("eular_utp.transport_params.init_max_streams_bidi", "Init Max Streams Bidi", base.DEC)
 f.tp_init_max_streams_uni = ProtoField.uint16("eular_utp.transport_params.init_max_streams_uni", "Init Max Streams Uni", base.DEC)
 f.tp_ack_delay_exponent = ProtoField.uint8("eular_utp.transport_params.ack_delay_exponent", "Ack Delay Exponent", base.DEC)
+f.tp_initial_max_data = ProtoField.uint64("eular_utp.transport_params.initial_max_data", "Initial Max Data", base.DEC)
+f.tp_initial_max_stream_data_bidi_local = ProtoField.uint64("eular_utp.transport_params.initial_max_stream_data_bidi_local", "Initial Max Stream Data Bidi Local", base.DEC)
+f.tp_initial_max_stream_data_bidi_remote = ProtoField.uint64("eular_utp.transport_params.initial_max_stream_data_bidi_remote", "Initial Max Stream Data Bidi Remote", base.DEC)
 
 f.reset_error = ProtoField.uint16("eular_utp.reset.error", "Reset Error Code", base.DEC)
 f.reset_stream_id = ProtoField.uint32("eular_utp.reset.stream_id", "Reset Stream ID", base.DEC)
 f.reset_final_size = ProtoField.uint64("eular_utp.reset.final_size", "Reset Final Size", base.DEC)
+
+f.max_data_limit = ProtoField.uint64("eular_utp.max_data.maximum_data", "Maximum Data", base.DEC)
+f.max_stream_data_stream_id = ProtoField.uint32("eular_utp.max_stream_data.stream_id", "MaxStreamData Stream ID", base.DEC)
+f.max_stream_data_limit = ProtoField.uint64("eular_utp.max_stream_data.maximum_stream_data", "Maximum Stream Data", base.DEC)
+f.data_blocked_limit = ProtoField.uint64("eular_utp.data_blocked.data_limit", "Data Limit", base.DEC)
+f.stream_data_blocked_stream_id = ProtoField.uint32("eular_utp.stream_data_blocked.stream_id", "StreamDataBlocked Stream ID", base.DEC)
+f.stream_data_blocked_limit = ProtoField.uint64("eular_utp.stream_data_blocked.stream_data_limit", "Stream Data Limit", base.DEC)
 
 local function frame_name(ftype)
     return frame_type_names[ftype] or string.format("Unknown(%d)", ftype)
@@ -174,11 +188,17 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 13 then
         frame_len = 7
     elseif frame_type == 16 then
-        -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 = 14
-        frame_len = 14
+        -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 + 8 + 8 + 8 = 38
+        frame_len = 38
     elseif frame_type == 17 then
         -- FRAME_HANDSHAKE_DELAY_SIZE = 1 + 4 = 5
         frame_len = 5
+    elseif frame_type == 18 or frame_type == 20 then
+        -- FRAME_MAX_DATA_SIZE / FRAME_DATA_BLOCKED_SIZE = 1 + 8 = 9
+        frame_len = 9
+    elseif frame_type == 19 or frame_type == 21 then
+        -- FRAME_MAX_STREAM_DATA_SIZE / FRAME_STREAM_DATA_BLOCKED_SIZE = 1 + 4 + 8 = 13
+        frame_len = 13
     else
         return -1
     end
@@ -297,7 +317,12 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         node:add(f.tp_init_max_streams_bidi, payload(payload_offset + 9, 2))
         node:add(f.tp_init_max_streams_uni, payload(payload_offset + 11, 2))
         node:add(f.tp_ack_delay_exponent, payload(payload_offset + 13, 1))
-        append_summary(summaries, string.format("TP hs_to=%u", payload(payload_offset + 7, 2):uint()))
+        node:add(f.tp_initial_max_data, payload(payload_offset + 14, 8))
+        node:add(f.tp_initial_max_stream_data_bidi_local, payload(payload_offset + 22, 8))
+        node:add(f.tp_initial_max_stream_data_bidi_remote, payload(payload_offset + 30, 8))
+        append_summary(summaries, string.format("TP hs_to=%u max_data=%s",
+            payload(payload_offset + 7, 2):uint(),
+            tostring(payload(payload_offset + 14, 8):uint64())))
     elseif frame_type == 5 then
         append_summary(summaries, "PING")
     elseif frame_type == 15 then
@@ -306,6 +331,24 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 17 then
         node:add(f.handshake_delay_us, payload(payload_offset + 1, 4))
         append_summary(summaries, string.format("HANDSHAKE_DELAY us=%u", payload(payload_offset + 1, 4):uint()))
+    elseif frame_type == 18 then
+        node:add(f.max_data_limit, payload(payload_offset + 1, 8))
+        append_summary(summaries, string.format("MAX_DATA %s", tostring(payload(payload_offset + 1, 8):uint64())))
+    elseif frame_type == 19 then
+        node:add(f.max_stream_data_stream_id, payload(payload_offset + 1, 4))
+        node:add(f.max_stream_data_limit, payload(payload_offset + 5, 8))
+        append_summary(summaries, string.format("MAX_STREAM_DATA sid=%u limit=%s",
+            payload(payload_offset + 1, 4):uint(),
+            tostring(payload(payload_offset + 5, 8):uint64())))
+    elseif frame_type == 20 then
+        node:add(f.data_blocked_limit, payload(payload_offset + 1, 8))
+        append_summary(summaries, string.format("DATA_BLOCKED %s", tostring(payload(payload_offset + 1, 8):uint64())))
+    elseif frame_type == 21 then
+        node:add(f.stream_data_blocked_stream_id, payload(payload_offset + 1, 4))
+        node:add(f.stream_data_blocked_limit, payload(payload_offset + 5, 8))
+        append_summary(summaries, string.format("STREAM_DATA_BLOCKED sid=%u limit=%s",
+            payload(payload_offset + 1, 4):uint(),
+            tostring(payload(payload_offset + 5, 8):uint64())))
     end
 
     return frame_len
