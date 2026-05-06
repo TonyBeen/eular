@@ -85,7 +85,7 @@ public:
     // --- Congestion Control (拥塞控制) ---
     int32_t     cc_algorithm = 0;                       ///< 算法选择: 0-默认(BBR), 1-BBR, 2-Cubic
     uint32_t    clock_granularity_us = 1;               ///< Pacer 时钟粒度 (us)
-    uint32_t    bbr_init_cwnd_mss = 32;                 ///< BBR 初始拥塞窗口 (MSS)
+    uint32_t    bbr_init_cwnd_mss = 16;                 ///< BBR 初始拥塞窗口 (MSS)
     uint32_t    bbr_min_cwnd_mss = 4;                   ///< BBR 最小拥塞窗口 (MSS)
     float       bbr_startup_high_gain = 2.885f;         ///< BBR STARTUP 阶段增益
     float       bbr_cwnd_gain = 2.0f;                   ///< BBR PROBE_BW 阶段 cwnd 增益
@@ -102,41 +102,41 @@ public:
     uint32_t    cubic_min_cwnd_mss = 4;     ///< CUBIC 最小拥塞窗口 (MSS)
 
     // --- ACK 行为控制 ---
-    uint8_t     ack_every_n_packets = 10;   ///< 每收到 N 个包发一次 ACK
+    uint8_t     ack_every_n_packets = 4;    ///< 每收到 N 个包发一次 ACK
     uint32_t    time_threshold_ms = 3;      ///< ACK 延迟时间阈值因子
     uint8_t     max_ack_range_size = 149;   ///< ACK 帧中最大 Range 数量
     uint8_t     ack_delay_exponent = 3;     ///< ACK 延迟指数
-    uint16_t    ack_delay = 150;            ///< 最大 ACK 延迟 (ms)
+    uint16_t    ack_delay = 50;             ///< 最大 ACK 延迟 (ms)
 
     // --- Transport Parameters (传输参数) ---
-    uint16_t    handshake_timeout = 3000;                       ///< 握手超时时间 (ms)
-    uint16_t    pending_handshake_retry_interval_ms = 200;      ///< 握手重试周期 (ms)
-    uint8_t     pending_handshake_max_retries = 3;              ///< 握手最大重试次数
-    uint16_t    pending_pre_handshake_buffer_packets = 16;      ///< 握手前缓冲区包数上限
-    uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024; ///< 握手前缓冲区字节上限
-    uint16_t    init_max_streams_bidi = 64;                     ///< 初始最大双向流数
-    uint16_t    init_max_streams_uni = 32;                      ///< 初始最大单向流数
-    uint64_t    initial_max_data = 64ull * 1024ull * 1024ull;                        ///< 初始连接级流量控制窗口
-    uint64_t    initial_max_stream_data_bidi_local = 16ull * 1024ull * 1024ull;      ///< 对端可向本端双向流发送的初始窗口
-    uint64_t    initial_max_stream_data_bidi_remote = 16ull * 1024ull * 1024ull;     ///< 本端可向对端双向流发送的初始窗口
+    uint16_t    handshake_timeout = 3000;                           ///< 握手超时时间 (ms)
+    uint16_t    pending_handshake_retry_interval_ms = 200;          ///< 握手重试周期 (ms)
+    uint8_t     pending_handshake_max_retries = 3;                  ///< 握手最大重试次数
+    uint16_t    pending_pre_handshake_buffer_packets = 16;          ///< 握手前缓冲区包数上限
+    uint32_t    pending_pre_handshake_buffer_bytes = 32 * 1024;     ///< 握手前缓冲区字节上限
+    uint16_t    init_max_streams_bidi = 32;                         ///< 初始最大双向流数
+    uint16_t    init_max_streams_uni = 16;                          ///< 初始最大单向流数
+    uint64_t    initial_max_data = 8ull * 1024ull * 1024ull;        ///< 初始连接级流量控制窗口
+    uint64_t    initial_max_stream_data_bidi_local = 256 * 1024;    ///< 对端可向本端双向流发送的初始窗口
+    uint64_t    initial_max_stream_data_bidi_remote = 256 * 1024;   ///< 本端可向对端双向流发送的初始窗口
 
     // --- Stream Scheduler (流调度器) ---
-    uint8_t     stream_default_priority = 4;           ///< 默认流优先级 (0-7)
+    uint8_t     stream_default_priority = 4;            ///< 默认流优先级 (0-7)
     StreamSchedulerMode stream_scheduler_mode = kStreamSchedulerStrict; ///< 流调度模式
-    uint16_t    stream_aging_threshold = 8;            ///< 优先级老化阈值
-    uint8_t     stream_aging_step = 1;                 ///< 优先级老化步进
-    uint16_t    stream_drr_quantum = 1200;             ///< DRR 基准量子
-    uint32_t    stream_drr_deficit_cap = 64 * 1024;    ///< DRR 赤字上限
-    uint32_t    stream_send_buffer_limit = 64 * 1024;  ///< 单流写缓冲区上限
-    bool        stream_enable_coalescing = true;       ///< 是否启用小包聚合发送
+    uint16_t    stream_aging_threshold = 8;             ///< 优先级老化阈值
+    uint8_t     stream_aging_step = 1;                  ///< 优先级老化步进
+    uint16_t    stream_drr_quantum = 1200;              ///< DRR 基准量子
+    uint32_t    stream_drr_deficit_cap = 128 * 1024;    ///< DRR 赤字上限
+    uint32_t    stream_send_buffer_limit = 256 * 1024;  ///< 单流写缓冲区上限
+    bool        stream_enable_coalescing = true;        ///< 是否启用小包聚合发送
     uint16_t    stream_min_payload_before_immediate_send = 1200; ///< 聚合触发阈值
-    uint32_t    stream_coalesce_delay_us = 1000;       ///< 聚合等待时延 (us)
+    uint32_t    stream_coalesce_delay_us = 1000;        ///< 聚合等待时延 (us)
     uint32_t    stream_unacked_data_limit = 256 * 1024; ///< 在途未确认数据上限 (bytes)
 
     // --- Connection Scheduler (连接级 WDRR 调度器) ---
     ConnectionSchedulerMode connection_scheduler_mode = kConnectionSchedulerWdrr; ///< 连接调度模式
     uint32_t    connection_wdrr_quantum = 1200; ///< 连接级 WDRR 量子
-    uint32_t    connection_wdrr_deficit_cap = 64 * 1024; ///< 连接级 WDRR 赤字上限
+    uint32_t    connection_wdrr_deficit_cap = 512 * 1024; ///< 连接级 WDRR 赤字上限
 };
 
 } // namespace utp
