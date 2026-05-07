@@ -387,6 +387,39 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
 
 ConnectionImpl::~ConnectionImpl() = default;
 
+bool ConnectionImpl::recordConnectionError(int32_t errorCode, const char *reason, bool notify)
+{
+    if (errorCode == UTP_ERR_OK) {
+        return false;
+    }
+
+    if (m_lastErrorCode != UTP_ERR_OK) {
+        UTP_LOGW("%s suppress subsequent error: new_code=%d new_reason=%s existing_code=%d existing_reason=%s",
+                 tag(),
+                 errorCode,
+                 reason ? reason : "",
+                 m_lastErrorCode,
+                 m_lastErrorReason.data());
+        return false;
+    }
+
+    m_lastErrorCode = errorCode;
+    if (reason != nullptr) {
+        std::snprintf(m_lastErrorReason.data(), kConnectionReasonSize, "%s", reason);
+    } else {
+        m_lastErrorReason[0] = '\0';
+    }
+    if (notify) {
+        notifyConnectionError(m_lastErrorCode, m_lastErrorReason.data());
+    }
+    return true;
+}
+
+bool ConnectionImpl::hasFatalConnectionError() const
+{
+    return m_lastErrorCode != UTP_ERR_OK;
+}
+
 void ConnectionImpl::bootstrapLocalTransportParams()
 {
     m_loaclTP = TransportParams{};
@@ -463,7 +496,7 @@ int32_t ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttC
     m_networkPath.bindPeerAddress(peer);
     m_mtuDiscovery.setAddressFamily(peer.family());
     m_lastErrorCode = UTP_ERR_OK;
-    m_lastErrorReason.clear();
+    m_lastErrorReason[0] = '\0';
     m_closeByPeer = false;
     m_closedNotified = false;
     m_isClientInitiator = true;
@@ -553,7 +586,7 @@ int32_t ConnectionImpl::initPassive(const Context::ConnectInfo &info,
     m_ackProfileLastSentMs = 0;
     m_ackProfileBaselineSrttUs = 0;
     m_lastErrorCode = UTP_ERR_OK;
-    m_lastErrorReason.clear();
+    m_lastErrorReason[0] = '\0';
     m_closeByPeer = false;
     m_closedNotified = false;
     m_sessionTokenIssued = false;
@@ -667,9 +700,13 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
     size_t frameOffset = 0;
     bool peerCloseReceived = false;
+    uint16_t peerCloseErrorCode = UTP_ERR_OK;
+    std::array<char, kConnectionReasonSize> peerCloseReason{};
     bool hasHandshakeDoneFrame = false;
     bool streamBackpressured = false;
-    while (frameOffset < packet->payload_size) {
+    bool stopFrameProcessing = false;
+    bool fatalPacketError = false;
+    while (frameOffset < packet->payload_size && !stopFrameProcessing) {
         FrameType frameType = kFrameInvalid;
         const uint8_t *frameData = nullptr;
         size_t frameLen = 0;
@@ -818,30 +855,45 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
                     }
 
                     const uint32_t noncePrefix = m_localConnectionID ^ m_peerConnectionID;
-                    if (!FrameCryptoTypeToEncryptionContext(crypto.crypto_type,
-                                                            peerPublicKey,
-                                                            m_x25519,
-                                                            m_aesCtx,
-                                                            noncePrefix)) {
-                        SetLastErrorV(UTP_ERR_CRYPTO_INIT_FAILED,
-                                      "init aes-gcm context failed after x25519 key exchange");
+                    if (!FrameCryptoTypeToEncryptionContext(crypto.crypto_type, peerPublicKey, m_x25519, m_aesCtx, noncePrefix)) {
+                        (void)recordConnectionError(UTP_ERR_CRYPTO_INIT_FAILED,
+                                                    "init aes-gcm context failed after x25519 key exchange");
+                        beginCloseSent(UTP_ERR_CRYPTO_INIT_FAILED,
+                                       "init aes-gcm context failed after x25519 key exchange");
+                        fatalPacketError = true;
+                        stopFrameProcessing = true;
                     }
                 } catch (const std::exception &e) {
-                    SetLastErrorV(UTP_ERR_INTERNAL_ERROR, "x25519 key exchange failed: {}", e.what());
+                    UTP_LOGW("%s x25519 key exchange failed: %s", tag(), e.what());
+                    (void)recordConnectionError(UTP_ERR_INTERNAL_ERROR, "x25519 key exchange failed");
+                    beginCloseSent(UTP_ERR_INTERNAL_ERROR, "x25519 key exchange failed");
+                    fatalPacketError = true;
+                    stopFrameProcessing = true;
                 }
             }
             break;
         }
         case kFrameConnectionClose:
+        {
+            FrameConnectionClose closeFrame;
+            if (closeFrame.decode(frameData, frameLen) >= 0) {
+                peerCloseErrorCode = closeFrame.error_code;
+                if (!closeFrame.reason_phrase.empty()) {
+                    std::snprintf(peerCloseReason.data(), kConnectionReasonSize, "%s", closeFrame.reason_phrase.c_str());
+                }
+            }
             peerCloseReceived = true;
             m_state = kStateCloseReceived;
             m_closeByPeer = true;
-            if (m_lastErrorCode == UTP_ERR_OK) {
-                m_lastErrorCode = UTP_ERR_CANCELLED;
-                m_lastErrorReason = "peer closed connection";
-                notifyConnectionError(m_lastErrorCode, m_lastErrorReason);
+            if (peerCloseErrorCode != UTP_ERR_OK) {
+                const char *peerCloseErrorReason = peerCloseReason[0] != '\0'
+                                                ? peerCloseReason.data()
+                                                : "peer closed connection";
+                (void)recordConnectionError(static_cast<int32_t>(peerCloseErrorCode), peerCloseErrorReason);
             }
+            stopFrameProcessing = true;
             break;
+        }
         case kFrameHandshakeDone:
             {
                 FrameHandshakeDone done;
@@ -855,11 +907,21 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         }
     }
 
+    if (fatalPacketError) {
+        return;
+    }
+
     if (peerCloseReceived) {
         // 对端的 close 只回复一次；重复到达的 close 不再触发新的 close 发送。
         if (m_closePeerResendCount == 0) {
-            m_closeErrorCode = UTP_ERR_CANCELLED;
-            m_closeReason = "peer close ack";
+            m_closeErrorCode = peerCloseErrorCode;
+            if (peerCloseErrorCode == UTP_ERR_OK) {
+                std::snprintf(m_closeReason.data(), kConnectionReasonSize, "ok");
+            } else if (peerCloseReason[0] != '\0') {
+                std::snprintf(m_closeReason.data(), kConnectionReasonSize, "%s", peerCloseReason.data());
+            } else {
+                std::snprintf(m_closeReason.data(), kConnectionReasonSize, "peer closed connection");
+            }
             m_closeFramePending = true;
             m_closePtoUs = closePtoUs();
             m_closeDeadlineUs = 0;
@@ -955,13 +1017,13 @@ void ConnectionImpl::onWrite()
         }
 
         m_closeFramePending = false;
-        m_lastErrorCode = closeStatus;
-        m_lastErrorReason = "send connection close failed";
-        notifyConnectionError(m_lastErrorCode, m_lastErrorReason);
+        (void)recordConnectionError(closeStatus, "send connection close failed");
         m_state = State::kStateDisconnected;
         stopAckTimer();
         m_keepaliveTimer.stop();
-        notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, m_closeByPeer);
+        notifyConnectionClosed(m_lastErrorCode == UTP_ERR_OK ? closeStatus : m_lastErrorCode,
+                       m_lastErrorReason[0] == '\0' ? "send connection close failed" : m_lastErrorReason.data(),
+                       m_closeByPeer);
         scheduleWrite();
         return;
     }
@@ -971,20 +1033,21 @@ void ConnectionImpl::onWrite()
         if (!zeroRttFirstPacket) {
             int32_t status = sendInitialPacket();
             if (status != UTP_ERR_OK) {
-                int32_t err = utp_get_last_error();
+                int32_t err = status;
                 if (err <= 0) {
-                    err = UTP_ERR_SOCKET_WRITE;
+                    int32_t tlsErr = utp_get_last_error();
+                    err = tlsErr > 0 ? tlsErr : UTP_ERR_SOCKET_WRITE;
                 }
-                m_lastErrorCode = err;
-                m_lastErrorReason = "send initial packet failed";
-                notifyConnectionError(m_lastErrorCode, m_lastErrorReason);
+                (void)recordConnectionError(err, "send initial packet failed");
                 m_state = State::kStateDisconnected;
                 m_connTimer.stop();
                 m_handshakeDoneTimer.stop();
                 m_pathValidationTimer.stop();
                 stopAckTimer();
                 m_keepaliveTimer.stop();
-                notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, false);
+                notifyConnectionClosed(m_lastErrorCode == UTP_ERR_OK ? err : m_lastErrorCode,
+                                       m_lastErrorReason[0] == '\0' ? "send initial packet failed" : m_lastErrorReason.data(),
+                                       false);
                 return;
             }
         }
@@ -1921,7 +1984,7 @@ int32_t ConnectionImpl::sendConnectionCloseFrame()
 {
     FrameConnectionClose closeFrame;
     closeFrame.error_code = m_closeErrorCode;
-    closeFrame.reason_phrase = m_closeReason;
+    closeFrame.reason_phrase = m_closeReason.data();
     closeFrame.reason_length = static_cast<uint16_t>(closeFrame.reason_phrase.size());
 
     std::array<uint8_t, 256> payload{};
@@ -1933,15 +1996,7 @@ int32_t ConnectionImpl::sendConnectionCloseFrame()
     const int32_t status = sendPacket(UTP_TYPE_CONNECTION_CLOSE,
                                       payload.data(),
                                       static_cast<size_t>(frameLen));
-    if (status == UTP_ERR_OK) {
-        return UTP_ERR_OK;
-    }
-
-    int32_t err = utp_get_last_error();
-    if (err <= 0) {
-        err = UTP_ERR_SOCKET_WRITE;
-    }
-    return err;
+    return status;
 }
 
 int32_t ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize)
@@ -1963,15 +2018,7 @@ int32_t ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCo
                                       0,
                                       nullptr,
                                       (1u << static_cast<uint32_t>(kFrameResetStream)));
-    if (status == UTP_ERR_OK) {
-        return UTP_ERR_OK;
-    }
-
-    int32_t err = utp_get_last_error();
-    if (err <= 0) {
-        err = UTP_ERR_SOCKET_WRITE;
-    }
-    return err;
+    return status;
 }
 
 void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
@@ -2520,31 +2567,26 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                    size_t frameMetaCount)
 {
     if (m_udpSocket == nullptr) {
-        SetLastErrorV(UTP_ERR_SOCKET_WRITE, "udp socket is null");
         return UTP_ERR_SOCKET_WRITE;
     }
 
     if (segmentCount > 0 && segments == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "segments is null when segmentCount={}", segmentCount);
         return UTP_ERR_INVALID_PARAM;
     }
 
     const Address &sendAddress = (targetAddress != nullptr) ? *targetAddress : m_peerAddress;
     if (!sendAddress.isValid()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "peer address is invalid");
         return UTP_ERR_INVALID_PARAM;
     }
 
     size_t payloadLen = 0;
     for (size_t i = 0; i < segmentCount; ++i) {
         if (segments[i].len > 0 && segments[i].data == nullptr) {
-            SetLastErrorV(UTP_ERR_INVALID_PARAM, "segment {} data is null", i);
             return UTP_ERR_INVALID_PARAM;
         }
         payloadLen += segments[i].len;
     }
     if (payloadLen > UINT16_MAX) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "payload length {} exceeds uint16 max", payloadLen);
         return UTP_ERR_OVERFLOW;
     }
 
@@ -2573,7 +2615,6 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                   || isClosePacket;
     const bool shouldTrackPacket = !isAckOnlyPacket && allowSendCtlRetrans;
     if (m_networkPath.state() == NetworkPath::kPathFailed && !isClosePacket) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "network path validation failed");
         return UTP_ERR_INVALID_STATE;
     }
 
@@ -2588,39 +2629,24 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     size_t packetLen = UTP_HEADER_SIZE + payloadLen;
     const size_t wirePacketLen = packetLen + encryptOverhead;
     if (wirePacketLen > UINT16_MAX) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "packet length {} exceeds uint16 max", wirePacketLen);
         return UTP_ERR_OVERFLOW;
     }
 
     const bool isMtuProbePacket = (packetFlags & PacketOutFlags::kPoMtuProbe) != 0;
     const size_t currentMaxPacketSize = m_mtuDiscovery.currentMaxPacketSize();
     if (!isMtuProbePacket && wirePacketLen > currentMaxPacketSize) {
-        SetLastErrorV(UTP_ERR_WOULD_BLOCK,
-                      "packet length {} exceeds current path MTU budget {}",
-                      wirePacketLen,
-                      currentMaxPacketSize);
         return UTP_ERR_WOULD_BLOCK;
     }
 
     if (isMtuProbePacket && wirePacketLen > m_mtuDiscovery.absoluteMaxPacketSize()) {
-        SetLastErrorV(UTP_ERR_WOULD_BLOCK, "mtu probe packet length {} exceeds probe ceiling {}",
-                      wirePacketLen, m_mtuDiscovery.absoluteMaxPacketSize());
         return UTP_ERR_WOULD_BLOCK;
     }
 
     if (!canSendOnCurrentPath(wirePacketLen, effectiveFrameType)) {
-        SetLastErrorV(UTP_ERR_WOULD_BLOCK,
-                      "anti-amplification limit reached while path validating, frame={}",
-                      FrameTypeToString(effectiveFrameType));
-        return UTP_ERR_WOULD_BLOCK;
+        return UTP_ERR_PATH_VALIDATION_BLOCKED;
     }
 
     if (streamDataBytes > 0 && !canSendStreamUnackedBytes(streamDataBytes)) {
-        SetLastErrorV(UTP_ERR_WOULD_BLOCK,
-                      "stream unacked data limit reached: pending={}, this={}, limit={}",
-                      m_streamUnackedDataBytes,
-                      streamDataBytes,
-                      config() ? config()->stream_unacked_data_limit : (256u * 1024u));
         return UTP_ERR_WOULD_BLOCK;
     }
 
@@ -2629,7 +2655,6 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
         if (packet != nullptr) {
             m_mm.putPacketOut(packet);
         }
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "allocate packet out failed, size={}", wirePacketLen);
         return UTP_ERR_NO_MEMORY;
     }
 
@@ -2649,17 +2674,12 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
     packet->stream_offset = streamOffset;
 
     if (frameMetaCount > PACKET_OUT_MAX_FRAMES) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "frame metadata count {} exceeds max {}",
-                      frameMetaCount,
-                      PACKET_OUT_MAX_FRAMES);
         m_mm.putPacketOut(packet);
-        return -1;
+        return UTP_ERR_OVERFLOW;
     }
     if (frameMetaCount > 0 && frameMetas == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "frameMetas is null when frameMetaCount={}", frameMetaCount);
         m_mm.putPacketOut(packet);
-        return -1;
+        return UTP_ERR_INVALID_PARAM;
     }
 
     size_t nonEmptySegmentCount = 0;
@@ -2777,14 +2797,14 @@ int32_t ConnectionImpl::sendPacket(uint8_t packetType,
                                                            &outCipherPayloadLen);
         if (encStatus != UTP_ERR_OK) {
             m_mm.putPacketOut(packet);
-            return -1;
+            return UTP_ERR_CRYPTO_ENCRYPTION;
         }
 
         uint8_t *payloadLenOffset = packet->raw_data + offsetof(UTPHeaderProto, payload_length);
         size_t payloadLenLeft = packet->alloc_size - offsetof(UTPHeaderProto, payload_length);
         if (Serialize::SerializeTo(payloadLenOffset, payloadLenLeft, static_cast<uint16_t>(outCipherPayloadLen)) == nullptr) {
             m_mm.putPacketOut(packet);
-            return -1;
+            return UTP_ERR_OVERFLOW;
         }
 
         packet->encrypt_data = packet->raw_data;
@@ -3038,14 +3058,14 @@ void ConnectionImpl::onConnTimeout()
         return;
     }
 
-    m_lastErrorCode = UTP_ERR_TIMEOUT;
-    m_lastErrorReason = "connect timeout";
-    notifyConnectionError(m_lastErrorCode, m_lastErrorReason);
+    (void)recordConnectionError(UTP_ERR_TIMEOUT, "connect timeout");
     m_state = State::kStateDisconnected;
     m_handshakeDoneTimer.stop();
     stopAckTimer();
     m_keepaliveTimer.stop();
-    notifyConnectionClosed(m_lastErrorCode, m_lastErrorReason, false);
+    notifyConnectionClosed(m_lastErrorCode == UTP_ERR_OK ? UTP_ERR_TIMEOUT : m_lastErrorCode,
+                           m_lastErrorReason[0] == '\0' ? "connect timeout" : m_lastErrorReason.data(),
+                           false);
     scheduleWrite();
 }
 
@@ -3090,7 +3110,7 @@ void ConnectionImpl::markPeerActivity(utp_time_t nowUs)
     armKeepaliveTimer(keepaliveIntervalMs());
 }
 
-void ConnectionImpl::beginCloseSent(uint16_t errorCode, const std::string &reason)
+void ConnectionImpl::beginCloseSent(uint16_t errorCode, const char *reason)
 {
     if (m_state == State::kStateDisconnected || m_state == State::kStatePtoTimedWait) {
         return;
@@ -3104,7 +3124,13 @@ void ConnectionImpl::beginCloseSent(uint16_t errorCode, const std::string &reaso
     m_keepaliveTimer.stop();
 
     m_closeErrorCode = errorCode;
-    m_closeReason = reason;
+    if (errorCode == UTP_ERR_OK) {
+        std::snprintf(m_closeReason.data(), kConnectionReasonSize, "ok");
+    } else if (reason != nullptr && reason[0] != '\0') {
+        std::snprintf(m_closeReason.data(), kConnectionReasonSize, "%s", reason);
+    } else {
+        m_closeReason[0] = '\0';
+    }
     m_closeByPeer = false;
     m_closeFramePending = true;
     m_closePeerResendCount = 0;
@@ -3141,10 +3167,9 @@ void ConnectionImpl::onKeepaliveTimeout()
 
     const uint16_t maxProbes = std::max<uint16_t>(cfg->keepalive_probes, 1);
     if (m_keepaliveMissedProbes >= maxProbes) {
-        m_lastErrorCode = UTP_ERR_TIMEOUT;
-        m_lastErrorReason = "keepalive timeout";
-        notifyConnectionError(m_lastErrorCode, m_lastErrorReason);
-        beginCloseSent(static_cast<uint16_t>(m_lastErrorCode), m_lastErrorReason);
+        (void)recordConnectionError(UTP_ERR_TIMEOUT, "keepalive timeout");
+        beginCloseSent(static_cast<uint16_t>(m_lastErrorCode == UTP_ERR_OK ? UTP_ERR_TIMEOUT : m_lastErrorCode),
+                       m_lastErrorReason[0] == '\0' ? "keepalive timeout" : m_lastErrorReason.data());
         return;
     }
 
@@ -3215,8 +3240,7 @@ void ConnectionImpl::onCloseDrainTimeout()
     m_state = State::kStateDisconnected;
     stopAckTimer();
     m_keepaliveTimer.stop();
-    const int32_t closeCode = m_closeErrorCode == 0 ? UTP_ERR_CANCELLED : static_cast<int32_t>(m_closeErrorCode);
-    notifyConnectionClosed(closeCode, m_closeReason, m_closeByPeer);
+    notifyConnectionClosed(static_cast<int32_t>(m_closeErrorCode), m_closeReason.data(), m_closeByPeer);
     scheduleWrite();
 }
 
@@ -3240,25 +3264,38 @@ void ConnectionImpl::setOnClosed(const OnClosed &cb)
     m_onClosed = cb;
 }
 
-void ConnectionImpl::notifyConnectionError(int32_t errorCode, const std::string &reason)
+void ConnectionImpl::notifyConnectionError(int32_t errorCode, const char *reason)
 {
     if (errorCode == UTP_ERR_OK) {
         return;
     }
 
+    UTP_LOGW("%s notify error: state=%u code=%d reason=%s",
+             tag(),
+             static_cast<uint32_t>(m_state),
+             errorCode,
+             reason ? reason : "");
+
     if (m_onError) {
         ConnectionErrorInfo info;
         info.error_code = errorCode;
-        info.error_reason = reason;
+        info.error_reason = reason ? reason : "";
         m_onError(info);
     }
 }
 
-void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const std::string &reason, bool byPeer)
+void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const char *reason, bool byPeer)
 {
     if (m_closedNotified) {
         return;
     }
+
+    UTP_LOGW("%s notify closed: state=%u code=%d by_peer=%u reason=%s",
+             tag(),
+             static_cast<uint32_t>(m_state),
+             errorCode,
+             byPeer ? 1u : 0u,
+             reason ? reason : "");
 
     m_closedNotified = true;
     if (!m_onClosed) {
@@ -3267,7 +3304,7 @@ void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const std::string
 
     ConnectionCloseInfo info;
     info.error_code = errorCode;
-    info.error_reason = reason;
+    info.error_reason = reason ? reason : "";
     info.by_peer = byPeer;
     m_onClosed(info);
 }
@@ -3329,7 +3366,9 @@ Connection::Description ConnectionImpl::description() const
 int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t> &outToken)
 {
     if (!m_hasCachedResumptionState || m_cachedResumptionInfo.sessionTicket.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no cached session token", m_localConnectionID);
+        SetLastErrorV(UTP_ERR_SESSION_TOKEN_UNAVAILABLE,
+                      "connection {} has no cached session token",
+                      m_localConnectionID);
         return -1;
     }
 
@@ -3340,7 +3379,9 @@ int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t> &outToken)
 int32_t ConnectionImpl::exportSessionResumptionState(std::string &outState)
 {
     if (!m_hasCachedResumptionState) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no cached resumption state", m_localConnectionID);
+        SetLastErrorV(UTP_ERR_RESUMPTION_STATE_UNAVAILABLE,
+                      "connection {} has no cached resumption state",
+                      m_localConnectionID);
         return -1;
     }
 
@@ -3369,7 +3410,9 @@ int32_t ConnectionImpl::buildSessionResumptionState(const CachedResumptionState 
                                                     std::string &outState) const
 {
     if (m_ctx == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_STATE, "connection {} has no context", m_localConnectionID);
+        SetLastErrorV(UTP_ERR_CONTEXT_UNAVAILABLE,
+                      "connection {} has no context",
+                      m_localConnectionID);
         return -1;
     }
     if (info.sessionTicket.empty()) {
@@ -3847,7 +3890,7 @@ void ConnectionImpl::close()
         return;
     }
 
-    beginCloseSent(UTP_ERR_OK, "");
+    beginCloseSent(UTP_ERR_OK, "ok");
 }
 
 } // namespace utp

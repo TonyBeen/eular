@@ -134,7 +134,7 @@ public:
     const Context::ConnectAttemptInfo& connectAttemptInfo() const { return m_connectAttemptInfo; }
     State       state() const { return m_state; }
     int32_t     lastErrorCode() const { return m_lastErrorCode; }
-    const std::string& lastErrorReason() const { return m_lastErrorReason; }
+    const char* lastErrorReason() const { return m_lastErrorReason.data(); }
     size_t      streamPayloadBudgetHint() const;
     bool        canSendStreamUnackedBytes(size_t streamBytes) const;
     void        onStreamPacketUnackedAdded(const PacketOut *pkt);
@@ -280,7 +280,7 @@ private:
     uint32_t keepaliveIntervalMs() const;
     void    armKeepaliveTimer(uint32_t delayMs);
     void    markPeerActivity(utp_time_t nowUs);
-    void    beginCloseSent(uint16_t errorCode, const std::string &reason);
+    void    beginCloseSent(uint16_t errorCode, const char *reason);
     void    armHandshakeDoneTimer();
     uint32_t handshakeDoneDelayMs() const;
     void    onHandshakeDoneFrameAcked();
@@ -288,8 +288,10 @@ private:
     void    bootstrapLocalTransportParams();
     void    onConnTimeout();
     void    trySendZeroRttEarlyData();
-    void    notifyConnectionError(int32_t errorCode, const std::string &reason);
-    void    notifyConnectionClosed(int32_t errorCode, const std::string &reason, bool byPeer);
+    bool    recordConnectionError(int32_t errorCode, const char *reason, bool notify = true);
+    bool    hasFatalConnectionError() const;
+    void    notifyConnectionError(int32_t errorCode, const char *reason);
+    void    notifyConnectionClosed(int32_t errorCode, const char *reason, bool byPeer);
 
     /// @brief 读取默认 stream 优先级（0最高，7最低）
     uint8_t defaultStreamPriority() const;
@@ -390,8 +392,9 @@ private:
     utp_packno_t            m_peerHandshakePacketNo{0};
     utp_time_t              m_handshakeReceivedAtUs{0};
     bool                    m_closeFramePending{false};
+    static constexpr size_t kConnectionReasonSize = 128;
     uint16_t                m_closeErrorCode{0};
-    std::string             m_closeReason{"local close"};
+    std::array<char, kConnectionReasonSize> m_closeReason{};
     utp_time_t              m_closePtoUs{0};
     utp_time_t              m_closeDeadlineUs{0};
     utp_time_t              m_closeLastSendUs{0};
@@ -416,7 +419,7 @@ private:
     std::unordered_map<uint32_t, utp_time_t> m_lastStreamDataBlockedSentUs;
     bool                    m_isClientInitiator{true};
     int32_t                 m_lastErrorCode{0};
-    std::string             m_lastErrorReason;
+    std::array<char, kConnectionReasonSize> m_lastErrorReason{};
     bool                    m_closeByPeer{false};
     bool                    m_closedNotified{false};
     bool                    m_zeroRttEarlyDataSent{false};
