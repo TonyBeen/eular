@@ -4,39 +4,77 @@
 
 set -euo pipefail
 
-BUILD_DIR="${1:-/home/eular/VSCode/eular/libutp/build-fi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_BUILD_DIR="$REPO_ROOT/build"
+
+BUILD_DIR="${1:-$DEFAULT_BUILD_DIR}"
+ALLOW_NO_ROOT="0"
+
+for arg in "$@"; do
+    case "$arg" in
+        --allow-no-root)
+            ALLOW_NO_ROOT="1"
+            ;;
+        *)
+            if [ "$BUILD_DIR" = "$DEFAULT_BUILD_DIR" ]; then
+                BUILD_DIR="$arg"
+            fi
+            ;;
+    esac
+done
 ECHO_SERVER="$BUILD_DIR/examples/utp_echo_server"
 ECHO_CLIENT="$BUILD_DIR/examples/utp_echo_client"
 IFACE="lo"
 ECHO_PORT=9100
-ECHO_SERVER_LOG="/tmp/utp_netem_echo_server.log"
+ECHO_SERVER_LOG="$(mktemp /tmp/utp_netem_echo_server.XXXXXX.log)"
 ECHO_SERVER_PID=0
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 pass=0; fail=0
 
 netem_set() {
+    if [ "$ALLOW_NO_ROOT" = "1" ]; then
+        return 0
+    fi
     tc qdisc del dev "$IFACE" root 2>/dev/null || true
     [ -n "$1" ] && tc qdisc add dev "$IFACE" root netem $1 || true
 }
 
 netem_clear() {
+    if [ "$ALLOW_NO_ROOT" = "1" ]; then
+        return 0
+    fi
     tc qdisc del dev "$IFACE" root 2>/dev/null || true
 }
 
 start_echo_server() {
     > "$ECHO_SERVER_LOG"
-    "$ECHO_SERVER" --bind-ip 127.0.0.1 --bind-port "$ECHO_PORT" >>"$ECHO_SERVER_LOG" 2>&1 &
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL -eL "$ECHO_SERVER" --bind-ip 127.0.0.1 --bind-port "$ECHO_PORT" >>"$ECHO_SERVER_LOG" 2>&1 &
+    else
+        "$ECHO_SERVER" --bind-ip 127.0.0.1 --bind-port "$ECHO_PORT" >>"$ECHO_SERVER_LOG" 2>&1 &
+    fi
     ECHO_SERVER_PID=$!
     local timeout=8
     while [ $timeout -gt 0 ]; do
         if grep -q "listening" "$ECHO_SERVER_LOG"; then
-            break
+            sleep 1
+            return 0
+        fi
+        if ! kill -0 "$ECHO_SERVER_PID" 2>/dev/null; then
+            echo "  [ERROR] echo server exited before listening"
+            tail -20 "$ECHO_SERVER_LOG" | sed 's/^/    /'
+            stop_echo_server
+            return 1
         fi
         sleep 0.5
         ((timeout--)) || true
     done
-    sleep 1
+    echo "  [ERROR] echo server failed to start (no listening log)"
+    tail -20 "$ECHO_SERVER_LOG" | sed 's/^/    /'
+    stop_echo_server
+    return 1
 }
 
 stop_echo_server() {
@@ -45,42 +83,68 @@ stop_echo_server() {
     ECHO_SERVER_PID=0
 }
 
-parse_done_bytes() {
+cleanup() {
+    stop_echo_server
+    netem_clear
+}
+
+on_interrupt() {
+    cleanup
+    exit 130
+}
+
+parse_done_result() {
     local output="$1"
-    local sb eb
-    sb=$(echo "$output" | grep -oP 'sent_bytes=\K[0-9]+' | tail -1 || echo 0)
-    eb=$(echo "$output" | grep -oP 'echoed_bytes=\K[0-9]+' | tail -1 || echo 0)
-    echo "$sb $eb"
+    local sent_bytes done_bytes result
+
+    sent_bytes=$(echo "$output" | sed -nE 's/.*sent_bytes=([0-9]+).*/\1/p' | tail -1)
+    done_bytes=$(echo "$output" | sed -nE 's/.*done bytes=([0-9]+).*/\1/p' | tail -1)
+    result=$(echo "$output" | sed -nE 's/.*result=([A-Z]+).*/\1/p' | tail -1)
+
+    [ -n "$sent_bytes" ] || sent_bytes=0
+    [ -n "$done_bytes" ] || done_bytes=0
+    [ -n "$result" ] || result="UNKNOWN"
+
+    echo "$sent_bytes $done_bytes $result"
 }
 
 run_echo_scenario() {
     local name="$1"
     local netem_args="$2"
     local count="${3:-10}"
-    local interval_ms="${4:-500}"
-    local timeout_s="${5:-30}"
+    local timeout_s="${4:-30}"
+    local expected_bytes=$((count * 64))
 
     echo -e "\n${YELLOW}>>> $name${NC}"
     [ -n "$netem_args" ] && echo "  netem: $netem_args" || echo "  netem: (none)"
 
     netem_set "$netem_args"
-    start_echo_server
+    if ! start_echo_server; then
+        netem_clear
+        ((fail++)) || true
+        return
+    fi
 
     local output=""
-    output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    local client_status=0
+    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
-        --count "$count" --interval-ms "$interval_ms" --length 64 2>&1) || true
+        --count "$count" --length 64 2>&1); then
+        client_status=$?
+    fi
 
     stop_echo_server
     netem_clear
 
-    read -r sent_bytes echoed_bytes < <(parse_done_bytes "$output")
+    local sent_bytes echoed_bytes result
+    read -r sent_bytes echoed_bytes result < <(parse_done_result "$output")
 
-    if [ "$sent_bytes" -gt 0 ] && [ "$sent_bytes" = "$echoed_bytes" ]; then
-        echo -e "  ${GREEN}PASS${NC}  bytes=$sent_bytes echoed=$echoed_bytes"
+    if [ "$client_status" -eq 0 ] && [ "$result" = "PASS" ] \
+       && [ "$sent_bytes" = "$expected_bytes" ] && [ "$echoed_bytes" = "$expected_bytes" ]; then
+        echo -e "  ${GREEN}PASS${NC}  expected=$expected_bytes sent=$sent_bytes done=$echoed_bytes"
         ((pass++)) || true
     else
-        echo -e "  ${RED}FAIL${NC}  bytes sent=$sent_bytes echoed=$echoed_bytes"
+        echo -e "  ${RED}FAIL${NC}  expected=$expected_bytes sent=$sent_bytes done=$echoed_bytes result=$result status=$client_status"
         echo "$output" | tail -20 | sed 's/^/    /'
         ((fail++)) || true
     fi
@@ -90,30 +154,39 @@ run_burst_loss_scenario() {
     local name="$1"
     local gemodel_args="$2"
     local count="${3:-10}"
-    local interval_ms="${4:-500}"
-    local timeout_s="${5:-35}"
+    local timeout_s="${4:-35}"
+    local expected_bytes=$((count * 64))
 
     echo -e "\n${YELLOW}>>> $name${NC}"
     echo "  netem: loss gemodel $gemodel_args"
 
     netem_set "loss gemodel $gemodel_args"
-    start_echo_server
+    if ! start_echo_server; then
+        netem_clear
+        ((fail++)) || true
+        return
+    fi
 
     local output=""
-    output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    local client_status=0
+    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
-        --count "$count" --interval-ms "$interval_ms" --length 64 2>&1) || true
+        --count "$count" --length 64 2>&1); then
+        client_status=$?
+    fi
 
     stop_echo_server
     netem_clear
 
-    read -r sent_bytes echoed_bytes < <(parse_done_bytes "$output")
+    local sent_bytes echoed_bytes result
+    read -r sent_bytes echoed_bytes result < <(parse_done_result "$output")
 
-    if [ "$echoed_bytes" -gt 0 ]; then
-        echo -e "  ${GREEN}PASS${NC}  sent=$sent_bytes echoed=$echoed_bytes"
+    if [ "$client_status" -eq 0 ] && [ "$result" = "PASS" ] \
+       && [ "$sent_bytes" = "$expected_bytes" ] && [ "$echoed_bytes" = "$expected_bytes" ]; then
+        echo -e "  ${GREEN}PASS${NC}  expected=$expected_bytes sent=$sent_bytes done=$echoed_bytes"
         ((pass++)) || true
     else
-        echo -e "  ${RED}FAIL${NC}  echoed=0"
+        echo -e "  ${RED}FAIL${NC}  expected=$expected_bytes sent=$sent_bytes done=$echoed_bytes result=$result status=$client_status"
         echo "$output" | tail -20 | sed 's/^/    /'
         ((fail++)) || true
     fi
@@ -131,24 +204,33 @@ run_large_transfer_scenario() {
     echo "  total_bytes=$total_bytes length=$length"
 
     netem_set "$netem_args"
-    start_echo_server
+    if ! start_echo_server; then
+        netem_clear
+        ((fail++)) || true
+        return
+    fi
 
     local output=""
-    output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    local client_status=0
+    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
-        --interval-ms 1 --length "$length" --count 200000 \
-        --total-bytes "$total_bytes" --quiet 2>&1) || true
+        --length "$length" --count 200000 \
+        --total-bytes "$total_bytes" --quiet 2>&1); then
+        client_status=$?
+    fi
 
     stop_echo_server
     netem_clear
 
-    read -r sent_bytes echoed_bytes < <(parse_done_bytes "$output")
+    local sent_bytes echoed_bytes result
+    read -r sent_bytes echoed_bytes result < <(parse_done_result "$output")
 
-    if [ "$sent_bytes" = "$total_bytes" ] && [ "$echoed_bytes" = "$total_bytes" ]; then
+    if [ "$client_status" -eq 0 ] && [ "$result" = "PASS" ] \
+       && [ "$sent_bytes" = "$total_bytes" ] && [ "$echoed_bytes" = "$total_bytes" ]; then
         echo -e "  ${GREEN}PASS${NC}  100MB 级别传输完成，bytes=$sent_bytes"
         ((pass++)) || true
     else
-        echo -e "  ${RED}FAIL${NC}  expected=$total_bytes sent=$sent_bytes echoed=$echoed_bytes"
+        echo -e "  ${RED}FAIL${NC}  expected=$total_bytes sent=$sent_bytes done=$echoed_bytes result=$result status=$client_status"
         echo "$output" | tail -30 | sed 's/^/    /'
         ((fail++)) || true
     fi
@@ -167,7 +249,11 @@ run_bulk_concurrent_scenario() {
     echo "  clients=$num_clients bytes_per_client=$bytes_per_client length=$length"
 
     netem_set "$netem_args"
-    start_echo_server
+    if ! start_echo_server; then
+        netem_clear
+        ((fail++)) || true
+        return
+    fi
 
     local pids=()
     local success_count=0
@@ -175,18 +261,22 @@ run_bulk_concurrent_scenario() {
     for i in $(seq 1 "$num_clients"); do
         (
             local output=""
-            output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+            local client_status=0
+            if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
                 --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
-                --interval-ms 1 --length "$length" --count 200000 \
-                --total-bytes "$bytes_per_client" --quiet 2>&1) || true
+                --length "$length" --count 200000 \
+                --total-bytes "$bytes_per_client" --quiet 2>&1); then
+                client_status=$?
+            fi
 
-            local sb eb
-            read -r sb eb < <(parse_done_bytes "$output")
-            if [ "$sb" = "$bytes_per_client" ] && [ "$eb" = "$bytes_per_client" ]; then
+            local sb eb result
+            read -r sb eb result < <(parse_done_result "$output")
+            if [ "$client_status" -eq 0 ] && [ "$result" = "PASS" ] \
+               && [ "$sb" = "$bytes_per_client" ] && [ "$eb" = "$bytes_per_client" ]; then
                 echo "    [客户端 $i] PASS bytes=$sb"
                 exit 0
             else
-                echo "    [客户端 $i] FAIL sent=$sb echoed=$eb"
+                echo "    [客户端 $i] FAIL sent=$sb done=$eb result=$result status=$client_status"
                 exit 1
             fi
         ) &
@@ -213,9 +303,14 @@ run_bulk_concurrent_scenario() {
 }
 
 if [ "$(id -u)" != "0" ]; then
-    echo "需要 root 权限操作 tc qdisc，请用 sudo 运行" >&2
-    exit 1
+    if [ "$ALLOW_NO_ROOT" != "1" ]; then
+        echo "需要 root 权限操作 tc qdisc，请用 sudo 运行，或设置 ALLOW_NO_ROOT=1 跳过 netem" >&2
+        exit 1
+    fi
 fi
+
+trap cleanup EXIT
+trap on_interrupt INT TERM
 
 for bin in "$ECHO_SERVER" "$ECHO_CLIENT"; do
     [ -x "$bin" ] || { echo "找不到 $bin" >&2; exit 1; }
@@ -225,14 +320,14 @@ echo "========== libutp 增强网络仿真测试 =========="
 echo ""
 
 echo "【Phase 3 回归】基础网络仿真（8 场景）"
-run_echo_scenario "场景1: 基准（无损）"           ""                                   10 200 20
-run_echo_scenario "场景2: 丢包 1%"               "loss 1%"                            10 500 30
-run_echo_scenario "场景3: 丢包 5%"               "loss 5%"                            10 800 40
-run_echo_scenario "场景4: 延迟 50ms"             "delay 50ms"                         10 300 25
-run_echo_scenario "场景5: 延迟 200ms"            "delay 200ms"                        5  800 40
-run_echo_scenario "场景6: 乱序 10%"              "delay 5ms reorder 10% 50%"          10 400 30
-run_echo_scenario "场景7: 抖动 20ms±10ms"        "delay 20ms 10ms"                    10 400 30
-run_echo_scenario "场景8: 综合（丢包+延迟+乱序）" "loss 1% delay 30ms reorder 5% 50%" 10 600 40
+run_echo_scenario "场景1: 基准（无损）"           ""                                   10 20
+run_echo_scenario "场景2: 丢包 1%"               "loss 1%"                            10 30
+run_echo_scenario "场景3: 丢包 5%"               "loss 5%"                            10 40
+run_echo_scenario "场景4: 延迟 50ms"             "delay 50ms"                         10 25
+run_echo_scenario "场景5: 延迟 200ms"            "delay 200ms"                        5  40
+run_echo_scenario "场景6: 乱序 10%"              "delay 5ms reorder 10% 50%"          10 30
+run_echo_scenario "场景7: 抖动 20ms±10ms"        "delay 20ms 10ms"                    10 30
+run_echo_scenario "场景8: 综合（丢包+延迟+乱序）" "loss 1% delay 30ms reorder 5% 50%" 10 40
 
 echo ""
 echo "【Phase 4a】大文件流测试"
@@ -241,9 +336,9 @@ run_large_transfer_scenario "A2: 单连接 100MB + 1% 丢包" "loss 1%" 10485760
 
 echo ""
 echo "【Phase 4b】突发丢包（Gemodel）"
-run_burst_loss_scenario "B1: 轻度突发丢包" "10% 80% 10% 10%" 10 500 35
-run_burst_loss_scenario "B2: 中度突发丢包" "20% 70% 15% 20%" 10 600 40
-run_burst_loss_scenario "B3: 重度突发丢包" "30% 60% 20% 30%" 10 800 50
+run_burst_loss_scenario "B1: 轻度突发丢包" "10% 80% 10% 10%" 10 35
+run_burst_loss_scenario "B2: 中度突发丢包" "20% 70% 15% 20%" 10 40
+run_burst_loss_scenario "B3: 重度突发丢包" "30% 60% 20% 30%" 10 50
 
 echo ""
 echo "【Phase 4c】并发大流量"

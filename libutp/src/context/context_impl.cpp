@@ -850,7 +850,7 @@ Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, pending.peerCid);
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
-    offset = Serialize::SerializeTo(offset, left, pending.packetNumber++);
+    offset = Serialize::SerializeTo(offset, left, packetNo);
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, static_cast<uint16_t>(payloadLen));
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
@@ -872,6 +872,7 @@ Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
     Status sendStatus;
     int32_t sent = m_udpSocket.send(msgVec, sendStatus);
     if (sent > 0) {
+        pending.packetNumber++;
         if (outPacketNo != nullptr) {
             *outPacketNo = packetNo;
         }

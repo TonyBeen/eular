@@ -433,6 +433,7 @@ uint8_t StreamImpl::priority() const
 void StreamImpl::setOnReadable(const OnReadable &cb)
 {
     m_onReadable = cb;
+    maybeNotifyReadable(true);
 }
 
 void StreamImpl::setOnWritable(const OnWritable &cb)
@@ -610,10 +611,7 @@ Status StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
     }
 
     maybeAdvancePeerFin();
-    if (m_onReadable && readable()) {
-        m_onReadable();
-    }
-
+    maybeNotifyReadable(true);
     maybeNotifyClosed();
     return Status::OK();
 }
@@ -1125,6 +1123,21 @@ void StreamImpl::maybeNotifyClosed()
             m_onClosed();
         }
     }
+}
+
+void StreamImpl::maybeNotifyReadable(bool allowPeerFin)
+{
+    if (!m_onReadable || m_notifyingReadable) {
+        return;
+    }
+
+    if (!readable() && !(allowPeerFin && m_peerFin)) {
+        return;
+    }
+
+    m_notifyingReadable = true;
+    m_onReadable();
+    m_notifyingReadable = false;
 }
 
 void StreamImpl::maybeNotifyWritable(bool force)

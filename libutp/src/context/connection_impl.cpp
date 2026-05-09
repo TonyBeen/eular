@@ -996,14 +996,9 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         m_handshakeDonePending = true;
         m_handshakeDoneSent = false;
         m_handshakeDoneLastPacketNo = 0;
+        armHandshakeDoneTimer();
         m_connTimer.stop();
         markPeerActivity(nowUs);
-
-        const Status handshakeDoneStatus = sendHandshakeDonePacket();
-        if (!handshakeDoneStatus.ok()) {
-            m_handshakeDoneTimer.stop();
-            m_handshakeDoneTimer.start(10);
-        }
     }
 
     if (m_state == State::kStateConnected) {
@@ -1644,10 +1639,6 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
         return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "not connected");
     }
 
-    if (m_handshakeDonePending && m_state == State::kStateConnected && !allowEarlyData) {
-        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "handshake done pending");
-    }
-
     if (len > UINT16_MAX) {
         return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "stream data exceeds UINT16_MAX");
     }
@@ -1718,7 +1709,10 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
         return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "serialize failed");
     }
 
-    const bool    piggybackHandshakeDone = (m_state == State::kStateConnected) && m_handshakeDonePending && len > 0;
+    // Allow the third handshake flight to carry stream data or a FIN instead
+    // of stalling application sends behind a standalone HandshakeDone packet.
+    const bool piggybackHandshakeDone =
+        (m_state == State::kStateConnected) && m_handshakeDonePending && (len > 0 || fin);
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> handshakeTrailer{};
     size_t                                                                      handshakeTrailerSize = 0;
@@ -3022,8 +3016,7 @@ utp_time_t ConnectionImpl::closePtoUs() const
 
     utp_time_t maxAckDelayUs = static_cast<utp_time_t>(m_peerAckMaxDelayMs) * 1000;
     utp_time_t ptoUs = srtt + std::max<utp_time_t>(4 * rttVar, granularityUs) + maxAckDelayUs;
-    ptoUs = std::max<utp_time_t>(ptoUs, kMinPtoUs);
-    ptoUs = std::min<utp_time_t>(ptoUs, kMaxPtoUs);
+    ptoUs = CLAMP(ptoUs, kMinPtoUs, kMaxPtoUs);
 
     return ptoUs;
 }

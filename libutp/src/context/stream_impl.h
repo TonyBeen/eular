@@ -103,6 +103,7 @@ private:
     void    releaseRecvFragment(RecvFragment *fragment);
     void    maybeAdvancePeerFin();
     size_t  contiguousReadableBytes(size_t maxBytes) const;
+    void    maybeNotifyReadable(bool allowPeerFin = false);
     void    maybeNotifyClosed();
     void    maybeNotifyWritable(bool force = false);
     void    notifyResetOnce();
@@ -132,6 +133,7 @@ private:
     OnWritable      m_onWritable;
     OnClosed        m_onClosed;
     OnReset         m_onReset;
+    bool            m_notifyingReadable{false};
     bool            m_notifyingWritable{false};
     std::map<uint64_t, uint64_t> m_sendAckedRanges;
 

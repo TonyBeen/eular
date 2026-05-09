@@ -414,7 +414,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::cout << "[server] listening on " << bindIp << ":" << bindPort << "\n";
+    std::cout << "[server] listening on " << bindIp << ":" << bindPort << std::endl;
 
     loop.dispatch();
     std::cout << "[server] shutdown\n";

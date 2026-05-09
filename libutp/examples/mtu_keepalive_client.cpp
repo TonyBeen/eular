@@ -44,17 +44,15 @@ int main(int argc, char **argv)
 {
     std::string serverIp = "127.0.0.1";
     uint16_t serverPort = 9100;
-    uint32_t totalBytes = 512 * 1024;
     uint32_t chunkBytes = 1200;
-    uint32_t idleSeconds = 8;
+    uint32_t aliveSeconds = 15;
     uint32_t reportMs = 1000;
 
     CLI::App app("UTP MTU+keepalive client example");
     app.add_option("--server-ip", serverIp, "Server IPv4")->check(CLI::ValidIPV4);
     app.add_option("--server-port", serverPort, "Server port")->check(CLI::Range(1025, 65535));
-    app.add_option("--total-bytes", totalBytes, "Total bytes to send before idle")->check(CLI::Range(1024, 8 * 1024 * 1024));
     app.add_option("--chunk-bytes", chunkBytes, "Write chunk size")->check(CLI::Range(128, 4096));
-    app.add_option("--idle-seconds", idleSeconds, "Idle seconds after payload to observe keepalive/mtu")->check(CLI::Range(1, 120));
+    app.add_option("--alive-seconds", aliveSeconds, "Connection alive seconds for probing")->check(CLI::Range(1, 600));
     app.add_option("--report-ms", reportMs, "Statistic print interval(ms)")->check(CLI::Range(200, 5000));
     CLI11_PARSE(app, argc, argv);
 
@@ -84,10 +82,9 @@ int main(int argc, char **argv)
     eular::utp::Stream *stream = nullptr;
 
     bool connected = false;
-    bool sendDone = false;
     uint64_t bytesSent = 0;
     uint64_t bytesEchoed = 0;
-    uint64_t idleStartMs = 0;
+    uint64_t connectedAtMs = 0;
 
     ev::EventTimer stopTimer;
     stopTimer.reset(loop.loop(), [&]() {
@@ -102,19 +99,19 @@ int main(int argc, char **argv)
 
     ev::EventTimer sendTimer;
     sendTimer.reset(loop.loop(), [&]() {
-        if (!connected || stream == nullptr || sendDone) {
+        if (!connected || stream == nullptr) {
             return;
         }
 
-        const uint32_t remain = static_cast<uint32_t>(totalBytes - std::min<uint64_t>(bytesSent, totalBytes));
-        if (remain == 0) {
-            sendDone = true;
-            idleStartMs = NowMs();
-            std::cout << "[client] payload done, entering idle stage for " << idleSeconds << "s\n";
+        const uint64_t nowMs = NowMs();
+        if (connectedAtMs > 0
+            && nowMs >= connectedAtMs + static_cast<uint64_t>(aliveSeconds) * 1000) {
+            std::cout << "[client] alive stage done, closing connection\n";
+            conn->close();
             return;
         }
 
-        const size_t n = std::min<size_t>(chunkBytes, remain);
+        const size_t n = chunkBytes;
         const std::vector<uint8_t> payload = MakePayload(n);
         const int32_t wn = stream->write(payload.data(), payload.size(), false);
         if (wn < 0) {
@@ -150,23 +147,13 @@ int main(int argc, char **argv)
                       << "\n";
         }
 
-        if (sendDone && idleStartMs > 0) {
-            const uint64_t nowMs = NowMs();
-            if (nowMs >= idleStartMs + static_cast<uint64_t>(idleSeconds) * 1000) {
-                std::cout << "[client] idle stage done, closing connection\n";
-                if (conn) {
-                    conn->close();
-                }
-                return;
-            }
-        }
-
         statTimer.start(reportMs);
     });
 
     ctx.setOnConnected([&](eular::utp::Connection::Ptr c) {
         connected = true;
         conn = c;
+        connectedAtMs = NowMs();
 
         const auto d = conn->description();
         std::cout << "[client] connected scid=" << d.scid
@@ -240,9 +227,8 @@ int main(int argc, char **argv)
     }
 
     std::cout << "[client] target=" << serverIp << ":" << serverPort
-              << " total_bytes=" << totalBytes
+              << " alive_seconds=" << aliveSeconds
               << " chunk=" << chunkBytes
-              << " idle_seconds=" << idleSeconds
               << " (keepalive+dplpmtud enabled)\n";
 
     loop.dispatch();

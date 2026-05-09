@@ -87,6 +87,12 @@ void OnSignal(int)
     std::exit(0);
 }
 
+uint64_t NowMs()
+{
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+}
+
 std::string RandomString(size_t len)
 {
     static const char kAlphabet[] =
@@ -148,6 +154,7 @@ int main(int argc, char **argv)
     bool md5Finalized = false;
     bool doneReceived = false;
     uint64_t serverDoneBytes = 0;
+    uint64_t waitDoneStartMs = 0;
     std::string localMd5;
     std::string serverMd5;
     size_t ackCount = 0;
@@ -179,6 +186,11 @@ int main(int argc, char **argv)
     ev::EventTimer drainTimer;
     drainTimer.reset(loop.loop(), [&]() {
         if (!closeIssued && connected && conn) {
+            const uint64_t nowMs = NowMs();
+            if (waitDoneStartMs != 0 && nowMs < waitDoneStartMs + drainMaxWaitMs) {
+                drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
+                return;
+            }
             std::cout << "[client] drain timeout, closing connection\n";
             std::cout << "[client] sent_msgs=" << sent
                       << ", sent_bytes=" << sentBytes
@@ -216,6 +228,7 @@ int main(int argc, char **argv)
         }
         std::cout << "[client] upload finished, waiting DONE, sent_bytes=" << sentBytes
                   << " md5=" << localMd5 << "\n";
+        waitDoneStartMs = NowMs();
         drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
     };
 
