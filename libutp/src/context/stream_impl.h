@@ -78,22 +78,22 @@ public:
     void        setOnReset(const OnReset &cb) override;
 
     // Feed an incoming STREAM frame payload into this stream.
-    int32_t     onFrame(const FrameStream &frame, PacketIn *packet = nullptr);
-    int32_t     onReset(uint16_t errorCode, bool fromPeer);
+    Status      onFrame(const FrameStream &frame, PacketIn *packet = nullptr);
+    Status      onReset(uint16_t errorCode, bool fromPeer);
 
 private:
     friend class ConnectionImpl;
 
 private:
-    int32_t flushPendingSends(size_t maxBytes = static_cast<size_t>(-1));
-    int32_t onConnectionWritable();
+    Status  flushPendingSends(size_t maxBytes = static_cast<size_t>(-1));
+    Status  onConnectionWritable();
     void    onPacketAcked(uint64_t streamOffset, size_t len);
     size_t  appWriteCredit() const;
     uint64_t sendBufferedEndOffset() const;
     bool    hasPendingSendWork() const;
     bool    shouldDeferSend(utp_time_t nowUs) const;
     utp_time_t coalesceDelayRemainingUs(utp_time_t nowUs) const;
-    int32_t insertRecvFragment(RecvFragment *fragment, bool *inserted = nullptr);
+    Status  insertRecvFragment(RecvFragment *fragment, bool *inserted = nullptr);
     void    clearRecvFragments();
     RecvFragment* findLowerBound(uint64_t offset) const;
     RecvFragment* findPrev(uint64_t offset) const;

@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <event/loop.h>
 
@@ -17,12 +18,19 @@
 #include "util/time.h"
 
 using eular::utp::Address;
+using eular::utp::Status;
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::Context;
+using eular::utp::Status;
 using eular::utp::ContextImpl;
+using eular::utp::Status;
 using eular::utp::TokenAuth;
+using eular::utp::Status;
 using eular::utp::TokenMeta;
+using eular::utp::Status;
 using eular::utp::TokenType;
+using eular::utp::Status;
 
 namespace {
 

@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #define private public
 #include "context/context_impl.h"
@@ -16,8 +17,11 @@
 #include "socket/address.h"
 
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::ContextImpl;
+using eular::utp::Status;
 using eular::utp::Address;
+using eular::utp::Status;
 
 TEST_CASE("ContextImpl: allocLocalCid avoids established and pending cid sets", "[Context][CID]")
 {

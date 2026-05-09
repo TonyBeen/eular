@@ -169,8 +169,9 @@ int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize,
 
     const size_t oldSize = payload.size();
     payload.resize(targetPayloadSize, 0);
-    const int32_t encoded = padding.encode(payload.data() + oldSize, remain);
-    if (encoded < 0 || static_cast<size_t>(encoded) != remain) {
+    eular::utp::Status st;
+    const int32_t encoded = padding.encode(payload.data() + oldSize, remain, st);
+    if (!st.ok() || static_cast<size_t>(encoded) != remain) {
         return -1;
     }
 
@@ -198,13 +199,13 @@ bool InitAesContextByCryptoType(eular::utp::FrameCryptoType type,
         auto sharedSecret = x25519->deriveSharedSecret(peerPublicKey);
         eular::utp::AesGcmContext::AesKey256 key256;
         std::copy(sharedSecret.begin(), sharedSecret.end(), key256.begin());
-        return aesCtx->init(key256, noncePrefix);
+        return aesCtx->init(key256, noncePrefix).ok();
     }
 
     auto sharedSecretShort = x25519->deriveSharedSecretShort(peerPublicKey);
     eular::utp::AesGcmContext::AesKey128 key128;
     std::copy(sharedSecretShort.begin(), sharedSecretShort.end(), key128.begin());
-    return aesCtx->init(key128, noncePrefix);
+    return aesCtx->init(key128, noncePrefix).ok();
 }
 
 bool DecodeTokenEncryptionMode(uint8_t modeRaw, eular::utp::Context::EncryptionMode &mode)
@@ -467,8 +468,7 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
 
         if (retriesLeft > 0) {
             attempt.retriesRemaining = static_cast<int8_t>(retriesLeft - 1);
-            const int32_t retryStatus = startPendingConnectAttempt(attempt);
-            if (retryStatus == UTP_ERR_OK) {
+            if (startPendingConnectAttempt(attempt).ok()) {
                 return;
             }
         }
@@ -497,30 +497,29 @@ void ContextImpl::handleConnectionState(ConnectionImpl *conn)
     }
 }
 
-int32_t ContextImpl::startPendingConnectAttempt(const PendingConnectAttempt &attempt)
+Status ContextImpl::startPendingConnectAttempt(const PendingConnectAttempt &attempt)
 {
     uint32_t cid = 0;
     if (!allocLocalCid(cid)) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "{} allocate local cid failed", tag());
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "allocate local cid failed");
     }
 
     ConnectionImpl::SP conn = std::make_shared<ConnectionImpl>(this, &m_udpSocket, cid);
     const ConnectionImpl::ZeroRttConfig *zeroRtt = attempt.hasZeroRtt ? &attempt.zeroRtt : nullptr;
-    const int32_t status = conn->connect(attempt.connectInfo, zeroRtt);
-    if (status != UTP_ERR_OK) {
-        return status;
+    const Status connStatus = conn->connect(attempt.connectInfo, zeroRtt);
+    if (!connStatus.ok()) {
+        return connStatus;
     }
 
     m_pendingConnections[conn.get()] = attempt;
     m_connections[cid] = std::move(conn);
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
+Status ContextImpl::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
-    int32_t status = m_udpSocket.bind(ip, port, ifname);
-    if (status != UTP_ERR_OK) {
+    Status status = m_udpSocket.bind(ip, port, ifname);
+    if (!status.ok()) {
         return status;
     }
 
@@ -533,15 +532,15 @@ int32_t ContextImpl::bind(const std::string &ip, uint16_t port, const std::strin
     });
     m_readEvent.start();
     m_udpSocket.updateTag(tag());
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t ContextImpl::connect(const Context::ConnectInfo &info)
+Status ContextImpl::connect(const Context::ConnectInfo &info)
 {
     return connectInternal(info, nullptr);
 }
 
-int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
+Status ContextImpl::connectInternal(const Context::ConnectInfo &info,
                                      const ConnectionImpl::ZeroRttConfig *zeroRtt)
 {
     Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
@@ -557,13 +556,11 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
     }
 
     if (info.ip.empty() || info.port == 0) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid connect info: {}:{}", tag(), info.ip, info.port);
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid connect info");
     }
 
     if (!m_udpSocket.isValid()) {
-        SetLastErrorV(UTP_ERR_SOCKET_NOT_BOUND, "{} UDP socket is not bound", tag());
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_SOCKET_NOT_BOUND, "UDP socket is not bound");
     }
 
     for (auto it = m_connections.begin(); it != m_connections.end(); ++it) {
@@ -571,12 +568,10 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
         if (conn->connectInfo() == info) {
             auto pendingIt = m_pendingConnections.find(conn.get());
             if (pendingIt != m_pendingConnections.end()) {
-                SetLastErrorV(UTP_ERR_IN_PROGRESS, "{} connection to {}:{} is already in progress", tag(), info.ip, info.port);
-                return -1;
+                return Status::ErrorLiteral(UTP_ERR_IN_PROGRESS, "connection already in progress");
             }
 
-            SetLastErrorV(UTP_ERR_SOCKET_CONNECTED, "{} already connected to {}:{}", tag(), info.ip, info.port);
-            return -1;
+            return Status::ErrorLiteral(UTP_ERR_SOCKET_CONNECTED, "already connected");
         }
     }
 
@@ -590,11 +585,11 @@ int32_t ContextImpl::connectInternal(const Context::ConnectInfo &info,
     return startPendingConnectAttempt(pending);
 }
 
-int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
+Status ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
 {
     const Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info);
     if (info.ip.empty() || info.port == 0 || info.session_ticket.empty()) {
-        return -UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid param");
     }
 
     size_t payloadSize = FRAME_SESSION_TOKEN_HDR_SIZE + info.session_ticket.size();
@@ -602,7 +597,7 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
         payloadSize += FRAME_STREAM_HDR_SIZE + info.early_data.size();
     }
     if (UTP_HEADER_SIZE + payloadSize > 1280) {
-        return -UTP_ERR_OVERFLOW;
+        return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "payload size exceeds max packet size");
     }
 
     Context::ConnectInfo base;
@@ -624,31 +619,28 @@ int32_t ContextImpl::connect0Rtt(const Context::Connect0RttInfo &info)
     return connectInternal(base, &zeroRtt);
 }
 
-int32_t ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInfo &info,
+Status ContextImpl::connect0RttWithState(const Context::Connect0RttWithStateInfo &info,
                                           const std::string &state)
 {
     Context::ConnectAttemptInfo attempt = MakeConnectAttemptInfo(info, state.size());
     if (info.ip.empty() || info.port == 0 || state.empty()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid connect0RttWithState input: {}:{} state_size={}",
-                      tag(), info.ip, info.port, state.size());
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid connect0RttWithState input");
     }
 
     Context::ConnectInfo base;
     CachedResumptionState parsed;
     uint64_t expiresAt = 0;
-    int32_t status = parseSessionResumptionState(state, parsed, expiresAt);
-    if (status != UTP_ERR_OK) {
-        return -1;
+    Status st = parseSessionResumptionState(state, parsed, expiresAt);
+    if (!st.ok()) {
+        return Status::Error(st.code(), fmt::format("parse resumption state failed: {}", st.message()));
     }
 
     attempt.encrypted = parsed.encrypted;
 
     const uint64_t nowSec = time::RealtimeMs() / 1000;
     if (expiresAt > 0 && nowSec > expiresAt) {
-        SetLastErrorV(UTP_ERR_TIMEOUT, "{} session resumption state expired: now={}, expires_at={}",
-                      tag(), nowSec, expiresAt);
-        return -1;
+        return Status::Error(UTP_ERR_TIMEOUT, fmt::format("{} session resumption state expired: now={}, expires_at={}",
+                            tag(), nowSec, expiresAt));
     }
 
     base.ip = info.ip;
@@ -677,21 +669,19 @@ ResumptionStateCodec::Key ContextImpl::activeResumptionSecret() const
 }
 
 
-int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
+Status ContextImpl::parseSessionResumptionState(const std::string &state,
                                                  CachedResumptionState &outInfo,
                                                  uint64_t &expiresAt) const
 {
     std::vector<uint8_t> sealed;
     if (!Base64::DecodeStd(state, sealed)) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid standard base64 session resumption state", tag());
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} invalid standard base64 session resumption state", tag()));
     }
 
     std::vector<uint8_t> plain;
     const auto key = activeResumptionSecret();
     if (!ResumptionStateCodec::Open(key, sealed, plain)) {
-        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "{} failed to decrypt session resumption state", tag());
-        return -1;
+        return Status::Error(UTP_ERR_CRYPTO_DECRYPTION, fmt::format("{} failed to decrypt session resumption state", tag()));
     }
 
     const uint8_t *offset = plain.data();
@@ -706,8 +696,7 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
     offset = Serialize::DeserializeFrom(offset, left, expiresAt);
     offset = Serialize::DeserializeFrom(offset, left, ticketSize);
     if (offset == nullptr || left < ticketSize) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(ticket)", tag());
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} malformed session resumption state(ticket)", tag()));
     }
 
     outInfo.sessionTicket.assign(offset, offset + ticketSize);
@@ -716,47 +705,44 @@ int32_t ContextImpl::parseSessionResumptionState(const std::string &state,
 
     offset = Serialize::DeserializeFrom(offset, left, pskSize);
     if (offset == nullptr || left < pskSize) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} malformed session resumption state(psk)", tag());
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} malformed session resumption state(psk)", tag()));
     }
 
     outInfo.resumptionPsk.assign(offset, offset + pskSize);
     Context::EncryptionMode mode = Context::kEncryptionNone;
     if (!DecodeTokenEncryptionMode(modeRaw, mode)) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid encryption_mode in resumption state", tag());
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} invalid encryption_mode in resumption state", tag()));
     }
 
     outInfo.encrypted = mode;
     if (outInfo.encrypted != Context::kEncryptionNone && outInfo.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} invalid resumption_psk size in encrypted state: {}",
-                      tag(), outInfo.resumptionPsk.size());
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} invalid resumption_psk size in encrypted state: {}",
+                               tag(), outInfo.resumptionPsk.size()));
     }
 
     (void)version;
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t ContextImpl::accept()
+Status ContextImpl::accept()
 {
     if (m_pendingIncomingQueue.empty()) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "no pending incoming connections");
     }
     const uint32_t localCid = m_pendingIncomingQueue.front();
     m_pendingIncomingQueue.pop_front();
 
     auto it = m_pendingIncoming.find(localCid);
     if (it == m_pendingIncoming.end()) {
-        return UTP_ERR_INVALID_STATE;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "pending connection not found");
     }
 
     PendingIncomingConnection &pending = it->second;
     if (pending.handshakeSent) {
-        return UTP_ERR_IN_PROGRESS;
+        return Status::ErrorLiteral(UTP_ERR_IN_PROGRESS, "handshake already sent");
     }
 
-    if (sendPendingHandshake(pending) != UTP_ERR_OK) {
+    if (!sendPendingHandshake(pending).ok()) {
         sendPendingConnectionClose(pending, UTP_ERR_INTERNAL_ERROR, "send handshake failed");
 
         Context::ConnectAttemptInfo info;
@@ -768,7 +754,7 @@ int32_t ContextImpl::accept()
         reportConnectError(UTP_ERR_INTERNAL_ERROR, "send passive handshake failed", info);
 
         removePendingIncoming(localCid);
-        return UTP_ERR_INTERNAL_ERROR;
+        return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "send passive handshake failed");
     }
 
     pending.handshakeSent = true;
@@ -778,7 +764,7 @@ int32_t ContextImpl::accept()
     m_waitHandshakeDone.insert(localCid);
     refreshPendingHandshakeTimer();
 
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
 bool ContextImpl::buildZeroRttSessionToken(const Address &peerAddress,
@@ -844,14 +830,14 @@ std::string ContextImpl::PeerKey(const Address &peerAddress, uint32_t peerCid)
     return peerAddress.toString() + "#" + std::to_string(peerCid);
 }
 
-int32_t ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
+Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
                                        uint8_t packetType,
                                        const void *payload,
                                        size_t payloadLen,
                                        utp_packno_t *outPacketNo)
 {
     if (!pending.peerAddress.isValid() || payloadLen > UINT16_MAX) {
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid param");
     }
 
     const utp_packno_t packetNo = pending.packetNumber;
@@ -861,17 +847,17 @@ int32_t ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
     size_t left = wire.size();
 
     offset = Serialize::SerializeTo(offset, left, pending.localCid);
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, pending.peerCid);
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, pending.packetNumber++);
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, static_cast<uint16_t>(payloadLen));
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, packetType);
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
     offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(0));
-    if (offset == nullptr) return -1;
+    if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
 
     if (payloadLen > 0 && payload != nullptr) {
         std::memcpy(offset, payload, payloadLen);
@@ -883,20 +869,24 @@ int32_t ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
     msg.metaInfo.peerAddress = pending.peerAddress;
 
     std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
-    int32_t sent = m_udpSocket.send(msgVec);
+    Status sendStatus;
+    int32_t sent = m_udpSocket.send(msgVec, sendStatus);
     if (sent > 0) {
         if (outPacketNo != nullptr) {
             *outPacketNo = packetNo;
         }
-        return UTP_ERR_OK;
+        return Status::OK();
     }
 
-    return -1;
+    if (sendStatus.ok() || sendStatus.code() == UTP_ERR_WOULD_BLOCK) {
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "UDP send would block");
+    }
+    return sendStatus;
 }
 
-int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
+Status  ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
 {
-    auto appendAckFrequency = [this](std::vector<uint8_t> &payload) -> int32_t {
+    auto appendAckFrequency = [this](std::vector<uint8_t> &payload) -> Status {
         FrameAckFrequency ackFreq;
         ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(m_config.ack_every_n_packets, UINT8_MAX));
         ackFreq.reordering_threshold = 3;
@@ -905,15 +895,16 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
 
         const size_t oldSize = payload.size();
         payload.resize(oldSize + FRAME_ACK_FREQUENCY_SIZE, 0);
-        const int32_t encoded = ackFreq.encode(payload.data() + oldSize, FRAME_ACK_FREQUENCY_SIZE);
-        if (encoded < 0) {
-            return -1;
+        Status st;
+        const int32_t encoded = ackFreq.encode(payload.data() + oldSize, FRAME_ACK_FREQUENCY_SIZE, st);
+        if (!st.ok()) {
+            return st;
         }
         payload.resize(oldSize + static_cast<size_t>(encoded));
-        return UTP_ERR_OK;
+        return Status::OK();
     };
 
-    auto appendHandshakeDelay = [&pending](std::vector<uint8_t> &payload) -> int32_t {
+    auto appendHandshakeDelay = [&pending](std::vector<uint8_t> &payload) -> Status {
         const utp_time_t nowUs = time::MonotonicUs();
         const utp_time_t baseUs = (pending.initialReceivedUs > 0 && nowUs >= pending.initialReceivedUs)
                                 ? pending.initialReceivedUs
@@ -926,21 +917,21 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
                                      payload.data() + oldSize,
                                      FRAME_HANDSHAKE_DELAY_SIZE,
                                      encoded) != UTP_ERR_OK) {
-            return -1;
+            return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
         }
 
         payload.resize(oldSize + encoded);
-        return UTP_ERR_OK;
+        return Status::OK();
     };
 
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
     std::vector<uint8_t> payload(FRAME_VERSION_SIZE, 0);
-    int32_t frameLen = version.encode(payload.data(), payload.size());
-    if (frameLen < 0) {
-        return -1;
+    Status st;
+    int32_t frameLen = version.encode(payload.data(), payload.size(), st);
+    if (!st.ok()) {
+        return st;
     }
-    payload.resize(static_cast<size_t>(frameLen));
 
     TransportParams localTp;
     localTp.handshake_timeout = m_config.handshake_timeout;
@@ -952,60 +943,50 @@ int32_t ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
     transportParams.params = &localTp;
     const size_t tpOffset = payload.size();
     payload.resize(tpOffset + FRAME_TRANSPORT_PARAMS_SIZE, 0);
-    frameLen = transportParams.encode(payload.data() + tpOffset, FRAME_TRANSPORT_PARAMS_SIZE);
-    if (frameLen < 0) {
-        return -1;
+    int32_t encoded = transportParams.encode(payload.data() + tpOffset, FRAME_TRANSPORT_PARAMS_SIZE, st);
+    if (!st.ok()) {
+        return st;
     }
-    payload.resize(tpOffset + static_cast<size_t>(frameLen));
+    payload.resize(tpOffset + static_cast<size_t>(encoded));
 
-    if (pending.encrypted != Context::kEncryptionNone) {
-        if (!pending.x25519) {
-            pending.x25519 = std::make_shared<X25519Wrapper>();
-        }
-
+    if (pending.encrypted != Context::kEncryptionNone && pending.x25519) {
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(pending.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(pending.x25519->publicKey().data());
 
         const size_t cryptoOffset = payload.size();
         payload.resize(cryptoOffset + FRAME_CRYPTO_SIZE, 0);
-        frameLen = crypto.encode(payload.data() + cryptoOffset, FRAME_CRYPTO_SIZE);
-        if (frameLen < 0) {
-            return -1;
+        encoded = crypto.encode(payload.data() + cryptoOffset, FRAME_CRYPTO_SIZE, st);
+        if (!st.ok()) {
+            return st;
         }
-        payload.resize(cryptoOffset + static_cast<size_t>(frameLen));
+        payload.resize(cryptoOffset + static_cast<size_t>(encoded));
     }
 
-    if (appendAckFrequency(payload) != UTP_ERR_OK) {
-        return -1;
+    Status freqSt = appendAckFrequency(payload);
+    if (!freqSt.ok()) {
+        return freqSt;
     }
 
-    if (appendHandshakeDelay(payload) != UTP_ERR_OK) {
-        return -1;
-    }
-
-    const uint16_t targetPacketSize = ConfiguredMinPacketSize(m_config, pending.peerAddress.family());
-    if (targetPacketSize > UTP_HEADER_SIZE) {
-        const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, payload) != UTP_ERR_OK) {
-            return -1;
-        }
+    Status delaySt = appendHandshakeDelay(payload);
+    if (!delaySt.ok()) {
+        return delaySt;
     }
 
     utp_packno_t sentPacketNo = 0;
-    const int32_t status = sendPendingPacket(pending,
+    Status status = sendPendingPacket(pending,
                                              UTP_TYPE_HANDSHAKE,
                                              payload.data(),
                                              payload.size(),
                                              &sentPacketNo);
-    if (status == UTP_ERR_OK) {
+    if (status.ok()) {
         pending.lastHandshakePacketNo = sentPacketNo;
     }
 
     return status;
 }
 
-int32_t ContextImpl::sendPendingConnectionClose(PendingIncomingConnection &pending,
+Status  ContextImpl::sendPendingConnectionClose(PendingIncomingConnection &pending,
                                                 uint16_t errorCode,
                                                 const std::string &reason)
 {
@@ -1015,9 +996,10 @@ int32_t ContextImpl::sendPendingConnectionClose(PendingIncomingConnection &pendi
     close.reason_length = static_cast<uint16_t>(reason.size());
 
     std::vector<uint8_t> payload(static_cast<size_t>(close.frameSize()));
-    int32_t frameLen = close.encode(payload.data(), payload.size());
-    if (frameLen < 0) {
-        return -1;
+    Status st;
+    int32_t frameLen = close.encode(payload.data(), payload.size(), st);
+    if (!st.ok()) {
+        return st;
     }
 
     return sendPendingPacket(pending,
@@ -1042,7 +1024,9 @@ void ContextImpl::parsePendingNegotiationFrame(PendingIncomingConnection &pendin
         TransportParams peerTp;
         FrameTransportParams transportParams;
         transportParams.params = &peerTp;
-        if (transportParams.decode(frameData, frameLen) >= 0) {
+        Status st;
+        transportParams.decode(frameData, frameLen, st);
+        if (st.ok()) {
             pending.peerTp = peerTp;
         }
         return;
@@ -1050,7 +1034,9 @@ void ContextImpl::parsePendingNegotiationFrame(PendingIncomingConnection &pendin
 
     if (frameType == kFrameAckFrequency) {
         FrameAckFrequency ackFreq;
-        if (ackFreq.decode(frameData, frameLen) >= 0) {
+        Status st;
+        ackFreq.decode(frameData, frameLen, st);
+        if (st.ok()) {
             ackFreq.normalize();
             pending.peerAckFrequency = ackFreq;
             pending.hasPeerAckFrequency = true;
@@ -1440,7 +1426,8 @@ void ContextImpl::onReadEvent()
         refreshPendingHandshakeTimer();
 
         std::vector<UdpSocket::MsgMetaInfo> msgVec;
-        int32_t nread = m_udpSocket.recv(msgVec);
+        Status recvStatus;
+        int32_t nread = m_udpSocket.recv(msgVec, recvStatus);
         if (nread <= 0) {
             return;
         }
@@ -1533,7 +1520,8 @@ void ContextImpl::onReadEvent()
                         FrameType frameType = kFrameInvalid;
                         const uint8_t *frameData = nullptr;
                         size_t frameLen = 0;
-                        if (pendingPacket->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                        Status nextSt;
+                        if (pendingPacket->nextFrame(frameOffset, frameType, frameData, frameLen, nextSt) < 0) {
                             break;
                         }
 
@@ -1544,7 +1532,9 @@ void ContextImpl::onReadEvent()
 
                         if (frameType == kFrameHandshakeDone) {
                             FrameHandshakeDone done;
-                            if (done.decode(frameData, frameLen) >= 0
+                            Status st;
+                            done.decode(frameData, frameLen, st);
+                            if (st.ok()
                                 && done.ack_handshake_pn == pendingIt->second.lastHandshakePacketNo) {
                                 handshakeDone = true;
                             }
@@ -1619,11 +1609,14 @@ void ContextImpl::onReadEvent()
                     FrameType frameType = kFrameInvalid;
                     const uint8_t *frameData = nullptr;
                     size_t frameLen = 0;
-                    if (packet->nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                    Status nextSt;
+                    if (packet->nextFrame(frameOffset, frameType, frameData, frameLen, nextSt) < 0) {
                         break;
                     }
                     if (frameType == kFrameSessionToken) {
-                        if (sessionToken.decode(frameData, frameLen) >= 0) {
+                        Status st;
+                        sessionToken.decode(frameData, frameLen, st);
+                        if (st.ok()) {
                             hasSessionToken = true;
                         }
                         break;
@@ -1773,7 +1766,7 @@ void ContextImpl::onReadEvent()
             }
 
             PacketIn initialPacket;
-            if (initialPacket.decode(msg.data, msg.len) < 0) {
+            if (!initialPacket.decode(msg.data, msg.len).ok()) {
                 continue;
             }
 
@@ -1797,7 +1790,8 @@ void ContextImpl::onReadEvent()
                 FrameType frameType = kFrameInvalid;
                 const uint8_t *frameData = nullptr;
                 size_t frameLen = 0;
-                if (initialPacket.nextFrame(frameOffset, frameType, frameData, frameLen) < 0) {
+                Status nextSt;
+                if (initialPacket.nextFrame(frameOffset, frameType, frameData, frameLen, nextSt) < 0) {
                     break;
                 }
 
@@ -1810,7 +1804,9 @@ void ContextImpl::onReadEvent()
                     std::array<uint8_t, FRAME_CRYPTO_EPH_PUBKEY_SIZE> peerPubKey{};
                     FrameCrypto crypto;
                     crypto.eph_pubkey = peerPubKey.data();
-                    if (crypto.decode(frameData, frameLen) >= 0) {
+                    Status st;
+                    crypto.decode(frameData, frameLen, st);
+                    if (st.ok()) {
                         pending.encrypted = FrameCryptoTypeToEncryptionMode(crypto.crypto_type);
                         if (!pending.x25519) {
                             pending.x25519 = std::make_shared<X25519Wrapper>();
@@ -1838,7 +1834,9 @@ void ContextImpl::onReadEvent()
 
                 if (frameType == kFrameSessionToken) {
                     FrameSessionToken sessionToken;
-                    if (sessionToken.decode(frameData, frameLen) < 0) {
+                    Status st;
+                    sessionToken.decode(frameData, frameLen, st);
+                    if (!st.ok()) {
                         continue;
                     }
 

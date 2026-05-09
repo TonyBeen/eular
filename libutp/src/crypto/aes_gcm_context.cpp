@@ -41,7 +41,7 @@ AesGcmContext::~AesGcmContext()
     cleanup();
 }
 
-bool AesGcmContext::init(const AesKey128 &key, uint32_t noncePerfix)
+Status AesGcmContext::init(const AesKey128 &key, uint32_t noncePerfix)
 {
     cleanup();
 
@@ -49,11 +49,10 @@ bool AesGcmContext::init(const AesKey128 &key, uint32_t noncePerfix)
     if (m_cipher == nullptr) {
         uint32_t sslCode = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(sslCode);
-        SetLastErrorV(UTP_ERR_CRYPTO_INIT_FAILED,
-                      "AES-128-GCM init failed: {} (code=0x{:X})",
-                      msg.data(),
-                      sslCode);
-        return false;
+        return Status::Error(UTP_ERR_CRYPTO_INIT_FAILED,
+                             fmt::format("AES-128-GCM init failed: {} (code=0x{:X})",
+                                         msg.data(),
+                                         sslCode));
     }
 
     m_keySize = key.size();
@@ -61,10 +60,10 @@ bool AesGcmContext::init(const AesKey128 &key, uint32_t noncePerfix)
 
     noncePerfix = htobe32(noncePerfix);
     std::memcpy(m_noncePerfix.data(), &noncePerfix, sizeof(noncePerfix));
-    return true;
+    return Status::OK();
 }
 
-bool AesGcmContext::init(const AesKey256 &key, uint32_t noncePerfix)
+Status AesGcmContext::init(const AesKey256 &key, uint32_t noncePerfix)
 {
     cleanup();
 
@@ -72,11 +71,10 @@ bool AesGcmContext::init(const AesKey256 &key, uint32_t noncePerfix)
     if (m_cipher == nullptr) {
         uint32_t sslCode = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(sslCode);
-        SetLastErrorV(UTP_ERR_CRYPTO_INIT_FAILED,
-                      "AES-256-GCM init failed: {} (code=0x{:X})",
-                      msg.data(),
-                      sslCode);
-        return false;
+        return Status::Error(UTP_ERR_CRYPTO_INIT_FAILED,
+                             fmt::format("AES-256-GCM init failed: {} (code=0x{:X})",
+                                         msg.data(),
+                                         sslCode));
     }
 
     m_keySize = key.size();
@@ -84,31 +82,28 @@ bool AesGcmContext::init(const AesKey256 &key, uint32_t noncePerfix)
 
     noncePerfix = htobe32(noncePerfix);
     std::memcpy(m_noncePerfix.data(), &noncePerfix, sizeof(noncePerfix));
-    return true;
+    return Status::OK();
 }
 
-int32_t AesGcmContext::encrypt(PacketOut *packet)
+Status AesGcmContext::encrypt(PacketOut *packet)
 {
     if (packet == nullptr || packet->raw_data == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid packet for encrypt");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid packet for encrypt");
     }
 
     if (packet->data_size < UTP_HEADER_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "packet too small for encrypt: data_size={}",
-                      packet->data_size);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("packet too small for encrypt: data_size={}",
+                                         packet->data_size));
     }
 
     const size_t plainPayloadLen = static_cast<size_t>(packet->data_size - UTP_HEADER_SIZE);
     const size_t cipherPayloadLen = plainPayloadLen + GCM_TAG_SIZE;
     const size_t encryptedPacketLen = UTP_HEADER_SIZE + cipherPayloadLen;
     if (encryptedPacketLen > (std::numeric_limits<uint16_t>::max)()) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "encrypted packet too large: {}",
-                      encryptedPacketLen);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("encrypted packet too large: {}",
+                                         encryptedPacketLen));
     }
 
     uint8_t *targetBuffer = nullptr;
@@ -121,17 +116,15 @@ int32_t AesGcmContext::encrypt(PacketOut *packet)
         inPlace = true;
     } else {
         if (fiu_fail("crypto/encrypt_buf/malloc")) {
-            SetLastErrorV(UTP_ERR_NO_MEMORY,
-                          "allocate encrypted packet buffer failed, size={}",
-                          encryptedPacketLen);
-            return -1;
+            return Status::Error(UTP_ERR_NO_MEMORY,
+                                 fmt::format("allocate encrypted packet buffer failed, size={}",
+                                             encryptedPacketLen));
         }
         targetBuffer = static_cast<uint8_t *>(std::malloc(encryptedPacketLen));
         if (targetBuffer == nullptr) {
-            SetLastErrorV(UTP_ERR_NO_MEMORY,
-                          "allocate encrypted packet buffer failed, size={}",
-                          encryptedPacketLen);
-            return -1;
+            return Status::Error(UTP_ERR_NO_MEMORY,
+                                 fmt::format("allocate encrypted packet buffer failed, size={}",
+                                             encryptedPacketLen));
         }
         std::memcpy(targetBuffer, packet->raw_data, UTP_HEADER_SIZE);
     }
@@ -140,18 +133,18 @@ int32_t AesGcmContext::encrypt(PacketOut *packet)
 
     size_t outCipherPayloadLen = cipherPayloadLen;
     // For in-place encryption, plaintext and ciphertext pointers are the same.
-    const int32_t status = encrypt(packet->raw_data + UTP_HEADER_SIZE,
-                                   plainPayloadLen,
-                                   targetBuffer,
-                                   UTP_HEADER_SIZE,
-                                   packet->packno,
-                                   targetBuffer + UTP_HEADER_SIZE,
-                                   &outCipherPayloadLen);
-    if (status < 0) {
+    const Status encStatus = encrypt(packet->raw_data + UTP_HEADER_SIZE,
+                                     plainPayloadLen,
+                                     targetBuffer,
+                                     UTP_HEADER_SIZE,
+                                     packet->packno,
+                                     targetBuffer + UTP_HEADER_SIZE,
+                                     &outCipherPayloadLen);
+    if (!encStatus.ok()) {
         if (!inPlace) {
             std::free(targetBuffer);
         }
-        return -1;
+        return encStatus;
     }
 
     if (packet->encrypt_data != nullptr && packet->encrypt_data != packet->raw_data) {
@@ -161,27 +154,25 @@ int32_t AesGcmContext::encrypt(PacketOut *packet)
     packet->encrypt_data = targetBuffer;
     packet->encrypt_data_size = static_cast<uint16_t>(UTP_HEADER_SIZE + outCipherPayloadLen);
     packet->po_flags |= PacketOutFlags::kPoEncrypted;
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t AesGcmContext::decrypt(PacketIn *packet)
+Status AesGcmContext::decrypt(PacketIn *packet)
 {
     if (packet == nullptr || packet->raw_data == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid packet for decrypt");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid packet for decrypt");
     }
 
     if (packet->raw_size < UTP_HEADER_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "packet too small for decrypt: raw_size={}",
-                      packet->raw_size);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("packet too small for decrypt: raw_size={}",
+                                         packet->raw_size));
     }
 
     if (packet->payload == nullptr) {
         if (packet->raw_size < UTP_HEADER_SIZE) {
-            SetLastErrorV(UTP_ERR_OVERFLOW, "invalid encrypted packet raw_size={}", packet->raw_size);
-            return -1;
+            return Status::Error(UTP_ERR_OVERFLOW,
+                                 fmt::format("invalid encrypted packet raw_size={}", packet->raw_size));
         }
 
         packet->payload = packet->raw_data + UTP_HEADER_SIZE;
@@ -189,23 +180,22 @@ int32_t AesGcmContext::decrypt(PacketIn *packet)
     }
 
     if (packet->payload_size < GCM_TAG_SIZE) {
-        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION,
-                      "encrypted payload too short: {}",
-                      packet->payload_size);
-        return -1;
+        return Status::Error(UTP_ERR_CRYPTO_DECRYPTION,
+                             fmt::format("encrypted payload too short: {}",
+                                         packet->payload_size));
     }
 
     uint8_t *mutablePayload = const_cast<uint8_t *>(packet->payload);
     size_t plainPayloadLen = packet->payload_size - GCM_TAG_SIZE;
-    const int32_t status = decrypt(packet->payload,
-                                   packet->payload_size,
-                                   packet->raw_data,
-                                   UTP_HEADER_SIZE,
-                                   packet->header.pn,
-                                   mutablePayload,
-                                   &plainPayloadLen);
-    if (status < 0) {
-        return -1;
+    const Status decStatus = decrypt(packet->payload,
+                                     packet->payload_size,
+                                     packet->raw_data,
+                                     UTP_HEADER_SIZE,
+                                     packet->header.pn,
+                                     mutablePayload,
+                                     &plainPayloadLen);
+    if (!decStatus.ok()) {
+        return decStatus;
     }
 
     packet->header.payload_length = static_cast<uint16_t>(plainPayloadLen);
@@ -219,45 +209,39 @@ int32_t AesGcmContext::decrypt(PacketIn *packet)
         packet->raw_size = UTP_HEADER_SIZE + plainPayloadLen;
     }
 
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, const uint8_t *aad, size_t aad_len, uint64_t counter, uint8_t *ciphertext, size_t *ciphertext_len)
+Status AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, const uint8_t *aad, size_t aad_len, uint64_t counter, uint8_t *ciphertext, size_t *ciphertext_len)
 {
     if (m_cipher == nullptr || m_keySize == 0) {
-        SetLastErrorV(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
     }
 
     if (ciphertext == nullptr || ciphertext_len == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ciphertext buffer is null");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "ciphertext buffer is null");
     }
 
     if (plaintext_len > (std::numeric_limits<int>::max)() || aad_len > (std::numeric_limits<int>::max)()) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "encrypt input is too large");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "encrypt input is too large");
     }
 
     const size_t required = plaintext_len + GCM_TAG_SIZE;
     if (*ciphertext_len < required) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "ciphertext buffer too small: required={}, provided={}",
-                      required,
-                      *ciphertext_len);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("ciphertext buffer too small: required={}, provided={}",
+                                         required,
+                                         *ciphertext_len));
     }
 
     Nonce nonce = buildNonce(counter);
 
     if (fiu_fail("crypto/evp_ctx/alloc")) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
 
     int32_t status = EVP_EncryptInit_ex(ctx, m_cipher, nullptr, nullptr, nullptr);
@@ -292,19 +276,18 @@ int32_t AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, c
     if (status != 1) {
         uint32_t sslCode = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(sslCode);
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION,
-                      "AES-GCM encryption failed: {} (code=0x{:X})",
-                      msg.data(),
-                      sslCode);
-        return -1;
+        return Status::Error(UTP_ERR_CRYPTO_ENCRYPTION,
+                             fmt::format("AES-GCM encryption failed: {} (code=0x{:X})",
+                                         msg.data(),
+                                         sslCode));
     }
 
     *ciphertext_len = static_cast<size_t>(totalLen + GCM_TAG_SIZE);
 
-    return 0;
+    return Status::OK();
 }
 
-int32_t AesGcmContext::encryptScatter(const PlainSegment *segments,
+Status AesGcmContext::encryptScatter(const PlainSegment *segments,
                                      size_t segmentCount,
                                      const uint8_t *aad,
                                      size_t aad_len,
@@ -313,55 +296,49 @@ int32_t AesGcmContext::encryptScatter(const PlainSegment *segments,
                                      size_t *ciphertext_len)
 {
     if (m_cipher == nullptr || m_keySize == 0) {
-        SetLastErrorV(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
     }
 
     if (ciphertext == nullptr || ciphertext_len == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ciphertext buffer is null");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "ciphertext buffer is null");
     }
 
     size_t totalPlainLen = 0;
     if (segmentCount > 0 && segments == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "segments is null when segmentCount={}", segmentCount);
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM,
+                             fmt::format("segments is null when segmentCount={}", segmentCount));
     }
     for (size_t i = 0; i < segmentCount; ++i) {
         if (segments[i].len == 0) {
             continue;
         }
         if (segments[i].data == nullptr) {
-            SetLastErrorV(UTP_ERR_INVALID_PARAM, "segment {} data is null", i);
-            return -1;
+            return Status::Error(UTP_ERR_INVALID_PARAM,
+                                 fmt::format("segment {} data is null", i));
         }
         totalPlainLen += segments[i].len;
     }
 
     if (totalPlainLen > (std::numeric_limits<int>::max)() || aad_len > (std::numeric_limits<int>::max)()) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "encrypt input is too large");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "encrypt input is too large");
     }
 
     const size_t required = totalPlainLen + GCM_TAG_SIZE;
     if (*ciphertext_len < required) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "ciphertext buffer too small: required={}, provided={}",
-                      required,
-                      *ciphertext_len);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("ciphertext buffer too small: required={}, provided={}",
+                                         required,
+                                         *ciphertext_len));
     }
 
     Nonce nonce = buildNonce(counter);
 
     if (fiu_fail("crypto/evp_ctx/alloc")) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
 
     int32_t status = EVP_EncryptInit_ex(ctx, m_cipher, nullptr, nullptr, nullptr);
@@ -399,46 +376,40 @@ int32_t AesGcmContext::encryptScatter(const PlainSegment *segments,
     if (status != 1) {
         uint32_t sslCode = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(sslCode);
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION,
-                      "AES-GCM scatter encryption failed: {} (code=0x{:X})",
-                      msg.data(),
-                      sslCode);
-        return -1;
+        return Status::Error(UTP_ERR_CRYPTO_ENCRYPTION,
+                             fmt::format("AES-GCM scatter encryption failed: {} (code=0x{:X})",
+                                         msg.data(),
+                                         sslCode));
     }
 
     *ciphertext_len = static_cast<size_t>(totalLen + GCM_TAG_SIZE);
-    return 0;
+    return Status::OK();
 }
 
-int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *aad, size_t aad_len, uint64_t counter, uint8_t *plaintext, size_t *plaintext_len)
+Status AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *aad, size_t aad_len, uint64_t counter, uint8_t *plaintext, size_t *plaintext_len)
 {
     if (m_cipher == nullptr || m_keySize == 0) {
-        SetLastErrorV(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_UNINITIALIZED, "Crypto context uninitialized");
     }
 
     if (plaintext == nullptr || plaintext_len == nullptr || ciphertext == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "decrypt buffer arg is null");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "decrypt buffer arg is null");
     }
 
     if (ciphertext_len > (std::numeric_limits<int>::max)() || aad_len > (std::numeric_limits<int>::max)()) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "decrypt input is too large");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "decrypt input is too large");
     }
 
     if (ciphertext_len < GCM_TAG_SIZE) {
-        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "Ciphertext too short for AES-GCM decryption");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "Ciphertext too short for AES-GCM decryption");
     }
 
     const size_t cipherDataLen = ciphertext_len - GCM_TAG_SIZE;
     if (*plaintext_len < cipherDataLen) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "plaintext buffer too small: required={}, provided={}",
-                      cipherDataLen,
-                      *plaintext_len);
-        return -1;
+        return Status::Error(UTP_ERR_OVERFLOW,
+                             fmt::format("plaintext buffer too small: required={}, provided={}",
+                                         cipherDataLen,
+                                         *plaintext_len));
     }
 
     Nonce nonce = buildNonce(counter);
@@ -446,8 +417,7 @@ int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len,
     const uint8_t *tag = ciphertext + cipherDataLen;
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
 
     int32_t status = EVP_DecryptInit_ex(ctx, m_cipher, nullptr, nullptr, nullptr);
@@ -479,16 +449,15 @@ int32_t AesGcmContext::decrypt(const uint8_t *ciphertext, size_t ciphertext_len,
     if (status != 1) {
         uint32_t sslCode = 0;
         OpenSSLErrorMsg msg = GetOpenSSLErrorMsg(sslCode);
-        SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION,
-                      "AES-GCM decryption failed: {} (code=0x{:X})",
-                      msg.data(),
-                      sslCode);
-        return -1;
+        return Status::Error(UTP_ERR_CRYPTO_DECRYPTION,
+                             fmt::format("AES-GCM decryption failed: {} (code=0x{:X})",
+                                         msg.data(),
+                                         sslCode));
     }
 
     *plaintext_len = static_cast<size_t>(totalLen);
 
-    return 0;
+    return Status::OK();
 }
 
 AesGcmContext::Nonce AesGcmContext::buildNonce(uint64_t counter) const

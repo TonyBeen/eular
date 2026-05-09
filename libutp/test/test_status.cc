@@ -16,14 +16,14 @@ TEST_CASE("Status: OK status behavior", "[Status]")
 {
     Status s;
     REQUIRE(s.ok());
-    REQUIRE(s.code() == UTP_ERR_OK);
+    REQUIRE(s.code()  == 0);
     REQUIRE(s.messageEmpty());
     REQUIRE(s.messageSize() == 0);
     REQUIRE(static_cast<bool>(s) == true);
 
     Status s_ok = Status::OK();
     REQUIRE(s_ok.ok());
-    REQUIRE(s_ok.code() == UTP_ERR_OK);
+    REQUIRE(s_ok.code()  == 0);
     REQUIRE(s_ok.messageEmpty());
     REQUIRE(s_ok.messageSize() == 0);
 }

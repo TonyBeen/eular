@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <cstring>
@@ -20,8 +21,11 @@
 #undef private
 
 using eular::utp::FrameStream;
+using eular::utp::Status;
 using eular::utp::Stream;
+using eular::utp::Status;
 using eular::utp::StreamImpl;
+using eular::utp::Status;
 
 struct StreamTestCtx {
     eular::utp::Config      cfg;
@@ -41,7 +45,7 @@ TEST_CASE("StreamImpl: acquireReadViews supports out-of-order reassembly", "[Str
     f1.stream_offset = 2;
     f1.stream_data_length = static_cast<uint16_t>(tail.size());
     f1.stream_data = tail.data();
-    REQUIRE(stream.onFrame(f1) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f1)  == 0);
     REQUIRE_FALSE(stream.readable());
 
     std::array<uint8_t, 2> head = {1, 2};
@@ -50,7 +54,7 @@ TEST_CASE("StreamImpl: acquireReadViews supports out-of-order reassembly", "[Str
     f0.stream_offset = 0;
     f0.stream_data_length = static_cast<uint16_t>(head.size());
     f0.stream_data = head.data();
-    REQUIRE(stream.onFrame(f0) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f0)  == 0);
     REQUIRE(stream.readable());
 
     Stream::ConstBufferView views[2];
@@ -85,7 +89,7 @@ TEST_CASE("StreamImpl: read and read-views stay consistent", "[Stream][ReadViews
     frame.stream_offset = 0;
     frame.stream_data_length = static_cast<uint16_t>(payload.size());
     frame.stream_data = payload.data();
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
 
     Stream::ConstBufferView views[2];
     REQUIRE(stream.acquireReadViews(views, 2) == 2);
@@ -112,7 +116,7 @@ TEST_CASE("StreamImpl: out-of-order fin is delivered only when contiguous", "[St
     fin.stream_data_length = 0;
     fin.stream_data = nullptr;
     fin.stream_flag = 0x01;
-    REQUIRE(stream.onFrame(fin) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(fin)  == 0);
 
     uint8_t one = 0;
     REQUIRE(stream.read(&one, 1) == -1);
@@ -124,7 +128,7 @@ TEST_CASE("StreamImpl: out-of-order fin is delivered only when contiguous", "[St
     frame.stream_offset = 0;
     frame.stream_data_length = static_cast<uint16_t>(data.size());
     frame.stream_data = data.data();
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
 
     std::array<uint8_t, 8> out{};
     REQUIRE(stream.read(out.data(), out.size()) == 3);
@@ -144,7 +148,7 @@ TEST_CASE("StreamImpl: overlapping fragments are trimmed without duplication", "
     first.stream_offset = 0;
     first.stream_data_length = static_cast<uint16_t>(base.size());
     first.stream_data = base.data();
-    REQUIRE(stream.onFrame(first) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(first)  == 0);
 
     std::array<uint8_t, 8> overlap = {5, 6, 7, 8, 9, 10, 11, 12};
     FrameStream second;
@@ -152,7 +156,7 @@ TEST_CASE("StreamImpl: overlapping fragments are trimmed without duplication", "
     second.stream_offset = 4;
     second.stream_data_length = static_cast<uint16_t>(overlap.size());
     second.stream_data = overlap.data();
-    REQUIRE(stream.onFrame(second) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(second)  == 0);
 
     Stream::ConstBufferView views[2];
     const size_t total = stream.acquireReadViews(views, 32);
@@ -180,28 +184,28 @@ TEST_CASE("StreamImpl: overlap chain keeps strictly contiguous output", "[Stream
     f0.stream_offset = 0;
     f0.stream_data_length = static_cast<uint16_t>(p0.size());
     f0.stream_data = p0.data();
-    REQUIRE(stream.onFrame(f0) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f0)  == 0);
 
     FrameStream f1;
     f1.stream_id = 35;
     f1.stream_offset = 4;
     f1.stream_data_length = static_cast<uint16_t>(p1.size());
     f1.stream_data = p1.data();
-    REQUIRE(stream.onFrame(f1) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f1)  == 0);
 
     FrameStream f2;
     f2.stream_id = 35;
     f2.stream_offset = 2;
     f2.stream_data_length = static_cast<uint16_t>(p2.size());
     f2.stream_data = p2.data();
-    REQUIRE(stream.onFrame(f2) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f2)  == 0);
 
     FrameStream f3;
     f3.stream_id = 35;
     f3.stream_offset = 10;
     f3.stream_data_length = static_cast<uint16_t>(p3.size());
     f3.stream_data = p3.data();
-    REQUIRE(stream.onFrame(f3) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f3)  == 0);
 
     Stream::ConstBufferView views[2];
     // acquireReadViews returns at most two contiguous spans.
@@ -229,7 +233,7 @@ TEST_CASE("StreamImpl: multiple fragments can reference one PacketIn", "[Stream]
     f0.stream_offset = 0;
     f0.stream_data_length = static_cast<uint16_t>(p0.size());
     f0.stream_data = p0.data();
-    REQUIRE(stream.onFrame(f0, &packet) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f0, &packet)  == 0);
 
     std::array<uint8_t, 3> p1 = {4, 5, 6};
     FrameStream f1;
@@ -237,7 +241,7 @@ TEST_CASE("StreamImpl: multiple fragments can reference one PacketIn", "[Stream]
     f1.stream_offset = 3;
     f1.stream_data_length = static_cast<uint16_t>(p1.size());
     f1.stream_data = p1.data();
-    REQUIRE(stream.onFrame(f1, &packet) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(f1, &packet)  == 0);
 
     auto first = stream.firstFragment();
     REQUIRE(first != nullptr);

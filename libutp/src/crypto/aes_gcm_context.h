@@ -15,6 +15,8 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
+#include <util/status.h>
+
 namespace eular {
 namespace utp {
 struct PacketOut;
@@ -65,7 +67,7 @@ public:
      * @param key AES-128 密钥 (16 字节)
      * @param noncePerfix Nonce 前缀, 内部会转为大端存储 (4 字节)
      */
-    bool init(const AesKey128& key, uint32_t noncePerfix);
+    Status init(const AesKey128& key, uint32_t noncePerfix);
 
     /**
      * @brief 初始化 AES-256-GCM 上下文
@@ -73,10 +75,10 @@ public:
      * @param key AES-256 密钥 (32 字节)
      * @param noncePerfix Nonce 前缀, 内部会转为大端存储 (4 字节)
      */
-    bool init(const AesKey256& key, uint32_t noncePerfix);
+    Status init(const AesKey256& key, uint32_t noncePerfix);
 
-    int32_t encrypt(PacketOut *packet);
-    int32_t decrypt(PacketIn *packet);
+    Status encrypt(PacketOut *packet);
+    Status decrypt(PacketIn *packet);
 
     /**
      * @brief 加密
@@ -88,9 +90,9 @@ public:
      * @param counter packet 序号
      * @param ciphertext 加密后输出缓冲区
      * @param[in,out] ciphertext_len 输入：缓冲区大小; 输出: 加密后长度(包含 tag 长度 16 字节)
-     * @return int32_t 加密数据长度
+     * @return Status 加密结果状态
      */
-    int32_t encrypt(const uint8_t* plaintext, size_t plaintext_len,
+    Status encrypt(const uint8_t* plaintext, size_t plaintext_len,
                     const uint8_t* aad, size_t aad_len,
                     uint64_t counter,
                     uint8_t* ciphertext, size_t* ciphertext_len);
@@ -98,7 +100,7 @@ public:
     /**
      * @brief 对多段明文执行一次 AES-GCM 加密，密文连续输出
      */
-    int32_t encryptScatter(const PlainSegment *segments,
+    Status encryptScatter(const PlainSegment *segments,
                            size_t segmentCount,
                            const uint8_t *aad,
                            size_t aad_len,
@@ -116,9 +118,9 @@ public:
      * @param counter packet 序号
      * @param plaintext 明文输出缓冲区
      * @param[in,out] plaintext_len 输入：缓冲区大小; 输出: 明文长度
-     * @return int32_t 明文数据长度
+     * @return Status 解密结果状态
      */
-    int32_t decrypt(const uint8_t* ciphertext, size_t ciphertext_len,
+    Status decrypt(const uint8_t* ciphertext, size_t ciphertext_len,
                     const uint8_t* aad, size_t aad_len,
                     uint64_t counter,
                     uint8_t* plaintext, size_t* plaintext_len);

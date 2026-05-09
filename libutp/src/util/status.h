@@ -91,6 +91,9 @@ public:
      */
     explicit operator bool() const { return ok(); }
 
+    bool operator==(utp_error_t code) const { return m_code == code; }
+    bool operator!=(utp_error_t code) const { return m_code != code; }
+
 private:
     explicit Status(utp_error_t code)
         : m_code(code), m_msgSize(0)

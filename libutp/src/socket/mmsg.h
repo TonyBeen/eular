@@ -11,6 +11,7 @@
 #include "commom.h"
 
 #include "mtu/mtu.h"
+#include "util/status.h"
 
 #ifdef USE_SENDMMSG
 
@@ -27,7 +28,7 @@ public:
     MultipleMsg(uint32_t size, uint32_t mss);
     ~MultipleMsg();
 
-    void        resize(uint32_t size, uint32_t mss);
+    Status      resize(uint32_t size, uint32_t mss);
     void        reset();
     bool        valid() const { return m_buffer != nullptr; }
     uint32_t    size() const { return m_nMsg; }

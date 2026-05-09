@@ -76,11 +76,12 @@ public:
     void noteZeroRttInvalidTicketRejected();
 
 public:
-    int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
-    int32_t connect(const Context::ConnectInfo &info);
-    int32_t connect0Rtt(const Context::Connect0RttInfo &info);
-    int32_t connect0RttWithState(const Context::Connect0RttWithStateInfo &info, const std::string &state);
-    int32_t accept();
+    Status  bind(const std::string &ip, uint16_t port, const std::string &ifname);
+    Status  connect(const Context::ConnectInfo &info);
+    Status  connect0Rtt(const Context::Connect0RttInfo &info);
+    Status  connect0RttWithState(const Context::Connect0RttWithStateInfo &info, const std::string &state);
+    Status  accept();
+
     bool buildZeroRttSessionToken(const Address &peerAddress,
                                   uint32_t cid,
                                   Context::EncryptionMode encrypted,
@@ -92,15 +93,15 @@ private:
     void reportConnectError(int32_t errorCode,
                             const std::string &reason,
                             const Context::ConnectAttemptInfo &info);
-    int32_t connectInternal(const Context::ConnectInfo &info,
-                            const ConnectionImpl::ZeroRttConfig *zeroRtt = nullptr);
+    Status   connectInternal(const Context::ConnectInfo &info,
+                             const ConnectionImpl::ZeroRttConfig *zeroRtt);
     struct PendingConnectAttempt {
         Context::ConnectInfo connectInfo{};
         ConnectionImpl::ZeroRttConfig zeroRtt{};
         bool hasZeroRtt{false};
         int8_t retriesRemaining{0};
     };
-    int32_t startPendingConnectAttempt(const PendingConnectAttempt &attempt);
+    Status startPendingConnectAttempt(const PendingConnectAttempt &attempt);
     struct CachedResumptionState {
         Context::EncryptionMode encrypted{Context::kEncryptionNone};
         std::vector<uint8_t> sessionTicket;
@@ -136,9 +137,9 @@ private:
 private:
     static std::string PeerKey(const Address &peerAddress, uint32_t peerCid);
     void    handleConnectionState(ConnectionImpl *conn);
-    int32_t sendPendingHandshake(PendingIncomingConnection &pending);
-    int32_t sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
-    int32_t sendPendingPacket(PendingIncomingConnection &pending,
+    Status sendPendingHandshake(PendingIncomingConnection &pending);
+    Status sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
+    Status  sendPendingPacket(PendingIncomingConnection &pending,
                               uint8_t packetType,
                               const void *payload,
                               size_t payloadLen,
@@ -179,10 +180,9 @@ private:
                                Context::EncryptionMode &encryptionMode);
     void purgeZeroRttReplayCache(uint64_t nowMs);
     bool rememberZeroRttNonce(uint32_t ticketCid, uint64_t nonce, uint64_t nowMs = 0);
-    int32_t parseSessionResumptionState(const std::string &state,
+    Status  parseSessionResumptionState(const std::string &state,
                                         CachedResumptionState &outInfo,
-                                        uint64_t &expiresAt) const;
-    ResumptionStateCodec::Key activeResumptionSecret() const;
+                                        uint64_t &expiresAt) const;    ResumptionStateCodec::Key activeResumptionSecret() const;
 
 private:
     void onReadEvent();

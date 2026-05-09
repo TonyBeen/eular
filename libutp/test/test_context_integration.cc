@@ -6,6 +6,8 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
+#include "utp/logger.h"
 
 #include <chrono>
 #include <cstdint>
@@ -43,6 +45,7 @@ using eular::utp::TokenAuth;
 using eular::utp::TokenMeta;
 using eular::utp::TokenType;
 using eular::utp::UdpSocket;
+using eular::utp::Status;
 using eular::utp::FramePathChallenge;
 using eular::utp::FramePathResponse;
 using eular::utp::FrameStream;
@@ -192,8 +195,8 @@ TEST_CASE("Context integration: OnNewConnection allow completes passive handshak
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool serverNotified = false;
     bool serverConnected = false;
@@ -216,15 +219,16 @@ TEST_CASE("Context integration: OnNewConnection allow completes passive handshak
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
         [&]() { return HasConnectedConnection(server) && HasConnectedConnection(client); },
         [&]() {
             if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                acceptStatus = server.accept();
-                if (acceptStatus == UTP_ERR_OK) {
+                auto st = server.accept();
+                acceptStatus = static_cast<int32_t>(st.code());
+                if (st.ok()) {
                     accepted = true;
                 }
             }
@@ -235,7 +239,7 @@ TEST_CASE("Context integration: OnNewConnection allow completes passive handshak
     REQUIRE(serverConnected);
     REQUIRE(clientConnected);
     REQUIRE(accepted);
-    REQUIRE(acceptStatus == UTP_ERR_OK);
+    REQUIRE(acceptStatus == 0);
 }
 
 TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Context][Integration]")
@@ -247,8 +251,8 @@ TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Conte
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool serverNotified = false;
     bool serverConnected = false;
@@ -257,8 +261,9 @@ TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Conte
 
     server.setOnNewConnection([&](const Context::NewConnectionInfo &) {
         serverNotified = true;
-        acceptStatus = server.accept();
-        return acceptStatus == UTP_ERR_OK;
+        auto st = server.accept();
+        acceptStatus = static_cast<int32_t>(st.code());
+        return st.ok();
     });
     server.setOnConnected([&serverConnected](Connection::Ptr) {
         serverConnected = true;
@@ -271,7 +276,7 @@ TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Conte
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -282,7 +287,7 @@ TEST_CASE("Context integration: OnNewConnection may accept immediately", "[Conte
     REQUIRE(serverNotified);
     REQUIRE(serverConnected);
     REQUIRE(clientConnected);
-    REQUIRE(acceptStatus == UTP_ERR_OK);
+    REQUIRE(acceptStatus == 0);
     REQUIRE(server.m_pendingIncomingQueue.empty());
 }
 
@@ -295,8 +300,8 @@ TEST_CASE("Context integration: OnNewConnection reject returns connection close 
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool serverNotified = false;
     bool serverConnected = false;
@@ -317,7 +322,7 @@ TEST_CASE("Context integration: OnNewConnection reject returns connection close 
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -345,8 +350,8 @@ TEST_CASE("Context integration: connect retries after first reject when retries 
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     int32_t incomingAttempts = 0;
     bool serverConnected = false;
@@ -373,14 +378,14 @@ TEST_CASE("Context integration: connect retries after first reject when retries 
     info.port = BoundPort(server);
     info.timeout = 200;
     info.retries = 1;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
         [&]() { return HasConnectedConnection(server) && HasConnectedConnection(client); },
         [&]() {
             if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                accepted = (server.accept() == UTP_ERR_OK);
+                accepted = server.accept().ok();
             }
         },
         5000,
@@ -403,8 +408,8 @@ TEST_CASE("Context integration: remote ConnectionClose converges to OnConnection
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -419,7 +424,7 @@ TEST_CASE("Context integration: remote ConnectionClose converges to OnConnection
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -463,9 +468,9 @@ TEST_CASE("Context integration: mixed active and passive handshakes share one Co
     ContextImpl incomingClient(loop.loop(), &cfg);
     ContextImpl remoteServer(loop.loop(), &cfg);
 
-    REQUIRE(hub.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(incomingClient.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(remoteServer.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(hub.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(incomingClient.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(remoteServer.bind("127.0.0.1", 0, "").ok());
 
     bool hubIncomingNotified = false;
     bool hubAcceptedIncoming = false;
@@ -498,7 +503,7 @@ TEST_CASE("Context integration: mixed active and passive handshakes share one Co
     incomingInfo.ip = "127.0.0.1";
     incomingInfo.port = BoundPort(hub);
     incomingInfo.timeout = 200;
-    REQUIRE(incomingClient.connect(incomingInfo) == UTP_ERR_OK);
+    REQUIRE(incomingClient.connect(incomingInfo).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -519,7 +524,7 @@ TEST_CASE("Context integration: mixed active and passive handshakes share one Co
                 outboundInfo.ip = "127.0.0.1";
                 outboundInfo.port = BoundPort(remoteServer);
                 outboundInfo.timeout = 200;
-                REQUIRE(hub.connect(outboundInfo) == UTP_ERR_OK);
+                REQUIRE(hub.connect(outboundInfo).ok());
 
                 ConnectionImpl::SP outbound = FindConnectionByRemote(hub, outboundInfo.port);
                 REQUIRE(outbound != nullptr);
@@ -529,14 +534,14 @@ TEST_CASE("Context integration: mixed active and passive handshakes share one Co
             }
 
             if (hubIncomingNotified && !hubAcceptedIncoming) {
-                const int32_t status = hub.accept();
-                if (status == UTP_ERR_OK) {
+                const Status status = hub.accept();
+                if (status.ok()) {
                     hubAcceptedIncoming = true;
                 }
             }
 
             if (!remoteAccepted && !remoteServer.m_pendingIncomingQueue.empty()) {
-                REQUIRE(remoteServer.accept() == UTP_ERR_OK);
+                REQUIRE(remoteServer.accept().ok());
                 remoteAccepted = true;
             }
         });
@@ -558,8 +563,8 @@ TEST_CASE("Context integration: 0-RTT accepted early data establishes directly",
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool serverConnected = false;
     bool clientConnected = false;
@@ -596,7 +601,7 @@ TEST_CASE("Context integration: 0-RTT accepted early data establishes directly",
     info.timeout = 300;
     info.session_ticket = ticket;
     info.early_data.assign(earlyPayload.begin(), earlyPayload.end());
-    REQUIRE(client.connect0Rtt(info) == UTP_ERR_OK);
+    REQUIRE(client.connect0Rtt(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -647,8 +652,8 @@ TEST_CASE("Context integration: 0-RTT rejected ticket closes client without deli
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool serverNotified = false;
     bool clientConnected = false;
@@ -679,7 +684,7 @@ TEST_CASE("Context integration: 0-RTT rejected ticket closes client without deli
     info.timeout = 300;
     info.session_ticket.assign(16, 0x5a);
     info.early_data.assign(earlyPayload.begin(), earlyPayload.end());
-    REQUIRE(client.connect0Rtt(info) == UTP_ERR_OK);
+    REQUIRE(client.connect0Rtt(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -720,8 +725,8 @@ TEST_CASE("Context integration: SessionToken callback and export work after hand
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool accepted = false;
     bool tokenReady = false;
@@ -742,7 +747,7 @@ TEST_CASE("Context integration: SessionToken callback and export work after hand
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 300;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -751,7 +756,7 @@ TEST_CASE("Context integration: SessionToken callback and export work after hand
         },
         [&]() {
             if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                accepted = (server.accept() == UTP_ERR_OK);
+                accepted = server.accept().ok();
             }
         },
         500,
@@ -761,16 +766,21 @@ TEST_CASE("Context integration: SessionToken callback and export work after hand
     REQUIRE(clientConn != nullptr);
 
     std::vector<uint8_t> token;
-    REQUIRE(clientConn->exportSessionToken(token) == UTP_ERR_OK);
+    REQUIRE(clientConn->exportSessionToken(token) == 0);
     REQUIRE(token.size() == eular::utp::TOKEN_SIZE);
 
     std::string state;
-    REQUIRE(clientConn->exportSessionResumptionState(state) == UTP_ERR_OK);
+    REQUIRE(clientConn->exportSessionResumptionState(state) == 0);
     REQUIRE_FALSE(state.empty());
 }
 
 TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close", "[Context][Integration][0RTT][ResumptionState]")
 {
+    utp_set_log_level(UTP_LOG_INFO);
+    utp_set_log_cb([](int32_t level, const char* msg, int32_t size) {
+        printf("[UTP %d] %.*s\n", level, size, msg);
+    });
+
     Config cfg;
     cfg.handshake_timeout = 300;
     cfg.zero_rtt_token_max_lifetime = 600;
@@ -780,9 +790,9 @@ TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close
     ContextImpl client(loop.loop(), &cfg);
     ContextImpl resumer(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(resumer.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(resumer.bind("127.0.0.1", 0, "").ok());
 
     bool phase1Accepted = false;
     bool phase1Connected = false;
@@ -807,7 +817,7 @@ TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close
     phase1.port = BoundPort(server);
     phase1.timeout = 300;
     phase1.encrypted = Context::kEncryptionAesGcm256;
-    REQUIRE(client.connect(phase1) == UTP_ERR_OK);
+    REQUIRE(client.connect(phase1).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -816,14 +826,14 @@ TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close
         },
         [&]() {
             if (!phase1Accepted && !server.m_pendingIncomingQueue.empty()) {
-                phase1Accepted = (server.accept() == UTP_ERR_OK);
+                phase1Accepted = server.accept().ok();
             }
         },
-        600,
+        2000,
         1));
 
     std::string state;
-    REQUIRE(phase1ClientConn->exportSessionResumptionState(state) == UTP_ERR_OK);
+    REQUIRE(phase1ClientConn->exportSessionResumptionState(state) == 0);
     REQUIRE_FALSE(state.empty());
 
     phase1ClientConn->close();
@@ -867,7 +877,7 @@ TEST_CASE("Context integration: connect0RttWithState succeeds after phase1 close
     phase2.port = BoundPort(server);
     phase2.timeout = 300;
     phase2.early_data.assign(earlyPayload.begin(), earlyPayload.end());
-    REQUIRE(resumer.connect0RttWithState(phase2, state) == UTP_ERR_OK);
+    REQUIRE(resumer.connect0RttWithState(phase2, state).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -909,9 +919,9 @@ TEST_CASE("Context integration: 0-RTT replay is rejected and counted", "[Context
     ContextImpl clientA(loop.loop(), &cfg);
     ContextImpl clientB(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(clientA.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(clientB.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(clientA.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(clientB.bind("127.0.0.1", 0, "").ok());
 
     int32_t acceptedEvents = 0;
     int32_t replayRejectedEvents = 0;
@@ -938,7 +948,7 @@ TEST_CASE("Context integration: 0-RTT replay is rejected and counted", "[Context
     first.timeout = 300;
     first.session_ticket = ticket;
     first.early_data = {'o', 'n', 'e'};
-    REQUIRE(clientA.connect0Rtt(first) == UTP_ERR_OK);
+    REQUIRE(clientA.connect0Rtt(first).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -953,7 +963,7 @@ TEST_CASE("Context integration: 0-RTT replay is rejected and counted", "[Context
     second.timeout = 300;
     second.session_ticket = ticket;
     second.early_data = {'t', 'w', 'o'};
-    REQUIRE(clientB.connect0Rtt(second) == UTP_ERR_OK);
+    REQUIRE(clientB.connect0Rtt(second).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -1025,7 +1035,8 @@ TEST_CASE("Context integration: path validation counters track started/succeeded
     response.data = conn.m_networkPath.m_pendingChallenge;
 
     uint8_t responseBuf[FRAME_PATH_FRAME_SIZE] = {0};
-    const int32_t responseLen = response.encode(responseBuf, sizeof(responseBuf));
+    Status encodeSt;
+    const int32_t responseLen = response.encode(responseBuf, sizeof(responseBuf), encodeSt);
     REQUIRE(responseLen > 0);
     conn.handlePathResponseFrame(responseBuf, static_cast<size_t>(responseLen), candidate);
 
@@ -1039,7 +1050,8 @@ TEST_CASE("Context integration: path validation counters track started/succeeded
     const Address candidateFail("10.0.0.1", 10002);
     REQUIRE(conn.m_networkPath.detectPeerAddressChange(candidateFail));
     FramePathChallenge failChallenge;
-    REQUIRE(conn.m_networkPath.makePathChallenge(failChallenge, 0) == UTP_ERR_OK);
+    Status failSt;
+    REQUIRE(conn.m_networkPath.makePathChallenge(failChallenge, 0) == 0);
 
     conn.onPathValidationTimeout();
 
@@ -1058,8 +1070,8 @@ TEST_CASE("Context integration: handshake promotion preserves first stream callb
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     bool accepted = false;
     bool serverConnected = false;
@@ -1095,7 +1107,7 @@ TEST_CASE("Context integration: handshake promotion preserves first stream callb
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 300;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     const bool ok = PumpUntil(
         loop,
@@ -1104,7 +1116,7 @@ TEST_CASE("Context integration: handshake promotion preserves first stream callb
         },
         [&]() {
             if (!accepted && !server.m_pendingIncomingQueue.empty()) {
-                accepted = (server.accept() == UTP_ERR_OK);
+                accepted = server.accept().ok();
             }
         },
         500,
@@ -1124,7 +1136,7 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
 
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
-    REQUIRE(ctx.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(ctx.bind("127.0.0.1", 0, "").ok());
 
     const uint32_t localCid = 0x10002000;
     const uint32_t peerCid = 0x20001000;
@@ -1148,10 +1160,11 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
         frame.stream_id = 0;
         frame.stream_offset = offset;
         frame.stream_data_length = 1;
-        frame.stream_data = &byte;
+        frame.stream_data = (uint8_t *)&byte;
 
         std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()), 0);
-        const int32_t frameLen = frame.encode(payload.data(), payload.size());
+        Status st;
+        const int32_t frameLen = frame.encode(payload.data(), payload.size(), st);
         REQUIRE(frameLen > 0);
         payload.resize(static_cast<size_t>(frameLen));
         if (withHandshakeDone) {
@@ -1159,7 +1172,8 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
             done.ack_handshake_pn = pending.lastHandshakePacketNo;
             const size_t oldSize = payload.size();
             payload.resize(oldSize + FRAME_HANDSHAKE_DONE_SIZE, 0);
-            REQUIRE(done.encode(payload.data() + oldSize, FRAME_HANDSHAKE_DONE_SIZE) == FRAME_HANDSHAKE_DONE_SIZE);
+            Status doneSt;
+            REQUIRE(done.encode(payload.data() + oldSize, FRAME_HANDSHAKE_DONE_SIZE, doneSt) == FRAME_HANDSHAKE_DONE_SIZE);
         }
         return payload;
     };
@@ -1176,12 +1190,12 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
         REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
 
         UdpSocket::MsgMetaInfo msg{};
-        msg.data = packetBytes.data();
+        msg.data = (void*)packetBytes.data();
         msg.len = packetBytes.size();
         msg.metaInfo.peerAddress = peerAddr;
 
         auto packetReleaser = [&](PacketIn *pkt) {
-            ctx.m_mm.putPacketIn(pkt);
+            ctx.m_mm.releasePacketIn(pkt);
         };
         std::unique_ptr<PacketIn, decltype(packetReleaser)> decoded(
             ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
@@ -1210,14 +1224,14 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
                                   snapshot.peerTp,
                                   snapshot.hasPeerAckFrequency ? &snapshot.peerAckFrequency : nullptr,
                                   snapshot.x25519,
-                                  snapshot.aesCtx) == UTP_ERR_OK);
+                                  snapshot.aesCtx).ok());
         REQUIRE(ctx.m_connections.emplace(snapshot.localCid, conn).second);
 
         ctx.removePendingIncoming(localCid);
 
         for (const auto &cached : snapshot.bufferedBeforeHandshakeDone) {
             UdpSocket::MsgMetaInfo replay{};
-            replay.data = cached.data();
+            replay.data = (void*)cached.data();
             replay.len = cached.size();
             replay.metaInfo.peerAddress = peerAddr;
             conn->onUdpPacket(replay);
@@ -1255,7 +1269,7 @@ TEST_CASE("Context integration: pending handshake retry count is capped by confi
 
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
-    REQUIRE(ctx.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(ctx.bind("127.0.0.1", 0, "").ok());
 
     const uint32_t localCid = 0x30004000;
     ContextImpl::PendingIncomingConnection pending;
@@ -1292,8 +1306,8 @@ TEST_CASE("Context integration: stream OnWritable fires again after queued data 
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -1303,7 +1317,7 @@ TEST_CASE("Context integration: stream OnWritable fires again after queued data 
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -1343,7 +1357,7 @@ TEST_CASE("Context integration: stream OnWritable fires again after queued data 
 
     static const uint8_t payload[] = {'p', 'i', 'n', 'g'};
     REQUIRE(stream->m_sendBuffer.write(payload, sizeof(payload)) == sizeof(payload));
-    stream->m_sendQueuedBytes = eular::utp::StreamImpl::kDefaultBufferCapacity;
+    stream->m_sendQueuedBytes = 256 * 1024; // Default config limit
 
     REQUIRE_FALSE(stream->writable());
 

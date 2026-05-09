@@ -264,8 +264,10 @@ if(UTP_BUILD_TESTS)
 
     set(UTP_TEST_SOURCES
         test/test_connection_stream_layer.cc
+        test/test_ack_behavior.cc
         test/test_context_cid_alloc.cc
         test/test_context_integration.cc
+        test/test_context_zero_rtt.cc
         test/test_frame_ack_decode.cc
         test/test_frame_ack_frequency.cc
         test/test_frame_reset_stream.cc
@@ -275,15 +277,21 @@ if(UTP_BUILD_TESTS)
         test/test_frame_session_token.cc
         test/test_frame_transport_params.cc
         test/test_frame_flow_control.cc
+        test/test_bbr_config.cc
+        test/test_bbr_new_params.cc
+        test/test_cubic.cc
         test/test_mtu.cc
         test/test_network_path.cc
         test/test_packet_in.cc
         test/test_packet_out.cc
+        test/test_mm.cc
         test/test_retrans_repack.cc
         test/test_receive_history.cc
         test/test_ring_buffer.cc
         test/test_stream_impl.cc
         test/test_stream_zero_copy_views.cc
+        test/test_public_api_errno.cc
+        test/test_status.cc
         test/test_fault_injection_mmsg.cc
         test/test_fault_injection_new.cc
     )

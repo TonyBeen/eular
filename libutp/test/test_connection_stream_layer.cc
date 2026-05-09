@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <chrono>
@@ -32,6 +33,7 @@ using eular::utp::Stream;
 using eular::utp::StreamImpl;
 using eular::utp::Address;
 using eular::utp::UdpSocket;
+using eular::utp::Status;
 
 TEST_CASE("ConnectionImpl: getStream returns created stream pointer", "[Connection][Stream]")
 {
@@ -43,7 +45,7 @@ TEST_CASE("ConnectionImpl: getStream returns created stream pointer", "[Connecti
     conn.m_state = ConnectionImpl::kStateConnected;
     conn.m_peerTP.init_max_streams_bidi = 8;
 
-    const int32_t streamId = conn.createStream();
+    const int32_t streamId = conn.createStream(Connection::kStreamTypeBidirectional);
     REQUIRE(streamId >= 0);
 
     Stream *stream = conn.getStream(static_cast<uint32_t>(streamId));
@@ -73,7 +75,7 @@ TEST_CASE("ConnectionImpl: setOnIncomingStream only fires for peer-created strea
         ++callbackCount;
     });
 
-    const int32_t localStreamId = conn.createStream();
+    const int32_t localStreamId = conn.createStream(Connection::kStreamTypeBidirectional);
     REQUIRE(localStreamId == 0);
     REQUIRE(callbackCount == 0);
 
@@ -83,7 +85,7 @@ TEST_CASE("ConnectionImpl: setOnIncomingStream only fires for peer-created strea
     incoming.stream_offset = 0;
     incoming.stream_data_length = 1;
     incoming.stream_data = &byte;
-    REQUIRE(conn.ingestStreamFrame(incoming) == UTP_ERR_OK);
+    REQUIRE(conn.ingestStreamFrame(incoming).ok());
     REQUIRE(callbackCount == 1);
     REQUIRE(callbackStreamId == 1);
 }
@@ -154,8 +156,8 @@ TEST_CASE("ConnectionImpl: handshake barrier blocks regular stream send until ha
     conn.m_handshakeDoneSent = true;
 
     const uint8_t data[] = {'h', 'i'};
-    const int32_t status = conn.sendStreamFrame(0, 0, data, sizeof(data), false);
-    REQUIRE(status == UTP_ERR_WOULD_BLOCK);
+    const Status status = conn.sendStreamFrame(0, 0, data, sizeof(data), false);
+    REQUIRE(status.code() == UTP_ERR_WOULD_BLOCK);
 }
 
 TEST_CASE("ConnectionImpl: handshake done delay uses peer transport timeout", "[Connection][Handshake]")
@@ -209,23 +211,23 @@ TEST_CASE("ConnectionImpl: ingress stream gate checks role and per-type limits",
     valid.stream_offset = 0;
     valid.stream_data_length = 1;
     valid.stream_data = &byte;
-    REQUIRE(conn.ingestStreamFrame(valid) == UTP_ERR_OK);
+    REQUIRE(conn.ingestStreamFrame(valid).ok());
 
     FrameStream wrongRole = valid;
     wrongRole.stream_id = 0; // client-initiated, should not appear as ingress for client side
-    REQUIRE(conn.ingestStreamFrame(wrongRole) == UTP_ERR_STREAM_STATE_ERROR);
+    REQUIRE(conn.ingestStreamFrame(wrongRole).code() == UTP_ERR_STREAM_STATE_ERROR);
 
     FrameStream validUni = valid;
     validUni.stream_id = 3; // server-initiated uni stream
-    REQUIRE(conn.ingestStreamFrame(validUni) == UTP_ERR_OK);
+    REQUIRE(conn.ingestStreamFrame(validUni).ok());
 
     FrameStream overLimit = valid;
     overLimit.stream_id = 5; // second server-initiated bidi stream (ordinal=2)
-    REQUIRE(conn.ingestStreamFrame(overLimit) == UTP_ERR_STREAM_LIMIT_ERROR);
+    REQUIRE(conn.ingestStreamFrame(overLimit).code() == UTP_ERR_STREAM_LIMIT_ERROR);
 
     FrameStream overLimitUni = valid;
     overLimitUni.stream_id = 7; // second server-initiated uni stream (ordinal=2)
-    REQUIRE(conn.ingestStreamFrame(overLimitUni) == UTP_ERR_STREAM_LIMIT_ERROR);
+    REQUIRE(conn.ingestStreamFrame(overLimitUni).code() == UTP_ERR_STREAM_LIMIT_ERROR);
 }
 
 TEST_CASE("ConnectionImpl: collectClosedStreams erases fully drained closed stream", "[Connection][Stream]")
@@ -319,7 +321,7 @@ TEST_CASE("ConnectionImpl: multi-stream ingress and reclamation regression", "[C
         frame.stream_offset = 0;
         frame.stream_data_length = 1;
         frame.stream_data = &byte;
-        REQUIRE(conn.ingestStreamFrame(frame) == UTP_ERR_OK);
+        REQUIRE(conn.ingestStreamFrame(frame)  == 0);
     }
     REQUIRE(conn.streamCount() == 32);
 
@@ -532,9 +534,9 @@ TEST_CASE("StreamImpl: setPriority validates input range", "[Connection][Stream]
     ConnectionImpl conn(&ctx, nullptr, 1014);
     StreamImpl stream(&conn, 4, 4);
 
-    REQUIRE(stream.setPriority(0) == UTP_ERR_OK);
+    REQUIRE(stream.setPriority(0)  == 0);
     REQUIRE(stream.priority() == 0);
-    REQUIRE(stream.setPriority(7) == UTP_ERR_OK);
+    REQUIRE(stream.setPriority(7)  == 0);
     REQUIRE(stream.priority() == 7);
     REQUIRE(stream.setPriority(8) == -1);
     REQUIRE(utp_get_last_error() == UTP_ERR_INVALID_PARAM);
@@ -660,7 +662,7 @@ TEST_CASE("StreamImpl: flushPendingSends does not send early FIN before queued p
     ContextImpl ctx(loop.loop(), &cfg);
     UdpSocket sock(cfg);
 
-    REQUIRE(sock.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(sock.bind("127.0.0.1", 0, "")  == 0);
 
     ConnectionImpl conn(&ctx, &sock, 1022);
     conn.m_state = ConnectionImpl::kStateConnected;
@@ -684,7 +686,7 @@ TEST_CASE("StreamImpl: flushPendingSends does not send early FIN before queued p
     stream.m_localFinQueued = true;
     stream.m_localFinSent = false;
 
-    REQUIRE(stream.flushPendingSends(2048) == UTP_ERR_OK);
+    REQUIRE(stream.flushPendingSends(2048)  == 0);
     REQUIRE(stream.m_nextSendOffset == payload.size());
     REQUIRE(stream.m_sendQueuedBytes == 0);
     REQUIRE(stream.m_localFinSent);

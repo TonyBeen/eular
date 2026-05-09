@@ -6,13 +6,17 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include "mtu/mtu.h"
 #include "utp/config.h"
 
 using eular::utp::Address;
+using eular::utp::Status;
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::MtuDiscovery;
+using eular::utp::Status;
 
 TEST_CASE("MtuDiscovery: initialize and conversion", "[Mtu]")
 {

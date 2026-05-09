@@ -15,22 +15,22 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameTransportParams::encode(void *buffer, size_t size) const
+int32_t FrameTransportParams::encode(void *buffer, size_t size, Status &status) const
 {
     if (buffer == nullptr || params == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid transport params frame encode args: buffer={}, params={}",
-                      buffer != nullptr,
-                      params != nullptr);
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("invalid transport params frame encode args: buffer={}, params={}",
+                                           buffer != nullptr,
+                                           params != nullptr));
         return -1;
     }
 
     const int32_t frameLen = frameSize();
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than transport params frame size {}",
-                      size,
-                      frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than transport params frame size {}",
+                                           size,
+                                           frameLen));
         return -1;
     }
 
@@ -46,28 +46,28 @@ int32_t FrameTransportParams::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, params->initial_max_stream_data_bidi_local);
     offset = Serialize::SerializeTo(offset, size, params->initial_max_stream_data_bidi_remote);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to encode transport params frame");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to encode transport params frame");
         return -1;
     }
 
     return frameLen;
 }
 
-int32_t FrameTransportParams::decode(const void *buffer, size_t size)
+int32_t FrameTransportParams::decode(const void *buffer, size_t size, Status &status)
 {
     if (buffer == nullptr || params == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid transport params frame decode args: buffer={}, params={}",
-                      buffer != nullptr,
-                      params != nullptr);
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("invalid transport params frame decode args: buffer={}, params={}",
+                                           buffer != nullptr,
+                                           params != nullptr));
         return -1;
     }
 
     if (size < static_cast<size_t>(frameSize())) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than transport params frame size {}",
-                      size,
-                      frameSize());
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than transport params frame size {}",
+                                           size,
+                                           frameSize()));
         return -1;
     }
 
@@ -76,9 +76,7 @@ int32_t FrameTransportParams::decode(const void *buffer, size_t size)
     FrameType frameType = kFrameInvalid;
     offset = Serialize::DeserializeFrom(offset, size, frameType);
     if (offset == nullptr || frameType != FrameType::kFrameTransportParams) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
-                      "invalid transport params frame type: {}",
-                      static_cast<uint8_t>(frameType));
+        status = Status::ErrorLiteral(UTP_ERR_FRAME_UNEXPECTED, "invalid transport params frame type");
         return -1;
     }
 
@@ -92,7 +90,7 @@ int32_t FrameTransportParams::decode(const void *buffer, size_t size)
     offset = Serialize::DeserializeFrom(offset, size, params->initial_max_stream_data_bidi_local);
     offset = Serialize::DeserializeFrom(offset, size, params->initial_max_stream_data_bidi_remote);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode transport params frame");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode transport params frame");
         return -1;
     }
 

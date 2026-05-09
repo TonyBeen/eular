@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 
@@ -17,6 +18,7 @@ using eular::Serialize;
 using eular::utp::AckInfo;
 using eular::utp::FrameAck;
 using eular::utp::FrameType;
+using eular::utp::Status;
 using eular::utp::TransportParams;
 
 TEST_CASE("Ack frame decode sets largest ack and ranges", "[FrameAck]")
@@ -55,7 +57,9 @@ TEST_CASE("Ack frame decode sets largest ack and ranges", "[FrameAck]")
     ack._ackInfo = &ackInfo;
     ack._params = &params;
 
-    int32_t decoded = ack.decode(bytes.data(), frameLen);
+    Status st;
+    int32_t decoded = ack.decode(bytes.data(), frameLen, st);
+    REQUIRE(st.ok());
     REQUIRE(decoded == static_cast<int32_t>(frameLen));
 
     REQUIRE(ackInfo.largest_ack_packno == 100);

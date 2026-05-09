@@ -25,6 +25,7 @@
 #include "proto/frame/padding.h"
 #include "proto/frame/stream.h"
 #include "utp/errno.h"
+#include "util/status.h"
 #include "util/ack_info.h"
 #include "util/time.h"
 #include "logger/logger.h"
@@ -88,13 +89,14 @@ bool BuildMtuProbePayload(uint16_t packetSize,
     if (paddingFrameSize < FRAME_PADDING_HDR_SIZE) {
         return false;
     }
+eular::utp::FramePadding padding;
+padding.padding_length = static_cast<uint16_t>(paddingFrameSize - FRAME_PADDING_HDR_SIZE);
 
-    eular::utp::FramePadding padding;
-    padding.padding_length = static_cast<uint16_t>(paddingFrameSize - FRAME_PADDING_HDR_SIZE);
-    int32_t encoded = padding.encode(payload.data() + 1, paddingFrameSize);
-    if (encoded < 0 || static_cast<size_t>(encoded) != paddingFrameSize) {
-        return false;
-    }
+eular::utp::Status st;
+int32_t encoded = padding.encode(payload.data() + 1, paddingFrameSize, st);
+if (!st.ok() || static_cast<size_t>(encoded) != paddingFrameSize) {
+    return false;
+}
 
     return true;
 }
@@ -217,7 +219,7 @@ void SendControl::init()
     m_adaptiveReorder.lastExpandUs = 0;
 }
 
-int32_t SendControl::packetSent(PacketOut *pkt)
+Status SendControl::packetSent(PacketOut *pkt)
 {
     const uint32_t packetSize = PacketSentSize(pkt);
     const std::string &packetFrames = FrameTypeToString(pkt->frame_types);
@@ -249,7 +251,7 @@ int32_t SendControl::packetSent(PacketOut *pkt)
 #if defined(UTP_SEND_STATS)
     ++m_stats._totalSent;
 #endif
-    return 0;
+    return Status::OK();
 }
 
 bool SendControl::canSend()
@@ -295,7 +297,7 @@ uint64_t SendControl::retransmittedBytes() const
     return m_bytesRetransTotal;
 }
 
-int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
+Status SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
 {
     bool hasAcked = false;
     bool hasLoss = false;
@@ -427,7 +429,7 @@ int32_t SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
         m_flags |= SendCtlFlags::WasQuiet;
     }
 
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
 void SendControl::onCanWrite(utp_time_t nowUs)
@@ -445,7 +447,7 @@ void SendControl::onCanWrite(utp_time_t nowUs)
             break;
         }
 
-        if (retransmitLostPacket(pkt, nowUs) != UTP_ERR_OK) {
+        if (!retransmitLostPacket(pkt, nowUs).ok()) {
             break;
         }
 
@@ -491,12 +493,12 @@ void SendControl::onCanWrite(utp_time_t nowUs)
     }
 
     utp_packno_t probePackNo = 0;
-    int32_t sent = m_conn->sendPacket(UTP_TYPE_CTRL,
+    Status sent = m_conn->sendPacket(UTP_TYPE_CTRL,
                                       probePayload.data(),
                                       probePayload.size(),
                                       PacketOutFlags::kPoMtuProbe,
                                       &probePackNo);
-    if (sent == UTP_ERR_OK) {
+    if (sent.ok()) {
         mtu.onProbeSent(probePackNo, probeMtu, nowMs);
         UTP_LOGD("%s sent MTU probe packet: packno=%" PRIu64 ", probe_mtu=%u, packet_size=%u",
             m_tag.c_str(),
@@ -929,7 +931,7 @@ bool SendControl::haveUnackedHandshakePackets() const
 int32_t SendControl::expireUnacked(ExpireFilter filter, utp_time_t nowUs)
 {
     (void)nowUs;
-    int32_t nResubmitted = 0;
+    int32_t expired = 0;
 
     if (filter == ExpireFilter::kLastOnly) {
         PacketOut *pkt = nullptr;
@@ -938,12 +940,11 @@ int32_t SendControl::expireUnacked(ExpireFilter filter, utp_time_t nowUs)
                 continue;
             }
 
-            if (handleRegularLostPacket(pkt, pkt) != nullptr) {
-                ++nResubmitted;
-            }
+            (void)handleRegularLostPacket(pkt, pkt);
+            expired++;
             break;
         }
-        return nResubmitted;
+        return expired;
     }
 
     PacketOut *pkt = nullptr;
@@ -964,16 +965,17 @@ int32_t SendControl::expireUnacked(ExpireFilter filter, utp_time_t nowUs)
         }
 
         if (pkt->po_flags & PacketOutFlags::kPoMtuProbe) {
-            (void)handleLostMtuProbe(pkt);
+            if (handleLostMtuProbe(pkt)) {
+                expired++;
+            }
             continue;
         }
 
-        if (handleRegularLostPacket(pkt, next) != nullptr) {
-            ++nResubmitted;
-        }
+        (void)handleRegularLostPacket(pkt, next);
+        expired++;
     }
 
-    return nResubmitted;
+    return expired;
 }
 
 void SendControl::onLossEvent()
@@ -1053,25 +1055,25 @@ bool SendControl::handleLostMtuProbe(PacketOut *pkt)
     return true;
 }
 
-int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs)
+Status SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs)
 {
     (void)nowUs;
     if (pkt == nullptr || m_conn == nullptr) {
-        return UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid param");
     }
 
     if (pkt->raw_data == nullptr || pkt->data_size < UTP_HEADER_SIZE || pkt->frame_meta_count == 0) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "invalid packet state for retransmission");
     }
 
     const size_t maxPacketSize = m_conn->m_mtuDiscovery.currentMaxPacketSize();
     if (maxPacketSize <= UTP_HEADER_SIZE) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "mtu too small");
     }
 
     const size_t payloadBudget = maxPacketSize - UTP_HEADER_SIZE;
     if (payloadBudget == 0) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "mtu payload budget is zero");
     }
 
     const uint8_t packetType = *(pkt->raw_data + offsetof(UTPHeaderProto, types));
@@ -1094,25 +1096,25 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
         }
     };
 
-    auto flushFramePacket = [&] () -> int32_t {
+    auto flushFramePacket = [&] () -> Status {
         if (framePayload.empty()) {
-            return UTP_ERR_OK;
+            return Status::OK();
         }
 
-        const int32_t status = m_conn->sendPacket(packetType,
-                                                   framePayload.data(),
-                                                   framePayload.size(),
-                                                   packetFlags,
-                                                   nullptr,
-                                                   frameTypeBits,
-                                                   nullptr,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   frameMetas.data(),
-                                                   frameMetas.size());
-        if (status != UTP_ERR_OK) {
+        const Status status = m_conn->sendPacket(packetType,
+                                                    framePayload.data(),
+                                                    framePayload.size(),
+                                                    packetFlags,
+                                                    nullptr,
+                                                    frameTypeBits,
+                                                    nullptr,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    frameMetas.data(),
+                                                    frameMetas.size());
+        if (!status.ok()) {
             return status;
         }
 
@@ -1120,7 +1122,7 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
         framePayload.clear();
         frameMetas.clear();
         frameTypeBits = 0;
-        return UTP_ERR_OK;
+        return Status::OK();
     };
 
     for (uint8_t i = 0; i < pkt->frame_meta_count; ++i) {
@@ -1136,37 +1138,38 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
         }
 
         if (meta.offset < UTP_HEADER_SIZE || pkt->data_size < meta.offset + meta.length) {
-            return UTP_ERR_INTERNAL_ERROR;
+            return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "invalid frame meta offset/length");
         }
 
         const uint8_t *frameBytes = pkt->raw_data + meta.offset;
         const size_t frameLen = meta.length;
 
         if (meta.frame_type == kFrameStream) {
-            int32_t flushStatus = flushFramePacket();
-            if (flushStatus != UTP_ERR_OK) {
+            Status flushStatus = flushFramePacket();
+            if (!flushStatus.ok()) {
                 return flushStatus;
             }
 
             FrameStream frame;
-            if (frame.decode(frameBytes, frameLen) < 0) {
-                return UTP_ERR_INTERNAL_ERROR;
+            Status st;
+            if (frame.decode(frameBytes, frameLen, st) < 0) {
+                return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to decode stream frame");
             }
 
             const uint8_t *streamData = static_cast<const uint8_t *>(frame.stream_data);
             if (frame.stream_data_length > 0 && streamData == nullptr) {
-                return UTP_ERR_INTERNAL_ERROR;
+                return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "stream data is null");
             }
 
             const size_t streamChunkBudget = std::max<size_t>(m_conn->streamPayloadBudgetHint(), 1);
             size_t sentData = 0;
             if (frame.stream_data_length == 0 && STREAM_IS_FIN(frame.stream_flag)) {
-                const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
+                const Status status = m_conn->sendStreamFrame(frame.stream_id,
                                                                frame.stream_offset,
                                                                nullptr,
                                                                0,
                                                                true);
-                if (status != UTP_ERR_OK) {
+                if (!status.ok()) {
                     return status;
                 }
                 sentAny = true;
@@ -1178,12 +1181,12 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
                                                  static_cast<size_t>(frame.stream_data_length - sentData));
                 const bool fin = STREAM_IS_FIN(frame.stream_flag)
                               && (sentData + chunkLen == frame.stream_data_length);
-                const int32_t status = m_conn->sendStreamFrame(frame.stream_id,
+                const Status status = m_conn->sendStreamFrame(frame.stream_id,
                                                                frame.stream_offset + sentData,
                                                                streamData + sentData,
                                                                chunkLen,
                                                                fin);
-                if (status != UTP_ERR_OK) {
+                if (!status.ok()) {
                     return status;
                 }
                 sentAny = true;
@@ -1197,12 +1200,12 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
             if ((meta.frame_flags & kFMDroppableOnMtu) != 0) {
                 continue;
             }
-            return UTP_ERR_WOULD_BLOCK;
+            return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "frame too large for mtu");
         }
 
         if (!framePayload.empty() && framePayload.size() + frameLen > payloadBudget) {
-            int32_t flushStatus = flushFramePacket();
-            if (flushStatus != UTP_ERR_OK) {
+            Status flushStatus = flushFramePacket();
+            if (!flushStatus.ok()) {
                 return flushStatus;
             }
         }
@@ -1213,13 +1216,13 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
         includeFrameBit(meta.frame_type);
     }
 
-    int32_t flushStatus = flushFramePacket();
-    if (flushStatus != UTP_ERR_OK) {
+    Status flushStatus = flushFramePacket();
+    if (!flushStatus.ok()) {
         return flushStatus;
     }
 
     if (!sentAny) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "no payload to send");
     }
 
     TAILQ_REMOVE(&m_lostPackets, pkt, po_next);
@@ -1230,39 +1233,39 @@ int32_t SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowU
     m_bytesRetransTotal += retransBytes;
 
     destroyPacket(pkt);
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
+Status SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
 {
     if (pkt == nullptr || m_conn == nullptr || m_conn->m_udpSocket == nullptr) {
-        return UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid param");
     }
 
     if (!m_conn->canSendStreamUnackedBytes(pkt->stream_data_size)) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "congestion control blocked");
     }
 
     if (pkt->stream_data_size > 0 && pkt->transient_ack_size > 0) {
         if (!detail::PacketEditor::StripTransientAckPayload(pkt)) {
-            return UTP_ERR_INTERNAL_ERROR;
+            return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to strip transient ack payload");
         }
     }
 
     const FrameType frameType = FirstFrameType(pkt->frame_types);
     if (!m_conn->canSendOnCurrentPath(pkt->data_size, frameType)) {
-        const int32_t splitStatus = retransmitSplitStreamPacket(pkt, nowUs);
-        if (splitStatus != UTP_ERR_WOULD_BLOCK) {
+        const Status splitStatus = retransmitSplitStreamPacket(pkt, nowUs);
+        if (splitStatus.code() != UTP_ERR_WOULD_BLOCK) {
             return splitStatus;
         }
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "path validation blocked");
     }
 
     const utp_packno_t previousPackNo = pkt->packno;
     const bool needResetPackNo = (pkt->po_flags & PacketOutFlags::kPoResetPackNo) != 0;
     if (needResetPackNo) {
         if (!detail::PacketEditor::RewritePacketNumber(m_conn, pkt)) {
-            return UTP_ERR_INTERNAL_ERROR;
+            return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to rewrite packet number");
         }
     }
 
@@ -1274,7 +1277,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
                                    && (needResetPackNo || pkt->encrypt_data == nullptr);
     if (needRegenerateCipher) {
         if (m_conn->m_aesCtx->encrypt(pkt) != UTP_ERR_OK) {
-            return UTP_ERR_CRYPTO_ENCRYPTION;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "re-encryption failed");
         }
         pkt->data_size = pkt->encrypt_data_size;
     }
@@ -1295,10 +1298,11 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     }
     msg.metaInfo.peerAddress = m_conn->m_peerAddress;
 
-    std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
-    int32_t sent = m_conn->m_udpSocket->send(msgVec);
+    std::vector<UdpSocket::MsgMetaInfo> msgVec = {msg};
+    Status                              udpSt;
+    int32_t sent = m_conn->m_udpSocket->send(msgVec, udpSt);
     if (sent <= 0) {
-        return UTP_ERR_SOCKET_WRITE;
+        return udpSt.ok() ? Status::ErrorLiteral(UTP_ERR_SOCKET_WRITE, "UDP send failed") : udpSt;
     }
 
     TAILQ_REMOVE(&m_lostPackets, pkt, po_next);
@@ -1334,7 +1338,7 @@ int32_t SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     UTP_LOGD("%s Retransmit packet sent: old Packet No=%" PRIu64 ", new Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
         m_tag.c_str(), previousPackNo, pkt->packno, packetFrames.c_str(), static_cast<uint32_t>(pkt->data_size));
 
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
 void SendControl::unackedRemove(PacketOut *pkt)

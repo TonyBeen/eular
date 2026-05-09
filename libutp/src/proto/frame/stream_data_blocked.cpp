@@ -15,13 +15,13 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameStreamDataBlocked::encode(void *buffer, size_t size) const
+int32_t FrameStreamDataBlocked::encode(void *buffer, size_t size, Status &status) const
 {
     if (size < FRAME_STREAM_DATA_BLOCKED_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than stream data blocked frame size {}",
-                      size,
-                      FRAME_STREAM_DATA_BLOCKED_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than stream data blocked frame size {}",
+                                           size,
+                                           FRAME_STREAM_DATA_BLOCKED_SIZE));
         return -1;
     }
 
@@ -30,20 +30,20 @@ int32_t FrameStreamDataBlocked::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, stream_id);
     offset = Serialize::SerializeTo(offset, size, stream_data_limit);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "encode stream data blocked frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "encode stream data blocked frame failed");
         return -1;
     }
 
     return FRAME_STREAM_DATA_BLOCKED_SIZE;
 }
 
-int32_t FrameStreamDataBlocked::decode(const void *buffer, size_t size)
+int32_t FrameStreamDataBlocked::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_STREAM_DATA_BLOCKED_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than stream data blocked frame size {}",
-                      size,
-                      FRAME_STREAM_DATA_BLOCKED_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than stream data blocked frame size {}",
+                                           size,
+                                           FRAME_STREAM_DATA_BLOCKED_SIZE));
         return -1;
     }
 
@@ -51,16 +51,16 @@ int32_t FrameStreamDataBlocked::decode(const void *buffer, size_t size)
     FrameType frameType = FrameType::kFrameInvalid;
     offset = Serialize::DeserializeFrom(offset, size, frameType);
     if (offset == nullptr || frameType != FrameType::kFrameStreamDataBlocked) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
-                      "invalid frame type: {}",
-                      static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("invalid frame type: {}",
+                                           static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     offset = Serialize::DeserializeFrom(offset, size, stream_id);
     offset = Serialize::DeserializeFrom(offset, size, stream_data_limit);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "decode stream data blocked frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "decode stream data blocked frame failed");
         return -1;
     }
 

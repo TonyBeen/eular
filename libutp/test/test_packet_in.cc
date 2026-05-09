@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <cstring>
@@ -22,6 +23,7 @@ using eular::utp::FramePathChallenge;
 using eular::utp::FrameType;
 using eular::utp::FrameVersion;
 using eular::utp::PacketIn;
+using eular::utp::Status;
 
 TEST_CASE("PacketIn: decode and iterate frames", "[PacketIn]")
 {
@@ -33,12 +35,13 @@ TEST_CASE("PacketIn: decode and iterate frames", "[PacketIn]")
 
     std::array<uint8_t, 256> payload{};
     uint8_t *payloadOffset = payload.data();
-    int32_t versionLen = version.encode(payloadOffset, payload.size());
+    Status st;
+    int32_t versionLen = version.encode(payloadOffset, payload.size(), st);
     REQUIRE(versionLen > 0);
     payloadOffset += versionLen;
 
     int32_t challengeLen = challenge.encode(payloadOffset,
-                                            payload.size() - static_cast<size_t>(versionLen));
+                                            payload.size() - static_cast<size_t>(versionLen), st);
     REQUIRE(challengeLen > 0);
     payloadOffset += challengeLen;
 
@@ -65,7 +68,7 @@ TEST_CASE("PacketIn: decode and iterate frames", "[PacketIn]")
     const size_t packetSize = UTP_HEADER_SIZE + payloadLen;
 
     PacketIn packet;
-    REQUIRE(packet.decode(packetBytes.data(), packetSize) == UTP_ERR_OK);
+    REQUIRE(packet.decode(packetBytes.data(), packetSize).ok());
     REQUIRE(packet.header.scid == 1001);
     REQUIRE(packet.header.dcid == 2002);
     REQUIRE(packet.header.pn == 7);
@@ -80,15 +83,15 @@ TEST_CASE("PacketIn: decode and iterate frames", "[PacketIn]")
     const uint8_t *frameData = nullptr;
     size_t frameLen = 0;
 
-    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen) > 0);
+    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen, st) > 0);
     REQUIRE(frameType == FrameType::kFrameVersion);
     REQUIRE(frameLen == FRAME_VERSION_SIZE);
 
-    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen) > 0);
+    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen, st) > 0);
     REQUIRE(frameType == FrameType::kFramePathChallenge);
     REQUIRE(frameLen == FRAME_PATH_FRAME_SIZE);
 
-    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen) < 0);
+    REQUIRE(packet.nextFrame(frameOffset, frameType, frameData, frameLen, st) < 0);
 }
 
 TEST_CASE("PacketIn: reject truncated payload", "[PacketIn]")
@@ -114,5 +117,5 @@ TEST_CASE("PacketIn: reject truncated payload", "[PacketIn]")
     offset[1] = static_cast<uint8_t>(FrameType::kFramePing);
 
     PacketIn packet;
-    REQUIRE(packet.decode(bytes.data(), bytes.size()) < 0);
+    REQUIRE_FALSE(packet.decode(bytes.data(), bytes.size()).ok());
 }

@@ -15,10 +15,13 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameVersion::encode(void *buffer, size_t size) const
+int32_t FrameVersion::encode(void *buffer, size_t size, Status &status) const
 {
     if (size < FRAME_VERSION_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than version frame size {}", size, FRAME_VERSION_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than version frame size {}",
+                                           size,
+                                           FRAME_VERSION_SIZE));
         return -1;
     }
 
@@ -29,10 +32,13 @@ int32_t FrameVersion::encode(void *buffer, size_t size) const
     return FRAME_VERSION_SIZE;
 }
 
-int32_t FrameVersion::decode(const void *buffer, size_t size)
+int32_t FrameVersion::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_VERSION_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than version frame size {}", size, FRAME_VERSION_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than version frame size {}",
+                                           size,
+                                           FRAME_VERSION_SIZE));
         return -1;
     }
 
@@ -40,7 +46,9 @@ int32_t FrameVersion::decode(const void *buffer, size_t size)
     FrameType frameType;
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != FrameType::kFrameVersion) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("Invalid frame type: {}",
+                                           static_cast<uint8_t>(frameType)));
         return -1;
     }
 

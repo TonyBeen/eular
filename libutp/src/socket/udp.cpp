@@ -48,19 +48,22 @@ void UdpSocket::updateTag(const std::string &tag)
     m_tag = tag + "[udp socket(" + std::to_string(m_sock) + ")]";
 }
 
-int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &ifname)
+Status UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     Address address(ip, port);
     if (!address.isValid()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "{} bind({}) to an invalid address {}:{}", tag(), m_sock, ip.c_str(), port);
-        return -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} bind({}) to an invalid address {}:{}", tag(), m_sock, ip.c_str(), port));
     }
 
-    m_sock = Socket::Open(address.family());
-    if (m_sock < 0) {
-        return -1;
+    {
+        Status openStatus;
+        m_sock = Socket::Open(address.family(), openStatus);
+        if (!openStatus.ok()) {
+            return openStatus;
+        }
     }
 
+    Status st = Status::ErrorLiteral(UTP_ERR_SOCKET_IOCTL, "socket setup failed");
     do {
         if (Socket::Ioctl::SetNonBlock(m_sock) < 0) {
             break;
@@ -80,51 +83,47 @@ int32_t UdpSocket::bind(const std::string &ip, uint16_t port, const std::string 
         }
 
         // NOTE 设置接收错误消息选项, 以便在接收数据报时获取ICMP错误消息
-        if (Socket::Ioctl::SetRecvError(m_sock, address.family()) < 0) {
-            break;
-        }
+        st = Socket::Ioctl::SetRecvError(m_sock, address.family());
+        if (!st.ok()) break;
 
         // NOTE 绑定在 :: 上时支持IPv4和IPv6双栈
         if (address.family() == AF_INET6 && address != Address::AnyIPv6()) {
-            Socket::Ioctl::SetIPv6Only(m_sock);
+            st = Socket::Ioctl::SetIPv6Only(m_sock);
+            if (!st.ok()) break;
         }
 
-        if (!ifname.empty() && Socket::Ioctl::SetBindInterface(m_sock, ifname.c_str()) < 0) {
-            break;
+        if (!ifname.empty()) {
+            st = Socket::Ioctl::SetBindInterface(m_sock, ifname.c_str());
+            if (!st.ok()) break;
         }
 
-        if (Socket::Ioctl::SetRecvBufferSize(m_sock, m_config.recv_buf_size) < 0) {
-            break;
-        }
+        st = Socket::Ioctl::SetRecvBufferSize(m_sock, m_config.recv_buf_size);
+        if (!st.ok()) break;
 
-        if (Socket::Ioctl::SetSendBufferSize(m_sock, m_config.send_buf_size) < 0) {
-            break;
-        }
+        st = Socket::Ioctl::SetSendBufferSize(m_sock, m_config.send_buf_size);
+        if (!st.ok()) break;
 
         // NOTE 调高 UDP 包的优先级
-        if (Socket::Ioctl::SetIPTos(m_sock) < 0) {
-            break;
-        }
+        st = Socket::Ioctl::SetIPTos(m_sock);
+        if (!st.ok()) break;
 
-        if (Socket::Ioctl::SetNoSigPipe(m_sock) < 0) {
-            break;
-        }
+        st = Socket::Ioctl::SetNoSigPipe(m_sock);
+        if (!st.ok()) break;
 
-        if (Socket::Bind(m_sock, address) < 0) {
-            break;
-        }
+        st = Socket::Bind(m_sock, address);
+        if (!st.ok()) break;
 
         m_bindAddr = address;
         m_localAddr.fromSocket(m_sock);
-        return 0;
+        return Status::OK();
     } while (0);
 
     Socket::Close(m_sock);
     m_sock = INVALID_SOCKET;
-    return -1;
+    return st;
 }
 
-int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg)
+int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg, Status &status)
 {
 #if defined(OS_LINUX)
     sockaddr_storage remoteAddr;
@@ -151,7 +150,7 @@ int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg)
         if (code == EAGAIN || code == EWOULDBLOCK) {
             return 0;
         } else {
-            SetLastErrorV(UTP_ERR_SOCKET_READ, "receive ICMP message failed: [{}, {}]", code, GetSystemErrnoMsg(code));
+            status = Status::Error(UTP_ERR_SOCKET_READ, fmt::format("receive ICMP message failed: [{}, {}]", code, GetSystemErrnoMsg(code)));
             return -1;
         }
     }
@@ -182,11 +181,12 @@ int32_t UdpSocket::recvErrorMsg(ErrorMsg &errMsg)
     return 1;
 #else
     UNUSED(errMsg);
+    UNUSED(status);
     return 0;
 #endif
 }
 
-int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
+int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec, Status &status)
 {
 #if defined(USE_SENDMMSG)
     int32_t n = ::recvmmsg(m_sock, m_mmsg.mmsghdrAt(0), m_mmsg.size(), 0, nullptr);
@@ -195,7 +195,7 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
         if (code == EAGAIN || code == EWOULDBLOCK) {
             return 0;
         } else {
-            SetLastErrorV(UTP_ERR_SOCKET_READ, "{} recvmmsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code));
+            status = Status::Error(UTP_ERR_SOCKET_READ, fmt::format("{} recvmmsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code)));
             return -1;
         }
     }
@@ -245,7 +245,7 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
         if (code == EAGAIN || code == EWOULDBLOCK) {
             return 0;
         } else {
-            SetLastErrorV(UTP_ERR_SOCKET_READ, "{} recvmmsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code));
+            status = Status::Error(UTP_ERR_SOCKET_READ, fmt::format("{} recvmmsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code)));
             return -1;
         }
     }
@@ -282,13 +282,13 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
     msg.dwFlags = 0;
 
     DWORD nreads = 0;
-    int32_t status = lpfnWSARecvMsg(m_sock, &msg, &nreads, nullptr, nullptr);
-    if (status == SOCKET_ERROR) {
+    int32_t wsaStatus = lpfnWSARecvMsg(m_sock, &msg, &nreads, nullptr, nullptr);
+    if (wsaStatus == SOCKET_ERROR) {
         int32_t code = GetSystemLastError();
         if (code == WSAEWOULDBLOCK) {
             return 0;
         } else {
-            SetLastErrorV(UTP_ERR_SOCKET_READ, "{} WSARecvMsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code));
+            status = Status::Error(UTP_ERR_SOCKET_READ, fmt::format("{} WSARecvMsg({}) failed: [{}, {}]", tag(), m_sock, code, GetSystemErrnoMsg(code)));
             return -1;
         }
     }
@@ -317,10 +317,10 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec)
 #endif // defined(USE_SENDMMSG)
 }
 
-int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
+int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
 {
     if (!isValid()) {
-        SetLastErrorV(UTP_ERR_SOCKET_WRITE, "{} send failed: socket invalid", tag());
+        status = Status::Error(UTP_ERR_SOCKET_WRITE, fmt::format("{} send failed: socket invalid", tag()));
         return -1;
     }
 
@@ -343,7 +343,7 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
         }
 
 #if defined(OS_WINDOWS)
-        int32_t status = 0;
+        int32_t wsaRet = 0;
         if (hasSlices) {
             WSABUF bufs[kMaxMsgSlices] = {};
             DWORD iovCount = 0;
@@ -361,7 +361,7 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
             }
 
             DWORD bytesSent = 0;
-            status = ::WSASendTo(m_sock,
+            wsaRet = ::WSASendTo(m_sock,
                                  bufs,
                                  iovCount,
                                  &bytesSent,
@@ -377,21 +377,21 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
                                         0,
                                         reinterpret_cast<sockaddr *>(&remoteStorage),
                                         remoteLen);
-            status = (nwritten == SOCKET_ERROR) ? SOCKET_ERROR : 0;
+            wsaRet = (nwritten == SOCKET_ERROR) ? SOCKET_ERROR : 0;
         }
 
-        if (status == SOCKET_ERROR) {
+        if (wsaRet == SOCKET_ERROR) {
             int32_t code = GetSystemLastError();
             if (code == WSAEWOULDBLOCK) {
                 return sentCount > 0 ? sentCount : 0;
             }
 
-            SetLastErrorV(UTP_ERR_SOCKET_WRITE,
-                          "{} sendto({}) failed: [{}, {}]",
+            status = Status::Error(UTP_ERR_SOCKET_WRITE,
+                          fmt::format("{} sendto({}) failed: [{}, {}]",
                           tag(),
                           m_sock,
                           code,
-                          GetSystemErrnoMsg(code));
+                          GetSystemErrnoMsg(code)));
             return sentCount > 0 ? sentCount : -1;
         }
 #else
@@ -438,12 +438,12 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec)
                 return sentCount > 0 ? sentCount : 0;
             }
 
-            SetLastErrorV(UTP_ERR_SOCKET_WRITE,
-                          "{} sendto({}) failed: [{}, {}]",
+            status = Status::Error(UTP_ERR_SOCKET_WRITE,
+                          fmt::format("{} sendto({}) failed: [{}, {}]",
                           tag(),
                           m_sock,
                           code,
-                          GetSystemErrnoMsg(code));
+                          GetSystemErrnoMsg(code)));
             return sentCount > 0 ? sentCount : -1;
         }
 #endif

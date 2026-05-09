@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <cstring>
@@ -20,6 +21,7 @@ using eular::utp::FrameVersion;
 using eular::utp::MemoryManager;
 using eular::utp::PacketIn;
 using eular::utp::PacketOut;
+using eular::utp::Status;
 
 TEST_CASE("MemoryManager: PacketIn allocates decode buffer", "[MemoryManager][PacketIn]")
 {
@@ -43,17 +45,18 @@ TEST_CASE("MemoryManager: PacketIn allocates decode buffer", "[MemoryManager][Pa
     REQUIRE(offset != nullptr);
     offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint16_t>(FRAME_VERSION_SIZE));
     REQUIRE(offset != nullptr);
-    offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint8_t>(eular::utp::UTP_TYPE_INITIAL));
+    offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint8_t>(UTP_TYPE_INITIAL));
     REQUIRE(offset != nullptr);
     offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint8_t>(0));
     REQUIRE(offset != nullptr);
-    REQUIRE(version.encode(offset, left) == FRAME_VERSION_SIZE);
+    Status st;
+    REQUIRE(version.encode(offset, left, st) == FRAME_VERSION_SIZE);
 
     const size_t wireSize = UTP_HEADER_SIZE + FRAME_VERSION_SIZE;
     std::memcpy(const_cast<uint8_t *>(packet->raw_data), wire.data(), wireSize);
     packet->raw_size = wireSize;
 
-    REQUIRE(packet->decode(packet->raw_data, packet->raw_size) == static_cast<int32_t>(wireSize));
+    REQUIRE(packet->decode(packet->raw_data, packet->raw_size).ok());
     REQUIRE(packet->header.scid == 1);
     REQUIRE(packet->header.dcid == 2);
     REQUIRE(packet->hasFrame(eular::utp::kFrameVersion));

@@ -24,8 +24,8 @@ public:
     FramePathChallenge() : FrameBase(FrameType::kFramePathChallenge) {}
     ~FramePathChallenge() = default;
 
-    int32_t encode(void *buffer, size_t size) const;
-    int32_t decode(const void *buffer, size_t size);
+    int32_t encode(void *buffer, size_t size, Status &status) const;
+    int32_t decode(const void *buffer, size_t size, Status &status);
 
 public:
     std::array<uint8_t, FRAME_PATH_DATA_SIZE> data{};
@@ -36,8 +36,8 @@ public:
     FramePathResponse() : FrameBase(FrameType::kFramePathResponse) {}
     ~FramePathResponse() = default;
 
-    int32_t encode(void *buffer, size_t size) const;
-    int32_t decode(const void *buffer, size_t size);
+    int32_t encode(void *buffer, size_t size, Status &status) const;
+    int32_t decode(const void *buffer, size_t size, Status &status);
 
 public:
     std::array<uint8_t, FRAME_PATH_DATA_SIZE> data{};

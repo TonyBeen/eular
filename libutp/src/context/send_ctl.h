@@ -106,16 +106,16 @@ public:
      * @brief pkt 已发送, 更新发送控制状态, 包括拥塞控制、重传计数、统计数据等
      *
      * @param pkt 已发送的包
-     * @return int32_t always 0
+     * @return Status OK if successful
      */
-    int32_t     packetSent(PacketOut *pkt);
+    Status      packetSent(PacketOut *pkt);
 
 public:
     bool        canSend();
     uint64_t    bytesOutTotal() const;
     uint64_t    bandwidthEstimate() const;
     uint64_t    retransmittedBytes() const;
-    int32_t     onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
+    Status      onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
     void        onCanWrite(utp_time_t nowUs);
     void        setReorderThreshold(uint32_t threshold);
     bool        isLossFrequent(utp_time_t nowUs, utp_time_t windowUs, uint32_t threshold) const;
@@ -144,8 +144,8 @@ private:
     utp_packno_t largestRetxPacketNo() const;
     PacketOut*  handleRegularLostPacket(PacketOut *pkt, PacketOut *&next);
     bool        handleLostMtuProbe(PacketOut *pkt);
-    int32_t     retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs);
-    int32_t     retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs);
+    Status      retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs);
+    Status      retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs);
     void        unackedRemove(PacketOut *pkt);
 
     void        destroyPacket(PacketOut *pkt);

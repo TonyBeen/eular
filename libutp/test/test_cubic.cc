@@ -6,14 +6,19 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include "congestion/cubic.h"
 #include "utp/config.h"
 
 using eular::utp::Cubic;
+using eular::utp::Status;
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::PacketInfo;
+using eular::utp::Status;
 using eular::utp::RttStats;
+using eular::utp::Status;
 
 namespace {
 PacketInfo MakePacket(uint64_t packetNo, uint64_t sendTimeUs, uint32_t packetSize)

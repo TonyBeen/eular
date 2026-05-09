@@ -25,19 +25,19 @@ inline bool DeserializeHelper(const uint8_t *&offset, size_t &sz, T &value) {
 namespace eular {
 namespace utp {
 
-int32_t FrameCrypto::encode(void *buffer, size_t size) const
+int32_t FrameCrypto::encode(void *buffer, size_t size, Status &status) const
 {
     if (buffer == nullptr || eph_pubkey == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid crypto frame encode args: buffer={}, eph_pubkey={}",
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                      fmt::format("invalid crypto frame encode args: buffer={}, eph_pubkey={}",
                       buffer != nullptr,
-                      eph_pubkey != nullptr);
+                      eph_pubkey != nullptr));
         return -1;
     }
 
     const int32_t frameLen = frameSize();
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than crypto frame size {}", size, frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("buffer size {} is smaller than crypto frame size {}", size, frameLen));
         return -1;
     }
 
@@ -47,9 +47,9 @@ int32_t FrameCrypto::encode(void *buffer, size_t size) const
     bufferOffset = Serialize::SerializeTo(bufferOffset, size, static_cast<uint8_t>(0));
 
     if (bufferOffset == nullptr || size < FRAME_CRYPTO_EPH_PUBKEY_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "failed to encode crypto frame public key, left={} bytes",
-                      size);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                      fmt::format("failed to encode crypto frame public key, left={} bytes",
+                      size));
         return -1;
     }
 
@@ -57,21 +57,21 @@ int32_t FrameCrypto::encode(void *buffer, size_t size) const
     return frameLen;
 }
 
-int32_t FrameCrypto::decode(const void *buffer, size_t size)
+int32_t FrameCrypto::decode(const void *buffer, size_t size, Status &status)
 {
     if (buffer == nullptr || eph_pubkey == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "invalid crypto frame decode args: buffer={}, eph_pubkey={}",
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                      fmt::format("invalid crypto frame decode args: buffer={}, eph_pubkey={}",
                       buffer != nullptr,
-                      eph_pubkey != nullptr);
+                      eph_pubkey != nullptr));
         return -1;
     }
 
     if (size < FRAME_CRYPTO_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than crypto frame size {}",
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                      fmt::format("buffer size {} is smaller than crypto frame size {}",
                       size,
-                      FRAME_CRYPTO_SIZE);
+                      FRAME_CRYPTO_SIZE));
         return -1;
     }
 
@@ -80,23 +80,23 @@ int32_t FrameCrypto::decode(const void *buffer, size_t size)
 
     FrameType frameType = FrameType::kFrameInvalid;
     if (!DeserializeHelper(bufferOffset, size, frameType) || frameType != FrameType::kFrameCrypto) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
-                      "invalid crypto frame type: {}",
-                      static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                      fmt::format("invalid crypto frame type: {}",
+                      static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     uint8_t reserved = 0;
     if (!DeserializeHelper(bufferOffset, size, crypto_type) || !DeserializeHelper(bufferOffset, size, reserved)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode crypto frame header");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode crypto frame header");
         return -1;
     }
 
     if (size < FRAME_CRYPTO_EPH_PUBKEY_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "crypto frame truncated before peer public key: left={}, required={}",
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                      fmt::format("crypto frame truncated before peer public key: left={}, required={}",
                       size,
-                      FRAME_CRYPTO_EPH_PUBKEY_SIZE);
+                      FRAME_CRYPTO_EPH_PUBKEY_SIZE));
         return -1;
     }
 

@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 
@@ -14,6 +15,7 @@
 
 using eular::utp::FrameHandshakeDelay;
 using eular::utp::FrameHandshakeDone;
+using eular::utp::Status;
 
 TEST_CASE("HandshakeDone frame encode/decode", "[FrameHandshakeDone]")
 {
@@ -21,10 +23,13 @@ TEST_CASE("HandshakeDone frame encode/decode", "[FrameHandshakeDone]")
     frame.ack_handshake_pn = 123456789ULL;
 
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE> bytes{};
-    REQUIRE(frame.encode(bytes.data(), bytes.size()) == FRAME_HANDSHAKE_DONE_SIZE);
+    Status st;
+    REQUIRE(frame.encode(bytes.data(), bytes.size(), st) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(st.ok());
 
     FrameHandshakeDone decoded;
-    REQUIRE(decoded.decode(bytes.data(), bytes.size()) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(decoded.decode(bytes.data(), bytes.size(), st) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(st.ok());
     REQUIRE(decoded.ack_handshake_pn == frame.ack_handshake_pn);
 }
 
@@ -34,9 +39,12 @@ TEST_CASE("HandshakeDelay frame encode/decode", "[FrameHandshakeDelay]")
     frame.delay_time_us = 987654;
 
     std::array<uint8_t, FRAME_HANDSHAKE_DELAY_SIZE> bytes{};
-    REQUIRE(frame.encode(bytes.data(), bytes.size()) == FRAME_HANDSHAKE_DELAY_SIZE);
+    Status st;
+    REQUIRE(frame.encode(bytes.data(), bytes.size(), st) == FRAME_HANDSHAKE_DELAY_SIZE);
+    REQUIRE(st.ok());
 
     FrameHandshakeDelay decoded;
-    REQUIRE(decoded.decode(bytes.data(), bytes.size()) == FRAME_HANDSHAKE_DELAY_SIZE);
+    REQUIRE(decoded.decode(bytes.data(), bytes.size(), st) == FRAME_HANDSHAKE_DELAY_SIZE);
+    REQUIRE(st.ok());
     REQUIRE(decoded.delay_time_us == frame.delay_time_us);
 }

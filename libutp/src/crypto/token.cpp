@@ -10,7 +10,7 @@
 #include <utils/exception.h>
 #include <utils/serialize.hpp>
 
-#include "util/error.h"
+#include "fmt/fmt.h"
 
 #ifndef TOKEN_KEY_UPDATE_INTERVAL_MS
 #define TOKEN_KEY_UPDATE_INTERVAL_MS (60 * 60 * 1000) // 1 hour
@@ -62,7 +62,7 @@ TokenAuth::~TokenAuth()
     }
 }
 
-bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
+Status TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
 {
     std::array<uint8_t, TOKEN_META_SIZE> plaintext;
     encode(meta, plaintext);
@@ -72,8 +72,7 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     // nonce
     uint8_t *nonce = outToken.data();
     if (RAND_bytes(nonce, AEAD_NONCE_SIZE) != 1) {
-        SetLastErrorV(UTP_ERR_RANDOM_GENERATION_FAILED, "RAND_bytes failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_RANDOM_GENERATION_FAILED, "RAND_bytes failed");
     }
 
     uint8_t* ciphertext = outToken.data() + AEAD_NONCE_SIZE;
@@ -82,18 +81,15 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
     EVP_CIPHER_CTX_reset(m_sealCtx);
     int32_t status = EVP_EncryptInit_ex(m_sealCtx, AEADCipher(), nullptr, m_key.data(), nonce);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
     }
     status = EVP_CIPHER_CTX_ctrl(m_sealCtx, EVP_CTRL_AEAD_SET_IVLEN, AEAD_NONCE_SIZE, nullptr);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
     }
     status = EVP_EncryptInit_ex(m_sealCtx, nullptr, nullptr, m_key.data(), nonce);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptInit_ex failed");
     }
     // AAD
     int32_t aadOutLen = 0;
@@ -101,42 +97,38 @@ bool TokenAuth::seal(const TokenMeta &meta, TokenBuf &outToken)
                                reinterpret_cast<const uint8_t *>(tokenAad.data()),
                                static_cast<int32_t>(tokenAad.size()));
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
     }
 
     // encrypt plaintext
     int32_t outLen = 0;
     status = EVP_EncryptUpdate(m_sealCtx, ciphertext, &outLen, plaintext.data(), static_cast<int32_t>(plaintext.size()));
     if (status != 1 || outLen != (int32_t)TOKEN_META_SIZE) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptUpdate failed");
     }
 
     // finalize
     int32_t finalOutLen = 0;
     status = EVP_EncryptFinal_ex(m_sealCtx, ciphertext + outLen, &finalOutLen);
     if (status != 1 || finalOutLen != 0) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptFinal_ex failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_EncryptFinal_ex failed");
     }
     // get tag
     status = EVP_CIPHER_CTX_ctrl(m_sealCtx, EVP_CTRL_AEAD_GET_TAG, AEAD_TAG_SIZE, tag);
     if (status != 1) {
-        SetLastErrorV(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
-        return false;
+        return Status::ErrorLiteral(UTP_ERR_CRYPTO_ENCRYPTION, "EVP_CIPHER_CTX_ctrl failed");
     }
-    return true;
+    return Status::OK();
 }
 
-bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta, TokenType expectedType)
+Status TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta, TokenType expectedType)
 {
     const uint8_t *nonce      = token.data();
     const uint8_t *ciphertext = token.data() + AEAD_NONCE_SIZE;
     const uint8_t *tag        = token.data() + AEAD_NONCE_SIZE + TOKEN_META_SIZE;
     const std::string &tokenAad = TokenAadByType(expectedType);
 
-    auto try_open_with_key = [&] (const TokenKey& key) -> bool {
+    auto try_open_with_key = [&] (const TokenKey& key) -> Status {
         EVP_CIPHER_CTX_reset(m_openCtx);
 
         int32_t status = 0;
@@ -145,79 +137,73 @@ bool TokenAuth::open(const TokenBuf &token, TokenMeta &outMeta, TokenType expect
 
         status = EVP_DecryptInit_ex(m_openCtx, AEADCipher(), nullptr, nullptr, nullptr);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         status = EVP_CIPHER_CTX_ctrl(m_openCtx, EVP_CTRL_AEAD_SET_IVLEN, AEAD_NONCE_SIZE, nullptr);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
         status = EVP_DecryptInit_ex(m_openCtx, nullptr, nullptr, key.data(), nonce);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         status = EVP_DecryptUpdate(m_openCtx, nullptr, &outLen,
                        reinterpret_cast<const uint8_t *>(tokenAad.data()),
                        static_cast<int32_t>(tokenAad.size()));
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         status = EVP_DecryptUpdate(m_openCtx, plaintext.data(), &outLen, ciphertext, (int32_t)(TOKEN_META_SIZE));
         if (status != 1 || outLen != static_cast<int32_t>(TOKEN_META_SIZE)) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         status = EVP_CIPHER_CTX_ctrl(m_openCtx, EVP_CTRL_AEAD_SET_TAG, AEAD_TAG_SIZE, (void *)tag);
         if (status != 1) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         int32_t finalLen = 0;
         status = EVP_DecryptFinal_ex(m_openCtx, plaintext.data() + outLen, &finalLen);
         if (status != 1 || finalLen != 0) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
-            return false;
+            return Status::ErrorLiteral(UTP_ERR_CRYPTO_DECRYPTION, "EVP_DecryptInit_ex failed");
         }
 
         decode(plaintext, outMeta);
         if (outMeta.token_type != static_cast<uint8_t>(expectedType)) {
-            SetLastErrorV(UTP_ERR_CRYPTO_DECRYPTION,
-                          "token type mismatch: expected={}, actual={}",
-                          static_cast<uint8_t>(expectedType),
-                          outMeta.token_type);
-            return false;
+            return Status::Error(UTP_ERR_CRYPTO_DECRYPTION,
+                                 fmt::format("token type mismatch: expected={}, actual={}",
+                                             static_cast<uint8_t>(expectedType),
+                                             outMeta.token_type));
         }
-        return true;
+        return Status::OK();
     };
 
     // 先用 key 验证, 失败再用 old key
-    if (try_open_with_key(m_key)) {
-        return true;
+    Status st = try_open_with_key(m_key);
+    if (st.ok()) {
+        return Status::OK();
     }
-    if (try_open_with_key(m_oldKey)) {
-        return true;
+    st = try_open_with_key(m_oldKey);
+    if (st.ok()) {
+        return Status::OK();
     }
 
-    return false;
+    return st;
 }
 
-void TokenAuth::onUpdateKey()
+Status TokenAuth::onUpdateKey()
 {
     TokenKey oldKey = m_key;
     if (RAND_bytes(m_key.data(), (int32_t)m_key.size()) != 1) {
-        SetLastErrorV(UTP_ERR_RANDOM_GENERATION_FAILED, "RAND_bytes failed");
-        return;
+        return Status::ErrorLiteral(UTP_ERR_RANDOM_GENERATION_FAILED, "RAND_bytes failed");
     }
 
     m_oldKey = oldKey;
+    return Status::OK();
 }
 
 void TokenAuth::encode(const TokenMeta &meta, std::array<uint8_t, TOKEN_META_SIZE> &plaintext)
