@@ -15,6 +15,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <sys/select.h>
 #include <vector>
 
 #include "context/context_impl.h"
@@ -161,6 +162,35 @@ bool AppendRawBytes(std::vector<uint8_t> &buffer, const void *data, size_t len)
     buffer.resize(oldSize + len);
     std::memcpy(buffer.data() + oldSize, data, len);
     return true;
+}
+
+uint32_t ExponentialBackoffTimeoutMs(uint32_t baseMs, uint8_t round)
+{
+    const uint32_t normalizedBase = std::max<uint32_t>(baseMs, 1);
+    if (round >= 31) {
+        return std::numeric_limits<uint32_t>::max();
+    }
+
+    const uint64_t scaled = static_cast<uint64_t>(normalizedBase) << round;
+    return scaled >= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())
+               ? std::numeric_limits<uint32_t>::max()
+               : static_cast<uint32_t>(scaled);
+}
+
+bool SocketHasReadableData(const eular::utp::UdpSocket *socket)
+{
+    if (socket == nullptr || socket->fd() < 0) {
+        return false;
+    }
+
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(socket->fd(), &readfds);
+
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+    return select(socket->fd() + 1, &readfds, nullptr, nullptr, &timeout) > 0 && FD_ISSET(socket->fd(), &readfds);
 }
 
 template <typename FrameT>
@@ -528,12 +558,10 @@ Status ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttCo
     }
     stopAckTimer();
     m_keepaliveTimer.stop();
+    m_handshakeRetryCount = 0;
+    m_connTimer.stop();
 
     m_ctx->wantWrite(this);
-    bool success = m_connTimer.start(info.timeout);
-    if (!success) {
-        return Status::ErrorLiteral(UTP_ERR_SOCKET_EVENT, "failed to start connection timer");
-    }
     return Status::OK();
 }
 
@@ -991,6 +1019,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 
     if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
         m_state = State::kStateConnected;
+        m_handshakeRetryCount = 0;
         m_peerHandshakePacketNo = packet->header.pn;
         m_handshakeReceivedAtUs = nowUs;
         m_handshakeDonePending = true;
@@ -1071,6 +1100,19 @@ void ConnectionImpl::onWrite()
         }
 
         m_state = State::kStateInitialSent;
+        if (!armConnectTimerForRound(m_handshakeRetryCount, false)) {
+            (void)recordConnectionError(Status::Error(UTP_ERR_SOCKET_EVENT, "failed to start connection timer"), true);
+            m_state = State::kStateDisconnected;
+            m_handshakeDoneTimer.stop();
+            m_pathValidationTimer.stop();
+            stopAckTimer();
+            m_keepaliveTimer.stop();
+            notifyConnectionClosed(m_lastErrorCode == UTP_ERR_OK ? UTP_ERR_SOCKET_EVENT : m_lastErrorCode,
+                                   m_lastErrorReason[0] == '\0' ? "failed to start connection timer"
+                                                                : m_lastErrorReason.data(),
+                                   false);
+            return;
+        }
     }
 
     trySendZeroRttEarlyData();
@@ -2855,21 +2897,51 @@ void ConnectionImpl::armHandshakeDoneTimer()
     m_handshakeDoneTimer.start(delayMs);
 }
 
+bool ConnectionImpl::armConnectTimerForRound(uint8_t round, bool usePeerSuggestion)
+{
+    const uint32_t delayMs = handshakeTimeoutForRoundMs(round, usePeerSuggestion);
+    m_connTimer.stop();
+    return m_connTimer.start(delayMs);
+}
+
 uint32_t ConnectionImpl::handshakeDoneDelayMs() const
 {
-    uint32_t handshakeTimeoutMs = 0;
-    if ((m_peerTP.flags & TransportParams::kHandshakeTimeout) != 0 && m_peerTP.handshake_timeout > 0) {
-        handshakeTimeoutMs = m_peerTP.handshake_timeout;
-    } else if (m_connectInfo.timeout > 0) {
-        handshakeTimeoutMs = m_connectInfo.timeout;
-    } else if (m_ctx != nullptr && m_ctx->config() != nullptr && m_ctx->config()->handshake_timeout > 0) {
-        handshakeTimeoutMs = m_ctx->config()->handshake_timeout;
-    } else {
-        handshakeTimeoutMs = 1000;
-    }
-
-    const uint32_t delayMs = handshakeTimeoutMs / 3;
+    const uint32_t delayMs = effectiveHandshakeTimeoutMs() / 3;
     return delayMs > 0 ? delayMs : 1;
+}
+
+uint32_t ConnectionImpl::localHandshakeTimeoutMs() const
+{
+    if (m_connectInfo.timeout > 0) {
+        return m_connectInfo.timeout;
+    }
+    if (m_ctx != nullptr && m_ctx->config() != nullptr && m_ctx->config()->handshake_timeout > 0) {
+        return m_ctx->config()->handshake_timeout;
+    }
+    return 1000;
+}
+
+uint32_t ConnectionImpl::effectiveHandshakeTimeoutMs() const
+{
+    const uint32_t localTimeoutMs = localHandshakeTimeoutMs();
+    if ((m_peerTP.flags & TransportParams::kHandshakeTimeout) != 0 && m_peerTP.handshake_timeout > 0) {
+        return std::min<uint32_t>(localTimeoutMs, m_peerTP.handshake_timeout);
+    }
+    return localTimeoutMs;
+}
+
+uint32_t ConnectionImpl::handshakeTimeoutForRoundMs(uint8_t round, bool usePeerSuggestion) const
+{
+    const uint32_t baseTimeoutMs = usePeerSuggestion ? effectiveHandshakeTimeoutMs() : localHandshakeTimeoutMs();
+    return ExponentialBackoffTimeoutMs(baseTimeoutMs, round);
+}
+
+uint8_t ConnectionImpl::handshakeMaxRetries() const
+{
+    if (m_ctx == nullptr || m_ctx->config() == nullptr) {
+        return 0;
+    }
+    return m_ctx->config()->handshake_max_retries;
 }
 
 void ConnectionImpl::onConnTimeout()
@@ -2877,6 +2949,31 @@ void ConnectionImpl::onConnTimeout()
     if (m_state == State::kStateConnected || m_state == State::kStateDisconnected ||
         m_state == State::kStateCloseSent || m_state == State::kStatePtoTimedWait) {
         return;
+    }
+
+    if (m_state == State::kStateInitialSent) {
+        if (SocketHasReadableData(m_udpSocket)) {
+            (void)armConnectTimerForRound(m_handshakeRetryCount, false);
+            return;
+        }
+
+        if (m_handshakeRetryCount < handshakeMaxRetries()) {
+            const Status retryStatus = sendInitialPacket();
+            if (retryStatus.ok()) {
+                ++m_handshakeRetryCount;
+                (void)armConnectTimerForRound(m_handshakeRetryCount, false);
+                return;
+            }
+
+            if (retryStatus.code() == UTP_ERR_WOULD_BLOCK) {
+                scheduleWrite();
+                m_connTimer.stop();
+                m_connTimer.start(1);
+                return;
+            }
+
+            (void)recordConnectionError(retryStatus, true);
+        }
     }
 
     (void)recordConnectionError(Status::Error(UTP_ERR_TIMEOUT, "connect timeout"), true);

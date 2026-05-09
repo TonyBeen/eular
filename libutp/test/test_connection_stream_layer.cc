@@ -27,6 +27,7 @@
 using eular::utp::Config;
 using eular::utp::Connection;
 using eular::utp::ConnectionImpl;
+using eular::utp::Context;
 using eular::utp::ContextImpl;
 using eular::utp::FrameStream;
 using eular::utp::Stream;
@@ -144,33 +145,42 @@ TEST_CASE("ConnectionImpl: handshake done pending clears only on ack callback", 
     REQUIRE_FALSE(conn.m_handshakeDonePending);
 }
 
-TEST_CASE("ConnectionImpl: handshake barrier blocks regular stream send until handshake done acked", "[Connection][Handshake]")
+TEST_CASE("ConnectionImpl: handshake done delay uses min of local and peer timeout", "[Connection][Handshake]")
 {
     Config cfg;
+    cfg.handshake_timeout = 3000;
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
 
     ConnectionImpl conn(&ctx, nullptr, 1100);
-    conn.m_state = ConnectionImpl::kStateConnected;
-    conn.m_handshakeDonePending = true;
-    conn.m_handshakeDoneSent = true;
+    conn.m_connectInfo.timeout = 4000;
+    conn.m_peerTP.handshake_timeout = 6000;
+    REQUIRE(conn.handshakeDoneDelayMs() == (4000u / 3u));
 
-    const uint8_t data[] = {'h', 'i'};
-    const Status status = conn.sendStreamFrame(0, 0, data, sizeof(data), false);
-    REQUIRE(status.code() == UTP_ERR_WOULD_BLOCK);
+    conn.m_peerTP.handshake_timeout = 900;
+    REQUIRE(conn.handshakeDoneDelayMs() == 300);
 }
 
-TEST_CASE("ConnectionImpl: handshake done delay uses peer transport timeout", "[Connection][Handshake]")
+TEST_CASE("ConnectionImpl: active handshake timeout uses exponential backoff and fails after retries", "[Connection][Handshake]")
 {
     Config cfg;
-    cfg.handshake_timeout = 9000;
+    cfg.handshake_timeout = 10;
+    cfg.handshake_max_retries = 2;
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
 
     ConnectionImpl conn(&ctx, nullptr, 1101);
-    conn.m_peerTP.handshake_timeout = 6000;
+    conn.m_state = ConnectionImpl::kStateInitialSent;
+    conn.m_connectInfo.timeout = 10;
 
-    REQUIRE(conn.handshakeDoneDelayMs() == 2000);
+    REQUIRE(conn.handshakeTimeoutForRoundMs(0, false) == 10);
+    REQUIRE(conn.handshakeTimeoutForRoundMs(1, false) == 20);
+    REQUIRE(conn.handshakeTimeoutForRoundMs(2, false) == 40);
+
+    conn.m_handshakeRetryCount = cfg.handshake_max_retries;
+    conn.onConnTimeout();
+    REQUIRE(conn.state() == ConnectionImpl::kStateDisconnected);
+    REQUIRE(conn.lastErrorCode() == UTP_ERR_TIMEOUT);
 }
 
 TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")

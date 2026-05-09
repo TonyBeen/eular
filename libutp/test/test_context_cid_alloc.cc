@@ -45,6 +45,7 @@ TEST_CASE("ContextImpl: passive handshake timeout recycles pending entry", "[Con
 {
     Config cfg;
     cfg.handshake_timeout = 1;
+    cfg.handshake_max_retries = 0;
     ContextImpl ctx(nullptr, &cfg);
 
     int32_t connectErrorCalls = 0;
@@ -58,7 +59,8 @@ TEST_CASE("ContextImpl: passive handshake timeout recycles pending entry", "[Con
     pending.peerAddress = Address("127.0.0.1", 9999);
     pending.peerIp = "127.0.0.1";
     pending.handshakeSent = true;
-    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 10 * 1000; // 10ms ago
+    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 10 * 1000; // bookkeeping only
+    pending.lastHandshakeSentUs = eular::utp::time::MonotonicUs() - 2 * 1000;
 
     ctx.m_pendingIncoming.emplace(pending.localCid, pending);
     ctx.m_pendingIncomingPeerIndex.emplace(ContextImpl::PeerKey(pending.peerAddress, pending.peerCid), pending.localCid);

@@ -1260,16 +1260,14 @@ TEST_CASE("Context integration: pending buffers replay once after delayed Handsh
     REQUIRE(std::string(readBuf.data(), static_cast<size_t>(nread)) == "AB");
 }
 
-TEST_CASE("Context integration: pending handshake retry count is capped by config", "[Context][Integration][Handshake][Config]")
+TEST_CASE("Context integration: pending handshake retry uses peer-aware exponential backoff", "[Context][Integration][Handshake][Config]")
 {
     Config cfg;
-    cfg.handshake_timeout = 1000;
-    cfg.pending_handshake_retry_interval_ms = 1;
-    cfg.pending_handshake_max_retries = 2;
+    cfg.handshake_timeout = 100;
+    cfg.handshake_max_retries = 2;
 
     ev::EventLoop loop;
     ContextImpl ctx(loop.loop(), &cfg);
-    REQUIRE(ctx.bind("127.0.0.1", 0, "").ok());
 
     const uint32_t localCid = 0x30004000;
     ContextImpl::PendingIncomingConnection pending;
@@ -1277,24 +1275,22 @@ TEST_CASE("Context integration: pending handshake retry count is capped by confi
     pending.peerCid = 0x40003000;
     pending.peerAddress = Address("127.0.0.1", 9);
     pending.peerIp = pending.peerAddress.toIpString();
-    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 900000;
     pending.handshakeSent = true;
-    pending.lastHandshakeSentUs = 0;
+    pending.lastHandshakeSentUs = 1000;
+    pending.peerTp.handshake_timeout = 40;
+    REQUIRE(ctx.pendingHandshakeBaseTimeoutMs(pending) == 40);
+    REQUIRE(ctx.pendingHandshakeRetryDueUs(pending) == 41000);
 
-    ctx.m_pendingIncoming.emplace(localCid, pending);
-    ctx.m_waitHandshakeDone.insert(localCid);
+    pending.handshakeRetryCount = 1;
+    REQUIRE(ctx.pendingHandshakeRetryDueUs(pending) == 81000);
 
-    for (int32_t i = 0; i < 6; ++i) {
-        auto it = ctx.m_pendingIncoming.find(localCid);
-        REQUIRE(it != ctx.m_pendingIncoming.end());
-        it->second.acceptStartUs = eular::utp::time::MonotonicUs() - 900000;
-        it->second.lastHandshakeSentUs = 0;
-        ctx.processPendingHandshakeTimeouts();
-    }
+    pending.handshakeRetryCount = 2;
+    REQUIRE(ctx.pendingHandshakeRetryDueUs(pending) == 161000);
 
-    auto it = ctx.m_pendingIncoming.find(localCid);
-    REQUIRE(it != ctx.m_pendingIncoming.end());
-    REQUIRE(it->second.handshakeRetryCount == cfg.pending_handshake_max_retries);
+    pending.peerTp.handshake_timeout = 400;
+    pending.handshakeRetryCount = 0;
+    REQUIRE(ctx.pendingHandshakeBaseTimeoutMs(pending) == 100);
+    REQUIRE(ctx.pendingHandshakeRetryDueUs(pending) == 101000);
 }
 
 TEST_CASE("Context integration: stream OnWritable fires again after queued data drains", "[Context][Integration][Stream]")

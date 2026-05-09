@@ -172,6 +172,8 @@ private:
     void    onPendingHandshakeTimeout();
     void    processPendingHandshakeTimeouts();
     void    refreshPendingHandshakeTimer();
+    uint32_t pendingHandshakeBaseTimeoutMs(const PendingIncomingConnection &pending) const;
+    uint64_t pendingHandshakeRetryDueUs(const PendingIncomingConnection &pending) const;
     TokenAuth *tokenAuth();
     bool validateZeroRttTicket(const Address &peerAddress,
                                const std::vector<uint8_t> &ticket,

@@ -235,7 +235,12 @@ private:
     void       markPeerActivity(utp_time_t nowUs);
     void       beginCloseSent(uint16_t errorCode, const char *reason);
     void       armHandshakeDoneTimer();
+    bool       armConnectTimerForRound(uint8_t round, bool usePeerSuggestion);
     uint32_t   handshakeDoneDelayMs() const;
+    uint32_t   localHandshakeTimeoutMs() const;
+    uint32_t   effectiveHandshakeTimeoutMs() const;
+    uint32_t   handshakeTimeoutForRoundMs(uint8_t round, bool usePeerSuggestion) const;
+    uint8_t    handshakeMaxRetries() const;
     void       onHandshakeDoneFrameAcked();
     // 根据当前状态和配置生成本地 TP，供初始包使用
     void bootstrapLocalTransportParams();
@@ -336,6 +341,7 @@ private:
     ev::EventTimer                      m_closeDrainTimer;
     ReceiveHistory                      m_receiveHistory;
     MtuDiscovery                        m_mtuDiscovery;
+    uint8_t                             m_handshakeRetryCount{0};
     bool                                m_handshakeDonePending{false};
     bool                                m_handshakeDoneSent{false};
     utp_packno_t                        m_handshakeDoneLastPacketNo{0};

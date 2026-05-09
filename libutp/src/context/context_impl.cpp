@@ -58,42 +58,51 @@ const std::array<uint8_t, eular::utp::ResumptionStateCodec::KEY_SIZE> kDefaultRe
     0xfa, 0x57, 0x02, 0x3b, 0xc4, 0x88, 0x6e, 0x11,
 };
 
-uint32_t PendingHandshakeRetryIntervalMs(const eular::utp::Config &cfg)
+uint32_t PendingHandshakeBaseTimeoutMs(const eular::utp::Config &cfg,
+                                       const eular::utp::TransportParams &peerTp)
 {
-    return std::max<uint32_t>(cfg.pending_handshake_retry_interval_ms, 10);
+    const uint32_t localTimeoutMs = std::max<uint16_t>(cfg.handshake_timeout, 1);
+    if ((peerTp.flags & eular::utp::TransportParams::kHandshakeTimeout) != 0 && peerTp.handshake_timeout > 0) {
+        return std::min<uint32_t>(localTimeoutMs, peerTp.handshake_timeout);
+    }
+    return localTimeoutMs;
 }
 
-uint64_t PendingHandshakeTimeoutUs(const eular::utp::Config &cfg)
+uint64_t PendingHandshakeRoundTimeoutUs(const eular::utp::Config &cfg,
+                                        const eular::utp::TransportParams &peerTp,
+                                        uint8_t round)
 {
-    return static_cast<uint64_t>(std::max<uint16_t>(cfg.handshake_timeout, 1)) * 1000ULL;
-}
-
-uint64_t PendingHandshakeRetryStartUs(const eular::utp::Config &cfg, utp_time_t acceptStartUs)
-{
-    if (acceptStartUs == 0) {
+    const uint64_t baseTimeoutUs = static_cast<uint64_t>(PendingHandshakeBaseTimeoutMs(cfg, peerTp)) * 1000ULL;
+    if (round >= 63) {
         return UINT64_MAX;
     }
-    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(cfg);
-    return static_cast<uint64_t>(acceptStartUs) + (timeoutUs * 2ULL) / 3ULL;
+
+    const uint64_t scaled = baseTimeoutUs << round;
+    return scaled < baseTimeoutUs ? UINT64_MAX : scaled;
 }
 
 uint64_t PendingHandshakeRetryDueUs(const eular::utp::Config &cfg,
-                                    utp_time_t acceptStartUs,
-                                    utp_time_t lastHandshakeSentUs)
+                                    const eular::utp::TransportParams &peerTp,
+                                    utp_time_t lastHandshakeSentUs,
+                                    uint8_t handshakeRetryCount)
 {
-    if (acceptStartUs == 0) {
+    if (lastHandshakeSentUs == 0) {
         return UINT64_MAX;
     }
 
-    const uint64_t retryBaseUs = static_cast<uint64_t>(PendingHandshakeRetryIntervalMs(cfg)) * 1000ULL;
-    const uint64_t startUs = PendingHandshakeRetryStartUs(cfg, acceptStartUs);
-    const uint64_t sendBaseUs = static_cast<uint64_t>(lastHandshakeSentUs) + retryBaseUs;
-    return std::max<uint64_t>(startUs, sendBaseUs);
+    const uint64_t roundTimeoutUs = PendingHandshakeRoundTimeoutUs(cfg, peerTp, handshakeRetryCount);
+    if (roundTimeoutUs == UINT64_MAX) {
+        return UINT64_MAX;
+    }
+
+    const uint64_t baseUs = static_cast<uint64_t>(lastHandshakeSentUs);
+    const uint64_t dueUs = baseUs + roundTimeoutUs;
+    return dueUs < baseUs ? UINT64_MAX : dueUs;
 }
 
 uint8_t PendingHandshakeMaxRetries(const eular::utp::Config &cfg)
 {
-    return cfg.pending_handshake_max_retries;
+    return cfg.handshake_max_retries;
 }
 
 size_t PendingPreHandshakeBufferMaxPackets(const eular::utp::Config &cfg)
@@ -1306,8 +1315,6 @@ void ContextImpl::processPendingHandshakeTimeouts()
     }
 
     const utp_time_t nowUs = time::MonotonicUs();
-    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(m_config);
-
     std::vector<uint32_t> expired;
     expired.reserve(m_waitHandshakeDone.size());
 
@@ -1319,24 +1326,21 @@ void ContextImpl::processPendingHandshakeTimeouts()
         }
 
         PendingIncomingConnection &pending = it->second;
-        if (pending.acceptStartUs == 0) {
+        if (!pending.handshakeSent || pending.lastHandshakeSentUs == 0) {
             continue;
         }
 
-        const uint64_t retryDueUs = PendingHandshakeRetryDueUs(m_config,
-                                                               pending.acceptStartUs,
-                                                               pending.lastHandshakeSentUs);
-        if (pending.handshakeSent
-            && pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)
-            && retryDueUs != UINT64_MAX
-            && static_cast<uint64_t>(nowUs) >= retryDueUs) {
+        const uint64_t retryDueUs = pendingHandshakeRetryDueUs(pending);
+        if (retryDueUs == UINT64_MAX || static_cast<uint64_t>(nowUs) < retryDueUs) {
+            continue;
+        }
+
+        if (pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)) {
             if (sendPendingHandshake(pending) == UTP_ERR_OK) {
                 pending.lastHandshakeSentUs = nowUs;
                 ++pending.handshakeRetryCount;
             }
-        }
-
-        if (nowUs >= pending.acceptStartUs && (nowUs - pending.acceptStartUs) >= timeoutUs) {
+        } else {
             expired.push_back(localCid);
         }
     }
@@ -1353,7 +1357,7 @@ void ContextImpl::processPendingHandshakeTimeouts()
         Context::ConnectAttemptInfo info;
         info.ip = pending.peerIp;
         info.port = pending.peerAddress.port();
-        info.timeout = m_config.handshake_timeout;
+        info.timeout = pendingHandshakeBaseTimeoutMs(pending);
         info.encrypted = pending.encrypted;
         info.type = Context::kConnectAttemptPassive;
         reportConnectError(UTP_ERR_TIMEOUT, "wait handshake done timeout", info);
@@ -1370,7 +1374,6 @@ void ContextImpl::refreshPendingHandshakeTimer()
     }
 
     const utp_time_t nowUs = time::MonotonicUs();
-    const uint64_t timeoutUs = PendingHandshakeTimeoutUs(m_config);
     uint64_t nextDueUs = UINT64_MAX;
 
     for (uint32_t localCid : m_waitHandshakeDone) {
@@ -1380,22 +1383,13 @@ void ContextImpl::refreshPendingHandshakeTimer()
         }
 
         const PendingIncomingConnection &pending = it->second;
-        if (pending.acceptStartUs == 0) {
+        if (!pending.handshakeSent || pending.lastHandshakeSentUs == 0) {
             continue;
         }
 
-        const uint64_t expireDueUs = static_cast<uint64_t>(pending.acceptStartUs) + timeoutUs;
-        if (expireDueUs < nextDueUs) {
-            nextDueUs = expireDueUs;
-        }
-
-        if (pending.handshakeSent && pending.handshakeRetryCount < PendingHandshakeMaxRetries(m_config)) {
-            const uint64_t retryDueUs = PendingHandshakeRetryDueUs(m_config,
-                                                                   pending.acceptStartUs,
-                                                                   pending.lastHandshakeSentUs);
-            if (retryDueUs < nextDueUs) {
-                nextDueUs = retryDueUs;
-            }
+        const uint64_t retryDueUs = pendingHandshakeRetryDueUs(pending);
+        if (retryDueUs < nextDueUs) {
+            nextDueUs = retryDueUs;
         }
     }
 
@@ -1412,6 +1406,16 @@ void ContextImpl::refreshPendingHandshakeTimer()
 
     m_pendingHandshakeTimer.stop();
     m_pendingHandshakeTimer.start(delayMs);
+}
+
+uint32_t ContextImpl::pendingHandshakeBaseTimeoutMs(const PendingIncomingConnection &pending) const
+{
+    return PendingHandshakeBaseTimeoutMs(m_config, pending.peerTp);
+}
+
+uint64_t ContextImpl::pendingHandshakeRetryDueUs(const PendingIncomingConnection &pending) const
+{
+    return PendingHandshakeRetryDueUs(m_config, pending.peerTp, pending.lastHandshakeSentUs, pending.handshakeRetryCount);
 }
 
 void ContextImpl::onPendingHandshakeTimeout()
