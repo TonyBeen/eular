@@ -25,8 +25,9 @@ int32_t BuildHandshakeDoneFrame(utp_packno_t ackHandshakePn,
     FrameHandshakeDone done;
     done.ack_handshake_pn = ackHandshakePn;
 
-    const int32_t encoded = done.encode(buffer, size);
-    if (encoded < 0) {
+    Status st;
+    const int32_t encoded = done.encode(buffer, size, st);
+    if (!st.ok() || encoded < 0) {
         return -1;
     }
 
@@ -43,8 +44,9 @@ int32_t BuildHandshakeDelayFrame(utp_time_t delayUs,
     delay.delay_time_us = static_cast<uint32_t>(
         std::min<utp_time_t>(delayUs, static_cast<utp_time_t>(std::numeric_limits<uint32_t>::max())));
 
-    const int32_t encoded = delay.encode(buffer, size);
-    if (encoded < 0) {
+    Status st;
+    const int32_t encoded = delay.encode(buffer, size, st);
+    if (!st.ok() || encoded < 0) {
         return -1;
     }
 

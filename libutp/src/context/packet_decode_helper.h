@@ -10,22 +10,20 @@
 
 #include <memory>
 
-#include "socket/udp.h"
-#include "proto/packet_in.h"
 #include "crypto/aes_gcm_context.h"
+#include "proto/packet_in.h"
+#include "socket/udp.h"
 #include "util/mm.h"
 
 namespace eular {
 namespace utp {
 namespace detail {
 
-bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg,
-                                     MemoryManager &mm,
-                                     const std::shared_ptr<AesGcmContext> &aesCtx,
-                                     PacketIn &packet);
+bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryManager &mm,
+                                     const std::shared_ptr<AesGcmContext> &aesCtx, PacketIn &packet);
 
-} // namespace detail
-} // namespace utp
-} // namespace eular
+}  // namespace detail
+}  // namespace utp
+}  // namespace eular
 
-#endif // __UTP_CONTEXT_PACKET_DECODE_HELPER_H__
+#endif  // __UTP_CONTEXT_PACKET_DECODE_HELPER_H__

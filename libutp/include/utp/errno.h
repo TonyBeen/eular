@@ -34,6 +34,10 @@ enum {
     UTP_ERR_CID_CONFLICT,                   ///< 连接 ID 冲突
     UTP_ERR_OVERFLOW,                       ///< 缓冲区或数值溢出
     UTP_ERR_STREAM_LIMITED,                 ///< 流个数被对端限制（触发连接关闭）
+    UTP_ERR_PATH_VALIDATION_BLOCKED = 0x0010, ///< 路径校验阶段受 anti-amplification 限制，发送被抑制
+    UTP_ERR_SESSION_TOKEN_UNAVAILABLE,        ///< 当前连接无可导出的会话票据
+    UTP_ERR_RESUMPTION_STATE_UNAVAILABLE,     ///< 当前连接无可导出的恢复状态
+    UTP_ERR_CONTEXT_UNAVAILABLE,              ///< 连接上下文不可用
 
     // --- Socket 相关错误 (0x0020 起) ---
     UTP_ERR_SOCKET_CREATE       = 0x0020,   ///< 套接字创建失败

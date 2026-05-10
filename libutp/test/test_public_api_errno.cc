@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <event/loop.h>
 
@@ -13,7 +14,9 @@
 #include "utp/utp.h"
 
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::Context;
+using eular::utp::Status;
 
 TEST_CASE("Context public API maps WOULD_BLOCK to -1 with errno", "[Context][API][Errno]")
 {

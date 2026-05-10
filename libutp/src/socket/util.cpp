@@ -54,203 +54,187 @@ int32_t Socket::Ioctl::SetDontFragment(socket_t sockfd, bool df)
 #endif
 }
 
-int32_t Socket::Ioctl::SetBindInterface(socket_t sockfd, const char *ifname)
+Status Socket::Ioctl::SetBindInterface(socket_t sockfd, const char *ifname)
 {
     if (ifname == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
-        return -1;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
     }
 
 #if defined(OS_LINUX)
     if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) < 0) {
-        auto status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "bind interface '{}' failed: [{}, {}]", ifname, status, GetSystemErrnoMsg(status));
-        return -1;
+        auto err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("bind interface '{}' failed: [{}, {}]", ifname, err, GetSystemErrnoMsg(err)));
     }
 
-    return 0;
+    return Status::OK();
 #else
-    return 0;
+    return Status::OK();
 #endif
 
 }
 
-int32_t Socket::Ioctl::SetRecvError(socket_t sockfd, int32_t family, bool recverr)
+Status Socket::Ioctl::SetRecvError(socket_t sockfd, int32_t family, bool recverr)
 {
-    int32_t status = 0;
 #if defined(OS_LINUX)
     int32_t flag = recverr ? 1 : 0;
     if (family == AF_INET) {
         if (setsockopt(sockfd, IPPROTO_IP, IP_RECVERR, &flag, sizeof(flag)) < 0) {
             int32_t code = GetSystemLastError();
-            SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_RECVERR, {}) failed: [{}, {}].",
-                sockfd, recverr, code, GetSystemErrnoMsg(code));
-            status = -1;
+            return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IP, IP_RECVERR, {}) failed: [{}, {}].",
+                sockfd, recverr, code, GetSystemErrnoMsg(code)));
         }
     } else if (family == AF_INET6) {
         if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVERR, &flag, sizeof(flag)) < 0) {
             int32_t code = GetSystemLastError();
-            SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IPV6, IPV6_RECVERR, {}) failed: [{}, {}].",
-                sockfd, recverr, code, GetSystemErrnoMsg(code));
-            status = -1;
+            return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IPV6, IPV6_RECVERR, {}) failed: [{}, {}].",
+                sockfd, recverr, code, GetSystemErrnoMsg(code)));
         }
     } else {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid family: {}", family);
-        status = -1;
+        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid family: {}", family));
     }
 #else
     UNUSED(sockfd);
     UNUSED(family);
     UNUSED(recverr);
 #endif
-    return status;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetSendBufferSize(socket_t sockfd, int32_t size)
+Status Socket::Ioctl::SetSendBufferSize(socket_t sockfd, int32_t size)
 {
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (const char *)&size, sizeof(size));
-    if (status != 0) {
+    int32_t ret = ::setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (const char *)&size, sizeof(size));
+    if (ret != 0) {
         int32_t code = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, SOL_SOCKET, SO_SNDBUF, {}) failed: [{}, {}].",
-                sockfd, size, code, GetSystemErrnoMsg(code));
-        return -1;
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, SOL_SOCKET, SO_SNDBUF, {}) failed: [{}, {}].",
+                sockfd, size, code, GetSystemErrnoMsg(code)));
     }
 
-    return 0;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetRecvBufferSize(socket_t sockfd, int32_t size)
+Status Socket::Ioctl::SetRecvBufferSize(socket_t sockfd, int32_t size)
 {
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (const char *)&size, sizeof(size));
-    if (status != 0) {
+    int32_t ret = ::setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (const char *)&size, sizeof(size));
+    if (ret != 0) {
         int32_t code = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, SOL_SOCKET, SO_RCVBUF, {}) failed: [{}, {}].",
-                sockfd, size, code, GetSystemErrnoMsg(code));
-        return -1;
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, SOL_SOCKET, SO_RCVBUF, {}) failed: [{}, {}].",
+                sockfd, size, code, GetSystemErrnoMsg(code)));
     }
 
-    return 0;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetPktInfoV4(socket_t sockfd, bool on)
+Status Socket::Ioctl::SetPktInfoV4(socket_t sockfd, bool on)
 {
 #if defined(OS_LINUX) || defined(OS_WINDOWS)
     int32_t enable = on ? 1 : 0;
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IP, IP_PKTINFO, (const char *)&enable, sizeof(enable));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_PKTINFO, {}) failed: [{}, {}].",
-                sockfd, on, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IP, IP_PKTINFO, (const char *)&enable, sizeof(enable));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IP, IP_PKTINFO, {}) failed: [{}, {}].",
+                sockfd, on, err, GetSystemErrnoMsg(err)));
     }
 #elif defined(OS_APPLE)
     int32_t enable = on ? 1 : 0;
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IP, IP_RECVDSTADDR, &enable, sizeof(enable));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_RECVDSTADDR, {}) failed: [{}, {}].",
-                sockfd, on, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IP, IP_RECVDSTADDR, &enable, sizeof(enable));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IP, IP_RECVDSTADDR, {}) failed: [{}, {}].",
+                sockfd, on, err, GetSystemErrnoMsg(err)));
     }
 #else
     UNUSED(sockfd);
     UNUSED(on);
 #endif
-    return 0;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetPktInfoV6(socket_t sockfd, bool on)
+Status Socket::Ioctl::SetPktInfoV6(socket_t sockfd, bool on)
 {
 #if defined(OS_LINUX) || defined(OS_APPLE)
     int32_t enable = on ? 1 : 0;
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &enable, sizeof(enable));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IPV6, IPV6_RECVPKTINFO, {}) failed: [{}, {}].",
-                sockfd, on, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &enable, sizeof(enable));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IPV6, IPV6_RECVPKTINFO, {}) failed: [{}, {}].",
+                sockfd, on, err, GetSystemErrnoMsg(err)));
     }
-    return 0;
+    return Status::OK();
 #elif defined(OS_WINDOWS)
     DWORD enable = on ? 1 : 0;
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_PKTINFO, (const char*)&enable, sizeof(enable));
-    if (status == SOCKET_ERROR) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IPV6, IPV6_PKTINFO, {}) failed: [{}, {}].",
-                sockfd, on, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_PKTINFO, (const char*)&enable, sizeof(enable));
+    if (ret == SOCKET_ERROR) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IPV6, IPV6_PKTINFO, {}) failed: [{}, {}].",
+                sockfd, on, err, GetSystemErrnoMsg(err)));
     }
-    return 0;
+    return Status::OK();
 #endif
 }
 
-int32_t Socket::Ioctl::SetIPv6Only(socket_t sockfd)
+Status Socket::Ioctl::SetIPv6Only(socket_t sockfd)
 {
 #if defined(OS_LINUX)
     int32_t enable = 1;
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &enable, sizeof(enable));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IPV6, IPV6_V6ONLY, 1) failed: [{}, {}].",
-                sockfd, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &enable, sizeof(enable));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IPV6, IPV6_V6ONLY, 1) failed: [{}, {}].",
+                sockfd, err, GetSystemErrnoMsg(err)));
     }
 
 #else
     UNUSED(sockfd);
 #endif
 
-    return 0;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetIPTos(socket_t sockfd)
+Status Socket::Ioctl::SetIPTos(socket_t sockfd)
 {
 #if defined(OS_LINUX)
     int32_t tos = 0xA0; // DSCP CS5(0xA0)
-    int32_t status = ::setsockopt(sockfd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_TOS, 0x20) failed: [{}, {}].",
-                sockfd, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IP, IP_TOS, 0x20) failed: [{}, {}].",
+                sockfd, err, GetSystemErrnoMsg(err)));
     }
 #elif defined(OS_APPLE)
     int32_t tos = NET_SERVICE_TYPE_VO;
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &tos, sizeof(tos));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, IPPROTO_IP, IP_TOS, NET_SERVICE_TYPE_VO) failed: [{}, {}].",
-                sockfd, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &tos, sizeof(tos));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, IPPROTO_IP, IP_TOS, NET_SERVICE_TYPE_VO) failed: [{}, {}].",
+                sockfd, err, GetSystemErrnoMsg(err)));
     }
 #else
     UNUSED(sockfd);
 #endif
-    return 0;
+    return Status::OK();
 }
 
-int32_t Socket::Ioctl::SetNoSigPipe(socket_t sockfd)
+Status Socket::Ioctl::SetNoSigPipe(socket_t sockfd)
 {
 #if defined(OS_APPLE) && defined(SO_NOSIGPIPE)
     int32_t flag = 1;
-    int32_t status = ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &flag, sizeof(flag));
-    if (status != 0) {
-        status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "setsockopt({}, SOL_SOCKET, SO_NOSIGPIPE, 1) failed: [{}, {}].",
-                sockfd, status, GetSystemErrnoMsg(status));
-        return -1;
+    int32_t ret = ::setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &flag, sizeof(flag));
+    if (ret != 0) {
+        int32_t err = GetSystemLastError();
+        return Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("setsockopt({}, SOL_SOCKET, SO_NOSIGPIPE, 1) failed: [{}, {}].",
+                sockfd, err, GetSystemErrnoMsg(err)));
     }
-    return 0;
+    return Status::OK();
 #else
     UNUSED(sockfd);
-    return 0;
+    return Status::OK();
 #endif
 }
 
-int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
+int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname, Status &status)
 {
     if (ifname == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
+        status = Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "ifname is nullptr");
         return -1;
     }
 
@@ -260,8 +244,8 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
     strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
 
     if (ioctl(sockfd, SIOCGIFMTU, &ifr) < 0) {
-        auto status = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "ioctl SIOCGIFMTU for interface '{}' failed: [{}, {}]", ifname, status, GetSystemErrnoMsg(status));
+        auto err = GetSystemLastError();
+        status = Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("ioctl SIOCGIFMTU for interface '{}' failed: [{}, {}]", ifname, err, GetSystemErrnoMsg(err)));
         return -1;
     }
 
@@ -270,7 +254,7 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
     struct ifaddrs *ifs = nullptr;
     if (getifaddrs(&ifs) != 0) {
         int err = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "getifaddrs('{}') failed: [{}, {}]", ifname, err, GetSystemErrnoMsg(err));
+        status = Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("getifaddrs('{}') failed: [{}, {}]", ifname, err, GetSystemErrnoMsg(err)));
         return -1;
     }
 
@@ -289,7 +273,7 @@ int32_t Socket::Ioctl::GetMtuByIfname(socket_t sockfd, const char *ifname)
     freeifaddrs(ifs);
 
     if (mtu < 0) {
-        SetLastErrorV(UTP_ERR_SOCKET_IOCTL, "unable to obtain MTU for interface '{}'", ifname);
+        status = Status::Error(UTP_ERR_SOCKET_IOCTL, fmt::format("unable to obtain MTU for interface '{}'", ifname));
     }
 
     return mtu;
@@ -434,36 +418,35 @@ Address Socket::Util::GetIPPktInfo(const msghdr_t &msg, uint16_t port)
 #endif
 }
 
-socket_t Socket::Open(int32_t family)
+socket_t Socket::Open(int32_t family, Status &status)
 {
     if (family != AF_INET && family != AF_INET6) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid family: {}", family);
+        status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid family: {}", family));
         return -1;
     }
 
     socket_t sockfd = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
     if (sockfd < 0) {
         int32_t code = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_CREATE, "socket({}, SOCK_DGRAM, IPPROTO_UDP) failed: [{}, {}].", family, code, GetSystemErrnoMsg(code));
+        status = Status::Error(UTP_ERR_SOCKET_CREATE, fmt::format("socket({}, SOCK_DGRAM, IPPROTO_UDP) failed: [{}, {}].", family, code, GetSystemErrnoMsg(code)));
         return -1;
     }
 
     return sockfd;
 }
 
-int32_t Socket::Bind(socket_t sockfd, const Address &addr)
+Status Socket::Bind(socket_t sockfd, const Address &addr)
 {
     sockaddr_storage storage;
     socklen_t len = addr.toSockAddr(storage);
-    int32_t status = ::bind(sockfd, (sockaddr *)&storage, len);
-    if (status != 0) {
+    int32_t ret = ::bind(sockfd, (sockaddr *)&storage, len);
+    if (ret != 0) {
         int32_t code = GetSystemLastError();
-        SetLastErrorV(UTP_ERR_SOCKET_BIND, "bind {} to {} failed: [{}, {}].",
-                sockfd, addr.toString(), code, GetSystemErrnoMsg(code));
-        return -1;
+        return Status::Error(UTP_ERR_SOCKET_BIND, fmt::format("bind {} to {} failed: [{}, {}].",
+                sockfd, addr.toString(), code, GetSystemErrnoMsg(code)));
     }
 
-    return 0;
+    return Status::OK();
 }
 
 void Socket::Close(socket_t sockfd)

@@ -6,15 +6,21 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
+#define protected public
 #define private public
 #include "congestion/bbr_v1.h"
 #undef private
+#undef protected
 #include "utp/config.h"
 
 using eular::utp::BbrV1;
+using eular::utp::Status;
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::RttStats;
+using eular::utp::Status;
 
 TEST_CASE("BbrV1: new configurable params are applied", "[BBR]")
 {
@@ -55,10 +61,10 @@ TEST_CASE("BbrV1: probe_rtt_multiplier affects ProbeRTT cwnd", "[BBR]")
     // Set a dummy bandwidth to get a predictable BDP
     // BDP = minRtt * BW / 1000000
     // getMinRtt() will return 20000 if m_rttStats->minRTT() is 20000
-    // BW is in bytes per second.
-    // BW = 1000000 (1 MB/s)
+    // BandWidth stores bits per second.
+    // BW = 8000000 bps (1 MB/s)
     // BDP = 20000 * 1000000 / 1000000 = 20000 bytes
-    bbr.m_maxBandwidth.updateMax(1, 1000000); 
+    bbr.m_maxBandwidth.updateMax(1, 8000000);
 
     // targetCwnd(0.6) = 0.6 * 20000 = 12000
     uint64_t expectedCwnd = static_cast<uint64_t>(0.6f * 20000);

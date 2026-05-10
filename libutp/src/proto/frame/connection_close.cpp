@@ -17,12 +17,12 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameConnectionClose::encode(void *buffer, size_t size) const
+int32_t FrameConnectionClose::encode(void *buffer, size_t size, Status &status) const
 {
     if (reason_phrase.size() > std::numeric_limits<uint16_t>::max()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "reason phrase size {} exceeds uint16_t max",
-                      reason_phrase.size());
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("reason phrase size {} exceeds uint16_t max",
+                                           reason_phrase.size()));
         return -1;
     }
 
@@ -32,16 +32,17 @@ int32_t FrameConnectionClose::encode(void *buffer, size_t size) const
     }
 
     if (reason_phrase.size() != encodeReasonLength) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "reason length mismatch: reason_length={}, reason_phrase.size={}",
-                      encodeReasonLength,
-                      reason_phrase.size());
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("reason length mismatch: reason_length={}, reason_phrase.size={}",
+                                           encodeReasonLength,
+                                           reason_phrase.size()));
         return -1;
     }
 
     int32_t frameLen = FRAME_CONNECTION_CLOSE_HDR_SIZE + encodeReasonLength;
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than connection close frame size {}", size, frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than connection close frame size {}", size, frameLen));
         return -1;
     }
 
@@ -57,13 +58,13 @@ int32_t FrameConnectionClose::encode(void *buffer, size_t size) const
     return frameLen;
 }
 
-int32_t FrameConnectionClose::decode(const void *buffer, size_t size)
+int32_t FrameConnectionClose::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_CONNECTION_CLOSE_HDR_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than minimum connection close frame size {}",
-                      size,
-                      FRAME_CONNECTION_CLOSE_HDR_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than minimum connection close frame size {}",
+                                           size,
+                                           FRAME_CONNECTION_CLOSE_HDR_SIZE));
         return -1;
     }
 
@@ -71,7 +72,8 @@ int32_t FrameConnectionClose::decode(const void *buffer, size_t size)
     FrameType frameType;
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != FrameType::kFrameConnectionClose) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("Invalid frame type: {}", static_cast<uint8_t>(frameType)));
         return -1;
     }
 
@@ -79,10 +81,10 @@ int32_t FrameConnectionClose::decode(const void *buffer, size_t size)
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, reason_length);
 
     if (size < reason_length) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "connection close reason truncated: left={}, required={}",
-                      size,
-                      reason_length);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("connection close reason truncated: left={}, required={}",
+                                           size,
+                                           reason_length));
         return -1;
     }
 

@@ -15,13 +15,13 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameHandshakeDelay::encode(void *buffer, size_t size) const
+int32_t FrameHandshakeDelay::encode(void *buffer, size_t size, Status &status) const
 {
     if (size < FRAME_HANDSHAKE_DELAY_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than handshake delay frame size {}",
-                      size,
-                      FRAME_HANDSHAKE_DELAY_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than handshake delay frame size {}",
+                                           size,
+                                           FRAME_HANDSHAKE_DELAY_SIZE));
         return -1;
     }
 
@@ -29,20 +29,20 @@ int32_t FrameHandshakeDelay::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, FrameType::kFrameHandshakeDelay);
     offset = Serialize::SerializeTo(offset, size, delay_time_us);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "encode handshake delay frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "encode handshake delay frame failed");
         return -1;
     }
 
     return FRAME_HANDSHAKE_DELAY_SIZE;
 }
 
-int32_t FrameHandshakeDelay::decode(const void *buffer, size_t size)
+int32_t FrameHandshakeDelay::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_HANDSHAKE_DELAY_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than handshake delay frame size {}",
-                      size,
-                      FRAME_HANDSHAKE_DELAY_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than handshake delay frame size {}",
+                                           size,
+                                           FRAME_HANDSHAKE_DELAY_SIZE));
         return -1;
     }
 
@@ -50,15 +50,15 @@ int32_t FrameHandshakeDelay::decode(const void *buffer, size_t size)
     FrameType frameType = FrameType::kFrameInvalid;
     offset = Serialize::DeserializeFrom(offset, size, frameType);
     if (offset == nullptr || frameType != FrameType::kFrameHandshakeDelay) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
-                      "Invalid frame type: {}",
-                      static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("Invalid frame type: {}",
+                                           static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     offset = Serialize::DeserializeFrom(offset, size, delay_time_us);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "decode handshake delay frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "decode handshake delay frame failed");
         return -1;
     }
 

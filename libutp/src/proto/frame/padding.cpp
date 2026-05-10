@@ -16,11 +16,14 @@
 namespace eular {
 namespace utp {
 
-int32_t FramePadding::encode(void *buffer, size_t size) const
+int32_t FramePadding::encode(void *buffer, size_t size, Status &status) const
 {
     int32_t frameLen = frameSize();
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than padding frame size {}", size, frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than padding frame size {}",
+                                           size,
+                                           frameLen));
         return -1;
     }
 
@@ -34,13 +37,13 @@ int32_t FramePadding::encode(void *buffer, size_t size) const
     return frameLen;
 }
 
-int32_t FramePadding::decode(const void *buffer, size_t size)
+int32_t FramePadding::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_PADDING_HDR_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than minimum padding frame size {}",
-                      size,
-                      FRAME_PADDING_HDR_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than minimum padding frame size {}",
+                                           size,
+                                           FRAME_PADDING_HDR_SIZE));
         return -1;
     }
 
@@ -48,16 +51,18 @@ int32_t FramePadding::decode(const void *buffer, size_t size)
     FrameType frameType;
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != FrameType::kFramePadding) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("Invalid frame type: {}",
+                                           static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, padding_length);
     if (size < padding_length) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "padding payload truncated: left={}, required={}",
-                      size,
-                      padding_length);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("padding payload truncated: left={}, required={}",
+                                           size,
+                                           padding_length));
         return -1;
     }
 

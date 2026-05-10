@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <chrono>
 #include <thread>
@@ -47,6 +48,7 @@ using eular::utp::FrameStream;
 using eular::utp::FrameType;
 using eular::utp::PacketOut;
 using eular::utp::SendControl;
+using eular::utp::Status;
 
 namespace {
 
@@ -144,7 +146,8 @@ std::vector<uint8_t> BuildAckFrequencyPayload(uint8_t ackThreshold,
     ackFreq.max_ack_delay_ms = maxAckDelayMs;
 
     std::vector<uint8_t> payload(static_cast<size_t>(ackFreq.frameSize()), 0);
-    REQUIRE(ackFreq.encode(payload.data(), payload.size()) == ackFreq.frameSize());
+    Status st;
+    REQUIRE(ackFreq.encode(payload.data(), payload.size(), st) == ackFreq.frameSize());
     return payload;
 }
 
@@ -159,14 +162,15 @@ std::vector<uint8_t> BuildStreamPayload(uint32_t streamId,
     frame.stream_data = const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(data.data()));
 
     std::vector<uint8_t> payload(static_cast<size_t>(FRAME_STREAM_HDR_SIZE) + data.size(), 0);
-    REQUIRE(frame.encode(payload.data(), payload.size()) == static_cast<int32_t>(payload.size()));
+    Status st;
+    REQUIRE(frame.encode(payload.data(), payload.size(), st) == static_cast<int32_t>(payload.size()));
     return payload;
 }
 
 bool AcceptPending(ContextImpl &server)
 {
     if (!server.m_pendingIncomingQueue.empty()) {
-        return server.accept() == eular::utp::UTP_ERR_OK;
+        return server.accept().ok();
     }
     return false;
 }
@@ -283,8 +287,8 @@ TEST_CASE("Ack timer sends delayed ACK without follow-up packets", "[Ack][Integr
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -294,7 +298,7 @@ TEST_CASE("Ack timer sends delayed ACK without follow-up packets", "[Ack][Integr
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -313,7 +317,7 @@ TEST_CASE("Ack timer sends delayed ACK without follow-up packets", "[Ack][Integr
     REQUIRE(clientConn != nullptr);
     REQUIRE(serverConn != nullptr);
 
-    const int32_t sid = clientConn->createStream();
+    const int32_t sid = clientConn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
     REQUIRE(sid >= 0);
     auto clientStreamIt = clientConn->m_streams.find(static_cast<uint32_t>(sid));
     REQUIRE(clientStreamIt != clientConn->m_streams.end());
@@ -344,8 +348,8 @@ TEST_CASE("Ack reordering threshold updates send side and triggers immediate ACK
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -355,7 +359,7 @@ TEST_CASE("Ack reordering threshold updates send side and triggers immediate ACK
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -374,6 +378,7 @@ TEST_CASE("Ack reordering threshold updates send side and triggers immediate ACK
     REQUIRE(clientConn != nullptr);
     REQUIRE(serverConn != nullptr);
 
+    clientConn->m_lastAckFrequencyApplyMs = 0;
     const std::vector<uint8_t> ackFreqPayload = BuildAckFrequencyPayload(10, 1, 200);
     const std::vector<uint8_t> ackFreqWire = BuildWirePacket(serverConn->cid(),
                                                              clientConn->cid(),
@@ -422,8 +427,8 @@ TEST_CASE("Ack piggyback coalesces pending ACK with outgoing stream packet", "[A
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -433,7 +438,7 @@ TEST_CASE("Ack piggyback coalesces pending ACK with outgoing stream packet", "[A
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -452,7 +457,7 @@ TEST_CASE("Ack piggyback coalesces pending ACK with outgoing stream packet", "[A
     REQUIRE(clientConn != nullptr);
     REQUIRE(serverConn != nullptr);
 
-    const int32_t serverSid = serverConn->createStream();
+    const int32_t serverSid = serverConn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
     REQUIRE(serverSid >= 0);
     auto serverStreamIt = serverConn->m_streams.find(static_cast<uint32_t>(serverSid));
     REQUIRE(serverStreamIt != serverConn->m_streams.end());
@@ -468,7 +473,7 @@ TEST_CASE("Ack piggyback coalesces pending ACK with outgoing stream packet", "[A
         200,
         1));
 
-    const int32_t clientSid = clientConn->createStream();
+    const int32_t clientSid = clientConn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
     REQUIRE(clientSid >= 0);
     auto clientStreamIt = clientConn->m_streams.find(static_cast<uint32_t>(clientSid));
     REQUIRE(clientStreamIt != clientConn->m_streams.end());
@@ -477,6 +482,14 @@ TEST_CASE("Ack piggyback coalesces pending ACK with outgoing stream packet", "[A
 
     const uint32_t ackStreamBits = (1u << static_cast<uint32_t>(FrameType::kFrameAck))
                                  | (1u << static_cast<uint32_t>(FrameType::kFrameStream));
+    REQUIRE(PumpUntil(
+        loop,
+        [&]() {
+            return HasUnackedPacketWithBits(clientConn->m_sendCtl.get(), ackStreamBits);
+        },
+        nullptr,
+        200,
+        1));
     REQUIRE(HasUnackedPacketWithBits(clientConn->m_sendCtl.get(), ackStreamBits));
     REQUIRE(clientConn->m_ackElicitingSinceLastAck == 0);
     REQUIRE_FALSE(clientConn->m_ackTimer.isActive());
@@ -493,8 +506,8 @@ TEST_CASE("AckFrequency update is throttled within minimum interval", "[Ack][Int
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -504,7 +517,7 @@ TEST_CASE("AckFrequency update is throttled within minimum interval", "[Ack][Int
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -523,6 +536,7 @@ TEST_CASE("AckFrequency update is throttled within minimum interval", "[Ack][Int
     REQUIRE(clientConn != nullptr);
     REQUIRE(serverConn != nullptr);
 
+    clientConn->m_lastAckFrequencyApplyMs = 0;
     const std::vector<uint8_t> firstAckFreqPayload = BuildAckFrequencyPayload(20, 7, 120);
     const std::vector<uint8_t> firstAckFreqWire = BuildWirePacket(serverConn->cid(),
                                                                   clientConn->cid(),
@@ -573,18 +587,16 @@ TEST_CASE("Passive handshake inherits peer AckFrequency from pending initial par
     ContextImpl server(loop.loop(), &serverCfg);
     ContextImpl client(loop.loop(), &clientCfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) {
-        return true;
-    });
+    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
 
     Context::ConnectInfo info;
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -614,8 +626,8 @@ TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Inte
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "").ok());
+    REQUIRE(client.bind("127.0.0.1", 0, "").ok());
 
     server.setOnNewConnection([](const Context::NewConnectionInfo &) {
         return true;
@@ -625,7 +637,7 @@ TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Inte
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
+    REQUIRE(client.connect(info).ok());
 
     REQUIRE(PumpUntil(
         loop,
@@ -659,225 +671,4 @@ TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Inte
     REQUIRE(clientConn->m_ackProfileCurrent == ConnectionImpl::kAckProfileLatencySensitive);
     const uint32_t ackFrequencyBits = (1u << static_cast<uint32_t>(FrameType::kFrameAckFrequency));
     REQUIRE(HasUnackedPacketWithBits(clientConn->m_sendCtl.get(), ackFrequencyBits));
-}
-
-TEST_CASE("Retrans repack: transient ACK frame is stripped while STREAM is preserved", "[Retrans][Repack]")
-{
-    Config cfg;
-    cfg.handshake_timeout = 200;
-
-    ev::EventLoop loop;
-    ContextImpl server(loop.loop(), &cfg);
-    ContextImpl client(loop.loop(), &cfg);
-
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
-
-    Context::ConnectInfo info;
-    info.ip = "127.0.0.1";
-    info.port = BoundPort(server);
-    info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
-
-    REQUIRE(PumpUntil(loop,
-                      [&]() {
-                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
-                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
-                      },
-                      [&]() { (void)AcceptPending(server); },
-                      300,
-                      1));
-
-    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
-    REQUIRE(clientConn != nullptr);
-
-    const std::vector<uint8_t> ackBytes = {static_cast<uint8_t>(FrameType::kFrameAck), 0x00, 0x00, 0x00};
-    const std::string streamData = "repack-ack-strip";
-    std::vector<uint8_t> streamBytes = BuildStreamPayload(77, 0, streamData);
-
-    std::vector<uint8_t> payload;
-    payload.insert(payload.end(), ackBytes.begin(), ackBytes.end());
-    payload.insert(payload.end(), streamBytes.begin(), streamBytes.end());
-
-    std::vector<eular::utp::FrameMetaInfo> metas(2);
-    metas[0].offset = UTP_HEADER_SIZE;
-    metas[0].length = static_cast<uint16_t>(ackBytes.size());
-    metas[0].frame_type = FrameType::kFrameAck;
-    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMTransientOnRetrans | eular::utp::kFMDroppableOnMtu);
-    metas[0].fmi_u.data = 0;
-    metas[1].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size());
-    metas[1].length = static_cast<uint16_t>(streamBytes.size());
-    metas[1].frame_type = FrameType::kFrameStream;
-    metas[1].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
-    metas[1].fmi_u.data = 0;
-
-    PacketOut *lostPkt = BuildLostPacket(client,
-                                         clientConn,
-                                         payload,
-                                         metas,
-                                         (1u << static_cast<uint32_t>(FrameType::kFrameAck))
-                                       | (1u << static_cast<uint32_t>(FrameType::kFrameStream)),
-                                         streamData.size(),
-                                         static_cast<uint16_t>(ackBytes.size()));
-
-    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
-    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == eular::utp::UTP_ERR_OK);
-
-    REQUIRE(TAILQ_EMPTY(&clientConn->m_sendCtl->m_lostPackets));
-    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(), beforePackNo,
-                                             (1u << static_cast<uint32_t>(FrameType::kFrameAck))) == 0);
-    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(), beforePackNo,
-                                             (1u << static_cast<uint32_t>(FrameType::kFrameStream))) >= 1);
-}
-
-TEST_CASE("Retrans repack: large STREAM is split into multiple retrans packets", "[Retrans][Repack]")
-{
-    Config cfg;
-    cfg.handshake_timeout = 200;
-
-    ev::EventLoop loop;
-    ContextImpl server(loop.loop(), &cfg);
-    ContextImpl client(loop.loop(), &cfg);
-
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
-
-    Context::ConnectInfo info;
-    info.ip = "127.0.0.1";
-    info.port = BoundPort(server);
-    info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
-
-    REQUIRE(PumpUntil(loop,
-                      [&]() {
-                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
-                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
-                      },
-                      [&]() { (void)AcceptPending(server); },
-                      300,
-                      1));
-
-    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
-    REQUIRE(clientConn != nullptr);
-
-    // Shrink MTU budget to force stream chunking into multiple packets.
-    clientConn->m_mtuDiscovery.m_currentMtu = ETHERNET_MTU_MIN;
-
-    const std::string streamData(4096, 'x');
-    std::vector<uint8_t> streamBytes = BuildStreamPayload(88, 0, streamData);
-
-    std::vector<eular::utp::FrameMetaInfo> metas(1);
-    metas[0].offset = UTP_HEADER_SIZE;
-    metas[0].length = static_cast<uint16_t>(streamBytes.size());
-    metas[0].frame_type = FrameType::kFrameStream;
-    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
-    metas[0].fmi_u.data = 0;
-
-    PacketOut *lostPkt = BuildLostPacket(client,
-                                         clientConn,
-                                         streamBytes,
-                                         metas,
-                                         (1u << static_cast<uint32_t>(FrameType::kFrameStream)),
-                                         streamData.size(),
-                                         0);
-
-    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
-    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == eular::utp::UTP_ERR_OK);
-
-    const size_t newStreamPackets = CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
-                                                                      beforePackNo,
-                                                                      (1u << static_cast<uint32_t>(FrameType::kFrameStream)));
-    REQUIRE(newStreamPackets >= 2);
-    REQUIRE(SumUnackedStreamBytesAfter(clientConn->m_sendCtl.get(), beforePackNo) == streamData.size());
-}
-
-TEST_CASE("Retrans repack: mixed frames keep mandatory control frame and drop transient ACK", "[Retrans][Repack]")
-{
-    Config cfg;
-    cfg.handshake_timeout = 200;
-
-    ev::EventLoop loop;
-    ContextImpl server(loop.loop(), &cfg);
-    ContextImpl client(loop.loop(), &cfg);
-
-    REQUIRE(server.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == eular::utp::UTP_ERR_OK);
-    server.setOnNewConnection([](const Context::NewConnectionInfo &) { return true; });
-
-    Context::ConnectInfo info;
-    info.ip = "127.0.0.1";
-    info.port = BoundPort(server);
-    info.timeout = 200;
-    REQUIRE(client.connect(info) == eular::utp::UTP_ERR_OK);
-
-    REQUIRE(PumpUntil(loop,
-                      [&]() {
-                          return FindConnectedByRemote(server, BoundPort(client)) != nullptr
-                              && FindConnectedByRemote(client, BoundPort(server)) != nullptr;
-                      },
-                      [&]() { (void)AcceptPending(server); },
-                      300,
-                      1));
-
-    ConnectionImpl::SP clientConn = FindConnectedByRemote(client, BoundPort(server));
-    REQUIRE(clientConn != nullptr);
-
-    const std::vector<uint8_t> ackBytes = {static_cast<uint8_t>(FrameType::kFrameAck), 0x00, 0x00, 0x00};
-    const std::string streamData = "mixed-control-stream";
-    std::vector<uint8_t> streamBytes = BuildStreamPayload(99, 0, streamData);
-
-    FrameHandshakeDone hsDone{};
-    std::vector<uint8_t> hsBytes(static_cast<size_t>(FRAME_HANDSHAKE_DONE_SIZE), 0);
-    REQUIRE(hsDone.encode(hsBytes.data(), hsBytes.size()) == FRAME_HANDSHAKE_DONE_SIZE);
-
-    std::vector<uint8_t> payload;
-    payload.insert(payload.end(), ackBytes.begin(), ackBytes.end());
-    payload.insert(payload.end(), streamBytes.begin(), streamBytes.end());
-    payload.insert(payload.end(), hsBytes.begin(), hsBytes.end());
-
-    std::vector<eular::utp::FrameMetaInfo> metas(3);
-    metas[0].offset = UTP_HEADER_SIZE;
-    metas[0].length = static_cast<uint16_t>(ackBytes.size());
-    metas[0].frame_type = FrameType::kFrameAck;
-    metas[0].frame_flags = static_cast<uint8_t>(eular::utp::kFMTransientOnRetrans | eular::utp::kFMDroppableOnMtu);
-    metas[0].fmi_u.data = 0;
-    metas[1].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size());
-    metas[1].length = static_cast<uint16_t>(streamBytes.size());
-    metas[1].frame_type = FrameType::kFrameStream;
-    metas[1].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep | eular::utp::kFMSplittable);
-    metas[1].fmi_u.data = 0;
-    metas[2].offset = static_cast<uint16_t>(UTP_HEADER_SIZE + ackBytes.size() + streamBytes.size());
-    metas[2].length = static_cast<uint16_t>(hsBytes.size());
-    metas[2].frame_type = FrameType::kFrameHandshakeDone;
-    metas[2].frame_flags = static_cast<uint8_t>(eular::utp::kFMRetransMustKeep);
-    metas[2].fmi_u.data = 0;
-
-    PacketOut *lostPkt = BuildLostPacket(client,
-                                         clientConn,
-                                         payload,
-                                         metas,
-                                         (1u << static_cast<uint32_t>(FrameType::kFrameAck))
-                                       | (1u << static_cast<uint32_t>(FrameType::kFrameStream))
-                                       | (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone))
-                                       | (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDelay)),
-                                         streamData.size(),
-                                         static_cast<uint16_t>(ackBytes.size()));
-
-    const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
-    REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == eular::utp::UTP_ERR_OK);
-
-    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
-                                             beforePackNo,
-                                             (1u << static_cast<uint32_t>(FrameType::kFrameAck))) == 0);
-    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
-                                             beforePackNo,
-                                             (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone))) >= 1);
-    REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
-                                             beforePackNo,
-                                             (1u << static_cast<uint32_t>(FrameType::kFrameStream))) >= 1);
 }

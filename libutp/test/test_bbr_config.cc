@@ -6,13 +6,17 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include "congestion/bbr_v1.h"
 #include "utp/config.h"
 
 using eular::utp::BbrV1;
+using eular::utp::Status;
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::RttStats;
+using eular::utp::Status;
 
 TEST_CASE("BbrV1: configurable init/min cwnd are applied", "[BBR]")
 {

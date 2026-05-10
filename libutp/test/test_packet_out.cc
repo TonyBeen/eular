@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <cstdint>
 #include <limits>
@@ -16,6 +17,7 @@
 using eular::utp::kFrameVersion;
 using eular::utp::MemoryManager;
 using eular::utp::PacketOut;
+using eular::utp::Status;
 
 TEST_CASE("PacketOut: create and destroy", "[PacketOut]")
 {

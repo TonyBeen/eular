@@ -21,11 +21,11 @@ inline bool DeserializeHelper(const uint8_t *&offset, size_t &sz, T &value) {
 }
 }
 
-int32_t eular::utp::FrameAck::encode(void *buffer, size_t size) const
+int32_t eular::utp::FrameAck::encode(void *buffer, size_t size, Status &status) const
 {
     int32_t ackFrameSize = frameSize();
     if (ackFrameSize > static_cast<int32_t>(size)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than ack frame size {}", size, ackFrameSize);
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "buffer too small for ack frame");
         return -1;
     }
 
@@ -37,7 +37,7 @@ int32_t eular::utp::FrameAck::encode(void *buffer, size_t size) const
     auto it = _history->begin();
     firstAckRange = it->high - it->low + 1; // +1 表示闭区间
     if (firstAckRange == 0) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range {}", firstAckRange);
+        status = Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid first ack range");
         return -1;
     }
 
@@ -65,16 +65,15 @@ int32_t eular::utp::FrameAck::encode(void *buffer, size_t size) const
     return ackFrameSize;
 }
 
-int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
+int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size, Status &status)
 {
     if (buffer == nullptr || _ackInfo == nullptr || _params == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack decode args: buffer={}, ackInfo={}, params={}",
-            buffer != nullptr, _ackInfo != nullptr, _params != nullptr);
+        status = Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid ack decode args");
         return -1;
     }
 
     if (size < FRAME_ACK_HDR_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than minimum ack frame size {}", size, FRAME_ACK_HDR_SIZE);
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "buffer too small to parse ack frame");
         return -1;
     }
 
@@ -83,29 +82,29 @@ int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
 
     FrameType frameType;
     if (!DeserializeHelper(bufferOffset, size,frameType)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack frame type");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode ack frame type");
         return -1;
     }
     if (frameType != FrameType::kFrameAck) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED, fmt::format("Invalid frame type: {}", static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     uint8_t rangeCount;
     if (!DeserializeHelper(bufferOffset, size,rangeCount)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack range count");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode ack range count");
         return -1;
     }
 
     // range_count 表示 additional ACK ranges 的数量（不含 first_ack_range）
     if (rangeCount >= _ackInfo->ack_ranges.size()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range count {}", rangeCount);
+        status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid ack range count {}", rangeCount));
         return -1;
     }
 
     const size_t expectedSize = FRAME_ACK_HDR_SIZE + static_cast<size_t>(rangeCount) * FRAME_ACK_RANGE_SIZE;
     if (sizeOriginal < expectedSize) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "ack frame too short: size={}, expected={}", sizeOriginal, expectedSize);
+        status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("ack frame too short: size={}, expected={}", sizeOriginal, expectedSize));
         return -1;
     }
 
@@ -113,30 +112,31 @@ int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
 
     uint16_t ackDelay;
     if (!DeserializeHelper(bufferOffset, size,ackDelay)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack delay");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode ack delay");
         return -1;
     }
     _ackInfo->ack_delay = ackDelay << _params->ack_delay_exponent;
 
     uint32_t firstAckRange;
     if (!DeserializeHelper(bufferOffset, size,firstAckRange)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode first ack range");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode first ack range");
         return -1;
     }
 
     if (firstAckRange == 0) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range 0");
+        status = Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid first ack range 0");
         return -1;
     }
 
     utp_packno_t largestAcked;
     if (!DeserializeHelper(bufferOffset, size,largestAcked)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode largest acked packno");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "failed to decode largest acked packno");
         return -1;
     }
 
     if (largestAcked < static_cast<utp_packno_t>(firstAckRange - 1)) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid first ack range {} for largest packno {}", firstAckRange, largestAcked);
+        status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid first ack range {} for largest packno {}",
+            firstAckRange, largestAcked));
         return -1;
     }
 
@@ -150,29 +150,29 @@ int32_t eular::utp::FrameAck::decode(const void *buffer, size_t size)
     for (; i <= rangeCount; ++i) {
         uint32_t gap;
         if (!DeserializeHelper(bufferOffset, size,gap)) {
-            SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack gap at index {}", i);
+            status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("failed to decode ack gap at index {}", i));
             return -1;
         }
 
         if (lastAcked <= static_cast<utp_packno_t>(gap)) {
-            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack gap {} at index {}", gap, i);
+            status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid ack gap {} at index {}", gap, i));
             return -1;
         }
 
         uint32_t ackRangeLength;
         if (!DeserializeHelper(bufferOffset, size,ackRangeLength)) {
-            SetLastErrorV(UTP_ERR_OVERFLOW, "failed to decode ack range length at index {}", i);
+            status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("failed to decode ack range length at index {}", i));
             return -1;
         }
 
         if (ackRangeLength == 0) {
-            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range length 0 at index {}", i);
+            status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid ack range length 0 at index {}", i));
             return -1;
         }
 
         _ackInfo->ack_ranges[i].high = lastAcked - gap - 1;
         if (_ackInfo->ack_ranges[i].high + 1 < ackRangeLength) {
-            SetLastErrorV(UTP_ERR_INVALID_PARAM, "invalid ack range length {} at index {}", ackRangeLength, i);
+            status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("invalid ack range length {} at index {}", ackRangeLength, i));
             return -1;
         }
 

@@ -16,16 +16,16 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameStream::encode(void *buffer, size_t size) const
+int32_t FrameStream::encode(void *buffer, size_t size, Status &status) const
 {
     int32_t frameLen = frameSize();
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than stream frame size {}", size, frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("buffer size {} is smaller than stream frame size {}", size, frameLen));
         return -1;
     }
 
     if (stream_data_length > 0 && stream_data == nullptr) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "stream_data is null while stream_data_length={}", stream_data_length);
+        status = Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("stream_data is null while stream_data_length={}", stream_data_length));
         return -1;
     }
 
@@ -43,13 +43,13 @@ int32_t FrameStream::encode(void *buffer, size_t size) const
     return frameLen;
 }
 
-int32_t FrameStream::decode(const void *buffer, size_t size)
+int32_t FrameStream::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_STREAM_HDR_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than minimum stream frame size {}",
-                      size,
-                      FRAME_STREAM_HDR_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than minimum stream frame size {}",
+                                           size,
+                                           FRAME_STREAM_HDR_SIZE));
         return -1;
     }
 
@@ -57,7 +57,7 @@ int32_t FrameStream::decode(const void *buffer, size_t size)
     FrameType frameType;
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != FrameType::kFrameStream) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED, fmt::format("Invalid frame type: {}", static_cast<uint8_t>(frameType)));
         return -1;
     }
 
@@ -67,10 +67,10 @@ int32_t FrameStream::decode(const void *buffer, size_t size)
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, stream_offset);
 
     if (size < stream_data_length) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "stream payload truncated: left={}, required={}",
-                      size,
-                      stream_data_length);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("stream payload truncated: left={}, required={}",
+                                           size,
+                                           stream_data_length));
         return -1;
     }
 

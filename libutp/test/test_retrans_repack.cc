@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <chrono>
 #include <cstdint>
@@ -42,6 +43,7 @@ using eular::utp::FrameStream;
 using eular::utp::FrameType;
 using eular::utp::PacketOut;
 using eular::utp::SendControl;
+using eular::utp::Status;
 
 namespace {
 
@@ -75,7 +77,7 @@ uint16_t BoundPort(const ContextImpl &ctx)
 bool AcceptPending(ContextImpl &server)
 {
     if (!server.m_pendingIncomingQueue.empty()) {
-        return server.accept() == UTP_ERR_OK;
+        return server.accept()  == 0;
     }
     return false;
 }
@@ -133,7 +135,8 @@ std::vector<uint8_t> BuildStreamPayload(uint32_t streamId,
     frame.stream_data = const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(data.data()));
 
     std::vector<uint8_t> payload(static_cast<size_t>(FRAME_STREAM_HDR_SIZE) + data.size(), 0);
-    REQUIRE(frame.encode(payload.data(), payload.size()) == static_cast<int32_t>(payload.size()));
+    Status st;
+    REQUIRE(frame.encode(payload.data(), payload.size(), st) == static_cast<int32_t>(payload.size()));
     return payload;
 }
 
@@ -229,7 +232,7 @@ bool ConnectPair(ev::EventLoop &loop,
     info.ip = "127.0.0.1";
     info.port = BoundPort(server);
     info.timeout = 200;
-    if (client.connect(info) != UTP_ERR_OK) {
+    if (client.connect(info)  != 0) {
         return false;
     }
 
@@ -261,8 +264,8 @@ TEST_CASE("Retrans repack: transient ACK frame is stripped while STREAM is prese
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "")  == 0);
+    REQUIRE(client.bind("127.0.0.1", 0, "")  == 0);
 
     ConnectionImpl::SP clientConn;
     ConnectionImpl::SP serverConn;
@@ -301,7 +304,7 @@ TEST_CASE("Retrans repack: transient ACK frame is stripped while STREAM is prese
 
     const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
     REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == UTP_ERR_OK);
+             == 0);
 
     REQUIRE(TAILQ_EMPTY(&clientConn->m_sendCtl->m_lostPackets));
     REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(), beforePackNo,
@@ -319,8 +322,8 @@ TEST_CASE("Retrans repack: large STREAM is split into multiple retrans packets",
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "")  == 0);
+    REQUIRE(client.bind("127.0.0.1", 0, "")  == 0);
 
     ConnectionImpl::SP clientConn;
     ConnectionImpl::SP serverConn;
@@ -349,7 +352,7 @@ TEST_CASE("Retrans repack: large STREAM is split into multiple retrans packets",
 
     const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
     REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == UTP_ERR_OK);
+             == 0);
 
     const size_t newStreamPackets = CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
                                                                       beforePackNo,
@@ -367,8 +370,8 @@ TEST_CASE("Retrans repack: mixed frames keep mandatory control frame and drop tr
     ContextImpl server(loop.loop(), &cfg);
     ContextImpl client(loop.loop(), &cfg);
 
-    REQUIRE(server.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
-    REQUIRE(client.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(server.bind("127.0.0.1", 0, "")  == 0);
+    REQUIRE(client.bind("127.0.0.1", 0, "")  == 0);
 
     ConnectionImpl::SP clientConn;
     ConnectionImpl::SP serverConn;
@@ -383,8 +386,9 @@ TEST_CASE("Retrans repack: mixed frames keep mandatory control frame and drop tr
 
     FrameHandshakeDone hsDone;
     hsDone.ack_handshake_pn = 123;
+    Status st;
     std::vector<uint8_t> hsBytes(static_cast<size_t>(FRAME_HANDSHAKE_DONE_SIZE), 0);
-    REQUIRE(hsDone.encode(hsBytes.data(), hsBytes.size()) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(hsDone.encode(hsBytes.data(), hsBytes.size(), st) == FRAME_HANDSHAKE_DONE_SIZE);
 
     std::vector<uint8_t> payload;
     payload.insert(payload.end(), ackBytes.begin(), ackBytes.end());
@@ -420,7 +424,7 @@ TEST_CASE("Retrans repack: mixed frames keep mandatory control frame and drop tr
 
     const utp_packno_t beforePackNo = LargestUnackedPackNo(clientConn->m_sendCtl.get());
     REQUIRE(clientConn->m_sendCtl->retransmitSplitStreamPacket(lostPkt, eular::utp::time::MonotonicUs())
-            == UTP_ERR_OK);
+             == 0);
 
     REQUIRE(CountUnackedPacketsAfterWithBits(clientConn->m_sendCtl.get(),
                                              beforePackNo,

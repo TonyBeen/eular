@@ -13,14 +13,16 @@
 
 #include "utp/errno.h"
 #include "util/error.h"
+#include "logger/logger.h"
 
 namespace eular {
 namespace utp {
 
-int32_t FrameSessionToken::encode(void *buffer, size_t size) const
+int32_t FrameSessionToken::encode(void *buffer, size_t size, Status &status) const
 {
     if (token.size() > std::numeric_limits<uint8_t>::max()) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM, "token size {} exceeds uint8_t max", token.size());
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("token size {} exceeds uint8_t max", token.size()));
         return -1;
     }
 
@@ -30,16 +32,16 @@ int32_t FrameSessionToken::encode(void *buffer, size_t size) const
     }
 
     if (token.size() != encodeTokenSize) {
-        SetLastErrorV(UTP_ERR_INVALID_PARAM,
-                      "token size mismatch: token_size={}, token.size={}",
-                      encodeTokenSize,
-                      token.size());
+        status = Status::Error(UTP_ERR_INVALID_PARAM,
+                               fmt::format("token size mismatch: token_size={}, token.size={}",
+                                           encodeTokenSize, token.size()));
         return -1;
     }
 
     int32_t frameLen = FRAME_SESSION_TOKEN_HDR_SIZE + encodeTokenSize;
     if (size < static_cast<size_t>(frameLen)) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than session token frame size {}", size, frameLen);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than session token frame size {}", size, frameLen));
         return -1;
     }
 
@@ -55,13 +57,13 @@ int32_t FrameSessionToken::encode(void *buffer, size_t size) const
     return frameLen;
 }
 
-int32_t FrameSessionToken::decode(const void *buffer, size_t size)
+int32_t FrameSessionToken::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_SESSION_TOKEN_HDR_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than minimum session token frame size {}",
-                      size,
-                      FRAME_SESSION_TOKEN_HDR_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than minimum session token frame size {}",
+                                           size,
+                                           FRAME_SESSION_TOKEN_HDR_SIZE));
         return -1;
     }
 
@@ -69,7 +71,7 @@ int32_t FrameSessionToken::decode(const void *buffer, size_t size)
     FrameType frameType;
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != FrameType::kFrameSessionToken) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::ErrorLiteral(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type for session token");
         return -1;
     }
 
@@ -77,10 +79,10 @@ int32_t FrameSessionToken::decode(const void *buffer, size_t size)
     bufferOffset = Serialize::DeserializeFrom(bufferOffset, size, token_validity_period);
 
     if (size < token_size) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "session token payload truncated: left={}, required={}",
-                      size,
-                      token_size);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("session token payload truncated: left={}, required={}",
+                                           size,
+                                           token_size));
         return -1;
     }
 

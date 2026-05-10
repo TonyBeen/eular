@@ -4,7 +4,7 @@
 
 #include <stdlib.h>
 
-#include "util/error.h"
+#include "fmt/fmt.h"
 #include "util/fiu_local.h"
 
 namespace eular {
@@ -25,7 +25,7 @@ MultipleMsg::~MultipleMsg()
     resize(0, 0);
 }
 
-void MultipleMsg::resize(uint32_t size, uint32_t mss)
+Status MultipleMsg::resize(uint32_t size, uint32_t mss)
 {
     if (m_buffer) {
         free(m_buffer);
@@ -35,7 +35,7 @@ void MultipleMsg::resize(uint32_t size, uint32_t mss)
     m_nMsg = size;
     m_mss = mss;
     if (m_nMsg == 0 || m_mss == 0) {
-        return;
+        return Status::OK();
     }
 
     size_t bufSize = bufferSize();
@@ -45,8 +45,7 @@ void MultipleMsg::resize(uint32_t size, uint32_t mss)
         m_buffer = reinterpret_cast<char *>(malloc(bufSize));
     }
     if (!m_buffer) {
-        SetLastErrorV(UTP_ERR_NO_MEMORY, "MultipleMsg::resize malloc failed! size={}", bufSize);
-        return;
+        return Status::Error(UTP_ERR_NO_MEMORY, fmt::format("MultipleMsg::resize malloc failed! size={}", bufSize));
     }
 
     // Initialize mmsghdr, iovec
@@ -65,6 +64,8 @@ void MultipleMsg::resize(uint32_t size, uint32_t mss)
         msg->msg_hdr.msg_flags = 0;
         msg->msg_len = 0;
     }
+
+    return Status::OK();
 }
 
 void MultipleMsg::reset()

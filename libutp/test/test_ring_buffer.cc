@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <cstdint>
@@ -16,7 +17,9 @@
 #include "util/ring_buffer.h"
 
 using eular::utp::RingBuffer;
+using eular::utp::Status;
 using eular::utp::Stream;
+using eular::utp::Status;
 
 TEST_CASE("RingBuffer: write/read keeps byte order", "[RingBuffer]")
 {

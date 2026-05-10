@@ -15,13 +15,13 @@
 namespace eular {
 namespace utp {
 
-int32_t FrameMaxData::encode(void *buffer, size_t size) const
+int32_t FrameMaxData::encode(void *buffer, size_t size, Status &status) const
 {
     if (size < FRAME_MAX_DATA_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than max data frame size {}",
-                      size,
-                      FRAME_MAX_DATA_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than max data frame size {}",
+                                           size,
+                                           FRAME_MAX_DATA_SIZE));
         return -1;
     }
 
@@ -29,20 +29,20 @@ int32_t FrameMaxData::encode(void *buffer, size_t size) const
     offset = Serialize::SerializeTo(offset, size, FrameType::kFrameMaxData);
     offset = Serialize::SerializeTo(offset, size, maximum_data);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "encode max data frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "encode max data frame failed");
         return -1;
     }
 
     return FRAME_MAX_DATA_SIZE;
 }
 
-int32_t FrameMaxData::decode(const void *buffer, size_t size)
+int32_t FrameMaxData::decode(const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_MAX_DATA_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW,
-                      "buffer size {} is smaller than max data frame size {}",
-                      size,
-                      FRAME_MAX_DATA_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW,
+                               fmt::format("buffer size {} is smaller than max data frame size {}",
+                                           size,
+                                           FRAME_MAX_DATA_SIZE));
         return -1;
     }
 
@@ -50,15 +50,15 @@ int32_t FrameMaxData::decode(const void *buffer, size_t size)
     FrameType frameType = FrameType::kFrameInvalid;
     offset = Serialize::DeserializeFrom(offset, size, frameType);
     if (offset == nullptr || frameType != FrameType::kFrameMaxData) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED,
-                      "invalid frame type: {}",
-                      static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED,
+                               fmt::format("invalid frame type: {}",
+                                           static_cast<uint8_t>(frameType)));
         return -1;
     }
 
     offset = Serialize::DeserializeFrom(offset, size, maximum_data);
     if (offset == nullptr) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "decode max data frame failed");
+        status = Status::ErrorLiteral(UTP_ERR_OVERFLOW, "decode max data frame failed");
         return -1;
     }
 

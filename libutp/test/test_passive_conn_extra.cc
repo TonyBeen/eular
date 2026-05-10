@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <event/loop.h>
 #include <utils/serialize.hpp>
@@ -25,6 +26,7 @@ using eular::utp::ContextImpl;
 using eular::utp::UdpSocket;
 using eular::utp::PacketIn;
 using eular::utp::FrameHandshakeDone;
+using eular::utp::Status;
 using eular::Serialize;
 
 namespace {
@@ -65,7 +67,8 @@ UdpSocket::MsgMetaInfo BuildHandshakeDonePacket(uint32_t scid, uint32_t dcid, ui
     offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(eular::utp::UTP_TYPE_CTRL));
     offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(0));
     
-    done.encode(offset, left);
+    Status st;
+    done.encode(offset, left, st);
 
     UdpSocket::MsgMetaInfo msg;
     msg.data = buffer.data();
@@ -118,7 +121,7 @@ TEST_CASE("Passive Connection: HandshakeDone convergence", "[Passive][Handshake]
     ctx.onReadPacket(msg1);
 
     uint32_t localCid = ctx.m_pendingIncomingQueue.front();
-    REQUIRE(ctx.accept() == UTP_ERR_OK);
+    REQUIRE(ctx.accept().ok());
     
     auto &pending = ctx.m_pendingIncoming[localCid];
     REQUIRE(pending.handshakeSent);

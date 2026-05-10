@@ -1,4 +1,5 @@
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include "utp/errno.h"
 #include "utp/platform.h"

@@ -16,6 +16,7 @@
 #include "commom.h"
 #include "socket/mmsg.h"
 #include "socket/packet.h"
+#include "util/status.h"
 
 namespace eular {
 namespace utp {
@@ -58,9 +59,9 @@ public:
 public:
     bool isValid() const { return m_sock != INVALID_SOCKET; }
 
-    int32_t bind(const std::string &ip, uint16_t port, const std::string &ifname);
+    Status bind(const std::string &ip, uint16_t port, const std::string &ifname);
 
-    int32_t recvErrorMsg(ErrorMsg &errMsg);
+    int32_t recvErrorMsg(ErrorMsg &errMsg, Status &status);
 
     /**
      * @brief 读取数据
@@ -68,11 +69,11 @@ public:
      * @param msgVec 数据缓存
      * @return int32_t 返回读取到的数据包数量, 小于0表示失败, 等于0表示无数据
      */
-    int32_t recv(std::vector<MsgMetaInfo>& msgVec);
+    int32_t recv(std::vector<MsgMetaInfo>& msgVec, Status &status);
 
     // TODO(next): 在 Linux 上增加 MSG_ZEROCOPY 发送与错误队列完成事件处理（SO_EE_ORIGIN_ZEROCOPY）。
     // NOTE: 需要与 SendControl/PacketOut 生命周期联动，避免在 completion 前释放或改写缓冲。
-    int32_t send(const std::vector<MsgMetaInfo> &msgVec);
+    int32_t send(const std::vector<MsgMetaInfo> &msgVec, Status &status);
 
 private:
     socket_t        m_sock{INVALID_SOCKET};

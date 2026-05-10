@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <vector>
 
@@ -25,12 +26,19 @@
 #include "util/fiu_local.h"
 
 using eular::utp::Config;
+using eular::utp::Status;
 using eular::utp::ContextImpl;
+using eular::utp::Status;
 using eular::utp::ConnectionImpl;
+using eular::utp::Status;
 using eular::utp::PacketOut;
+using eular::utp::Status;
 using eular::utp::PacketOutFlags;
+using eular::utp::Status;
 using eular::utp::AesGcmContext;
+using eular::utp::Status;
 using eular::utp::UdpSocket;
+using eular::utp::Status;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 1: mem/packet_out_attempt/alloc
@@ -98,7 +106,7 @@ TEST_CASE("Fault injection: udp sendto failure", "[FaultInjection][UDP]")
 
     Config cfg;
     UdpSocket sock(cfg);
-    REQUIRE(sock.bind("127.0.0.1", 0, "") == UTP_ERR_OK);
+    REQUIRE(sock.bind("127.0.0.1", 0, "")  == 0);
 
     uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     eular::utp::Address peer("127.0.0.1", 12345);
@@ -111,18 +119,19 @@ TEST_CASE("Fault injection: udp sendto failure", "[FaultInjection][UDP]")
     std::vector<UdpSocket::MsgMetaInfo> msgVec = {msg};
 
     // Without injection: send succeeds (returns 1 = sent count)
-    int32_t ret = sock.send(msgVec);
+    Status sendStatus;
+    int32_t ret = sock.send(msgVec, sendStatus);
     REQUIRE(ret == 1);
 
     // With injection: sendto/sendmsg faked to return ENOBUFS
     REQUIRE(fiu_enable("net/udp/sendto", 1, NULL, 0) == 0);
-    ret = sock.send(msgVec);
+    ret = sock.send(msgVec, sendStatus);
     REQUIRE(ret < 1);
-    REQUIRE(utp_get_last_error() == UTP_ERR_SOCKET_WRITE);
+    REQUIRE(sendStatus.code() == UTP_ERR_SOCKET_WRITE);
     REQUIRE(fiu_disable("net/udp/sendto") == 0);
 
     // After disabling: send works again
-    ret = sock.send(msgVec);
+    ret = sock.send(msgVec, sendStatus);
     REQUIRE(ret == 1);
 #else
     SUCCEED();
@@ -158,7 +167,8 @@ TEST_CASE("Fault injection: encrypt buffer malloc failure", "[FaultInjection][Cr
     pkt->packno    = 1;
 
     // Without injection: encrypt succeeds
-    REQUIRE(aes.encrypt(pkt) == 0);
+    Status encStatus = aes.encrypt(pkt);
+    REQUIRE(encStatus.ok());
     if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
         std::free(pkt->encrypt_data);
         pkt->encrypt_data = nullptr;
@@ -167,13 +177,15 @@ TEST_CASE("Fault injection: encrypt buffer malloc failure", "[FaultInjection][Cr
 
     // With injection: malloc fails → encrypt returns non-zero
     REQUIRE(fiu_enable("crypto/encrypt_buf/malloc", 1, NULL, 0) == 0);
-    REQUIRE(aes.encrypt(pkt) != 0);
-    REQUIRE(utp_get_last_error() == UTP_ERR_NO_MEMORY);
+    encStatus = aes.encrypt(pkt);
+    REQUIRE_FALSE(encStatus.ok());
+    REQUIRE(encStatus.code() == UTP_ERR_NO_MEMORY);
     REQUIRE(fiu_disable("crypto/encrypt_buf/malloc") == 0);
 
     // After disabling: encrypt works again
     pkt->po_flags = static_cast<uint16_t>(PacketOutFlags::kPoKeepPlaintext);
-    REQUIRE(aes.encrypt(pkt) == 0);
+    encStatus = aes.encrypt(pkt);
+    REQUIRE(encStatus.ok());
 
     ctx.m_mm.putPacketOut(pkt);
 #else

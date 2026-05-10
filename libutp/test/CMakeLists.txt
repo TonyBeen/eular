@@ -24,6 +24,7 @@ set(UTP_TEST_SOURCES
     test_stream_impl.cc
     test_stream_zero_copy_views.cc
     test_public_api_errno.cc
+    test_status.cc
     test_fault_injection_mmsg.cc
     test_fault_injection_new.cc
 )

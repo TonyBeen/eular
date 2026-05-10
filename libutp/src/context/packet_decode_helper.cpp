@@ -8,7 +8,6 @@
 #include "context/packet_decode_helper.h"
 
 #include <cstring>
-
 #include <utils/serialize.hpp>
 
 #include "utp/errno.h"
@@ -50,7 +49,7 @@ bool ParseHeader(const uint8_t *data, size_t size, UTPHeaderProto &header, const
     return true;
 }
 
-} // namespace
+}  // namespace
 
 bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryManager &mm,
                                      const std::shared_ptr<AesGcmContext> &aesCtx, PacketIn &packet)
@@ -72,7 +71,7 @@ bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryMa
         std::memcpy(const_cast<uint8_t *>(packet.raw_data), msgData, msg.len);
         packet.raw_size = msg.len;
         packet.meta = msg.metaInfo;
-        return packet.decode(packet.raw_data, packet.raw_size) == UTP_ERR_OK;
+        return packet.decode(packet.raw_data, packet.raw_size).ok();
     }
 
     if (header.payload_length < AesGcmContext::GCM_TAG_SIZE) {
@@ -90,13 +89,8 @@ bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryMa
     }
 
     std::memcpy(const_cast<uint8_t *>(packet.raw_data), msgData, UTP_HEADER_SIZE);
-    if (aesCtx->decrypt(payload,
-                        header.payload_length,
-                        msgData,
-                        UTP_HEADER_SIZE,
-                        header.pn,
-                        const_cast<uint8_t *>(packet.raw_data) + UTP_HEADER_SIZE,
-                        &plainLen) != UTP_ERR_OK) {
+    if (!aesCtx->decrypt(payload, header.payload_length, msgData, UTP_HEADER_SIZE, header.pn,
+                         const_cast<uint8_t *>(packet.raw_data) + UTP_HEADER_SIZE, &plainLen)) {
         return false;
     }
 
@@ -111,9 +105,9 @@ bool DecodeUdpPacketWithOptionalAead(const UdpSocket::MsgMetaInfo &msg, MemoryMa
 
     packet.raw_size = decodedSize;
     packet.meta = msg.metaInfo;
-    return packet.decode(packet.raw_data, decodedSize) == UTP_ERR_OK;
+    return packet.decode(packet.raw_data, decodedSize).ok();
 }
 
-} // namespace detail
-} // namespace utp
-} // namespace eular
+}  // namespace detail
+}  // namespace utp
+}  // namespace eular

@@ -12,6 +12,18 @@
 #include "util/error.h"
 
 namespace {
+using eular::utp::Status;
+
+int32_t NormalizePublicStatus(const Status &status)
+{
+    if (status.ok()) {
+        return 0;
+    }
+
+    SetLastErrorV(status.code(), status.message());
+    return -1;
+}
+
 int32_t NormalizePublicStatus(int32_t status)
 {
     if (status == UTP_ERR_OK) {

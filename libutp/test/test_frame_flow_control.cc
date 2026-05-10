@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 
@@ -18,6 +19,7 @@ using eular::utp::FrameDataBlocked;
 using eular::utp::FrameMaxData;
 using eular::utp::FrameMaxStreamData;
 using eular::utp::FrameStreamDataBlocked;
+using eular::utp::Status;
 
 TEST_CASE("MaxData frame: encode/decode", "[FrameFlowControl]")
 {
@@ -25,11 +27,12 @@ TEST_CASE("MaxData frame: encode/decode", "[FrameFlowControl]")
     frame.maximum_data = 123456789ULL;
 
     std::array<uint8_t, FRAME_MAX_DATA_SIZE> buffer{};
-    const int32_t encoded = frame.encode(buffer.data(), buffer.size());
+    Status st;
+    const int32_t encoded = frame.encode(buffer.data(), buffer.size(), st);
     REQUIRE(encoded == FRAME_MAX_DATA_SIZE);
 
     FrameMaxData decoded;
-    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded));
+    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded), st);
     REQUIRE(decodedLen == encoded);
     REQUIRE(decoded.maximum_data == frame.maximum_data);
 }
@@ -41,11 +44,12 @@ TEST_CASE("MaxStreamData frame: encode/decode", "[FrameFlowControl]")
     frame.maximum_stream_data = 9988776655ULL;
 
     std::array<uint8_t, FRAME_MAX_STREAM_DATA_SIZE> buffer{};
-    const int32_t encoded = frame.encode(buffer.data(), buffer.size());
+    Status st;
+    const int32_t encoded = frame.encode(buffer.data(), buffer.size(), st);
     REQUIRE(encoded == FRAME_MAX_STREAM_DATA_SIZE);
 
     FrameMaxStreamData decoded;
-    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded));
+    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded), st);
     REQUIRE(decodedLen == encoded);
     REQUIRE(decoded.stream_id == frame.stream_id);
     REQUIRE(decoded.maximum_stream_data == frame.maximum_stream_data);
@@ -57,11 +61,12 @@ TEST_CASE("DataBlocked frame: encode/decode", "[FrameFlowControl]")
     frame.data_limit = 42424242ULL;
 
     std::array<uint8_t, FRAME_DATA_BLOCKED_SIZE> buffer{};
-    const int32_t encoded = frame.encode(buffer.data(), buffer.size());
+    Status st;
+    const int32_t encoded = frame.encode(buffer.data(), buffer.size(), st);
     REQUIRE(encoded == FRAME_DATA_BLOCKED_SIZE);
 
     FrameDataBlocked decoded;
-    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded));
+    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded), st);
     REQUIRE(decodedLen == encoded);
     REQUIRE(decoded.data_limit == frame.data_limit);
 }
@@ -73,11 +78,12 @@ TEST_CASE("StreamDataBlocked frame: encode/decode", "[FrameFlowControl]")
     frame.stream_data_limit = 1357911ULL;
 
     std::array<uint8_t, FRAME_STREAM_DATA_BLOCKED_SIZE> buffer{};
-    const int32_t encoded = frame.encode(buffer.data(), buffer.size());
+    Status st;
+    const int32_t encoded = frame.encode(buffer.data(), buffer.size(), st);
     REQUIRE(encoded == FRAME_STREAM_DATA_BLOCKED_SIZE);
 
     FrameStreamDataBlocked decoded;
-    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded));
+    const int32_t decodedLen = decoded.decode(buffer.data(), static_cast<size_t>(encoded), st);
     REQUIRE(decodedLen == encoded);
     REQUIRE(decoded.stream_id == frame.stream_id);
     REQUIRE(decoded.stream_data_limit == frame.stream_data_limit);

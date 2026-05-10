@@ -17,12 +17,13 @@ namespace {
 using eular::utp::FramePathChallenge;
 using eular::utp::FramePathResponse;
 using eular::utp::FrameType;
+using eular::utp::Status;
 
 template <typename FrameT>
-int32_t EncodePathFrame(const FrameT &frame, FrameType expectedType, void *buffer, size_t size)
+int32_t EncodePathFrame(const FrameT &frame, FrameType expectedType, void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_PATH_FRAME_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than path frame size {}", size, FRAME_PATH_FRAME_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("buffer size {} is smaller than path frame size {}", size, FRAME_PATH_FRAME_SIZE));
         return -1;
     }
 
@@ -33,10 +34,10 @@ int32_t EncodePathFrame(const FrameT &frame, FrameType expectedType, void *buffe
 }
 
 template <typename FrameT>
-int32_t DecodePathFrame(FrameT &frame, FrameType expectedType, const void *buffer, size_t size)
+int32_t DecodePathFrame(FrameT &frame, FrameType expectedType, const void *buffer, size_t size, Status &status)
 {
     if (size < FRAME_PATH_FRAME_SIZE) {
-        SetLastErrorV(UTP_ERR_OVERFLOW, "buffer size {} is smaller than path frame size {}", size, FRAME_PATH_FRAME_SIZE);
+        status = Status::Error(UTP_ERR_OVERFLOW, fmt::format("buffer size {} is smaller than path frame size {}", size, FRAME_PATH_FRAME_SIZE));
         return -1;
     }
 
@@ -44,7 +45,7 @@ int32_t DecodePathFrame(FrameT &frame, FrameType expectedType, const void *buffe
     FrameType frameType;
     bufferOffset = eular::Serialize::DeserializeFrom(bufferOffset, size, frameType);
     if (frameType != expectedType) {
-        SetLastErrorV(UTP_ERR_FRAME_UNEXPECTED, "Invalid frame type: {}", static_cast<uint8_t>(frameType));
+        status = Status::Error(UTP_ERR_FRAME_UNEXPECTED, fmt::format("Invalid frame type: {}", static_cast<uint8_t>(frameType)));
         return -1;
     }
 
@@ -57,24 +58,24 @@ int32_t DecodePathFrame(FrameT &frame, FrameType expectedType, const void *buffe
 namespace eular {
 namespace utp {
 
-int32_t FramePathChallenge::encode(void *buffer, size_t size) const
+int32_t FramePathChallenge::encode(void *buffer, size_t size, Status &status) const
 {
-    return EncodePathFrame(*this, FrameType::kFramePathChallenge, buffer, size);
+    return EncodePathFrame(*this, FrameType::kFramePathChallenge, buffer, size, status);
 }
 
-int32_t FramePathChallenge::decode(const void *buffer, size_t size)
+int32_t FramePathChallenge::decode(const void *buffer, size_t size, Status &status)
 {
-    return DecodePathFrame(*this, FrameType::kFramePathChallenge, buffer, size);
+    return DecodePathFrame(*this, FrameType::kFramePathChallenge, buffer, size, status);
 }
 
-int32_t FramePathResponse::encode(void *buffer, size_t size) const
+int32_t FramePathResponse::encode(void *buffer, size_t size, Status &status) const
 {
-    return EncodePathFrame(*this, FrameType::kFramePathResponse, buffer, size);
+    return EncodePathFrame(*this, FrameType::kFramePathResponse, buffer, size, status);
 }
 
-int32_t FramePathResponse::decode(const void *buffer, size_t size)
+int32_t FramePathResponse::decode(const void *buffer, size_t size, Status &status)
 {
-    return DecodePathFrame(*this, FrameType::kFramePathResponse, buffer, size);
+    return DecodePathFrame(*this, FrameType::kFramePathResponse, buffer, size, status);
 }
 
 } // namespace utp

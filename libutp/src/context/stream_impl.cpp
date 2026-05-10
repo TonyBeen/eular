@@ -23,13 +23,15 @@
 namespace eular {
 namespace utp {
 
-static inline int32_t StreamErr(utp_error_t err)
+static inline int32_t StreamErr(utp_error_t err, Status &st)
 {
     if (err == UTP_ERR_OK) {
-        return UTP_ERR_OK;
+        st = Status::OK();
+        return 0;
     }
 
-    SetLastErrorV(err, "stream operation failed: {}", static_cast<uint32_t>(err));
+    st = Status::Error(err, fmt::format("stream operation failed: {}", static_cast<uint32_t>(err)));
+    SetLastErrorV(st.code(), st.message());
     return -1;
 }
 
@@ -85,22 +87,23 @@ uint32_t StreamImpl::id() const
 
 int32_t StreamImpl::write(const void *data, size_t len, bool fin)
 {
+    Status st;
     if (len == 0 && !fin) {
-        return StreamErr(UTP_ERR_INVALID_PARAM);
+        return StreamErr(UTP_ERR_INVALID_PARAM, st);
     }
 
     if (m_localFinQueued) {
-        return StreamErr(UTP_ERR_STREAM_CLOSED);
+        return StreamErr(UTP_ERR_STREAM_CLOSED, st);
     }
 
     if (len > appWriteCredit()) {
-        return StreamErr(UTP_ERR_WOULD_BLOCK);
+        return StreamErr(UTP_ERR_WOULD_BLOCK, st);
     }
 
     MutableBufferView views[2];
     size_t acquired = acquireWriteBuffer(views, len);
     if (acquired < len) {
-        return StreamErr(UTP_ERR_WOULD_BLOCK);
+        return StreamErr(UTP_ERR_WOULD_BLOCK, st);
     }
 
     const uint8_t *payload = static_cast<const uint8_t *>(data);
@@ -119,14 +122,15 @@ int32_t StreamImpl::write(const void *data, size_t len, bool fin)
 
 int32_t StreamImpl::read(void *buffer, size_t capacity)
 {
+    Status st;
     if (buffer == nullptr || capacity == 0) {
-        return StreamErr(UTP_ERR_INVALID_PARAM);
+        return StreamErr(UTP_ERR_INVALID_PARAM, st);
     }
 
     const size_t contiguous = contiguousReadableBytes(capacity);
     if (contiguous == 0) {
         maybeAdvancePeerFin();
-        return m_peerFin ? 0 : StreamErr(UTP_ERR_WOULD_BLOCK);
+        return m_peerFin ? 0 : StreamErr(UTP_ERR_WOULD_BLOCK, st);
     }
 
     uint8_t *out = static_cast<uint8_t *>(buffer);
@@ -193,28 +197,29 @@ size_t StreamImpl::acquireWriteBuffer(MutableBufferView views[2], size_t maxByte
 
 int32_t StreamImpl::commitWrite(size_t bytes, bool fin)
 {
+    Status st;
     if (m_localFinQueued) {
-        return StreamErr(UTP_ERR_STREAM_CLOSED);
+        return StreamErr(UTP_ERR_STREAM_CLOSED, st);
     }
 
     if (m_conn == nullptr) {
-        return StreamErr(UTP_ERR_INVALID_STATE);
+        return StreamErr(UTP_ERR_INVALID_STATE, st);
     }
 
     if (bytes > appWriteCredit()) {
-        return StreamErr(UTP_ERR_WOULD_BLOCK);
+        return StreamErr(UTP_ERR_WOULD_BLOCK, st);
     }
 
     if (bytes > m_sendBuffer.freeSize()) {
-        return StreamErr(UTP_ERR_OVERFLOW);
+        return StreamErr(UTP_ERR_OVERFLOW, st);
     }
 
     if (bytes > (std::numeric_limits<uint32_t>::max)()) {
-        return StreamErr(UTP_ERR_OVERFLOW);
+        return StreamErr(UTP_ERR_OVERFLOW, st);
     }
 
     if (m_sendQueuedBytes + m_sendInFlightBytes + bytes > kMaxSendQueueBytes) {
-        return StreamErr(UTP_ERR_STREAM_DATA_LIMITED);
+        return StreamErr(UTP_ERR_STREAM_DATA_LIMITED, st);
     }
 
     if (bytes > 0) {
@@ -287,22 +292,23 @@ size_t StreamImpl::acquireReadViews(ConstBufferView views[2], size_t maxBytes) c
 
 int32_t StreamImpl::commitReadViews(size_t bytes)
 {
+    Status st;
     if (bytes == 0) {
         maybeAdvancePeerFin();
         maybeNotifyClosed();
-        return UTP_ERR_OK;
+        return 0;
     }
 
     const size_t allowed = contiguousReadableBytes(bytes);
     if (allowed < bytes) {
-        return StreamErr(UTP_ERR_OVERFLOW);
+        return StreamErr(UTP_ERR_OVERFLOW, st);
     }
 
     size_t left = bytes;
     while (left > 0) {
         RecvFragment *fragment = firstFragment();
         if (fragment == nullptr || (fragment->offset + fragment->consumed) != m_recvOffset) {
-            return StreamErr(UTP_ERR_OVERFLOW);
+            return StreamErr(UTP_ERR_OVERFLOW, st);
         }
 
         const size_t remaining = fragment->remaining();
@@ -361,20 +367,18 @@ void StreamImpl::close()
 
 int32_t StreamImpl::reset(uint16_t errorCode)
 {
+    Status st;
     if (m_conn == nullptr) {
-        return StreamErr(UTP_ERR_INVALID_STATE);
+        return StreamErr(UTP_ERR_INVALID_STATE, st);
     }
 
     if (m_localFinQueued && m_localFinSent && m_peerFin) {
-        return StreamErr(UTP_ERR_STREAM_CLOSED);
+        return StreamErr(UTP_ERR_STREAM_CLOSED, st);
     }
 
-    const int32_t status = m_conn->sendResetStreamFrame(m_streamId, errorCode, sendBufferedEndOffset());
-    if (status != UTP_ERR_OK) {
-        if (status < 0) {
-            return StreamErr(UTP_ERR_INTERNAL_ERROR);
-        }
-        return StreamErr(static_cast<utp_error_t>(status));
+    const Status status = m_conn->sendResetStreamFrame(m_streamId, errorCode, sendBufferedEndOffset());
+    if (!status.ok()) {
+        return StreamErr(status.code(), st);
     }
 
     m_localFinQueued = true;
@@ -387,7 +391,7 @@ int32_t StreamImpl::reset(uint16_t errorCode)
     m_sendBuffer.consume(m_sendBuffer.size());
     clearRecvFragments();
     maybeNotifyClosed();
-    return UTP_ERR_OK;
+    return 0;
 }
 
 bool StreamImpl::resetReceived() const
@@ -397,13 +401,14 @@ bool StreamImpl::resetReceived() const
 
 int32_t StreamImpl::setPriority(uint8_t priority)
 {
+    Status st;
     if (priority < Stream::kPriorityHighest || priority > Stream::kPriorityLowest) {
         UTP_LOGW("stream %u setPriority invalid value: %u", m_streamId, static_cast<uint32_t>(priority));
-        return StreamErr(UTP_ERR_INVALID_PARAM);
+        return StreamErr(UTP_ERR_INVALID_PARAM, st);
     }
 
     if (m_priority == priority) {
-        return UTP_ERR_OK;
+        return 0;
     }
 
     const uint8_t oldPriority = m_priority;
@@ -417,7 +422,7 @@ int32_t StreamImpl::setPriority(uint8_t priority)
         m_conn->scheduleWrite();
     }
 
-    return UTP_ERR_OK;
+    return 0;
 }
 
 uint8_t StreamImpl::priority() const
@@ -428,6 +433,7 @@ uint8_t StreamImpl::priority() const
 void StreamImpl::setOnReadable(const OnReadable &cb)
 {
     m_onReadable = cb;
+    maybeNotifyReadable(true);
 }
 
 void StreamImpl::setOnWritable(const OnWritable &cb)
@@ -446,18 +452,18 @@ void StreamImpl::setOnReset(const OnReset &cb)
     m_onReset = cb;
 }
 
-int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
+Status StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
 {
     if (m_resetByPeer) {
-        return UTP_ERR_STREAM_CLOSED;
+        return Status::ErrorLiteral(UTP_ERR_STREAM_CLOSED, "stream reset by peer");
     }
 
     if (frame.stream_id != m_streamId) {
-        return UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "stream id mismatch");
     }
 
     if (frame.stream_data_length > 0 && frame.stream_data == nullptr) {
-        return UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "null stream data");
     }
 
     uint64_t frameOffset = frame.stream_offset;
@@ -473,7 +479,7 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
                 m_peerFin = true;
                 maybeNotifyClosed();
             }
-            return UTP_ERR_OK;
+            return Status::OK();
         }
 
         frameOffset += trim;
@@ -502,7 +508,7 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
         if (iter == nullptr || iter->offset >= (cursor + frameLength)) {
             RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
             if (fragment == nullptr) {
-                return UTP_ERR_INTERNAL_ERROR;
+                return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to get recv fragment");
             }
             fragment->packet = packet;
             fragment->data = cursorData;
@@ -516,8 +522,8 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
             }
 
             bool inserted = false;
-            int32_t status = insertRecvFragment(fragment, &inserted);
-            if (status != UTP_ERR_OK) {
+            Status status = insertRecvFragment(fragment, &inserted);
+            if (!status.ok()) {
                 releaseRecvFragment(fragment);
                 return status;
             }
@@ -532,7 +538,7 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
             const size_t chunk = static_cast<size_t>(std::min<uint64_t>(iter->offset - cursor, frameLength));
             RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
             if (fragment == nullptr) {
-                return UTP_ERR_INTERNAL_ERROR;
+                return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to get recv fragment");
             }
             fragment->packet = packet;
             fragment->data = cursorData;
@@ -546,8 +552,8 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
             }
 
             bool inserted = false;
-            int32_t status = insertRecvFragment(fragment, &inserted);
-            if (status != UTP_ERR_OK) {
+            Status status = insertRecvFragment(fragment, &inserted);
+            if (!status.ok()) {
                 releaseRecvFragment(fragment);
                 return status;
             }
@@ -586,7 +592,7 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
             } else {
                 RecvFragment *fragment = m_recvMm != nullptr ? m_recvMm->getRecvFragment() : nullptr;
                 if (fragment == nullptr) {
-                    return UTP_ERR_INTERNAL_ERROR;
+                    return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "failed to get recv fragment");
                 }
                 fragment->packet = packet;
                 fragment->data = nullptr;
@@ -595,8 +601,8 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
                 fragment->offset = originalEnd;
                 fragment->fin = true;
                 bool inserted = false;
-                int32_t status = insertRecvFragment(fragment, &inserted);
-                if (status != UTP_ERR_OK) {
+                Status status = insertRecvFragment(fragment, &inserted);
+                if (!status.ok()) {
                     releaseRecvFragment(fragment);
                     return status;
                 }
@@ -605,15 +611,12 @@ int32_t StreamImpl::onFrame(const FrameStream &frame, PacketIn *packet)
     }
 
     maybeAdvancePeerFin();
-    if (m_onReadable && readable()) {
-        m_onReadable();
-    }
-
+    maybeNotifyReadable(true);
     maybeNotifyClosed();
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
+Status StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
 {
     m_resetErrorCode = errorCode;
     if (fromPeer) {
@@ -632,13 +635,13 @@ int32_t StreamImpl::onReset(uint16_t errorCode, bool fromPeer)
 
     notifyResetOnce();
     maybeNotifyClosed();
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t StreamImpl::flushPendingSends(size_t maxBytes)
+Status StreamImpl::flushPendingSends(size_t maxBytes)
 {
     if (m_conn == nullptr) {
-        return UTP_ERR_INVALID_STATE;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "null connection");
     }
 
     size_t sentBytes = 0;
@@ -665,21 +668,21 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
                 break;
             }
 
-            const int32_t finStatus = m_conn->sendStreamFrame(m_streamId,
+            const Status finStatus = m_conn->sendStreamFrame(m_streamId,
                                                               m_nextSendOffset,
                                                               nullptr,
                                                               0,
                                                               true);
-            if (finStatus == UTP_ERR_OK) {
+            if (finStatus.ok()) {
                 m_localFinSent = true;
                 continue;
             }
 
-            if (finStatus == UTP_ERR_WOULD_BLOCK) {
+            if (finStatus.code() == UTP_ERR_WOULD_BLOCK) {
                 m_conn->scheduleWrite();
                 UTP_LOGD("stream %u send blocked, queue_bytes=%zu", m_streamId, m_sendQueuedBytes);
             } else {
-                UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, finStatus);
+                UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, finStatus.code());
             }
             return finStatus;
         }
@@ -698,13 +701,13 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
             if (unsentBytes == 0) {
                 continue;
             }
-            return UTP_ERR_WOULD_BLOCK;
+            return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "no readable views");
         }
 
         payload = static_cast<const uint8_t *>(views[0].data);
         payloadLen = std::min<size_t>(views[0].len, UINT16_MAX);
 
-        int32_t status = UTP_ERR_WOULD_BLOCK;
+        Status status = Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "initial block");
         size_t tryLen = std::min(payloadLen, StreamPayloadMtuBudget(m_conn));
         while (tryLen > 0) {
             frameFin = m_localFinQueued && !m_localFinSent && (tryLen == unsentBytes);
@@ -713,7 +716,7 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
                                              payload,
                                              tryLen,
                                              frameFin);
-            if (status != UTP_ERR_WOULD_BLOCK || tryLen == 1) {
+            if (status.code() != UTP_ERR_WOULD_BLOCK || tryLen == 1) {
                 payloadLen = tryLen;
                 break;
             }
@@ -723,7 +726,7 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
             tryLen /= 2;
         }
 
-        if (status == UTP_ERR_OK) {
+        if (status.ok()) {
             m_nextSendOffset += payloadLen;
             if (m_sendQueuedBytes >= payloadLen) {
                 m_sendQueuedBytes -= payloadLen;
@@ -739,20 +742,20 @@ int32_t StreamImpl::flushPendingSends(size_t maxBytes)
             continue;
         }
 
-        if (status == UTP_ERR_WOULD_BLOCK) {
+        if (status.code() == UTP_ERR_WOULD_BLOCK) {
             m_conn->scheduleWrite();
             UTP_LOGD("stream %u send blocked, queue_bytes=%zu", m_streamId, m_sendQueuedBytes);
         }
-        if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
-            UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, status);
+        if (!status.ok() && status.code() != UTP_ERR_WOULD_BLOCK) {
+            UTP_LOGW("stream %u flushPendingSends failed: status=%d", m_streamId, status.code());
         }
         return status;
     }
 
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
-int32_t StreamImpl::onConnectionWritable()
+Status StreamImpl::onConnectionWritable()
 {
     if (m_conn != nullptr) {
         const utp_time_t nowUs = time::MonotonicUs();
@@ -760,12 +763,12 @@ int32_t StreamImpl::onConnectionWritable()
             const utp_time_t remainUs = coalesceDelayRemainingUs(nowUs);
             const utp_time_t delayMs = std::max<utp_time_t>(1, (remainUs + 999) / 1000);
             m_conn->nextScheduleTime(delayMs);
-            return UTP_ERR_OK;
+            return Status::OK();
         }
     }
 
-    const int32_t status = flushPendingSends(StreamWritableSendBudget(m_conn));
-    if (status != UTP_ERR_OK && status != UTP_ERR_WOULD_BLOCK) {
+    const Status status = flushPendingSends(StreamWritableSendBudget(m_conn));
+    if (!status.ok() && status.code() != UTP_ERR_WOULD_BLOCK) {
         return status;
     }
 
@@ -919,10 +922,10 @@ utp_time_t StreamImpl::coalesceDelayRemainingUs(utp_time_t nowUs) const
     return deadlineUs - nowUs;
 }
 
-int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
+Status StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
 {
     if (fragment == nullptr) {
-        return UTP_ERR_INVALID_PARAM;
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "null fragment");
     }
 
     if (inserted != nullptr) {
@@ -930,7 +933,7 @@ int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
     }
 
     if (fragment->len > 0 && m_recvBufferedBytes + fragment->len > kMaxRecvFragmentBytes) {
-        return UTP_ERR_WOULD_BLOCK;
+        return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "recv buffer full");
     }
 
     struct rb_node **link = &m_recvFragmentsTree.rb_node;
@@ -945,7 +948,7 @@ int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
         } else {
             if (current->len >= fragment->len) {
                 releaseRecvFragment(fragment);
-                return UTP_ERR_OK;
+                return Status::OK();
             }
 
             rb_replace_node(&current->treeNode, &fragment->treeNode, &m_recvFragmentsTree);
@@ -954,7 +957,7 @@ int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
             if (inserted != nullptr) {
                 *inserted = true;
             }
-            return UTP_ERR_OK;
+            return Status::OK();
         }
     }
 
@@ -964,7 +967,7 @@ int32_t StreamImpl::insertRecvFragment(RecvFragment *fragment, bool *inserted)
     if (inserted != nullptr) {
         *inserted = true;
     }
-    return UTP_ERR_OK;
+    return Status::OK();
 }
 
 void StreamImpl::clearRecvFragments()
@@ -1120,6 +1123,21 @@ void StreamImpl::maybeNotifyClosed()
             m_onClosed();
         }
     }
+}
+
+void StreamImpl::maybeNotifyReadable(bool allowPeerFin)
+{
+    if (!m_onReadable || m_notifyingReadable) {
+        return;
+    }
+
+    if (!readable() && !(allowPeerFin && m_peerFin)) {
+        return;
+    }
+
+    m_notifyingReadable = true;
+    m_onReadable();
+    m_notifyingReadable = false;
 }
 
 void StreamImpl::maybeNotifyWritable(bool force)

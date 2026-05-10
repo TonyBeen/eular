@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <array>
 #include <cstring>
@@ -20,7 +21,9 @@
 #undef private
 
 using eular::utp::FrameStream;
+using eular::utp::Status;
 using eular::utp::StreamImpl;
+using eular::utp::Status;
 
 struct StreamTestCtx {
     eular::utp::Config      cfg;
@@ -46,7 +49,7 @@ TEST_CASE("StreamImpl: onFrame pushes data and read consumes", "[Stream]")
         readableNotified = true;
     });
 
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
     REQUIRE(stream.readable());
     REQUIRE(readableNotified);
 
@@ -68,7 +71,7 @@ TEST_CASE("StreamImpl: out-of-order frame is rejected for now", "[Stream]")
     frame.stream_data_length = static_cast<uint16_t>(payload.size());
     frame.stream_data = payload.data();
 
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
     REQUIRE_FALSE(stream.readable());
 
     FrameStream head;
@@ -77,7 +80,7 @@ TEST_CASE("StreamImpl: out-of-order frame is rejected for now", "[Stream]")
     head.stream_data_length = 2;
     head.stream_data = payload.data();
 
-    REQUIRE(stream.onFrame(head) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(head)  == 0);
     REQUIRE(stream.readable());
 
     std::array<uint8_t, 8> out{};
@@ -97,7 +100,7 @@ TEST_CASE("StreamImpl: peer fin returns EOF on empty read", "[Stream]")
     frame.stream_data = nullptr;
     frame.stream_flag = 0x01; // FIN
 
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
     REQUIRE(stream.state() == eular::utp::Stream::kStateHalfClosedRemote);
 
     uint8_t buf = 0;
@@ -115,7 +118,7 @@ TEST_CASE("StreamImpl: read views interface exposes readable buffer", "[Stream]"
     frame.stream_data_length = static_cast<uint16_t>(payload.size());
     frame.stream_data = payload.data();
 
-    REQUIRE(stream.onFrame(frame) == UTP_ERR_OK);
+    REQUIRE(stream.onFrame(frame)  == 0);
 
     eular::utp::Stream::ConstBufferView views[2];
     const size_t bytes = stream.acquireReadViews(views, 16);
@@ -155,13 +158,13 @@ TEST_CASE("StreamImpl: setOnWritable fires immediately when writable", "[Stream]
     REQUIRE(stream.writable());
     REQUIRE(writableNotified == 1);
 }
-
 TEST_CASE("StreamImpl: writable reflects send queue capacity", "[Stream]")
 {
+    eular::utp::Status st;
     StreamTestCtx _fix_17; StreamImpl stream(&_fix_17.conn, 17);
 
     REQUIRE(stream.writable());
-    stream.m_sendQueuedBytes = StreamImpl::kDefaultBufferCapacity;
+    stream.m_sendQueuedBytes = 256 * 1024; // Default config limit
     REQUIRE_FALSE(stream.writable());
 }
 
@@ -185,7 +188,7 @@ TEST_CASE("StreamImpl: close transitions local side state", "[Stream]")
     fin.stream_data_length = 0;
     fin.stream_data = nullptr;
     fin.stream_flag = 0x01;
-    REQUIRE(rxOnly.onFrame(fin) == UTP_ERR_OK);
+    REQUIRE(rxOnly.onFrame(fin)  == 0);
     REQUIRE(rxOnly.state() == eular::utp::Stream::kStateHalfClosedRemote);
 }
 
@@ -200,7 +203,7 @@ TEST_CASE("StreamImpl: reset frame notifies upper layer", "[Stream]")
         resetCode = err;
     });
 
-    REQUIRE(stream.onReset(UTP_ERR_CANCELLED, true) == UTP_ERR_OK);
+    REQUIRE(stream.onReset(UTP_ERR_CANCELLED, true)  == 0);
     REQUIRE(stream.resetReceived());
     REQUIRE(resetNotified);
     REQUIRE(resetCode == UTP_ERR_CANCELLED);

@@ -6,14 +6,19 @@
  ************************************************************************/
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include "utp/errno.h"
 #include "util/network_path.h"
 
 using eular::utp::Address;
+using eular::utp::Status;
 using eular::utp::FramePathChallenge;
+using eular::utp::Status;
 using eular::utp::FramePathResponse;
+using eular::utp::Status;
 using eular::utp::NetworkPath;
+using eular::utp::Status;
 
 TEST_CASE("NetworkPath: address change triggers validating", "[NetworkPath]")
 {
@@ -35,7 +40,7 @@ TEST_CASE("NetworkPath: challenge-response validates path", "[NetworkPath]")
     REQUIRE(path.detectPeerAddressChange(Address("10.0.0.1", 10001)));
 
     FramePathChallenge challenge;
-    REQUIRE(path.makePathChallenge(challenge, 1000) == UTP_ERR_OK);
+    REQUIRE(path.makePathChallenge(challenge, 1000)  == 0);
     REQUIRE(path.hasInFlightChallenge());
 
     FramePathResponse response;
@@ -53,14 +58,14 @@ TEST_CASE("NetworkPath: timeout can move path to failed", "[NetworkPath]")
     REQUIRE(path.detectPeerAddressChange(Address("192.168.1.2", 9001)));
 
     FramePathChallenge challenge;
-    REQUIRE(path.makePathChallenge(challenge, 0) == UTP_ERR_OK);
+    REQUIRE(path.makePathChallenge(challenge, 0)  == 0);
 
     // first timeout: still can retry
     REQUIRE_FALSE(path.onTimeout(100));
     REQUIRE(path.state() == NetworkPath::kPathValidating);
     REQUIRE(path.canRetryChallenge());
 
-    REQUIRE(path.makePathChallenge(challenge, 101) == UTP_ERR_OK);
+    REQUIRE(path.makePathChallenge(challenge, 101)  == 0);
 
     // second timeout: retries exhausted -> failed
     REQUIRE(path.onTimeout(201));
@@ -75,7 +80,7 @@ TEST_CASE("NetworkPath: mismatched response should be ignored", "[NetworkPath]")
     REQUIRE(path.detectPeerAddressChange(Address("172.16.0.2", 7001)));
 
     FramePathChallenge challenge;
-    REQUIRE(path.makePathChallenge(challenge, 10) == UTP_ERR_OK);
+    REQUIRE(path.makePathChallenge(challenge, 10)  == 0);
 
     FramePathResponse badResponse;
     badResponse.data = {0, 1, 2, 3, 4, 5, 6, 7};

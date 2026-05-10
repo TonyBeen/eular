@@ -10,6 +10,7 @@
 #endif
 
 #include <catch2/catch.hpp>
+#include "util/status.h"
 
 #include <vector>
 #include <utility>
@@ -18,6 +19,7 @@
 #include "util/receive_history.h"
 
 using eular::utp::ReceiveHistory;
+using eular::utp::Status;
 
 static std::vector<std::pair<uint64_t, uint64_t>>
 collectRanges(const ReceiveHistory& hist)

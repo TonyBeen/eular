@@ -12,6 +12,7 @@
 
 #include "commom.h"
 #include "socket/address.h"
+#include "util/status.h"
 
 namespace eular {
 namespace utp {
@@ -24,16 +25,16 @@ public:
         static int32_t  SetReuseAddr(socket_t sockfd, bool reuse = true);
         static int32_t  SetReusePort(socket_t sockfd, bool reuse = true);
         static int32_t  SetDontFragment(socket_t sockfd, bool df = true);
-        static int32_t  SetBindInterface(socket_t sockfd, const char *ifname);
-        static int32_t  SetRecvError(socket_t sockfd, int32_t family, bool recverr = true);
-        static int32_t  SetSendBufferSize(socket_t sockfd, int32_t size);
-        static int32_t  SetRecvBufferSize(socket_t sockfd, int32_t size);
-        static int32_t  SetPktInfoV4(socket_t sockfd, bool on = true);
-        static int32_t  SetPktInfoV6(socket_t sockfd, bool on = true);
-        static int32_t  SetIPv6Only(socket_t sockfd);
-        static int32_t  SetIPTos(socket_t sockfd);
-        static int32_t  SetNoSigPipe(socket_t sockfd);
-        static int32_t  GetMtuByIfname(socket_t sockfd, const char *ifname);
+        static Status   SetBindInterface(socket_t sockfd, const char *ifname);
+        static Status   SetRecvError(socket_t sockfd, int32_t family, bool recverr = true);
+        static Status   SetSendBufferSize(socket_t sockfd, int32_t size);
+        static Status   SetRecvBufferSize(socket_t sockfd, int32_t size);
+        static Status   SetPktInfoV4(socket_t sockfd, bool on = true);
+        static Status   SetPktInfoV6(socket_t sockfd, bool on = true);
+        static Status   SetIPv6Only(socket_t sockfd);
+        static Status   SetIPTos(socket_t sockfd);
+        static Status   SetNoSigPipe(socket_t sockfd);
+        static int32_t  GetMtuByIfname(socket_t sockfd, const char *ifname, Status &status);
     };
 
     class Util
@@ -43,8 +44,8 @@ public:
     };
 
 
-    static socket_t     Open(int32_t family);
-    static int32_t      Bind(socket_t sockfd, const Address &addr);
+    static socket_t     Open(int32_t family, Status &status);
+    static Status       Bind(socket_t sockfd, const Address &addr);
     static void         Close(socket_t sockfd);
 };
 

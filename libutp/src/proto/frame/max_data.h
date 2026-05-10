@@ -20,8 +20,8 @@ public:
     FrameMaxData() : FrameBase(FrameType::kFrameMaxData) {}
     ~FrameMaxData() = default;
 
-    int32_t encode(void *buffer, size_t size) const;
-    int32_t decode(const void *buffer, size_t size);
+    int32_t encode(void *buffer, size_t size, Status &status) const;
+    int32_t decode(const void *buffer, size_t size, Status &status);
     int32_t frameSize() const;
 
 public:
