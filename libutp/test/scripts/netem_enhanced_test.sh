@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # netem_enhanced_test.sh — libutp 增强网络仿真测试（大流量、突发丢包、并发）
-# 用法: sudo ./test/scripts/netem_enhanced_test.sh [build-dir]
+# 用法: sudo ./test/scripts/netem_enhanced_test.sh <build-dir> [--allow-no-root]
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DEFAULT_BUILD_DIR="$REPO_ROOT/build"
-
-BUILD_DIR="${1:-$DEFAULT_BUILD_DIR}"
+BUILD_DIR=""
 ALLOW_NO_ROOT="0"
 
 for arg in "$@"; do
@@ -17,12 +13,21 @@ for arg in "$@"; do
             ALLOW_NO_ROOT="1"
             ;;
         *)
-            if [ "$BUILD_DIR" = "$DEFAULT_BUILD_DIR" ]; then
+            if [ -z "$BUILD_DIR" ]; then
                 BUILD_DIR="$arg"
+            else
+                echo "用法: sudo ./test/scripts/netem_enhanced_test.sh <build-dir> [--allow-no-root]" >&2
+                exit 1
             fi
             ;;
     esac
 done
+
+if [ -z "$BUILD_DIR" ]; then
+    echo "用法: sudo ./test/scripts/netem_enhanced_test.sh <build-dir> [--allow-no-root]" >&2
+    exit 1
+fi
+
 ECHO_SERVER="$BUILD_DIR/examples/utp_echo_server"
 ECHO_CLIENT="$BUILD_DIR/examples/utp_echo_client"
 IFACE="lo"
