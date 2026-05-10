@@ -11,9 +11,12 @@
 #include <array>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include <event/loop.h>
 #include <event2/event.h>
+
+#include <utils/serialize.hpp>
 
 #define private public
 #include "context/context_impl.h"
@@ -21,6 +24,7 @@
 #undef private
 
 #include "utp/errno.h"
+#include "proto/proto.h"
 #include "proto/packet_out.h"
 #include "util/time.h"
 
@@ -35,6 +39,35 @@ using eular::utp::StreamImpl;
 using eular::utp::Address;
 using eular::utp::UdpSocket;
 using eular::utp::Status;
+
+namespace {
+
+std::vector<uint8_t> BuildRawPacket(uint32_t scid,
+                                    uint32_t dcid,
+                                    uint64_t pn,
+                                    uint8_t packetType,
+                                    const std::vector<uint8_t> &payload)
+{
+    std::vector<uint8_t> packet(static_cast<size_t>(UTP_HEADER_SIZE) + payload.size(), 0);
+    uint8_t *offset = packet.data();
+    size_t left = packet.size();
+
+    offset = eular::Serialize::SerializeTo(offset, left, scid);
+    offset = eular::Serialize::SerializeTo(offset, left, dcid);
+    offset = eular::Serialize::SerializeTo(offset, left, pn);
+    offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint16_t>(payload.size()));
+    offset = eular::Serialize::SerializeTo(offset, left, packetType);
+    offset = eular::Serialize::SerializeTo(offset, left, static_cast<uint8_t>(0));
+    REQUIRE(offset != nullptr);
+    REQUIRE(left == payload.size());
+
+    if (!payload.empty()) {
+        std::memcpy(offset, payload.data(), payload.size());
+    }
+    return packet;
+}
+
+} // namespace
 
 TEST_CASE("ConnectionImpl: getStream returns created stream pointer", "[Connection][Stream]")
 {
@@ -181,6 +214,122 @@ TEST_CASE("ConnectionImpl: active handshake timeout uses exponential backoff and
     conn.onConnTimeout();
     REQUIRE(conn.state() == ConnectionImpl::kStateDisconnected);
     REQUIRE(conn.lastErrorCode() == UTP_ERR_TIMEOUT);
+}
+
+TEST_CASE("ConnectionImpl: timeout callback after handshake promotion does not disconnect connection",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 10;
+    cfg.handshake_max_retries = 2;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1102);
+    conn.m_state = ConnectionImpl::kStateInitialSent;
+
+    const std::vector<uint8_t> payload;
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(0x22334455, conn.cid(), 7, UTP_TYPE_HANDSHAKE, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = Address("127.0.0.1", 23456);
+
+    conn.onUdpPacket(msg);
+    REQUIRE(conn.state() == ConnectionImpl::kStateConnected);
+    REQUIRE(conn.m_handshakeDonePending);
+
+    conn.onConnTimeout();
+    REQUIRE(conn.state() == ConnectionImpl::kStateConnected);
+    REQUIRE(conn.m_handshakeDonePending);
+    REQUIRE(conn.lastErrorCode() == UTP_ERR_OK);
+}
+
+TEST_CASE("ConnectionImpl: late handshake packet does not revive timed out connection",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 10;
+    cfg.handshake_max_retries = 0;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1103);
+    conn.m_state = ConnectionImpl::kStateInitialSent;
+    conn.m_connectInfo.timeout = 10;
+
+    conn.onConnTimeout();
+    REQUIRE(conn.state() == ConnectionImpl::kStateDisconnected);
+    REQUIRE(conn.lastErrorCode() == UTP_ERR_TIMEOUT);
+
+    const std::vector<uint8_t> payload;
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(0x55667788, conn.cid(), 9, UTP_TYPE_HANDSHAKE, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = Address("127.0.0.1", 23457);
+
+    conn.onUdpPacket(msg);
+    REQUIRE(conn.state() == ConnectionImpl::kStateDisconnected);
+    REQUIRE(conn.lastErrorCode() == UTP_ERR_TIMEOUT);
+}
+
+TEST_CASE("ConnectionImpl: duplicate handshake while connected rearms HandshakeDone convergence",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 300;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1104);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = false;
+    conn.m_peerHandshakePacketNo = 0;
+    conn.m_handshakeReceivedAtUs = 0;
+
+    const std::vector<uint8_t> payload;
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(0x8899aabb, conn.cid(), 15, UTP_TYPE_HANDSHAKE, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = Address("127.0.0.1", 23458);
+
+    conn.onUdpPacket(msg);
+    REQUIRE(conn.state() == ConnectionImpl::kStateConnected);
+    REQUIRE(conn.m_handshakeDonePending);
+    REQUIRE(conn.m_peerHandshakePacketNo == 15);
+    REQUIRE(conn.m_handshakeReceivedAtUs > 0);
+}
+
+TEST_CASE("ConnectionImpl: stream data packet piggybacks HandshakeDone while pending",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1105);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+
+    REQUIRE(conn.shouldPiggybackHandshakeDone(2, false));
+    REQUIRE_FALSE(conn.shouldPiggybackHandshakeDone(0, false));
+}
+
+TEST_CASE("ConnectionImpl: FIN-only stream packet piggybacks HandshakeDone while pending",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    ConnectionImpl conn(&ctx, nullptr, 1106);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+
+    REQUIRE(conn.shouldPiggybackHandshakeDone(0, true));
+    REQUIRE_FALSE(conn.shouldPiggybackHandshakeDone(0, false));
 }
 
 TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")

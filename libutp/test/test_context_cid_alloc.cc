@@ -71,5 +71,6 @@ TEST_CASE("ContextImpl: passive handshake timeout recycles pending entry", "[Con
 
     REQUIRE(ctx.m_pendingIncoming.find(pending.localCid) == ctx.m_pendingIncoming.end());
     REQUIRE(ctx.m_waitHandshakeDone.find(pending.localCid) == ctx.m_waitHandshakeDone.end());
+    REQUIRE(ctx.m_pendingIncomingQueue.empty());
     REQUIRE(connectErrorCalls == 1);
 }

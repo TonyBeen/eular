@@ -1030,6 +1030,13 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         markPeerActivity(nowUs);
     }
 
+    if (m_state == State::kStateConnected && packet->header.types == UTP_TYPE_HANDSHAKE) {
+        m_peerHandshakePacketNo = packet->header.pn;
+        m_handshakeReceivedAtUs = nowUs;
+        m_handshakeDonePending = true;
+        armHandshakeDoneTimer();
+    }
+
     if (m_state == State::kStateConnected) {
         flushPendingStreamWrites();
     }
@@ -1527,7 +1534,7 @@ Status ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId, uint64_t stream
 
 void ConnectionImpl::updateTag(const std::string &tag)
 {
-    m_tag = tag + " Connection [" + std::to_string(m_localConnectionID) + "]";
+    m_tag = tag + " Connection (" + std::to_string(m_localConnectionID) + ")";
 }
 
 void ConnectionImpl::flushPendingStreamWrites()
@@ -1753,8 +1760,7 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
 
     // Allow the third handshake flight to carry stream data or a FIN instead
     // of stalling application sends behind a standalone HandshakeDone packet.
-    const bool piggybackHandshakeDone =
-        (m_state == State::kStateConnected) && m_handshakeDonePending && (len > 0 || fin);
+    const bool piggybackHandshakeDone = shouldPiggybackHandshakeDone(len, fin);
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> handshakeTrailer{};
     size_t                                                                      handshakeTrailerSize = 0;
@@ -2942,6 +2948,11 @@ uint8_t ConnectionImpl::handshakeMaxRetries() const
         return 0;
     }
     return m_ctx->config()->handshake_max_retries;
+}
+
+bool ConnectionImpl::shouldPiggybackHandshakeDone(size_t len, bool fin) const
+{
+    return (m_state == State::kStateConnected) && m_handshakeDonePending && (len > 0 || fin);
 }
 
 void ConnectionImpl::onConnTimeout()

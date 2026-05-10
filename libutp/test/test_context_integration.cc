@@ -1293,6 +1293,159 @@ TEST_CASE("Context integration: pending handshake retry uses peer-aware exponent
     REQUIRE(ctx.pendingHandshakeRetryDueUs(pending) == 101000);
 }
 
+TEST_CASE("Context integration: pending HandshakeDone promotes connection before timeout cleanup",
+          "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 100;
+    cfg.handshake_max_retries = 0;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    const uint32_t localCid = 0x50004000;
+    const uint32_t peerCid = 0x40005000;
+    const Address peerAddr("127.0.0.1", 19001);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 500000;
+    pending.lastHandshakeSentUs = eular::utp::time::MonotonicUs() - 500000;
+    pending.lastHandshakePacketNo = 77;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    FrameHandshakeDone done;
+    done.ack_handshake_pn = pending.lastHandshakePacketNo;
+    std::vector<uint8_t> payload(FRAME_HANDSHAKE_DONE_SIZE, 0);
+    Status st;
+    REQUIRE(done.encode(payload.data(), payload.size(), st) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(st.ok());
+
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(peerCid, localCid, 12, UTP_TYPE_CTRL, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = peerAddr;
+
+    auto handlePendingPacket = [&]() {
+        auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+
+        auto packetReleaser = [&](PacketIn *pkt) {
+            ctx.m_mm.releasePacketIn(pkt);
+        };
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> pendingPacket(
+            ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
+        REQUIRE(pendingPacket != nullptr);
+        REQUIRE(ctx.decodeIncomingPendingPacket(msg, pendingIt->second, *pendingPacket));
+
+        bool handshakeDone = false;
+        size_t frameOffset = 0;
+        while (frameOffset < pendingPacket->payload_size) {
+            eular::utp::FrameType frameType = eular::utp::kFrameInvalid;
+            const uint8_t *frameData = nullptr;
+            size_t frameLen = 0;
+            Status nextSt;
+            REQUIRE(pendingPacket->nextFrame(frameOffset, frameType, frameData, frameLen, nextSt) >= 0);
+            if (frameType == eular::utp::kFrameHandshakeDone) {
+                FrameHandshakeDone localDone;
+                Status decodeSt;
+                REQUIRE(localDone.decode(frameData, frameLen, decodeSt) >= 0);
+                REQUIRE(decodeSt.ok());
+                handshakeDone = (localDone.ack_handshake_pn == pendingIt->second.lastHandshakePacketNo);
+                break;
+            }
+        }
+        REQUIRE(handshakeDone);
+
+        ContextImpl::PendingIncomingConnection snapshot = pendingIt->second;
+        Context::ConnectInfo info;
+        info.ip = snapshot.peerIp;
+        info.port = snapshot.peerAddress.port();
+        info.timeout = cfg.handshake_timeout;
+        info.encrypted = snapshot.encrypted;
+
+        ConnectionImpl::SP conn = ctx.createAndInsertPassiveConnection(
+            snapshot.localCid,
+            info,
+            snapshot.peerAddress,
+            snapshot.peerCid,
+            snapshot.peerTp,
+            snapshot.hasPeerAckFrequency ? &snapshot.peerAckFrequency : nullptr,
+            snapshot.x25519,
+            snapshot.aesCtx,
+            "local cid collision while promoting passive connection");
+        REQUIRE(conn != nullptr);
+        ctx.removePendingIncoming(localCid);
+    };
+
+    handlePendingPacket();
+    ctx.processPendingHandshakeTimeouts();
+
+    REQUIRE(ctx.m_connections.find(localCid) != ctx.m_connections.end());
+    REQUIRE(ctx.m_pendingIncoming.find(localCid) == ctx.m_pendingIncoming.end());
+    REQUIRE(ctx.m_waitHandshakeDone.find(localCid) == ctx.m_waitHandshakeDone.end());
+}
+
+TEST_CASE("Context integration: late HandshakeDone after pending timeout does not promote connection",
+          "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 100;
+    cfg.handshake_max_retries = 0;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    const uint32_t localCid = 0x60004000;
+    const uint32_t peerCid = 0x40006000;
+    const Address peerAddr("127.0.0.1", 19002);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.acceptStartUs = eular::utp::time::MonotonicUs() - 500000;
+    pending.lastHandshakeSentUs = eular::utp::time::MonotonicUs() - 500000;
+    pending.lastHandshakePacketNo = 88;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    ctx.processPendingHandshakeTimeouts();
+    REQUIRE(ctx.m_pendingIncoming.find(localCid) == ctx.m_pendingIncoming.end());
+    REQUIRE(ctx.m_connections.find(localCid) == ctx.m_connections.end());
+
+    FrameHandshakeDone done;
+    done.ack_handshake_pn = pending.lastHandshakePacketNo;
+    std::vector<uint8_t> payload(FRAME_HANDSHAKE_DONE_SIZE, 0);
+    Status st;
+    REQUIRE(done.encode(payload.data(), payload.size(), st) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(st.ok());
+
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(peerCid, localCid, 12, UTP_TYPE_CTRL, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = peerAddr;
+
+    auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+    REQUIRE(pendingIt == ctx.m_pendingIncoming.end());
+    (void)msg;
+
+    REQUIRE(ctx.m_connections.find(localCid) == ctx.m_connections.end());
+}
+
 TEST_CASE("Context integration: stream OnWritable fires again after queued data drains", "[Context][Integration][Stream]")
 {
     Config cfg;

@@ -241,6 +241,7 @@ private:
     uint32_t   effectiveHandshakeTimeoutMs() const;
     uint32_t   handshakeTimeoutForRoundMs(uint8_t round, bool usePeerSuggestion) const;
     uint8_t    handshakeMaxRetries() const;
+    bool       shouldPiggybackHandshakeDone(size_t len, bool fin) const;
     void       onHandshakeDoneFrameAcked();
     // 根据当前状态和配置生成本地 TP，供初始包使用
     void bootstrapLocalTransportParams();
