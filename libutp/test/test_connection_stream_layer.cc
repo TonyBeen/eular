@@ -10,6 +10,7 @@
 
 #include <array>
 #include <chrono>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -20,6 +21,7 @@
 
 #define private public
 #include "context/context_impl.h"
+#include "context/send_ctl.h"
 #include "context/stream_impl.h"
 #undef private
 
@@ -65,6 +67,20 @@ std::vector<uint8_t> BuildRawPacket(uint32_t scid,
         std::memcpy(offset, payload.data(), payload.size());
     }
     return packet;
+}
+
+eular::utp::PacketOut *LastUnackedPacket(eular::utp::SendControl *sendCtl)
+{
+    if (sendCtl == nullptr) {
+        return nullptr;
+    }
+
+    eular::utp::PacketOut *last = nullptr;
+    eular::utp::PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &sendCtl->m_unackedPackets, po_next) {
+        last = pkt;
+    }
+    return last;
 }
 
 } // namespace
@@ -330,6 +346,41 @@ TEST_CASE("ConnectionImpl: FIN-only stream packet piggybacks HandshakeDone while
 
     REQUIRE(conn.shouldPiggybackHandshakeDone(0, true));
     REQUIRE_FALSE(conn.shouldPiggybackHandshakeDone(0, false));
+}
+
+TEST_CASE("ConnectionImpl: FIN-only stream send emits HandshakeDone metadata on wire packet",
+          "[Connection][Handshake][Regression]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    UdpSocket sock(cfg);
+    sock.m_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock.m_sock == INVALID_SOCKET) {
+        WARN("socket creation unavailable in current environment");
+        return;
+    }
+
+    ConnectionImpl conn(&ctx, &sock, 1107);
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_peerConnectionID = 2207;
+    conn.m_peerAddress = Address("127.0.0.1", 9);
+    conn.m_networkPath.m_state = decltype(conn.m_networkPath)::kPathValidated;
+    conn.m_bytesIn = 4096;
+    conn.m_handshakeDonePending = true;
+    conn.m_peerTP.init_max_streams_bidi = 8;
+
+    REQUIRE(conn.sendStreamFrame(0, 0, nullptr, 0, true).ok());
+
+    eular::utp::PacketOut *pkt = LastUnackedPacket(conn.m_sendCtl.get());
+    REQUIRE(pkt != nullptr);
+    REQUIRE((pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameStream))) != 0);
+    REQUIRE((pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameHandshakeDone))) != 0);
+    REQUIRE((pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameHandshakeDelay))) != 0);
+    REQUIRE(pkt->frame_meta_count == 2);
+    REQUIRE(pkt->frame_meta[0].frame_type == eular::utp::kFrameStream);
+    REQUIRE(pkt->frame_meta[1].frame_type == eular::utp::kFrameHandshakeDone);
+    REQUIRE(conn.m_handshakeDoneLastPacketNo == pkt->packno);
 }
 
 TEST_CASE("ConnectionImpl: stream unacked data limit checks pending bytes", "[Connection][Stream]")

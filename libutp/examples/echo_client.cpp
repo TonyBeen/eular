@@ -15,11 +15,8 @@
 #include <event/loop.h>
 #include <event/timer.h>
 
-#ifdef X509_NAME
-#undef X509_NAME
-#endif
-#include <openssl/evp.h>
-
+#define XXH_INLINE_ALL
+#include "../3rd/xxhash.h"
 #include <utils/CLI11.hpp>
 
 #include <utp/errno.h>
@@ -27,19 +24,19 @@
 
 namespace {
 
-class Md5Accumulator {
+class Xxh128Accumulator {
 public:
-    Md5Accumulator() {
-        m_ctx = EVP_MD_CTX_new();
-        if (m_ctx != nullptr) {
-            m_ok = (EVP_DigestInit_ex(m_ctx, EVP_md5(), nullptr) == 1);
+    Xxh128Accumulator() {
+        m_state = XXH3_createState();
+        if (m_state != nullptr) {
+            m_ok = (XXH3_128bits_reset(m_state) == XXH_OK);
         }
     }
 
-    ~Md5Accumulator() {
-        if (m_ctx != nullptr) {
-            EVP_MD_CTX_free(m_ctx);
-            m_ctx = nullptr;
+    ~Xxh128Accumulator() {
+        if (m_state != nullptr) {
+            XXH3_freeState(m_state);
+            m_state = nullptr;
         }
     }
 
@@ -49,7 +46,7 @@ public:
         if (!m_ok || m_finalized) {
             return false;
         }
-        return EVP_DigestUpdate(m_ctx, data, len) == 1;
+        return XXH3_128bits_update(m_state, data, len) == XXH_OK;
     }
 
     bool finalize(std::string &hexOut) {
@@ -57,18 +54,15 @@ public:
             return false;
         }
 
-        uint8_t digest[EVP_MAX_MD_SIZE] = {0};
-        unsigned int digestLen = 0;
-        if (EVP_DigestFinal_ex(m_ctx, digest, &digestLen) != 1) {
-            return false;
-        }
-
+        const XXH128_hash_t digest = XXH3_128bits_digest(m_state);
+        XXH128_canonical_t canonical;
+        XXH128_canonicalFromHash(&canonical, digest);
         static const char *kHex = "0123456789abcdef";
         hexOut.clear();
-        hexOut.reserve(digestLen * 2);
-        for (unsigned int i = 0; i < digestLen; ++i) {
-            hexOut.push_back(kHex[digest[i] >> 4]);
-            hexOut.push_back(kHex[digest[i] & 0x0F]);
+        hexOut.reserve(sizeof(canonical.digest) * 2);
+        for (uint8_t byte : canonical.digest) {
+            hexOut.push_back(kHex[byte >> 4]);
+            hexOut.push_back(kHex[byte & 0x0F]);
         }
 
         m_finalized = true;
@@ -76,16 +70,10 @@ public:
     }
 
 private:
-    EVP_MD_CTX *m_ctx{nullptr};
+    XXH3_state_t *m_state{nullptr};
     bool m_ok{false};
     bool m_finalized{false};
 };
-
-void OnSignal(int)
-{
-    std::cout << "\n[client] signal received, shutting down...\n";
-    std::exit(0);
-}
 
 uint64_t NowMs()
 {
@@ -120,7 +108,7 @@ int main(int argc, char **argv)
     uint32_t sendCount = 5;
     size_t msgLen = 16;
     uint64_t totalBytes = 0;
-    bool quiet = false;
+    bool silent = false;
 
     CLI::App app("UTP echo client example");
     app.add_option("--server-ip", serverIp, "Server IP address")->check(CLI::ValidIPV4);
@@ -128,11 +116,12 @@ int main(int argc, char **argv)
     app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 200000));
     app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 16384));
     app.add_option("--total-bytes", totalBytes, "Total bytes to send; if > 0, overrides --count")->check(CLI::Range(static_cast<uint64_t>(0), static_cast<uint64_t>(4294967296ULL)));
-    app.add_flag("--quiet", quiet, "Reduce per-message output for stress tests");
+    app.add_flag("--quiet", silent, "Suppress all client output");
+    app.add_flag("--silent", silent, "Alias for --quiet");
     CLI11_PARSE(app, argc, argv);
 
-    std::signal(SIGINT, OnSignal);
-    std::signal(SIGTERM, OnSignal);
+    std::signal(SIGINT, [](int) { std::exit(0); });
+    std::signal(SIGTERM, [](int) { std::exit(0); });
 
     ev::EventLoop loop;
     eular::utp::Config cfg;
@@ -151,12 +140,12 @@ int main(int argc, char **argv)
     uint64_t sentBytes = 0;
     bool sendDone = false;
     bool closeIssued = false;
-    bool md5Finalized = false;
+    bool hashFinalized = false;
     bool doneReceived = false;
     uint64_t serverDoneBytes = 0;
     uint64_t waitDoneStartMs = 0;
-    std::string localMd5;
-    std::string serverMd5;
+    std::string localHash;
+    std::string serverHash;
     size_t ackCount = 0;
     const uint64_t drainCheckIntervalMs = 1000;
     const uint64_t drainMaxWaitMs = 180000;
@@ -168,9 +157,11 @@ int main(int argc, char **argv)
     const std::string uploadHeader = "UPLOAD " + std::to_string(targetBytes) + "\n";
     size_t headerOffset = 0;
     std::string recvTextBuffer;
-    Md5Accumulator md5;
-    if (!md5.valid()) {
-        std::cerr << "[client] failed to initialize md5\n";
+    Xxh128Accumulator hash;
+    if (!hash.valid()) {
+        if (!silent) {
+            std::cerr << "[client] failed to initialize xxh128\n";
+        }
         return 1;
     }
 
@@ -179,7 +170,9 @@ int main(int argc, char **argv)
 
     ev::EventTimer stopTimer;
     stopTimer.reset(loop.loop(), [&]() {
-        std::cout << "[client] exiting...\n";
+        if (!silent) {
+            std::cout << "[client] exiting...\n";
+        }
         loop.breakLoop();
     });
 
@@ -191,25 +184,29 @@ int main(int argc, char **argv)
                 drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
                 return;
             }
-            std::cout << "[client] drain timeout, closing connection\n";
-            std::cout << "[client] sent_msgs=" << sent
-                      << ", sent_bytes=" << sentBytes
-                      << ", local_md5=" << (localMd5.empty() ? "<pending>" : localMd5)
-                      << ", done_received=" << (doneReceived ? 1 : 0) << "\n";
+            if (!silent) {
+                std::cout << "[client] drain timeout, closing connection\n";
+                std::cout << "[client] sent_msgs=" << sent
+                          << ", sent_bytes=" << sentBytes
+                          << ", local_xxh128=" << (localHash.empty() ? "<pending>" : localHash)
+                          << ", done_received=" << (doneReceived ? 1 : 0) << "\n";
+            }
             closeIssued = true;
             conn->close();
         }
     });
 
-    auto finalizeLocalMd5 = [&]() -> bool {
-        if (md5Finalized) {
+    auto finalizeLocalHash = [&]() -> bool {
+        if (hashFinalized) {
             return true;
         }
-        if (!md5.finalize(localMd5)) {
-            std::cerr << "[client] md5 finalize failed\n";
+        if (!hash.finalize(localHash)) {
+            if (!silent) {
+                std::cerr << "[client] xxh128 finalize failed\n";
+            }
             return false;
         }
-        md5Finalized = true;
+        hashFinalized = true;
         return true;
     };
 
@@ -218,7 +215,7 @@ int main(int argc, char **argv)
             return;
         }
         sendDone = true;
-        if (!finalizeLocalMd5()) {
+        if (!finalizeLocalHash()) {
             connectFailed = true;
             if (!closeIssued && conn) {
                 closeIssued = true;
@@ -226,8 +223,10 @@ int main(int argc, char **argv)
             }
             return;
         }
-        std::cout << "[client] upload finished, waiting DONE, sent_bytes=" << sentBytes
-                  << " md5=" << localMd5 << "\n";
+        if (!silent) {
+            std::cout << "[client] upload finished, waiting DONE, sent_bytes=" << sentBytes
+                      << " xxh128=" << localHash << "\n";
+        }
         waitDoneStartMs = NowMs();
         drainTimer.start(drainCheckIntervalMs, drainCheckIntervalMs);
     };
@@ -238,44 +237,53 @@ int main(int argc, char **argv)
             const std::string value = line.substr(std::strlen("ACK total="));
             try {
                 const uint64_t total = std::stoull(value);
-                if (!quiet || (ackCount % 1000 == 0)) {
+                if (!silent) {
                     std::cout << "[client] ack total=" << total << "\n";
                 }
             } catch (...) {
-                std::cerr << "[client] bad ACK line: " << line << "\n";
+                if (!silent) {
+                    std::cerr << "[client] bad ACK line: " << line << "\n";
+                }
             }
             return;
         }
 
         if (line.rfind("DONE bytes=", 0) == 0) {
-            const size_t md5Pos = line.find(" md5=");
-            if (md5Pos == std::string::npos) {
-                std::cerr << "[client] bad DONE line: " << line << "\n";
+            const size_t hashPos = line.find(" xxh128=");
+            if (hashPos == std::string::npos) {
+                if (!silent) {
+                    std::cerr << "[client] bad DONE line: " << line << "\n";
+                }
                 return;
             }
 
             try {
-                serverDoneBytes = std::stoull(line.substr(std::strlen("DONE bytes="), md5Pos - std::strlen("DONE bytes=")));
+                serverDoneBytes =
+                    std::stoull(line.substr(std::strlen("DONE bytes="), hashPos - std::strlen("DONE bytes=")));
             } catch (...) {
-                std::cerr << "[client] bad DONE bytes: " << line << "\n";
+                if (!silent) {
+                    std::cerr << "[client] bad DONE bytes: " << line << "\n";
+                }
                 return;
             }
-            serverMd5 = line.substr(md5Pos + std::strlen(" md5="));
+            serverHash = line.substr(hashPos + std::strlen(" xxh128="));
             doneReceived = true;
             drainTimer.stop();
 
-            if (!md5Finalized && !finalizeLocalMd5()) {
+            if (!hashFinalized && !finalizeLocalHash()) {
                 connectFailed = true;
             }
 
             const bool bytesMatch = (serverDoneBytes == sentBytes);
-            const bool md5Match = (serverMd5 == localMd5);
-            std::cout << "[client] done bytes=" << serverDoneBytes
-                      << " md5=" << serverMd5
-                      << " local_bytes=" << sentBytes
-                      << " local_md5=" << localMd5
-                      << " result=" << ((bytesMatch && md5Match) ? "PASS" : "FAIL")
-                      << "\n";
+            const bool hashMatch = (serverHash == localHash);
+            if (!silent) {
+                std::cout << "[client] done bytes=" << serverDoneBytes
+                          << " xxh128=" << serverHash
+                          << " local_bytes=" << sentBytes
+                          << " local_xxh128=" << localHash
+                          << " result=" << ((bytesMatch && hashMatch) ? "PASS" : "FAIL")
+                          << "\n";
+            }
 
             if (!closeIssued && conn) {
                 closeIssued = true;
@@ -285,7 +293,9 @@ int main(int argc, char **argv)
         }
 
         if (line.rfind("ERR ", 0) == 0) {
-            std::cerr << "[client] server error: " << line << "\n";
+            if (!silent) {
+                std::cerr << "[client] server error: " << line << "\n";
+            }
             connectFailed = true;
             if (!closeIssued && conn) {
                 closeIssued = true;
@@ -294,29 +304,39 @@ int main(int argc, char **argv)
             return;
         }
 
-        std::cout << "[client] server: " << line << "\n";
+        if (!silent) {
+            std::cout << "[client] server: " << line << "\n";
+        }
     };
 
     ctx.setOnConnected([&](eular::utp::Connection::Ptr c) {
         connected = true;
         conn = c;
-        std::cout << "[client] connected scid=" << conn->description().scid << " dcid=" << conn->description().dcid << "\n";
+        if (!silent) {
+            std::cout << "[client] connected scid=" << conn->description().scid << " dcid=" << conn->description().dcid << "\n";
+        }
 
         const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
         if (sid < 0) {
-            std::cerr << "[client] createStream failed: " << sid << "\n";
+            if (!silent) {
+                std::cerr << "[client] createStream failed: " << sid << "\n";
+            }
             connectFailed = true;
             return;
         }
 
         stream = conn->getStream(static_cast<uint32_t>(sid));
         if (stream == nullptr) {
-            std::cerr << "[client] getStream failed for sid=" << sid << "\n";
+            if (!silent) {
+                std::cerr << "[client] getStream failed for sid=" << sid << "\n";
+            }
             connectFailed = true;
             return;
         }
 
-        std::cout << "[client] local stream id=" << stream->id() << "\n";
+        if (!silent) {
+            std::cout << "[client] local stream id=" << stream->id() << "\n";
+        }
 
         auto trySendPtr = std::make_shared<std::function<void()>>();
         *trySendPtr = [&]() {
@@ -333,7 +353,9 @@ int main(int argc, char **argv)
                         if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
                             return;
                         }
-                        std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
+                        if (!silent) {
+                            std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
+                        }
                         connectFailed = true;
                         return;
                     }
@@ -357,13 +379,17 @@ int main(int argc, char **argv)
                     if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
                         return;
                     }
-                    std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
+                    if (!silent) {
+                        std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
+                    }
                     connectFailed = true;
                     return;
                 }
 
                 if (fin && static_cast<size_t>(nwrite) != chunkLen) {
-                    std::cerr << "[client] unexpected partial FIN write\n";
+                    if (!silent) {
+                        std::cerr << "[client] unexpected partial FIN write\n";
+                    }
                     connectFailed = true;
                     return;
                 }
@@ -372,8 +398,10 @@ int main(int argc, char **argv)
                     return;
                 }
 
-                if (!md5.update(reinterpret_cast<const uint8_t *>(fixedPayload.data()), static_cast<size_t>(nwrite))) {
-                    std::cerr << "[client] md5 update failed\n";
+                if (!hash.update(reinterpret_cast<const uint8_t *>(fixedPayload.data()), static_cast<size_t>(nwrite))) {
+                    if (!silent) {
+                        std::cerr << "[client] xxh128 update failed\n";
+                    }
                     connectFailed = true;
                     return;
                 }
@@ -381,13 +409,9 @@ int main(int argc, char **argv)
                 ++sent;
                 sentBytes += static_cast<uint64_t>(nwrite);
 
-                if (!quiet) {
+                if (!silent) {
                     std::cout << "[client] send #" << sent
                               << " bytes=" << nwrite
-                              << (fin ? " [fin]" : "") << "\n";
-                } else if ((sent % 1000 == 0) || fin) {
-                    std::cout << "[client] progress sent_msgs=" << sent
-                              << " sent_bytes=" << sentBytes
                               << (fin ? " [fin]" : "") << "\n";
                 }
 
@@ -423,7 +447,9 @@ int main(int argc, char **argv)
 
                 if (n == 0) {
                     if (!doneReceived) {
-                        std::cerr << "[client] server closed before DONE\n";
+                        if (!silent) {
+                            std::cerr << "[client] server closed before DONE\n";
+                        }
                     }
                     break;
                 }
@@ -435,20 +461,26 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectError([&](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
-        std::cerr << "[client] connect error code=" << code
-                  << " peer=" << info.ip << ":" << info.port
-                  << " reason=" << reason << "\n";
+        if (!silent) {
+            std::cerr << "[client] connect error code=" << code
+                      << " peer=" << info.ip << ":" << info.port
+                      << " reason=" << reason << "\n";
+        }
         connectFailed = true;
     });
 
     ctx.setOnConnectionClosed([&](eular::utp::Connection::Ptr c) {
-        std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
+        if (!silent) {
+            std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
+        }
         stopTimer.start(1000);
     });
 
     const int32_t bindStatus = ctx.bind("0.0.0.0", 0);
     if (bindStatus != UTP_ERR_OK) {
-        std::cerr << "[client] bind failed: " << bindStatus << "\n";
+        if (!silent) {
+            std::cerr << "[client] bind failed: " << bindStatus << "\n";
+        }
         return 1;
     }
 
@@ -459,16 +491,20 @@ int main(int argc, char **argv)
     info.encrypted = eular::utp::Context::kEncryptionNone;
     const int32_t connectStatus = ctx.connect(info);
     if (connectStatus != UTP_ERR_OK) {
-        std::cerr << "[client] connect start failed: " << connectStatus << "\n";
+        if (!silent) {
+            std::cerr << "[client] connect start failed: " << connectStatus << "\n";
+        }
         return 1;
     }
 
-    std::cout << "[client] connecting to " << serverIp << ":" << serverPort
-              << ", count=" << sendCount
-              << ", length=" << msgLen
-              << ", total_bytes=" << totalBytes
-              << ", target_bytes=" << targetBytes
-              << (quiet ? ", quiet=1" : ", quiet=0") << "\n";
+    if (!silent) {
+        std::cout << "[client] connecting to " << serverIp << ":" << serverPort
+                  << ", count=" << sendCount
+                  << ", length=" << msgLen
+                  << ", total_bytes=" << totalBytes
+                  << ", target_bytes=" << targetBytes
+                  << ", silent=0\n";
+    }
 
     loop.dispatch();
     return 0;

@@ -29,6 +29,7 @@
 #include "proto/frame/handshake_done.h"
 #include "proto/frame/stream.h"
 #include "utp/errno.h"
+#include "util/ack_info.h"
 #include "util/time.h"
 
 namespace eular {
@@ -272,6 +273,61 @@ PacketOut *BuildLostPacket(ContextImpl &owner,
     pkt->po_flags |= eular::utp::PacketOutFlags::kPoResetPackNo;
     TAILQ_INSERT_TAIL(&conn->m_sendCtl->m_lostPackets, pkt, po_next);
     return pkt;
+}
+
+PacketOut *BuildUnackedPacket(ConnectionImpl &conn,
+                              utp_packno_t packno,
+                              uint32_t frameTypes,
+                              uint32_t streamDataBytes = 0,
+                              uint16_t transientAckBytes = 0,
+                              uint16_t payloadBytes = 1)
+{
+    const uint32_t packetSize = static_cast<uint32_t>(UTP_HEADER_SIZE + payloadBytes);
+    PacketOut *pkt = conn.m_mm.getPacketOut(packetSize);
+    REQUIRE(pkt != nullptr);
+    REQUIRE(pkt->raw_data != nullptr);
+    REQUIRE(pkt->alloc_size >= packetSize);
+
+    std::memset(pkt->raw_data, 0, packetSize);
+    pkt->data_size = static_cast<uint16_t>(packetSize);
+    pkt->packno = packno;
+    pkt->sent_time = eular::utp::time::MonotonicUs() - 1000;
+    pkt->frame_types = frameTypes;
+    pkt->stream_data_size = streamDataBytes;
+    pkt->transient_ack_size = transientAckBytes;
+    conn.m_sendCtl->appendUnacked(pkt);
+    return pkt;
+}
+
+eular::utp::AckInfo BuildAckRange(utp_packno_t low, utp_packno_t high, utp_time_t ackDelayUs = 0)
+{
+    eular::utp::AckInfo ackInfo;
+    ackInfo.largest_ack_packno = high;
+    ackInfo.ack_delay = ackDelayUs;
+    ackInfo.range_size = 1;
+    ackInfo.ack_ranges[0].low = low;
+    ackInfo.ack_ranges[0].high = high;
+    return ackInfo;
+}
+
+eular::utp::AckInfo BuildAckRanges(std::initializer_list<Range> ranges, utp_time_t ackDelayUs = 0)
+{
+    eular::utp::AckInfo ackInfo;
+    ackInfo.ack_delay = ackDelayUs;
+    ackInfo.range_size = static_cast<uint32_t>(ranges.size());
+    REQUIRE(ackInfo.range_size > 0);
+    REQUIRE(ackInfo.range_size <= ackInfo.ack_ranges.size());
+
+    utp_packno_t largest = 0;
+    size_t index = 0;
+    for (const auto &range : ranges) {
+        ackInfo.ack_ranges[index++] = range;
+        if (range.high > largest) {
+            largest = range.high;
+        }
+    }
+    ackInfo.largest_ack_packno = largest;
+    return ackInfo;
 }
 
 } // namespace
@@ -671,4 +727,139 @@ TEST_CASE("Adaptive AckFrequency updates on sustained RTT increase", "[Ack][Inte
     REQUIRE(clientConn->m_ackProfileCurrent == ConnectionImpl::kAckProfileLatencySensitive);
     const uint32_t ackFrequencyBits = (1u << static_cast<uint32_t>(FrameType::kFrameAckFrequency));
     REQUIRE(HasUnackedPacketWithBits(clientConn->m_sendCtl.get(), ackFrequencyBits));
+}
+
+TEST_CASE("Ack without HandshakeDone coverage keeps HandshakeDone pending", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2101);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+    BuildUnackedPacket(conn, 10, (1u << static_cast<uint32_t>(FrameType::kFrameStream)), 16);
+
+    const Status st = conn.m_sendCtl->onAckReceived(BuildAckRange(10, 10), eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE(conn.m_handshakeDonePending);
+    REQUIRE(conn.m_handshakeDoneTimer.isActive());
+    REQUIRE(TAILQ_EMPTY(&conn.m_sendCtl->m_unackedPackets));
+}
+
+TEST_CASE("Ack covering HandshakeDone packet clears pending convergence", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2102);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+    const uint32_t handshakeDoneBits = (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone));
+    BuildUnackedPacket(conn, 20, handshakeDoneBits);
+
+    const Status st = conn.m_sendCtl->onAckReceived(BuildAckRange(20, 20), eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE_FALSE(conn.m_handshakeDonePending);
+    REQUIRE_FALSE(conn.m_handshakeDoneTimer.isActive());
+    REQUIRE(TAILQ_EMPTY(&conn.m_sendCtl->m_unackedPackets));
+}
+
+TEST_CASE("Ack that skips HandshakeDone packet does not clear pending convergence", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2103);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+
+    const uint32_t handshakeDoneBits = (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone));
+    const uint32_t streamBits = (1u << static_cast<uint32_t>(FrameType::kFrameStream));
+    BuildUnackedPacket(conn, 30, handshakeDoneBits);
+    BuildUnackedPacket(conn, 31, streamBits, 8);
+
+    const Status st = conn.m_sendCtl->onAckReceived(BuildAckRange(31, 31), eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE(conn.m_handshakeDonePending);
+    REQUIRE(conn.m_handshakeDoneTimer.isActive());
+    REQUIRE_FALSE(HasUnackedPacketWithBits(conn.m_sendCtl.get(), streamBits));
+}
+
+TEST_CASE("Ack of packet carrying Ack Stream and HandshakeDone clears pending", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2104);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+
+    const uint32_t frameBits = (1u << static_cast<uint32_t>(FrameType::kFrameAck))
+                             | (1u << static_cast<uint32_t>(FrameType::kFrameStream))
+                             | (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone));
+    BuildUnackedPacket(conn, 40, frameBits, 32, 12);
+
+    const Status st = conn.m_sendCtl->onAckReceived(BuildAckRange(40, 40), eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE_FALSE(conn.m_handshakeDonePending);
+    REQUIRE_FALSE(conn.m_handshakeDoneTimer.isActive());
+    REQUIRE(TAILQ_EMPTY(&conn.m_sendCtl->m_unackedPackets));
+}
+
+TEST_CASE("Sparse ACK ranges that do not cover HandshakeDone keep pending convergence", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2105);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+
+    const uint32_t handshakeDoneBits = (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone));
+    const uint32_t streamBits = (1u << static_cast<uint32_t>(FrameType::kFrameStream));
+    BuildUnackedPacket(conn, 50, handshakeDoneBits);
+    BuildUnackedPacket(conn, 51, streamBits, 8);
+    BuildUnackedPacket(conn, 53, streamBits, 8);
+
+    const Status st = conn.m_sendCtl->onAckReceived(
+        BuildAckRanges({Range{51, 51}, Range{53, 53}}),
+        eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE(conn.m_handshakeDonePending);
+    REQUIRE(conn.m_handshakeDoneTimer.isActive());
+}
+
+TEST_CASE("Sparse ACK ranges clear pending once one range covers HandshakeDone", "[Ack][HandshakeDone]")
+{
+    Config cfg;
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+    ConnectionImpl conn(&ctx, nullptr, 2106);
+
+    conn.m_state = ConnectionImpl::kStateConnected;
+    conn.m_handshakeDonePending = true;
+    REQUIRE(conn.m_handshakeDoneTimer.start(1000));
+
+    const uint32_t handshakeDoneBits = (1u << static_cast<uint32_t>(FrameType::kFrameHandshakeDone));
+    const uint32_t streamBits = (1u << static_cast<uint32_t>(FrameType::kFrameStream));
+    BuildUnackedPacket(conn, 60, handshakeDoneBits);
+    BuildUnackedPacket(conn, 61, streamBits, 8);
+    BuildUnackedPacket(conn, 63, streamBits, 8);
+
+    const Status st = conn.m_sendCtl->onAckReceived(
+        BuildAckRanges({Range{61, 61}, Range{60, 60}, Range{63, 63}}),
+        eular::utp::time::MonotonicUs());
+    REQUIRE(st.ok());
+    REQUIRE_FALSE(conn.m_handshakeDonePending);
+    REQUIRE_FALSE(conn.m_handshakeDoneTimer.isActive());
 }

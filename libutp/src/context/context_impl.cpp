@@ -1426,10 +1426,10 @@ void ContextImpl::onPendingHandshakeTimeout()
 
 void ContextImpl::onReadEvent()
 {
-    while (true) {
-        processPendingHandshakeTimeouts();
-        refreshPendingHandshakeTimer();
+    processPendingHandshakeTimeouts();
+    refreshPendingHandshakeTimer();
 
+    while (true) {
         std::vector<UdpSocket::MsgMetaInfo> msgVec;
         Status recvStatus;
         int32_t nread = m_udpSocket.recv(msgVec, recvStatus);
@@ -1437,6 +1437,7 @@ void ContextImpl::onReadEvent()
             return;
         }
 
+        const utp_time_t nowUs = time::MonotonicUs();
         for (const UdpSocket::MsgMetaInfo &msg : msgVec) {
             if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
                 continue;

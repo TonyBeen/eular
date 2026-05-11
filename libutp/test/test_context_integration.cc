@@ -1446,6 +1446,248 @@ TEST_CASE("Context integration: late HandshakeDone after pending timeout does no
     REQUIRE(ctx.m_connections.find(localCid) == ctx.m_connections.end());
 }
 
+TEST_CASE("Context integration: mismatched ack_handshake_pn does not promote pending connection",
+          "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 100;
+    cfg.pending_pre_handshake_buffer_packets = 4;
+    cfg.pending_pre_handshake_buffer_bytes = 1024;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    const uint32_t localCid = 0x61004000;
+    const uint32_t peerCid = 0x40006100;
+    const Address peerAddr("127.0.0.1", 19003);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.lastHandshakePacketNo = 91;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    FrameStream frame;
+    uint8_t byte = 'Z';
+    frame.stream_id = 0;
+    frame.stream_offset = 0;
+    frame.stream_data_length = 1;
+    frame.stream_data = &byte;
+
+    std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()) + FRAME_HANDSHAKE_DONE_SIZE, 0);
+    Status st;
+    const int32_t frameLen = frame.encode(payload.data(), payload.size(), st);
+    REQUIRE(frameLen > 0);
+    REQUIRE(st.ok());
+
+    FrameHandshakeDone done;
+    done.ack_handshake_pn = pending.lastHandshakePacketNo - 1;
+    REQUIRE(done.encode(payload.data() + frameLen, FRAME_HANDSHAKE_DONE_SIZE, st) == FRAME_HANDSHAKE_DONE_SIZE);
+    REQUIRE(st.ok());
+
+    const std::vector<uint8_t> packetBytes = BuildRawPacket(peerCid, localCid, 12, UTP_TYPE_CTRL, payload);
+    UdpSocket::MsgMetaInfo msg{};
+    msg.data = (void *)packetBytes.data();
+    msg.len = packetBytes.size();
+    msg.metaInfo.peerAddress = peerAddr;
+
+    auto deliverPendingPacket = [&]() {
+        auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+
+        auto packetReleaser = [&](PacketIn *pkt) {
+            ctx.m_mm.releasePacketIn(pkt);
+        };
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> decoded(
+            ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
+        REQUIRE(decoded != nullptr);
+        REQUIRE(ctx.decodeIncomingPendingPacket(msg, pendingIt->second, *decoded));
+        REQUIRE(decoded->hasFrame(eular::utp::kFrameHandshakeDone));
+
+        pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(packetBytes);
+        pendingIt->second.bufferedBeforeHandshakeDoneBytes += packetBytes.size();
+    };
+
+    deliverPendingPacket();
+
+    auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+    REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+    REQUIRE(ctx.m_connections.find(localCid) == ctx.m_connections.end());
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDone.size() == 1);
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDoneBytes == packetBytes.size());
+}
+
+TEST_CASE("Context integration: pending pre-handshake buffer enforces packet cap",
+          "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 100;
+    cfg.pending_pre_handshake_buffer_packets = 2;
+    cfg.pending_pre_handshake_buffer_bytes = 4096;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    const uint32_t localCid = 0x62004000;
+    const uint32_t peerCid = 0x40006200;
+    const Address peerAddr("127.0.0.1", 19004);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.lastHandshakePacketNo = 92;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    auto makePacket = [&](utp_packno_t pn, uint64_t offset, char byte) {
+        FrameStream frame;
+        frame.stream_id = 0;
+        frame.stream_offset = offset;
+        frame.stream_data_length = 1;
+        frame.stream_data = reinterpret_cast<uint8_t *>(&byte);
+
+        std::vector<uint8_t> payload(static_cast<size_t>(frame.frameSize()), 0);
+        Status st;
+        REQUIRE(frame.encode(payload.data(), payload.size(), st) > 0);
+        REQUIRE(st.ok());
+        return BuildRawPacket(peerCid, localCid, pn, UTP_TYPE_CTRL, payload);
+    };
+
+    const std::vector<uint8_t> packetA = makePacket(20, 0, 'A');
+    const std::vector<uint8_t> packetB = makePacket(21, 1, 'B');
+    const std::vector<uint8_t> packetC = makePacket(22, 2, 'C');
+
+    auto cachePendingPacket = [&](const std::vector<uint8_t> &packetBytes) {
+        auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+
+        UdpSocket::MsgMetaInfo msg{};
+        msg.data = (void *)packetBytes.data();
+        msg.len = packetBytes.size();
+        msg.metaInfo.peerAddress = peerAddr;
+
+        auto packetReleaser = [&](PacketIn *pkt) {
+            ctx.m_mm.releasePacketIn(pkt);
+        };
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> decoded(
+            ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
+        REQUIRE(decoded != nullptr);
+        REQUIRE(ctx.decodeIncomingPendingPacket(msg, pendingIt->second, *decoded));
+        REQUIRE_FALSE(decoded->hasFrame(eular::utp::kFrameHandshakeDone));
+
+        if (pendingIt->second.bufferedBeforeHandshakeDone.size() < cfg.pending_pre_handshake_buffer_packets
+            && (pendingIt->second.bufferedBeforeHandshakeDoneBytes + packetBytes.size()) <=
+                   cfg.pending_pre_handshake_buffer_bytes) {
+            pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(packetBytes);
+            pendingIt->second.bufferedBeforeHandshakeDoneBytes += packetBytes.size();
+        }
+    };
+
+    cachePendingPacket(packetA);
+    cachePendingPacket(packetB);
+    cachePendingPacket(packetC);
+
+    auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+    REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDone.size() == 2);
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDoneBytes == packetA.size() + packetB.size());
+}
+
+TEST_CASE("Context integration: pending pre-handshake buffer enforces byte cap",
+          "[Context][Integration][Handshake][Regression]")
+{
+    Config cfg;
+    cfg.handshake_timeout = 100;
+    cfg.pending_pre_handshake_buffer_packets = 8;
+    cfg.pending_pre_handshake_buffer_bytes = 120;
+
+    ev::EventLoop loop;
+    ContextImpl ctx(loop.loop(), &cfg);
+
+    const uint32_t localCid = 0x63004000;
+    const uint32_t peerCid = 0x40006300;
+    const Address peerAddr("127.0.0.1", 19005);
+
+    ContextImpl::PendingIncomingConnection pending;
+    pending.localCid = localCid;
+    pending.peerCid = peerCid;
+    pending.peerAddress = peerAddr;
+    pending.peerIp = peerAddr.toIpString();
+    pending.handshakeSent = true;
+    pending.lastHandshakePacketNo = 93;
+    pending.peerTp.init_max_streams_bidi = 8;
+    pending.peerTp.init_max_streams_uni = 8;
+    ctx.m_pendingIncoming.emplace(localCid, pending);
+    ctx.m_waitHandshakeDone.insert(localCid);
+
+    auto makePacket = [&](utp_packno_t pn, uint64_t offset, size_t payloadBytes) {
+        std::vector<uint8_t> streamPayload(FRAME_STREAM_HDR_SIZE + payloadBytes, 0);
+        FrameStream frame;
+        frame.stream_id = 0;
+        frame.stream_offset = offset;
+        frame.stream_data_length = static_cast<uint16_t>(payloadBytes);
+        std::vector<uint8_t> data(payloadBytes, 'Q');
+        frame.stream_data = data.data();
+        Status st;
+        REQUIRE(frame.encode(streamPayload.data(), streamPayload.size(), st) == static_cast<int32_t>(streamPayload.size()));
+        REQUIRE(st.ok());
+        return BuildRawPacket(peerCid, localCid, pn, UTP_TYPE_CTRL, streamPayload);
+    };
+
+    const std::vector<uint8_t> packetA = makePacket(30, 0, 20);
+    const std::vector<uint8_t> packetB = makePacket(31, 20, 20);
+    const std::vector<uint8_t> packetC = makePacket(32, 40, 20);
+
+    REQUIRE(packetA.size() + packetB.size() <= cfg.pending_pre_handshake_buffer_bytes);
+    REQUIRE(packetA.size() + packetB.size() + packetC.size() > cfg.pending_pre_handshake_buffer_bytes);
+
+    auto cachePendingPacket = [&](const std::vector<uint8_t> &packetBytes) {
+        auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+        REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+
+        UdpSocket::MsgMetaInfo msg{};
+        msg.data = (void *)packetBytes.data();
+        msg.len = packetBytes.size();
+        msg.metaInfo.peerAddress = peerAddr;
+
+        auto packetReleaser = [&](PacketIn *pkt) {
+            ctx.m_mm.releasePacketIn(pkt);
+        };
+        std::unique_ptr<PacketIn, decltype(packetReleaser)> decoded(
+            ctx.m_mm.getPacketIn(static_cast<uint32_t>(packetBytes.size())), packetReleaser);
+        REQUIRE(decoded != nullptr);
+        REQUIRE(ctx.decodeIncomingPendingPacket(msg, pendingIt->second, *decoded));
+        REQUIRE_FALSE(decoded->hasFrame(eular::utp::kFrameHandshakeDone));
+
+        if (pendingIt->second.bufferedBeforeHandshakeDone.size() < cfg.pending_pre_handshake_buffer_packets
+            && (pendingIt->second.bufferedBeforeHandshakeDoneBytes + packetBytes.size()) <=
+                   cfg.pending_pre_handshake_buffer_bytes) {
+            pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(packetBytes);
+            pendingIt->second.bufferedBeforeHandshakeDoneBytes += packetBytes.size();
+        }
+    };
+
+    cachePendingPacket(packetA);
+    cachePendingPacket(packetB);
+    cachePendingPacket(packetC);
+
+    auto pendingIt = ctx.m_pendingIncoming.find(localCid);
+    REQUIRE(pendingIt != ctx.m_pendingIncoming.end());
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDone.size() == 2);
+    REQUIRE(pendingIt->second.bufferedBeforeHandshakeDoneBytes == packetA.size() + packetB.size());
+}
+
 TEST_CASE("Context integration: stream OnWritable fires again after queued data drains", "[Context][Integration][Stream]")
 {
     Config cfg;
