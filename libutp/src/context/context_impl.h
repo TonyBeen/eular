@@ -135,7 +135,21 @@ private:
     };
 
 private:
-    static std::string PeerKey(const Address &peerAddress, uint32_t peerCid);
+    struct PeerIndexKey {
+        Address  peerAddress;
+        uint32_t peerCid{0};
+
+        bool operator==(const PeerIndexKey &other) const {
+            return peerCid == other.peerCid && peerAddress == other.peerAddress;
+        }
+    };
+    struct PeerIndexKeyHash {
+        size_t operator()(const PeerIndexKey &key) const {
+            size_t h = key.peerAddress.hash();
+            h ^= static_cast<size_t>(key.peerCid) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
     void    handleConnectionState(ConnectionImpl *conn);
     Status sendPendingHandshake(PendingIncomingConnection &pending);
     Status sendPendingConnectionClose(PendingIncomingConnection &pending, uint16_t errorCode, const std::string &reason);
@@ -217,7 +231,7 @@ private:
     bool                            m_inWriteDispatch{false};
 
     std::unordered_map<uint32_t, PendingIncomingConnection> m_pendingIncoming; // local cid -> pending incoming
-    std::unordered_map<std::string, uint32_t> m_pendingIncomingPeerIndex;       // peer address+scid -> local cid
+    std::unordered_map<PeerIndexKey, uint32_t, PeerIndexKeyHash> m_pendingIncomingPeerIndex; // peer address+scid -> local cid
     std::list<uint32_t>             m_pendingIncomingQueue; // 回调通知后的待 accept 队列
     std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
     std::unique_ptr<TokenAuth>      m_tokenAuth;

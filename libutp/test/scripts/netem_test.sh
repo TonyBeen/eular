@@ -89,9 +89,11 @@ run_scenario() {
 
     local output=""
     local client_status=0
-    if ! output=$(timeout "$timeout_s" "$CLIENT" \
+    if output=$(timeout "$timeout_s" "$CLIENT" \
         --server-ip 127.0.0.1 --server-port "$PORT" \
         --count "$count" --length 64 2>&1); then
+        client_status=0
+    else
         client_status=$?
     fi
 
@@ -100,7 +102,7 @@ run_scenario() {
 
     local sent_bytes done_bytes result
     sent_bytes=$(echo "$output" | sed -nE 's/.*sent_bytes=([0-9]+).*/\1/p' | tail -1)
-    done_bytes=$(echo "$output" | sed -nE 's/.*done bytes=([0-9]+).*/\1/p' | tail -1)
+    done_bytes=$(echo "$output" | sed -nE 's/.*done(_| )bytes=([0-9]+).*/\2/p' | tail -1)
     result=$(echo "$output" | sed -nE 's/.*result=([A-Z]+).*/\1/p' | tail -1)
 
     [ -n "$sent_bytes" ] || sent_bytes=0

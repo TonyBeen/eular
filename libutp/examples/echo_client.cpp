@@ -125,7 +125,7 @@ int main(int argc, char **argv)
 
     ev::EventLoop loop;
     eular::utp::Config cfg;
-    cfg.handshake_timeout = 5000;
+    cfg.handshake_timeout = 3000;
     cfg.enable_keepalive = false;
     cfg.enable_dplpmtud = false;
     cfg.mtu_base = 1400;
@@ -135,6 +135,7 @@ int main(int argc, char **argv)
     eular::utp::Stream *stream = nullptr;
     bool connected = false;
     bool connectFailed = false;
+    bool finalResultPrinted = false;
 
     uint32_t sent = 0;
     uint64_t sentBytes = 0;
@@ -157,6 +158,7 @@ int main(int argc, char **argv)
     const std::string uploadHeader = "UPLOAD " + std::to_string(targetBytes) + "\n";
     size_t headerOffset = 0;
     std::string recvTextBuffer;
+    size_t recvTextOffset = 0;
     Xxh128Accumulator hash;
     if (!hash.valid()) {
         if (!silent) {
@@ -168,11 +170,49 @@ int main(int argc, char **argv)
     // Pre-generate payload to avoid CPU bottleneck during high-speed tests
     const std::string fixedPayload = RandomString(msgLen);
 
+    auto copyToWriteViews = [&](eular::utp::Stream::MutableBufferView views[2],
+                                const uint8_t *src,
+                                size_t len) -> size_t {
+        size_t copied = 0;
+        for (size_t i = 0; i < 2 && copied < len; ++i) {
+            if (views[i].data == nullptr || views[i].len == 0) {
+                continue;
+            }
+            const size_t ncopy = std::min(views[i].len, len - copied);
+            std::memcpy(views[i].data, src + copied, ncopy);
+            copied += ncopy;
+        }
+        return copied;
+    };
+
+    auto printFinalResult = [&](const std::string &reason) {
+        if (finalResultPrinted) {
+            return;
+        }
+        finalResultPrinted = true;
+
+        const bool bytesMatch = doneReceived && (serverDoneBytes == sentBytes);
+        const bool hashMatch = doneReceived && (serverHash == localHash);
+        const bool pass = doneReceived && bytesMatch && hashMatch && !connectFailed;
+
+        std::ostream &out = pass ? std::cout : std::cerr;
+        out << "[client] result=" << (pass ? "PASS" : "FAIL")
+            << " reason=" << reason
+            << " sent_bytes=" << sentBytes
+            << " done_bytes=" << serverDoneBytes
+            << " local_xxh128=" << (localHash.empty() ? "<pending>" : localHash)
+            << " server_xxh128=" << (serverHash.empty() ? "<pending>" : serverHash)
+            << " ack_count=" << ackCount
+            << " done_received=" << (doneReceived ? 1 : 0)
+            << "\n";
+    };
+
     ev::EventTimer stopTimer;
     stopTimer.reset(loop.loop(), [&]() {
         if (!silent) {
             std::cout << "[client] exiting...\n";
         }
+        printFinalResult("timer");
         loop.breakLoop();
     });
 
@@ -186,11 +226,8 @@ int main(int argc, char **argv)
             }
             if (!silent) {
                 std::cout << "[client] drain timeout, closing connection\n";
-                std::cout << "[client] sent_msgs=" << sent
-                          << ", sent_bytes=" << sentBytes
-                          << ", local_xxh128=" << (localHash.empty() ? "<pending>" : localHash)
-                          << ", done_received=" << (doneReceived ? 1 : 0) << "\n";
             }
+            printFinalResult("drain-timeout");
             closeIssued = true;
             conn->close();
         }
@@ -284,6 +321,7 @@ int main(int argc, char **argv)
                           << " result=" << ((bytesMatch && hashMatch) ? "PASS" : "FAIL")
                           << "\n";
             }
+            printFinalResult((bytesMatch && hashMatch) ? "done" : "mismatch");
 
             if (!closeIssued && conn) {
                 closeIssued = true;
@@ -297,6 +335,7 @@ int main(int argc, char **argv)
                 std::cerr << "[client] server error: " << line << "\n";
             }
             connectFailed = true;
+            printFinalResult("server-error");
             if (!closeIssued && conn) {
                 closeIssued = true;
                 conn->close();
@@ -346,20 +385,30 @@ int main(int argc, char **argv)
 
             while (true) {
                 if (headerOffset < uploadHeader.size()) {
-                    const int32_t nwrite = stream->write(uploadHeader.data() + headerOffset,
-                                                         uploadHeader.size() - headerOffset,
-                                                         false);
-                    if (nwrite < 0) {
-                        if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
-                            return;
-                        }
-                        if (!silent) {
-                            std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
-                        }
-                        connectFailed = true;
+                    const size_t remaining = uploadHeader.size() - headerOffset;
+                    eular::utp::Stream::MutableBufferView views[2];
+                    const size_t grant = stream->acquireWriteBuffer(views, remaining);
+                    if (grant == 0) {
                         return;
                     }
-                    headerOffset += static_cast<size_t>(nwrite);
+                    const size_t copied = copyToWriteViews(
+                        views,
+                        reinterpret_cast<const uint8_t *>(uploadHeader.data() + headerOffset),
+                        grant);
+                    if (copied == 0) {
+                        return;
+                    }
+                    const int32_t committed = stream->commitWrite(copied, false);
+                    if (committed <= 0) {
+                        if (committed < 0 && utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
+                            if (!silent) {
+                                std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
+                            }
+                            connectFailed = true;
+                        }
+                        return;
+                    }
+                    headerOffset += static_cast<size_t>(committed);
                     if (headerOffset < uploadHeader.size()) {
                         return;
                     }
@@ -374,31 +423,32 @@ int main(int argc, char **argv)
                 const uint64_t remaining = targetBytes - sentBytes;
                 const size_t chunkLen = static_cast<size_t>(std::min<uint64_t>(remaining, static_cast<uint64_t>(msgLen)));
                 const bool fin = (chunkLen == remaining);
-                const int32_t nwrite = stream->write(fixedPayload.data(), chunkLen, fin);
-                if (nwrite < 0) {
-                    if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
-                        return;
-                    }
-                    if (!silent) {
-                        std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
-                    }
-                    connectFailed = true;
+                eular::utp::Stream::MutableBufferView views[2];
+                const size_t grant = stream->acquireWriteBuffer(views, chunkLen);
+                if (grant < chunkLen) {
                     return;
                 }
 
-                if (fin && static_cast<size_t>(nwrite) != chunkLen) {
-                    if (!silent) {
-                        std::cerr << "[client] unexpected partial FIN write\n";
+                const size_t copied = copyToWriteViews(
+                    views,
+                    reinterpret_cast<const uint8_t *>(fixedPayload.data()),
+                    chunkLen);
+                if (copied != chunkLen) {
+                    return;
+                }
+
+                const int32_t committed = stream->commitWrite(chunkLen, fin);
+                if (committed < 0) {
+                    if (utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
+                        if (!silent) {
+                            std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
+                        }
+                        connectFailed = true;
                     }
-                    connectFailed = true;
                     return;
                 }
 
-                if (nwrite == 0) {
-                    return;
-                }
-
-                if (!hash.update(reinterpret_cast<const uint8_t *>(fixedPayload.data()), static_cast<size_t>(nwrite))) {
+                if (!hash.update(reinterpret_cast<const uint8_t *>(fixedPayload.data()), chunkLen)) {
                     if (!silent) {
                         std::cerr << "[client] xxh128 update failed\n";
                     }
@@ -407,11 +457,11 @@ int main(int argc, char **argv)
                 }
 
                 ++sent;
-                sentBytes += static_cast<uint64_t>(nwrite);
+                sentBytes += static_cast<uint64_t>(chunkLen);
 
                 if (!silent) {
                     std::cout << "[client] send #" << sent
-                              << " bytes=" << nwrite
+                              << " bytes=" << chunkLen
                               << (fin ? " [fin]" : "") << "\n";
                 }
 
@@ -427,33 +477,57 @@ int main(int argc, char **argv)
         });
 
         stream->setOnReadable([&]() {
-            std::vector<uint8_t> buffer(65536);
             for (;;) {
-                const int32_t n = stream->read(buffer.data(), buffer.size());
-                if (n > 0) {
-                    recvTextBuffer.append(reinterpret_cast<const char *>(buffer.data()), static_cast<size_t>(n));
-                    size_t pos = recvTextBuffer.find('\n');
-                    while (pos != std::string::npos) {
-                        std::string line = recvTextBuffer.substr(0, pos);
-                        if (!line.empty() && line.back() == '\r') {
-                            line.pop_back();
-                        }
-                        parseServerLine(line);
-                        recvTextBuffer.erase(0, pos + 1);
-                        pos = recvTextBuffer.find('\n');
-                    }
-                    continue;
-                }
-
-                if (n == 0) {
-                    if (!doneReceived) {
-                        if (!silent) {
-                            std::cerr << "[client] server closed before DONE\n";
+                eular::utp::Stream::ConstBufferView views[2];
+                const size_t readable = stream->acquireReadViews(views, 65536);
+                if (readable == 0) {
+                    if (stream->state() == eular::utp::Stream::kStateHalfClosedRemote ||
+                        stream->state() == eular::utp::Stream::kStateClosed) {
+                        (void)stream->commitReadViews(0);
+                        if (!doneReceived) {
+                            if (!silent) {
+                                std::cerr << "[client] server closed before DONE\n";
+                            }
                         }
                     }
                     break;
                 }
-                break;
+
+                size_t consumed = 0;
+                for (size_t i = 0; i < 2 && consumed < readable; ++i) {
+                    if (views[i].data == nullptr || views[i].len == 0) {
+                        continue;
+                    }
+                    recvTextBuffer.append(static_cast<const char *>(views[i].data), views[i].len);
+                    consumed += views[i].len;
+                }
+
+                size_t parseStart = recvTextOffset;
+                while (true) {
+                    const size_t pos = recvTextBuffer.find('\n', parseStart);
+                    if (pos == std::string::npos) {
+                        break;
+                    }
+                    std::string line = recvTextBuffer.substr(parseStart, pos - parseStart);
+                    if (!line.empty() && line.back() == '\r') {
+                        line.pop_back();
+                    }
+                    parseServerLine(line);
+                    parseStart = pos + 1;
+                }
+                recvTextOffset = parseStart;
+                if (recvTextOffset >= recvTextBuffer.size()) {
+                    recvTextBuffer.clear();
+                    recvTextOffset = 0;
+                }
+
+                if (stream->commitReadViews(consumed) < 0) {
+                    if (!silent) {
+                        std::cerr << "[client] commitReadViews failed\n";
+                    }
+                    connectFailed = true;
+                    break;
+                }
             }
         });
 
@@ -467,6 +541,7 @@ int main(int argc, char **argv)
                       << " reason=" << reason << "\n";
         }
         connectFailed = true;
+        printFinalResult("connect-error");
     });
 
     ctx.setOnConnectionClosed([&](eular::utp::Connection::Ptr c) {
@@ -481,19 +556,21 @@ int main(int argc, char **argv)
         if (!silent) {
             std::cerr << "[client] bind failed: " << bindStatus << "\n";
         }
+        printFinalResult("bind-failed");
         return 1;
     }
 
     eular::utp::Context::ConnectInfo info;
     info.ip = serverIp;
     info.port = serverPort;
-    info.timeout = 5000;
+    info.timeout = 3000;
     info.encrypted = eular::utp::Context::kEncryptionNone;
     const int32_t connectStatus = ctx.connect(info);
     if (connectStatus != UTP_ERR_OK) {
         if (!silent) {
             std::cerr << "[client] connect start failed: " << connectStatus << "\n";
         }
+        printFinalResult("connect-start-failed");
         return 1;
     }
 
@@ -507,5 +584,8 @@ int main(int argc, char **argv)
     }
 
     loop.dispatch();
+    if (!finalResultPrinted) {
+        printFinalResult("loop-exit");
+    }
     return 0;
 }

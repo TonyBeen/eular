@@ -16,6 +16,8 @@ WORKER_PIDS=()
 ECHO_CLIENT_BIN=""
 RSS_WARN_THRESHOLD_KB=65536
 RSS_FAIL_THRESHOLD_KB=0
+CPU_STOP_THRESHOLD=80
+CLIENT_TIMEOUT_SECONDS=90
 
 SCRIPT_NAME="$(basename "$0")"
 START_TS="$(date +%Y%m%d_%H%M%S)"
@@ -52,6 +54,8 @@ usage() {
                            RSS 告警阈值（相对起始值），默认 65536
   --rss-fail-threshold-kb <n>
                            RSS 失败阈值（相对起始值），默认 0（关闭）
+  --cpu-stop-threshold <n> server CPU% 超过该值时立刻停止，默认 80（关闭请设 0）
+  --client-timeout <n>     单轮 client 最大运行时间（秒），默认 90
   --keep-logs              成功时也保留日志目录
 EOF
 }
@@ -108,6 +112,16 @@ parse_args() {
                 RSS_FAIL_THRESHOLD_KB="$2"
                 shift 2
                 ;;
+            --cpu-stop-threshold)
+                [ "$#" -ge 2 ] || die "缺少 --cpu-stop-threshold 参数值"
+                CPU_STOP_THRESHOLD="$2"
+                shift 2
+                ;;
+            --client-timeout)
+                [ "$#" -ge 2 ] || die "缺少 --client-timeout 参数值"
+                CLIENT_TIMEOUT_SECONDS="$2"
+                shift 2
+                ;;
             --keep-logs)
                 KEEP_LOGS=1
                 shift
@@ -139,8 +153,10 @@ parse_args() {
     is_positive_int "$PAYLOAD_LENGTH" || die "--length 必须是正整数"
     is_positive_int "$REPORT_INTERVAL" || die "--report-interval 必须是正整数"
     is_positive_int "$SERVER_PORT" || die "--server-port 必须是正整数"
+    is_positive_int "$CLIENT_TIMEOUT_SECONDS" || die "--client-timeout 必须是正整数"
     [[ "$RSS_WARN_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-warn-threshold-kb 必须是非负整数"
     [[ "$RSS_FAIL_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-fail-threshold-kb 必须是非负整数"
+    [[ "$CPU_STOP_THRESHOLD" =~ ^[0-9]+$ ]] || die "--cpu-stop-threshold 必须是非负整数"
 }
 
 parse_done_result() {
@@ -148,7 +164,7 @@ parse_done_result() {
     local sent_bytes done_bytes result
 
     sent_bytes=$(echo "$output" | sed -nE 's/.*sent_bytes=([0-9]+).*/\1/p' | tail -1)
-    done_bytes=$(echo "$output" | sed -nE 's/.*done bytes=([0-9]+).*/\1/p' | tail -1)
+    done_bytes=$(echo "$output" | sed -nE 's/.*done(_| )bytes=([0-9]+).*/\2/p' | tail -1)
     result=$(echo "$output" | sed -nE 's/.*result=([A-Z]+).*/\1/p' | tail -1)
 
     [ -n "$sent_bytes" ] || sent_bytes=0
@@ -170,6 +186,17 @@ get_fd_count() {
     else
         echo 0
     fi
+}
+
+get_cpu_percent() {
+    local pid="$1"
+    ps -p "$pid" -o %cpu= 2>/dev/null | awk '{print $1 + 0}'
+}
+
+trigger_stop() {
+    local reason="$1"
+    echo "reason=$reason" >"$TMP_ROOT/.stop_reason"
+    : >"$TMP_ROOT/.stop"
 }
 
 write_worker_state() {
@@ -280,15 +307,20 @@ run_worker() {
     write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
 
     while [ "$(date +%s)" -lt "$end_epoch" ]; do
+        if [ -f "$TMP_ROOT/.stop" ]; then
+            return 0
+        fi
         local output=""
         local client_status=0
-        if ! output=$(timeout 90 "$echo_client" \
+        if output=$(timeout "$CLIENT_TIMEOUT_SECONDS" "$echo_client" \
             --server-ip 127.0.0.1 \
             --server-port "$SERVER_PORT" \
             --length "$PAYLOAD_LENGTH" \
             --count 200000 \
             --total-bytes "$BYTES_PER_CLIENT" \
             --quiet 2>&1); then
+            client_status=0
+        else
             client_status=$?
         fi
 
@@ -317,6 +349,9 @@ run_worker() {
             else
                 last_error="EXIT_${client_status}"
             fi
+            write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
+            trigger_stop "WORKER_${worker_id}_${last_error}"
+            return 1
         fi
 
         write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
@@ -345,8 +380,10 @@ main() {
     echo "length=$PAYLOAD_LENGTH"
     echo "report_interval=$REPORT_INTERVAL"
     echo "server_port=$SERVER_PORT"
+    echo "client_timeout_seconds=$CLIENT_TIMEOUT_SECONDS"
     echo "rss_warn_threshold_kb=$RSS_WARN_THRESHOLD_KB"
     echo "rss_fail_threshold_kb=$RSS_FAIL_THRESHOLD_KB"
+    echo "cpu_stop_threshold=$CPU_STOP_THRESHOLD"
     echo "tmp_root=$TMP_ROOT"
     echo ""
 
@@ -365,10 +402,16 @@ main() {
     local total_bytes=0
     local alive_workers=0
     local elapsed=0
+    local stop_reason="NONE"
 
     while [ "$(date +%s)" -lt "$end_epoch" ]; do
+        if [ -f "$TMP_ROOT/.stop" ]; then
+            stop_reason="$(read_state_value "$TMP_ROOT/.stop_reason" reason || echo STOP)"
+            break
+        fi
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then
             SERVER_EXITED_EARLY=1
+            stop_reason="SERVER_EXITED"
             break
         fi
 
@@ -397,13 +440,24 @@ main() {
         local rss_kb fd_count
         rss_kb="$(get_rss_kb "$SERVER_PID")"
         fd_count="$(get_fd_count "$SERVER_PID")"
+        local cpu_percent
+        cpu_percent="$(get_cpu_percent "$SERVER_PID")"
         [ "$rss_kb" -gt "$SERVER_PEAK_RSS_KB" ] && SERVER_PEAK_RSS_KB="$rss_kb"
         [ "$fd_count" -gt "$SERVER_PEAK_FD" ] && SERVER_PEAK_FD="$fd_count"
 
         elapsed=$((DURATION_SECONDS - (end_epoch - $(date +%s))))
-        printf "elapsed_s=%s success_rounds=%s failed_rounds=%s bytes_total=%s server_rss_kb=%s server_fd_count=%s active_clients=%s\n" \
-            "$elapsed" "$total_success" "$total_failed" "$total_bytes" "$rss_kb" "$fd_count" "$alive_workers" \
+        printf "elapsed_s=%s success_rounds=%s failed_rounds=%s bytes_total=%s server_rss_kb=%s server_fd_count=%s server_cpu_percent=%s active_clients=%s\n" \
+            "$elapsed" "$total_success" "$total_failed" "$total_bytes" "$rss_kb" "$fd_count" "$cpu_percent" "$alive_workers" \
             | tee -a "$REPORT_FILE"
+
+        if [ "$CPU_STOP_THRESHOLD" -gt 0 ]; then
+            if awk "BEGIN {exit !($cpu_percent > $CPU_STOP_THRESHOLD)}"; then
+                echo "  [ERROR] server CPU ${cpu_percent}% 超过阈值 ${CPU_STOP_THRESHOLD}%"
+                stop_reason="CPU_THRESHOLD"
+                trigger_stop "$stop_reason"
+                break
+            fi
+        fi
 
         sleep "$REPORT_INTERVAL"
     done
@@ -458,6 +512,7 @@ main() {
     echo "server_fd_start=$SERVER_START_FD"
     echo "server_fd_end=$server_end_fd"
     echo "server_fd_peak=$SERVER_PEAK_FD"
+    echo "stop_reason=$stop_reason"
     echo "connect_timeout_count=$connect_timeout_count"
     echo "drain_timeout_count=$drain_timeout_count"
     echo "result_fail_count=$result_fail_count"
@@ -468,6 +523,10 @@ main() {
     echo "=========================================="
 
     local pass=1
+    if [ "$stop_reason" != "NONE" ] && [ "$stop_reason" != "STOP" ] && [ "$stop_reason" != "SERVER_EXITED" ]; then
+        echo -e "${RED}FAIL${NC} 触发停止条件: $stop_reason"
+        pass=0
+    fi
     if [ "$SERVER_EXITED_EARLY" -ne 0 ]; then
         echo -e "${RED}FAIL${NC} server 提前退出"
         pass=0

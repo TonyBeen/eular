@@ -29,10 +29,16 @@ endif()
 option(UTP_BUILD_TESTS "Build libutp tests" OFF)
 option(UTP_USE_BUNDLED_BORINGSSL "Use bundled BoringSSL submodule" ON)
 option(UTP_ENABLE_FAULT_INJECTION "Enable Linux-only libfiu fault injection hooks" OFF)
+option(UTP_USE_SENDMMSG "Use recvmmsg/sendmmsg batching on Linux" ON)
 
 if(UTP_ENABLE_FAULT_INJECTION AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(WARNING "UTP_ENABLE_FAULT_INJECTION is Linux-only, disabling on ${CMAKE_SYSTEM_NAME}")
     set(UTP_ENABLE_FAULT_INJECTION OFF CACHE BOOL "Enable Linux-only libfiu fault injection hooks" FORCE)
+endif()
+
+if(UTP_USE_SENDMMSG AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(WARNING "UTP_USE_SENDMMSG is Linux-only, disabling on ${CMAKE_SYSTEM_NAME}")
+    set(UTP_USE_SENDMMSG OFF CACHE BOOL "Use recvmmsg/sendmmsg batching on Linux" FORCE)
 endif()
 
 if(UTP_ENABLE_FAULT_INJECTION)
@@ -178,6 +184,10 @@ target_compile_definitions(utp_static
         UTP_STATIC
         $<$<BOOL:${MSVC}>:NOMINMAX>
 )
+
+if(UTP_USE_SENDMMSG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(utp_static PUBLIC USE_SENDMMSG)
+endif()
 
 if(UTP_ENABLE_FAULT_INJECTION)
     target_compile_definitions(utp_static PRIVATE UTP_ENABLE_FAULT_INJECTION)

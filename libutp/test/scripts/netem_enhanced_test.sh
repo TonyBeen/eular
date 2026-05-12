@@ -103,7 +103,7 @@ parse_done_result() {
     local sent_bytes done_bytes result
 
     sent_bytes=$(echo "$output" | sed -nE 's/.*sent_bytes=([0-9]+).*/\1/p' | tail -1)
-    done_bytes=$(echo "$output" | sed -nE 's/.*done bytes=([0-9]+).*/\1/p' | tail -1)
+    done_bytes=$(echo "$output" | sed -nE 's/.*done(_| )bytes=([0-9]+).*/\2/p' | tail -1)
     result=$(echo "$output" | sed -nE 's/.*result=([A-Z]+).*/\1/p' | tail -1)
 
     [ -n "$sent_bytes" ] || sent_bytes=0
@@ -132,9 +132,11 @@ run_echo_scenario() {
 
     local output=""
     local client_status=0
-    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    if output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
         --count "$count" --length 64 2>&1); then
+        client_status=0
+    else
         client_status=$?
     fi
 
@@ -174,9 +176,11 @@ run_burst_loss_scenario() {
 
     local output=""
     local client_status=0
-    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    if output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
         --count "$count" --length 64 2>&1); then
+        client_status=0
+    else
         client_status=$?
     fi
 
@@ -217,10 +221,12 @@ run_large_transfer_scenario() {
 
     local output=""
     local client_status=0
-    if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+    if output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
         --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
         --length "$length" --count 200000 \
         --total-bytes "$total_bytes" --quiet 2>&1); then
+        client_status=0
+    else
         client_status=$?
     fi
 
@@ -265,14 +271,16 @@ run_bulk_concurrent_scenario() {
 
     for i in $(seq 1 "$num_clients"); do
         (
-            local output=""
-            local client_status=0
-            if ! output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
-                --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
-                --length "$length" --count 200000 \
-                --total-bytes "$bytes_per_client" --quiet 2>&1); then
-                client_status=$?
-            fi
+    local output=""
+    local client_status=0
+    if output=$(timeout "$timeout_s" "$ECHO_CLIENT" \
+        --server-ip 127.0.0.1 --server-port "$ECHO_PORT" \
+        --length "$length" --count 200000 \
+        --total-bytes "$bytes_per_client" --quiet 2>&1); then
+        client_status=0
+    else
+        client_status=$?
+    fi
 
             local sb eb result
             read -r sb eb result < <(parse_done_result "$output")

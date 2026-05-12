@@ -17,6 +17,7 @@ SUDO_PASSWORD=${SUDO_PASSWORD:-1}
 SERVER_BIN="${BUILD_DIR}/examples/utp_echo_server"
 CLIENT_BIN="${BUILD_DIR}/examples/utp_echo_client"
 FLAMEGRAPH_DIR="/home/eular/VSCode/FlameGraph"
+SYSTEM_MAP="/boot/System.map-$(uname -r)"
 SERVER_LOG="/tmp/utp_echo_server_silent.log"
 PERF_LOG="/tmp/utp_echo_perf.record.log"
 PERF_DATA="/tmp/utp_echo_perf.data"
@@ -71,8 +72,13 @@ done
 
 wait "$PERF_BG_PID"
 
-printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown "$(id -u):$(id -g)" "$PERF_DATA" >/dev/null 2>&1
-perf script -i "$PERF_DATA" | "$FLAMEGRAPH_DIR/stackcollapse-perf.pl" > "$PERF_FOLDED"
+if [[ -r "$SYSTEM_MAP" ]]; then
+    printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' perf script -i "$PERF_DATA" --kallsyms "$SYSTEM_MAP" > "$PERF_FOLDED"
+else
+    printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' perf script -i "$PERF_DATA" > "$PERF_FOLDED"
+fi
+"$FLAMEGRAPH_DIR/stackcollapse-perf.pl" < "$PERF_FOLDED" > "$PERF_FOLDED.tmp"
+mv "$PERF_FOLDED.tmp" "$PERF_FOLDED"
 "$FLAMEGRAPH_DIR/flamegraph.pl" "$PERF_FOLDED" > "$FLAME_SVG"
 
 echo "flamegraph=$FLAME_SVG"

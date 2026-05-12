@@ -13,7 +13,7 @@ namespace eular {
 namespace utp {
 
 RingBuffer::RingBuffer(size_t capacity) :
-    m_buffer(std::max<size_t>(capacity, 1), 0)
+    m_buffer(std::max<size_t>(capacity, 1))
 {
 }
 

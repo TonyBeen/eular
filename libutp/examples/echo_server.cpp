@@ -125,7 +125,6 @@ int main(int argc, char **argv)
 
     ev::EventLoop loop;
     eular::utp::Config cfg;
-    cfg.handshake_timeout = 5000;
     cfg.enable_keepalive = true;
     cfg.enable_dplpmtud = false;
     cfg.mtu_base = 1400;
@@ -232,47 +231,77 @@ int main(int argc, char **argv)
                 uint64_t receivedBytes{0};
                 Xxh128Accumulator xxh128;
 
-                std::vector<uint8_t> outbox;
+                std::string outbox;
                 size_t outboxOffset{0};
+                std::vector<uint8_t> readBuffer;
                 bool closeAfterFlush{false};
                 bool failed{false};
                 bool finSeen{false};
             };
             auto session = std::make_shared<Session>();
+            session->outbox.reserve(256);
+            session->readBuffer.reserve(32 * 1024);
 
             auto queueLine = [session](const std::string &line) {
-                session->outbox.insert(session->outbox.end(), line.begin(), line.end());
+                session->outbox.append(line);
             };
 
-            auto markFailed = [session, queueLine](const std::string &reason) {
+            auto markFailed = [session, queueLine, silent](const std::string &reason) {
                 if (session->failed) {
                     return;
                 }
                 session->failed = true;
+                if (!silent) {
+                    std::cerr << "[server] stream failed: " << reason << "\n";
+                }
                 queueLine("ERR " + reason + "\n");
                 session->closeAfterFlush = true;
             };
 
-            auto tryFlushPtr = std::make_shared<std::function<void()>>();
-            *tryFlushPtr = [stream, session, tryFlushPtr, silent]() {
-                while (session->outboxOffset < session->outbox.size()) {
-                    const uint8_t *base = session->outbox.data() + session->outboxOffset;
-                    const size_t left = session->outbox.size() - session->outboxOffset;
-                    const int32_t nw = stream->write(base, left, false);
-                    if (nw < 0) {
-                        if (utp_get_last_error() == UTP_ERR_WOULD_BLOCK) {
-                            return;
-                        }
-                        if (!silent) {
-                            std::cerr << "[server] write failed: " << utp_get_error_string() << "\n";
-                        }
-                        session->closeAfterFlush = true;
-                        break;
+            auto copyToWriteViews = [](eular::utp::Stream::MutableBufferView views[2],
+                                       const uint8_t *src,
+                                       size_t len) -> size_t {
+                size_t copied = 0;
+                for (size_t i = 0; i < 2 && copied < len; ++i) {
+                    if (views[i].data == nullptr || views[i].len == 0) {
+                        continue;
                     }
-                    if (nw == 0) {
+                    const size_t ncopy = std::min(views[i].len, len - copied);
+                    std::memcpy(views[i].data, src + copied, ncopy);
+                    copied += ncopy;
+                }
+                return copied;
+            };
+
+            auto tryFlushPtr = std::make_shared<std::function<void()>>();
+            *tryFlushPtr = [stream, session, tryFlushPtr, silent, copyToWriteViews]() {
+                while (session->outboxOffset < session->outbox.size()) {
+                    const size_t left = session->outbox.size() - session->outboxOffset;
+                    eular::utp::Stream::MutableBufferView views[2];
+                    const size_t grant = stream->acquireWriteBuffer(views, left);
+                    if (grant == 0) {
                         return;
                     }
-                    session->outboxOffset += static_cast<size_t>(nw);
+
+                    const size_t copied = copyToWriteViews(
+                        views,
+                        reinterpret_cast<const uint8_t *>(session->outbox.data() + session->outboxOffset),
+                        grant);
+                    if (copied == 0) {
+                        return;
+                    }
+
+                    const int32_t committed = stream->commitWrite(copied, false);
+                    if (committed <= 0) {
+                        if (committed < 0 && utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
+                            if (!silent) {
+                                std::cerr << "[server] write failed: " << utp_get_error_string() << "\n";
+                            }
+                            session->closeAfterFlush = true;
+                        }
+                        return;
+                    }
+                    session->outboxOffset += static_cast<size_t>(committed);
                 }
 
                 if (session->outboxOffset >= session->outbox.size()) {
@@ -289,43 +318,67 @@ int main(int argc, char **argv)
                 (*tryFlushPtr)();
             });
 
-            stream->setOnReadable([stream, session, queueLine, markFailed, tryFlushPtr, &read_size]() {
+            stream->setOnReadable([stream, session, queueLine, markFailed, tryFlushPtr, &read_size, silent]() {
                 if (session->phase == Session::kClosed) {
                     return;
                 }
 
-                std::vector<uint8_t> buffer(32 * 1024, 0);
-                for (;;) {
-                    const int32_t n = stream->read(buffer.data(), buffer.size());
-                    if (n < 0) {
-                        break;
+                auto finalizeDone = [&]() {
+                    if (session->failed) {
+                        return;
                     }
-                    read_size += n;
-
-                    if (n == 0) {
-                        session->finSeen = true;
-                        if (!session->failed) {
-                            if (session->phase != Session::kReadPayload) {
-                                markFailed("missing_upload_header");
-                            } else if (session->receivedBytes != session->expectedBytes) {
-                                markFailed("size_mismatch");
-                            } else {
-                                std::string hashHex;
-                                if (!session->xxh128.finalize(hashHex)) {
-                                    markFailed("xxh128_finalize_failed");
-                                } else {
-                                    queueLine("DONE bytes=" + std::to_string(session->receivedBytes) + " xxh128=" + hashHex + "\n");
-                                    session->closeAfterFlush = true;
-                                }
-                            }
+                    if (session->phase != Session::kReadPayload) {
+                        markFailed("missing_upload_header");
+                    } else if (session->receivedBytes != session->expectedBytes) {
+                        markFailed("size_mismatch");
+                    } else {
+                        std::string hashHex;
+                        if (!session->xxh128.finalize(hashHex)) {
+                            markFailed("xxh128_finalize_failed");
+                        } else {
+                            queueLine("DONE bytes=" + std::to_string(session->receivedBytes) + " xxh128=" + hashHex + "\n");
+                            session->closeAfterFlush = true;
                         }
+                    }
+                    (*tryFlushPtr)();
+                };
 
-                        (*tryFlushPtr)();
+                for (;;) {
+                    eular::utp::Stream::ConstBufferView views[2];
+                    const size_t readable = stream->acquireReadViews(views, 65536);
+                    if (readable == 0) {
+                        if (stream->state() == eular::utp::Stream::kStateHalfClosedRemote ||
+                            stream->state() == eular::utp::Stream::kStateClosed) {
+                            (void)stream->commitReadViews(0);
+                            session->finSeen = true;
+                            finalizeDone();
+                        }
                         break;
                     }
 
-                    const uint8_t *chunk = buffer.data();
-                    size_t left = static_cast<size_t>(n);
+                    session->readBuffer.resize(readable);
+                    size_t copied = 0;
+                    for (size_t i = 0; i < 2 && copied < readable; ++i) {
+                        if (views[i].data == nullptr || views[i].len == 0) {
+                            continue;
+                        }
+                        const size_t ncopy = std::min(views[i].len, readable - copied);
+                        std::memcpy(session->readBuffer.data() + copied, views[i].data, ncopy);
+                        copied += ncopy;
+                    }
+                    if (copied == 0) {
+                        break;
+                    }
+                    if (stream->commitReadViews(copied) < 0) {
+                        if (!silent) {
+                            std::cerr << "[server] commitReadViews failed\n";
+                        }
+                        break;
+                    }
+
+                    size_t consumed = 0;
+                    const uint8_t *chunk = session->readBuffer.data();
+                    size_t left = copied;
                     while (left > 0 && !session->failed) {
                         if (session->phase == Session::kReadHeader) {
                             const uint8_t *lf = static_cast<const uint8_t *>(std::memchr(chunk, '\n', left));
@@ -334,6 +387,7 @@ int main(int argc, char **argv)
                                 if (session->headerBuffer.size() > 1024) {
                                     markFailed("header_too_large");
                                 }
+                                consumed += left;
                                 left = 0;
                                 break;
                             }
@@ -347,6 +401,7 @@ int main(int argc, char **argv)
                             uint64_t expected = 0;
                             if (!ParseUploadHeader(session->headerBuffer, expected)) {
                                 markFailed("bad_upload_header");
+                                consumed += headPartLen + 1;
                                 left = 0;
                                 break;
                             }
@@ -355,6 +410,7 @@ int main(int argc, char **argv)
                             session->headerBuffer.clear();
                             if (!session->xxh128.valid()) {
                                 markFailed("xxh128_init_failed");
+                                consumed += headPartLen + 1;
                                 left = 0;
                                 break;
                             }
@@ -362,16 +418,19 @@ int main(int argc, char **argv)
                             const size_t consume = headPartLen + 1;
                             chunk += consume;
                             left -= consume;
+                            consumed += consume;
                             continue;
                         }
 
                         if (session->phase != Session::kReadPayload) {
+                            consumed += left;
                             left = 0;
                             break;
                         }
 
                         if (session->receivedBytes >= session->expectedBytes) {
                             markFailed("payload_overflow");
+                            consumed += left;
                             left = 0;
                             break;
                         }
@@ -380,10 +439,12 @@ int main(int argc, char **argv)
                         const size_t consume = static_cast<size_t>(std::min<uint64_t>(remain, left));
                         if (!session->xxh128.update(chunk, consume)) {
                             markFailed("xxh128_update_failed");
+                            consumed += consume;
                             left = 0;
                             break;
                         }
                         session->receivedBytes += static_cast<uint64_t>(consume);
+                        consumed += consume;
                         queueLine("ACK total=" + std::to_string(session->receivedBytes) + "\n");
 
                         chunk += consume;
@@ -391,9 +452,19 @@ int main(int argc, char **argv)
 
                         if (left > 0 && session->receivedBytes >= session->expectedBytes) {
                             markFailed("payload_overflow");
+                            consumed += left;
                             left = 0;
                             break;
                         }
+                    }
+
+                    read_size += consumed;
+
+                    if (!session->failed && session->phase == Session::kReadPayload &&
+                        session->receivedBytes == session->expectedBytes &&
+                        stream->state() != eular::utp::Stream::kStateOpen && !session->finSeen) {
+                        session->finSeen = true;
+                        finalizeDone();
                     }
 
                     (*tryFlushPtr)();
