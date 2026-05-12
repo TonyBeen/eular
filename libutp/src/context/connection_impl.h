@@ -334,7 +334,6 @@ private:
     mutable std::vector<uint8_t>        m_ackPayloadScratch;
     std::vector<uint8_t>                m_payloadScratch;
     std::vector<uint8_t>                m_bodyScratch;
-    std::vector<UdpSocket::MsgMetaInfo> m_sendMsgScratch;
     ev::EventTimer                      m_pathValidationTimer;
     ev::EventTimer                      m_handshakeDoneTimer;
     ev::EventTimer                      m_ackTimer;

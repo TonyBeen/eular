@@ -70,6 +70,7 @@ public:
      * @return int32_t 返回读取到的数据包数量, 小于0表示失败, 等于0表示无数据
      */
     int32_t recv(std::vector<MsgMetaInfo>& msgVec, Status &status);
+    int32_t send(const MsgMetaInfo &msg, Status &status);
 
     // TODO(next): 在 Linux 上增加 MSG_ZEROCOPY 发送与错误队列完成事件处理（SO_EE_ORIGIN_ZEROCOPY）。
     // NOTE: 需要与 SendControl/PacketOut 生命周期联动，避免在 completion 前释放或改写缓冲。

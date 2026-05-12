@@ -289,6 +289,7 @@ ContextImpl::ContextImpl(event_base *base, Config *config) :
     m_pendingHandshakeTimer.reset(m_base, [this] () {
         onPendingHandshakeTimeout();
     });
+    m_recvMsgScratch.resize(32);
 
     uint32_t id = g_contextId.fetch_add(1, std::memory_order_relaxed);
     m_tag = "[ContextImpl " + std::to_string(id) + "]";
@@ -846,9 +847,9 @@ Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
 
     const utp_packno_t packetNo = pending.packetNumber;
 
-    std::vector<uint8_t> wire(UTP_HEADER_SIZE + payloadLen, 0);
-    uint8_t *offset = wire.data();
-    size_t left = wire.size();
+    std::array<uint8_t, UTP_HEADER_SIZE> header;
+    uint8_t *offset = header.data();
+    size_t left = header.size();
 
     offset = Serialize::SerializeTo(offset, left, pending.localCid);
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
@@ -863,18 +864,23 @@ Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
     offset = Serialize::SerializeTo(offset, left, static_cast<uint8_t>(0));
     if (offset == nullptr) return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "serialize failed");
 
+    UdpSocket::MsgMetaInfo msg;
+    msg.data = nullptr;
+    msg.len = 0;
+    msg.slice_count = 0;
+    msg.slices[0].data = header.data();
+    msg.slices[0].len = header.size();
+    msg.metaInfo.peerAddress = pending.peerAddress;
     if (payloadLen > 0 && payload != nullptr) {
-        std::memcpy(offset, payload, payloadLen);
+        msg.slices[1].data = payload;
+        msg.slices[1].len = payloadLen;
+        msg.slice_count = 2;
+    } else {
+        msg.slice_count = 1;
     }
 
-    UdpSocket::MsgMetaInfo msg{};
-    msg.data = wire.data();
-    msg.len = wire.size();
-    msg.metaInfo.peerAddress = pending.peerAddress;
-
-    std::vector<UdpSocket::MsgMetaInfo> msgVec(1, msg);
     Status sendStatus;
-    int32_t sent = m_udpSocket.send(msgVec, sendStatus);
+    int32_t sent = m_udpSocket.send(msg, sendStatus);
     if (sent > 0) {
         pending.packetNumber++;
         if (outPacketNo != nullptr) {
@@ -891,52 +897,17 @@ Status  ContextImpl::sendPendingPacket(PendingIncomingConnection &pending,
 
 Status  ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
 {
-    auto appendAckFrequency = [this](std::vector<uint8_t> &payload) -> Status {
-        FrameAckFrequency ackFreq;
-        ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(m_config.ack_every_n_packets, UINT8_MAX));
-        ackFreq.reordering_threshold = 3;
-        ackFreq.max_ack_delay_ms = m_config.ack_delay;
-        ackFreq.normalize();
-
-        const size_t oldSize = payload.size();
-        payload.resize(oldSize + FRAME_ACK_FREQUENCY_SIZE, 0);
-        Status st;
-        const int32_t encoded = ackFreq.encode(payload.data() + oldSize, FRAME_ACK_FREQUENCY_SIZE, st);
-        if (!st.ok()) {
-            return st;
-        }
-        payload.resize(oldSize + static_cast<size_t>(encoded));
-        return Status::OK();
-    };
-
-    auto appendHandshakeDelay = [&pending](std::vector<uint8_t> &payload) -> Status {
-        const utp_time_t nowUs = time::MonotonicUs();
-        const utp_time_t baseUs = (pending.initialReceivedUs > 0 && nowUs >= pending.initialReceivedUs)
-                                ? pending.initialReceivedUs
-                                : nowUs;
-
-        const size_t oldSize = payload.size();
-        payload.resize(oldSize + FRAME_HANDSHAKE_DELAY_SIZE, 0);
-        size_t encoded = 0;
-        if (BuildHandshakeDelayFrame(nowUs - baseUs,
-                                     payload.data() + oldSize,
-                                     FRAME_HANDSHAKE_DELAY_SIZE,
-                                     encoded) != UTP_ERR_OK) {
-            return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
-        }
-
-        payload.resize(oldSize + encoded);
-        return Status::OK();
-    };
-
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
-    std::vector<uint8_t> payload(FRAME_VERSION_SIZE, 0);
     Status st;
-    int32_t frameLen = version.encode(payload.data(), payload.size(), st);
-    if (!st.ok()) {
+    std::array<uint8_t, 256> payload;
+    size_t                   payloadLen = 0;
+
+    const int32_t versionLen = version.encode(payload.data() + payloadLen, payload.size() - payloadLen, st);
+    if (!st.ok() || versionLen < 0) {
         return st;
     }
+    payloadLen += static_cast<size_t>(versionLen);
 
     TransportParams localTp;
     localTp.handshake_timeout = m_config.handshake_timeout;
@@ -946,43 +917,54 @@ Status  ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
 
     FrameTransportParams transportParams;
     transportParams.params = &localTp;
-    const size_t tpOffset = payload.size();
-    payload.resize(tpOffset + FRAME_TRANSPORT_PARAMS_SIZE, 0);
-    int32_t encoded = transportParams.encode(payload.data() + tpOffset, FRAME_TRANSPORT_PARAMS_SIZE, st);
-    if (!st.ok()) {
+    const int32_t tpLen = transportParams.encode(payload.data() + payloadLen, payload.size() - payloadLen, st);
+    if (!st.ok() || tpLen < 0) {
         return st;
     }
-    payload.resize(tpOffset + static_cast<size_t>(encoded));
+    payloadLen += static_cast<size_t>(tpLen);
 
     if (pending.encrypted != Context::kEncryptionNone && pending.x25519) {
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(pending.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(pending.x25519->publicKey().data());
 
-        const size_t cryptoOffset = payload.size();
-        payload.resize(cryptoOffset + FRAME_CRYPTO_SIZE, 0);
-        encoded = crypto.encode(payload.data() + cryptoOffset, FRAME_CRYPTO_SIZE, st);
-        if (!st.ok()) {
+        const int32_t cryptoLen = crypto.encode(payload.data() + payloadLen, payload.size() - payloadLen, st);
+        if (!st.ok() || cryptoLen < 0) {
             return st;
         }
-        payload.resize(cryptoOffset + static_cast<size_t>(encoded));
+        payloadLen += static_cast<size_t>(cryptoLen);
     }
 
-    Status freqSt = appendAckFrequency(payload);
-    if (!freqSt.ok()) {
-        return freqSt;
+    FrameAckFrequency ackFreq;
+    ackFreq.ack_eliciting_threshold =
+        static_cast<uint8_t>(std::min<uint16_t>(m_config.ack_every_n_packets, UINT8_MAX));
+    ackFreq.reordering_threshold = 3;
+    ackFreq.max_ack_delay_ms = m_config.ack_delay;
+    ackFreq.normalize();
+    const int32_t ackLen = ackFreq.encode(payload.data() + payloadLen, payload.size() - payloadLen, st);
+    if (!st.ok() || ackLen < 0) {
+        return st;
     }
+    payloadLen += static_cast<size_t>(ackLen);
 
-    Status delaySt = appendHandshakeDelay(payload);
-    if (!delaySt.ok()) {
-        return delaySt;
+    const utp_time_t nowUs = time::MonotonicUs();
+    const utp_time_t baseUs = (pending.initialReceivedUs > 0 && nowUs >= pending.initialReceivedUs)
+                              ? pending.initialReceivedUs
+                              : nowUs;
+    size_t delayLen = 0;
+    if (BuildHandshakeDelayFrame(nowUs - baseUs,
+                                 payload.data() + payloadLen,
+                                 payload.size() - payloadLen,
+                                 delayLen) != UTP_ERR_OK) {
+        return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
+    payloadLen += delayLen;
 
     utp_packno_t sentPacketNo = 0;
     Status status = sendPendingPacket(pending,
                                              UTP_TYPE_HANDSHAKE,
                                              payload.data(),
-                                             payload.size(),
+                                             payloadLen,
                                              &sentPacketNo);
     if (status.ok()) {
         pending.lastHandshakePacketNo = sentPacketNo;
@@ -1427,15 +1409,15 @@ void ContextImpl::onReadEvent()
     refreshPendingHandshakeTimer();
 
     while (true) {
-        std::vector<UdpSocket::MsgMetaInfo> msgVec;
         Status recvStatus;
-        int32_t nread = m_udpSocket.recv(msgVec, recvStatus);
+        int32_t nread = m_udpSocket.recv(m_recvMsgScratch, recvStatus);
         if (nread <= 0) {
             return;
         }
 
         const utp_time_t nowUs = time::MonotonicUs();
-        for (const UdpSocket::MsgMetaInfo &msg : msgVec) {
+        for (int32_t i = 0; i < nread; ++i) {
+            const UdpSocket::MsgMetaInfo &msg = m_recvMsgScratch[static_cast<size_t>(i)];
             if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
                 continue;
             }

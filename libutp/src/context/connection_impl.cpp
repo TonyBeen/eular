@@ -356,7 +356,6 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
     m_ackPayloadScratch.reserve(kAckPayloadScratchSize);
     m_payloadScratch.reserve(kDefaultPayloadScratchCapacity);
     m_bodyScratch.reserve(kDefaultPayloadScratchCapacity);
-    m_sendMsgScratch.reserve(1);
 
     m_connTimer.reset(ctx->loop(), [this]() { onConnTimeout(); });
 
@@ -2293,24 +2292,26 @@ Status ConnectionImpl::maybeSendSessionTokenPacket()
 
 Status ConnectionImpl::sendInitialPacket()
 {
-    m_payloadScratch.clear();
-    size_t reserveSize =
-        FRAME_VERSION_SIZE + FRAME_TRANSPORT_PARAMS_SIZE + FRAME_CRYPTO_SIZE + FRAME_ACK_FREQUENCY_SIZE;
-    if (m_zeroRttConfig.enabled()) {
-        reserveSize += FRAME_SESSION_TOKEN_HDR_SIZE + m_zeroRttConfig.sessionTicket.size();
-    }
-    m_payloadScratch.reserve(reserveSize);
-
     Status       status;
+    std::array<uint8_t, UTP_ETHERNET_MTU> payload;
+    size_t                                payloadLen = 0;
+
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
-    if (AppendEncodedFrame(m_payloadScratch, version, FRAME_VERSION_SIZE, status) != UTP_ERR_OK) {
+    const int32_t versionLen = version.encode(payload.data() + payloadLen, FRAME_VERSION_SIZE, status);
+    if (!status.ok() || versionLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(versionLen);
 
-    if (AppendTransportParamsFrame(m_loaclTP, m_payloadScratch, status) != UTP_ERR_OK) {
+    FrameTransportParams transportParams;
+    transportParams.params = &m_loaclTP;
+    const int32_t transportLen =
+        transportParams.encode(payload.data() + payloadLen, FRAME_TRANSPORT_PARAMS_SIZE, status);
+    if (!status.ok() || transportLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(transportLen);
 
     if (m_connectInfo.encrypted != Context::kEncryptionNone) {
         if (!m_x25519) {
@@ -2321,9 +2322,11 @@ Status ConnectionImpl::sendInitialPacket()
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
-        if (AppendEncodedFrame(m_payloadScratch, crypto, FRAME_CRYPTO_SIZE, status) != UTP_ERR_OK) {
+        const int32_t cryptoLen = crypto.encode(payload.data() + payloadLen, FRAME_CRYPTO_SIZE, status);
+        if (!status.ok() || cryptoLen < 0) {
             return status;
         }
+        payloadLen += static_cast<size_t>(cryptoLen);
     }
 
     if (m_zeroRttConfig.enabled()) {
@@ -2335,49 +2338,71 @@ Status ConnectionImpl::sendInitialPacket()
         const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
         sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
 
-        const size_t oldSize = m_payloadScratch.size();
-        m_payloadScratch.resize(oldSize + static_cast<size_t>(sessionToken.frameSize()));
-        Status        st;
         const int32_t tokenLen =
-            sessionToken.encode(m_payloadScratch.data() + oldSize, m_payloadScratch.size() - oldSize, st);
-        if (!st.ok()) {
-            return st;
+            sessionToken.encode(payload.data() + payloadLen, FRAME_SESSION_TOKEN_HDR_SIZE + UINT8_MAX, status);
+        if (!status.ok() || tokenLen < 0) {
+            return status;
         }
-        m_payloadScratch.resize(oldSize + static_cast<size_t>(tokenLen));
+        payloadLen += static_cast<size_t>(tokenLen);
     }
 
-    if (AppendAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr, m_payloadScratch, status) != UTP_ERR_OK) {
+    FrameAckFrequency ackFreq;
+    const Config      *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
+    ackFreq.reordering_threshold = 3;
+    ackFreq.max_ack_delay_ms = cfg ? cfg->ack_delay : 150;
+    ackFreq.normalize();
+    const int32_t ackLen = ackFreq.encode(payload.data() + payloadLen, FRAME_ACK_FREQUENCY_SIZE, status);
+    if (!status.ok() || ackLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(ackLen);
 
     const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
     const uint16_t        targetPacketSize = ConfiguredMinPacketSize(config(), family);
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, m_payloadScratch, status) != UTP_ERR_OK) {
-            return status;
+        if (targetPayloadSize > payloadLen) {
+            const size_t remain = targetPayloadSize - payloadLen;
+            if (remain >= FRAME_PADDING_HDR_SIZE) {
+                FramePadding padding;
+                padding.padding_length = static_cast<uint16_t>(remain - FRAME_PADDING_HDR_SIZE);
+                const int32_t paddingLen = padding.encode(payload.data() + payloadLen, remain, status);
+                if (!status.ok() || paddingLen < 0) {
+                    return status;
+                }
+                payloadLen += static_cast<size_t>(paddingLen);
+            }
         }
     }
 
-    return sendPacket(UTP_TYPE_INITIAL, m_payloadScratch.data(), m_payloadScratch.size(), PacketOutFlags::kPoHello);
+    std::array<PayloadSegment, 1> segments{};
+    segments[0] = PayloadSegment{payload.data(), payloadLen, true};
+    return sendPacket(UTP_TYPE_INITIAL, segments.data(), 1, PacketOutFlags::kPoHello);
 }
 
 Status ConnectionImpl::sendHandshakePacket(bool encrypted)
 {
-    m_payloadScratch.clear();
-    m_payloadScratch.reserve(FRAME_VERSION_SIZE + FRAME_TRANSPORT_PARAMS_SIZE + FRAME_CRYPTO_SIZE +
-                             FRAME_ACK_FREQUENCY_SIZE);
-
     Status       status;
+    std::array<uint8_t, UTP_ETHERNET_MTU> payload;
+    size_t                                payloadLen = 0;
+
     FrameVersion version;
     version.version = UTP_PROTOCOL_VERSION;
-    if (AppendEncodedFrame(m_payloadScratch, version, FRAME_VERSION_SIZE, status) != UTP_ERR_OK) {
+    const int32_t versionLen = version.encode(payload.data() + payloadLen, FRAME_VERSION_SIZE, status);
+    if (!status.ok() || versionLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(versionLen);
 
-    if (AppendTransportParamsFrame(m_loaclTP, m_payloadScratch, status) != UTP_ERR_OK) {
+    FrameTransportParams transportParams;
+    transportParams.params = &m_loaclTP;
+    const int32_t transportLen =
+        transportParams.encode(payload.data() + payloadLen, FRAME_TRANSPORT_PARAMS_SIZE, status);
+    if (!status.ok() || transportLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(transportLen);
 
     if (encrypted) {
         if (!m_x25519) {
@@ -2388,25 +2413,46 @@ Status ConnectionImpl::sendHandshakePacket(bool encrypted)
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
         crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
 
-        if (AppendEncodedFrame(m_payloadScratch, crypto, FRAME_CRYPTO_SIZE, status) != UTP_ERR_OK) {
+        const int32_t cryptoLen = crypto.encode(payload.data() + payloadLen, FRAME_CRYPTO_SIZE, status);
+        if (!status.ok() || cryptoLen < 0) {
             return status;
         }
+        payloadLen += static_cast<size_t>(cryptoLen);
     }
 
-    if (AppendAckFrequencyFrame(m_ctx ? m_ctx->config() : nullptr, m_payloadScratch, status) != UTP_ERR_OK) {
+    FrameAckFrequency ackFreq;
+    const Config      *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
+    ackFreq.reordering_threshold = 3;
+    ackFreq.max_ack_delay_ms = cfg ? cfg->ack_delay : 150;
+    ackFreq.normalize();
+    const int32_t ackLen = ackFreq.encode(payload.data() + payloadLen, FRAME_ACK_FREQUENCY_SIZE, status);
+    if (!status.ok() || ackLen < 0) {
         return status;
     }
+    payloadLen += static_cast<size_t>(ackLen);
 
     const Address::Family family = m_peerAddress.isValid() ? m_peerAddress.family() : Address::IPv4;
     const uint16_t        targetPacketSize = ConfiguredMinPacketSize(config(), family);
     if (targetPacketSize > UTP_HEADER_SIZE) {
         const size_t targetPayloadSize = static_cast<size_t>(targetPacketSize - UTP_HEADER_SIZE);
-        if (AppendPaddingToTargetPayloadSize(targetPayloadSize, m_payloadScratch, status) != UTP_ERR_OK) {
-            return status;
+        if (targetPayloadSize > payloadLen) {
+            const size_t remain = targetPayloadSize - payloadLen;
+            if (remain >= FRAME_PADDING_HDR_SIZE) {
+                FramePadding padding;
+                padding.padding_length = static_cast<uint16_t>(remain - FRAME_PADDING_HDR_SIZE);
+                const int32_t paddingLen = padding.encode(payload.data() + payloadLen, remain, status);
+                if (!status.ok() || paddingLen < 0) {
+                    return status;
+                }
+                payloadLen += static_cast<size_t>(paddingLen);
+            }
         }
     }
 
-    return sendPacket(UTP_TYPE_HANDSHAKE, m_payloadScratch.data(), m_payloadScratch.size(), PacketOutFlags::kPoHello);
+    std::array<PayloadSegment, 1> segments{};
+    segments[0] = PayloadSegment{payload.data(), payloadLen, true};
+    return sendPacket(UTP_TYPE_HANDSHAKE, segments.data(), 1, PacketOutFlags::kPoHello);
 }
 
 Status ConnectionImpl::sendPacket(uint8_t packetType, const void *payload, size_t payloadLen, uint16_t packetFlags,
@@ -2695,7 +2741,9 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
     }
 
     UdpSocket::MsgMetaInfo msg;
-    std::memset(&msg, 0, sizeof(msg));
+    msg.data = nullptr;
+    msg.len = 0;
+    msg.slice_count = 0;
     if (shouldEncrypt && packet->encrypt_data != nullptr) {
         msg.data = packet->encrypt_data;
         msg.len = packet->data_size;
@@ -2710,10 +2758,8 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
     }
     msg.metaInfo.peerAddress = sendAddress;
 
-    m_sendMsgScratch.resize(1);
-    m_sendMsgScratch[0] = msg;
     Status  udpSt;
-    int32_t sent = m_udpSocket->send(m_sendMsgScratch, udpSt);
+    int32_t sent = m_udpSocket->send(msg, udpSt);
     if (sent <= 0) {
         if (udpSt.ok() || udpSt.code() == UTP_ERR_WOULD_BLOCK) {
             m_mm.putPacketOut(packet);

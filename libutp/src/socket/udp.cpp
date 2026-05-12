@@ -48,6 +48,141 @@ void UdpSocket::updateTag(const std::string &tag)
     m_tag = tag + "[udp socket(" + std::to_string(m_sock) + ")]";
 }
 
+namespace {
+
+int32_t SendSingleMsgImpl(UdpSocket &sock, const UdpSocket::MsgMetaInfo &msg, Status &status)
+{
+    if (!sock.isValid()) {
+        status = Status::Error(UTP_ERR_SOCKET_WRITE, fmt::format("{} send failed: socket invalid", sock.tag()));
+        return -1;
+    }
+
+    if (!msg.metaInfo.peerAddress.isValid()) {
+        return 0;
+    }
+
+    const bool hasSlices = msg.slice_count > 0;
+    if (!hasSlices && (msg.data == nullptr || msg.len == 0)) {
+        return 0;
+    }
+
+    sockaddr_storage remoteStorage;
+    socklen_t remoteLen = msg.metaInfo.peerAddress.toSockAddr(remoteStorage);
+    if (remoteLen == 0) {
+        return 0;
+    }
+
+#if defined(OS_WINDOWS)
+    int32_t wsaRet = 0;
+    if (hasSlices) {
+        WSABUF bufs[UdpSocket::kMaxMsgSlices] = {};
+        DWORD iovCount = 0;
+        for (uint8_t i = 0; i < msg.slice_count && i < UdpSocket::kMaxMsgSlices; ++i) {
+            if (msg.slices[i].data == nullptr || msg.slices[i].len == 0) {
+                continue;
+            }
+            bufs[iovCount].buf = const_cast<char *>(static_cast<const char *>(msg.slices[i].data));
+            bufs[iovCount].len = static_cast<ULONG>(msg.slices[i].len);
+            ++iovCount;
+        }
+
+        if (iovCount == 0) {
+            return 0;
+        }
+
+        DWORD bytesSent = 0;
+        wsaRet = ::WSASendTo(sock.fd(),
+                             bufs,
+                             iovCount,
+                             &bytesSent,
+                             0,
+                             reinterpret_cast<sockaddr *>(&remoteStorage),
+                             remoteLen,
+                             nullptr,
+                             nullptr);
+    } else {
+        const int32_t nwritten = ::sendto(sock.fd(),
+                                          static_cast<const char *>(msg.data),
+                                          static_cast<int32_t>(msg.len),
+                                          0,
+                                          reinterpret_cast<sockaddr *>(&remoteStorage),
+                                          remoteLen);
+        wsaRet = (nwritten == SOCKET_ERROR) ? SOCKET_ERROR : 0;
+    }
+
+    if (wsaRet == SOCKET_ERROR) {
+        int32_t code = GetSystemLastError();
+        if (code == WSAEWOULDBLOCK) {
+            return 0;
+        }
+
+        status = Status::Error(UTP_ERR_SOCKET_WRITE,
+                               fmt::format("{} sendto({}) failed: [{}, {}]",
+                                           sock.tag(),
+                                           sock.fd(),
+                                           code,
+                                           GetSystemErrnoMsg(code)));
+        return -1;
+    }
+    return 1;
+#else
+    ssize_t nwritten = 0;
+    if (hasSlices) {
+        struct iovec iov[UdpSocket::kMaxMsgSlices] = {};
+        size_t iovCount = 0;
+        for (uint8_t i = 0; i < msg.slice_count && i < UdpSocket::kMaxMsgSlices; ++i) {
+            if (msg.slices[i].data == nullptr || msg.slices[i].len == 0) {
+                continue;
+            }
+            iov[iovCount].iov_base = const_cast<void *>(msg.slices[i].data);
+            iov[iovCount].iov_len = msg.slices[i].len;
+            ++iovCount;
+        }
+
+        if (iovCount == 0) {
+            return 0;
+        }
+
+        struct msghdr sndmsg;
+        std::memset(&sndmsg, 0, sizeof(sndmsg));
+        sndmsg.msg_name = &remoteStorage;
+        sndmsg.msg_namelen = remoteLen;
+        sndmsg.msg_iov = iov;
+        sndmsg.msg_iovlen = iovCount;
+        nwritten = ::sendmsg(sock.fd(), &sndmsg, MSG_NOSIGNAL);
+    } else {
+        nwritten = ::sendto(sock.fd(),
+                            msg.data,
+                            msg.len,
+                            MSG_NOSIGNAL,
+                            reinterpret_cast<sockaddr *>(&remoteStorage),
+                            remoteLen);
+    }
+
+    if (fiu_fail("net/udp/sendto")) {
+        errno = ENOBUFS;
+        nwritten = -1;
+    }
+    if (nwritten < 0) {
+        int32_t code = GetSystemLastError();
+        if (code == EAGAIN || code == EWOULDBLOCK) {
+            return 0;
+        }
+
+        status = Status::Error(UTP_ERR_SOCKET_WRITE,
+                               fmt::format("{} sendto({}) failed: [{}, {}]",
+                                           sock.tag(),
+                                           sock.fd(),
+                                           code,
+                                           GetSystemErrnoMsg(code)));
+        return -1;
+    }
+    return 1;
+#endif
+}
+
+} // namespace
+
 Status UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &ifname)
 {
     Address address(ip, port);
@@ -207,7 +342,9 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec, Status &status)
         pointer = &m_localAddr;
     }
 
-    msgVec.resize(n);
+    if (msgVec.size() < static_cast<size_t>(n)) {
+        msgVec.resize(static_cast<size_t>(n));
+    }
     for (int32_t i = 0; i < n; ++i) {
         MsgMetaInfo &rmsg = msgVec[i];
         rmsg.len = m_mmsg.mmsghdrAt(i)->msg_len;
@@ -301,7 +438,9 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec, Status &status)
         pointer = &m_localAddr;
     }
 
-    msgVec.resize(1);
+    if (msgVec.size() < 1) {
+        msgVec.resize(1);
+    }
     MsgMetaInfo &rmsg = msgVec[0];
     rmsg.len = static_cast<size_t>(nreads);
     rmsg.data = m_recvBuffer.data();
@@ -317,137 +456,26 @@ int32_t UdpSocket::recv(std::vector<MsgMetaInfo> &msgVec, Status &status)
 #endif // defined(USE_SENDMMSG)
 }
 
+int32_t UdpSocket::send(const MsgMetaInfo &msg, Status &status)
+{
+    return SendSingleMsgImpl(*this, msg, status);
+}
+
 int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
 {
-    if (!isValid()) {
-        status = Status::Error(UTP_ERR_SOCKET_WRITE, fmt::format("{} send failed: socket invalid", tag()));
-        return -1;
-    }
-
     int32_t sentCount = 0;
     for (const MsgMetaInfo &msg : msgVec) {
-        if (!msg.metaInfo.peerAddress.isValid()) {
+        const int32_t ret = SendSingleMsgImpl(*this, msg, status);
+        if (ret > 0) {
+            ++sentCount;
             continue;
         }
 
-        const bool hasSlices = msg.slice_count > 0;
-        if (!hasSlices && (msg.data == nullptr || msg.len == 0)) {
-            continue;
+        if (ret == 0) {
+            return sentCount > 0 ? sentCount : 0;
         }
 
-        sockaddr_storage remoteStorage;
-        std::memset(&remoteStorage, 0, sizeof(remoteStorage));
-        socklen_t remoteLen = msg.metaInfo.peerAddress.toSockAddr(remoteStorage);
-        if (remoteLen == 0) {
-            continue;
-        }
-
-#if defined(OS_WINDOWS)
-        int32_t wsaRet = 0;
-        if (hasSlices) {
-            WSABUF bufs[kMaxMsgSlices] = {};
-            DWORD iovCount = 0;
-            for (uint8_t i = 0; i < msg.slice_count && i < kMaxMsgSlices; ++i) {
-                if (msg.slices[i].data == nullptr || msg.slices[i].len == 0) {
-                    continue;
-                }
-                bufs[iovCount].buf = const_cast<char *>(static_cast<const char *>(msg.slices[i].data));
-                bufs[iovCount].len = static_cast<ULONG>(msg.slices[i].len);
-                ++iovCount;
-            }
-
-            if (iovCount == 0) {
-                continue;
-            }
-
-            DWORD bytesSent = 0;
-            wsaRet = ::WSASendTo(m_sock,
-                                 bufs,
-                                 iovCount,
-                                 &bytesSent,
-                                 0,
-                                 reinterpret_cast<sockaddr *>(&remoteStorage),
-                                 remoteLen,
-                                 nullptr,
-                                 nullptr);
-        } else {
-            int32_t nwritten = ::sendto(m_sock,
-                                        static_cast<const char *>(msg.data),
-                                        static_cast<int32_t>(msg.len),
-                                        0,
-                                        reinterpret_cast<sockaddr *>(&remoteStorage),
-                                        remoteLen);
-            wsaRet = (nwritten == SOCKET_ERROR) ? SOCKET_ERROR : 0;
-        }
-
-        if (wsaRet == SOCKET_ERROR) {
-            int32_t code = GetSystemLastError();
-            if (code == WSAEWOULDBLOCK) {
-                return sentCount > 0 ? sentCount : 0;
-            }
-
-            status = Status::Error(UTP_ERR_SOCKET_WRITE,
-                          fmt::format("{} sendto({}) failed: [{}, {}]",
-                          tag(),
-                          m_sock,
-                          code,
-                          GetSystemErrnoMsg(code)));
-            return sentCount > 0 ? sentCount : -1;
-        }
-#else
-        ssize_t nwritten = 0;
-        if (hasSlices) {
-            struct iovec iov[kMaxMsgSlices] = {};
-            size_t iovCount = 0;
-            for (uint8_t i = 0; i < msg.slice_count && i < kMaxMsgSlices; ++i) {
-                if (msg.slices[i].data == nullptr || msg.slices[i].len == 0) {
-                    continue;
-                }
-                iov[iovCount].iov_base = const_cast<void *>(msg.slices[i].data);
-                iov[iovCount].iov_len = msg.slices[i].len;
-                ++iovCount;
-            }
-
-            if (iovCount == 0) {
-                continue;
-            }
-
-            struct msghdr sndmsg;
-            std::memset(&sndmsg, 0, sizeof(sndmsg));
-            sndmsg.msg_name = &remoteStorage;
-            sndmsg.msg_namelen = remoteLen;
-            sndmsg.msg_iov = iov;
-            sndmsg.msg_iovlen = iovCount;
-            nwritten = ::sendmsg(m_sock, &sndmsg, MSG_NOSIGNAL);
-        } else {
-            nwritten = ::sendto(m_sock,
-                                msg.data,
-                                msg.len,
-                                MSG_NOSIGNAL,
-                                reinterpret_cast<sockaddr *>(&remoteStorage),
-                                remoteLen);
-        }
-
-        if (fiu_fail("net/udp/sendto")) {
-            errno = ENOBUFS;
-            nwritten = -1;
-        }
-        if (nwritten < 0) {
-            int32_t code = GetSystemLastError();
-            if (code == EAGAIN || code == EWOULDBLOCK) {
-                return sentCount > 0 ? sentCount : 0;
-            }
-
-            status = Status::Error(UTP_ERR_SOCKET_WRITE,
-                          fmt::format("{} sendto({}) failed: [{}, {}]",
-                          tag(),
-                          m_sock,
-                          code,
-                          GetSystemErrnoMsg(code)));
-            return sentCount > 0 ? sentCount : -1;
-        }
-#endif
-        ++sentCount;
+        return sentCount > 0 ? sentCount : -1;
     }
 
     return sentCount;

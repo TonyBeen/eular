@@ -234,6 +234,7 @@ private:
     std::unordered_map<PeerIndexKey, uint32_t, PeerIndexKeyHash> m_pendingIncomingPeerIndex; // peer address+scid -> local cid
     std::list<uint32_t>             m_pendingIncomingQueue; // 回调通知后的待 accept 队列
     std::set<uint32_t>              m_waitHandshakeDone;    // 已 accept，等待 HandshakeDone
+    std::vector<UdpSocket::MsgMetaInfo> m_recvMsgScratch;
     std::unique_ptr<TokenAuth>      m_tokenAuth;
 
     std::array<uint8_t, 32>         m_resumptionSecret{};   // 0-RTT 加密会话恢复密钥

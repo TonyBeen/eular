@@ -9,7 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+#include <memory>
 
 #include "utp/stream.h"
 
@@ -24,7 +24,7 @@ public:
 
     void    ensureFree(size_t freeBytes);
     size_t  size() const { return m_size; }
-    size_t  capacity() const { return m_buffer.size(); }
+    size_t  capacity() const { return m_capacity; }
     size_t  freeSize() const { return capacity() - m_size; }
     bool    empty() const { return m_size == 0; }
 
@@ -37,7 +37,8 @@ public:
     size_t  read(uint8_t *buffer, size_t len);
 
 private:
-    std::vector<uint8_t> m_buffer;
+    std::unique_ptr<uint8_t[]> m_buffer;
+    size_t m_capacity{0};
     size_t m_head{0};
     size_t m_size{0};
 };
