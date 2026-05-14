@@ -20,7 +20,10 @@ EventLoop::EventLoop() :
     m_eventBase(nullptr)
 {
     event_config *pConfig = event_config_new();
-    int32_t flags = EVENT_BASE_FLAG_IGNORE_ENV | EVENT_BASE_FLAG_PRECISE_TIMER;
+    int32_t flags = EVENT_BASE_FLAG_IGNORE_ENV;
+#if defined(EVENT_WRAPPER_ENABLE_PRECISE_TIMER)
+    flags |= EVENT_BASE_FLAG_PRECISE_TIMER;
+#endif
     event_config_set_flag(pConfig, flags);
     m_eventBase = event_base_new_with_config(pConfig);
     if (pConfig) {
