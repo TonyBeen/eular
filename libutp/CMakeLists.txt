@@ -112,6 +112,7 @@ set(UTP_PUBLIC_HEADERS
     include/utp/platform.h
     include/utp/stream.h
     include/utp/types.h
+    include/utp/context.h
     include/utp/utp.h
 )
 
@@ -173,7 +174,7 @@ set(UTP_SOURCES
     src/util/time.cpp
     src/util/transport_param.cpp
     src/util/util.cpp
-    src/utp.cpp
+    src/context.cpp
 )
 
 add_library(utp_static STATIC ${UTP_SOURCES} ${UTP_PUBLIC_HEADERS})

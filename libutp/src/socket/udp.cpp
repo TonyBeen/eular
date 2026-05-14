@@ -7,6 +7,7 @@
 
 #include "socket/udp.h"
 
+#include <array>
 #include <cstring>
 #include <stdexcept>
 #include <mutex>
@@ -159,10 +160,12 @@ int32_t SendSingleMsgImpl(UdpSocket &sock, const UdpSocket::MsgMetaInfo &msg, St
                             remoteLen);
     }
 
+#if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("net/udp/sendto")) {
         errno = ENOBUFS;
         nwritten = -1;
     }
+#endif
     if (nwritten < 0) {
         int32_t code = GetSystemLastError();
         if (code == EAGAIN || code == EWOULDBLOCK) {
@@ -463,6 +466,107 @@ int32_t UdpSocket::send(const MsgMetaInfo &msg, Status &status)
 
 int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
 {
+    if (!isValid()) {
+        status = Status::Error(UTP_ERR_SOCKET_WRITE, fmt::format("{} send failed: socket invalid", tag()));
+        return -1;
+    }
+
+    if (msgVec.empty()) {
+        return 0;
+    }
+
+#if defined(USE_SENDMMSG) && defined(OS_LINUX)
+    if (msgVec.size() > 1) {
+        int32_t sentCount = 0;
+        for (size_t base = 0; base < msgVec.size();) {
+            const size_t batchCount = std::min<size_t>(static_cast<size_t>(MAX_MMSG_SIZE), msgVec.size() - base);
+            std::array<mmsghdr, MAX_MMSG_SIZE>                         mmsg{};
+            std::array<sockaddr_storage, MAX_MMSG_SIZE>                remoteStorage{};
+            std::array<std::array<struct iovec, kMaxMsgSlices>, MAX_MMSG_SIZE> iovecs{};
+
+            size_t preparedCount = 0;
+            bool   invalidMsg = false;
+            for (; preparedCount < batchCount; ++preparedCount) {
+                const MsgMetaInfo &msg = msgVec[base + preparedCount];
+                if (!msg.metaInfo.peerAddress.isValid()) {
+                    invalidMsg = true;
+                    break;
+                }
+
+                socklen_t remoteLen = msg.metaInfo.peerAddress.toSockAddr(remoteStorage[preparedCount]);
+                if (remoteLen == 0) {
+                    invalidMsg = true;
+                    break;
+                }
+
+                struct iovec *iov = iovecs[preparedCount].data();
+                size_t        iovCount = 0;
+                if (msg.slice_count > 0) {
+                    for (uint8_t i = 0; i < msg.slice_count && i < kMaxMsgSlices; ++i) {
+                        if (msg.slices[i].data == nullptr || msg.slices[i].len == 0) {
+                            continue;
+                        }
+                        iov[iovCount].iov_base = const_cast<void *>(msg.slices[i].data);
+                        iov[iovCount].iov_len = msg.slices[i].len;
+                        ++iovCount;
+                    }
+                } else if (msg.data != nullptr && msg.len > 0) {
+                    iov[0].iov_base = const_cast<void *>(msg.data);
+                    iov[0].iov_len = msg.len;
+                    iovCount = 1;
+                }
+
+                if (iovCount == 0) {
+                    invalidMsg = true;
+                    break;
+                }
+
+                mmsg[preparedCount].msg_hdr.msg_name = &remoteStorage[preparedCount];
+                mmsg[preparedCount].msg_hdr.msg_namelen = remoteLen;
+                mmsg[preparedCount].msg_hdr.msg_iov = iov;
+                mmsg[preparedCount].msg_hdr.msg_iovlen = iovCount;
+                mmsg[preparedCount].msg_hdr.msg_control = nullptr;
+                mmsg[preparedCount].msg_hdr.msg_controllen = 0;
+                mmsg[preparedCount].msg_hdr.msg_flags = 0;
+                mmsg[preparedCount].msg_len = 0;
+            }
+
+            if (preparedCount == 0) {
+                return sentCount;
+            }
+
+            if (invalidMsg) {
+                return sentCount;
+            }
+
+            int32_t ret = ::sendmmsg(m_sock, mmsg.data(), static_cast<unsigned int>(preparedCount), MSG_NOSIGNAL);
+            if (ret < 0) {
+                int32_t code = GetSystemLastError();
+                if (code == EAGAIN || code == EWOULDBLOCK) {
+                    return sentCount;
+                }
+
+                status = Status::Error(UTP_ERR_SOCKET_WRITE,
+                                       fmt::format("{} sendmmsg({}) failed: [{}, {}]",
+                                                   tag(),
+                                                   m_sock,
+                                                   code,
+                                                   GetSystemErrnoMsg(code)));
+                return sentCount > 0 ? sentCount : -1;
+            }
+
+            sentCount += ret;
+            if (ret < static_cast<int32_t>(preparedCount)) {
+                return sentCount;
+            }
+
+            base += preparedCount;
+        }
+
+        return sentCount;
+    }
+#endif
+
     int32_t sentCount = 0;
     for (const MsgMetaInfo &msg : msgVec) {
         const int32_t ret = SendSingleMsgImpl(*this, msg, status);

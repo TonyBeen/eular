@@ -25,6 +25,57 @@
 namespace {
 
 constexpr size_t kPayloadLengthOffset = 4 + 4 + 8;
+constexpr size_t kEncryptBufferClassCount = 5;
+constexpr size_t kEncryptBufferClasses[kEncryptBufferClassCount] = {
+    1280,
+    1500,
+    4096,
+    9000,
+    65535,
+};
+
+struct EncryptBufferNode {
+    SLIST_ENTRY(EncryptBufferNode)  next;
+};
+
+SLIST_HEAD(EncryptBufferFreeList, EncryptBufferNode);
+thread_local EncryptBufferFreeList g_encryptBufferFreeLists[kEncryptBufferClassCount] = {
+    SLIST_HEAD_INITIALIZER(g_encryptBufferFreeLists[0]),
+    SLIST_HEAD_INITIALIZER(g_encryptBufferFreeLists[1]),
+    SLIST_HEAD_INITIALIZER(g_encryptBufferFreeLists[2]),
+    SLIST_HEAD_INITIALIZER(g_encryptBufferFreeLists[3]),
+    SLIST_HEAD_INITIALIZER(g_encryptBufferFreeLists[4]),
+};
+
+size_t NormalizeEncryptBufferSize(size_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < kEncryptBufferClassCount; ++i) {
+        if (size <= kEncryptBufferClasses[i]) {
+            return kEncryptBufferClasses[i];
+        }
+    }
+
+    return size;
+}
+
+bool IsPooledEncryptBufferSize(size_t size)
+{
+    return size > 0 && size <= kEncryptBufferClasses[kEncryptBufferClassCount - 1];
+}
+
+size_t EncryptBufferClassIndex(size_t capacity)
+{
+    for (size_t i = 0; i < kEncryptBufferClassCount; ++i) {
+        if (capacity <= kEncryptBufferClasses[i]) {
+            return i;
+        }
+    }
+    return kEncryptBufferClassCount - 1;
+}
 
 void StoreBE16(uint8_t *dst, uint16_t value)
 {
@@ -115,12 +166,7 @@ Status AesGcmContext::encrypt(PacketOut *packet)
         targetBuffer = packet->raw_data;
         inPlace = true;
     } else {
-        if (fiu_fail("crypto/encrypt_buf/malloc")) {
-            return Status::Error(UTP_ERR_NO_MEMORY,
-                                 fmt::format("allocate encrypted packet buffer failed, size={}",
-                                             encryptedPacketLen));
-        }
-        targetBuffer = static_cast<uint8_t *>(std::malloc(encryptedPacketLen));
+        targetBuffer = AcquireEncryptBuffer(encryptedPacketLen);
         if (targetBuffer == nullptr) {
             return Status::Error(UTP_ERR_NO_MEMORY,
                                  fmt::format("allocate encrypted packet buffer failed, size={}",
@@ -142,13 +188,13 @@ Status AesGcmContext::encrypt(PacketOut *packet)
                                      &outCipherPayloadLen);
     if (!encStatus.ok()) {
         if (!inPlace) {
-            std::free(targetBuffer);
+            ReleaseEncryptBuffer(targetBuffer, encryptedPacketLen);
         }
         return encStatus;
     }
 
     if (packet->encrypt_data != nullptr && packet->encrypt_data != packet->raw_data) {
-        std::free(packet->encrypt_data);
+        ReleaseEncryptBuffer(packet->encrypt_data, packet->encrypt_data_size);
     }
 
     packet->encrypt_data = targetBuffer;
@@ -236,9 +282,11 @@ Status AesGcmContext::encrypt(const uint8_t *plaintext, size_t plaintext_len, co
 
     Nonce nonce = buildNonce(counter);
 
+#if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("crypto/evp_ctx/alloc")) {
         return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
+#endif
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
         return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
@@ -333,9 +381,11 @@ Status AesGcmContext::encryptScatter(const PlainSegment *segments,
 
     Nonce nonce = buildNonce(counter);
 
+#if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("crypto/evp_ctx/alloc")) {
         return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
     }
+#endif
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == nullptr) {
         return Status::ErrorLiteral(UTP_ERR_NO_MEMORY, "alloc EVP_CIPHER_CTX failed");
@@ -476,6 +526,44 @@ void AesGcmContext::cleanup()
     m_keySize = 0;
     std::memset(m_key.data(), 0, m_key.size());
     std::memset(m_noncePerfix.data(), 0, m_noncePerfix.size());
+}
+
+uint8_t *AesGcmContext::AcquireEncryptBuffer(size_t size)
+{
+    if (size == 0) {
+        return nullptr;
+    }
+
+    if (!IsPooledEncryptBufferSize(size)) {
+        return static_cast<uint8_t *>(std::malloc(size));
+    }
+
+    const size_t capacity = NormalizeEncryptBufferSize(size);
+    const size_t idx = EncryptBufferClassIndex(capacity);
+    EncryptBufferNode *node = SLIST_FIRST(&g_encryptBufferFreeLists[idx]);
+    if (node != nullptr) {
+        SLIST_REMOVE_HEAD(&g_encryptBufferFreeLists[idx], next);
+        return reinterpret_cast<uint8_t *>(node);
+    }
+
+    return static_cast<uint8_t *>(std::malloc(capacity));
+}
+
+void AesGcmContext::ReleaseEncryptBuffer(uint8_t *buffer, size_t size)
+{
+    if (buffer == nullptr || size == 0) {
+        return;
+    }
+
+    if (!IsPooledEncryptBufferSize(size)) {
+        std::free(buffer);
+        return;
+    }
+
+    const size_t capacity = NormalizeEncryptBufferSize(size);
+    const size_t idx = EncryptBufferClassIndex(capacity);
+    EncryptBufferNode *node = reinterpret_cast<EncryptBufferNode *>(buffer);
+    SLIST_INSERT_HEAD(&g_encryptBufferFreeLists[idx], node, next);
 }
 
 } // namespace utp

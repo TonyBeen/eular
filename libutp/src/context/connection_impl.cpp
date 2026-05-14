@@ -2773,7 +2773,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
 
     if (shouldTrackPacket && shouldEncrypt && (packet->po_flags & PacketOutFlags::kPoKeepPlaintext) &&
         packet->encrypt_data != nullptr && packet->encrypt_data != packet->raw_data) {
-        std::free(packet->encrypt_data);
+        AesGcmContext::ReleaseEncryptBuffer(packet->encrypt_data, packet->encrypt_data_size);
         packet->encrypt_data = nullptr;
         packet->encrypt_data_size = 0;
     }

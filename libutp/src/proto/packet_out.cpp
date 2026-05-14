@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 
+#include "crypto/aes_gcm_context.h"
 #include "util/fiu_local.h"
 
 namespace eular {
@@ -18,9 +19,11 @@ namespace utp {
 
 bool PacketOut::addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime)
 {
+#if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("mem/packet_out_attempt/alloc")) {
         return false;
     }
+#endif
     PacketOutAttempt *attempt = new (std::nothrow) PacketOutAttempt();
     if (attempt == nullptr) {
         return false;
@@ -62,7 +65,7 @@ void PacketOut::reset()
     clearSendAttempts();
 
     if (encrypt_data != nullptr && encrypt_data != raw_data) {
-        std::free(encrypt_data);
+        AesGcmContext::ReleaseEncryptBuffer(encrypt_data, encrypt_data_size);
     }
 
     uint8_t *raw = raw_data;

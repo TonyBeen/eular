@@ -1298,9 +1298,8 @@ Status SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
     }
     msg.metaInfo.peerAddress = m_conn->m_peerAddress;
 
-    std::vector<UdpSocket::MsgMetaInfo> msgVec = {msg};
     Status                              udpSt;
-    int32_t sent = m_conn->m_udpSocket->send(msgVec, udpSt);
+    int32_t sent = m_conn->m_udpSocket->send(msg, udpSt);
     if (sent <= 0) {
         return udpSt.ok() ? Status::ErrorLiteral(UTP_ERR_SOCKET_WRITE, "UDP send failed") : udpSt;
     }

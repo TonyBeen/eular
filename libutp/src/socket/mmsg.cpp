@@ -39,11 +39,15 @@ Status MultipleMsg::resize(uint32_t size, uint32_t mss)
     }
 
     size_t bufSize = bufferSize();
+#if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("mem/mmsg/malloc")) {
         m_buffer = nullptr;
     } else {
         m_buffer = reinterpret_cast<char *>(malloc(bufSize));
     }
+#else
+    m_buffer = reinterpret_cast<char *>(malloc(bufSize));
+#endif
     if (!m_buffer) {
         return Status::Error(UTP_ERR_NO_MEMORY, fmt::format("MultipleMsg::resize malloc failed! size={}", bufSize));
     }
@@ -134,22 +138,25 @@ mmsghdr *MultipleMsg::mmsghdrBegin()
 
 sockaddr_storage *MultipleMsg::sockaddrBegin()
 {
-    return reinterpret_cast<sockaddr_storage *>(m_buffer + m_nMsg * sizeof(mmsghdr));
+    return reinterpret_cast<sockaddr_storage *>(static_cast<char *>(m_buffer) + m_nMsg * sizeof(mmsghdr));
 }
 
 iovec *MultipleMsg::iovecBegin()
 {
-    return reinterpret_cast<iovec *>(m_buffer + m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage)));
+    return reinterpret_cast<iovec *>(static_cast<char *>(m_buffer) +
+                                     m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage)));
 }
 
 char *MultipleMsg::dataBegin()
 {
-    return reinterpret_cast<char *>(m_buffer + m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage) + sizeof(iovec)));
+    return static_cast<char *>(m_buffer) +
+           m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage) + sizeof(iovec));
 }
 
 char *MultipleMsg::msgctrlBegin()
 {
-    return reinterpret_cast<char *>(m_buffer + m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage) + sizeof(iovec) + m_mss));
+    return static_cast<char *>(m_buffer) +
+           m_nMsg * (sizeof(mmsghdr) + sizeof(sockaddr_storage) + sizeof(iovec) + m_mss);
 }
 } // namespace utp
 } // namespace eular

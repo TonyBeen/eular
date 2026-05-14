@@ -12,6 +12,7 @@
 
 #include <utils/serialize.hpp>
 
+#include "crypto/aes_gcm_context.h"
 #include "context/connection_impl.h"
 #include "proto/proto.h"
 #include "proto/packet_out.h"
@@ -135,7 +136,7 @@ bool PacketEditor::StripTransientAckPayload(PacketOut *pkt)
     }
 
     if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
-        std::free(pkt->encrypt_data);
+        AesGcmContext::ReleaseEncryptBuffer(pkt->encrypt_data, pkt->encrypt_data_size);
     }
     pkt->encrypt_data = nullptr;
     pkt->encrypt_data_size = 0;

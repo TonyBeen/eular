@@ -80,6 +80,9 @@ public:
     Status encrypt(PacketOut *packet);
     Status decrypt(PacketIn *packet);
 
+    static uint8_t *AcquireEncryptBuffer(size_t size);
+    static void     ReleaseEncryptBuffer(uint8_t *buffer, size_t size);
+
     /**
      * @brief 加密
      *

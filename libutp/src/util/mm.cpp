@@ -6,6 +6,7 @@
  ************************************************************************/
 
 #include "util/mm.h"
+#include "crypto/aes_gcm_context.h"
 #include "mtu/mtu.h"
 #include "proto/proto.h"
 #include "logger/logger.h"
@@ -118,10 +119,12 @@ PacketOut *MemoryManager::getPacketOut(uint32_t size)
         SLIST_REMOVE_HEAD(&packet_out_bufs[idx], next_pob);
         poolStatsAllocated(&packet_out_stats[idx], 0);
     } else {
+#if defined(UTP_ENABLE_FAULT_INJECTION)
         if (fiu_fail("mem/mm/packet_out_buf")) {
             packet_out_malo.put(packetOut);
             return nullptr;
         }
+#endif
         pob = (PacketOutBuf *)malloc(g_packetOutSizeVec[idx]);
         if (!pob) {
             packet_out_malo.put(packetOut);
@@ -148,7 +151,7 @@ void MemoryManager::putPacketOut(PacketOut *pkt)
 
     pkt->clearSendAttempts();
     if (pkt->encrypt_data != nullptr && pkt->encrypt_data != pkt->raw_data) {
-        std::free(pkt->encrypt_data);
+        AesGcmContext::ReleaseEncryptBuffer(pkt->encrypt_data, pkt->encrypt_data_size);
         pkt->encrypt_data = nullptr;
         pkt->encrypt_data_size = 0;
     }
