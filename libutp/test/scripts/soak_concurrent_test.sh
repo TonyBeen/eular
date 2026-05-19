@@ -13,7 +13,6 @@ REPORT_INTERVAL=10
 SERVER_PORT=""
 SERVER_PORT_AUTO=1
 KEEP_LOGS=0
-HANDSHAKE_TRACE=0
 WORKER_PIDS=()
 ECHO_CLIENT_BIN=""
 RSS_WARN_THRESHOLD_KB=65536
@@ -58,7 +57,6 @@ usage() {
                            RSS 失败阈值（相对起始值），默认 0（关闭）
   --cpu-stop-threshold <n> server CPU% 超过该值时立刻停止，默认 80（关闭请设 0）
   --client-timeout <n>     单轮 client 最大运行时间（秒），默认 90
-  --handshake-trace        打开握手追踪日志（默认关闭）
   --keep-logs              成功时也保留日志目录
 EOF
 }
@@ -126,10 +124,6 @@ parse_args() {
                 CLIENT_TIMEOUT_SECONDS="$2"
                 shift 2
                 ;;
-            --handshake-trace)
-                HANDSHAKE_TRACE=1
-                shift
-                ;;
             --keep-logs)
                 KEEP_LOGS=1
                 shift
@@ -164,8 +158,6 @@ parse_args() {
     [[ "$RSS_WARN_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-warn-threshold-kb 必须是非负整数"
     [[ "$RSS_FAIL_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-fail-threshold-kb 必须是非负整数"
     [[ "$CPU_STOP_THRESHOLD" =~ ^[0-9]+$ ]] || die "--cpu-stop-threshold 必须是非负整数"
-    [ "$HANDSHAKE_TRACE" -eq 0 ] || [ "$HANDSHAKE_TRACE" -eq 1 ] || die "--handshake-trace 解析失败"
-
     if [ "$SERVER_PORT_AUTO" -eq 0 ]; then
         is_positive_int "$SERVER_PORT" || die "--server-port 必须是正整数"
     fi
@@ -227,12 +219,18 @@ write_worker_state() {
     local failed_rounds="$3"
     local bytes_total="$4"
     local last_error="$5"
+    local duration_total_ms="${6:-0}"
+    local duration_min_ms="${7:-0}"
+    local duration_max_ms="${8:-0}"
 
     cat >"$file" <<EOF
 success_rounds=$success_rounds
 failed_rounds=$failed_rounds
 bytes_total=$bytes_total
 last_error=$last_error
+round_duration_total_ms=$duration_total_ms
+round_duration_min_ms=$duration_min_ms
+round_duration_max_ms=$duration_max_ms
 EOF
 }
 
@@ -282,9 +280,6 @@ start_server() {
     local server_pid_file="$TMP_ROOT/server.pid"
     mkdir -p "$TMP_ROOT" "$CLIENT_LOG_DIR" "$CLIENT_STATE_DIR"
     local server_args=(--bind-ip 127.0.0.1 --bind-port "$SERVER_PORT" --silent)
-    if [ "$HANDSHAKE_TRACE" -eq 1 ]; then
-        server_args+=(--handshake-trace)
-    fi
 
     local attempt=1
     local max_attempts=5
@@ -342,13 +337,14 @@ run_worker() {
     local failed_rounds=0
     local bytes_total=0
     local last_error="NONE"
+    local duration_total_ms=0
+    local duration_min_ms=0
+    local duration_max_ms=0
     local client_args=(--server-ip 127.0.0.1 --server-port "$SERVER_PORT" --length "$PAYLOAD_LENGTH" --count 200000 --total-bytes "$BYTES_PER_CLIENT" --quiet)
-    if [ "$HANDSHAKE_TRACE" -eq 1 ]; then
-        client_args+=(--handshake-trace)
-    fi
 
     : >"$log_file"
-    write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
+    write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error" \
+        "$duration_total_ms" "$duration_min_ms" "$duration_max_ms"
 
     while [ "$(date +%s)" -lt "$end_epoch" ]; do
         if [ -f "$TMP_ROOT/.stop" ]; then
@@ -356,11 +352,15 @@ run_worker() {
         fi
         local output=""
         local client_status=0
+        local round_start_ms round_end_ms round_duration_ms
+        round_start_ms="$(date +%s%3N)"
         if output=$(timeout "$CLIENT_TIMEOUT_SECONDS" "$echo_client" "${client_args[@]}" 2>&1); then
             client_status=0
         else
             client_status=$?
         fi
+        round_end_ms="$(date +%s%3N)"
+        round_duration_ms=$((round_end_ms - round_start_ms))
 
         local sent_bytes done_bytes result
         read -r sent_bytes done_bytes result < <(parse_done_result "$output")
@@ -373,6 +373,13 @@ run_worker() {
            && [ "$sent_bytes" = "$BYTES_PER_CLIENT" ] && [ "$done_bytes" = "$BYTES_PER_CLIENT" ]; then
             success_rounds=$((success_rounds + 1))
             bytes_total=$((bytes_total + sent_bytes))
+            duration_total_ms=$((duration_total_ms + round_duration_ms))
+            if [ "$duration_min_ms" -eq 0 ] || [ "$round_duration_ms" -lt "$duration_min_ms" ]; then
+                duration_min_ms="$round_duration_ms"
+            fi
+            if [ "$round_duration_ms" -gt "$duration_max_ms" ]; then
+                duration_max_ms="$round_duration_ms"
+            fi
             last_error="NONE"
         else
             failed_rounds=$((failed_rounds + 1))
@@ -387,12 +394,14 @@ run_worker() {
             else
                 last_error="EXIT_${client_status}"
             fi
-            write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
+            write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error" \
+                "$duration_total_ms" "$duration_min_ms" "$duration_max_ms"
             trigger_stop "WORKER_${worker_id}_${last_error}"
             return 1
         fi
 
-        write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
+        write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error" \
+            "$duration_total_ms" "$duration_min_ms" "$duration_max_ms"
     done
 }
 
@@ -423,7 +432,6 @@ main() {
     echo "rss_warn_threshold_kb=$RSS_WARN_THRESHOLD_KB"
     echo "rss_fail_threshold_kb=$RSS_FAIL_THRESHOLD_KB"
     echo "cpu_stop_threshold=$CPU_STOP_THRESHOLD"
-    echo "handshake_trace=$HANDSHAKE_TRACE"
     echo "tmp_root=$TMP_ROOT"
     echo ""
 
@@ -504,20 +512,33 @@ main() {
     total_success=0
     total_failed=0
     total_bytes=0
+    local duration_total_ms=0
+    local duration_min_ms=0
+    local duration_max_ms=0
     local connect_timeout_count=0
     local drain_timeout_count=0
     local result_fail_count=0
     local other_fail_count=0
     for i in $(seq 1 "$NUM_CLIENTS"); do
         local state_file="$CLIENT_STATE_DIR/client_${i}.state"
-        local s f b e
+        local s f b e dt dmin dmax
         s="$(read_state_value "$state_file" success_rounds || echo 0)"
         f="$(read_state_value "$state_file" failed_rounds || echo 0)"
         b="$(read_state_value "$state_file" bytes_total || echo 0)"
         e="$(read_state_value "$state_file" last_error || echo NONE)"
+        dt="$(read_state_value "$state_file" round_duration_total_ms || echo 0)"
+        dmin="$(read_state_value "$state_file" round_duration_min_ms || echo 0)"
+        dmax="$(read_state_value "$state_file" round_duration_max_ms || echo 0)"
         total_success=$((total_success + s))
         total_failed=$((total_failed + f))
         total_bytes=$((total_bytes + b))
+        duration_total_ms=$((duration_total_ms + dt))
+        if [ "$dmin" -gt 0 ] && { [ "$duration_min_ms" -eq 0 ] || [ "$dmin" -lt "$duration_min_ms" ]; }; then
+            duration_min_ms="$dmin"
+        fi
+        if [ "$dmax" -gt "$duration_max_ms" ]; then
+            duration_max_ms="$dmax"
+        fi
         case "$e" in
             CONNECT_TIMEOUT) connect_timeout_count=$((connect_timeout_count + 1)) ;;
             DRAIN_TIMEOUT) drain_timeout_count=$((drain_timeout_count + 1)) ;;
@@ -541,6 +562,13 @@ main() {
     echo "success_rounds=$total_success"
     echo "failed_rounds=$total_failed"
     echo "bytes_total=$total_bytes"
+    if [ "$total_success" -gt 0 ]; then
+        echo "round_duration_avg_ms=$((duration_total_ms / total_success))"
+    else
+        echo "round_duration_avg_ms=0"
+    fi
+    echo "round_duration_min_ms=$duration_min_ms"
+    echo "round_duration_max_ms=$duration_max_ms"
     echo "server_rss_start_kb=$SERVER_START_RSS_KB"
     echo "server_rss_end_kb=$server_end_rss_kb"
     echo "server_rss_peak_kb=$SERVER_PEAK_RSS_KB"

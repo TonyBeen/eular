@@ -496,9 +496,9 @@ int32_t UdpSocket::send(const MsgMetaInfo *msgVec, size_t count, Status &status)
         int32_t sentCount = 0;
         for (size_t base = 0; base < count;) {
             const size_t batchCount = std::min<size_t>(static_cast<size_t>(MAX_MMSG_SIZE), count - base);
-            std::array<mmsghdr, MAX_MMSG_SIZE>                         mmsg{};
-            std::array<sockaddr_storage, MAX_MMSG_SIZE>                remoteStorage{};
-            std::array<std::array<struct iovec, kMaxMsgSlices>, MAX_MMSG_SIZE> iovecs{};
+            std::array<mmsghdr, MAX_MMSG_SIZE>                         mmsg;
+            std::array<sockaddr_storage, MAX_MMSG_SIZE>                remoteStorage;
+            std::array<std::array<struct iovec, kMaxMsgSlices>, MAX_MMSG_SIZE> iovecs;
 
             size_t preparedCount = 0;
             bool   invalidMsg = false;

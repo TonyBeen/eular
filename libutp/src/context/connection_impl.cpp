@@ -9,16 +9,16 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdarg>
 #include <cstddef>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
 #include <memory>
-#include <sys/select.h>
 #include <vector>
+
+#include <sys/select.h>
 
 #include "context/context_impl.h"
 #include "context/detail/frame_meta_policy.h"
@@ -143,7 +143,7 @@ FrameType FirstFrameTypeBit(uint32_t frameTypes)
     return static_cast<FrameType>(bitIndex);
 }
 
-bool ResetScratchBuffer(std::vector<uint8_t> &buffer, size_t size)
+bool ResetScratchBuffer(std::vector<uint8_t>& buffer, size_t size)
 {
     if (buffer.size() != size) {
         buffer.resize(size);
@@ -151,7 +151,7 @@ bool ResetScratchBuffer(std::vector<uint8_t> &buffer, size_t size)
     return true;
 }
 
-bool AppendRawBytes(std::vector<uint8_t> &buffer, const void *data, size_t len)
+bool AppendRawBytes(std::vector<uint8_t>& buffer, const void* data, size_t len)
 {
     if (len == 0) {
         return true;
@@ -174,12 +174,11 @@ uint32_t ExponentialBackoffTimeoutMs(uint32_t baseMs, uint8_t round)
     }
 
     const uint64_t scaled = static_cast<uint64_t>(normalizedBase) << round;
-    return scaled >= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())
-               ? std::numeric_limits<uint32_t>::max()
-               : static_cast<uint32_t>(scaled);
+    return scaled >= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) ? std::numeric_limits<uint32_t>::max()
+                                                                                 : static_cast<uint32_t>(scaled);
 }
 
-bool SocketHasReadableData(const eular::utp::UdpSocket *socket)
+bool SocketHasReadableData(const eular::utp::UdpSocket* socket)
 {
     if (socket == nullptr || socket->fd() < 0) {
         return false;
@@ -196,7 +195,8 @@ bool SocketHasReadableData(const eular::utp::UdpSocket *socket)
 }
 
 template <typename FrameT>
-int32_t AppendEncodedFrame(std::vector<uint8_t> &payload, const FrameT &frame, size_t maxFrameSize, eular::utp::Status &status)
+int32_t AppendEncodedFrame(std::vector<uint8_t>& payload, const FrameT& frame, size_t maxFrameSize,
+                           eular::utp::Status& status)
 {
     const size_t oldSize = payload.size();
     payload.resize(oldSize + maxFrameSize);
@@ -213,31 +213,6 @@ int32_t AppendEncodedFrame(std::vector<uint8_t> &payload, const FrameT &frame, s
 bool IsSupportedStreamType(Connection::StreamType streamType)
 {
     return streamType == Connection::kStreamTypeBidirectional || streamType == Connection::kStreamTypeUnidirectional;
-}
-
-bool HandshakeTraceEnabled()
-{
-    static int enabled = -1;
-    if (enabled < 0) {
-        const char *env = std::getenv("UTP_HANDSHAKE_TRACE_INTERNAL");
-        enabled = (env != nullptr && env[0] != '\0' && env[0] != '0') ? 1 : 0;
-    }
-    return enabled == 1;
-}
-
-void HandshakeTracePrint(const char *fmt, ...)
-{
-    if (!HandshakeTraceEnabled()) {
-        return;
-    }
-
-    std::fprintf(stderr, "[utp-handshake] ");
-    va_list ap;
-    va_start(ap, fmt);
-    std::vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    std::fputc('\n', stderr);
-    std::fflush(stderr);
 }
 
 Connection::StreamType StreamTypeFromStreamId(uint32_t streamId)
@@ -268,7 +243,7 @@ bool IsLocalInitiatedStream(uint32_t streamId, bool isClientInitiator)
     return isClientInitiator ? STREAM_ID_IS_CLIENT(streamId) : STREAM_ID_IS_SERVER(streamId);
 }
 
-const char *StreamSchedulerModeToString(eular::utp::StreamSchedulerMode mode)
+const char* StreamSchedulerModeToString(eular::utp::StreamSchedulerMode mode)
 {
     switch (mode) {
         case eular::utp::kStreamSchedulerDisabled:
@@ -293,9 +268,9 @@ eular::utp::FrameCryptoType EncryptionModeToFrameCryptoType(eular::utp::Context:
 }
 
 bool FrameCryptoTypeToEncryptionContext(eular::utp::FrameCryptoType                       type,
-                                        const eular::utp::X25519Wrapper::PublicKey       &peerPublicKey,
-                                        const std::shared_ptr<eular::utp::X25519Wrapper> &x25519,
-                                        const std::shared_ptr<eular::utp::AesGcmContext> &aesCtx, uint32_t noncePrefix)
+                                        const eular::utp::X25519Wrapper::PublicKey&       peerPublicKey,
+                                        const std::shared_ptr<eular::utp::X25519Wrapper>& x25519,
+                                        const std::shared_ptr<eular::utp::AesGcmContext>& aesCtx, uint32_t noncePrefix)
 {
     if (!x25519 || !aesCtx) {
         return false;
@@ -314,7 +289,8 @@ bool FrameCryptoTypeToEncryptionContext(eular::utp::FrameCryptoType             
     return aesCtx->init(key128, noncePrefix).ok();
 }
 
-int32_t AppendAckFrequencyFrame(const eular::utp::Config *config, std::vector<uint8_t> &payload, eular::utp::Status &status)
+int32_t AppendAckFrequencyFrame(const eular::utp::Config* config, std::vector<uint8_t>& payload,
+                                eular::utp::Status& status)
 {
     eular::utp::FrameAckFrequency ackFreq;
     const uint16_t                ackEveryN = config ? config->ack_every_n_packets : 10;
@@ -326,8 +302,8 @@ int32_t AppendAckFrequencyFrame(const eular::utp::Config *config, std::vector<ui
     return AppendEncodedFrame(payload, ackFreq, FRAME_ACK_FREQUENCY_SIZE, status);
 }
 
-int32_t AppendTransportParamsFrame(const eular::utp::TransportParams &params, std::vector<uint8_t> &payload,
-                                   eular::utp::Status &status)
+int32_t AppendTransportParamsFrame(const eular::utp::TransportParams& params, std::vector<uint8_t>& payload,
+                                   eular::utp::Status& status)
 {
     eular::utp::TransportParams      local = params;
     eular::utp::FrameTransportParams frame;
@@ -336,7 +312,8 @@ int32_t AppendTransportParamsFrame(const eular::utp::TransportParams &params, st
     return AppendEncodedFrame(payload, frame, FRAME_TRANSPORT_PARAMS_SIZE, status);
 }
 
-int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize, std::vector<uint8_t> &payload, eular::utp::Status &status)
+int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize, std::vector<uint8_t>& payload,
+                                         eular::utp::Status& status)
 {
     if (targetPayloadSize <= payload.size()) {
         return UTP_ERR_OK;
@@ -353,7 +330,7 @@ int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize, std::vector<u
     const size_t oldSize = payload.size();
     payload.resize(targetPayloadSize);
     eular::utp::Status st;
-    const int32_t encoded = padding.encode(payload.data() + oldSize, remain, st);
+    const int32_t      encoded = padding.encode(payload.data() + oldSize, remain, st);
     if (!st.ok() || static_cast<size_t>(encoded) != remain) {
         return -1;
     }
@@ -361,7 +338,7 @@ int32_t AppendPaddingToTargetPayloadSize(size_t targetPayloadSize, std::vector<u
     return UTP_ERR_OK;
 }
 
-uint16_t ConfiguredMinPacketSize(const eular::utp::Config *config, eular::utp::Address::Family family)
+uint16_t ConfiguredMinPacketSize(const eular::utp::Config* config, eular::utp::Address::Family family)
 {
     const uint16_t targetMtu =
         eular::utp::MtuDiscovery::NormalizeMtu(config == nullptr ? ETHERNET_MTU_MIN : config->mtu_min, family);
@@ -372,7 +349,7 @@ uint16_t ConfiguredMinPacketSize(const eular::utp::Config *config, eular::utp::A
 
 namespace eular {
 namespace utp {
-ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t cid)
+ConnectionImpl::ConnectionImpl(ContextImpl* ctx, UdpSocket* udpSocket, uint32_t cid)
     : m_ctx(ctx),
       m_udpSocket(udpSocket),
       m_localConnectionID(cid),
@@ -421,7 +398,7 @@ ConnectionImpl::ConnectionImpl(ContextImpl *ctx, UdpSocket *udpSocket, uint32_t 
 
 ConnectionImpl::~ConnectionImpl() = default;
 
-void ConnectionImpl::abortConnection(utp_error_t localErrCode, uint16_t quicTransportErrCode, const char *reason)
+void ConnectionImpl::abortConnection(utp_error_t localErrCode, uint16_t quicTransportErrCode, const char* reason)
 {
     if (m_state >= kStateCloseSent) {
         return;
@@ -452,7 +429,7 @@ void ConnectionImpl::abortConnection(utp_error_t localErrCode, uint16_t quicTran
     notifyConnectionClosed(localErrCode, reason ? reason : "connection aborted", false);
 }
 
-bool ConnectionImpl::recordConnectionError(const Status &status, bool notify)
+bool ConnectionImpl::recordConnectionError(const Status& status, bool notify)
 {
     if (status.ok()) {
         return false;
@@ -483,7 +460,7 @@ void ConnectionImpl::bootstrapLocalTransportParams()
         return;
     }
 
-    const Config *cfg = m_ctx->config();
+    const Config* cfg = m_ctx->config();
     m_loaclTP.max_idle_timeout = cfg->max_idle_timeout;
     m_loaclTP.handshake_timeout = cfg->handshake_timeout;
     m_loaclTP.init_max_streams_bidi = cfg->init_max_streams_bidi;
@@ -509,7 +486,7 @@ void ConnectionImpl::bootstrapLocalTransportParams()
     m_lastStreamDataBlockedSentUs.clear();
 }
 
-Status ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttConfig *zeroRtt)
+Status ConnectionImpl::connect(const Context::ConnectInfo& info, const ZeroRttConfig* zeroRtt)
 {
     if (m_state != State::kStateDisconnected) {
         return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "connection is not in disconnected state");
@@ -591,11 +568,11 @@ Status ConnectionImpl::connect(const Context::ConnectInfo &info, const ZeroRttCo
     return Status::OK();
 }
 
-Status ConnectionImpl::initPassive(const Context::ConnectInfo &info, const Address &peerAddress,
-                                   uint32_t peerConnectionID, const TransportParams &peerTp,
-                                   const FrameAckFrequency              *peerAckFrequency,
-                                   const std::shared_ptr<X25519Wrapper> &x25519,
-                                   const std::shared_ptr<AesGcmContext> &aesCtx)
+Status ConnectionImpl::initPassive(const Context::ConnectInfo& info, const Address& peerAddress,
+                                   uint32_t peerConnectionID, const TransportParams& peerTp,
+                                   const FrameAckFrequency*              peerAckFrequency,
+                                   const std::shared_ptr<X25519Wrapper>& x25519,
+                                   const std::shared_ptr<AesGcmContext>& aesCtx)
 {
     if (m_state != State::kStateDisconnected) {
         return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "connection is not in disconnected state");
@@ -654,18 +631,15 @@ Status ConnectionImpl::initPassive(const Context::ConnectInfo &info, const Addre
     return Status::OK();
 }
 
-void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
-{
-    onUdpPacket(msg, time::MonotonicUs());
-}
+void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo& msg) { onUdpPacket(msg, time::MonotonicUs()); }
 
-void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t nowUs)
+void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo& msg, utp_time_t nowUs)
 {
     if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
         return;
     }
 
-    auto packetReleaser = [this](PacketIn *packet) { m_mm.releasePacketIn(packet); };
+    auto packetReleaser = [this](PacketIn* packet) { m_mm.releasePacketIn(packet); };
     std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(m_mm.getPacketIn(static_cast<uint32_t>(msg.len)),
                                                                packetReleaser);
     if (!packet) {
@@ -722,7 +696,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
         size_t timedWaitOffset = 0;
         while (timedWaitOffset < packet->payload_size) {
             FrameType      frameType = kFrameInvalid;
-            const uint8_t *frameData = nullptr;
+            const uint8_t* frameData = nullptr;
             size_t         frameLen = 0;
             Status         nextSt;
             if (packet->nextFrame(timedWaitOffset, frameType, frameData, frameLen, nextSt) < 0) {
@@ -754,7 +728,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
     bool                                    fatalPacketError = false;
     while (frameOffset < packet->payload_size && !stopFrameProcessing) {
         FrameType      frameType = kFrameInvalid;
-        const uint8_t *frameData = nullptr;
+        const uint8_t* frameData = nullptr;
         size_t         frameLen = 0;
         Status         nextSt;
         if (packet->nextFrame(frameOffset, frameType, frameData, frameLen, nextSt) < 0) {
@@ -937,7 +911,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
                             fatalPacketError = true;
                             stopFrameProcessing = true;
                         }
-                    } catch (const std::exception &e) {
+                    } catch (const std::exception& e) {
                         UTP_LOGW("%s x25519 key exchange failed: %s", tag(), e.what());
                         (void)recordConnectionError(Status::Error(UTP_ERR_INTERNAL_ERROR, "x25519 key exchange failed"),
                                                     true);
@@ -962,7 +936,7 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
                 m_state = kStateCloseReceived;
                 m_closeByPeer = true;
                 if (peerCloseErrorCode != UTP_ERR_OK) {
-                    const char *peerCloseErrorReason =
+                    const char* peerCloseErrorReason =
                         peerCloseReason[0] != '\0' ? peerCloseReason.data() : "peer closed connection";
                     (void)recordConnectionError(
                         Status::Error(static_cast<utp_error_t>(peerCloseErrorCode), peerCloseErrorReason), true);
@@ -1047,8 +1021,6 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
     }
 
     if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
-        HandshakeTracePrint("%s recv handshake in InitialSent: pn=%" PRIu64 " peer_cid=%u local_cid=%u",
-                            tag(), packet->header.pn, m_peerConnectionID, m_localConnectionID);
         m_state = State::kStateConnected;
         m_handshakeRetryCount = 0;
         m_peerHandshakePacketNo = packet->header.pn;
@@ -1059,13 +1031,9 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
         armHandshakeDoneTimer();
         m_connTimer.stop();
         markPeerActivity(nowUs);
-        HandshakeTracePrint("%s promoted to Connected: peer_handshake_pn=%" PRIu64 " delay_ms=%u",
-                            tag(), m_peerHandshakePacketNo, handshakeDoneDelayMs());
     }
 
     if (m_state == State::kStateConnected && packet->header.types == UTP_TYPE_HANDSHAKE) {
-        HandshakeTracePrint("%s recv duplicate handshake in Connected: pn=%" PRIu64 " prev_pending=%u",
-                            tag(), packet->header.pn, static_cast<unsigned>(m_handshakeDonePending));
         m_peerHandshakePacketNo = packet->header.pn;
         m_handshakeReceivedAtUs = nowUs;
         m_handshakeDonePending = true;
@@ -1075,7 +1043,6 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t n
     if (m_state == State::kStateConnected) {
         flushPendingStreamWrites(nowUs);
     }
-
 }
 
 void ConnectionImpl::onWrite()
@@ -1176,10 +1143,9 @@ void ConnectionImpl::onWrite()
             m_pathValidationTimer.stop();
             stopAckTimer();
             m_keepaliveTimer.stop();
-            notifyConnectionClosed(m_lastErrorCode == UTP_ERR_OK ? UTP_ERR_SOCKET_EVENT : m_lastErrorCode,
-                                   m_lastErrorReason[0] == '\0' ? "failed to start connection timer"
-                                                                : m_lastErrorReason.data(),
-                                   false);
+            notifyConnectionClosed(
+                m_lastErrorCode == UTP_ERR_OK ? UTP_ERR_SOCKET_EVENT : m_lastErrorCode,
+                m_lastErrorReason[0] == '\0' ? "failed to start connection timer" : m_lastErrorReason.data(), false);
             return;
         }
     }
@@ -1217,13 +1183,14 @@ void ConnectionImpl::trySendZeroRttEarlyData()
         m_zeroRttEarlyStreamId = 0;  // 双向流，客户端方向首个 stream id
     }
 
-    if (sendStreamFrame(m_zeroRttEarlyStreamId, 0, m_zeroRttConfig.earlyData.data(),
-                        m_zeroRttConfig.earlyData.size(), m_zeroRttConfig.earlyFin).ok()) {
+    if (sendStreamFrame(m_zeroRttEarlyStreamId, 0, m_zeroRttConfig.earlyData.data(), m_zeroRttConfig.earlyData.size(),
+                        m_zeroRttConfig.earlyFin)
+            .ok()) {
         m_zeroRttEarlyDataSent = true;
     }
 }
 
-const Config *ConnectionImpl::config() const { return m_ctx ? m_ctx->config() : nullptr; }
+const Config* ConnectionImpl::config() const { return m_ctx ? m_ctx->config() : nullptr; }
 
 void ConnectionImpl::nextScheduleTime(utp_time_t timeNext) { m_scheduleTimer.start(timeNext); }
 
@@ -1234,7 +1201,7 @@ void ConnectionImpl::scheduleWrite()
     }
 }
 
-Status ConnectionImpl::buildAckPayload(std::vector<uint8_t> &payload, utp_time_t nowUs) const
+Status ConnectionImpl::buildAckPayload(std::vector<uint8_t>& payload, utp_time_t nowUs) const
 {
     if (m_receiveHistory.empty() || m_ctx == nullptr || m_peerConnectionID == 0) {
         return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "invalid state for building ACK");
@@ -1242,7 +1209,7 @@ Status ConnectionImpl::buildAckPayload(std::vector<uint8_t> &payload, utp_time_t
 
     FrameAck ackFrame;
     ackFrame._history = &m_receiveHistory;
-    ackFrame._params = const_cast<TransportParams *>(&m_loaclTP);
+    ackFrame._params = const_cast<TransportParams*>(&m_loaclTP);
     ackFrame._config = m_ctx->config();
     ackFrame._now = nowUs;
 
@@ -1270,9 +1237,8 @@ Status ConnectionImpl::sendAckPacket(utp_time_t nowUs)
         return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "failed to build ACK payload");
     }
 
-    const Status status =
-        sendPacket(UTP_TYPE_CTRL, m_ackPayloadScratch.data(), m_ackPayloadScratch.size(),
-                   0, nullptr, (1u << static_cast<uint32_t>(kFrameAck)));
+    const Status status = sendPacket(UTP_TYPE_CTRL, m_ackPayloadScratch.data(), m_ackPayloadScratch.size(), 0, nullptr,
+                                     (1u << static_cast<uint32_t>(kFrameAck)));
     if (status.ok()) {
         m_ackElicitingSinceLastAck = 0;
         m_ackPendingSinceUs = 0;
@@ -1290,7 +1256,7 @@ void ConnectionImpl::noteAckElicitingPacket(utp_time_t nowUs)
     ++m_ackElicitingSinceLastAck;
 }
 
-void ConnectionImpl::applyAckFrequency(const FrameAckFrequency &ackFreq, utp_time_t nowMs)
+void ConnectionImpl::applyAckFrequency(const FrameAckFrequency& ackFreq, utp_time_t nowMs)
 {
     if (m_lastAckFrequencyApplyMs != 0) {
         if (nowMs <= m_lastAckFrequencyApplyMs ||
@@ -1367,8 +1333,7 @@ Status ConnectionImpl::sendAckFrequencyUpdate(AckFrequencyProfile profile, utp_t
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(encoded),
-                                     0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(encoded), 0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameAckFrequency)));
     if (sendSt.ok()) {
         m_ackProfileLastSentMs = nowUs / 1000;
@@ -1455,7 +1420,7 @@ void ConnectionImpl::onAckTimeout()
 size_t ConnectionImpl::activeStreamCount(StreamType streamType) const
 {
     size_t count = 0;
-    for (const auto &entry : m_streams) {
+    for (const auto& entry : m_streams) {
         if (!entry.second || entry.second->state() == Stream::kStateClosed) {
             continue;
         }
@@ -1470,7 +1435,7 @@ size_t ConnectionImpl::activeStreamCount(StreamType streamType) const
 size_t ConnectionImpl::activeLocalStreamCount(StreamType streamType) const
 {
     size_t count = 0;
-    for (const auto &entry : m_streams) {
+    for (const auto& entry : m_streams) {
         if (!entry.second || entry.second->state() == Stream::kStateClosed) {
             continue;
         }
@@ -1492,7 +1457,7 @@ uint32_t ConnectionImpl::streamLimit(StreamType streamType, bool peerLimit) cons
         return 0;
     }
 
-    const TransportParams &tp = peerLimit ? m_peerTP : m_loaclTP;
+    const TransportParams& tp = peerLimit ? m_peerTP : m_loaclTP;
     const uint32_t limit = streamType == kStreamTypeUnidirectional ? tp.init_max_streams_uni : tp.init_max_streams_bidi;
     return std::max<uint32_t>(1, limit);
 }
@@ -1544,7 +1509,7 @@ Status ConnectionImpl::validateIncomingStreamId(uint32_t streamId) const
     return Status::OK();
 }
 
-Status ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame, PacketIn *packet)
+Status ConnectionImpl::ingestStreamFrame(const FrameStream& streamFrame, PacketIn* packet)
 {
     auto it = m_streams.find(streamFrame.stream_id);
     if (it == m_streams.end()) {
@@ -1575,8 +1540,8 @@ Status ConnectionImpl::ingestStreamFrame(const FrameStream &streamFrame, PacketI
     return status;
 }
 
-Status ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId, uint64_t streamOffset, const uint8_t *data,
-                                               size_t len, bool fin)
+Status ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId, uint64_t streamOffset, const uint8_t* data, size_t len,
+                                              bool fin)
 {
     if (m_state != State::kStateConnected && m_state != State::kStateHandshakeReceived &&
         m_state != State::kStateInitialSent && m_state != State::kStateHandshakeSent) {
@@ -1592,11 +1557,11 @@ Status ConnectionImpl::ingestEarlyStreamFrame(uint32_t streamId, uint64_t stream
     streamFrame.stream_data_length = static_cast<uint16_t>(len);
     streamFrame.stream_id = streamId;
     streamFrame.stream_offset = streamOffset;
-    streamFrame.stream_data = const_cast<uint8_t *>(data);
+    streamFrame.stream_data = const_cast<uint8_t*>(data);
     return ingestStreamFrame(streamFrame, nullptr);
 }
 
-void ConnectionImpl::updateTag(const std::string &tag)
+void ConnectionImpl::updateTag(const std::string& tag)
 {
     m_tag = tag + " Connection (" + std::to_string(m_localConnectionID) + ")";
 }
@@ -1608,7 +1573,7 @@ void ConnectionImpl::flushPendingStreamWrites(utp_time_t nowUs)
 
     auto armDeferredWakeup = [&](utp_time_t baseNowUs) {
         utp_time_t minRemainUs = 0;
-        for (const auto &entry : m_streams) {
+        for (const auto& entry : m_streams) {
             if (!entry.second || !entry.second->hasPendingSendWork()) {
                 continue;
             }
@@ -1635,14 +1600,14 @@ void ConnectionImpl::flushPendingStreamWrites(utp_time_t nowUs)
 
     size_t sentBursts = 0;
     while (sentBursts < kMaxStreamSendBurstsPerFlush) {
-        StreamImpl::SP stream = pickNextWritableStream();
+        StreamImpl::SP stream = pickNextWritableStream(nowUs);
         if (!stream) {
             ++m_schedulerStats.emptyRounds;
             armDeferredWakeup(nowUs);
             break;
         }
 
-        const Status status = stream->onConnectionWritable();
+        const Status status = stream->onConnectionWritable(nowUs);
         if (status.code() == UTP_ERR_WOULD_BLOCK) {
             ++m_schedulerStats.wouldBlock;
             UTP_LOGD("connection %u scheduler backpressure: mode=%s stream=%u", m_localConnectionID,
@@ -1693,7 +1658,7 @@ bool ConnectionImpl::canSendStreamUnackedBytes(size_t streamBytes) const
         return true;
     }
 
-    const Config  *cfg = config();
+    const Config*  cfg = config();
     const uint64_t limit = (cfg == nullptr) ? (256ull * 1024) : cfg->stream_unacked_data_limit;
     if (limit == 0) {
         return true;
@@ -1702,7 +1667,7 @@ bool ConnectionImpl::canSendStreamUnackedBytes(size_t streamBytes) const
     return m_streamUnackedDataBytes + static_cast<uint64_t>(streamBytes) <= limit;
 }
 
-void ConnectionImpl::onStreamPacketUnackedAdded(const PacketOut *pkt)
+void ConnectionImpl::onStreamPacketUnackedAdded(const PacketOut* pkt)
 {
     if (pkt == nullptr || pkt->stream_data_size == 0) {
         return;
@@ -1711,7 +1676,7 @@ void ConnectionImpl::onStreamPacketUnackedAdded(const PacketOut *pkt)
     m_streamUnackedDataBytes += pkt->stream_data_size;
 }
 
-void ConnectionImpl::onStreamPacketUnackedRemoved(const PacketOut *pkt)
+void ConnectionImpl::onStreamPacketUnackedRemoved(const PacketOut* pkt)
 {
     if (pkt == nullptr || pkt->stream_data_size == 0) {
         return;
@@ -1724,7 +1689,7 @@ void ConnectionImpl::onStreamPacketUnackedRemoved(const PacketOut *pkt)
     }
 }
 
-void ConnectionImpl::onStreamPacketAcked(const PacketOut *pkt)
+void ConnectionImpl::onStreamPacketAcked(const PacketOut* pkt)
 {
     if (pkt == nullptr || pkt->stream_data_size == 0) {
         return;
@@ -1738,8 +1703,8 @@ void ConnectionImpl::onStreamPacketAcked(const PacketOut *pkt)
     it->second->onPacketAcked(pkt->stream_offset, pkt->stream_data_size);
 }
 
-Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset, const uint8_t *data, size_t len,
-                                        bool fin)
+Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset, const uint8_t* data, size_t len,
+                                       bool fin)
 {
     if (m_state == State::kStateCloseSent || m_state == State::kStateCloseReceived ||
         m_state == State::kStatePtoTimedWait) {
@@ -1779,7 +1744,7 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
             (streamOffset > streamDataLimit) || (static_cast<uint64_t>(len) > (streamDataLimit - streamOffset));
         if (overStreamLimit) {
             const utp_time_t nowUs = time::MonotonicUs();
-            utp_time_t      &lastBlockedUs = m_lastStreamDataBlockedSentUs[streamId];
+            utp_time_t&      lastBlockedUs = m_lastStreamDataBlockedSentUs[streamId];
             if (lastBlockedUs == 0 ||
                 (nowUs > lastBlockedUs && (nowUs - lastBlockedUs) >= kFlowControlBlockedMinIntervalUs)) {
                 if (sendStreamDataBlockedFrame(streamId, streamDataLimit).ok()) {
@@ -1795,10 +1760,10 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
     frame.stream_data_length = static_cast<uint16_t>(len);
     frame.stream_id = streamId;
     frame.stream_offset = streamOffset;
-    frame.stream_data = const_cast<uint8_t *>(data);
+    frame.stream_data = const_cast<uint8_t*>(data);
 
     std::array<uint8_t, FRAME_STREAM_HDR_SIZE> header{};
-    uint8_t                                   *offset = header.data();
+    uint8_t*                                   offset = header.data();
     size_t                                     left = header.size();
     offset = Serialize::SerializeTo(offset, left, FrameType::kFrameStream);
     if (offset == nullptr) {
@@ -1823,7 +1788,7 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
 
     // Allow the third handshake flight to carry stream data or a FIN instead
     // of stalling application sends behind a standalone HandshakeDone packet.
-    const bool piggybackHandshakeDone = shouldPiggybackHandshakeDone(len, fin);
+    const bool    piggybackHandshakeDone = shouldPiggybackHandshakeDone(len, fin);
     const uint8_t packetType = allowEarlyData ? UTP_TYPE_0RTT : UTP_TYPE_CTRL;
     std::array<uint8_t, FRAME_HANDSHAKE_DONE_SIZE + FRAME_HANDSHAKE_DELAY_SIZE> handshakeTrailer{};
     size_t                                                                      handshakeTrailerSize = 0;
@@ -1843,7 +1808,7 @@ Status ConnectionImpl::sendStreamFrame(uint32_t streamId, uint64_t streamOffset,
         sessionToken.token = m_zeroRttConfig.sessionTicket;
         sessionToken.token_size = static_cast<uint8_t>(sessionToken.token.size());
 
-        const Config  *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+        const Config*  cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
         const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
         sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
 
@@ -2010,7 +1975,7 @@ void ConnectionImpl::onStreamDataSent(uint32_t streamId, uint64_t streamOffset, 
     }
 
     uint64_t  newEndOffset = streamOffset + static_cast<uint64_t>(len);
-    uint64_t &maxSent = m_streamMaxSentOffset[streamId];
+    uint64_t& maxSent = m_streamMaxSentOffset[streamId];
     if (newEndOffset > maxSent) {
         uint64_t delta = newEndOffset - maxSent;
         m_streamDataSentTotal += delta;
@@ -2032,8 +1997,7 @@ Status ConnectionImpl::sendConnectionCloseFrame()
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CONNECTION_CLOSE, payload.data(), static_cast<size_t>(frameLen),
-                      0);
+    return sendPacket(UTP_TYPE_CONNECTION_CLOSE, payload.data(), static_cast<size_t>(frameLen), 0);
 }
 
 Status ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize)
@@ -2054,7 +2018,7 @@ Status ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCod
                       (1u << static_cast<uint32_t>(kFrameResetStream)));
 }
 
-void ConnectionImpl::handleResetStreamFrame(const FrameResetStream &resetFrame)
+void ConnectionImpl::handleResetStreamFrame(const FrameResetStream& resetFrame)
 {
     auto it = m_streams.find(resetFrame.stream_id);
     if (it == m_streams.end()) {
@@ -2133,8 +2097,7 @@ Status ConnectionImpl::sendMaxDataFrame(uint64_t maximumData)
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen),
-                                     0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameMaxData)));
     if (sendSt.ok()) {
         m_lastMaxDataSentUs = time::MonotonicUs();
@@ -2157,8 +2120,7 @@ Status ConnectionImpl::sendMaxStreamDataFrame(uint32_t streamId, uint64_t maximu
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen),
-                                     0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameMaxStreamData)));
     if (sendSt.ok()) {
         m_lastMaxStreamDataSentUs[streamId] = time::MonotonicUs();
@@ -2178,8 +2140,8 @@ Status ConnectionImpl::sendDataBlockedFrame(uint64_t dataLimit)
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0,
-                      nullptr, (1u << static_cast<uint32_t>(kFrameDataBlocked)));
+    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
+                      (1u << static_cast<uint32_t>(kFrameDataBlocked)));
 }
 
 Status ConnectionImpl::sendStreamDataBlockedFrame(uint32_t streamId, uint64_t streamDataLimit)
@@ -2195,8 +2157,8 @@ Status ConnectionImpl::sendStreamDataBlockedFrame(uint32_t streamId, uint64_t st
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0,
-                      nullptr, (1u << static_cast<uint32_t>(kFrameStreamDataBlocked)));
+    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
+                      (1u << static_cast<uint32_t>(kFrameStreamDataBlocked)));
 }
 
 void ConnectionImpl::ensureFlowControlAdvertised(uint32_t streamId)
@@ -2263,7 +2225,7 @@ void ConnectionImpl::onStreamBytesConsumed(uint32_t streamId, size_t bytes)
                                            ? m_loaclTP.initial_max_stream_data_bidi_remote
                                            : kDefaultInitialMaxStreamData;
     const uint64_t targetMaxStreamData = baseMaxStreamData + consumedByStream;
-    uint64_t      &advertised = m_localMaxStreamDataAdvertised[streamId];
+    uint64_t&      advertised = m_localMaxStreamDataAdvertised[streamId];
     if (advertised == 0) {
         advertised = baseMaxStreamData;
     }
@@ -2300,9 +2262,6 @@ Status ConnectionImpl::sendHandshakeDonePacket()
     }
 
     utp_packno_t outPacketNo = 0;
-    HandshakeTracePrint("%s sendHandshakeDonePacket begin: peer_handshake_pn=%" PRIu64 " pending=%u sent=%u",
-                        tag(), m_peerHandshakePacketNo, static_cast<unsigned>(m_handshakeDonePending),
-                        static_cast<unsigned>(m_handshakeDoneSent));
     const Status status = sendPacket(
         UTP_TYPE_CTRL, payload.data(), payloadSize, 0, &outPacketNo,
         (1u << static_cast<uint32_t>(kFrameHandshakeDone)) | (1u << static_cast<uint32_t>(kFrameHandshakeDelay)));
@@ -2311,11 +2270,6 @@ Status ConnectionImpl::sendHandshakeDonePacket()
         m_handshakeDonePending = true;
         m_handshakeDoneLastPacketNo = outPacketNo;
         armHandshakeDoneTimer();
-        HandshakeTracePrint("%s sendHandshakeDonePacket ok: out_pn=%" PRIu64 " delay_ms=%u",
-                            tag(), outPacketNo, handshakeDoneDelayMs());
-    } else {
-        HandshakeTracePrint("%s sendHandshakeDonePacket failed: code=%d message=%s",
-                            tag(), status.code(), status.message());
     }
     return status;
 }
@@ -2357,8 +2311,7 @@ Status ConnectionImpl::maybeSendSessionTokenPacket()
     }
     m_payloadScratch.resize(static_cast<size_t>(frameLen));
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, m_payloadScratch.data(), m_payloadScratch.size(),
-                                     0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, m_payloadScratch.data(), m_payloadScratch.size(), 0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameSessionToken)));
     if (sendSt.ok()) {
         m_sessionTokenIssued = true;
@@ -2368,7 +2321,7 @@ Status ConnectionImpl::maybeSendSessionTokenPacket()
 
 Status ConnectionImpl::sendInitialPacket()
 {
-    Status       status;
+    Status                                status;
     std::array<uint8_t, UTP_ETHERNET_MTU> payload;
     size_t                                payloadLen = 0;
 
@@ -2396,7 +2349,7 @@ Status ConnectionImpl::sendInitialPacket()
 
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
-        crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
+        crypto.eph_pubkey = const_cast<uint8_t*>(m_x25519->publicKey().data());
 
         const int32_t cryptoLen = crypto.encode(payload.data() + payloadLen, FRAME_CRYPTO_SIZE, status);
         if (!status.ok() || cryptoLen < 0) {
@@ -2410,7 +2363,7 @@ Status ConnectionImpl::sendInitialPacket()
         sessionToken.token = m_zeroRttConfig.sessionTicket;
         sessionToken.token_size = static_cast<uint8_t>(sessionToken.token.size());
 
-        const Config  *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+        const Config*  cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
         const uint32_t lifetime = cfg ? cfg->zero_rtt_token_max_lifetime : 0;
         sessionToken.token_validity_period = static_cast<uint16_t>(std::min<uint32_t>(lifetime, UINT16_MAX));
 
@@ -2423,8 +2376,9 @@ Status ConnectionImpl::sendInitialPacket()
     }
 
     FrameAckFrequency ackFreq;
-    const Config      *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
-    ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
+    const Config*     cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    ackFreq.ack_eliciting_threshold =
+        static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
     ackFreq.reordering_threshold = 3;
     ackFreq.max_ack_delay_ms = cfg ? cfg->ack_delay : 150;
     ackFreq.normalize();
@@ -2459,7 +2413,7 @@ Status ConnectionImpl::sendInitialPacket()
 
 Status ConnectionImpl::sendHandshakePacket(bool encrypted)
 {
-    Status       status;
+    Status                                status;
     std::array<uint8_t, UTP_ETHERNET_MTU> payload;
     size_t                                payloadLen = 0;
 
@@ -2487,7 +2441,7 @@ Status ConnectionImpl::sendHandshakePacket(bool encrypted)
 
         FrameCrypto crypto;
         crypto.crypto_type = EncryptionModeToFrameCryptoType(m_connectInfo.encrypted);
-        crypto.eph_pubkey = const_cast<uint8_t *>(m_x25519->publicKey().data());
+        crypto.eph_pubkey = const_cast<uint8_t*>(m_x25519->publicKey().data());
 
         const int32_t cryptoLen = crypto.encode(payload.data() + payloadLen, FRAME_CRYPTO_SIZE, status);
         if (!status.ok() || cryptoLen < 0) {
@@ -2497,8 +2451,9 @@ Status ConnectionImpl::sendHandshakePacket(bool encrypted)
     }
 
     FrameAckFrequency ackFreq;
-    const Config      *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
-    ackFreq.ack_eliciting_threshold = static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
+    const Config*     cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    ackFreq.ack_eliciting_threshold =
+        static_cast<uint8_t>(std::min<uint16_t>(cfg ? cfg->ack_every_n_packets : 10, UINT8_MAX));
     ackFreq.reordering_threshold = 3;
     ackFreq.max_ack_delay_ms = cfg ? cfg->ack_delay : 150;
     ackFreq.normalize();
@@ -2531,10 +2486,10 @@ Status ConnectionImpl::sendHandshakePacket(bool encrypted)
     return sendPacket(UTP_TYPE_HANDSHAKE, segments.data(), 1, PacketOutFlags::kPoHello);
 }
 
-Status ConnectionImpl::sendPacket(uint8_t packetType, const void *payload, size_t payloadLen, uint16_t packetFlags,
-                                  utp_packno_t *outPacketNo, uint32_t frameTypeBitsOverride,
-                                  const Address *targetAddress, size_t streamDataBytes, uint32_t streamId,
-                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta *frameMetas,
+Status ConnectionImpl::sendPacket(uint8_t packetType, const void* payload, size_t payloadLen, uint16_t packetFlags,
+                                  utp_packno_t* outPacketNo, uint32_t frameTypeBitsOverride,
+                                  const Address* targetAddress, size_t streamDataBytes, uint32_t streamId,
+                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta* frameMetas,
                                   size_t frameMetaCount)
 {
     PayloadSegment segments[1];
@@ -2547,11 +2502,11 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const void *payload, size_
                       frameMetaCount);
 }
 
-Status ConnectionImpl::sendPacket(uint8_t packetType, const void *payloadHead, size_t payloadHeadLen,
-                                  const void *payloadBody, size_t payloadBodyLen, uint16_t packetFlags,
-                                  utp_packno_t *outPacketNo, uint32_t frameTypeBitsOverride,
-                                  const Address *targetAddress, size_t streamDataBytes, uint32_t streamId,
-                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta *frameMetas,
+Status ConnectionImpl::sendPacket(uint8_t packetType, const void* payloadHead, size_t payloadHeadLen,
+                                  const void* payloadBody, size_t payloadBodyLen, uint16_t packetFlags,
+                                  utp_packno_t* outPacketNo, uint32_t frameTypeBitsOverride,
+                                  const Address* targetAddress, size_t streamDataBytes, uint32_t streamId,
+                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta* frameMetas,
                                   size_t frameMetaCount)
 {
     PayloadSegment segments[2];
@@ -2567,10 +2522,10 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const void *payloadHead, s
                       frameMetaCount);
 }
 
-Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segments, size_t segmentCount,
-                                  uint16_t packetFlags, utp_packno_t *outPacketNo, uint32_t frameTypeBitsOverride,
-                                  const Address *targetAddress, size_t streamDataBytes, uint32_t streamId,
-                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta *frameMetas,
+Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment* segments, size_t segmentCount,
+                                  uint16_t packetFlags, utp_packno_t* outPacketNo, uint32_t frameTypeBitsOverride,
+                                  const Address* targetAddress, size_t streamDataBytes, uint32_t streamId,
+                                  uint64_t streamOffset, uint16_t transientAckBytes, const FrameBuildMeta* frameMetas,
                                   size_t frameMetaCount)
 {
     if (m_udpSocket == nullptr) {
@@ -2581,7 +2536,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
         return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "null segments with non-zero count");
     }
 
-    const Address &sendAddress = (targetAddress != nullptr) ? *targetAddress : m_peerAddress;
+    const Address& sendAddress = (targetAddress != nullptr) ? *targetAddress : m_peerAddress;
     if (!sendAddress.isValid()) {
         return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid send address");
     }
@@ -2602,7 +2557,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
         FrameType frameType = kFrameInvalid;
         for (size_t i = 0; i < segmentCount; ++i) {
             if (segments[i].data != nullptr && segments[i].len > 0) {
-                frameType = static_cast<FrameType>(*(static_cast<const uint8_t *>(segments[i].data)));
+                frameType = static_cast<FrameType>(*(static_cast<const uint8_t*>(segments[i].data)));
                 break;
             }
         }
@@ -2652,7 +2607,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
         return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "congestion control blocked");
     }
 
-    PacketOut *packet = m_mm.getPacketOut(static_cast<uint32_t>(wirePacketLen));
+    PacketOut* packet = m_mm.getPacketOut(static_cast<uint32_t>(wirePacketLen));
     if (packet == nullptr || packet->raw_data == nullptr) {
         if (packet != nullptr) {
             m_mm.putPacketOut(packet);
@@ -2692,7 +2647,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
     }
     const bool canUseSliceSend = !shouldEncrypt && (1 + nonEmptySegmentCount) <= PACKET_OUT_MAX_SLICES;
 
-    uint8_t *offset = packet->raw_data;
+    uint8_t* offset = packet->raw_data;
     size_t   left = packet->alloc_size;
     offset = Serialize::SerializeTo(offset, left, m_localConnectionID);
     if (offset == nullptr) {
@@ -2781,7 +2736,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
                 continue;
             }
             plainSegments[plainCount++] =
-                AesGcmContext::PlainSegment{static_cast<const uint8_t *>(segments[i].data), segments[i].len};
+                AesGcmContext::PlainSegment{static_cast<const uint8_t*>(segments[i].data), segments[i].len};
         }
 
         size_t outCipherPayloadLen = payloadLen + AesGcmContext::GCM_TAG_SIZE;
@@ -2793,7 +2748,7 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
             return encSt;
         }
 
-        uint8_t *payloadLenOffset = packet->raw_data + offsetof(UTPHeaderProto, payload_length);
+        uint8_t* payloadLenOffset = packet->raw_data + offsetof(UTPHeaderProto, payload_length);
         size_t   payloadLenLeft = packet->alloc_size - offsetof(UTPHeaderProto, payload_length);
         if (Serialize::SerializeTo(payloadLenOffset, payloadLenLeft, static_cast<uint16_t>(outCipherPayloadLen)) ==
             nullptr) {
@@ -2947,8 +2902,7 @@ Status ConnectionImpl::maybeSendPathChallenge()
     return Status::OK();
 }
 
-Status ConnectionImpl::handlePathChallengeFrame(const uint8_t *frameData, size_t frameSize,
-                                                const Address &fromAddress)
+Status ConnectionImpl::handlePathChallengeFrame(const uint8_t* frameData, size_t frameSize, const Address& fromAddress)
 {
     FramePathChallenge challenge;
     Status             st;
@@ -2967,8 +2921,7 @@ Status ConnectionImpl::handlePathChallengeFrame(const uint8_t *frameData, size_t
     return encodeSt;
 }
 
-Status ConnectionImpl::handlePathResponseFrame(const uint8_t *frameData, size_t frameSize,
-                                                const Address &fromAddress)
+Status ConnectionImpl::handlePathResponseFrame(const uint8_t* frameData, size_t frameSize, const Address& fromAddress)
 {
     if (!m_networkPath.needPathValidation() || fromAddress != m_networkPath.peerAddress()) {
         return Status::OK();
@@ -3017,8 +2970,6 @@ void ConnectionImpl::onHandshakeDoneTimeout()
         return;
     }
 
-    HandshakeTracePrint("%s HandshakeDone timeout: last_pn=%" PRIu64 " sent=%u",
-                        tag(), m_handshakeDoneLastPacketNo, static_cast<unsigned>(m_handshakeDoneSent));
     const Status status = sendHandshakeDonePacket();
     if (!status.ok()) {
         scheduleWrite();
@@ -3032,7 +2983,6 @@ void ConnectionImpl::onHandshakeDoneFrameAcked()
         return;
     }
 
-    HandshakeTracePrint("%s HandshakeDone acked: packet_pn=%" PRIu64, tag(), m_handshakeDoneLastPacketNo);
     m_handshakeDonePending = false;
     m_handshakeDoneTimer.stop();
 }
@@ -3104,8 +3054,6 @@ void ConnectionImpl::onConnTimeout()
     }
 
     if (m_state == State::kStateInitialSent) {
-        HandshakeTracePrint("%s connect timeout round=%u: readable=%u", tag(), static_cast<unsigned>(m_handshakeRetryCount),
-                            static_cast<unsigned>(SocketHasReadableData(m_udpSocket)));
         if (SocketHasReadableData(m_udpSocket)) {
             (void)armConnectTimerForRound(m_handshakeRetryCount, false);
             return;
@@ -3114,30 +3062,22 @@ void ConnectionImpl::onConnTimeout()
         if (m_handshakeRetryCount < handshakeMaxRetries()) {
             const Status retryStatus = sendInitialPacket();
             if (retryStatus.ok()) {
-                HandshakeTracePrint("%s resend Initial ok: next_round=%u", tag(),
-                                    static_cast<unsigned>(m_handshakeRetryCount + 1));
                 ++m_handshakeRetryCount;
                 (void)armConnectTimerForRound(m_handshakeRetryCount, false);
                 return;
             }
 
             if (retryStatus.code() == UTP_ERR_WOULD_BLOCK) {
-                HandshakeTracePrint("%s resend Initial blocked", tag());
                 scheduleWrite();
                 m_connTimer.stop();
                 m_connTimer.start(1);
                 return;
             }
 
-            HandshakeTracePrint("%s resend Initial failed: code=%d message=%s",
-                                tag(), retryStatus.code(), retryStatus.message());
             (void)recordConnectionError(retryStatus, true);
         }
     }
 
-    HandshakeTracePrint("%s connect timeout final: state=%u retries=%u last_reason=%s",
-                        tag(), static_cast<unsigned>(m_state), static_cast<unsigned>(m_handshakeRetryCount),
-                        m_lastErrorReason[0] == '\0' ? "<empty>" : m_lastErrorReason.data());
     (void)recordConnectionError(Status::Error(UTP_ERR_TIMEOUT, "connect timeout"), true);
     m_state = State::kStateDisconnected;
     m_handshakeDoneTimer.stop();
@@ -3154,7 +3094,7 @@ uint32_t ConnectionImpl::keepaliveIntervalMs() const
         return 1000;
     }
 
-    const Config  *cfg = m_ctx->config();
+    const Config*  cfg = m_ctx->config();
     const uint32_t localInterval =
         cfg->keepalive_interval > 0 ? cfg->keepalive_interval : std::max<uint32_t>(cfg->max_idle_timeout, 1);
 
@@ -3186,7 +3126,7 @@ void ConnectionImpl::markPeerActivity(utp_time_t nowUs)
     armKeepaliveTimer(keepaliveIntervalMs());
 }
 
-void ConnectionImpl::beginCloseSent(uint16_t errorCode, const char *reason)
+void ConnectionImpl::beginCloseSent(uint16_t errorCode, const char* reason)
 {
     if (m_state == State::kStateDisconnected || m_state == State::kStatePtoTimedWait) {
         return;
@@ -3223,7 +3163,7 @@ void ConnectionImpl::onKeepaliveTimeout()
         return;
     }
 
-    const Config *cfg = m_ctx->config();
+    const Config* cfg = m_ctx->config();
     if (!cfg->enable_keepalive) {
         return;
     }
@@ -3319,9 +3259,9 @@ void ConnectionImpl::onCloseDrainTimeout()
     scheduleWrite();
 }
 
-void ConnectionImpl::setOnIncomingStream(const OnIncomingStream &cb) { m_onIncomingStream = cb; }
+void ConnectionImpl::setOnIncomingStream(const OnIncomingStream& cb) { m_onIncomingStream = cb; }
 
-void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
+void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady& cb)
 {
     m_onSessionTokenReady = cb;
     if (m_onSessionTokenReady && m_hasCachedResumptionState) {
@@ -3329,11 +3269,11 @@ void ConnectionImpl::setOnSessionTokenReady(const OnSessionTokenReady &cb)
     }
 }
 
-void ConnectionImpl::setOnError(const OnError &cb) { m_onError = cb; }
+void ConnectionImpl::setOnError(const OnError& cb) { m_onError = cb; }
 
-void ConnectionImpl::setOnClosed(const OnClosed &cb) { m_onClosed = cb; }
+void ConnectionImpl::setOnClosed(const OnClosed& cb) { m_onClosed = cb; }
 
-void ConnectionImpl::notifyConnectionError(int32_t errorCode, const char *reason)
+void ConnectionImpl::notifyConnectionError(int32_t errorCode, const char* reason)
 {
     if (errorCode == UTP_ERR_OK) {
         return;
@@ -3350,7 +3290,7 @@ void ConnectionImpl::notifyConnectionError(int32_t errorCode, const char *reason
     }
 }
 
-void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const char *reason, bool byPeer)
+void ConnectionImpl::notifyConnectionClosed(int32_t errorCode, const char* reason, bool byPeer)
 {
     if (m_closedNotified) {
         return;
@@ -3427,7 +3367,7 @@ Connection::Description ConnectionImpl::description() const
     return desc;
 }
 
-int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t> &outToken)
+int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t>& outToken)
 {
     if (!m_hasCachedResumptionState || m_cachedResumptionInfo.sessionTicket.empty()) {
         SetLastErrorV(UTP_ERR_SESSION_TOKEN_UNAVAILABLE, "connection {} has no cached session token",
@@ -3439,7 +3379,7 @@ int32_t ConnectionImpl::exportSessionToken(std::vector<uint8_t> &outToken)
     return UTP_ERR_OK;
 }
 
-int32_t ConnectionImpl::exportSessionResumptionState(std::string &outState)
+int32_t ConnectionImpl::exportSessionResumptionState(std::string& outState)
 {
     if (!m_hasCachedResumptionState) {
         UTP_LOGW("%s exportSessionResumptionState failed: no cached state", tag());
@@ -3457,7 +3397,7 @@ int32_t ConnectionImpl::exportSessionResumptionState(std::string &outState)
     return 0;
 }
 
-void ConnectionImpl::cacheSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt)
+void ConnectionImpl::cacheSessionResumptionState(const CachedResumptionState& info, uint64_t expiresAt)
 {
     if (info.sessionTicket.empty()) {
         return;
@@ -3475,28 +3415,30 @@ void ConnectionImpl::cacheSessionResumptionState(const CachedResumptionState &in
     }
 }
 
-Status ConnectionImpl::buildSessionResumptionState(const CachedResumptionState &info, uint64_t expiresAt,
-                                                   std::string &outState) const
+Status ConnectionImpl::buildSessionResumptionState(const CachedResumptionState& info, uint64_t expiresAt,
+                                                   std::string& outState) const
 {
     if (m_ctx == nullptr) {
         return Status::Error(UTP_ERR_CONTEXT_UNAVAILABLE,
                              fmt::format("connection {} has no context", m_localConnectionID));
     }
     if (info.sessionTicket.empty()) {
-        return Status::Error(UTP_ERR_INVALID_PARAM,
-                             fmt::format("connection {} cannot build state without session ticket", m_localConnectionID));
+        return Status::Error(
+            UTP_ERR_INVALID_PARAM,
+            fmt::format("connection {} cannot build state without session ticket", m_localConnectionID));
     }
     if (info.encrypted != Context::kEncryptionNone && info.resumptionPsk.size() != ResumptionStateCodec::KEY_SIZE) {
-        return Status::Error(UTP_ERR_INVALID_PARAM,
-                             fmt::format("connection {} encrypted state requires {}-byte psk, got {}", m_localConnectionID,
-                                         ResumptionStateCodec::KEY_SIZE, info.resumptionPsk.size()));
+        return Status::Error(
+            UTP_ERR_INVALID_PARAM,
+            fmt::format("connection {} encrypted state requires {}-byte psk, got {}", m_localConnectionID,
+                        ResumptionStateCodec::KEY_SIZE, info.resumptionPsk.size()));
     }
 
     const uint16_t       ticketSize = static_cast<uint16_t>(std::min<size_t>(info.sessionTicket.size(), UINT16_MAX));
     const uint8_t        pskSize = static_cast<uint8_t>(std::min<size_t>(info.resumptionPsk.size(), UINT8_MAX));
     std::vector<uint8_t> plain(4 + 1 + 8 + 2 + ticketSize + 1 + pskSize, 0);
 
-    uint8_t       *offset = plain.data();
+    uint8_t*       offset = plain.data();
     size_t         left = plain.size();
     const uint32_t utpVersion = UTP_PROTOCOL_VERSION;
     offset = Serialize::SerializeTo(offset, left, utpVersion);
@@ -3533,17 +3475,18 @@ Status ConnectionImpl::buildSessionResumptionState(const CachedResumptionState &
     return Status::OK();
 }
 
-Status ConnectionImpl::createStreamInternal(StreamType streamType, uint32_t &outStreamId)
+Status ConnectionImpl::createStreamInternal(StreamType streamType, uint32_t& outStreamId)
 {
     if (!IsSupportedStreamType(streamType)) {
-        return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("connection {} unsupported stream type {}",
-                                                               m_localConnectionID, static_cast<uint32_t>(streamType)));
+        return Status::Error(UTP_ERR_INVALID_PARAM,
+                             fmt::format("connection {} unsupported stream type {}", m_localConnectionID,
+                                         static_cast<uint32_t>(streamType)));
     }
 
     const bool allowEarlyData = (m_state == State::kStateInitialSent) && m_zeroRttConfig.enabled();
     if (m_state != State::kStateConnected && !allowEarlyData) {
         return Status::Error(UTP_ERR_INVALID_STATE, fmt::format("connection {} cannot create stream in state {}",
-                                                               m_localConnectionID, static_cast<uint32_t>(m_state)));
+                                                                m_localConnectionID, static_cast<uint32_t>(m_state)));
     }
 
     collectClosedStreams();
@@ -3562,7 +3505,7 @@ Status ConnectionImpl::createStreamInternal(StreamType streamType, uint32_t &out
                                          static_cast<uint32_t>(streamType)));
     }
 
-    uint32_t &nextStreamId = m_streamId[slot];
+    uint32_t& nextStreamId = m_streamId[slot];
     if (nextStreamId == 0) {
         const uint32_t roleBase = m_isClientInitiator ? 0u : 1u;
         const uint32_t dirBit = streamType == kStreamTypeUnidirectional ? 2u : 0u;
@@ -3613,7 +3556,7 @@ StreamSchedulerMode ConnectionImpl::streamSchedulerMode() const
     return m_ctx->config()->stream_scheduler_mode;
 }
 
-StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates, uint32_t &cursor)
+StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl::SP>& candidates, uint32_t& cursor)
 {
     if (candidates.empty()) {
         return nullptr;
@@ -3621,7 +3564,7 @@ StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl
 
     std::vector<uint32_t> ids;
     ids.reserve(candidates.size());
-    for (const auto &stream : candidates) {
+    for (const auto& stream : candidates) {
         if (stream) {
             ids.push_back(stream->id());
         }
@@ -3647,12 +3590,11 @@ StreamImpl::SP ConnectionImpl::pickRoundRobinStream(const std::vector<StreamImpl
     return it->second;
 }
 
-StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled()
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled(utp_time_t nowUs)
 {
-    const utp_time_t            nowUs = time::MonotonicUs();
     std::vector<StreamImpl::SP> candidates;
     candidates.reserve(m_streams.size());
-    for (const auto &entry : m_streams) {
+    for (const auto& entry : m_streams) {
         if (entry.second && entry.second->hasPendingSendWork() && !entry.second->shouldDeferSend(nowUs)) {
             candidates.push_back(entry.second);
         }
@@ -3669,17 +3611,16 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDisabled()
     return selected;
 }
 
-StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict()
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict(utp_time_t nowUs)
 {
-    const utp_time_t                                                  nowUs = time::MonotonicUs();
     std::array<std::vector<StreamImpl::SP>, kMaxStreamPriorityLevels> byPriority;
-    for (const auto &entry : m_streams) {
+    for (const auto& entry : m_streams) {
         if (!entry.second || !entry.second->hasPendingSendWork() || entry.second->shouldDeferSend(nowUs)) {
             continue;
         }
 
         const uint8_t  basePriority = std::min<uint8_t>(entry.second->m_priority, Stream::kPriorityLowest);
-        const Config  *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+        const Config*  cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
         const uint16_t agingThreshold =
             (cfg != nullptr && cfg->stream_aging_threshold > 0) ? cfg->stream_aging_threshold : 1;
         const uint8_t  agingStep = (cfg != nullptr && cfg->stream_aging_step > 0) ? cfg->stream_aging_step : 1;
@@ -3706,12 +3647,11 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamStrict()
     return nullptr;
 }
 
-StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
+StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr(utp_time_t nowUs)
 {
-    const utp_time_t            nowUs = time::MonotonicUs();
     std::vector<StreamImpl::SP> candidates;
     candidates.reserve(m_streams.size());
-    for (const auto &entry : m_streams) {
+    for (const auto& entry : m_streams) {
         if (entry.second && entry.second->hasPendingSendWork() && !entry.second->shouldDeferSend(nowUs)) {
             candidates.push_back(entry.second);
         }
@@ -3722,9 +3662,9 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
     }
 
     std::sort(candidates.begin(), candidates.end(),
-              [](const StreamImpl::SP &a, const StreamImpl::SP &b) { return a->id() < b->id(); });
+              [](const StreamImpl::SP& a, const StreamImpl::SP& b) { return a->id() < b->id(); });
 
-    const Config  *cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
+    const Config*  cfg = (m_ctx != nullptr) ? m_ctx->config() : nullptr;
     const uint32_t baseQuantum = (cfg != nullptr && cfg->stream_drr_quantum > 0) ? cfg->stream_drr_quantum : 1200;
     const uint32_t deficitCap =
         (cfg != nullptr && cfg->stream_drr_deficit_cap > 0) ? cfg->stream_drr_deficit_cap : 64 * 1024;
@@ -3741,12 +3681,12 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
     for (size_t pass = 0; pass < 2; ++pass) {
         for (size_t n = 0; n < size; ++n) {
             const size_t          idx = (startIndex + n) % size;
-            const StreamImpl::SP &stream = candidates[idx];
+            const StreamImpl::SP& stream = candidates[idx];
             const uint32_t        priorityWeight = static_cast<uint32_t>(
                 Stream::kPriorityLowest - std::min<uint8_t>(stream->m_priority, Stream::kPriorityLowest) + 1);
             const uint32_t quantum = baseQuantum * priorityWeight;
 
-            uint32_t      &deficit = m_drrDeficit[stream->id()];
+            uint32_t&      deficit = m_drrDeficit[stream->id()];
             const uint32_t before = deficit;
             if (deficit + quantum >= deficitCap) {
                 deficit = deficitCap;
@@ -3778,16 +3718,30 @@ StreamImpl::SP ConnectionImpl::pickNextWritableStreamDrr()
     return nullptr;
 }
 
-StreamImpl::SP ConnectionImpl::pickNextWritableStream()
+StreamImpl::SP ConnectionImpl::pickNextWritableStream(utp_time_t nowUs)
 {
-    switch (streamSchedulerMode()) {
+    const StreamSchedulerMode mode = streamSchedulerMode();
+    if (m_streams.size() == 1) {
+        const auto& stream = m_streams.begin()->second;
+        if (stream && stream->hasPendingSendWork()) {
+            if (!stream->shouldDeferSend(nowUs)) {
+                onSchedulerStreamSelected(stream, mode, false, stream->m_priority, 0, 0, 0);
+                UTP_LOGD("connection %u scheduler selected: mode=%s stream=%u prio=%u single_stream=1",
+                         m_localConnectionID, StreamSchedulerModeToString(mode), stream->id(),
+                         static_cast<uint32_t>(stream->m_priority));
+                return stream;
+            }
+        }
+    }
+
+    switch (mode) {
         case kStreamSchedulerDisabled:
-            return pickNextWritableStreamDisabled();
+            return pickNextWritableStreamDisabled(nowUs);
         case kStreamSchedulerDrr:
-            return pickNextWritableStreamDrr();
+            return pickNextWritableStreamDrr(nowUs);
         case kStreamSchedulerStrict:
         default:
-            return pickNextWritableStreamStrict();
+            return pickNextWritableStreamStrict(nowUs);
     }
 }
 
@@ -3796,8 +3750,11 @@ void ConnectionImpl::updateStrictAgingState(uint32_t selectedStreamId)
     if (streamSchedulerMode() != kStreamSchedulerStrict) {
         return;
     }
+    if (m_streams.size() <= 1) {
+        return;
+    }
 
-    for (auto &entry : m_streams) {
+    for (auto& entry : m_streams) {
         if (!entry.second || !entry.second->hasPendingSendWork()) {
             if (entry.second) {
                 entry.second->m_schedWaitRounds = 0;
@@ -3828,7 +3785,7 @@ void ConnectionImpl::pruneSchedulerState()
     }
 }
 
-void ConnectionImpl::onSchedulerStreamSelected(const StreamImpl::SP &stream, StreamSchedulerMode mode,
+void ConnectionImpl::onSchedulerStreamSelected(const StreamImpl::SP& stream, StreamSchedulerMode mode,
                                                bool agingPromoted, uint8_t effectivePriority, uint32_t drrNeed,
                                                uint32_t drrDeficitBefore, uint32_t drrDeficitAfter)
 {
@@ -3890,7 +3847,7 @@ void ConnectionImpl::maybeEmitSchedulerStats(utp_time_t nowUs)
         static_cast<uint32_t>(m_schedulerStats.drrDeficitConsumes));
 }
 
-Stream *ConnectionImpl::getStream(uint32_t streamId)
+Stream* ConnectionImpl::getStream(uint32_t streamId)
 {
     collectClosedStreams();
 

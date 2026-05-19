@@ -2,6 +2,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -112,19 +113,13 @@ int main(int argc, char **argv)
     std::string bindIp = "0.0.0.0";
     uint16_t bindPort = 9000;
     bool silent = false;
-    bool handshakeTrace = false;
 
     CLI::App app{"UTP Echo Server"};
     app.add_option("--bind-ip", bindIp, "IP address to bind")->check(CLI::ValidIPV4);
     app.add_option("--bind-port", bindPort, "Port to bind")->check(CLI::Range(5000, 65535));
     app.add_flag("--quiet", silent, "Suppress all server output");
     app.add_flag("--silent", silent, "Alias for --quiet");
-    app.add_flag("--handshake-trace", handshakeTrace, "Print handshake progress even in quiet mode");
     CLI11_PARSE(app, argc, argv);
-
-    if (handshakeTrace) {
-        ::setenv("UTP_HANDSHAKE_TRACE_INTERNAL", "1", 1);
-    }
 
     std::signal(SIGINT, [](int) { std::exit(0); });
     std::signal(SIGTERM, [](int) { std::exit(0); });
@@ -147,8 +142,6 @@ int main(int argc, char **argv)
 
     eular::utp::Context ctx(loop.loop(), &cfg);
     std::unordered_set<std::string> zeroRttAcceptedPeers;
-    const bool traceHandshake = !silent || handshakeTrace;
-
     size_t read_size = 0;
     ev::EventTimer print_timer;
     print_timer.reset(loop.loop(), [&]() {
@@ -158,10 +151,10 @@ int main(int argc, char **argv)
     });
     print_timer.start(1000, 1000);
 
-    ctx.setOnNewConnection([&ctx, traceHandshake](const eular::utp::Context::NewConnectionInfo &info) {
+    ctx.setOnNewConnection([&ctx, silent](const eular::utp::Context::NewConnectionInfo &info) {
         const bool zeroRttPath = info.local_cid == 0;
         if (zeroRttPath) {
-            if (traceHandshake) {
+            if (!silent) {
                 std::cout << "[server] incoming 0-rtt request from "
                           << info.remote_ip << ":" << info.remote_port
                           << ", peer_cid=" << info.peer_cid << "\n";
@@ -169,7 +162,7 @@ int main(int argc, char **argv)
             return true;
         }
 
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[server] incoming handshake request from "
                       << info.remote_ip << ":" << info.remote_port
                       << ", local_cid=" << info.local_cid
@@ -178,14 +171,14 @@ int main(int argc, char **argv)
 
         const int32_t acceptStatus = ctx.accept();
         if (acceptStatus != UTP_ERR_OK) {
-            if (traceHandshake) {
+            if (!silent) {
                 std::cerr << "[server] accept failed for local_cid=" << info.local_cid
                           << ": " << acceptStatus << "\n";
             }
             return false;
         }
 
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[server] accepted handshake local_cid=" << info.local_cid << "\n";
         }
         return true;
@@ -195,7 +188,7 @@ int main(int argc, char **argv)
         const std::string peer = PeerKey(info.remote_ip, info.remote_port);
         if (info.accepted) {
             zeroRttAcceptedPeers.insert(peer);
-            if (traceHandshake) {
+            if (!silent) {
                 std::cout << "[server] 0-rtt accepted from "
                           << peer
                           << ", peer_cid=" << info.peer_cid
@@ -205,7 +198,7 @@ int main(int argc, char **argv)
         }
 
         zeroRttAcceptedPeers.erase(peer);
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[server] 0-rtt rejected from "
                       << peer
                       << ", peer_cid=" << info.peer_cid
@@ -218,7 +211,7 @@ int main(int argc, char **argv)
         const std::string peer = PeerKey(desc.remoteHost, desc.remotePort);
         const bool zeroRttPath = zeroRttAcceptedPeers.find(peer) != zeroRttAcceptedPeers.end();
 
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[server] connected via "
                       << (zeroRttPath ? "0-rtt" : "handshake")
                       << " scid=" << desc.scid
@@ -257,6 +250,29 @@ int main(int argc, char **argv)
 
             auto queueLine = [session](const std::string &line) {
                 session->outbox.append(line);
+            };
+
+            auto queueAckLine = [session]() {
+                char line[64];
+                const int n = std::snprintf(line, sizeof(line), "ACK total=%llu\n",
+                                            static_cast<unsigned long long>(session->receivedBytes));
+                if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) {
+                    return;
+                }
+                session->outbox.append(line, static_cast<size_t>(n));
+            };
+
+            auto queueDoneLine = [session](const std::string &hashHex) {
+                char prefix[64];
+                const int n = std::snprintf(prefix, sizeof(prefix), "DONE bytes=%llu",
+                                            static_cast<unsigned long long>(session->receivedBytes));
+                if (n <= 0 || static_cast<size_t>(n) >= sizeof(prefix)) {
+                    return;
+                }
+                session->outbox.append(prefix, static_cast<size_t>(n));
+                session->outbox.append(" xxh128=", 8);
+                session->outbox.append(hashHex);
+                session->outbox.push_back('\n');
             };
 
             auto markFailed = [session, queueLine, silent](const std::string &reason) {
@@ -331,7 +347,7 @@ int main(int argc, char **argv)
                 (*tryFlushPtr)();
             });
 
-            stream->setOnReadable([stream, session, queueLine, markFailed, tryFlushPtr, &read_size, silent]() {
+            stream->setOnReadable([stream, session, queueLine, queueAckLine, queueDoneLine, markFailed, tryFlushPtr, &read_size, silent]() {
                 if (session->phase == Session::kClosed) {
                     return;
                 }
@@ -349,7 +365,7 @@ int main(int argc, char **argv)
                         if (!session->xxh128.finalize(hashHex)) {
                             markFailed("xxh128_finalize_failed");
                         } else {
-                            queueLine("DONE bytes=" + std::to_string(session->receivedBytes) + " xxh128=" + hashHex + "\n");
+                            queueDoneLine(hashHex);
                             session->closeAfterFlush = true;
                         }
                     }
@@ -432,7 +448,7 @@ int main(int argc, char **argv)
                             }
                             session->receivedBytes += static_cast<uint64_t>(consume);
                             consumedTotal += consume;
-                            queueLine("ACK total=" + std::to_string(session->receivedBytes) + "\n");
+                            queueAckLine();
 
                             chunk += consume;
                             left -= consume;
@@ -477,17 +493,17 @@ int main(int argc, char **argv)
         });
     });
 
-    ctx.setOnConnectError([traceHandshake](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
-        if (traceHandshake) {
+    ctx.setOnConnectError([silent](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
+        if (!silent) {
             std::cerr << "[server] connect error code=" << code
                       << " peer=" << info.ip << ":" << info.port
                       << " reason=" << reason << "\n";
         }
     });
 
-    ctx.setOnConnectionClosed([traceHandshake](eular::utp::Connection::Ptr conn) {
+    ctx.setOnConnectionClosed([silent](eular::utp::Connection::Ptr conn) {
         const auto desc = conn->description();
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[server] connection closed scid=" << desc.scid
                       << " peer=" << desc.remoteHost << ":" << desc.remotePort << "\n";
         }
@@ -504,12 +520,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (traceHandshake) {
+    if (!silent) {
         std::cout << "[server] listening on " << bindIp << ":" << bindPort << std::endl;
     }
 
     loop.dispatch();
-    if (traceHandshake) {
+    if (!silent) {
         std::cout << "[server] shutdown\n";
     }
     return 0;

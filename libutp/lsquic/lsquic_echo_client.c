@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
+#include <time.h>
 
 #define XXH_INLINE_ALL
 #include "../3rd/xxhash.h"
@@ -55,10 +56,24 @@ struct client_app_ctx
     int                       connect_failed;
     int                       final_printed;
     int                       result;
+    unsigned long long         start_ms;
+    unsigned long long         connected_ms;
+    unsigned long long         upload_done_ms;
+    unsigned long long         done_ms;
     XXH3_state_t             *xxh_state;
     int                       hash_valid;
     int                       hash_finalized;
 };
+
+static unsigned long long
+now_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (unsigned long long) ts.tv_sec * 1000ull
+         + (unsigned long long) ts.tv_nsec / 1000000ull;
+}
 
 static int
 finalize_local_hash(struct client_app_ctx *ctx)
@@ -106,11 +121,16 @@ print_final_result(struct client_app_ctx *ctx, const char *reason)
 
     fprintf(stderr,
         "[client] result=%s reason=%s sent_bytes=%zu done_bytes=%zu "
+        "connect_ms=%llu upload_ms=%llu done_ms=%llu total_ms=%llu "
         "local_xxh128=%s server_xxh128=%s ack_count=%u done_received=%d\n",
         pass ? "PASS" : "FAIL",
         reason,
         ctx->sent_bytes,
         ctx->done_bytes,
+        ctx->connected_ms ? ctx->connected_ms - ctx->start_ms : 0,
+        ctx->upload_done_ms ? ctx->upload_done_ms - ctx->start_ms : 0,
+        ctx->done_ms ? ctx->done_ms - ctx->start_ms : 0,
+        now_ms() - ctx->start_ms,
         ctx->local_hash[0] ? ctx->local_hash : "<pending>",
         ctx->server_hash[0] ? ctx->server_hash : "<pending>",
         ctx->ack_count,
@@ -225,6 +245,7 @@ on_new_stream(void *stream_if_ctx, lsquic_stream_t *stream)
     memcpy(st->upload_header, header, st->upload_header_len);
 
     ctx->stream_ctx = st;
+    ctx->connected_ms = now_ms();
     if (!ctx->quiet)
         fprintf(stderr, "[client] new stream\n");
     lsquic_stream_wantread(stream, 1);
@@ -265,6 +286,7 @@ handle_server_line(struct client_stream_ctx *st, const char *line)
 
         snprintf(ctx->server_hash, sizeof(ctx->server_hash), "%s", hash_pos + 8);
         ctx->done_received = 1;
+        ctx->done_ms = now_ms();
         if (0 != finalize_local_hash(ctx))
             ctx->connect_failed = 1;
         client_finish(st, (ctx->done_bytes == ctx->sent_bytes
@@ -442,6 +464,7 @@ on_write(lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
     if (st->sent_bytes == st->total_bytes && !st->send_done)
     {
         st->send_done = 1;
+        ctx->upload_done_ms = now_ms();
         if (0 != finalize_local_hash(ctx))
         {
             ctx->connect_failed = 1;
@@ -542,6 +565,7 @@ main(int argc, char **argv)
     client_ctx.total_bytes = total_bytes;
     client_ctx.chunk_bytes = chunk_bytes;
     client_ctx.quiet = quiet;
+    client_ctx.start_ms = now_ms();
     client_ctx.xxh_state = XXH3_createState();
     if (!client_ctx.xxh_state || XXH3_128bits_reset(client_ctx.xxh_state) != XXH_OK)
     {

@@ -158,6 +158,11 @@ void FillMsgMetaInfoFromPacket(const eular::utp::Address &peerAddress,
     msg.metaInfo.peerAddress = peerAddress;
 }
 
+bool DebugLogEnabled()
+{
+    return g_log_cb != nullptr && g_log_level <= UTP_LOG_DEBUG;
+}
+
 } // namespace
 
 namespace eular {
@@ -250,9 +255,11 @@ void SendControl::init()
 Status SendControl::packetSent(PacketOut *pkt)
 {
     const uint32_t packetSize = PacketSentSize(pkt);
-    const std::string &packetFrames = FrameTypeToString(pkt->frame_types);
-    UTP_LOGD("%s Packet sent: Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
-        m_tag.c_str(), pkt->packno, packetFrames.c_str(), packetSize);
+    if (DebugLogEnabled()) {
+        const std::string packetFrames = FrameTypeToString(pkt->frame_types);
+        UTP_LOGD("%s Packet sent: Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
+            m_tag.c_str(), pkt->packno, packetFrames.c_str(), packetSize);
+    }
 
     if (!pkt->addSendAttempt(pkt->packno, pkt->sent_time)) {
         UTP_LOGW("%s record send attempt failed: Packet No=%" PRIu64,
@@ -568,8 +575,8 @@ int32_t SendControl::flushScheduledPackets(utp_time_t nowUs, uint32_t maxPackets
     }
 
     const uint32_t batchCap = std::min<uint32_t>(maxPackets, static_cast<uint32_t>(kSendBatchCap));
-    std::array<PacketOut *, kSendBatchCap> packets{};
-    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs{};
+    std::array<PacketOut *, kSendBatchCap> packets;
+    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs;
 
     size_t preparedCount = 0;
     PacketOut *pkt = nullptr;
@@ -655,8 +662,8 @@ int32_t SendControl::retransmitLostBatch(utp_time_t nowUs, uint32_t maxPackets, 
     }
 
     const uint32_t batchCap = std::min<uint32_t>(maxPackets, static_cast<uint32_t>(kSendBatchCap));
-    std::array<PacketOut *, kSendBatchCap> packets{};
-    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs{};
+    std::array<PacketOut *, kSendBatchCap> packets;
+    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs;
 
     size_t preparedCount = 0;
     PacketOut *pkt = nullptr;
@@ -699,6 +706,9 @@ int32_t SendControl::retransmitLostBatch(utp_time_t nowUs, uint32_t maxPackets, 
         }
 
         UdpSocket::MsgMetaInfo &msg = msgs[preparedCount];
+        msg.data = nullptr;
+        msg.len = 0;
+        msg.slice_count = 0;
         if ((pkt->po_flags & PacketOutFlags::kPoEncrypted) && pkt->encrypt_data != nullptr) {
             msg.data = pkt->encrypt_data;
             msg.len = pkt->data_size;
@@ -1594,9 +1604,11 @@ Status SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         retransAlarm(nowUs);
     }
 
-    const std::string packetFrames = FrameTypeToString(pkt->frame_types);
-    UTP_LOGD("%s Retransmit packet sent: old Packet No=%" PRIu64 ", new Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
-        m_tag.c_str(), previousPackNo, pkt->packno, packetFrames.c_str(), static_cast<uint32_t>(pkt->data_size));
+    if (DebugLogEnabled()) {
+        const std::string packetFrames = FrameTypeToString(pkt->frame_types);
+        UTP_LOGD("%s Retransmit packet sent: old Packet No=%" PRIu64 ", new Packet No=%" PRIu64 ", frames=[%s], bytes=%u",
+            m_tag.c_str(), previousPackNo, pkt->packno, packetFrames.c_str(), static_cast<uint32_t>(pkt->data_size));
+    }
 
     return Status::OK();
 }

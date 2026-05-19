@@ -108,7 +108,6 @@ int main(int argc, char **argv)
     size_t msgLen = 16;
     uint64_t totalBytes = 0;
     bool silent = false;
-    bool handshakeTrace = false;
 
     CLI::App app("UTP echo client example");
     app.add_option("--server-ip", serverIp, "Server IP address")->check(CLI::ValidIPV4);
@@ -120,12 +119,7 @@ int main(int argc, char **argv)
     app.add_option("--total-bytes", totalBytes, "Total bytes to send; if > 0, overrides --count")->check(CLI::Range(static_cast<uint64_t>(0), static_cast<uint64_t>(4294967296ULL)));
     app.add_flag("--quiet", silent, "Suppress all client output");
     app.add_flag("--silent", silent, "Alias for --quiet");
-    app.add_flag("--handshake-trace", handshakeTrace, "Print handshake progress even in quiet mode");
     CLI11_PARSE(app, argc, argv);
-
-    if (handshakeTrace) {
-        ::setenv("UTP_HANDSHAKE_TRACE_INTERNAL", "1", 1);
-    }
 
     std::signal(SIGINT, [](int) { std::exit(0); });
     std::signal(SIGTERM, [](int) { std::exit(0); });
@@ -160,13 +154,15 @@ int main(int argc, char **argv)
     bool doneReceived = false;
     uint64_t serverDoneBytes = 0;
     uint64_t waitDoneStartMs = 0;
+    const uint64_t startMs = NowMs();
+    uint64_t connectedMs = 0;
+    uint64_t uploadDoneMs = 0;
+    uint64_t doneMs = 0;
     std::string localHash;
     std::string serverHash;
     size_t ackCount = 0;
     const uint64_t drainCheckIntervalMs = 1000;
     const uint64_t drainMaxWaitMs = 180000;
-    const bool traceHandshake = !silent || handshakeTrace;
-
     const uint64_t targetBytes = (totalBytes > 0)
         ? totalBytes
         : (static_cast<uint64_t>(sendCount) * static_cast<uint64_t>(msgLen));
@@ -215,6 +211,10 @@ int main(int argc, char **argv)
             << " reason=" << reason
             << " sent_bytes=" << sentBytes
             << " done_bytes=" << serverDoneBytes
+            << " connect_ms=" << (connectedMs > 0 ? connectedMs - startMs : 0)
+            << " upload_ms=" << (uploadDoneMs > 0 ? uploadDoneMs - startMs : 0)
+            << " done_ms=" << (doneMs > 0 ? doneMs - startMs : 0)
+            << " total_ms=" << (NowMs() - startMs)
             << " local_xxh128=" << (localHash.empty() ? "<pending>" : localHash)
             << " server_xxh128=" << (serverHash.empty() ? "<pending>" : serverHash)
             << " ack_count=" << ackCount
@@ -267,6 +267,7 @@ int main(int argc, char **argv)
             return;
         }
         sendDone = true;
+        uploadDoneMs = NowMs();
         if (!finalizeLocalHash()) {
             connectFailed = true;
             if (!closeIssued && conn) {
@@ -286,16 +287,15 @@ int main(int argc, char **argv)
     auto parseServerLine = [&](const std::string &line) {
         if (line.rfind("ACK total=", 0) == 0) {
             ++ackCount;
+            if (silent) {
+                return;
+            }
             const std::string value = line.substr(std::strlen("ACK total="));
             try {
                 const uint64_t total = std::stoull(value);
-                if (!silent) {
-                    std::cout << "[client] ack total=" << total << "\n";
-                }
+                std::cout << "[client] ack total=" << total << "\n";
             } catch (...) {
-                if (!silent) {
-                    std::cerr << "[client] bad ACK line: " << line << "\n";
-                }
+                std::cerr << "[client] bad ACK line: " << line << "\n";
             }
             return;
         }
@@ -320,6 +320,7 @@ int main(int argc, char **argv)
             }
             serverHash = line.substr(hashPos + std::strlen(" xxh128="));
             doneReceived = true;
+            doneMs = NowMs();
             drainTimer.stop();
 
             if (!hashFinalized && !finalizeLocalHash()) {
@@ -365,14 +366,15 @@ int main(int argc, char **argv)
 
     ctx.setOnConnected([&](eular::utp::Connection::Ptr c) {
         connected = true;
+        connectedMs = NowMs();
         conn = c;
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[client] connected scid=" << conn->description().scid << " dcid=" << conn->description().dcid << "\n";
         }
 
         const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
         if (sid < 0) {
-            if (traceHandshake) {
+            if (!silent) {
                 std::cerr << "[client] createStream failed: " << sid << "\n";
             }
             connectFailed = true;
@@ -381,14 +383,14 @@ int main(int argc, char **argv)
 
         stream = conn->getStream(static_cast<uint32_t>(sid));
         if (stream == nullptr) {
-            if (traceHandshake) {
+            if (!silent) {
                 std::cerr << "[client] getStream failed for sid=" << sid << "\n";
             }
             connectFailed = true;
             return;
         }
 
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[client] local stream id=" << stream->id() << "\n";
         }
 
@@ -416,7 +418,7 @@ int main(int argc, char **argv)
                     const int32_t committed = stream->commitWrite(copied, false);
                     if (committed <= 0) {
                         if (committed < 0 && utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
-                            if (traceHandshake) {
+                            if (!silent) {
                                 std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
                             }
                             connectFailed = true;
@@ -455,7 +457,7 @@ int main(int argc, char **argv)
                 const int32_t committed = stream->commitWrite(chunkLen, fin);
                 if (committed < 0) {
                     if (utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
-                        if (traceHandshake) {
+                        if (!silent) {
                             std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
                         }
                         connectFailed = true;
@@ -565,7 +567,7 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectError([&](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
-        if (traceHandshake) {
+        if (!silent) {
             std::cerr << "[client] connect error code=" << code
                       << " peer=" << info.ip << ":" << info.port
                       << " reason=" << reason << "\n";
@@ -575,7 +577,7 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectionClosed([&](eular::utp::Connection::Ptr c) {
-        if (traceHandshake) {
+        if (!silent) {
             std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
         }
         stopTimer.start(1000);

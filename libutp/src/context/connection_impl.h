@@ -261,13 +261,13 @@ private:
     /// @brief 对候选 stream 做基于 stream_id 的 RR 选取
     StreamImpl::SP pickRoundRobinStream(const std::vector<StreamImpl::SP> &candidates, uint32_t &cursor);
     /// @brief DISABLED 模式：按 stream_id RR 选流
-    StreamImpl::SP pickNextWritableStreamDisabled();
+    StreamImpl::SP pickNextWritableStreamDisabled(utp_time_t nowUs);
     /// @brief STRICT+Aging 模式选流
-    StreamImpl::SP pickNextWritableStreamStrict();
+    StreamImpl::SP pickNextWritableStreamStrict(utp_time_t nowUs);
     /// @brief DRR 模式选流
-    StreamImpl::SP pickNextWritableStreamDrr();
+    StreamImpl::SP pickNextWritableStreamDrr(utp_time_t nowUs);
     /// @brief 按当前模式统一选流入口
-    StreamImpl::SP pickNextWritableStream();
+    StreamImpl::SP pickNextWritableStream(utp_time_t nowUs);
     /// @brief STRICT 模式下更新 aging 等待轮次
     void updateStrictAgingState(uint32_t selectedStreamId);
     /// @brief 清理无效调度状态（已关闭流/空队列）

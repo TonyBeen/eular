@@ -755,10 +755,9 @@ Status StreamImpl::flushPendingSends(size_t maxBytes)
     return Status::OK();
 }
 
-Status StreamImpl::onConnectionWritable()
+Status StreamImpl::onConnectionWritable(utp_time_t nowUs)
 {
     if (m_conn != nullptr) {
-        const utp_time_t nowUs = time::MonotonicUs();
         if (shouldDeferSend(nowUs)) {
             const utp_time_t remainUs = coalesceDelayRemainingUs(nowUs);
             const utp_time_t delayMs = std::max<utp_time_t>(1, (remainUs + 999) / 1000);
