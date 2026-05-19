@@ -8,7 +8,7 @@
 #define XXH_INLINE_ALL
 #include "../3rd/xxhash.h"
 
-#include "lsquic.h"
+#include "lsquic/lsquic.h"
 #include "test_common.h"
 #include "prog.h"
 

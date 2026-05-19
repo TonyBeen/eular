@@ -7,7 +7,7 @@
 #define XXH_INLINE_ALL
 #include "../3rd/xxhash.h"
 
-#include "lsquic.h"
+#include "lsquic/lsquic.h"
 #include "test_common.h"
 #include "prog.h"
 #include "test_cert.h"
@@ -466,7 +466,8 @@ main(int argc, char **argv)
 
     if (add_alpn("echo") != 0)
         return 1;
-    if (init_embedded_cert(&prog.prog_certs, "localhost") != 0)
+    prog.prog_certs = init_embedded_cert("localhost");
+    if (!prog.prog_certs)
         return 1;
 
     snprintf(sport, sizeof(sport), "%s:%hu", bind_ip, bind_port);
