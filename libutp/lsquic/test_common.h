@@ -6,8 +6,7 @@
 struct sport;
 TAILQ_HEAD(sport_head, sport);
 
-struct sport
-{
+struct sport {
     int dummy;
 };
 
