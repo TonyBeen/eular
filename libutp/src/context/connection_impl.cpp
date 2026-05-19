@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -211,6 +213,31 @@ int32_t AppendEncodedFrame(std::vector<uint8_t> &payload, const FrameT &frame, s
 bool IsSupportedStreamType(Connection::StreamType streamType)
 {
     return streamType == Connection::kStreamTypeBidirectional || streamType == Connection::kStreamTypeUnidirectional;
+}
+
+bool HandshakeTraceEnabled()
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = std::getenv("UTP_HANDSHAKE_TRACE_INTERNAL");
+        enabled = (env != nullptr && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+void HandshakeTracePrint(const char *fmt, ...)
+{
+    if (!HandshakeTraceEnabled()) {
+        return;
+    }
+
+    std::fprintf(stderr, "[utp-handshake] ");
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
 }
 
 Connection::StreamType StreamTypeFromStreamId(uint32_t streamId)
@@ -629,11 +656,14 @@ Status ConnectionImpl::initPassive(const Context::ConnectInfo &info, const Addre
 
 void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
 {
+    onUdpPacket(msg, time::MonotonicUs());
+}
+
+void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t nowUs)
+{
     if (msg.data == nullptr || msg.len < UTP_HEADER_SIZE) {
         return;
     }
-
-    const utp_time_t nowUs = time::MonotonicUs();
 
     auto packetReleaser = [this](PacketIn *packet) { m_mm.releasePacketIn(packet); };
     std::unique_ptr<PacketIn, decltype(packetReleaser)> packet(m_mm.getPacketIn(static_cast<uint32_t>(msg.len)),
@@ -1017,6 +1047,8 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     }
 
     if (m_state == State::kStateInitialSent && packet->header.types == UTP_TYPE_HANDSHAKE) {
+        HandshakeTracePrint("%s recv handshake in InitialSent: pn=%" PRIu64 " peer_cid=%u local_cid=%u",
+                            tag(), packet->header.pn, m_peerConnectionID, m_localConnectionID);
         m_state = State::kStateConnected;
         m_handshakeRetryCount = 0;
         m_peerHandshakePacketNo = packet->header.pn;
@@ -1027,9 +1059,13 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
         armHandshakeDoneTimer();
         m_connTimer.stop();
         markPeerActivity(nowUs);
+        HandshakeTracePrint("%s promoted to Connected: peer_handshake_pn=%" PRIu64 " delay_ms=%u",
+                            tag(), m_peerHandshakePacketNo, handshakeDoneDelayMs());
     }
 
     if (m_state == State::kStateConnected && packet->header.types == UTP_TYPE_HANDSHAKE) {
+        HandshakeTracePrint("%s recv duplicate handshake in Connected: pn=%" PRIu64 " prev_pending=%u",
+                            tag(), packet->header.pn, static_cast<unsigned>(m_handshakeDonePending));
         m_peerHandshakePacketNo = packet->header.pn;
         m_handshakeReceivedAtUs = nowUs;
         m_handshakeDonePending = true;
@@ -1037,8 +1073,9 @@ void ConnectionImpl::onUdpPacket(const UdpSocket::MsgMetaInfo &msg)
     }
 
     if (m_state == State::kStateConnected) {
-        flushPendingStreamWrites();
+        flushPendingStreamWrites(nowUs);
     }
+
 }
 
 void ConnectionImpl::onWrite()
@@ -1047,15 +1084,41 @@ void ConnectionImpl::onWrite()
         return;
     }
 
+    const utp_time_t nowUs = time::MonotonicUs();
+
     if (m_state == State::kStateCloseSent || m_state == State::kStateCloseReceived) {
         if (!m_closeFramePending) {
             return;
         }
 
+        if (m_sendCtl != nullptr && m_sendCtl->scheduledCount() > 0) {
+            m_sendCtl->onCanWrite(nowUs);
+            if (m_sendCtl->scheduledCount() > 0) {
+                scheduleWrite();
+                return;
+            }
+
+            m_closeFramePending = false;
+            m_closeLastSendUs = nowUs;
+            if (m_state == State::kStateCloseReceived && m_closePeerResendCount < kMaxCloseResendCount) {
+                ++m_closePeerResendCount;
+            }
+            enterPtoTimedWait();
+            return;
+        }
+
         const Status closeStatus = sendConnectionCloseFrame();
         if (closeStatus.ok()) {
+            if (m_sendCtl != nullptr && m_sendCtl->scheduledCount() > 0) {
+                m_sendCtl->onCanWrite(nowUs);
+                if (m_sendCtl->scheduledCount() > 0) {
+                    scheduleWrite();
+                    return;
+                }
+            }
+
             m_closeFramePending = false;
-            m_closeLastSendUs = time::MonotonicUs();
+            m_closeLastSendUs = nowUs;
             if (m_state == State::kStateCloseReceived && m_closePeerResendCount < kMaxCloseResendCount) {
                 ++m_closePeerResendCount;
             }
@@ -1134,13 +1197,13 @@ void ConnectionImpl::onWrite()
         maybeSendPathChallenge();
     }
 
+    maybeUpdateAckFrequency(nowUs);
+
+    flushPendingStreamWrites(nowUs);
+
     if (m_sendCtl) {
-        m_sendCtl->onCanWrite(time::MonotonicUs());
+        m_sendCtl->onCanWrite(nowUs);
     }
-
-    maybeUpdateAckFrequency(time::MonotonicUs());
-
-    flushPendingStreamWrites();
 }
 
 void ConnectionImpl::trySendZeroRttEarlyData()
@@ -1207,8 +1270,9 @@ Status ConnectionImpl::sendAckPacket(utp_time_t nowUs)
         return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "failed to build ACK payload");
     }
 
-    const Status status = sendPacket(UTP_TYPE_CTRL, m_ackPayloadScratch.data(), m_ackPayloadScratch.size(), 0, nullptr,
-                                     (1u << static_cast<uint32_t>(kFrameAck)));
+    const Status status =
+        sendPacket(UTP_TYPE_CTRL, m_ackPayloadScratch.data(), m_ackPayloadScratch.size(),
+                   0, nullptr, (1u << static_cast<uint32_t>(kFrameAck)));
     if (status.ok()) {
         m_ackElicitingSinceLastAck = 0;
         m_ackPendingSinceUs = 0;
@@ -1303,7 +1367,8 @@ Status ConnectionImpl::sendAckFrequencyUpdate(AckFrequencyProfile profile, utp_t
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(encoded), 0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(encoded),
+                                     0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameAckFrequency)));
     if (sendSt.ok()) {
         m_ackProfileLastSentMs = nowUs / 1000;
@@ -1536,9 +1601,8 @@ void ConnectionImpl::updateTag(const std::string &tag)
     m_tag = tag + " Connection (" + std::to_string(m_localConnectionID) + ")";
 }
 
-void ConnectionImpl::flushPendingStreamWrites()
+void ConnectionImpl::flushPendingStreamWrites(utp_time_t nowUs)
 {
-    const utp_time_t          nowUs = time::MonotonicUs();
     const StreamSchedulerMode mode = streamSchedulerMode();
     noteSchedulerModeIfChanged(mode);
 
@@ -1574,7 +1638,7 @@ void ConnectionImpl::flushPendingStreamWrites()
         StreamImpl::SP stream = pickNextWritableStream();
         if (!stream) {
             ++m_schedulerStats.emptyRounds;
-            armDeferredWakeup(time::MonotonicUs());
+            armDeferredWakeup(nowUs);
             break;
         }
 
@@ -1583,7 +1647,7 @@ void ConnectionImpl::flushPendingStreamWrites()
             ++m_schedulerStats.wouldBlock;
             UTP_LOGD("connection %u scheduler backpressure: mode=%s stream=%u", m_localConnectionID,
                      StreamSchedulerModeToString(mode), stream->id());
-            armDeferredWakeup(time::MonotonicUs());
+            armDeferredWakeup(nowUs);
             maybeEmitSchedulerStats(nowUs);
             return;
         }
@@ -1968,7 +2032,8 @@ Status ConnectionImpl::sendConnectionCloseFrame()
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CONNECTION_CLOSE, payload.data(), static_cast<size_t>(frameLen));
+    return sendPacket(UTP_TYPE_CONNECTION_CLOSE, payload.data(), static_cast<size_t>(frameLen),
+                      0);
 }
 
 Status ConnectionImpl::sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize)
@@ -2068,7 +2133,8 @@ Status ConnectionImpl::sendMaxDataFrame(uint64_t maximumData)
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen),
+                                     0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameMaxData)));
     if (sendSt.ok()) {
         m_lastMaxDataSentUs = time::MonotonicUs();
@@ -2091,7 +2157,8 @@ Status ConnectionImpl::sendMaxStreamDataFrame(uint32_t streamId, uint64_t maximu
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen),
+                                     0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameMaxStreamData)));
     if (sendSt.ok()) {
         m_lastMaxStreamDataSentUs[streamId] = time::MonotonicUs();
@@ -2111,8 +2178,8 @@ Status ConnectionImpl::sendDataBlockedFrame(uint64_t dataLimit)
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
-                      (1u << static_cast<uint32_t>(kFrameDataBlocked)));
+    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0,
+                      nullptr, (1u << static_cast<uint32_t>(kFrameDataBlocked)));
 }
 
 Status ConnectionImpl::sendStreamDataBlockedFrame(uint32_t streamId, uint64_t streamDataLimit)
@@ -2128,8 +2195,8 @@ Status ConnectionImpl::sendStreamDataBlockedFrame(uint32_t streamId, uint64_t st
         return Status::ErrorLiteral(UTP_ERR_INTERNAL_ERROR, "internal logic error");
     }
 
-    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0, nullptr,
-                      (1u << static_cast<uint32_t>(kFrameStreamDataBlocked)));
+    return sendPacket(UTP_TYPE_CTRL, payload.data(), static_cast<size_t>(frameLen), 0,
+                      nullptr, (1u << static_cast<uint32_t>(kFrameStreamDataBlocked)));
 }
 
 void ConnectionImpl::ensureFlowControlAdvertised(uint32_t streamId)
@@ -2233,6 +2300,9 @@ Status ConnectionImpl::sendHandshakeDonePacket()
     }
 
     utp_packno_t outPacketNo = 0;
+    HandshakeTracePrint("%s sendHandshakeDonePacket begin: peer_handshake_pn=%" PRIu64 " pending=%u sent=%u",
+                        tag(), m_peerHandshakePacketNo, static_cast<unsigned>(m_handshakeDonePending),
+                        static_cast<unsigned>(m_handshakeDoneSent));
     const Status status = sendPacket(
         UTP_TYPE_CTRL, payload.data(), payloadSize, 0, &outPacketNo,
         (1u << static_cast<uint32_t>(kFrameHandshakeDone)) | (1u << static_cast<uint32_t>(kFrameHandshakeDelay)));
@@ -2241,6 +2311,11 @@ Status ConnectionImpl::sendHandshakeDonePacket()
         m_handshakeDonePending = true;
         m_handshakeDoneLastPacketNo = outPacketNo;
         armHandshakeDoneTimer();
+        HandshakeTracePrint("%s sendHandshakeDonePacket ok: out_pn=%" PRIu64 " delay_ms=%u",
+                            tag(), outPacketNo, handshakeDoneDelayMs());
+    } else {
+        HandshakeTracePrint("%s sendHandshakeDonePacket failed: code=%d message=%s",
+                            tag(), status.code(), status.message());
     }
     return status;
 }
@@ -2282,7 +2357,8 @@ Status ConnectionImpl::maybeSendSessionTokenPacket()
     }
     m_payloadScratch.resize(static_cast<size_t>(frameLen));
 
-    const Status sendSt = sendPacket(UTP_TYPE_CTRL, m_payloadScratch.data(), m_payloadScratch.size(), 0, nullptr,
+    const Status sendSt = sendPacket(UTP_TYPE_CTRL, m_payloadScratch.data(), m_payloadScratch.size(),
+                                     0, nullptr,
                                      (1u << static_cast<uint32_t>(kFrameSessionToken)));
     if (sendSt.ok()) {
         m_sessionTokenIssued = true;
@@ -2740,6 +2816,22 @@ Status ConnectionImpl::sendPacket(uint8_t packetType, const PayloadSegment *segm
         packet->data_size = packet->encrypt_data_size;
     }
 
+    if ((packetFlags & PacketOutFlags::kPoSched) != 0) {
+        if (!m_sendCtl) {
+            m_mm.putPacketOut(packet);
+            return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "send control unavailable for scheduled packet");
+        }
+
+        const Status schedSt = m_sendCtl->schedulePacket(packet, shouldTrackPacket);
+        if (!schedSt.ok()) {
+            m_mm.putPacketOut(packet);
+            return schedSt;
+        }
+
+        scheduleWrite();
+        return Status::OK();
+    }
+
     UdpSocket::MsgMetaInfo msg;
     msg.data = nullptr;
     msg.len = 0;
@@ -2925,6 +3017,8 @@ void ConnectionImpl::onHandshakeDoneTimeout()
         return;
     }
 
+    HandshakeTracePrint("%s HandshakeDone timeout: last_pn=%" PRIu64 " sent=%u",
+                        tag(), m_handshakeDoneLastPacketNo, static_cast<unsigned>(m_handshakeDoneSent));
     const Status status = sendHandshakeDonePacket();
     if (!status.ok()) {
         scheduleWrite();
@@ -2938,6 +3032,7 @@ void ConnectionImpl::onHandshakeDoneFrameAcked()
         return;
     }
 
+    HandshakeTracePrint("%s HandshakeDone acked: packet_pn=%" PRIu64, tag(), m_handshakeDoneLastPacketNo);
     m_handshakeDonePending = false;
     m_handshakeDoneTimer.stop();
 }
@@ -3009,6 +3104,8 @@ void ConnectionImpl::onConnTimeout()
     }
 
     if (m_state == State::kStateInitialSent) {
+        HandshakeTracePrint("%s connect timeout round=%u: readable=%u", tag(), static_cast<unsigned>(m_handshakeRetryCount),
+                            static_cast<unsigned>(SocketHasReadableData(m_udpSocket)));
         if (SocketHasReadableData(m_udpSocket)) {
             (void)armConnectTimerForRound(m_handshakeRetryCount, false);
             return;
@@ -3017,22 +3114,30 @@ void ConnectionImpl::onConnTimeout()
         if (m_handshakeRetryCount < handshakeMaxRetries()) {
             const Status retryStatus = sendInitialPacket();
             if (retryStatus.ok()) {
+                HandshakeTracePrint("%s resend Initial ok: next_round=%u", tag(),
+                                    static_cast<unsigned>(m_handshakeRetryCount + 1));
                 ++m_handshakeRetryCount;
                 (void)armConnectTimerForRound(m_handshakeRetryCount, false);
                 return;
             }
 
             if (retryStatus.code() == UTP_ERR_WOULD_BLOCK) {
+                HandshakeTracePrint("%s resend Initial blocked", tag());
                 scheduleWrite();
                 m_connTimer.stop();
                 m_connTimer.start(1);
                 return;
             }
 
+            HandshakeTracePrint("%s resend Initial failed: code=%d message=%s",
+                                tag(), retryStatus.code(), retryStatus.message());
             (void)recordConnectionError(retryStatus, true);
         }
     }
 
+    HandshakeTracePrint("%s connect timeout final: state=%u retries=%u last_reason=%s",
+                        tag(), static_cast<unsigned>(m_state), static_cast<unsigned>(m_handshakeRetryCount),
+                        m_lastErrorReason[0] == '\0' ? "<empty>" : m_lastErrorReason.data());
     (void)recordConnectionError(Status::Error(UTP_ERR_TIMEOUT, "connect timeout"), true);
     m_state = State::kStateDisconnected;
     m_handshakeDoneTimer.stop();

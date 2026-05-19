@@ -117,6 +117,8 @@ public:
     uint64_t    retransmittedBytes() const;
     Status      onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs);
     void        onCanWrite(utp_time_t nowUs);
+    Status      schedulePacket(PacketOut *pkt, bool trackOnSend);
+    uint32_t    scheduledCount() const { return m_nScheduled; }
     void        setReorderThreshold(uint32_t threshold);
     bool        isLossFrequent(utp_time_t nowUs, utp_time_t windowUs, uint32_t threshold) const;
 
@@ -142,9 +144,11 @@ private:
     void        updateReorderThresholdOnLoss(utp_time_t now, utp_time_t srtt, utp_time_t rttvar);
     void        updateReorderThresholdOnAck(uint32_t ackedPackets, utp_time_t srtt, utp_time_t rttvar);
     utp_packno_t largestRetxPacketNo() const;
+    int32_t     flushScheduledPackets(utp_time_t nowUs, uint32_t maxPackets, bool &sentAny);
     PacketOut*  handleRegularLostPacket(PacketOut *pkt, PacketOut *&next);
     bool        handleLostMtuProbe(PacketOut *pkt);
     Status      retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs);
+    int32_t     retransmitLostBatch(utp_time_t nowUs, uint32_t maxPackets, bool &sentAny);
     Status      retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs);
     void        unackedRemove(PacketOut *pkt);
 

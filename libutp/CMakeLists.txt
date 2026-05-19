@@ -27,6 +27,7 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(UTP_BUILD_TESTS "Build libutp tests" OFF)
+option(UTP_BUILD_LSQUIC_ECHO "Build lsquic echo comparison examples" ON)
 option(UTP_USE_BUNDLED_BORINGSSL "Use bundled BoringSSL submodule" ON)
 option(UTP_ENABLE_FAULT_INJECTION "Enable Linux-only libfiu fault injection hooks" OFF)
 option(UTP_USE_SENDMMSG "Use recvmmsg/sendmmsg batching on Linux" ON)
@@ -324,4 +325,8 @@ if(UTP_BUILD_TESTS)
 
     add_test(NAME utp_tests COMMAND utp_tests)
     target_link_libraries(utp_tests PRIVATE utp_static)
+endif()
+
+if(UTP_BUILD_LSQUIC_ECHO)
+    add_subdirectory(lsquic)
 endif()

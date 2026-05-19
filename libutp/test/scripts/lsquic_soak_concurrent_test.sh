@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# soak_concurrent_test.sh — libutp 并发长稳定性测试（纯基线，无 netem）
-# 用法: ./test/scripts/soak_concurrent_test.sh <build-dir> [options]
+# lsquic_soak_concurrent_test.sh — lsquic 并发长稳定性测试（纯基线，无 netem）
+# 用法: ./test/scripts/lsquic_soak_concurrent_test.sh <build-dir> [options]
 
 set -euo pipefail
 
@@ -13,7 +13,6 @@ REPORT_INTERVAL=10
 SERVER_PORT=""
 SERVER_PORT_AUTO=1
 KEEP_LOGS=0
-HANDSHAKE_TRACE=0
 WORKER_PIDS=()
 ECHO_CLIENT_BIN=""
 RSS_WARN_THRESHOLD_KB=65536
@@ -23,7 +22,7 @@ CLIENT_TIMEOUT_SECONDS=90
 
 SCRIPT_NAME="$(basename "$0")"
 START_TS="$(date +%Y%m%d_%H%M%S)"
-TMP_ROOT="/tmp/utp_soak_${START_TS}_$$"
+TMP_ROOT="/tmp/lsquic_soak_${START_TS}_$$"
 REPORT_FILE="$TMP_ROOT/report.log"
 SERVER_LOG="$TMP_ROOT/server.log"
 CLIENT_LOG_DIR="$TMP_ROOT/clients"
@@ -35,11 +34,6 @@ SERVER_PEAK_RSS_KB=0
 SERVER_PEAK_FD=0
 SERVER_EXITED_EARLY=0
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
 usage() {
     cat <<EOF
 用法:
@@ -49,16 +43,15 @@ usage() {
   --duration-seconds <n>   运行时长，默认 600
   --clients <n>            并发 client 数，默认 10
   --bytes-per-client <n>   每轮每个 client 发送字节数，默认 4194304 (4 MiB)
-  --length <n>             每条消息长度，默认 1024
+  --length <n>             每轮发送块大小，默认 1024
   --report-interval <n>    采样周期（秒），默认 10
   --server-port <n>        server 监听端口；默认每次运行自动选择不同端口
   --rss-warn-threshold-kb <n>
                            RSS 告警阈值（相对起始值），默认 65536
   --rss-fail-threshold-kb <n>
                            RSS 失败阈值（相对起始值），默认 0（关闭）
-  --cpu-stop-threshold <n> server CPU% 超过该值时立刻停止，默认 80（关闭请设 0）
+  --cpu-stop-threshold <n> server CPU%% 超过该值时立刻停止，默认 80（关闭请设 0）
   --client-timeout <n>     单轮 client 最大运行时间（秒），默认 90
-  --handshake-trace        打开握手追踪日志（默认关闭）
   --keep-logs              成功时也保留日志目录
 EOF
 }
@@ -126,10 +119,6 @@ parse_args() {
                 CLIENT_TIMEOUT_SECONDS="$2"
                 shift 2
                 ;;
-            --handshake-trace)
-                HANDSHAKE_TRACE=1
-                shift
-                ;;
             --keep-logs)
                 KEEP_LOGS=1
                 shift
@@ -164,7 +153,6 @@ parse_args() {
     [[ "$RSS_WARN_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-warn-threshold-kb 必须是非负整数"
     [[ "$RSS_FAIL_THRESHOLD_KB" =~ ^[0-9]+$ ]] || die "--rss-fail-threshold-kb 必须是非负整数"
     [[ "$CPU_STOP_THRESHOLD" =~ ^[0-9]+$ ]] || die "--cpu-stop-threshold 必须是非负整数"
-    [ "$HANDSHAKE_TRACE" -eq 0 ] || [ "$HANDSHAKE_TRACE" -eq 1 ] || die "--handshake-trace 解析失败"
 
     if [ "$SERVER_PORT_AUTO" -eq 0 ]; then
         is_positive_int "$SERVER_PORT" || die "--server-port 必须是正整数"
@@ -279,56 +267,38 @@ on_interrupt() {
 
 start_server() {
     local echo_server="$1"
-    local server_pid_file="$TMP_ROOT/server.pid"
     mkdir -p "$TMP_ROOT" "$CLIENT_LOG_DIR" "$CLIENT_STATE_DIR"
-    local server_args=(--bind-ip 127.0.0.1 --bind-port "$SERVER_PORT" --silent)
-    if [ "$HANDSHAKE_TRACE" -eq 1 ]; then
-        server_args+=(--handshake-trace)
+    : >"$SERVER_LOG"
+    : >"$REPORT_FILE"
+
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL -eL "$echo_server" --bind-ip 127.0.0.1 --bind-port "$SERVER_PORT" >>"$SERVER_LOG" 2>&1 &
+    else
+        "$echo_server" --bind-ip 127.0.0.1 --bind-port "$SERVER_PORT" >>"$SERVER_LOG" 2>&1 &
     fi
+    SERVER_PID=$!
 
-    local attempt=1
-    local max_attempts=5
-    while [ "$attempt" -le "$max_attempts" ]; do
-        : >"$SERVER_LOG"
-        : >"$REPORT_FILE"
-        rm -f "$server_pid_file"
-
-        (
-            echo "$BASHPID" >"$server_pid_file"
-            exec "$echo_server" "${server_args[@]}"
-        ) >>"$SERVER_LOG" 2>&1 &
-
-        local timeout=32
-        while [ "$timeout" -gt 0 ]; do
-            if [ -f "$server_pid_file" ]; then
-                SERVER_PID="$(cat "$server_pid_file" 2>/dev/null || true)"
-                if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-                    break
-                fi
-            fi
-            sleep 0.25
-            timeout=$((timeout - 1))
-        done
-        if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-            break
+    local timeout=16
+    while [ "$timeout" -gt 0 ]; do
+        if grep -q "listening" "$SERVER_LOG"; then
+            SERVER_START_RSS_KB="$(get_rss_kb "$SERVER_PID")"
+            SERVER_START_FD="$(get_fd_count "$SERVER_PID")"
+            SERVER_PEAK_RSS_KB="$SERVER_START_RSS_KB"
+            SERVER_PEAK_FD="$SERVER_START_FD"
+            return 0
         fi
-
-        echo "  [WARN] echo server 启动失败，重试 ${attempt}/${max_attempts}"
-        tail -20 "$SERVER_LOG" | sed 's/^/    /'
-        SERVER_PID=0
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "  [ERROR] lsquic echo server exited before listening"
+            tail -20 "$SERVER_LOG" | sed 's/^/    /'
+            return 1
+        fi
         sleep 0.5
-        attempt=$((attempt + 1))
+        timeout=$((timeout - 1))
     done
-    if [ -z "$SERVER_PID" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "  [ERROR] echo server exited before listening"
-        tail -20 "$SERVER_LOG" | sed 's/^/    /'
-        return 1
-    fi
-    SERVER_START_RSS_KB="$(get_rss_kb "$SERVER_PID")"
-    SERVER_START_FD="$(get_fd_count "$SERVER_PID")"
-    SERVER_PEAK_RSS_KB="$SERVER_START_RSS_KB"
-    SERVER_PEAK_FD="$SERVER_START_FD"
-    return 0
+
+    echo "  [ERROR] lsquic echo server failed to start (no listening log)"
+    tail -20 "$SERVER_LOG" | sed 's/^/    /'
+    return 1
 }
 
 run_worker() {
@@ -342,10 +312,6 @@ run_worker() {
     local failed_rounds=0
     local bytes_total=0
     local last_error="NONE"
-    local client_args=(--server-ip 127.0.0.1 --server-port "$SERVER_PORT" --length "$PAYLOAD_LENGTH" --count 200000 --total-bytes "$BYTES_PER_CLIENT" --quiet)
-    if [ "$HANDSHAKE_TRACE" -eq 1 ]; then
-        client_args+=(--handshake-trace)
-    fi
 
     : >"$log_file"
     write_worker_state "$state_file" "$success_rounds" "$failed_rounds" "$bytes_total" "$last_error"
@@ -354,9 +320,15 @@ run_worker() {
         if [ -f "$TMP_ROOT/.stop" ]; then
             return 0
         fi
+
         local output=""
         local client_status=0
-        if output=$(timeout "$CLIENT_TIMEOUT_SECONDS" "$echo_client" "${client_args[@]}" 2>&1); then
+        if output=$(timeout "$CLIENT_TIMEOUT_SECONDS" "$echo_client" \
+            --server-ip 127.0.0.1 \
+            --server-port "$SERVER_PORT" \
+            --total-bytes "$BYTES_PER_CLIENT" \
+            --chunk-bytes "$PAYLOAD_LENGTH" \
+            --silent 2>&1); then
             client_status=0
         else
             client_status=$?
@@ -376,10 +348,10 @@ run_worker() {
             last_error="NONE"
         else
             failed_rounds=$((failed_rounds + 1))
-            if echo "$output" | grep -q "connect timeout"; then
-                last_error="CONNECT_TIMEOUT"
-            elif echo "$output" | grep -q "drain timeout"; then
-                last_error="DRAIN_TIMEOUT"
+            if echo "$output" | grep -qi "connect"; then
+                last_error="CONNECT_ERROR"
+            elif echo "$output" | grep -qi "timeout"; then
+                last_error="CLIENT_TIMEOUT"
             elif [ "$client_status" -eq 124 ]; then
                 last_error="CLIENT_TIMEOUT"
             elif [ "$result" != "PASS" ]; then
@@ -400,8 +372,8 @@ main() {
     parse_args "$@"
     choose_server_port
 
-    local echo_server="$BUILD_DIR/examples/utp_echo_server"
-    local echo_client="$BUILD_DIR/examples/utp_echo_client"
+    local echo_server="$BUILD_DIR/lsquic/lsquic_echo_server"
+    local echo_client="$BUILD_DIR/lsquic/lsquic_echo_client"
     ECHO_CLIENT_BIN="$echo_client"
 
     [ -x "$echo_server" ] || die "找不到 $echo_server"
@@ -411,7 +383,7 @@ main() {
     trap cleanup EXIT
     trap on_interrupt INT TERM
 
-    echo "========== libutp 并发长稳定性测试 =========="
+    echo "========== lsquic 并发长稳定性测试 =========="
     echo "build_dir=$BUILD_DIR"
     echo "duration_seconds=$DURATION_SECONDS"
     echo "clients=$NUM_CLIENTS"
@@ -423,7 +395,6 @@ main() {
     echo "rss_warn_threshold_kb=$RSS_WARN_THRESHOLD_KB"
     echo "rss_fail_threshold_kb=$RSS_FAIL_THRESHOLD_KB"
     echo "cpu_stop_threshold=$CPU_STOP_THRESHOLD"
-    echo "handshake_trace=$HANDSHAKE_TRACE"
     echo "tmp_root=$TMP_ROOT"
     echo ""
 
@@ -449,6 +420,11 @@ main() {
             stop_reason="$(read_state_value "$TMP_ROOT/.stop_reason" reason || echo STOP)"
             break
         fi
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            SERVER_EXITED_EARLY=1
+            stop_reason="SERVER_EXITED"
+            break
+        fi
 
         total_success=0
         total_failed=0
@@ -472,10 +448,9 @@ main() {
             fi
         done
 
-        local rss_kb fd_count
+        local rss_kb fd_count cpu_percent
         rss_kb="$(get_rss_kb "$SERVER_PID")"
         fd_count="$(get_fd_count "$SERVER_PID")"
-        local cpu_percent
         cpu_percent="$(get_cpu_percent "$SERVER_PID")"
         [ "$rss_kb" -gt "$SERVER_PEAK_RSS_KB" ] && SERVER_PEAK_RSS_KB="$rss_kb"
         [ "$fd_count" -gt "$SERVER_PEAK_FD" ] && SERVER_PEAK_FD="$fd_count"
@@ -504,8 +479,7 @@ main() {
     total_success=0
     total_failed=0
     total_bytes=0
-    local connect_timeout_count=0
-    local drain_timeout_count=0
+    local connect_error_count=0
     local result_fail_count=0
     local other_fail_count=0
     for i in $(seq 1 "$NUM_CLIENTS"); do
@@ -519,8 +493,7 @@ main() {
         total_failed=$((total_failed + f))
         total_bytes=$((total_bytes + b))
         case "$e" in
-            CONNECT_TIMEOUT) connect_timeout_count=$((connect_timeout_count + 1)) ;;
-            DRAIN_TIMEOUT) drain_timeout_count=$((drain_timeout_count + 1)) ;;
+            CONNECT_ERROR) connect_error_count=$((connect_error_count + 1)) ;;
             RESULT_*) result_fail_count=$((result_fail_count + 1)) ;;
             NONE) ;;
             *) other_fail_count=$((other_fail_count + 1)) ;;
@@ -548,59 +521,36 @@ main() {
     echo "server_fd_end=$server_end_fd"
     echo "server_fd_peak=$SERVER_PEAK_FD"
     echo "stop_reason=$stop_reason"
-    echo "connect_timeout_count=$connect_timeout_count"
-    echo "drain_timeout_count=$drain_timeout_count"
+    echo "connect_error_count=$connect_error_count"
     echo "result_fail_count=$result_fail_count"
     echo "other_fail_count=$other_fail_count"
     echo "server_log=$SERVER_LOG"
-    echo "client_log_dir=$CLIENT_LOG_DIR"
-    echo "report_file=$REPORT_FILE"
-    echo "=========================================="
+    echo "client_logs=$CLIENT_LOG_DIR"
+    echo "report_log=$REPORT_FILE"
 
-    local pass=1
-    if [ "$stop_reason" != "NONE" ] && [ "$stop_reason" != "STOP" ] && [ "$stop_reason" != "SERVER_EXITED" ]; then
-        echo -e "${RED}FAIL${NC} 触发停止条件: $stop_reason"
-        pass=0
-    fi
+    local status=0
     if [ "$SERVER_EXITED_EARLY" -ne 0 ]; then
-        echo -e "${RED}FAIL${NC} server 提前退出"
-        pass=0
-    fi
-    if [ "$total_failed" -ne 0 ]; then
-        echo -e "${RED}FAIL${NC} 出现失败轮次: $total_failed"
-        pass=0
-    fi
-    if [ "$server_end_fd" -gt $((SERVER_START_FD + 3)) ]; then
-        echo -e "${RED}FAIL${NC} server fd 疑似漏涨: start=$SERVER_START_FD end=$server_end_fd"
-        pass=0
-    fi
-    local rss_delta_kb=$((server_end_rss_kb - SERVER_START_RSS_KB))
-    if [ "$RSS_FAIL_THRESHOLD_KB" -gt 0 ] && [ "$rss_delta_kb" -gt "$RSS_FAIL_THRESHOLD_KB" ]; then
-        echo -e "${RED}FAIL${NC} server RSS 超过失败阈值: start=${SERVER_START_RSS_KB}KB end=${server_end_rss_kb}KB delta=${rss_delta_kb}KB"
-        pass=0
-    elif [ "$rss_delta_kb" -gt "$RSS_WARN_THRESHOLD_KB" ]; then
-        echo -e "${YELLOW}WARN${NC} server RSS 超过告警阈值: start=${SERVER_START_RSS_KB}KB end=${server_end_rss_kb}KB delta=${rss_delta_kb}KB"
+        echo "FAIL: server exited early"
+        status=1
+    elif [ "$total_failed" -ne 0 ]; then
+        echo "FAIL: observed failed rounds"
+        status=1
+    elif [ "$server_end_fd" -gt $((SERVER_START_FD + 3)) ]; then
+        echo "FAIL: server fd count grew unexpectedly"
+        status=1
+    elif [ "$RSS_FAIL_THRESHOLD_KB" -gt 0 ] && [ "$server_end_rss_kb" -gt $((SERVER_START_RSS_KB + RSS_FAIL_THRESHOLD_KB)) ]; then
+        echo "FAIL: server RSS exceeded fail threshold"
+        status=1
+    else
+        if [ "$server_end_rss_kb" -gt $((SERVER_START_RSS_KB + RSS_WARN_THRESHOLD_KB)) ]; then
+            echo "WARN: server RSS exceeded warning threshold"
+        fi
+        : >"$TMP_ROOT/.success"
+        echo "PASS"
+        status=0
     fi
 
-    if [ "$pass" -eq 1 ]; then
-        echo -e "${GREEN}PASS${NC}"
-        touch "$TMP_ROOT/.success"
-    else
-        echo "---- server log tail ----"
-        tail -20 "$SERVER_LOG" | sed 's/^/    /'
-        echo "---- client failure tails ----"
-        for i in $(seq 1 "$NUM_CLIENTS"); do
-            local log_file="$CLIENT_LOG_DIR/client_${i}.log"
-            local state_file="$CLIENT_STATE_DIR/client_${i}.state"
-            local e
-            e="$(read_state_value "$state_file" last_error || echo NONE)"
-            if [ "$e" != "NONE" ]; then
-                echo "  [client $i] last_error=$e"
-                tail -20 "$log_file" | sed 's/^/    /'
-            fi
-        done
-        exit 1
-    fi
+    exit "$status"
 }
 
 main "$@"

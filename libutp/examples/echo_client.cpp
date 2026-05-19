@@ -1,12 +1,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <csignal>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
-#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -81,20 +81,17 @@ uint64_t NowMs()
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 }
 
-std::string RandomString(size_t len)
+std::string MakePayload(size_t len)
 {
     static const char kAlphabet[] =
         "0123456789"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
 
-    static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<size_t> dist(0, sizeof(kAlphabet) - 2);
-
     std::string out;
     out.reserve(len);
     for (size_t i = 0; i < len; ++i) {
-        out.push_back(kAlphabet[dist(rng)]);
+        out.push_back(kAlphabet[i % (sizeof(kAlphabet) - 1)]);
     }
     return out;
 }
@@ -105,20 +102,30 @@ int main(int argc, char **argv)
 {
     std::string serverIp = "127.0.0.1";
     uint16_t serverPort = 9000;
+    std::string bindIp = "0.0.0.0";
+    uint16_t bindPort = 0;
     uint32_t sendCount = 5;
     size_t msgLen = 16;
     uint64_t totalBytes = 0;
     bool silent = false;
+    bool handshakeTrace = false;
 
     CLI::App app("UTP echo client example");
     app.add_option("--server-ip", serverIp, "Server IP address")->check(CLI::ValidIPV4);
     app.add_option("--server-port", serverPort, "Server port")->check(CLI::Range(5000, 65535));
+    app.add_option("--bind-ip", bindIp, "Local bind IP address")->check(CLI::ValidIPV4);
+    app.add_option("--bind-port", bindPort, "Local bind port")->check(CLI::Range(0, 65535));
     app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 200000));
     app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 16384));
     app.add_option("--total-bytes", totalBytes, "Total bytes to send; if > 0, overrides --count")->check(CLI::Range(static_cast<uint64_t>(0), static_cast<uint64_t>(4294967296ULL)));
     app.add_flag("--quiet", silent, "Suppress all client output");
     app.add_flag("--silent", silent, "Alias for --quiet");
+    app.add_flag("--handshake-trace", handshakeTrace, "Print handshake progress even in quiet mode");
     CLI11_PARSE(app, argc, argv);
+
+    if (handshakeTrace) {
+        ::setenv("UTP_HANDSHAKE_TRACE_INTERNAL", "1", 1);
+    }
 
     std::signal(SIGINT, [](int) { std::exit(0); });
     std::signal(SIGTERM, [](int) { std::exit(0); });
@@ -129,6 +136,14 @@ int main(int argc, char **argv)
     cfg.enable_keepalive = false;
     cfg.enable_dplpmtud = false;
     cfg.mtu_base = 1400;
+    cfg.mtu_min = 1400;
+    cfg.mtu_max = 1400;
+    cfg.recv_buf_size = 16 * 1024 * 1024;
+    cfg.send_buf_size = 16 * 1024 * 1024;
+    cfg.initial_max_stream_data_bidi_local = 1024 * 1024;
+    cfg.initial_max_stream_data_bidi_remote = 1024 * 1024;
+    cfg.stream_send_buffer_limit = 1024 * 1024;
+    cfg.stream_unacked_data_limit = 1024 * 1024;
     eular::utp::Context ctx(loop.loop(), &cfg);
 
     eular::utp::Connection::Ptr conn;
@@ -150,6 +165,7 @@ int main(int argc, char **argv)
     size_t ackCount = 0;
     const uint64_t drainCheckIntervalMs = 1000;
     const uint64_t drainMaxWaitMs = 180000;
+    const bool traceHandshake = !silent || handshakeTrace;
 
     const uint64_t targetBytes = (totalBytes > 0)
         ? totalBytes
@@ -157,8 +173,7 @@ int main(int argc, char **argv)
 
     const std::string uploadHeader = "UPLOAD " + std::to_string(targetBytes) + "\n";
     size_t headerOffset = 0;
-    std::string recvTextBuffer;
-    size_t recvTextOffset = 0;
+    std::string recvLineBuffer;
     Xxh128Accumulator hash;
     if (!hash.valid()) {
         if (!silent) {
@@ -168,7 +183,7 @@ int main(int argc, char **argv)
     }
 
     // Pre-generate payload to avoid CPU bottleneck during high-speed tests
-    const std::string fixedPayload = RandomString(msgLen);
+    const std::string fixedPayload = MakePayload(msgLen);
 
     auto copyToWriteViews = [&](eular::utp::Stream::MutableBufferView views[2],
                                 const uint8_t *src,
@@ -351,13 +366,13 @@ int main(int argc, char **argv)
     ctx.setOnConnected([&](eular::utp::Connection::Ptr c) {
         connected = true;
         conn = c;
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[client] connected scid=" << conn->description().scid << " dcid=" << conn->description().dcid << "\n";
         }
 
         const int32_t sid = conn->createStream(eular::utp::Connection::kStreamTypeBidirectional);
         if (sid < 0) {
-            if (!silent) {
+            if (traceHandshake) {
                 std::cerr << "[client] createStream failed: " << sid << "\n";
             }
             connectFailed = true;
@@ -366,14 +381,14 @@ int main(int argc, char **argv)
 
         stream = conn->getStream(static_cast<uint32_t>(sid));
         if (stream == nullptr) {
-            if (!silent) {
+            if (traceHandshake) {
                 std::cerr << "[client] getStream failed for sid=" << sid << "\n";
             }
             connectFailed = true;
             return;
         }
 
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[client] local stream id=" << stream->id() << "\n";
         }
 
@@ -401,7 +416,7 @@ int main(int argc, char **argv)
                     const int32_t committed = stream->commitWrite(copied, false);
                     if (committed <= 0) {
                         if (committed < 0 && utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
-                            if (!silent) {
+                            if (traceHandshake) {
                                 std::cerr << "[client] write header failed: " << utp_get_error_string() << "\n";
                             }
                             connectFailed = true;
@@ -440,7 +455,7 @@ int main(int argc, char **argv)
                 const int32_t committed = stream->commitWrite(chunkLen, fin);
                 if (committed < 0) {
                     if (utp_get_last_error() != UTP_ERR_WOULD_BLOCK) {
-                        if (!silent) {
+                        if (traceHandshake) {
                             std::cerr << "[client] write payload failed: " << utp_get_error_string() << "\n";
                         }
                         connectFailed = true;
@@ -494,31 +509,46 @@ int main(int argc, char **argv)
                 }
 
                 size_t consumed = 0;
+                auto processReadableChunk = [&](const char *data, size_t len) {
+                    const char *cursor = data;
+                    size_t left = len;
+                    while (left > 0) {
+                        const void *lfPos = std::memchr(cursor, '\n', left);
+                        if (lfPos == nullptr) {
+                            recvLineBuffer.append(cursor, left);
+                            consumed += left;
+                            return;
+                        }
+
+                        const char *lf = static_cast<const char *>(lfPos);
+                        const size_t partLen = static_cast<size_t>(lf - cursor);
+                        if (recvLineBuffer.empty()) {
+                            std::string line(cursor, partLen);
+                            if (!line.empty() && line.back() == '\r') {
+                                line.pop_back();
+                            }
+                            parseServerLine(line);
+                        } else {
+                            recvLineBuffer.append(cursor, partLen);
+                            if (!recvLineBuffer.empty() && recvLineBuffer.back() == '\r') {
+                                recvLineBuffer.pop_back();
+                            }
+                            parseServerLine(recvLineBuffer);
+                            recvLineBuffer.clear();
+                        }
+
+                        const size_t step = partLen + 1;
+                        cursor += step;
+                        left -= step;
+                        consumed += step;
+                    }
+                };
+
                 for (size_t i = 0; i < 2 && consumed < readable; ++i) {
                     if (views[i].data == nullptr || views[i].len == 0) {
                         continue;
                     }
-                    recvTextBuffer.append(static_cast<const char *>(views[i].data), views[i].len);
-                    consumed += views[i].len;
-                }
-
-                size_t parseStart = recvTextOffset;
-                while (true) {
-                    const size_t pos = recvTextBuffer.find('\n', parseStart);
-                    if (pos == std::string::npos) {
-                        break;
-                    }
-                    std::string line = recvTextBuffer.substr(parseStart, pos - parseStart);
-                    if (!line.empty() && line.back() == '\r') {
-                        line.pop_back();
-                    }
-                    parseServerLine(line);
-                    parseStart = pos + 1;
-                }
-                recvTextOffset = parseStart;
-                if (recvTextOffset >= recvTextBuffer.size()) {
-                    recvTextBuffer.clear();
-                    recvTextOffset = 0;
+                    processReadableChunk(static_cast<const char *>(views[i].data), views[i].len);
                 }
 
                 if (stream->commitReadViews(consumed) < 0) {
@@ -535,7 +565,7 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectError([&](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
-        if (!silent) {
+        if (traceHandshake) {
             std::cerr << "[client] connect error code=" << code
                       << " peer=" << info.ip << ":" << info.port
                       << " reason=" << reason << "\n";
@@ -545,17 +575,19 @@ int main(int argc, char **argv)
     });
 
     ctx.setOnConnectionClosed([&](eular::utp::Connection::Ptr c) {
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
         }
         stopTimer.start(1000);
     });
 
-    const int32_t bindStatus = ctx.bind("0.0.0.0", 0);
+    const int32_t bindStatus = ctx.bind(bindIp, bindPort);
     if (bindStatus != UTP_ERR_OK) {
-        if (!silent) {
-            std::cerr << "[client] bind failed: " << bindStatus << "\n";
-        }
+        std::cerr << "[client] bind failed: " << bindStatus
+                  << " last_error=" << utp_get_last_error()
+                  << " last_error_msg=" << utp_get_error_string()
+                  << " bind_ip=" << bindIp
+                  << " bind_port=" << bindPort << "\n";
         printFinalResult("bind-failed");
         return 1;
     }

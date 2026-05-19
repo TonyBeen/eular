@@ -7,6 +7,7 @@
 
 #include "send_ctl.h"
 
+#include <array>
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -40,6 +41,7 @@
 #define INITIAL_RTT         333333   // us
 #define MAX_RTO_BACKOFFS    10
 #define MAX_RESUBMITTED_ON_RTO 2
+static constexpr size_t kSendBatchCap = 32;
 
 namespace {
 
@@ -128,6 +130,32 @@ bool IsMtuRelevantDataPacket(const eular::utp::PacketOut *pkt)
         return false;
     }
     return (pkt->frame_types & (1u << static_cast<uint32_t>(eular::utp::kFrameStream))) != 0;
+}
+
+void FillMsgMetaInfoFromPacket(const eular::utp::Address &peerAddress,
+                               const eular::utp::PacketOut *pkt,
+                               eular::utp::UdpSocket::MsgMetaInfo &msg)
+{
+    msg.data = nullptr;
+    msg.len = 0;
+    msg.slice_count = 0;
+    if (pkt == nullptr || !peerAddress.isValid()) {
+        return;
+    }
+
+    if ((pkt->po_flags & eular::utp::PacketOutFlags::kPoEncrypted) && pkt->encrypt_data != nullptr) {
+        msg.data = pkt->encrypt_data;
+        msg.len = pkt->data_size;
+    } else {
+        msg.data = pkt->raw_data;
+        msg.len = pkt->data_size;
+        msg.slice_count = pkt->slice_count;
+        for (uint8_t i = 0; i < pkt->slice_count && i < eular::utp::UdpSocket::kMaxMsgSlices; ++i) {
+            msg.slices[i].data = pkt->slices[i].resolveData(pkt->raw_data);
+            msg.slices[i].len = pkt->slices[i].length;
+        }
+    }
+    msg.metaInfo.peerAddress = peerAddress;
 }
 
 } // namespace
@@ -439,20 +467,20 @@ void SendControl::onCanWrite(utp_time_t nowUs)
     }
 
     bool sentAny = false;
+    if (flushScheduledPackets(nowUs, kSendBatchCap, sentAny) < 0) {
+        return;
+    }
+
     uint32_t sentBudget = m_nextLimit > 0 ? m_nextLimit : UINT32_MAX;
     uint32_t sentCount = 0;
     while (!TAILQ_EMPTY(&m_lostPackets) && canSend() && sentCount < sentBudget) {
-        PacketOut *pkt = TAILQ_FIRST(&m_lostPackets);
-        if (pkt == nullptr) {
+        const uint32_t remainBudget = sentBudget - sentCount;
+        const int32_t batchSent = retransmitLostBatch(nowUs, remainBudget, sentAny);
+        if (batchSent <= 0) {
             break;
         }
 
-        if (!retransmitLostPacket(pkt, nowUs).ok()) {
-            break;
-        }
-
-        sentAny = true;
-        ++sentCount;
+        sentCount += static_cast<uint32_t>(batchSent);
         nowUs = time::MonotonicUs();
     }
 
@@ -506,6 +534,235 @@ void SendControl::onCanWrite(utp_time_t nowUs)
             static_cast<uint32_t>(probeMtu),
             static_cast<uint32_t>(probePacketSize));
     }
+}
+
+Status SendControl::schedulePacket(PacketOut *pkt, bool trackOnSend)
+{
+    if (pkt == nullptr || m_conn == nullptr || m_conn->m_udpSocket == nullptr) {
+        return Status::ErrorLiteral(UTP_ERR_INVALID_PARAM, "invalid param");
+    }
+
+    if ((pkt->po_flags & PacketOutFlags::kPoSched) != 0) {
+        return Status::ErrorLiteral(UTP_ERR_INVALID_STATE, "packet already scheduled");
+    }
+
+    TAILQ_INSERT_TAIL(&m_scheduledPackets, pkt, po_next);
+    pkt->po_flags |= PacketOutFlags::kPoSched;
+    if (trackOnSend) {
+        pkt->local_flags |= PacketOutLocalFlags::kPOLTrackOnSend;
+    }
+
+    const uint32_t packetSize = PacketSentSize(pkt);
+    m_bytesScheduled += packetSize;
+    ++m_nScheduled;
+    if (m_conn != nullptr) {
+        m_conn->scheduleWrite();
+    }
+    return Status::OK();
+}
+
+int32_t SendControl::flushScheduledPackets(utp_time_t nowUs, uint32_t maxPackets, bool &sentAny)
+{
+    if (m_conn == nullptr || m_conn->m_udpSocket == nullptr || TAILQ_EMPTY(&m_scheduledPackets) || maxPackets == 0) {
+        return 0;
+    }
+
+    const uint32_t batchCap = std::min<uint32_t>(maxPackets, static_cast<uint32_t>(kSendBatchCap));
+    std::array<PacketOut *, kSendBatchCap> packets{};
+    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs{};
+
+    size_t preparedCount = 0;
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &m_scheduledPackets, po_next) {
+        if (preparedCount >= batchCap) {
+            break;
+        }
+
+        FillMsgMetaInfoFromPacket(m_conn->m_peerAddress, pkt, msgs[preparedCount]);
+        packets[preparedCount] = pkt;
+        ++preparedCount;
+    }
+
+    if (preparedCount == 0) {
+        return 0;
+    }
+
+    Status udpSt;
+    const int32_t sent = m_conn->m_udpSocket->send(msgs.data(), preparedCount, udpSt);
+    if (sent <= 0) {
+        return 0;
+    }
+
+    sentAny = true;
+    for (int32_t i = 0; i < sent; ++i) {
+        PacketOut *sentPkt = packets[static_cast<size_t>(i)];
+        TAILQ_REMOVE(&m_scheduledPackets, sentPkt, po_next);
+        sentPkt->po_flags &= ~PacketOutFlags::kPoSched;
+        m_bytesScheduled -= PacketSentSize(sentPkt);
+        if (m_nScheduled > 0) {
+            --m_nScheduled;
+        }
+        sentPkt->sent_time = nowUs;
+
+        m_conn->m_bytesOut += sentPkt->data_size;
+        if ((sentPkt->local_flags & PacketOutLocalFlags::kPOLTrackOnSend) != 0) {
+            sentPkt->local_flags &= ~PacketOutLocalFlags::kPOLTrackOnSend;
+            if (sentPkt->po_flags & PacketOutFlags::kPoEncrypted) {
+                if ((sentPkt->po_flags & PacketOutFlags::kPoKeepPlaintext) &&
+                    sentPkt->encrypt_data != nullptr && sentPkt->encrypt_data != sentPkt->raw_data) {
+                    AesGcmContext::ReleaseEncryptBuffer(sentPkt->encrypt_data, sentPkt->encrypt_data_size);
+                    sentPkt->encrypt_data = nullptr;
+                    sentPkt->encrypt_data_size = 0;
+                }
+            }
+            if (!sentPkt->addSendAttempt(sentPkt->packno, sentPkt->sent_time)) {
+                UTP_LOGW("%s record scheduled send attempt failed: Packet No=%" PRIu64,
+                         m_tag.c_str(), sentPkt->packno);
+            }
+            m_sendHistory.update(sentPkt->packno);
+            if (m_congestion) {
+                PacketInfo info;
+                info.packetNo = sentPkt->packno;
+                info.sendTimeUs = sentPkt->sent_time;
+                info.packetSize = PacketSentSize(sentPkt);
+                info.packetState = sentPkt->bw_state;
+                m_congestion->onPacketSent(&info, m_bytesUnackedAll, m_flags & SendCtlFlags::AppLimited);
+                sentPkt->bw_state = static_cast<BWPacketState *>(info.packetState);
+            }
+            appendUnacked(sentPkt);
+            if (sentPkt->frame_types & m_retxFrames) {
+                retransAlarm(nowUs);
+            }
+        } else {
+            if ((sentPkt->po_flags & PacketOutFlags::kPoEncrypted) &&
+                (sentPkt->po_flags & PacketOutFlags::kPoKeepPlaintext) &&
+                sentPkt->encrypt_data != nullptr && sentPkt->encrypt_data != sentPkt->raw_data) {
+                AesGcmContext::ReleaseEncryptBuffer(sentPkt->encrypt_data, sentPkt->encrypt_data_size);
+                sentPkt->encrypt_data = nullptr;
+                sentPkt->encrypt_data_size = 0;
+            }
+            m_conn->m_mm.putPacketOut(sentPkt);
+        }
+    }
+
+    return sent;
+}
+
+int32_t SendControl::retransmitLostBatch(utp_time_t nowUs, uint32_t maxPackets, bool &sentAny)
+{
+    if (maxPackets == 0 || m_conn == nullptr || m_conn->m_udpSocket == nullptr) {
+        return 0;
+    }
+
+    const uint32_t batchCap = std::min<uint32_t>(maxPackets, static_cast<uint32_t>(kSendBatchCap));
+    std::array<PacketOut *, kSendBatchCap> packets{};
+    std::array<UdpSocket::MsgMetaInfo, kSendBatchCap> msgs{};
+
+    size_t preparedCount = 0;
+    PacketOut *pkt = nullptr;
+    TAILQ_FOREACH(pkt, &m_lostPackets, po_next) {
+        if (preparedCount >= batchCap) {
+            break;
+        }
+
+        if (!m_conn->canSendStreamUnackedBytes(pkt->stream_data_size)) {
+            break;
+        }
+
+        if (pkt->stream_data_size > 0 && pkt->transient_ack_size > 0) {
+            if (!detail::PacketEditor::StripTransientAckPayload(pkt)) {
+                break;
+            }
+        }
+
+        const FrameType frameType = FirstFrameType(pkt->frame_types);
+        if (!m_conn->canSendOnCurrentPath(pkt->data_size, frameType)) {
+            if (retransmitSplitStreamPacket(pkt, nowUs).ok()) {
+                sentAny = true;
+            }
+            break;
+        }
+
+        const bool needResetPackNo = (pkt->po_flags & PacketOutFlags::kPoResetPackNo) != 0;
+        if (needResetPackNo && !detail::PacketEditor::RewritePacketNumber(m_conn, pkt)) {
+            break;
+        }
+
+        const bool needRegenerateCipher = (pkt->po_flags & PacketOutFlags::kPoEncrypted)
+                                       && m_conn->m_aesCtx
+                                       && (needResetPackNo || pkt->encrypt_data == nullptr);
+        if (needRegenerateCipher) {
+            if (m_conn->m_aesCtx->encrypt(pkt) != UTP_ERR_OK) {
+                break;
+            }
+            pkt->data_size = pkt->encrypt_data_size;
+        }
+
+        UdpSocket::MsgMetaInfo &msg = msgs[preparedCount];
+        if ((pkt->po_flags & PacketOutFlags::kPoEncrypted) && pkt->encrypt_data != nullptr) {
+            msg.data = pkt->encrypt_data;
+            msg.len = pkt->data_size;
+        } else {
+            msg.data = pkt->raw_data;
+            msg.len = pkt->data_size;
+            msg.slice_count = pkt->slice_count;
+            for (uint8_t i = 0; i < pkt->slice_count && i < UdpSocket::kMaxMsgSlices; ++i) {
+                msg.slices[i].data = pkt->slices[i].resolveData(pkt->raw_data);
+                msg.slices[i].len = pkt->slices[i].length;
+            }
+        }
+        msg.metaInfo.peerAddress = m_conn->m_peerAddress;
+
+        packets[preparedCount] = pkt;
+        ++preparedCount;
+    }
+
+    if (preparedCount == 0) {
+        return 0;
+    }
+
+    Status udpSt;
+    const int32_t sent = m_conn->m_udpSocket->send(msgs.data(), preparedCount, udpSt);
+    if (sent <= 0) {
+        return 0;
+    }
+
+    sentAny = true;
+    for (int32_t i = 0; i < sent; ++i) {
+        PacketOut *sentPkt = packets[static_cast<size_t>(i)];
+        TAILQ_REMOVE(&m_lostPackets, sentPkt, po_next);
+        sentPkt->po_flags &= ~(PacketOutFlags::kPoLost | PacketOutFlags::kPoLossRecorded | PacketOutFlags::kPoResetPackNo);
+        sentPkt->sent_time = nowUs;
+
+        if (!sentPkt->addSendAttempt(sentPkt->packno, sentPkt->sent_time)) {
+            UTP_LOGW("%s record retransmit attempt failed: Packet No=%" PRIu64,
+                     m_tag.c_str(),
+                     sentPkt->packno);
+        }
+
+        m_conn->m_bytesOut += sentPkt->data_size;
+        m_conn->m_bytesRetrans += sentPkt->data_size;
+        m_bytesRetransTotal += sentPkt->data_size;
+
+        m_sendHistory.update(sentPkt->packno);
+        if (m_congestion) {
+            PacketInfo info;
+            info.packetNo = sentPkt->packno;
+            info.sendTimeUs = sentPkt->sent_time;
+            info.packetSize = PacketSentSize(sentPkt);
+            info.packetState = sentPkt->bw_state;
+            m_congestion->onPacketSent(&info, m_bytesUnackedAll, m_flags & SendCtlFlags::AppLimited);
+            sentPkt->bw_state = static_cast<BWPacketState *>(info.packetState);
+        }
+
+        appendUnacked(sentPkt);
+    }
+
+    if (sent > 0 && !TAILQ_EMPTY(&m_unackedPackets)) {
+        retransAlarm(nowUs);
+    }
+
+    return sent;
 }
 
 void SendControl::setReorderThreshold(uint32_t threshold)
@@ -1080,10 +1337,10 @@ Status SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs
     const uint16_t packetFlags = pkt->po_flags & (PacketOutFlags::kPoHello | PacketOutFlags::kPoNoEncrypt);
     const uint64_t bytesOutBefore = m_conn->m_bytesOut;
 
-    std::vector<uint8_t> framePayload;
-    std::vector<ConnectionImpl::FrameBuildMeta> frameMetas;
-    framePayload.reserve(payloadBudget);
-    frameMetas.reserve(PACKET_OUT_MAX_FRAMES);
+    std::array<uint8_t, UTP_ETHERNET_MTU> framePayload{};
+    std::array<ConnectionImpl::FrameBuildMeta, PACKET_OUT_MAX_FRAMES> frameMetas{};
+    size_t framePayloadSize = 0;
+    size_t frameMetaCount = 0;
     uint32_t frameTypeBits = 0;
     bool sentAny = false;
 
@@ -1097,13 +1354,13 @@ Status SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs
     };
 
     auto flushFramePacket = [&] () -> Status {
-        if (framePayload.empty()) {
+        if (framePayloadSize == 0) {
             return Status::OK();
         }
 
         const Status status = m_conn->sendPacket(packetType,
                                                     framePayload.data(),
-                                                    framePayload.size(),
+                                                    framePayloadSize,
                                                     packetFlags,
                                                     nullptr,
                                                     frameTypeBits,
@@ -1113,14 +1370,14 @@ Status SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs
                                                     0,
                                                     0,
                                                     frameMetas.data(),
-                                                    frameMetas.size());
+                                                    frameMetaCount);
         if (!status.ok()) {
             return status;
         }
 
         sentAny = true;
-        framePayload.clear();
-        frameMetas.clear();
+        framePayloadSize = 0;
+        frameMetaCount = 0;
         frameTypeBits = 0;
         return Status::OK();
     };
@@ -1203,16 +1460,21 @@ Status SendControl::retransmitSplitStreamPacket(PacketOut *pkt, utp_time_t nowUs
             return Status::ErrorLiteral(UTP_ERR_WOULD_BLOCK, "frame too large for mtu");
         }
 
-        if (!framePayload.empty() && framePayload.size() + frameLen > payloadBudget) {
+        if (framePayloadSize > 0 && framePayloadSize + frameLen > payloadBudget) {
             Status flushStatus = flushFramePacket();
             if (!flushStatus.ok()) {
                 return flushStatus;
             }
         }
 
-        framePayload.insert(framePayload.end(), frameBytes, frameBytes + frameLen);
-        frameMetas.push_back(ConnectionImpl::FrameBuildMeta(meta.frame_type,
-                                                            static_cast<uint16_t>(frameLen)));
+        if (framePayloadSize + frameLen > framePayload.size() || frameMetaCount >= frameMetas.size()) {
+            return Status::ErrorLiteral(UTP_ERR_OVERFLOW, "frame batch exceeds scratch buffer");
+        }
+
+        std::memcpy(framePayload.data() + framePayloadSize, frameBytes, frameLen);
+        framePayloadSize += frameLen;
+        frameMetas[frameMetaCount++] = ConnectionImpl::FrameBuildMeta(meta.frame_type,
+                                                                      static_cast<uint16_t>(frameLen));
         includeFrameBit(meta.frame_type);
     }
 
@@ -1282,8 +1544,7 @@ Status SendControl::retransmitLostPacket(PacketOut *pkt, utp_time_t nowUs)
         pkt->data_size = pkt->encrypt_data_size;
     }
 
-    UdpSocket::MsgMetaInfo msg;
-    std::memset(&msg, 0, sizeof(msg));
+    UdpSocket::MsgMetaInfo msg{};
     if ((pkt->po_flags & PacketOutFlags::kPoEncrypted) && pkt->encrypt_data != nullptr) {
         msg.data = pkt->encrypt_data;
         msg.len = pkt->data_size;

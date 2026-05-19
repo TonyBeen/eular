@@ -38,6 +38,7 @@ enum PacketOutLocalFlags : uint16_t {
     kPOLLoss        = (1 << 0), // 近期发生过丢包事件
     kPOLLimited     = (1 << 1), // 近期发生过丢包事件, 且当前拥塞受限
     kPOLFacked      = (1 << 2), // 被 FACK 检测出丢失
+    kPOLTrackOnSend = (1 << 3), // 调度发送后需要进入 unacked 队列
 };
 
 enum FrameMetaFlags : uint8_t {
@@ -98,6 +99,7 @@ static constexpr uint8_t PACKET_OUT_MAX_FRAMES = 8;
 
 struct PacketOut {
     void                reset();
+    void                initForReuse(uint8_t *raw, uint16_t alloc);
     bool                addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime);
     void                clearSendAttempts();
 

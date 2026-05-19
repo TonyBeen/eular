@@ -112,13 +112,19 @@ int main(int argc, char **argv)
     std::string bindIp = "0.0.0.0";
     uint16_t bindPort = 9000;
     bool silent = false;
+    bool handshakeTrace = false;
 
     CLI::App app{"UTP Echo Server"};
     app.add_option("--bind-ip", bindIp, "IP address to bind")->check(CLI::ValidIPV4);
     app.add_option("--bind-port", bindPort, "Port to bind")->check(CLI::Range(5000, 65535));
     app.add_flag("--quiet", silent, "Suppress all server output");
     app.add_flag("--silent", silent, "Alias for --quiet");
+    app.add_flag("--handshake-trace", handshakeTrace, "Print handshake progress even in quiet mode");
     CLI11_PARSE(app, argc, argv);
+
+    if (handshakeTrace) {
+        ::setenv("UTP_HANDSHAKE_TRACE_INTERNAL", "1", 1);
+    }
 
     std::signal(SIGINT, [](int) { std::exit(0); });
     std::signal(SIGTERM, [](int) { std::exit(0); });
@@ -128,11 +134,20 @@ int main(int argc, char **argv)
     cfg.enable_keepalive = true;
     cfg.enable_dplpmtud = false;
     cfg.mtu_base = 1400;
+    cfg.mtu_min = 1400;
+    cfg.mtu_max = 1400;
     cfg.ack_every_n_packets = 30;
     cfg.handshake_timeout = 3000;
+    cfg.recv_buf_size = 16 * 1024 * 1024;
+    cfg.send_buf_size = 16 * 1024 * 1024;
+    cfg.initial_max_stream_data_bidi_local = 1024 * 1024;
+    cfg.initial_max_stream_data_bidi_remote = 1024 * 1024;
+    cfg.stream_send_buffer_limit = 1024 * 1024;
+    cfg.stream_unacked_data_limit = 1024 * 1024;
 
     eular::utp::Context ctx(loop.loop(), &cfg);
     std::unordered_set<std::string> zeroRttAcceptedPeers;
+    const bool traceHandshake = !silent || handshakeTrace;
 
     size_t read_size = 0;
     ev::EventTimer print_timer;
@@ -143,10 +158,10 @@ int main(int argc, char **argv)
     });
     print_timer.start(1000, 1000);
 
-    ctx.setOnNewConnection([&ctx, silent](const eular::utp::Context::NewConnectionInfo &info) {
+    ctx.setOnNewConnection([&ctx, traceHandshake](const eular::utp::Context::NewConnectionInfo &info) {
         const bool zeroRttPath = info.local_cid == 0;
         if (zeroRttPath) {
-            if (!silent) {
+            if (traceHandshake) {
                 std::cout << "[server] incoming 0-rtt request from "
                           << info.remote_ip << ":" << info.remote_port
                           << ", peer_cid=" << info.peer_cid << "\n";
@@ -154,7 +169,7 @@ int main(int argc, char **argv)
             return true;
         }
 
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[server] incoming handshake request from "
                       << info.remote_ip << ":" << info.remote_port
                       << ", local_cid=" << info.local_cid
@@ -163,14 +178,14 @@ int main(int argc, char **argv)
 
         const int32_t acceptStatus = ctx.accept();
         if (acceptStatus != UTP_ERR_OK) {
-            if (!silent) {
+            if (traceHandshake) {
                 std::cerr << "[server] accept failed for local_cid=" << info.local_cid
                           << ": " << acceptStatus << "\n";
             }
             return false;
         }
 
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[server] accepted handshake local_cid=" << info.local_cid << "\n";
         }
         return true;
@@ -180,7 +195,7 @@ int main(int argc, char **argv)
         const std::string peer = PeerKey(info.remote_ip, info.remote_port);
         if (info.accepted) {
             zeroRttAcceptedPeers.insert(peer);
-            if (!silent) {
+            if (traceHandshake) {
                 std::cout << "[server] 0-rtt accepted from "
                           << peer
                           << ", peer_cid=" << info.peer_cid
@@ -190,7 +205,7 @@ int main(int argc, char **argv)
         }
 
         zeroRttAcceptedPeers.erase(peer);
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[server] 0-rtt rejected from "
                       << peer
                       << ", peer_cid=" << info.peer_cid
@@ -203,7 +218,7 @@ int main(int argc, char **argv)
         const std::string peer = PeerKey(desc.remoteHost, desc.remotePort);
         const bool zeroRttPath = zeroRttAcceptedPeers.find(peer) != zeroRttAcceptedPeers.end();
 
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[server] connected via "
                       << (zeroRttPath ? "0-rtt" : "handshake")
                       << " scid=" << desc.scid
@@ -233,14 +248,12 @@ int main(int argc, char **argv)
 
                 std::string outbox;
                 size_t outboxOffset{0};
-                std::vector<uint8_t> readBuffer;
                 bool closeAfterFlush{false};
                 bool failed{false};
                 bool finSeen{false};
             };
             auto session = std::make_shared<Session>();
             session->outbox.reserve(256);
-            session->readBuffer.reserve(32 * 1024);
 
             auto queueLine = [session](const std::string &line) {
                 session->outbox.append(line);
@@ -356,109 +369,100 @@ int main(int argc, char **argv)
                         break;
                     }
 
-                    session->readBuffer.resize(readable);
-                    size_t copied = 0;
-                    for (size_t i = 0; i < 2 && copied < readable; ++i) {
-                        if (views[i].data == nullptr || views[i].len == 0) {
+                    size_t consumedTotal = 0;
+
+                    auto processChunk = [&](const uint8_t *chunk, size_t left) {
+                        while (left > 0 && !session->failed) {
+                            if (session->phase == Session::kReadHeader) {
+                                const uint8_t *lf = static_cast<const uint8_t *>(std::memchr(chunk, '\n', left));
+                                if (lf == nullptr) {
+                                    session->headerBuffer.append(reinterpret_cast<const char *>(chunk), left);
+                                    if (session->headerBuffer.size() > 1024) {
+                                        markFailed("header_too_large");
+                                    }
+                                    consumedTotal += left;
+                                    return;
+                                }
+
+                                const size_t headPartLen = static_cast<size_t>(lf - chunk);
+                                session->headerBuffer.append(reinterpret_cast<const char *>(chunk), headPartLen);
+                                if (!session->headerBuffer.empty() && session->headerBuffer.back() == '\r') {
+                                    session->headerBuffer.pop_back();
+                                }
+
+                                uint64_t expected = 0;
+                                if (!ParseUploadHeader(session->headerBuffer, expected)) {
+                                    markFailed("bad_upload_header");
+                                    consumedTotal += headPartLen + 1;
+                                    return;
+                                }
+                                session->expectedBytes = expected;
+                                session->phase = Session::kReadPayload;
+                                session->headerBuffer.clear();
+                                if (!session->xxh128.valid()) {
+                                    markFailed("xxh128_init_failed");
+                                    consumedTotal += headPartLen + 1;
+                                    return;
+                                }
+
+                                const size_t consume = headPartLen + 1;
+                                chunk += consume;
+                                left -= consume;
+                                consumedTotal += consume;
+                                continue;
+                            }
+
+                            if (session->phase != Session::kReadPayload) {
+                                consumedTotal += left;
+                                return;
+                            }
+
+                            if (session->receivedBytes >= session->expectedBytes) {
+                                markFailed("payload_overflow");
+                                consumedTotal += left;
+                                return;
+                            }
+
+                            const uint64_t remain = session->expectedBytes - session->receivedBytes;
+                            const size_t consume = static_cast<size_t>(std::min<uint64_t>(remain, left));
+                            if (!session->xxh128.update(chunk, consume)) {
+                                markFailed("xxh128_update_failed");
+                                consumedTotal += consume;
+                                return;
+                            }
+                            session->receivedBytes += static_cast<uint64_t>(consume);
+                            consumedTotal += consume;
+                            queueLine("ACK total=" + std::to_string(session->receivedBytes) + "\n");
+
+                            chunk += consume;
+                            left -= consume;
+
+                            if (left > 0 && session->receivedBytes >= session->expectedBytes) {
+                                markFailed("payload_overflow");
+                                consumedTotal += left;
+                                return;
+                            }
+                        }
+                    };
+
+                    for (size_t i = 0; i < 2; ++i) {
+                        if (views[i].data == nullptr || views[i].len == 0 || session->failed) {
                             continue;
                         }
-                        const size_t ncopy = std::min(views[i].len, readable - copied);
-                        std::memcpy(session->readBuffer.data() + copied, views[i].data, ncopy);
-                        copied += ncopy;
+                        processChunk(static_cast<const uint8_t *>(views[i].data), views[i].len);
                     }
-                    if (copied == 0) {
+
+                    if (consumedTotal == 0) {
                         break;
                     }
-                    if (stream->commitReadViews(copied) < 0) {
+                    if (stream->commitReadViews(consumedTotal) < 0) {
                         if (!silent) {
                             std::cerr << "[server] commitReadViews failed\n";
                         }
                         break;
                     }
 
-                    size_t consumed = 0;
-                    const uint8_t *chunk = session->readBuffer.data();
-                    size_t left = copied;
-                    while (left > 0 && !session->failed) {
-                        if (session->phase == Session::kReadHeader) {
-                            const uint8_t *lf = static_cast<const uint8_t *>(std::memchr(chunk, '\n', left));
-                            if (lf == nullptr) {
-                                session->headerBuffer.append(reinterpret_cast<const char *>(chunk), left);
-                                if (session->headerBuffer.size() > 1024) {
-                                    markFailed("header_too_large");
-                                }
-                                consumed += left;
-                                left = 0;
-                                break;
-                            }
-
-                            const size_t headPartLen = static_cast<size_t>(lf - chunk);
-                            session->headerBuffer.append(reinterpret_cast<const char *>(chunk), headPartLen);
-                            if (!session->headerBuffer.empty() && session->headerBuffer.back() == '\r') {
-                                session->headerBuffer.pop_back();
-                            }
-
-                            uint64_t expected = 0;
-                            if (!ParseUploadHeader(session->headerBuffer, expected)) {
-                                markFailed("bad_upload_header");
-                                consumed += headPartLen + 1;
-                                left = 0;
-                                break;
-                            }
-                            session->expectedBytes = expected;
-                            session->phase = Session::kReadPayload;
-                            session->headerBuffer.clear();
-                            if (!session->xxh128.valid()) {
-                                markFailed("xxh128_init_failed");
-                                consumed += headPartLen + 1;
-                                left = 0;
-                                break;
-                            }
-
-                            const size_t consume = headPartLen + 1;
-                            chunk += consume;
-                            left -= consume;
-                            consumed += consume;
-                            continue;
-                        }
-
-                        if (session->phase != Session::kReadPayload) {
-                            consumed += left;
-                            left = 0;
-                            break;
-                        }
-
-                        if (session->receivedBytes >= session->expectedBytes) {
-                            markFailed("payload_overflow");
-                            consumed += left;
-                            left = 0;
-                            break;
-                        }
-
-                        const uint64_t remain = session->expectedBytes - session->receivedBytes;
-                        const size_t consume = static_cast<size_t>(std::min<uint64_t>(remain, left));
-                        if (!session->xxh128.update(chunk, consume)) {
-                            markFailed("xxh128_update_failed");
-                            consumed += consume;
-                            left = 0;
-                            break;
-                        }
-                        session->receivedBytes += static_cast<uint64_t>(consume);
-                        consumed += consume;
-                        queueLine("ACK total=" + std::to_string(session->receivedBytes) + "\n");
-
-                        chunk += consume;
-                        left -= consume;
-
-                        if (left > 0 && session->receivedBytes >= session->expectedBytes) {
-                            markFailed("payload_overflow");
-                            consumed += left;
-                            left = 0;
-                            break;
-                        }
-                    }
-
-                    read_size += consumed;
+                    read_size += consumedTotal;
 
                     if (!session->failed && session->phase == Session::kReadPayload &&
                         session->receivedBytes == session->expectedBytes &&
@@ -473,17 +477,17 @@ int main(int argc, char **argv)
         });
     });
 
-    ctx.setOnConnectError([silent](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
-        if (!silent) {
+    ctx.setOnConnectError([traceHandshake](int32_t code, const std::string &reason, eular::utp::Context::ConnectAttemptInfo info) {
+        if (traceHandshake) {
             std::cerr << "[server] connect error code=" << code
                       << " peer=" << info.ip << ":" << info.port
                       << " reason=" << reason << "\n";
         }
     });
 
-    ctx.setOnConnectionClosed([silent](eular::utp::Connection::Ptr conn) {
+    ctx.setOnConnectionClosed([traceHandshake](eular::utp::Connection::Ptr conn) {
         const auto desc = conn->description();
-        if (!silent) {
+        if (traceHandshake) {
             std::cout << "[server] connection closed scid=" << desc.scid
                       << " peer=" << desc.remoteHost << ":" << desc.remotePort << "\n";
         }
@@ -491,18 +495,21 @@ int main(int argc, char **argv)
 
     const int32_t bindStatus = ctx.bind(bindIp, bindPort);
     if (bindStatus != UTP_ERR_OK) {
-        if (!silent) {
-            std::cerr << "[server] bind failed: " << bindStatus << "\n";
-        }
+        std::cerr << "[server] bind failed: " << bindStatus
+                  << " last_error=" << utp_get_last_error()
+                  << " last_error_msg=" << utp_get_error_string()
+                  << " bind_ip=" << bindIp
+                  << " bind_port=" << bindPort
+                  << "\n";
         return 1;
     }
 
-    if (!silent) {
+    if (traceHandshake) {
         std::cout << "[server] listening on " << bindIp << ":" << bindPort << std::endl;
     }
 
     loop.dispatch();
-    if (!silent) {
+    if (traceHandshake) {
         std::cout << "[server] shutdown\n";
     }
     return 0;

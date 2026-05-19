@@ -7,8 +7,6 @@
 
 #include "proto/packet_out.h"
 
-#include <cstdlib>
-#include <cstring>
 #include <limits>
 
 #include "crypto/aes_gcm_context.h"
@@ -19,26 +17,13 @@ namespace utp {
 
 bool PacketOut::addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime)
 {
+    (void) packetNo;
+    (void) sentTime;
 #if defined(UTP_ENABLE_FAULT_INJECTION)
     if (fiu_fail("mem/packet_out_attempt/alloc")) {
         return false;
     }
 #endif
-    PacketOutAttempt *attempt = new (std::nothrow) PacketOutAttempt();
-    if (attempt == nullptr) {
-        return false;
-    }
-
-    attempt->packet_no = packetNo;
-    attempt->sent_time = sentTime;
-    attempt->next = nullptr;
-
-    if (attempts_tail != nullptr) {
-        attempts_tail->next = attempt;
-    } else {
-        attempts_head = attempt;
-    }
-    attempts_tail = attempt;
     if (attempts_count < (std::numeric_limits<uint16_t>::max)()) {
         ++attempts_count;
     }
@@ -48,13 +33,32 @@ bool PacketOut::addSendAttempt(utp_packno_t packetNo, utp_time_t sentTime)
 
 void PacketOut::clearSendAttempts()
 {
-    PacketOutAttempt *attempt = attempts_head;
-    while (attempt != nullptr) {
-        PacketOutAttempt *next = attempt->next;
-        delete attempt;
-        attempt = next;
-    }
+    attempts_head = nullptr;
+    attempts_tail = nullptr;
+    attempts_count = 0;
+}
 
+void PacketOut::initForReuse(uint8_t *raw, uint16_t alloc)
+{
+    raw_data = raw;
+    alloc_size = alloc;
+    sent_time = 0;
+    packno = 0;
+    ackno = 0;
+    loss_chain = this;
+    frame_types = 0;
+    po_flags = 0;
+    local_flags = 0;
+    data_size = 0;
+    encrypt_data_size = 0;
+    slice_count = 0;
+    frame_meta_count = 0;
+    stream_data_size = 0;
+    transient_ack_size = 0;
+    stream_id = 0;
+    stream_offset = 0;
+    encrypt_data = nullptr;
+    bw_state = nullptr;
     attempts_head = nullptr;
     attempts_tail = nullptr;
     attempts_count = 0;
@@ -68,14 +72,7 @@ void PacketOut::reset()
         AesGcmContext::ReleaseEncryptBuffer(encrypt_data, encrypt_data_size);
     }
 
-    uint8_t *raw = raw_data;
-    uint16_t alloc = alloc_size;
-
-    std::memset(this, 0, sizeof(PacketOut));
-
-    raw_data = raw;
-    alloc_size = alloc;
-    loss_chain = this;
+    initForReuse(raw_data, alloc_size);
 }
 
 } // namespace utp

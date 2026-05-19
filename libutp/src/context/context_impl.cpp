@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <unordered_set>
@@ -57,6 +60,31 @@ const std::array<uint8_t, eular::utp::ResumptionStateCodec::KEY_SIZE> kDefaultRe
     0xa7, 0x25, 0xe3, 0x44, 0x8c, 0x9f, 0x10, 0x6d,
     0xfa, 0x57, 0x02, 0x3b, 0xc4, 0x88, 0x6e, 0x11,
 };
+
+bool HandshakeTraceEnabled()
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = std::getenv("UTP_HANDSHAKE_TRACE_INTERNAL");
+        enabled = (env != nullptr && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+void HandshakeTracePrint(const char *fmt, ...)
+{
+    if (!HandshakeTraceEnabled()) {
+        return;
+    }
+
+    std::fprintf(stderr, "[utp-handshake] ");
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 
 uint32_t PendingHandshakeBaseTimeoutMs(const eular::utp::Config &cfg,
                                        const eular::utp::TransportParams &peerTp)
@@ -968,6 +996,13 @@ Status  ContextImpl::sendPendingHandshake(PendingIncomingConnection &pending)
                                              &sentPacketNo);
     if (status.ok()) {
         pending.lastHandshakePacketNo = sentPacketNo;
+        HandshakeTracePrint("server pending handshake sent: peer=%s:%u local_cid=%u peer_cid=%u pn=%" PRIu64 " retry=%u",
+                            pending.peerIp.c_str(), pending.peerAddress.port(), pending.localCid, pending.peerCid,
+                            sentPacketNo, static_cast<unsigned>(pending.handshakeRetryCount));
+    } else {
+        HandshakeTracePrint("server pending handshake send failed: peer=%s:%u local_cid=%u code=%d message=%s",
+                            pending.peerIp.c_str(), pending.peerAddress.port(), pending.localCid,
+                            status.code(), status.message());
     }
 
     return status;
@@ -1318,8 +1353,14 @@ void ContextImpl::processPendingHandshakeTimeouts()
             if (sendPendingHandshake(pending) == UTP_ERR_OK) {
                 pending.lastHandshakeSentUs = nowUs;
                 ++pending.handshakeRetryCount;
+                HandshakeTracePrint("server pending handshake retry advanced: peer=%s:%u local_cid=%u next_retry=%u",
+                                    pending.peerIp.c_str(), pending.peerAddress.port(), pending.localCid,
+                                    static_cast<unsigned>(pending.handshakeRetryCount));
             }
         } else {
+            HandshakeTracePrint("server pending handshake timeout: peer=%s:%u local_cid=%u last_pn=%" PRIu64,
+                                pending.peerIp.c_str(), pending.peerAddress.port(), pending.localCid,
+                                pending.lastHandshakePacketNo);
             expired.push_back(localCid);
         }
     }
@@ -1459,7 +1500,7 @@ void ContextImpl::onReadEvent()
 
             auto it = m_connections.find(dcid);
             if (it != m_connections.end()) {
-                it->second->onUdpPacket(msg);
+                it->second->onUdpPacket(msg, nowUs);
 
                 handleConnectionState(it->second.get());
                 continue;

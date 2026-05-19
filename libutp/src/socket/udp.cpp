@@ -8,9 +8,11 @@
 #include "socket/udp.h"
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <mutex>
+#include <thread>
 
 #include <utils/string8.h>
 
@@ -193,16 +195,25 @@ Status UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &
         return Status::Error(UTP_ERR_INVALID_PARAM, fmt::format("{} bind({}) to an invalid address {}:{}", tag(), m_sock, ip.c_str(), port));
     }
 
-    {
-        Status openStatus;
-        m_sock = Socket::Open(address.family(), openStatus);
-        if (!openStatus.ok()) {
-            return openStatus;
-        }
-    }
-
     Status st = Status::ErrorLiteral(UTP_ERR_SOCKET_IOCTL, "socket setup failed");
-    do {
+    constexpr int kMaxOpenAttempts = 3;
+    constexpr auto kRetryDelay = std::chrono::milliseconds(20);
+    for (int attempt = 1; attempt <= kMaxOpenAttempts; ++attempt) {
+        {
+            Status openStatus;
+            m_sock = Socket::Open(address.family(), openStatus);
+            if (!openStatus.ok()) {
+                st = openStatus;
+                if (attempt < kMaxOpenAttempts) {
+                    std::this_thread::sleep_for(kRetryDelay);
+                    continue;
+                }
+                return openStatus;
+            }
+        }
+
+        st = Status::ErrorLiteral(UTP_ERR_SOCKET_IOCTL, "socket setup failed");
+        do {
         if (Socket::Ioctl::SetNonBlock(m_sock) < 0) {
             break;
         }
@@ -254,10 +265,15 @@ Status UdpSocket::bind(const std::string &ip, uint16_t port, const std::string &
         m_bindAddr = address;
         m_localAddr.fromSocket(m_sock);
         return Status::OK();
-    } while (0);
+        } while (0);
 
-    Socket::Close(m_sock);
-    m_sock = INVALID_SOCKET;
+        Socket::Close(m_sock);
+        m_sock = INVALID_SOCKET;
+        if (attempt < kMaxOpenAttempts) {
+            std::this_thread::sleep_for(kRetryDelay);
+        }
+    }
+
     return st;
 }
 
@@ -464,22 +480,22 @@ int32_t UdpSocket::send(const MsgMetaInfo &msg, Status &status)
     return SendSingleMsgImpl(*this, msg, status);
 }
 
-int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
+int32_t UdpSocket::send(const MsgMetaInfo *msgVec, size_t count, Status &status)
 {
     if (!isValid()) {
         status = Status::Error(UTP_ERR_SOCKET_WRITE, fmt::format("{} send failed: socket invalid", tag()));
         return -1;
     }
 
-    if (msgVec.empty()) {
+    if (msgVec == nullptr || count == 0) {
         return 0;
     }
 
 #if defined(USE_SENDMMSG) && defined(OS_LINUX)
-    if (msgVec.size() > 1) {
+    if (count > 1) {
         int32_t sentCount = 0;
-        for (size_t base = 0; base < msgVec.size();) {
-            const size_t batchCount = std::min<size_t>(static_cast<size_t>(MAX_MMSG_SIZE), msgVec.size() - base);
+        for (size_t base = 0; base < count;) {
+            const size_t batchCount = std::min<size_t>(static_cast<size_t>(MAX_MMSG_SIZE), count - base);
             std::array<mmsghdr, MAX_MMSG_SIZE>                         mmsg{};
             std::array<sockaddr_storage, MAX_MMSG_SIZE>                remoteStorage{};
             std::array<std::array<struct iovec, kMaxMsgSlices>, MAX_MMSG_SIZE> iovecs{};
@@ -568,8 +584,8 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
 #endif
 
     int32_t sentCount = 0;
-    for (const MsgMetaInfo &msg : msgVec) {
-        const int32_t ret = SendSingleMsgImpl(*this, msg, status);
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t ret = SendSingleMsgImpl(*this, msgVec[i], status);
         if (ret > 0) {
             ++sentCount;
             continue;
@@ -583,6 +599,11 @@ int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
     }
 
     return sentCount;
+}
+
+int32_t UdpSocket::send(const std::vector<MsgMetaInfo> &msgVec, Status &status)
+{
+    return send(msgVec.data(), msgVec.size(), status);
 }
 
 } // namespace utp

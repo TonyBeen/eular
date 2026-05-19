@@ -91,6 +91,7 @@ public:
                        const std::shared_ptr<X25519Wrapper> &x25519, const std::shared_ptr<AesGcmContext> &aesCtx);
 
     void onUdpPacket(const UdpSocket::MsgMetaInfo &msg);
+    void onUdpPacket(const UdpSocket::MsgMetaInfo &msg, utp_time_t nowUs);
     void onWrite();
 
     // @brief 下一次调度时间(ms), send control触发
@@ -173,7 +174,7 @@ private:
     uint32_t streamIdSlot(StreamType streamType) const;
     Status   validateIncomingStreamId(uint32_t streamId) const;
     Status   ingestStreamFrame(const FrameStream &streamFrame, PacketIn *packet = nullptr);
-    void     flushPendingStreamWrites();
+    void     flushPendingStreamWrites(utp_time_t nowUs);
     Status   sendConnectionCloseFrame();
     Status   sendResetStreamFrame(uint32_t streamId, uint16_t errorCode, uint64_t finalSize);
     void     handleResetStreamFrame(const FrameResetStream &resetFrame);

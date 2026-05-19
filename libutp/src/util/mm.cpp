@@ -137,9 +137,7 @@ PacketOut *MemoryManager::getPacketOut(uint32_t size)
         maybeShrinkPoolOut(idx);
     }
 
-    memset(packetOut, 0, sizeof(PacketOut));
-    packetOut->alloc_size = g_packetOutSizeVec[idx];
-    packetOut->raw_data = (uint8_t *)pob;
+    packetOut->initForReuse(reinterpret_cast<uint8_t *>(pob), g_packetOutSizeVec[idx]);
     return packetOut;
 }
 
