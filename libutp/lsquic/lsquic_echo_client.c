@@ -219,11 +219,6 @@ static void handle_server_line(struct client_stream_ctx* st, const char* line)
     const char*            hash_pos;
     char*                  endptr;
 
-    if (0 == strncmp(line, "ACK total=", 10)) {
-        ++ctx->ack_count;
-        return;
-    }
-
     if (0 == strncmp(line, "DONE bytes=", 11)) {
         hash_pos = strstr(line, " xxh128=");
         if (!hash_pos) {

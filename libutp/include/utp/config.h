@@ -107,7 +107,7 @@ public:
     uint8_t  ack_every_n_packets = 4;   ///< 每收到 N 个包发一次 ACK
     uint8_t  max_ack_range_size = 149;  ///< ACK 帧中最大 Range 数量
     uint8_t  ack_delay_exponent = 3;    ///< ACK 延迟指数
-    uint16_t ack_delay = 50;            ///< 最大 ACK 延迟 (ms)
+    uint16_t ack_delay = 25;            ///< 最大 ACK 延迟 (ms)
 
     // --- Transport Parameters (传输参数) ---
     uint16_t handshake_timeout = 800;                           ///< 握手首轮超时时间基准 (ms)

@@ -128,6 +128,7 @@ int main(int argc, char **argv)
     eular::utp::Config cfg;
     cfg.enable_keepalive = true;
     cfg.enable_dplpmtud = false;
+    cfg.zero_rtt_token_max_lifetime = 0;
     cfg.mtu_base = 1400;
     cfg.mtu_min = 1400;
     cfg.mtu_max = 1400;
@@ -252,16 +253,6 @@ int main(int argc, char **argv)
                 session->outbox.append(line);
             };
 
-            auto queueAckLine = [session]() {
-                char line[64];
-                const int n = std::snprintf(line, sizeof(line), "ACK total=%llu\n",
-                                            static_cast<unsigned long long>(session->receivedBytes));
-                if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) {
-                    return;
-                }
-                session->outbox.append(line, static_cast<size_t>(n));
-            };
-
             auto queueDoneLine = [session](const std::string &hashHex) {
                 char prefix[64];
                 const int n = std::snprintf(prefix, sizeof(prefix), "DONE bytes=%llu",
@@ -347,7 +338,7 @@ int main(int argc, char **argv)
                 (*tryFlushPtr)();
             });
 
-            stream->setOnReadable([stream, session, queueLine, queueAckLine, queueDoneLine, markFailed, tryFlushPtr, &read_size, silent]() {
+            stream->setOnReadable([stream, session, queueLine, queueDoneLine, markFailed, tryFlushPtr, &read_size, silent]() {
                 if (session->phase == Session::kClosed) {
                     return;
                 }
@@ -448,7 +439,6 @@ int main(int argc, char **argv)
                             }
                             session->receivedBytes += static_cast<uint64_t>(consume);
                             consumedTotal += consume;
-                            queueAckLine();
 
                             chunk += consume;
                             left -= consume;

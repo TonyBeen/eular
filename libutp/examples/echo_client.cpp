@@ -129,6 +129,7 @@ int main(int argc, char **argv)
     cfg.handshake_timeout = 3000;
     cfg.enable_keepalive = false;
     cfg.enable_dplpmtud = false;
+    cfg.zero_rtt_token_max_lifetime = 0;
     cfg.mtu_base = 1400;
     cfg.mtu_min = 1400;
     cfg.mtu_max = 1400;
@@ -222,15 +223,6 @@ int main(int argc, char **argv)
             << "\n";
     };
 
-    ev::EventTimer stopTimer;
-    stopTimer.reset(loop.loop(), [&]() {
-        if (!silent) {
-            std::cout << "[client] exiting...\n";
-        }
-        printFinalResult("timer");
-        loop.breakLoop();
-    });
-
     ev::EventTimer drainTimer;
     drainTimer.reset(loop.loop(), [&]() {
         if (!closeIssued && connected && conn) {
@@ -285,21 +277,6 @@ int main(int argc, char **argv)
     };
 
     auto parseServerLine = [&](const std::string &line) {
-        if (line.rfind("ACK total=", 0) == 0) {
-            ++ackCount;
-            if (silent) {
-                return;
-            }
-            const std::string value = line.substr(std::strlen("ACK total="));
-            try {
-                const uint64_t total = std::stoull(value);
-                std::cout << "[client] ack total=" << total << "\n";
-            } catch (...) {
-                std::cerr << "[client] bad ACK line: " << line << "\n";
-            }
-            return;
-        }
-
         if (line.rfind("DONE bytes=", 0) == 0) {
             const size_t hashPos = line.find(" xxh128=");
             if (hashPos == std::string::npos) {
@@ -580,7 +557,10 @@ int main(int argc, char **argv)
         if (!silent) {
             std::cout << "[client] connection closed scid=" << c->description().scid << "\n";
         }
-        stopTimer.start(1000);
+        if (!finalResultPrinted) {
+            printFinalResult(doneReceived ? "closed" : "closed-before-done");
+        }
+        loop.breakLoop();
     });
 
     const int32_t bindStatus = ctx.bind(bindIp, bindPort);

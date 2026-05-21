@@ -136,8 +136,7 @@ uint64_t Cubic::smoothedRttUs() const
 {
     uint64_t srttUs = 25000;
     if (m_rttStats != nullptr && m_rttStats->srtt() > 0) {
-        // RttStats::srtt() stores value with alpha scale (x8).
-        srttUs = std::max<uint64_t>(1000, m_rttStats->srtt() >> 3);
+        srttUs = std::max<uint64_t>(1000, m_rttStats->srtt());
     }
     return srttUs;
 }

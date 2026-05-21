@@ -220,8 +220,6 @@ static void process_payload_chunk(struct server_stream_ctx* st, const unsigned c
     }
 
     st->received_bytes += len;
-    snprintf(line, sizeof(line), "ACK total=%llu\n", (unsigned long long)st->received_bytes);
-    if (0 != queue_line(st, line)) mark_failed(st, "oom");
 }
 
 static int consume_read_buf(struct server_stream_ctx* st, const unsigned char* data, size_t len)

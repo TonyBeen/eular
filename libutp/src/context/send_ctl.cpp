@@ -426,6 +426,7 @@ Status SendControl::onAckReceived(const AckInfo &ackInfo, utp_time_t nowUs)
                     m_conn->m_obsRttVarUs = (m_conn->m_obsRttVarUs * 3 + delta) / 4;
                     m_conn->m_obsRttUs = (m_conn->m_obsRttUs * 7 + sampleRttUs) / 8;
                 }
+                m_conn->m_rttStats.update(static_cast<int64_t>(sampleRttUs));
             }
         }
     }

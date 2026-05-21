@@ -3213,8 +3213,16 @@ utp_time_t ConnectionImpl::closePtoUs() const
         granularityUs = std::max<utp_time_t>(1000, m_ctx->config()->clock_granularity_us);
     }
 
-    utp_time_t maxAckDelayUs = static_cast<utp_time_t>(m_peerAckMaxDelayMs) * 1000;
-    utp_time_t ptoUs = srtt + std::max<utp_time_t>(4 * rttVar, granularityUs) + maxAckDelayUs;
+    // CONNECTION_CLOSE is not ack-eliciting.  Closing/draining only needs to absorb
+    // reordering and duplicate close packets, so we use a tighter close-specific PTO
+    // than the data-path PTO:
+    // - do not include peer max_ack_delay
+    // - use a weaker RTTVAR multiplier
+    // - peer-initiated close can be tighter still, as no further delivery is expected
+    const bool passiveClose = m_state == State::kStateCloseReceived || m_closeByPeer;
+    const utp_time_t varianceWeight = passiveClose ? 1 : 2;
+    const utp_time_t varianceUs = std::max<utp_time_t>(varianceWeight * rttVar, granularityUs);
+    utp_time_t ptoUs = srtt + varianceUs;
     ptoUs = CLAMP(ptoUs, kMinPtoUs, kMaxPtoUs);
 
     return ptoUs;

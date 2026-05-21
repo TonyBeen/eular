@@ -37,23 +37,26 @@ public:
     inline void update(int64_t measuredRtt)
     {
         if (m_srtt) {
-            int64_t delta = std::abs((int64_t)m_srtt - measuredRtt);
-            m_srtt -= (m_srtt >> ALPHA_SHIFT); // m_srtt * 7/8
-            m_srtt += measuredRtt >> ALPHA_SHIFT; // m_srtt + measuredRtt / 8
+            const int64_t srttUs = static_cast<int64_t>(m_srtt >> ALPHA_SHIFT);
+            const int64_t delta = measuredRtt - srttUs;
+            const uint64_t absDelta = static_cast<uint64_t>(std::abs(delta));
+
+            // m_srtt stores the smoothed RTT in alpha-scaled form (x8).
+            m_srtt = static_cast<uint64_t>(static_cast<int64_t>(m_srtt) + delta);
 
             m_rttvar -= (m_rttvar >> BETA_SHIFT); // m_rttvar * 3/4
-            m_rttvar += (delta >> BETA_SHIFT); // m_rttvar + delta / 4
+            m_rttvar += (absDelta >> BETA_SHIFT); // m_rttvar + |delta| / 4
             if (measuredRtt < m_minrtt) {
-                m_minrtt = measuredRtt;
+                m_minrtt = static_cast<uint64_t>(measuredRtt);
             }
         } else {
-            m_srtt = measuredRtt << ALPHA_SHIFT;
-            m_rttvar = measuredRtt << (BETA_SHIFT - 1);
-            m_minrtt = measuredRtt;
+            m_srtt = static_cast<uint64_t>(measuredRtt) << ALPHA_SHIFT;
+            m_rttvar = static_cast<uint64_t>(measuredRtt) << (BETA_SHIFT - 1);
+            m_minrtt = static_cast<uint64_t>(measuredRtt);
         }
     }
 
-    inline uint64_t srtt() const { return m_srtt; }
+    inline uint64_t srtt() const { return m_srtt >> ALPHA_SHIFT; }
     inline uint64_t rttVar() const { return m_rttvar; }
     inline uint64_t minRTT() const { return m_minrtt; }
 
