@@ -1067,7 +1067,8 @@ ConnectionImpl::SP ContextImpl::createAndInsertPassiveConnection(uint32_t localC
 }
 
 void ContextImpl::replayBufferedPendingPackets(ConnectionImpl *conn,
-                                               const std::deque<std::vector<uint8_t>> &buffered,
+                                               const std::vector<PendingIncomingConnection::BufferedPendingPacket> &buffered,
+                                               const std::vector<uint8_t> &bufferStorage,
                                                const UdpSocket::MsgMetaInfo &templateMsg)
 {
     if (conn == nullptr) {
@@ -1075,13 +1076,18 @@ void ContextImpl::replayBufferedPendingPackets(ConnectionImpl *conn,
     }
 
     for (const auto &cached : buffered) {
-        if (cached.size() < UTP_HEADER_SIZE) {
+        const size_t offset = static_cast<size_t>(cached.offset);
+        const size_t len = static_cast<size_t>(cached.len);
+        if (len < UTP_HEADER_SIZE) {
+            continue;
+        }
+        if (offset > bufferStorage.size() || len > (bufferStorage.size() - offset)) {
             continue;
         }
 
         UdpSocket::MsgMetaInfo replay{};
-        replay.data = cached.data();
-        replay.len = cached.size();
+        replay.data = bufferStorage.data() + offset;
+        replay.len = len;
         replay.metaInfo = templateMsg.metaInfo;
         conn->onUdpPacket(replay);
     }
@@ -1538,10 +1544,17 @@ void ContextImpl::onReadEvent()
                         && msg.len >= UTP_HEADER_SIZE
                         && pendingIt->second.bufferedBeforeHandshakeDone.size() < PendingPreHandshakeBufferMaxPackets(m_config)
                         && (pendingIt->second.bufferedBeforeHandshakeDoneBytes + static_cast<size_t>(msg.len)) <= PendingPreHandshakeBufferMaxBytes(m_config)) {
-                        std::vector<uint8_t> cached(static_cast<size_t>(msg.len));
-                        std::memcpy(cached.data(), msg.data, static_cast<size_t>(msg.len));
+                        const size_t packetLen = static_cast<size_t>(msg.len);
+                        const size_t packetOffset = pendingIt->second.bufferedBeforeHandshakeDoneStorage.size();
+                        pendingIt->second.bufferedBeforeHandshakeDoneStorage.resize(packetOffset + packetLen);
+                        std::memcpy(pendingIt->second.bufferedBeforeHandshakeDoneStorage.data() + packetOffset,
+                                    msg.data,
+                                    packetLen);
                         pendingIt->second.bufferedBeforeHandshakeDoneBytes += static_cast<size_t>(msg.len);
-                        pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(std::move(cached));
+                        PendingIncomingConnection::BufferedPendingPacket cached;
+                        cached.offset = static_cast<uint32_t>(packetOffset);
+                        cached.len = static_cast<uint32_t>(packetLen);
+                        pendingIt->second.bufferedBeforeHandshakeDone.emplace_back(cached);
                     }
                     continue;
                 }
@@ -1572,7 +1585,10 @@ void ContextImpl::onReadEvent()
                 if (m_onConnected) {
                     m_onConnected(conn);
                 }
-                replayBufferedPendingPackets(conn.get(), pending.bufferedBeforeHandshakeDone, msg);
+                replayBufferedPendingPackets(conn.get(),
+                                             pending.bufferedBeforeHandshakeDone,
+                                             pending.bufferedBeforeHandshakeDoneStorage,
+                                             msg);
                 conn->onUdpPacket(msg);
                 continue;
             }
@@ -1774,6 +1790,8 @@ void ContextImpl::onReadEvent()
             pending.encrypted = initialPacket.hasFrame(kFrameCrypto)
                              ? Context::kEncryptionAesGcm128
                              : Context::kEncryptionNone;
+            pending.bufferedBeforeHandshakeDone.reserve(PendingPreHandshakeBufferMaxPackets(m_config));
+            pending.bufferedBeforeHandshakeDoneStorage.reserve(PendingPreHandshakeBufferMaxBytes(m_config));
 
             size_t frameOffset = 0;
             while (frameOffset < initialPacket.payload_size) {

@@ -109,6 +109,11 @@ private:
     };
 
     struct PendingIncomingConnection {
+        struct BufferedPendingPacket {
+            uint32_t offset{0};
+            uint32_t len{0};
+        };
+
         uint32_t                localCid{0};
         uint32_t                peerCid{0};
         Address                 peerAddress;
@@ -126,7 +131,8 @@ private:
         bool                    handshakeSent{false};
         uint8_t                 handshakeRetryCount{0};
         size_t                  bufferedBeforeHandshakeDoneBytes{0};
-        std::deque<std::vector<uint8_t>> bufferedBeforeHandshakeDone;
+        std::vector<BufferedPendingPacket> bufferedBeforeHandshakeDone;
+        std::vector<uint8_t>    bufferedBeforeHandshakeDoneStorage;
         TransportParams         peerTp{};
         FrameAckFrequency       peerAckFrequency{};
         bool                    hasPeerAckFrequency{false};
@@ -176,7 +182,8 @@ private:
                                                         const std::string &collisionReason,
                                                         uint32_t sessionTokenSize = 0);
     void    replayBufferedPendingPackets(ConnectionImpl *conn,
-                                         const std::deque<std::vector<uint8_t>> &buffered,
+                                         const std::vector<PendingIncomingConnection::BufferedPendingPacket> &buffered,
+                                         const std::vector<uint8_t> &bufferStorage,
                                          const UdpSocket::MsgMetaInfo &templateMsg);
     void    reportZeroRttDecision(const PendingIncomingConnection &pending,
                                   bool accepted,
