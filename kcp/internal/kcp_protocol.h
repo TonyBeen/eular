@@ -149,6 +149,18 @@ typedef struct KcpSengment {
     char     data[1];   // 数据
 } kcp_segment_t;
 
+typedef struct KcpPacketAssembly {
+    struct rb_node      node_rbtree;    // keyed by psn
+    struct list_head    node_list;      // ordered by start_sn
+    struct list_head    fragments;      // ordered by frg
+    uint32_t            psn;
+    uint32_t            start_sn;
+    uint16_t            expected_frags;
+    uint16_t            received_frags;
+    int32_t             total_size;
+    bool                has_head;
+} kcp_packet_assembly_t;
+
 typedef enum KcpBbrMode {
     KCP_BBR_STARTUP = 1,
     KCP_BBR_DRAIN,
@@ -222,6 +234,7 @@ typedef struct KcpConnection {
     int32_t nrcv_buf_unused;    // 未使用的接收队列数量
     int32_t nrcv_que;           // 接收队列中的包数量
     int32_t nsnd_que;           // 发送队列中的包数量
+    int32_t rcv_queue_bytes;    // 接收队列中的总字节数
 
     // packet 计数
     uint32_t nsnd_pkt_next;     // 下一个待发送发送包序号
@@ -255,7 +268,9 @@ typedef struct KcpConnection {
     struct list_head    snd_buf_unused; // 未使用的发送缓存
 
     struct list_head    rcv_queue;      // 接收队列
-    struct list_head    rcv_buf;        // 接收缓存
+    struct rb_root      rcv_buf;        // 接收缓存, keyed by sn
+    struct rb_root      rcv_packet;     // 按psn聚合的接收缓存
+    struct list_head    rcv_packet_list;// 按start_sn排序的包列表
     struct list_head    rcv_buf_unused; // 未使用的接收缓存
 
     // ACK相关
@@ -396,6 +411,8 @@ EXTERN_C_BEGIN
 void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_host, struct KcpContext* kcp_ctx);
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn);
+
+void kcp_refresh_write_timer(struct KcpContext *kcp_ctx);
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_t data_size);
 

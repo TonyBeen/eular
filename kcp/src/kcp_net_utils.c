@@ -2,6 +2,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#if defined(OS_WINDOWS)
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#elif defined(OS_LINUX)
+#include <sys/random.h>
+#endif
 
 #include "kcp_inc.h"
 #include "kcp_error.h"
@@ -415,12 +423,58 @@ int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
 
 uint32_t kcp_random(uint32_t min, uint32_t max)
 {
+    uint32_t value = 0;
+    bool has_random_value = false;
+
     if (min > max) {
         uint32_t temp = min;
         min = max;
         max = temp;
     }
 
-    srand((uint32_t)kcp_time_monotonic_ms());
-    return min + rand() % (max - min + 1);
+    if (min == max) {
+        return min;
+    }
+
+    do {
+#if defined(OS_WINDOWS)
+        if (BCryptGenRandom(NULL, (PUCHAR)&value, (ULONG)sizeof(value), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0) {
+            has_random_value = true;
+            break;
+        }
+    #elif defined(OS_LINUX)
+        {
+            ssize_t nread = getrandom(&value, sizeof(value), 0);
+            if (nread == (ssize_t)sizeof(value)) {
+                has_random_value = true;
+                break;
+            }
+        }
+    #elif defined(OS_MAC) || defined(OS_FREEBSD) || defined(OS_OPENBSD) || defined(OS_NETBSD)
+        arc4random_buf(&value, sizeof(value));
+        has_random_value = true;
+        break;
+#endif
+
+        uint64_t seed = kcp_time_monotonic_us();
+        seed ^= (uint64_t)time(NULL) << 21;
+#if defined(OS_WINDOWS)
+        seed ^= (uint64_t)GetCurrentProcessId() << 7;
+#else
+        seed ^= (uint64_t)getpid() << 7;
+#endif
+        seed ^= ((uint64_t)(uintptr_t)&value) << 11;
+        seed ^= seed >> 33;
+        seed *= 0xff51afd7ed558ccdULL;
+        seed ^= seed >> 33;
+        seed *= 0xc4ceb9fe1a85ec53ULL;
+        seed ^= seed >> 33;
+        value = (uint32_t)(seed ^ (seed >> 32));
+        has_random_value = true;
+    } while (false);
+
+    if (!has_random_value) {
+        return min;
+    }
+    return min + value % (max - min + 1);
 }

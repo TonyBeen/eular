@@ -20,6 +20,7 @@ endif()
 option(KCPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(KCPP_STATIC_LIB "Build static library" ON)
 option(BUILD_EXAMPLES "Compile sample program" ON)
+option(BUILD_TEST_TOOLS "Compile test helper programs" ON)
 option(USE_SENDMMSG "Use sendmmsg" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
 
@@ -62,6 +63,10 @@ endif()
 
 if(BUILD_EXAMPLES MATCHES "ON")
     add_subdirectory(examples)
+endif()
+
+if(BUILD_TEST_TOOLS MATCHES "ON")
+    add_subdirectory(test)
 endif()
 
 # 生成静态库

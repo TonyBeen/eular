@@ -30,6 +30,133 @@ static const uint32_t kcp_bbr_probe_bw_gain_cycle[8] = {
     1250, 750, 1000, 1000, 1000, 1000, 1000, 1000
 };
 
+static kcp_segment_t *kcp_rcv_segment_search(kcp_connection_t *kcp_conn, uint32_t sn)
+{
+    struct rb_node *node = kcp_conn->rcv_buf.rb_node;
+    while (node != NULL) {
+        kcp_segment_t *segment = rb_entry(node, kcp_segment_t, node_rbtree);
+        if (sn < segment->sn) {
+            node = node->rb_left;
+        } else if (sn > segment->sn) {
+            node = node->rb_right;
+        } else {
+            return segment;
+        }
+    }
+
+    return NULL;
+}
+
+static void kcp_rcv_segment_insert(kcp_connection_t *kcp_conn, kcp_segment_t *segment)
+{
+    struct rb_node **link = &kcp_conn->rcv_buf.rb_node;
+    struct rb_node *parent = NULL;
+    while (*link != NULL) {
+        kcp_segment_t *current = rb_entry(*link, kcp_segment_t, node_rbtree);
+        parent = *link;
+        if (segment->sn < current->sn) {
+            link = &(*link)->rb_left;
+        } else {
+            link = &(*link)->rb_right;
+        }
+    }
+
+    rb_link_node(&segment->node_rbtree, parent, link);
+    rb_insert_color(&segment->node_rbtree, &kcp_conn->rcv_buf);
+}
+
+static kcp_packet_assembly_t *kcp_rcv_packet_search(kcp_connection_t *kcp_conn, uint32_t psn)
+{
+    struct rb_node *node = kcp_conn->rcv_packet.rb_node;
+    while (node != NULL) {
+        kcp_packet_assembly_t *packet = rb_entry(node, kcp_packet_assembly_t, node_rbtree);
+        if (psn < packet->psn) {
+            node = node->rb_left;
+        } else if (psn > packet->psn) {
+            node = node->rb_right;
+        } else {
+            return packet;
+        }
+    }
+
+    return NULL;
+}
+
+static void kcp_rcv_packet_insert(kcp_connection_t *kcp_conn, kcp_packet_assembly_t *packet)
+{
+    struct rb_node **link = &kcp_conn->rcv_packet.rb_node;
+    struct rb_node *parent = NULL;
+    while (*link != NULL) {
+        kcp_packet_assembly_t *current = rb_entry(*link, kcp_packet_assembly_t, node_rbtree);
+        parent = *link;
+        if (packet->psn < current->psn) {
+            link = &(*link)->rb_left;
+        } else {
+            link = &(*link)->rb_right;
+        }
+    }
+
+    rb_link_node(&packet->node_rbtree, parent, link);
+    rb_insert_color(&packet->node_rbtree, &kcp_conn->rcv_packet);
+}
+
+static void kcp_rcv_packet_order_insert(kcp_connection_t *kcp_conn, kcp_packet_assembly_t *packet)
+{
+    kcp_packet_assembly_t *pos = NULL;
+    list_for_each_entry(pos, &kcp_conn->rcv_packet_list, node_list) {
+        if (packet->start_sn < pos->start_sn) {
+            list_add_tail(&packet->node_list, &pos->node_list);
+            return;
+        }
+    }
+
+    list_add_tail(&packet->node_list, &kcp_conn->rcv_packet_list);
+}
+
+static kcp_packet_assembly_t *kcp_rcv_packet_create(kcp_connection_t *kcp_conn, uint32_t psn, uint32_t start_sn)
+{
+    (void)kcp_conn;
+
+    kcp_packet_assembly_t *packet = (kcp_packet_assembly_t *)malloc(sizeof(kcp_packet_assembly_t));
+    if (packet == NULL) {
+        return NULL;
+    }
+
+    memset(packet, 0, sizeof(*packet));
+    list_init(&packet->node_list);
+    list_init(&packet->fragments);
+    packet->psn = psn;
+    packet->start_sn = start_sn;
+    kcp_rcv_packet_insert(kcp_conn, packet);
+    kcp_rcv_packet_order_insert(kcp_conn, packet);
+    return packet;
+}
+
+static bool kcp_rcv_packet_is_complete(const kcp_packet_assembly_t *packet)
+{
+    if (!packet->has_head || packet->expected_frags == 0 || packet->expected_frags != packet->received_frags) {
+        return false;
+    }
+
+    uint32_t expected_sn = packet->start_sn;
+    kcp_segment_t *pos = NULL;
+    list_for_each_entry(pos, &packet->fragments, node_list) {
+        if (pos->sn != expected_sn) {
+            return false;
+        }
+        ++expected_sn;
+    }
+
+    return true;
+}
+
+static void kcp_rcv_packet_destroy(kcp_connection_t *kcp_conn, kcp_packet_assembly_t *packet)
+{
+    rb_erase(&packet->node_rbtree, &kcp_conn->rcv_packet);
+    list_del_init(&packet->node_list);
+    free(packet);
+}
+
 static uint64_t bbr_apply_gain_u64(uint64_t value, uint32_t gain_num)
 {
     return (value * gain_num) / KCP_BBR_GAIN_DEN;
@@ -337,6 +464,7 @@ static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_pr
             }
 
             kcp_connection->need_write_timer_event = true;
+            kcp_refresh_write_timer(kcp_connection->kcp_ctx);
         } else {
             send_rst = true;
         }
@@ -834,6 +962,7 @@ static int32_t on_kcp_write_timeout(struct KcpConnection *kcp_connection, uint64
     }
 
     kcp_connection->ts_flush = timestamp / 1000 + kcp_connection->interval;
+    kcp_refresh_write_timer(kcp_connection->kcp_ctx);
     if (kcp_connection->write_event_cb) {
         kcp_connection->write_event_cb(kcp_connection, kcp_connection->snd_wnd - kcp_connection->nsnd_buf);
     }
@@ -928,7 +1057,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     memset(&kcp_conn->node_rbtree, 0, sizeof(struct rb_node));
     list_init(&kcp_conn->node_list);
 
-    kcp_conn->scid = kcp_ctx->connection_id;
+    kcp_conn->scid = 0;
     kcp_conn->dcid = 0;
     kcp_conn->mtu = kcp_ctx->udp_mtu;
     kcp_conn->mss = kcp_conn->mtu - KCP_HEADER_SIZE;
@@ -957,6 +1086,7 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->nrcv_buf_unused = 0;
     kcp_conn->nrcv_que = 0;
     kcp_conn->nsnd_que = 0;
+    kcp_conn->rcv_queue_bytes = 0;
     kcp_conn->nsnd_pkt_next = 0;
     kcp_conn->incr = kcp_conn->cwnd * kcp_conn->mss;
 
@@ -1004,7 +1134,9 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     list_init(&kcp_conn->snd_buf_unused);
 
     list_init(&kcp_conn->rcv_queue);
-    list_init(&kcp_conn->rcv_buf);
+    kcp_conn->rcv_buf = RB_ROOT;
+    kcp_conn->rcv_packet = RB_ROOT;
+    list_init(&kcp_conn->rcv_packet_list);
     list_init(&kcp_conn->rcv_buf_unused);
 
     list_init(&kcp_conn->ack_item);
@@ -1043,9 +1175,13 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
 
 void kcp_connection_destroy(kcp_connection_t *kcp_conn)
 {
+    kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
+
     // 从红黑树中移除连接
-    connection_set_erase_node(&kcp_conn->kcp_ctx->connection_set, kcp_conn);
-    bitmap_set(&kcp_conn->kcp_ctx->conv_bitmap, kcp_conn->dcid, false);
+    connection_set_erase_node(&kcp_ctx->connection_set, kcp_conn);
+    if (kcp_conn->scid != 0 && bitmap_get(&kcp_ctx->conv_bitmap, kcp_conn->scid)) {
+        bitmap_set(&kcp_ctx->conv_bitmap, kcp_conn->scid, false);
+    }
 
     // 移除写事件
     if (!list_empty(&kcp_conn->node_list)) {
@@ -1172,12 +1308,21 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     }
 
     // 清理接收缓冲区
-    if (!list_empty(&kcp_conn->rcv_buf)) {
-        kcp_segment_t *pos = NULL;
-        kcp_segment_t *next = NULL;
-        list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
-            list_del_init(&pos->node_list);
-            free(pos);
+    while (kcp_conn->rcv_buf.rb_node != NULL) {
+        struct rb_node *node = rb_first(&kcp_conn->rcv_buf);
+        kcp_segment_t *pos = rb_entry(node, kcp_segment_t, node_rbtree);
+        rb_erase(node, &kcp_conn->rcv_buf);
+        list_del_init(&pos->node_list);
+        free(pos);
+    }
+
+    if (!list_empty(&kcp_conn->rcv_packet_list)) {
+        kcp_packet_assembly_t *packet = NULL;
+        kcp_packet_assembly_t *packet_next = NULL;
+        list_for_each_entry_safe(packet, packet_next, &kcp_conn->rcv_packet_list, node_list) {
+            rb_erase(&packet->node_rbtree, &kcp_conn->rcv_packet);
+            list_del_init(&packet->node_list);
+            free(packet);
         }
     }
 
@@ -1192,6 +1337,10 @@ void kcp_connection_destroy(kcp_connection_t *kcp_conn)
     }
 
     free(kcp_conn);
+
+    if (kcp_ctx != NULL) {
+        kcp_refresh_write_timer(kcp_ctx);
+    }
 }
 
 int32_t kcp_proto_parse(kcp_proto_header_t *kcp_header, const char **data, size_t data_size)
@@ -1613,6 +1762,7 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                             kcp_connection->mtu = MIN(remote_mtu, kcp_connection->mtu);
                             kcp_connection->mss = kcp_connection->mtu - KCP_HEADER_SIZE;
                             kcp_connection->ping_ctx->keepalive_next_ts = ts * 1000 + kcp_connection->ping_ctx->keepalive_interval;
+                            kcp_refresh_write_timer(kcp_ctx);
                             kcp_ctx->callback.on_connected(kcp_connection, NO_ERROR);
                             // kcp_mtu_probe(kcp_connection, DEFAULT_MTU_PROBE_TIMEOUT, 2);
                         }
@@ -1815,104 +1965,74 @@ int32_t on_kcp_push_pcaket(kcp_connection_t *kcp_conn, const kcp_proto_header_t 
         memcpy(kcp_segment->data, kcp_header->packet_data.data, kcp_segment->len);
     }
 
-    bool repeat = false;
-    kcp_segment_t *pos = NULL;
-    kcp_segment_t *next = NULL;
-    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
-        if (pos->psn == kcp_segment->psn && pos->frg == kcp_segment->frg) { // 相同包
-            repeat = true;
-            break;
-        }
-
-        if (kcp_segment->sn > pos->sn) {
-            break;
-        }
-    }
-
-    if (repeat) {
+    if (kcp_rcv_segment_search(kcp_conn, kcp_segment->sn) != NULL) {
         kcp_segment_recv_put(kcp_conn, kcp_segment);
         list_del_init(&ack_item->node);
         free(ack_item);
         return NO_ERROR;
     }
 
-    kcp_segment_t *last = NULL;
-    list_for_each_entry_safe(pos, next, &kcp_conn->rcv_buf, node_list) {
-        if (pos->psn == kcp_segment->psn) {
-            last = pos;
-            break;
+    kcp_packet_assembly_t *packet = kcp_rcv_packet_search(kcp_conn, kcp_segment->psn);
+    if (packet == NULL) {
+        packet = kcp_rcv_packet_create(kcp_conn, kcp_segment->psn, kcp_segment->sn - kcp_segment->frg);
+        if (packet == NULL) {
+            kcp_segment_recv_put(kcp_conn, kcp_segment);
+            list_del_init(&ack_item->node);
+            free(ack_item);
+            return NO_MEMORY;
         }
     }
 
-    if (last) { // 属于同一包
-        pos = last;
-        list_for_each_entry_safe_from(pos, next, &kcp_conn->rcv_buf, node_list) {
-            if (pos->psn != kcp_segment->psn) { // 同一个包的最后一个节点
-                break;
-            }
-            if (pos->frg > kcp_segment->frg) { // 同一包的不同分片
-                break;
-            }
-
-            last = pos;
+    if (kcp_segment->frg == 0) {
+        packet->has_head = true;
+        packet->expected_frags = (uint16_t)kcp_segment->wnd;
+        packet->start_sn = kcp_segment->sn;
+        if (!list_empty(&packet->node_list)) {
+            list_del_init(&packet->node_list);
         }
-
-        list_add(&kcp_segment->node_list, &last->node_list);
-    } else { // 新包
-        list_add_tail(&kcp_segment->node_list, &kcp_conn->rcv_buf);
+        kcp_rcv_packet_order_insert(kcp_conn, packet);
     }
 
+    kcp_segment_t *pos = NULL;
+    list_for_each_entry(pos, &packet->fragments, node_list) {
+        if (kcp_segment->frg < pos->frg) {
+            list_add_tail(&kcp_segment->node_list, &pos->node_list);
+            goto inserted_fragment;
+        }
+    }
+    list_add_tail(&kcp_segment->node_list, &packet->fragments);
+
+inserted_fragment:
+    kcp_rcv_segment_insert(kcp_conn, kcp_segment);
+    ++packet->received_frags;
+    packet->total_size += (int32_t)kcp_segment->len;
     ++kcp_conn->nrcv_buf;
+
     if (kcp_segment->sn == kcp_conn->rcv_nxt) {
         kcp_conn->rcv_nxt++;
-        kcp_segment_t *iterator = NULL;
-        // NOTE 修复因收包乱序导致的UNA异常问题
-        list_for_each_entry_safe(iterator, next, &kcp_conn->rcv_buf, node_list) {
-            if (iterator->sn < kcp_conn->rcv_nxt) { // 已被接收过
-                continue;
-            }
-
-            if (iterator->sn != kcp_conn->rcv_nxt) { // 不是连续的包
-                break;
-            }
-
+        while (kcp_rcv_segment_search(kcp_conn, kcp_conn->rcv_nxt) != NULL) {
             kcp_conn->rcv_nxt++;
         }
     }
 
-    // 解析rcv_buf, 组成完整数据包
-    kcp_segment_t *iterator = NULL;
-    uint16_t packet_count = 0;
-    list_for_each_entry_safe(iterator, next, &kcp_conn->rcv_buf, node_list) {
-        if (iterator->frg == 0) {
-            packet_count = (uint16_t)iterator->wnd; // NOTE 起始packet, 表示packet个数
-            pos = iterator;
-            uint16_t count = 0;
-            kcp_segment_t *temp_next = NULL;
-            list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
-                if (iterator->psn != pos->psn) { // 下一个包
-                    break;
-                }
-                ++count;
+    if (!list_empty(&kcp_conn->rcv_packet_list)) {
+        packet = list_first_entry(&kcp_conn->rcv_packet_list, kcp_packet_assembly_t, node_list);
+        if (kcp_rcv_packet_is_complete(packet) &&
+            (packet->start_sn + packet->expected_frags) <= kcp_conn->rcv_nxt) {
+            int32_t size = packet->total_size;
+            while (!list_empty(&packet->fragments)) {
+                pos = list_first_entry(&packet->fragments, kcp_segment_t, node_list);
+                list_del_init(&pos->node_list);
+                rb_erase(&pos->node_rbtree, &kcp_conn->rcv_buf);
+                list_add_tail(&pos->node_list, &kcp_conn->rcv_queue);
+                --kcp_conn->nrcv_buf;
+                ++kcp_conn->nrcv_que;
+                kcp_conn->rcv_queue_bytes += (int32_t)pos->len;
             }
 
-            if (packet_count == count) { // 完整的一包
-                pos = iterator;
-                int32_t size = 0;
-                list_for_each_entry_safe_from(pos, temp_next, &kcp_conn->rcv_buf, node_list) {
-                    if (iterator->psn != pos->psn) { // 下一个包
-                        break;
-                    }
-                    size += pos->len;
-                    list_del_init(&pos->node_list);
-                    list_add_tail(&pos->node_list, &kcp_conn->rcv_queue);
-                    --kcp_conn->nrcv_buf;
-                }
-
-                if (kcp_conn->read_event_cb) {
-                    kcp_conn->read_event_cb(kcp_conn, size);
-                }
-                break;
+            kcp_rcv_packet_destroy(kcp_conn, packet);
+            if (kcp_conn->read_event_cb) {
+                kcp_conn->read_event_cb(kcp_conn, size);
             }
         }
     }
