@@ -128,8 +128,10 @@ static std::string format_flags(ntrs_nat_flags_t nat_flags)
 
     append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
     append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0, "mapping_unstable");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0, "multiple_external_mappings");
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0,
+                     "observed_mapping_instability");
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
+                     "multiple_external_ips_observed");
     append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
 
     if (flags.empty()) {

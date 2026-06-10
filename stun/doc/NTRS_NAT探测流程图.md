@@ -77,8 +77,8 @@ flowchart TD
 | `LOCAL_ADDR_PUBLIC` | 本地绑定地址是公网地址 |
 | `UDP_BLOCKED` | 基础 UDP/STUN 路径失败 |
 | `PROBE_DEGRADED` | 探测不完整或证据冲突 |
-| `MAPPING_UNSTABLE` | 同目标多轮映射变化，或第二视角失败导致映射可信度下降 |
-| `MULTI_EXTERNAL_IP` | 双 STUN 视角看到多个外部 IP |
+| `MAPPING_UNSTABLE` | 观测到映射不稳定（observed mapping instability） |
+| `MULTI_EXTERNAL_IP` | 观测到多个外部 IP（multiple external IPs observed） |
 
 `same_ip_diff_port_rx` 和 `diff_ip_rx` 继续作为原始探测字段保留，但不再作为长期业务 flags；它们用于推导 `FilteringBehavior`。
 

@@ -120,6 +120,7 @@
 ### `mapping_unstable`
 
 - 映射不稳定。
+- 推荐文案理解：`observed mapping instability`
 - 需要信号：
   - 同一视角多轮采样 `srflx` 变化
 
@@ -146,6 +147,7 @@
 ### `multi_external_ip`
 
 - 看到多个外部地址或出口。
+- 推荐文案理解：`multiple external IPs observed`
 - 需要信号：
   - 双视角或多轮采样看到多个公网映射
 
