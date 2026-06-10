@@ -1,0 +1,56 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "musl",
+      "displayName": "musl static",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/build-musl",
+      "toolchainFile": "${sourceDir}/cmake/musl-toolchain.cmake",
+      "cacheVariables": {
+        "STUN_MUSL_STATIC": "ON",
+        "STUN_STATIC_EXECUTABLES": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "musl",
+      "configurePreset": "musl"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "musl",
+      "configurePreset": "musl",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

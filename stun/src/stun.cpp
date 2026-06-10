@@ -159,12 +159,14 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
         const SocketAddress *addr = eular::any_cast<SocketAddress>(&value);
         if (addr != nullptr) {
             stun_attr_sockaddr stun_attr;
+            size_t             attrSize = 0;
             stun_attr_sockaddr_init(&stun_attr, type, addr->getSockAddr());
-            ReserveForAppend(m_impl->msg_buf, sizeof(stun_attr));
+            attrSize = STUN_ATTR_SOCKADDR_SIZE(stun_attr.family);
+            ReserveForAppend(m_impl->msg_buf, attrSize);
             auto size = m_impl->msg_buf.size();
-            m_impl->msg_buf.resize(size + sizeof(stun_attr));
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
-            attr_length += sizeof(stun_attr);
+            m_impl->msg_buf.resize(size + attrSize);
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, attrSize);
+            attr_length += attrSize;
         }
         break;
     }
@@ -261,12 +263,14 @@ void StunMsgBuilder::addAttribute(uint16_t type, const eular::any &value)
         const SocketAddress *addr = eular::any_cast<SocketAddress>(&value);
         if (addr != nullptr) {
             stun_attr_xor_sockaddr stun_attr;
+            size_t                 attrSize = 0;
             stun_attr_xor_sockaddr_init(&stun_attr, type, addr->getSockAddr(), &m_impl->msg_hdr);
-            ReserveForAppend(m_impl->msg_buf, sizeof(stun_attr));
+            attrSize = STUN_ATTR_SOCKADDR_SIZE(stun_attr.family);
+            ReserveForAppend(m_impl->msg_buf, attrSize);
             size_t size = m_impl->msg_buf.size();
-            m_impl->msg_buf.resize(size + sizeof(stun_attr));
-            memcpy(m_impl->msg_buf.data() + size, &stun_attr, sizeof(stun_attr));
-            attr_length += sizeof(stun_attr);
+            m_impl->msg_buf.resize(size + attrSize);
+            memcpy(m_impl->msg_buf.data() + size, &stun_attr, attrSize);
+            attr_length += attrSize;
         }
         break;
     }

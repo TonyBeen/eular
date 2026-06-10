@@ -3,11 +3,18 @@
 
 #include <string>
 #include <functional>
+#include <memory>
+#include <stddef.h>
+#include <stdint.h>
 
 struct event_base;
-struct event;
 struct mosquitto;
 struct mosquitto_message;
+
+namespace ev {
+class EventPoll;
+class EventTimer;
+}
 
 namespace eular {
 namespace orion {
@@ -21,16 +28,19 @@ private:
     std::string username;
     std::string password;
     bool connected;
-    std::function<void(const std::string&, const std::string&)> message_callback;
+    std::function<void(const std::string&, const uint8_t*, size_t)> message_callback;
+    std::function<void()> connect_callback;
+    std::function<void(int)> disconnect_callback;
     bool will_enabled;
     std::string will_topic;
-    std::string will_payload;
+    uint8_t *will_payload;
+    size_t will_payload_len;
     int will_qos;
     bool will_retain;
     struct event_base* ev_base;
-    struct event* ev_read;
-    struct event* ev_write;
-    struct event* ev_misc;
+    std::unique_ptr<ev::EventPoll> ev_read;
+    std::unique_ptr<ev::EventPoll> ev_write;
+    std::unique_ptr<ev::EventTimer> ev_misc;
     int socket_fd;
     bool libevent_attached;
 
@@ -43,35 +53,36 @@ public:
 
     bool connect();
     void disconnect();
-    bool isConnected() const;
 
     void setWillMessage(const std::string& topic,
-                        const std::string& payload,
+                        const void* payload,
+                        size_t payload_len,
                         int qos = 1,
                         bool retain = true);
     bool attachEventLoop(struct event_base* base);
-    void detachEventLoop();
-    void poll(int timeout_ms = 50);
 
     bool subscribe(const std::string& topic, int qos = 1);
-    bool publish(const std::string& topic, const std::string& message, 
+    bool publish(const std::string& topic, const void* payload, size_t payload_len,
                  int qos = 1, bool retain = false);
 
-    void setMessageCallback(std::function<void(const std::string&, const std::string&)> callback);
+    void setMessageCallback(std::function<void(const std::string&, const uint8_t*, size_t)> callback);
+    void setConnectCallback(std::function<void()> callback);
+    void setDisconnectCallback(std::function<void(int)> callback);
+    bool isConnected() const;
 
 private:
+    void detachEventLoop();
     void refreshSocketEvents();
     void clearSocketEvents();
     void startMiscEvent();
     void stopMiscEvent();
+    void onReadEvent();
+    void onWriteEvent();
+    void onMiscEvent();
 
     static void on_connect(struct mosquitto* mosq, void* obj, int rc);
     static void on_disconnect(struct mosquitto* mosq, void* obj, int rc);
     static void on_message(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message);
-
-    static void on_read_event(int fd, short events, void* arg);
-    static void on_write_event(int fd, short events, void* arg);
-    static void on_misc_event(int fd, short events, void* arg);
 };
 
 } // namespace orion

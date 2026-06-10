@@ -1,8 +1,11 @@
 #include "mqtt_client.h"
 
-#include <event2/event.h>
+#include <event/poll.h>
+#include <event/timer.h>
 #include <mosquitto.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 
@@ -48,8 +51,12 @@ MqttClient::MqttClient(const std::string& broker, int port,
       broker(broker), port(port), client_id(client_id),
       username(username), password(password), connected(false),
       message_callback(nullptr), will_enabled(false),
+      will_payload(nullptr), will_payload_len(0),
       will_qos(1), will_retain(true),
-      ev_base(nullptr), ev_read(nullptr), ev_write(nullptr), ev_misc(nullptr),
+      ev_base(nullptr),
+      ev_read(new ev::EventPoll()),
+      ev_write(new ev::EventPoll()),
+      ev_misc(new ev::EventTimer()),
       socket_fd(-1), libevent_attached(false) {
     if (!acquire_mosquitto_library()) {
         return;
@@ -77,6 +84,11 @@ MqttClient::MqttClient(const std::string& broker, int port,
 MqttClient::~MqttClient() {
     detachEventLoop();
     disconnect();
+    if (will_payload) {
+        free(will_payload);
+        will_payload = nullptr;
+        will_payload_len = 0;
+    }
     if (mosq) {
         mosquitto_destroy(mosq);
         mosq = nullptr;
@@ -93,8 +105,8 @@ bool MqttClient::connect() {
         const int will_rc = mosquitto_will_set(
             mosq,
             will_topic.c_str(),
-            static_cast<int>(will_payload.size()),
-            will_payload.data(),
+            static_cast<int>(will_payload_len),
+            will_payload,
             will_qos,
             will_retain
         );
@@ -112,12 +124,12 @@ bool MqttClient::connect() {
         return false;
     }
 
-    connected = true;
+    connected = false;
     if (libevent_attached) {
         refreshSocketEvents();
         startMiscEvent();
     }
-    std::cout << "Connected to MQTT broker" << std::endl;
+    std::cout << "Connecting to MQTT broker " << broker << ":" << port << std::endl;
     return true;
 }
 
@@ -137,17 +149,25 @@ void MqttClient::disconnect() {
     clearSocketEvents();
 }
 
-bool MqttClient::isConnected() const {
-    return connected;
-}
-
 void MqttClient::setWillMessage(const std::string& topic,
-                                const std::string& payload,
+                                const void* payload,
+                                size_t payload_len,
                                 int qos,
                                 bool retain) {
     will_enabled = !topic.empty();
     will_topic = topic;
-    will_payload = payload;
+    if (will_payload) {
+        free(will_payload);
+        will_payload = nullptr;
+        will_payload_len = 0;
+    }
+    if (payload_len > 0) {
+        will_payload = static_cast<uint8_t *>(malloc(payload_len));
+        if (will_payload && payload) {
+            memcpy(will_payload, payload, payload_len);
+            will_payload_len = payload_len;
+        }
+    }
     will_qos = qos;
     will_retain = retain;
 }
@@ -178,17 +198,6 @@ void MqttClient::detachEventLoop() {
     libevent_attached = false;
 }
 
-void MqttClient::poll(int timeout_ms) {
-    if (!mosq || libevent_attached) {
-        return;
-    }
-
-    const int rc = mosquitto_loop(mosq, timeout_ms, 1);
-    if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN) {
-        std::cerr << "mosquitto_loop failed: " << mosquitto_strerror(rc) << std::endl;
-    }
-}
-
 bool MqttClient::subscribe(const std::string& topic, int qos) {
     if (!mosq || !connected) {
         std::cerr << "Not connected to broker" << std::endl;
@@ -205,7 +214,7 @@ bool MqttClient::subscribe(const std::string& topic, int qos) {
     return true;
 }
 
-bool MqttClient::publish(const std::string& topic, const std::string& message, 
+bool MqttClient::publish(const std::string& topic, const void* payload, size_t payload_len,
                         int qos, bool retain) {
     if (!mosq || !connected) {
         std::cerr << "Not connected to broker" << std::endl;
@@ -216,8 +225,8 @@ bool MqttClient::publish(const std::string& topic, const std::string& message,
         mosq,
         nullptr,
         topic.c_str(),
-        static_cast<int>(message.size()),
-        message.data(),
+        static_cast<int>(payload_len),
+        payload,
         qos,
         retain
     );
@@ -229,8 +238,20 @@ bool MqttClient::publish(const std::string& topic, const std::string& message,
     return true;
 }
 
-void MqttClient::setMessageCallback(std::function<void(const std::string&, const std::string&)> callback) {
+void MqttClient::setMessageCallback(std::function<void(const std::string&, const uint8_t*, size_t)> callback) {
     message_callback = callback;
+}
+
+void MqttClient::setConnectCallback(std::function<void()> callback) {
+    connect_callback = callback;
+}
+
+void MqttClient::setDisconnectCallback(std::function<void(int)> callback) {
+    disconnect_callback = callback;
+}
+
+bool MqttClient::isConnected() const {
+    return connected;
 }
 
 void MqttClient::refreshSocketEvents() {
@@ -249,34 +270,48 @@ void MqttClient::refreshSocketEvents() {
         socket_fd = fd;
     }
 
-    if (!ev_read) {
-        ev_read = event_new(ev_base, socket_fd, EV_READ | EV_PERSIST, on_read_event, this);
-        if (ev_read) {
-            event_add(ev_read, nullptr);
+    if (ev_read) {
+        const int rc = ev_read->reset(
+            ev_base,
+            socket_fd,
+            ev::EventPoll::Event::Read,
+            [this](socket_t, ev::EventPoll::event_t) {
+                onReadEvent();
+            }
+        );
+        if (rc == 0) {
+            ev_read->start();
         }
     }
 
     if (mosquitto_want_write(mosq)) {
-        if (!ev_write) {
-            ev_write = event_new(ev_base, socket_fd, EV_WRITE | EV_PERSIST, on_write_event, this);
-            if (ev_write) {
-                event_add(ev_write, nullptr);
+        if (ev_write) {
+            const int rc = ev_write->reset(
+                ev_base,
+                socket_fd,
+                ev::EventPoll::Event::Write,
+                [this](socket_t, ev::EventPoll::event_t) {
+                    onWriteEvent();
+                }
+            );
+            if (rc == 0) {
+                ev_write->start();
             }
         }
     } else if (ev_write) {
-        event_free(ev_write);
-        ev_write = nullptr;
+        ev_write->stop();
+        ev_write->reset();
     }
 }
 
 void MqttClient::clearSocketEvents() {
     if (ev_read) {
-        event_free(ev_read);
-        ev_read = nullptr;
+        ev_read->stop();
+        ev_read->reset();
     }
     if (ev_write) {
-        event_free(ev_write);
-        ev_write = nullptr;
+        ev_write->stop();
+        ev_write->reset();
     }
     socket_fd = -1;
 }
@@ -286,21 +321,15 @@ void MqttClient::startMiscEvent() {
         return;
     }
 
-    if (!ev_misc) {
-        ev_misc = evtimer_new(ev_base, on_misc_event, this);
-    }
-    if (ev_misc) {
-        struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-        event_add(ev_misc, &tv);
+    if (ev_misc && ev_misc->reset(ev_base, [this]() { onMiscEvent(); })) {
+        ev_misc->start(1000, 1000);
     }
 }
 
 void MqttClient::stopMiscEvent() {
     if (ev_misc) {
-        event_free(ev_misc);
-        ev_misc = nullptr;
+        ev_misc->stop();
+        ev_misc->reset();
     }
 }
 
@@ -313,7 +342,11 @@ void MqttClient::on_connect(struct mosquitto* mosq, void* obj, int rc) {
 
     client->connected = (rc == MOSQ_ERR_SUCCESS);
     if (client->connected) {
+        std::cout << "Connected to MQTT broker" << std::endl;
         client->refreshSocketEvents();
+        if (client->connect_callback) {
+            client->connect_callback();
+        }
     } else {
         std::cerr << "MQTT connect callback error: " << mosquitto_strerror(rc) << std::endl;
     }
@@ -321,13 +354,15 @@ void MqttClient::on_connect(struct mosquitto* mosq, void* obj, int rc) {
 
 void MqttClient::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     (void)mosq;
-    (void)rc;
     MqttClient* client = static_cast<MqttClient*>(obj);
     if (!client) {
         return;
     }
     client->connected = false;
     client->clearSocketEvents();
+    if (client->disconnect_callback) {
+        client->disconnect_callback(rc);
+    }
 }
 
 void MqttClient::on_message(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message) {
@@ -338,67 +373,54 @@ void MqttClient::on_message(struct mosquitto* mosq, void* obj, const struct mosq
     }
 
     std::string topic_str(message->topic);
-    std::string payload_str;
-    if (message->payload && message->payloadlen > 0) {
-        payload_str.assign(static_cast<const char*>(message->payload), static_cast<size_t>(message->payloadlen));
-    }
-
-    std::cout << "Received message on topic " << topic_str << ": " << payload_str << std::endl;
-
     if (client->message_callback) {
-        client->message_callback(topic_str, payload_str);
+        client->message_callback(
+            topic_str,
+            static_cast<const uint8_t *>(message->payload),
+            message->payloadlen > 0 ? static_cast<size_t>(message->payloadlen) : 0u
+        );
     }
 }
 
-void MqttClient::on_read_event(int fd, short events, void* arg) {
-    (void)fd;
-    (void)events;
-    MqttClient* client = static_cast<MqttClient*>(arg);
-    if (!client || !client->mosq) {
+void MqttClient::onReadEvent() {
+    if (!mosq) {
         return;
     }
 
-    const int rc = mosquitto_loop_read(client->mosq, 1);
+    const int rc = mosquitto_loop_read(mosq, 1);
     if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN) {
         std::cerr << "mosquitto_loop_read failed: " << mosquitto_strerror(rc) << std::endl;
-        client->connected = false;
+        connected = false;
     }
 
-    client->refreshSocketEvents();
+    refreshSocketEvents();
 }
 
-void MqttClient::on_write_event(int fd, short events, void* arg) {
-    (void)fd;
-    (void)events;
-    MqttClient* client = static_cast<MqttClient*>(arg);
-    if (!client || !client->mosq) {
+void MqttClient::onWriteEvent() {
+    if (!mosq) {
         return;
     }
 
-    const int rc = mosquitto_loop_write(client->mosq, 1);
+    const int rc = mosquitto_loop_write(mosq, 1);
     if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN) {
         std::cerr << "mosquitto_loop_write failed: " << mosquitto_strerror(rc) << std::endl;
-        client->connected = false;
+        connected = false;
     }
 
-    client->refreshSocketEvents();
+    refreshSocketEvents();
 }
 
-void MqttClient::on_misc_event(int fd, short events, void* arg) {
-    (void)fd;
-    (void)events;
-    MqttClient* client = static_cast<MqttClient*>(arg);
-    if (!client || !client->mosq) {
+void MqttClient::onMiscEvent() {
+    if (!mosq) {
         return;
     }
 
-    const int rc = mosquitto_loop_misc(client->mosq);
+    const int rc = mosquitto_loop_misc(mosq);
     if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN) {
         std::cerr << "mosquitto_loop_misc failed: " << mosquitto_strerror(rc) << std::endl;
     }
 
-    client->refreshSocketEvents();
-    client->startMiscEvent();
+    refreshSocketEvents();
 }
 
 } // namespace orion
