@@ -21,14 +21,14 @@
 #ifndef DISALLOW_COPY_AND_ASSIGN
 #define DISALLOW_COPY_AND_ASSIGN(ClassName)             \
     ClassName(const ClassName&) = delete;               \
-    ClassName& operator=(const ClassName&) = delete;
+    ClassName& operator=(const ClassName&) = delete
 
 #endif
 
 #ifndef DISALLOW_MOVE
 #define DISALLOW_MOVE(ClassName)                    \
     ClassName(ClassName &&) = delete;               \
-    ClassName& operator=(ClassName &&) = delete;
+    ClassName& operator=(ClassName &&) = delete
 
 #endif
 

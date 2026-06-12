@@ -21,15 +21,15 @@ public:
     enum Event {
         None = 0,
 
-        Read = 0b0001,
-        Write = 0b0010,
+        Read = 1 << 0,
+        Write = 1 << 1,
 
         // 以下内容不可与上面混用, 将返回错误
-        ReadOnce = 0b0100,
-        WriteOnce = 0b1000,
+        ReadOnce = 1 << 2,
+        WriteOnce = 1 << 3,
 
         // 边缘触发, libevent默认水平触发
-        EdgeTrigger = 0b10000,
+        EdgeTrigger = 1 << 4,
     };
     using event_t = uint32_t;
     using EventCB = std::function<void(socket_t, event_t)>;
