@@ -27,6 +27,7 @@ const char *sockaddr_to_string(const sockaddr_t *addr, char *buf, uint32_t len);
 
 int32_t     kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data, uint32_t size);
 int32_t     kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size);
+int32_t     kcp_send_packet_raw_silent(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size);
 
 int32_t     get_last_errno();
 

@@ -17,6 +17,8 @@
 #include "kcp_protocol.h"
 #include "kcp_time.h"
 
+static int32_t kcp_send_syn_to_candidates(kcp_connection_t* kcp_connection, const struct iovec* data, uint32_t size);
+
 static int32_t kcp_alloc_local_scid(struct KcpContext* kcp_ctx, uint32_t retries, uint16_t* scid)
 {
     if (kcp_ctx == NULL || scid == NULL) {
@@ -48,6 +50,26 @@ static void kcp_timer_from_delay_ms(uint64_t delay_ms, struct timeval* tv)
 {
     tv->tv_sec = (time_t)(delay_ms / 1000);
     tv->tv_usec = (suseconds_t)((delay_ms % 1000) * 1000);
+}
+
+static bool kcp_is_text_probe_packet(const char* buffer, size_t buffer_size)
+{
+    static const char* kPrefixes[] = {
+        "NTRS_KCP_PUNCH|",
+        "NTRS_FILTER_PROBE|",
+    };
+
+    if (buffer == NULL || buffer_size == 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(kPrefixes) / sizeof(kPrefixes[0]); ++i) {
+        size_t prefix_len = strlen(kPrefixes[i]);
+        if (buffer_size >= prefix_len && memcmp(buffer, kPrefixes[i], prefix_len) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void kcp_refresh_write_timer(struct KcpContext* kcp_ctx)
@@ -84,6 +106,10 @@ void kcp_refresh_write_timer(struct KcpContext* kcp_ctx)
 
 static void kcp_parse_packet(struct KcpContext* kcp_ctx, const char* buffer, size_t buffer_size, const sockaddr_t* addr)
 {
+    if (kcp_is_text_probe_packet(buffer, buffer_size)) {
+        return;
+    }
+
     if (buffer_size < KCP_HEADER_SIZE) {
         return;
     }
@@ -94,6 +120,9 @@ static void kcp_parse_packet(struct KcpContext* kcp_ctx, const char* buffer, siz
         kcp_proto_header_t kcp_header;
         list_init(&kcp_header.options);
         if (NO_ERROR != kcp_proto_parse(&kcp_header, &buffer_offset, buffer_remain)) {
+            if (kcp_is_text_probe_packet(buffer, buffer_size)) {
+                break;
+            }
             char buffer[INET6_ADDRSTRLEN] = {0};
             KCP_LOGE("%s: kcp parse packet error(%zu). scid(%u) -> dcid(%u), cmd: %s, frg: %u, wnd: %u",
                      sockaddr_to_string(addr, buffer, sizeof(buffer)), buffer_size, kcp_header.scid, kcp_header.dcid,
@@ -421,6 +450,7 @@ struct KcpContext* kcp_context_create(struct event_base* base, on_kcp_error_t cb
 
     ctx->read_buffer_size = ETHERNET_MTU;
     ctx->user_data = user;
+    ctx->ntrs_state = NULL;
     return ctx;
 }
 
@@ -429,6 +459,8 @@ void kcp_context_destroy(struct KcpContext* kcp_ctx)
     if (kcp_ctx == NULL) {
         return;
     }
+
+    kcp_ntrs_stop(kcp_ctx);
 
     kcp_connection_t* it = NULL;
     for (it = connection_first(&kcp_ctx->connection_set); it != NULL;) {
@@ -693,6 +725,14 @@ _error:
     return status;
 }
 
+int32_t kcp_context_udp_socket(struct KcpContext* kcp_ctx)
+{
+    if (kcp_ctx == NULL || kcp_ctx->sock == INVALID_SOCKET) {
+        return SOCKET_CLOSED;
+    }
+    return kcp_ctx->sock;
+}
+
 int32_t kcp_listen(struct KcpContext* kcp_ctx, on_kcp_connect_t cb)
 {
     if (kcp_ctx == NULL || cb == NULL) {
@@ -937,7 +977,12 @@ static void kcp_connect_timeout(int fd, short ev, void* arg)
         struct iovec data[1];
         data[0].iov_base = buffer;
         data[0].iov_len = sizeof(buffer);
-        int32_t status = kcp_send_packet(kcp_connection, data, 1);
+        int32_t status = NO_ERROR;
+        if (kcp_connection->candidate_count > 0 && kcp_connection->state == KCP_STATE_SYN_SENT) {
+            status = kcp_send_syn_to_candidates(kcp_connection, data, 1);
+        } else {
+            status = kcp_send_packet(kcp_connection, data, 1);
+        }
         if (status <= 0) {
             kcp_connection->kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
             return;
@@ -953,9 +998,39 @@ static void kcp_connect_timeout(int fd, short ev, void* arg)
     kcp_connection_destroy(kcp_connection);
 }
 
-int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t timeout_ms, on_kcp_connected_t cb)
+static int32_t kcp_send_syn_to_candidates(kcp_connection_t* kcp_connection, const struct iovec* data, uint32_t size)
 {
-    if (kcp_ctx == NULL || addr == NULL || cb == NULL || timeout_ms == 0) {
+    bool any_sent = false;
+    int32_t last_error = WRITE_ERROR;
+
+    for (uint32_t i = 0; i < kcp_connection->candidate_count; ++i) {
+        int32_t status =
+            kcp_send_packet_raw_silent(kcp_connection->kcp_ctx->sock, &kcp_connection->candidates[i].addr, data, size);
+        if (status <= 0) {
+            last_error = status;
+            status =
+                kcp_send_packet_raw_silent(kcp_connection->kcp_ctx->sock, &kcp_connection->candidates[i].addr, data, size);
+        }
+        if (status > 0) {
+            any_sent = true;
+        } else {
+            last_error = status;
+        }
+    }
+
+    return any_sent ? NO_ERROR : last_error;
+}
+
+int32_t kcp_connect_candidates(struct KcpContext* kcp_ctx,
+                               const kcp_p2p_candidate_t* candidates,
+                               uint32_t candidate_count,
+                               uint32_t timeout_ms,
+                               on_kcp_connected_t cb)
+{
+    if (kcp_ctx == NULL || candidates == NULL || candidate_count == 0 || cb == NULL || timeout_ms == 0) {
+        return INVALID_PARAM;
+    }
+    if (candidate_count > KCP_P2P_MAX_CANDIDATES) {
         return INVALID_PARAM;
     }
 
@@ -984,7 +1059,11 @@ int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t
     if (kcp_connection == NULL) {
         return NO_MEMORY;
     }
-    kcp_connection_init(kcp_connection, addr, kcp_ctx);
+    kcp_connection_init(kcp_connection, &candidates[0].addr, kcp_ctx);
+    kcp_connection->candidate_count = candidate_count;
+    for (uint32_t i = 0; i < candidate_count; ++i) {
+        memcpy(&kcp_connection->candidates[i], &candidates[i], sizeof(kcp_p2p_candidate_t));
+    }
     if (!connection_set_insert(&kcp_ctx->connection_set, kcp_connection)) {
         kcp_connection_destroy(kcp_connection);
         return UNKNOWN_ERROR;
@@ -1023,8 +1102,9 @@ int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t
     struct iovec data[1];
     data[0].iov_base = buffer;
     data[0].iov_len = sizeof(buffer);
-    status = kcp_send_packet(kcp_connection, data, 1);
-    if (status <= 0) {
+    status = kcp_send_syn_to_candidates(kcp_connection, data, 1);
+    if (status != NO_ERROR) {
+        kcp_connection_destroy(kcp_connection);
         return status;
     }
 
@@ -1033,6 +1113,7 @@ int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t
     kcp_ctx->callback.on_connect = NULL;
     kcp_connection->syn_timer_event = evtimer_new(kcp_ctx->event_loop, kcp_connect_timeout, kcp_connection);
     if (kcp_connection->syn_timer_event == NULL) {
+        kcp_connection_destroy(kcp_connection);
         return NO_MEMORY;
     }
 
@@ -1044,6 +1125,20 @@ int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t
     evtimer_add(kcp_connection->syn_timer_event, &tv);
     event_add(kcp_ctx->read_event, NULL);
     return NO_ERROR;
+}
+
+int32_t kcp_connect(struct KcpContext* kcp_ctx, const sockaddr_t* addr, uint32_t timeout_ms, on_kcp_connected_t cb)
+{
+    if (addr == NULL) {
+        return INVALID_PARAM;
+    }
+
+    kcp_p2p_candidate_t candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    memcpy(&candidate.addr, addr, sizeof(sockaddr_t));
+    candidate.type = KCP_P2P_CANDIDATE_UNKNOWN;
+    candidate.priority = 0;
+    return kcp_connect_candidates(kcp_ctx, &candidate, 1, timeout_ms, cb);
 }
 
 void kcp_set_close_cb(struct KcpContext* kcp_ctx, on_kcp_closed_t cb)

@@ -21,6 +21,7 @@ typedef struct EchoClientConfig {
     const char *server_host;
     int local_port;
     int server_port;
+    int bad_candidate_port;
     int message_count;
     int duration_ms;
     int message_len;
@@ -228,7 +229,7 @@ static int resolve_ipv4(const char *host, int port, sockaddr_t *addr)
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-        "Usage: %s [-s host] [-p server_port] [-l local_port] [-c count] [-d duration_ms] [-m message_len] [-t timeout_ms] [-n nic]\n",
+        "Usage: %s [-s host] [-p server_port] [-l local_port] [-b bad_candidate_port] [-c count] [-d duration_ms] [-m message_len] [-t timeout_ms] [-n nic]\n",
         argv0);
 }
 
@@ -238,6 +239,7 @@ int main(int argc, char **argv)
     g_state.cfg.server_host = "127.0.0.1";
     g_state.cfg.local_port = 0;
     g_state.cfg.server_port = 54321;
+    g_state.cfg.bad_candidate_port = 0;
     g_state.cfg.message_count = 10;
     g_state.cfg.duration_ms = 0;
     g_state.cfg.message_len = 64;
@@ -247,7 +249,7 @@ int main(int argc, char **argv)
     g_state.closed_code = UNKNOWN_ERROR;
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "s:p:l:c:d:m:t:n:h")) != -1) {
+    while ((opt = getopt(argc, argv, "s:p:l:b:c:d:m:t:n:h")) != -1) {
         switch (opt) {
         case 's':
             g_state.cfg.server_host = optarg;
@@ -257,6 +259,9 @@ int main(int argc, char **argv)
             break;
         case 'l':
             g_state.cfg.local_port = atoi(optarg);
+            break;
+        case 'b':
+            g_state.cfg.bad_candidate_port = atoi(optarg);
             break;
         case 'c':
             g_state.cfg.message_count = atoi(optarg);
@@ -284,6 +289,7 @@ int main(int argc, char **argv)
 
     if (g_state.cfg.server_port <= 0 || g_state.cfg.server_port > 65535 ||
         g_state.cfg.local_port < 0 || g_state.cfg.local_port > 65535 ||
+        g_state.cfg.bad_candidate_port < 0 || g_state.cfg.bad_candidate_port > 65535 ||
         g_state.cfg.message_count < 0 || g_state.cfg.duration_ms < 0 ||
         (g_state.cfg.message_count == 0 && g_state.cfg.duration_ms == 0) ||
         g_state.cfg.timeout_ms <= 0) {
@@ -345,7 +351,23 @@ int main(int argc, char **argv)
     }
 
     kcp_set_close_cb(g_state.ctx, on_kcp_closed);
-    if (kcp_connect(g_state.ctx, &remote_addr, (uint32_t)g_state.cfg.timeout_ms, on_kcp_connected) != NO_ERROR) {
+    int32_t connect_status = NO_ERROR;
+    if (g_state.cfg.bad_candidate_port > 0) {
+        kcp_p2p_candidate_t candidates[2];
+        memset(candidates, 0, sizeof(candidates));
+        candidates[0].addr = remote_addr;
+        candidates[0].addr.sin.sin_port = htons((uint16_t)g_state.cfg.bad_candidate_port);
+        candidates[0].type = KCP_P2P_CANDIDATE_UNKNOWN;
+        candidates[0].priority = 1;
+        candidates[1].addr = remote_addr;
+        candidates[1].type = KCP_P2P_CANDIDATE_UNKNOWN;
+        candidates[1].priority = 2;
+        connect_status = kcp_connect_candidates(
+            g_state.ctx, candidates, 2, (uint32_t)g_state.cfg.timeout_ms, on_kcp_connected);
+    } else {
+        connect_status = kcp_connect(g_state.ctx, &remote_addr, (uint32_t)g_state.cfg.timeout_ms, on_kcp_connected);
+    }
+    if (connect_status != NO_ERROR) {
         fprintf(stderr, "kcp_connect call failed\n");
         g_state.exit_code = 1;
         goto cleanup;

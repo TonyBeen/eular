@@ -18,6 +18,17 @@
 #include "kcp_log.h"
 #include "kcp_time.h"
 
+#ifndef TEMP_FAILURE_RETRY
+#define TEMP_FAILURE_RETRY(expression)           \
+    ({                                           \
+        long int _kcp_result;                    \
+        do {                                     \
+            _kcp_result = (long int)(expression);\
+        } while (_kcp_result == -1L && errno == EINTR); \
+        _kcp_result;                             \
+    })
+#endif
+
 int32_t set_socket_nonblock(socket_t fd)
 {
 #ifdef OS_WINDOWS
@@ -304,7 +315,11 @@ int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data
     return kcp_send_packet_raw(kcp_conn->kcp_ctx->sock, &kcp_conn->remote_host, data, size);
 }
 
-int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+static int32_t kcp_send_packet_raw_impl(int32_t sock,
+                                        const sockaddr_t *remote_addr,
+                                        const struct iovec *data,
+                                        uint32_t size,
+                                        bool log_errors)
 {
     if (size > KCP_PACKET_SIZE) {
         return INVALID_PARAM;
@@ -348,8 +363,10 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
     }
     send_packet = TEMP_FAILURE_RETRY(sendmmsg(sock, msgvec, size, 0));
     if (send_packet <= 0) {
-        int32_t code = get_last_errno();
-        KCP_LOGE("sendmmsg failed, code: %d, %s", code, errno_string(code));
+        if (log_errors) {
+            int32_t code = get_last_errno();
+            KCP_LOGE("sendmmsg failed, code: %d, %s", code, errno_string(code));
+        }
         send_packet = WRITE_ERROR;
     }
 
@@ -380,6 +397,16 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
 
 #endif
     return send_packet;
+}
+
+int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+{
+    return kcp_send_packet_raw_impl(sock, remote_addr, data, size, true);
+}
+
+int32_t kcp_send_packet_raw_silent(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+{
+    return kcp_send_packet_raw_impl(sock, remote_addr, data, size, false);
 }
 
 int32_t get_last_errno()

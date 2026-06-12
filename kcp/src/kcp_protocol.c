@@ -408,6 +408,16 @@ static void on_mtu_probe_completed(kcp_connection_t *kcp_conn, uint32_t mtu, int
 // KCP读事件回调, 用于接收数据
 static void on_kcp_read_event(struct KcpConnection *kcp_connection, const kcp_proto_header_t *kcp_header, const sockaddr_t *remote_host)
 {
+    if (kcp_connection->state == KCP_STATE_SYN_SENT && kcp_connection->candidate_count > 0) {
+        for (uint32_t i = 0; i < kcp_connection->candidate_count; ++i) {
+            if (sockaddr_equal(&kcp_connection->candidates[i].addr, remote_host)) {
+                memcpy(&kcp_connection->remote_host, remote_host, sizeof(sockaddr_t));
+                kcp_connection->selected_candidate_index = (int32_t)i;
+                break;
+            }
+        }
+    }
+
     if (!sockaddr_equal(&kcp_connection->remote_host, remote_host)) {
         KCP_LOGW("remote host not match, ignore packet");
         return;
@@ -1006,7 +1016,24 @@ static int32_t on_kcp_write_event(struct KcpConnection *kcp_connection, uint64_t
         data[0].iov_base = buffer;
         data[0].iov_len = KCP_HEADER_SIZE;
         int32_t status = kcp_send_packet(kcp_connection, data, 1);
-        if (status != 1) {
+        if (kcp_connection->state == KCP_STATE_SYN_SENT && kcp_connection->candidate_count > 0) {
+            bool any_sent = false;
+            int32_t last_error = WRITE_ERROR;
+            for (uint32_t i = 0; i < kcp_connection->candidate_count; ++i) {
+                status = kcp_send_packet_raw_silent(kcp_connection->kcp_ctx->sock, &kcp_connection->candidates[i].addr, data, 1);
+                if (status <= 0) {
+                    last_error = status;
+                    status = kcp_send_packet_raw_silent(kcp_connection->kcp_ctx->sock, &kcp_connection->candidates[i].addr, data, 1);
+                }
+                if (status > 0) {
+                    any_sent = true;
+                } else {
+                    last_error = status;
+                }
+            }
+            status = any_sent ? NO_ERROR : last_error;
+        }
+        if (status != 1 && status != NO_ERROR) {
             int32_t code = get_last_errno();
             if (code == EAGAIN || code == EWOULDBLOCK) {
                 return OP_TRY_AGAIN;
@@ -1123,6 +1150,9 @@ void kcp_connection_init(kcp_connection_t *kcp_conn, const sockaddr_t *remote_ho
     kcp_conn->syn_fin_sn = 0;
     kcp_conn->receive_timeout = DEFAULT_RECEIVE_TIMEOUT;
     memcpy(&kcp_conn->remote_host, remote_host, sizeof(sockaddr_t));
+    kcp_conn->candidate_count = 0;
+    memset(kcp_conn->candidates, 0, sizeof(kcp_conn->candidates));
+    kcp_conn->selected_candidate_index = -1;
 
     kcp_conn->nodelay = 0;      // 关闭nodelay
     kcp_conn->interval = 30;    // 发送间隔 30ms
@@ -1745,8 +1775,10 @@ void on_kcp_syn_received(struct KcpContext *kcp_ctx, const sockaddr_t *addr)
                         // NOTE 此处不会触发 EAGAIN
                         int32_t code = get_last_errno();
                         KCP_LOGE("kcp send packet error. [%d, %s]", code, errno_string(code));
-                        kcp_connection->state = KCP_STATE_DISCONNECTED;
-                        kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
+                        if (!(kcp_connection->state == KCP_STATE_SYN_SENT && kcp_connection->candidate_count > 1)) {
+                            kcp_connection->state = KCP_STATE_DISCONNECTED;
+                            kcp_ctx->callback.on_error(kcp_connection->kcp_ctx, kcp_connection, WRITE_ERROR);
+                        }
                     } else {
                         // NOTE 对端未收到ACK, 会重发SYN
                         if (kcp_connection->syn_timer_event) {

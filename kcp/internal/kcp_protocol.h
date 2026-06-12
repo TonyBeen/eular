@@ -299,6 +299,9 @@ typedef struct KcpConnection {
     uint32_t                fin_retries;
     sockaddr_t              remote_host;
     void*                   user_data;
+    uint32_t                candidate_count;
+    kcp_p2p_candidate_t     candidates[KCP_P2P_MAX_CANDIDATES];
+    int32_t                 selected_candidate_index;
 
     // syn
     struct KcpSYNNode*      syn_node;
@@ -361,6 +364,7 @@ typedef struct KcpContext {
     struct event*               write_timer_event;
     struct list_head            conn_write_event_queue;
     void*                       user_data;
+    void*                       ntrs_state;
     char*                       read_buffer;
     size_t                      read_buffer_size;
 } kcp_context_t;
