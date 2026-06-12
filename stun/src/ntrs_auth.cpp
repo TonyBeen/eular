@@ -3,14 +3,40 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <unistd.h>
 
+#include <utils/sysdef.h>
+
+#if defined(OS_WINDOWS)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+#if defined(OS_WINDOWS)
+#include <errno.h>
+#else
 #include <fcntl.h>
+#endif
 #include <md5.h>
 #include <sstream>
 
 #if defined(__linux__)
 #include <sys/random.h>
+#endif
+
+#if defined(OS_WINDOWS)
+static bool fillRandomBytesWindows(void *buf, size_t len)
+{
+    uint8_t *out = static_cast<uint8_t *>(buf);
+    for (size_t i = 0; i < len; ++i) {
+        unsigned int value = 0;
+        if (rand_s(&value) != 0) {
+            return false;
+        }
+        out[i] = (uint8_t)(value & 0xFFu);
+    }
+    return true;
+}
 #endif
 
 namespace eular {
@@ -22,6 +48,10 @@ static bool fillRandomBytes(void *buf, size_t len)
 {
     uint8_t *out = static_cast<uint8_t *>(buf);
     size_t offset = 0;
+
+#if defined(OS_WINDOWS)
+    return fillRandomBytesWindows(buf, len);
+#endif
 
 #if defined(__linux__)
     while (offset < len) {
@@ -59,9 +89,14 @@ static bool fillRandomBytes(void *buf, size_t len)
 static uint64_t weakRandom64()
 {
     uint64_t a = (uint64_t)time(NULL);
-    uint64_t b = (uint64_t)getpid();
-    uint64_t c = (uint64_t)random();
-    uint64_t d = (uint64_t)random();
+    uint64_t b = (uint64_t)
+#if defined(OS_WINDOWS)
+        _getpid();
+#else
+        getpid();
+#endif
+    uint64_t c = (uint64_t)rand();
+    uint64_t d = (uint64_t)rand();
     return (a << 32) ^ (b << 16) ^ (c << 8) ^ d;
 }
 

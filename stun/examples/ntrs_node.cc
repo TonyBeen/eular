@@ -65,6 +65,74 @@ struct PeerSession {
     time_t                    expire_at;
 };
 
+struct SessionStrategyPlan {
+    uint8_t  src_punch_order;
+    uint8_t  dst_punch_order;
+    uint8_t  src_connect_role;
+    uint8_t  dst_connect_role;
+    uint32_t src_warmup_rounds;
+    uint32_t dst_warmup_rounds;
+    uint32_t src_warmup_interval_ms;
+    uint32_t dst_warmup_interval_ms;
+};
+
+static uint32_t nat_strictness_score(ntrs_nat_class_t nat_class)
+{
+    switch (nat_class) {
+    case NTRS_NAT_CLASS_OPEN_PUBLIC:
+        return 1;
+    case NTRS_NAT_CLASS_FULL_CONE:
+        return 2;
+    case NTRS_NAT_CLASS_IP_RESTRICTED:
+        return 3;
+    case NTRS_NAT_CLASS_PORT_RESTRICTED:
+        return 4;
+    case NTRS_NAT_CLASS_SYMMETRIC:
+        return 5;
+    default:
+        return 0;
+    }
+}
+
+static SessionStrategyPlan build_session_strategy(const PeerSession& src, const PeerSession& dst)
+{
+    SessionStrategyPlan plan;
+    uint32_t            src_score = nat_strictness_score(src.nat_class);
+    uint32_t            dst_score = nat_strictness_score(dst.nat_class);
+
+    memset(&plan, 0, sizeof(plan));
+    plan.src_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::SIMULTANEOUS;
+    plan.dst_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::SIMULTANEOUS;
+    plan.src_connect_role = (uint8_t)eular::ntrs::RoleCode::INITIATOR;
+    plan.dst_connect_role = (uint8_t)eular::ntrs::RoleCode::RESPONDER;
+    plan.src_warmup_rounds = 4;
+    plan.dst_warmup_rounds = 4;
+    plan.src_warmup_interval_ms = 100;
+    plan.dst_warmup_interval_ms = 100;
+
+    if (src_score == dst_score) {
+        return plan;
+    }
+
+    plan.dst_warmup_rounds = 4;
+    plan.src_warmup_interval_ms = 100;
+    plan.dst_warmup_interval_ms = 100;
+
+    if (src_score < dst_score) {
+        plan.src_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::SEND_FIRST;
+        plan.dst_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::WAIT_FIRST;
+        plan.src_connect_role = (uint8_t)eular::ntrs::RoleCode::RESPONDER;
+        plan.dst_connect_role = (uint8_t)eular::ntrs::RoleCode::INITIATOR;
+        return plan;
+    }
+
+    plan.src_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::WAIT_FIRST;
+    plan.dst_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::SEND_FIRST;
+    plan.src_connect_role = (uint8_t)eular::ntrs::RoleCode::INITIATOR;
+    plan.dst_connect_role = (uint8_t)eular::ntrs::RoleCode::RESPONDER;
+    return plan;
+}
+
 struct ControlClientRxState {
     std::vector<uint8_t> buffer;
 };
@@ -1781,11 +1849,13 @@ int main(int argc, char** argv)
                         break;
                     }
 
-                    std::string sid = eular::ntrs::mintPeerSessionId(src, dst, now_sec);
+                    std::string         sid = eular::ntrs::mintPeerSessionId(src, dst, now_sec);
+                    SessionStrategyPlan strategy;
                     if (!auth_manager.issuePeerSession(src, dst, sid, now_sec, 60, &peer_session, &reason)) {
                         send_error(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
                         break;
                     }
+                    strategy = build_session_strategy(src_it->second, dst_it->second);
 
                     eular::ntrs::Message rsp;
                     eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::SESSION_CREATE_RSP, msg.request_id);
@@ -1793,6 +1863,10 @@ int main(int argc, char** argv)
                     eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::ROLE,
                                                    (uint8_t)eular::ntrs::RoleCode::INITIATOR);
                     eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
+                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.src_punch_order);
+                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.src_connect_role);
+                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.src_warmup_rounds);
+                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.src_warmup_interval_ms);
                     eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
                                                     (uint32_t)peer_session.expire_at_sec);
                     eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_ID,
@@ -1825,6 +1899,10 @@ int main(int argc, char** argv)
                     eular::ntrs::messageInit(&notify, eular::ntrs::MessageType::SESSION_NOTIFY, 0);
                     eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::SESSION_ID, sid.c_str());
                     eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
+                    eular::ntrs::messageAddU8ByTag(&notify, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.dst_punch_order);
+                    eular::ntrs::messageAddU8ByTag(&notify, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.dst_connect_role);
+                    eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.dst_warmup_rounds);
+                    eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.dst_warmup_interval_ms);
                     eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::EXPIRE_AT,
                                                     (uint32_t)peer_session.expire_at_sec);
                     eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::SRC_PEER_ID, src.c_str());

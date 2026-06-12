@@ -90,6 +90,10 @@ enum class FieldTag : uint16_t {
     PEER_FILTERING_BEHAVIOR = 0x0078,
     PEER_LOCAL_IP = 0x0079,
     PEER_LOCAL_PORT = 0x007A,
+    PUNCH_ORDER = 0x007B,
+    CONNECT_ROLE = 0x007C,
+    WARMUP_ROUNDS = 0x007D,
+    WARMUP_INTERVAL_MS = 0x007E,
 };
 
 enum class MessageType : uint8_t {
@@ -144,6 +148,13 @@ enum class RoleCode : uint8_t {
     UNKNOWN = 0,
     INITIATOR = 1,
     RESPONDER = 2,
+};
+
+enum class PunchOrderCode : uint8_t {
+    UNKNOWN = 0,
+    SEND_FIRST = 1,
+    WAIT_FIRST = 2,
+    SIMULTANEOUS = 3,
 };
 
 enum class NodeStatusCode : uint8_t {

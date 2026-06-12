@@ -1,18 +1,32 @@
 #include <ntrs_io.h>
 
-#include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
+
+#include <event2/util.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <unistd.h>
 
 namespace eular {
 namespace ntrs {
 
 namespace {
+
+static int socketLastError()
+{
+    return EVUTIL_SOCKET_ERROR();
+}
+
+static bool socketInterrupted(int err)
+{
+#if defined(_WIN32)
+    return err == WSAEINTR;
+#else
+    return err == EINTR;
+#endif
+}
 
 static bool recvExactTimeout(int fd, void* buf, size_t len, int timeout_ms)
 {
@@ -26,7 +40,7 @@ static bool recvExactTimeout(int fd, void* buf, size_t len, int timeout_ms)
 
         ssize_t nread = recv(fd, ptr + used, len - used, 0);
         if (nread <= 0) {
-            if (nread < 0 && errno == EINTR) {
+            if (nread < 0 && socketInterrupted(socketLastError())) {
                 continue;
             }
             return false;
@@ -62,7 +76,7 @@ bool waitReadable(int fd, int timeout_ms)
         if (ret == 0) {
             return false;
         }
-        if (errno != EINTR) {
+        if (!socketInterrupted(socketLastError())) {
             return false;
         }
 
@@ -117,7 +131,7 @@ bool connectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd
             freeaddrinfo(result);
             return true;
         }
-        close(fd);
+        EVUTIL_CLOSESOCKET(fd);
         fd = -1;
     }
 

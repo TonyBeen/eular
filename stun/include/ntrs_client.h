@@ -17,6 +17,8 @@ typedef uint16_t ntrs_nat_class_t;
 typedef uint16_t ntrs_nat_flags_t;
 typedef uint16_t ntrs_mapping_behavior_t;
 typedef uint16_t ntrs_filtering_behavior_t;
+typedef uint8_t  ntrs_punch_order_t;
+typedef uint8_t  ntrs_connect_role_t;
 
 enum {
     NTRS_NAT_CLASS_UNKNOWN = 0,
@@ -50,6 +52,19 @@ enum {
     NTRS_FILTERING_ADDRESS_DEPENDENT = 2,
     NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT = 3,
     NTRS_FILTERING_BLOCKED = 4,
+};
+
+enum {
+    NTRS_PUNCH_ORDER_UNKNOWN = 0,
+    NTRS_PUNCH_ORDER_SEND_FIRST = 1,
+    NTRS_PUNCH_ORDER_WAIT_FIRST = 2,
+    NTRS_PUNCH_ORDER_SIMULTANEOUS = 3,
+};
+
+enum {
+    NTRS_CONNECT_ROLE_UNKNOWN = 0,
+    NTRS_CONNECT_ROLE_INITIATOR = 1,
+    NTRS_CONNECT_ROLE_LISTENER = 2,
 };
 
 typedef struct ntrs_nat_info {
@@ -94,6 +109,10 @@ typedef struct ntrs_session_signal {
     char                      peer_nat_type[NTRS_MAX_TEXT_LEN];
     char                      session_id[NTRS_MAX_TEXT_LEN];
     char                      peer_session_token[NTRS_MAX_TEXT_LEN];
+    ntrs_punch_order_t        punch_order;
+    ntrs_connect_role_t       connect_role;
+    uint32_t                  warmup_rounds;
+    uint32_t                  warmup_interval_ms;
     uint32_t                  expire_at;
     uint32_t                  candidate_count;
     ntrs_peer_candidate_t     candidates[NTRS_MAX_CANDIDATES];
@@ -107,7 +126,6 @@ typedef struct ntrs_detect_nat_options {
 } ntrs_detect_nat_options_t;
 
 typedef struct ntrs_async_client   ntrs_async_client_t;
-typedef struct ntrs_nat_probe_flow ntrs_nat_probe_flow_t;
 struct event_base;
 
 typedef enum ntrs_async_request_type {
@@ -141,36 +159,8 @@ typedef struct ntrs_async_result {
 
 typedef void (*ntrs_async_callback_t)(const ntrs_async_result_t* result, void* user_data);
 
-typedef struct ntrs_nat_probe_params {
-    const char*               node_host;
-    uint16_t                  node_port;
-    const char*               peer_id;
-    const char*               bootstrap_token;
-    const char*               bind_ip;
-    const char*               bind_device;
-    const char*               stun1;
-    const char*               stun2;
-    ntrs_detect_nat_options_t detect_options;
-} ntrs_nat_probe_params_t;
-
-typedef struct ntrs_nat_probe_result {
-    bool            success;
-    bool            cancelled;
-    char            error_message[NTRS_MAX_TEXT_LEN];
-    char            session_token[NTRS_MAX_TEXT_LEN];
-    uint32_t        lease_default_sec;
-    char            stun1[NTRS_MAX_TEXT_LEN];
-    char            stun2[NTRS_MAX_TEXT_LEN];
-    ntrs_nat_info_t nat_info;
-    int32_t         control_fd;
-    int32_t         udp_sock;
-} ntrs_nat_probe_result_t;
-
-typedef void (*ntrs_nat_probe_callback_t)(const ntrs_nat_probe_result_t* result, void* user_data);
-
 void ntrs_nat_info_init(ntrs_nat_info_t* info);
 void ntrs_detect_nat_options_init(ntrs_detect_nat_options_t* options);
-void ntrs_nat_probe_params_init(ntrs_nat_probe_params_t* params);
 
 int32_t ntrs_connect_control(const char* ntrs_ip, uint16_t ntrs_port);
 
@@ -196,12 +186,6 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* cand
 ntrs_async_client_t* ntrs_async_client_create(struct event_base* base);
 void                 ntrs_async_client_destroy(ntrs_async_client_t* client);
 bool                 ntrs_async_client_cancel(ntrs_async_client_t* client, uint64_t request_id);
-
-ntrs_nat_probe_flow_t* ntrs_nat_probe_flow_create(ntrs_async_client_t* client);
-void                   ntrs_nat_probe_flow_destroy(ntrs_nat_probe_flow_t* flow);
-bool                   ntrs_nat_probe_flow_start(ntrs_nat_probe_flow_t* flow, const ntrs_nat_probe_params_t* params,
-                                                 ntrs_nat_probe_callback_t callback, void* user_data);
-bool                   ntrs_nat_probe_flow_cancel(ntrs_nat_probe_flow_t* flow);
 
 bool ntrs_async_auth(ntrs_async_client_t* client, uint64_t* request_id, int32_t control_fd, const char* peer_id,
                      const char* bootstrap_token, ntrs_async_callback_t callback, void* user_data);

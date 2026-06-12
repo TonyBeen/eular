@@ -1,5 +1,9 @@
 #include <errno.h>
 #include <ntrs_client.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -11,6 +15,10 @@
 #include <event2/event.h>
 #include <event2/util.h>
 #include <utils/CLI11.hpp>
+#if defined(__linux__)
+#include <net/if.h>
+#include <sys/ioctl.h>
+#endif
 
 namespace {
 
@@ -164,15 +172,27 @@ static void verbose_log(bool verbose, const char* message)
     }
 }
 
-struct NatProbeWait {
-    event_base*             base;
-    bool                    done;
-    ntrs_nat_probe_result_t result;
+struct AsyncResultWait {
+    event_base*         base;
+    bool                done;
+    ntrs_async_result_t result;
 };
 
-static void nat_probe_callback(const ntrs_nat_probe_result_t* result, void* user_data)
+struct ProbeSession {
+    bool            success;
+    char            error_message[NTRS_MAX_TEXT_LEN];
+    char            session_token[NTRS_MAX_TEXT_LEN];
+    uint32_t        lease_default_sec;
+    char            stun1[NTRS_MAX_TEXT_LEN];
+    char            stun2[NTRS_MAX_TEXT_LEN];
+    ntrs_nat_info_t nat_info;
+    int             control_fd;
+    int             udp_sock;
+};
+
+static void async_result_callback(const ntrs_async_result_t* result, void* user_data)
 {
-    NatProbeWait* wait = static_cast<NatProbeWait*>(user_data);
+    AsyncResultWait* wait = static_cast<AsyncResultWait*>(user_data);
     if (wait == NULL || result == NULL) {
         return;
     }
@@ -182,7 +202,7 @@ static void nat_probe_callback(const ntrs_nat_probe_result_t* result, void* user
     event_base_loopbreak(wait->base);
 }
 
-static bool wait_nat_probe_result(event_base* base, NatProbeWait* wait, int timeout_sec)
+static bool wait_async_result(event_base* base, AsyncResultWait* wait, int timeout_sec)
 {
     time_t deadline = time(NULL) + timeout_sec;
     while (wait != NULL && !wait->done && time(NULL) < deadline) {
@@ -193,17 +213,224 @@ static bool wait_nat_probe_result(event_base* base, NatProbeWait* wait, int time
     return wait != NULL && wait->done;
 }
 
+static bool set_nonblocking_fd(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+static bool parse_endpoint_text(const std::string& endpoint, std::string* host, uint16_t* port)
+{
+    size_t colon = endpoint.rfind(':');
+    int    parsed = 0;
+
+    if (host == NULL || port == NULL || colon == std::string::npos) {
+        return false;
+    }
+    *host = endpoint.substr(0, colon);
+    if (host->empty() || host->find(':') != std::string::npos) {
+        return false;
+    }
+    parsed = atoi(endpoint.substr(colon + 1).c_str());
+    if (parsed <= 0 || parsed > 65535) {
+        return false;
+    }
+    *port = (uint16_t)parsed;
+    return true;
+}
+
+static bool resolve_bind_ipv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
+{
+    if (resolved_ip == NULL) {
+        return false;
+    }
+    if (!bind_ip.empty()) {
+        struct in_addr addr;
+        if (inet_pton(AF_INET, bind_ip.c_str(), &addr) != 1) {
+            return false;
+        }
+        *resolved_ip = bind_ip;
+        return true;
+    }
+
+#if defined(SIOCGIFADDR)
+    if (!bind_device.empty()) {
+        int          sock = socket(AF_INET, SOCK_DGRAM, 0);
+        struct ifreq ifr;
+        char         ip_buffer[INET_ADDRSTRLEN] = {0};
+
+        if (sock < 0) {
+            return false;
+        }
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, bind_device.c_str(), IFNAMSIZ - 1);
+        ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+        ifr.ifr_addr.sa_family = AF_INET;
+        if (ioctl(sock, SIOCGIFADDR, &ifr) != 0) {
+            close(sock);
+            return false;
+        }
+        close(sock);
+        if (inet_ntop(AF_INET, &((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr, ip_buffer, sizeof(ip_buffer)) ==
+            NULL) {
+            return false;
+        }
+        *resolved_ip = ip_buffer;
+        return true;
+    }
+#else
+    (void)bind_device;
+#endif
+
+    resolved_ip->clear();
+    return true;
+}
+
+static int create_udp_probe_socket(const std::string& bind_ip, const std::string& bind_device)
+{
+    int                sock = -1;
+    std::string        resolved_ip;
+    struct sockaddr_in local_addr;
+
+    if (!resolve_bind_ipv4(bind_ip, bind_device, &resolved_ip)) {
+        return -1;
+    }
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        return -1;
+    }
+    if (!set_nonblocking_fd(sock)) {
+        close(sock);
+        return -1;
+    }
+
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_port = htons(0);
+    if (!resolved_ip.empty()) {
+        if (inet_pton(AF_INET, resolved_ip.c_str(), &local_addr.sin_addr) != 1) {
+            close(sock);
+            return -1;
+        }
+    } else {
+        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+    if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
+        close(sock);
+        return -1;
+    }
+
+    return sock;
+}
+
+static bool run_probe_session(event_base* base, ntrs_async_client_t* async_client, const DetectArgs& args,
+                              ProbeSession* out)
+{
+    int                       control_fd = -1;
+    int                       udp_sock = -1;
+    char                      session_token[NTRS_MAX_TEXT_LEN];
+    uint32_t                  lease_default_sec = 0;
+    char                      stun1[NTRS_MAX_TEXT_LEN];
+    char                      stun2[NTRS_MAX_TEXT_LEN];
+    std::string               stun1_host;
+    std::string               stun2_host;
+    uint16_t                  stun1_port = 0;
+    uint16_t                  stun2_port = 0;
+    ntrs_detect_nat_options_t detect_options;
+    AsyncResultWait           wait;
+    uint64_t                  request_id = 0;
+
+    if (base == NULL || async_client == NULL || out == NULL) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->control_fd = -1;
+    out->udp_sock = -1;
+    ntrs_nat_info_init(&out->nat_info);
+    memset(session_token, 0, sizeof(session_token));
+    memset(stun1, 0, sizeof(stun1));
+    memset(stun2, 0, sizeof(stun2));
+
+    control_fd = ntrs_connect_control(args.node_host.c_str(), args.node_port);
+    if (control_fd < 0) {
+        snprintf(out->error_message, sizeof(out->error_message), "connect control failed");
+        return false;
+    }
+    if (!ntrs_auth(control_fd, args.peer_id.c_str(), "ntrs-dev-secret", session_token, sizeof(session_token),
+                   &lease_default_sec)) {
+        snprintf(out->error_message, sizeof(out->error_message), "auth failed");
+        close(control_fd);
+        return false;
+    }
+
+    if (!args.stun1.empty()) {
+        snprintf(stun1, sizeof(stun1), "%s", args.stun1.c_str());
+        snprintf(stun2, sizeof(stun2), "%s", args.stun2.c_str());
+    } else if (!ntrs_request_probe_endpoints(control_fd, session_token, stun1, sizeof(stun1), stun2, sizeof(stun2))) {
+        snprintf(out->error_message, sizeof(out->error_message), "request probe endpoints failed");
+        close(control_fd);
+        return false;
+    }
+
+    if (!parse_endpoint_text(stun1, &stun1_host, &stun1_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid stun1 endpoint");
+        close(control_fd);
+        return false;
+    }
+    if (stun2[0] != '\0' && !parse_endpoint_text(stun2, &stun2_host, &stun2_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid stun2 endpoint");
+        close(control_fd);
+        return false;
+    }
+
+    udp_sock = create_udp_probe_socket(args.bind_ip, args.bind_device);
+    if (udp_sock < 0) {
+        snprintf(out->error_message, sizeof(out->error_message), "create probe socket failed");
+        close(control_fd);
+        return false;
+    }
+
+    ntrs_detect_nat_options_init(&detect_options);
+    detect_options.enable_filter_probe = true;
+    detect_options.verbose = args.verbose;
+    memset(&wait, 0, sizeof(wait));
+    wait.base = base;
+    if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, stun1_host.c_str(), stun1_port,
+                               stun2[0] == '\0' ? NULL : stun2_host.c_str(), stun2_port, control_fd, session_token,
+                               &detect_options, async_result_callback, &wait) ||
+        !wait_async_result(base, &wait, 10) || !wait.result.success) {
+        snprintf(out->error_message, sizeof(out->error_message), "%s",
+                 wait.result.error_message[0] != '\0' ? wait.result.error_message : "async NAT detect failed");
+        close(udp_sock);
+        close(control_fd);
+        return false;
+    }
+
+    out->success = true;
+    out->control_fd = control_fd;
+    out->udp_sock = udp_sock;
+    out->lease_default_sec = lease_default_sec;
+    snprintf(out->session_token, sizeof(out->session_token), "%s", session_token);
+    snprintf(out->stun1, sizeof(out->stun1), "%s", stun1);
+    snprintf(out->stun2, sizeof(out->stun2), "%s", stun2);
+    out->nat_info = wait.result.nat_info;
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
     CLI::App                app{"NTRS NAT detection tool"};
     DetectArgs              args;
-    ntrs_nat_probe_params_t probe_params;
-    ntrs_nat_probe_flow_t*  probe_flow = NULL;
     ntrs_async_client_t*    async_client = NULL;
     event_base*             base = NULL;
-    NatProbeWait            wait;
+    ProbeSession            probe;
 
     app.add_option("node_host", args.node_host, "Node host or IP")->required();
     app.add_option("node_port", args.node_port, "Node control port")->required();
@@ -216,18 +443,6 @@ int main(int argc, char** argv)
 
     CLI11_PARSE(app, argc, argv);
 
-    memset(&wait, 0, sizeof(wait));
-    ntrs_nat_probe_params_init(&probe_params);
-    probe_params.node_host = args.node_host.c_str();
-    probe_params.node_port = args.node_port;
-    probe_params.peer_id = args.peer_id.c_str();
-    probe_params.bind_ip = args.bind_ip.empty() ? NULL : args.bind_ip.c_str();
-    probe_params.bind_device = args.bind_device.empty() ? NULL : args.bind_device.c_str();
-    probe_params.stun1 = args.stun1.empty() ? NULL : args.stun1.c_str();
-    probe_params.stun2 = args.stun2.empty() ? NULL : args.stun2.c_str();
-    probe_params.detect_options.enable_filter_probe = true;
-    probe_params.detect_options.verbose = args.verbose;
-
     base = event_base_new();
     if (base == NULL) {
         printf("Failed to create event base\n");
@@ -237,14 +452,6 @@ int main(int argc, char** argv)
     async_client = ntrs_async_client_create(base);
     if (async_client == NULL) {
         printf("Failed to create async client\n");
-        event_base_free(base);
-        return 1;
-    }
-
-    probe_flow = ntrs_nat_probe_flow_create(async_client);
-    if (probe_flow == NULL) {
-        printf("Failed to create nat probe flow\n");
-        ntrs_async_client_destroy(async_client);
         event_base_free(base);
         return 1;
     }
@@ -264,27 +471,23 @@ int main(int argc, char** argv)
         verbose_log(true, "Starting NAT detection...");
     }
 
-    wait.base = base;
-    if (!ntrs_nat_probe_flow_start(probe_flow, &probe_params, nat_probe_callback, &wait) ||
-        !wait_nat_probe_result(base, &wait, 10) || !wait.result.success) {
-        printf("NAT detection failed: %s\n", wait.result.error_message);
-        ntrs_nat_probe_flow_destroy(probe_flow);
+    if (!run_probe_session(base, async_client, args, &probe)) {
+        printf("NAT detection failed: %s\n", probe.error_message);
         ntrs_async_client_destroy(async_client);
         event_base_free(base);
         return 1;
     }
 
-    args.stun1 = wait.result.stun1;
-    args.stun2 = wait.result.stun2;
-    print_result(&wait.result.nat_info, args.stun1, args.stun2);
+    args.stun1 = probe.stun1;
+    args.stun2 = probe.stun2;
+    print_result(&probe.nat_info, args.stun1, args.stun2);
 
-    if (wait.result.udp_sock >= 0) {
-        close(wait.result.udp_sock);
+    if (probe.udp_sock >= 0) {
+        close(probe.udp_sock);
     }
-    if (wait.result.control_fd >= 0) {
-        close(wait.result.control_fd);
+    if (probe.control_fd >= 0) {
+        close(probe.control_fd);
     }
-    ntrs_nat_probe_flow_destroy(probe_flow);
     ntrs_async_client_destroy(async_client);
     event_base_free(base);
     return 0;

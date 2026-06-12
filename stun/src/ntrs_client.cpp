@@ -1,5 +1,3 @@
-#include <errno.h>
-#include <fcntl.h>
 #include <netdb.h>
 #include <ntrs_client.h>
 #include <ntrs_codec.h>
@@ -22,6 +20,7 @@
 #include <arpa/inet.h>
 #include <event2/dns.h>
 #include <event2/event.h>
+#include <event2/util.h>
 #if defined(__linux__)
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -30,65 +29,51 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 
-enum class NatProbeStage {
-    IDLE,
-    CONNECT,
-    AUTH,
-    REQUEST_ENDPOINTS,
-    DETECT_NAT,
-    COMPLETE,
-};
-
-struct ntrs_nat_probe_flow {
-    ntrs_async_client_t*      client;
-    uint64_t                  active_request_id;
-    NatProbeStage             stage;
-    ntrs_nat_probe_params_t   params;
-    std::string               node_host;
-    std::string               peer_id;
-    std::string               bootstrap_token;
-    std::string               bind_ip;
-    std::string               bind_device;
-    std::string               stun1_endpoint;
-    std::string               stun2_endpoint;
-    ntrs_detect_nat_options_t detect_options;
-    ntrs_nat_probe_callback_t callback;
-    void*                     user_data;
-    ntrs_nat_probe_result_t   result;
-    std::string               stun1_host;
-    std::string               stun2_host;
-    uint16_t                  stun1_port;
-    uint16_t                  stun2_port;
-
-    ntrs_nat_probe_flow()
-        : client(NULL),
-          active_request_id(0),
-          stage(NatProbeStage::IDLE),
-          callback(NULL),
-          user_data(NULL),
-          stun1_port(0),
-          stun2_port(0)
-    {
-        memset(&params, 0, sizeof(params));
-        memset(&result, 0, sizeof(result));
-        ntrs_detect_nat_options_init(&detect_options);
-        result.control_fd = -1;
-        result.udp_sock = -1;
-        ntrs_nat_info_init(&result.nat_info);
-    }
-};
-
 namespace {
 
 static uint64_t  g_ntrs_req = 1;
 static const int kControlIoTimeoutMs = 2000;
 static bool      set_nonblocking(int fd);
-static bool      resolve_bind_ipv4(const char* bind_ip, const char* bind_device, std::string* resolved_ip);
 static bool      refresh_local_endpoint_for_remote(int sock, const struct sockaddr* remote_addr, socklen_t remote_len,
                                                    std::string* ip, uint16_t* port);
-static bool      bind_socket_to_local_ip(int sock, const std::string& ip);
-static bool      query_local_ip_for_remote(const struct sockaddr* remote_addr, socklen_t remote_len, std::string* ip);
 static bool      local_endpoint_is_explicit_bound(const struct sockaddr_storage* local_addr, socklen_t local_len);
+
+static int socket_last_error()
+{
+    return EVUTIL_SOCKET_ERROR();
+}
+
+static bool socket_err_would_block(int err)
+{
+#if defined(_WIN32)
+    return err == WSAEWOULDBLOCK || err == EAGAIN;
+#else
+    return err == EAGAIN || err == EWOULDBLOCK;
+#endif
+}
+
+static bool socket_err_interrupted(int err)
+{
+#if defined(_WIN32)
+    return err == WSAEINTR;
+#else
+    return err == EINTR;
+#endif
+}
+
+static bool socket_err_rw_retriable(int err)
+{
+    return socket_err_would_block(err) || socket_err_interrupted(err);
+}
+
+static bool socket_err_connect_retriable(int err)
+{
+#if defined(_WIN32)
+    return err == WSAEWOULDBLOCK || err == WSAEINTR || err == WSAEINPROGRESS || err == WSAEINVAL;
+#else
+    return err == EINTR || err == EINPROGRESS;
+#endif
+}
 
 struct NatSample {
     std::string               local_ip;
@@ -233,103 +218,6 @@ static void copy_text(char* dst, size_t dst_len, const char* src)
     snprintf(dst, dst_len, "%s", src == NULL ? "" : src);
 }
 
-static bool parse_endpoint_text(const std::string& input, std::string* host, uint16_t* port)
-{
-    size_t      pos = std::string::npos;
-    std::string host_part;
-    std::string port_part;
-
-    if (host == NULL || port == NULL || input.empty()) {
-        return false;
-    }
-
-    if (input[0] == '[') {
-        size_t end = input.find(']');
-        if (end == std::string::npos || end + 1 >= input.size() || input[end + 1] != ':') {
-            return false;
-        }
-        host_part = input.substr(1, end - 1);
-        port_part = input.substr(end + 2);
-    } else {
-        pos = input.rfind(':');
-        if (pos == std::string::npos || pos == 0 || pos == input.size() - 1) {
-            return false;
-        }
-        host_part = input.substr(0, pos);
-        port_part = input.substr(pos + 1);
-        if (host_part.find(':') != std::string::npos) {
-            return false;
-        }
-    }
-
-    int parsed = atoi(port_part.c_str());
-    if (parsed <= 0 || parsed > 65535) {
-        return false;
-    }
-
-    *host = host_part;
-    *port = (uint16_t)parsed;
-    return !host->empty();
-}
-
-static int create_probe_socket_fd(const char* bind_ip, const char* bind_device)
-{
-    int                sock = socket(AF_INET, SOCK_DGRAM, 0);
-    struct sockaddr_in local_addr;
-    struct timeval     tv;
-    std::string        resolved_bind_ip;
-
-    if (sock < 0) {
-        return -1;
-    }
-
-    if (!set_nonblocking(sock)) {
-        close(sock);
-        return -1;
-    }
-
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-#if defined(SO_BINDTODEVICE)
-    if (bind_device != NULL && bind_device[0] != '\0') {
-        struct ifreq ifr;
-
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, bind_device, IFNAMSIZ - 1);
-        ifr.ifr_name[IFNAMSIZ - 1] = '\0';
-        if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) < 0) {
-            close(sock);
-            return -1;
-        }
-    }
-#else
-    (void)bind_device;
-#endif
-
-    if (!resolve_bind_ipv4(bind_ip, bind_device, &resolved_bind_ip)) {
-        close(sock);
-        return -1;
-    }
-
-    if (!resolved_bind_ip.empty()) {
-        memset(&local_addr, 0, sizeof(local_addr));
-        local_addr.sin_family = AF_INET;
-        local_addr.sin_port = htons(0);
-        if (inet_pton(AF_INET, resolved_bind_ip.c_str(), &local_addr.sin_addr) != 1) {
-            close(sock);
-            return -1;
-        }
-        if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
-            close(sock);
-            return -1;
-        }
-    }
-
-    return sock;
-}
-
 static const char* msg_str_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag)
 {
     const char* value = eular::ntrs::messageGetStringByTag(&msg, tag);
@@ -404,60 +292,6 @@ static bool recv_message_timeout(int fd, int timeout_ms, eular::ntrs::Message* m
     }
 
     return recv_message(fd, msg);
-}
-
-static bool resolve_bind_ipv4(const char* bind_ip, const char* bind_device, std::string* resolved_ip)
-{
-    if (resolved_ip == NULL) {
-        return false;
-    }
-
-    if (bind_ip != NULL && bind_ip[0] != '\0') {
-        struct in_addr addr;
-
-        if (inet_pton(AF_INET, bind_ip, &addr) != 1) {
-            return false;
-        }
-        *resolved_ip = bind_ip;
-        return true;
-    }
-
-#if defined(SIOCGIFADDR)
-    if (bind_device != NULL && bind_device[0] != '\0') {
-        int            sock = -1;
-        struct ifreq   ifr;
-        struct in_addr addr;
-        char           ip_buffer[INET_ADDRSTRLEN] = {0};
-
-        sock = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sock < 0) {
-            return false;
-        }
-
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, bind_device, IFNAMSIZ - 1);
-        ifr.ifr_name[IFNAMSIZ - 1] = '\0';
-        ifr.ifr_addr.sa_family = AF_INET;
-        if (ioctl(sock, SIOCGIFADDR, &ifr) != 0) {
-            close(sock);
-            return false;
-        }
-
-        close(sock);
-        addr = ((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr;
-        if (inet_ntop(AF_INET, &addr, ip_buffer, sizeof(ip_buffer)) == NULL) {
-            return false;
-        }
-
-        *resolved_ip = ip_buffer;
-        return true;
-    }
-#else
-    (void)bind_device;
-#endif
-
-    resolved_ip->clear();
-    return true;
 }
 
 static bool parse_stun_response(const uint8_t* buffer, size_t len, const uint8_t* expected_txid,
@@ -697,6 +531,10 @@ static bool parse_session_signal_impl(const eular::ntrs::Message& msg, ntrs_sess
               eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::SESSION_ID));
     copy_text(out->peer_session_token, sizeof(out->peer_session_token),
               eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::TOKEN));
+    eular::ntrs::messageGetU8ByTag(&msg, eular::ntrs::FieldTag::PUNCH_ORDER, &out->punch_order);
+    eular::ntrs::messageGetU8ByTag(&msg, eular::ntrs::FieldTag::CONNECT_ROLE, &out->connect_role);
+    eular::ntrs::messageGetU32ByTag(&msg, eular::ntrs::FieldTag::WARMUP_ROUNDS, &out->warmup_rounds);
+    eular::ntrs::messageGetU32ByTag(&msg, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, &out->warmup_interval_ms);
     eular::ntrs::messageGetU32ByTag(&msg, eular::ntrs::FieldTag::EXPIRE_AT, &out->expire_at);
 
     peer_local_ip = eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_LOCAL_IP);
@@ -871,11 +709,7 @@ static void set_async_error(ntrs_async_result_t* result, const char* message)
 
 static bool set_nonblocking(int fd)
 {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
-        return false;
-    }
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    return evutil_make_socket_nonblocking(fd) == 0;
 }
 
 static bool async_result_ok_string(const eular::ntrs::Message& msg)
@@ -1075,7 +909,7 @@ static void async_io_cb(evutil_socket_t fd, short events, void* arg)
         while (request->output_offset < request->output.size()) {
             ssize_t nsend = send((int)fd, request->output.data() + request->output_offset,
                                  request->output.size() - request->output_offset, 0);
-            if (nsend < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            if (nsend < 0 && socket_err_rw_retriable(socket_last_error())) {
                 break;
             }
             if (nsend <= 0) {
@@ -1100,10 +934,10 @@ static void async_io_cb(evutil_socket_t fd, short events, void* arg)
         for (;;) {
             uint8_t buffer[2048];
             ssize_t nread = recv((int)fd, buffer, sizeof(buffer), 0);
-            if (nread < 0 && errno == EINTR) {
+            if (nread < 0 && socket_err_interrupted(socket_last_error())) {
                 continue;
             }
-            if (nread < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (nread < 0 && socket_err_would_block(socket_last_error())) {
                 break;
             }
             if (nread <= 0) {
@@ -1224,44 +1058,6 @@ static bool refresh_local_endpoint_for_remote(int sock, const struct sockaddr* r
     }
 
     return true;
-}
-
-static bool bind_socket_to_local_ip(int sock, const std::string& ip)
-{
-    struct sockaddr_in local_addr;
-
-    if (sock < 0 || ip.empty()) {
-        return false;
-    }
-
-    memset(&local_addr, 0, sizeof(local_addr));
-    local_addr.sin_family = AF_INET;
-    local_addr.sin_port = htons(0);
-    if (inet_pton(AF_INET, ip.c_str(), &local_addr.sin_addr) != 1) {
-        return false;
-    }
-
-    return bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) == 0;
-}
-
-static bool query_local_ip_for_remote(const struct sockaddr* remote_addr, socklen_t remote_len, std::string* ip)
-{
-    int         sock = -1;
-    uint16_t    port = 0;
-    bool        ok = false;
-
-    if (remote_addr == NULL || ip == NULL) {
-        return false;
-    }
-
-    sock = socket(remote_addr->sa_family, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        return false;
-    }
-
-    ok = refresh_local_endpoint_for_remote(sock, remote_addr, remote_len, ip, &port);
-    close(sock);
-    return ok;
 }
 
 static bool local_endpoint_is_explicit_bound(const struct sockaddr_storage* local_addr, socklen_t local_len)
@@ -1531,7 +1327,7 @@ static bool send_async_stun_request(AsyncRequest* request)
 
     if (sendto(request->fd, message.data(), message.size(), 0, (struct sockaddr*)&request->stun_addrs[target_index],
                request->stun_addr_lens[target_index]) < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        if (socket_err_rw_retriable(socket_last_error())) {
             return arm_async_stun_timer(request);
         }
         return false;
@@ -1566,10 +1362,10 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
         socklen_t               src_len = sizeof(src_addr);
         StunResponseInfo        response;
         ssize_t nread = recvfrom((int)fd, buffer, sizeof(buffer), 0, (struct sockaddr*)&src_addr, &src_len);
-        if (nread < 0 && errno == EINTR) {
+        if (nread < 0 && socket_err_interrupted(socket_last_error())) {
             continue;
         }
-        if (nread < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (nread < 0 && socket_err_would_block(socket_last_error())) {
             return;
         }
         if (nread <= 0) {
@@ -1686,18 +1482,8 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
 
 static bool start_async_nat_io(AsyncRequest* request)
 {
-    std::string route_ip;
-
     if (request == NULL) {
         return false;
-    }
-
-    if (!request->nat_explicit_bind &&
-        query_local_ip_for_remote((const struct sockaddr*)&request->stun_addrs[0], request->stun_addr_lens[0],
-                                  &route_ip)) {
-        if (!route_ip.empty() && route_ip != "0.0.0.0" && bind_socket_to_local_ip(request->fd, route_ip)) {
-            nat_probe_log(request, "nat probe pinned local route ip=%s\n", route_ip.c_str());
-        }
     }
 
     init_async_nat_sample(request);
@@ -1820,10 +1606,6 @@ static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, 
     if (client->active_fds.find(udp_sock) != client->active_fds.end()) {
         return false;
     }
-    if (!set_nonblocking(udp_sock)) {
-        return false;
-    }
-
     request = new AsyncRequest();
     request->client = client;
     request->request_id = client->next_request_id++;
@@ -1964,7 +1746,7 @@ static void async_connect_io_cb(evutil_socket_t, short events, void* arg)
     }
 
     if (request->fd >= 0) {
-        close(request->fd);
+        EVUTIL_CLOSESOCKET(request->fd);
         request->fd = -1;
     }
     if (!start_async_connect_attempt(request)) {
@@ -1979,7 +1761,7 @@ static void async_connect_timeout_cb(evutil_socket_t, short, void* arg)
         return;
     }
     if (request->fd >= 0) {
-        close(request->fd);
+        EVUTIL_CLOSESOCKET(request->fd);
         request->fd = -1;
     }
     if (!start_async_connect_attempt(request)) {
@@ -2010,7 +1792,7 @@ static bool start_async_connect_attempt(AsyncRequest* request)
             continue;
         }
         if (!set_nonblocking(request->fd)) {
-            close(request->fd);
+            EVUTIL_CLOSESOCKET(request->fd);
             request->fd = -1;
             continue;
         }
@@ -2023,8 +1805,8 @@ static bool start_async_connect_attempt(AsyncRequest* request)
             async_request_finish(request, false, NULL);
             return true;
         }
-        if (errno != EINPROGRESS) {
-            close(request->fd);
+        if (!socket_err_connect_retriable(socket_last_error())) {
+            EVUTIL_CLOSESOCKET(request->fd);
             request->fd = -1;
             continue;
         }
@@ -2156,14 +1938,34 @@ static void async_punch_finish(AsyncRequest* request, bool success, const ntrs_p
     async_request_finish(request, false, NULL);
 }
 
+static std::string build_punch_req_payload(const char* candidate_type, int round)
+{
+    char round_text[16];
+
+    snprintf(round_text, sizeof(round_text), "%d", round);
+    return std::string("NTRS_PUNCH_REQ|") +
+           (candidate_type == NULL || candidate_type[0] == '\0' ? "candidate" : candidate_type) + "|" + round_text;
+}
+
+static std::string build_punch_ack_payload(const uint8_t* payload, size_t payload_len)
+{
+    static const char req_prefix[] = "NTRS_PUNCH_REQ|";
+    static const char ack_prefix[] = "NTRS_PUNCH_ACK|";
+    size_t            req_prefix_len = sizeof(req_prefix) - 1;
+
+    if (payload == NULL || payload_len < req_prefix_len) {
+        return std::string();
+    }
+    return std::string(ack_prefix) +
+           std::string(reinterpret_cast<const char*>(payload) + req_prefix_len, payload_len - req_prefix_len);
+}
+
 static void async_punch_send_round(AsyncRequest* request)
 {
     for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
-        char payload[128];
-        snprintf(payload, sizeof(payload), "NTRS_KCP_PUNCH|%s|%d",
-                 request->punch_candidates[i].type[0] == '\0' ? "candidate" : request->punch_candidates[i].type,
-                 request->punch_round + 1);
-        sendto(request->fd, payload, strlen(payload), 0, (struct sockaddr*)&request->punch_addrs[i],
+        std::string payload =
+            build_punch_req_payload(request->punch_candidates[i].type, request->punch_round + 1);
+        sendto(request->fd, payload.data(), payload.size(), 0, (struct sockaddr*)&request->punch_addrs[i],
                request->punch_addr_lens[i]);
     }
 }
@@ -2201,20 +2003,46 @@ static void async_punch_io_cb(evutil_socket_t fd, short events, void* arg)
         struct sockaddr_storage src;
         socklen_t               src_len = sizeof(src);
         ssize_t                 nread = recvfrom((int)fd, buffer, sizeof(buffer), 0, (struct sockaddr*)&src, &src_len);
-        if (nread < 0 && errno == EINTR) {
+        if (nread < 0 && socket_err_interrupted(socket_last_error())) {
             continue;
         }
-        if (nread < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (nread < 0 && socket_err_would_block(socket_last_error())) {
             return;
         }
         if (nread <= 0) {
             return;
         }
 
+        std::string src_ip;
+        uint16_t    src_port = 0;
+        sockaddr_endpoint(&src, src_len, &src_ip, &src_port);
+
         for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
             if (sockaddr_same_endpoint(&src, src_len, &request->punch_addrs[i], request->punch_addr_lens[i])) {
+                if (nread >= 15 && memcmp(buffer, "NTRS_PUNCH_REQ|", 15) == 0) {
+                    std::string ack_payload = build_punch_ack_payload(buffer, (size_t)nread);
+                    if (!ack_payload.empty()) {
+                        sendto((int)fd, ack_payload.data(), ack_payload.size(), 0, (struct sockaddr*)&src, src_len);
+                    }
+                } else if (nread >= 15 && memcmp(buffer, "NTRS_PUNCH_ACK|", 15) != 0) {
+                    continue;
+                }
                 async_punch_finish(request, true, &request->punch_candidates[i]);
                 return;
+            }
+        }
+
+        if (nread >= 15 && memcmp(buffer, "NTRS_PUNCH_REQ|", 15) == 0) {
+            for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
+                if (strcmp(request->punch_candidates[i].type, "host_local") == 0 &&
+                    request->punch_candidates[i].port == src_port) {
+                    std::string ack_payload = build_punch_ack_payload(buffer, (size_t)nread);
+                    if (!ack_payload.empty()) {
+                        sendto((int)fd, ack_payload.data(), ack_payload.size(), 0, (struct sockaddr*)&src, src_len);
+                    }
+                    async_punch_finish(request, true, &request->punch_candidates[i]);
+                    return;
+                }
             }
         }
     }
@@ -2235,10 +2063,6 @@ static bool submit_async_punch_request(AsyncClientImpl* client, int32_t udp_sock
     if (client->active_fds.find(udp_sock) != client->active_fds.end()) {
         return false;
     }
-    if (!set_nonblocking(udp_sock)) {
-        return false;
-    }
-
     request = new AsyncRequest();
     request->client = client;
     request->request_id = client->next_request_id++;
@@ -2538,13 +2362,11 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* cand
         }
 
         for (round = 0; round < send_rounds; ++round) {
-            char           payload[128];
+            std::string    payload = build_punch_req_payload(candidates[i].type, round + 1);
             fd_set         rfds;
             struct timeval tv;
 
-            snprintf(payload, sizeof(payload), "NTRS_KCP_PUNCH|%s|%d",
-                     candidates[i].type[0] == '\0' ? "candidate" : candidates[i].type, round + 1);
-            sendto(udp_sock, payload, strlen(payload), 0, (struct sockaddr*)&dst, sizeof(dst));
+            sendto(udp_sock, payload.data(), payload.size(), 0, (struct sockaddr*)&dst, sizeof(dst));
 
             FD_ZERO(&rfds);
             FD_SET(udp_sock, &rfds);
@@ -2791,235 +2613,6 @@ bool ntrs_async_try_udp_hole_punch(ntrs_async_client_t* client, uint64_t* reques
 {
     return submit_async_punch_request(reinterpret_cast<AsyncClientImpl*>(client), udp_sock, candidates, candidate_count,
                                       send_rounds, interval_ms, callback, user_data, request_id);
-}
-
-static void nat_probe_flow_cleanup_failed(ntrs_nat_probe_flow_t* flow)
-{
-    if (flow == NULL) {
-        return;
-    }
-
-    if (flow->result.control_fd >= 0) {
-        close(flow->result.control_fd);
-        flow->result.control_fd = -1;
-    }
-    if (flow->result.udp_sock >= 0) {
-        close(flow->result.udp_sock);
-        flow->result.udp_sock = -1;
-    }
-}
-
-static void nat_probe_flow_finish(ntrs_nat_probe_flow_t* flow, bool cancelled, const char* error_message)
-{
-    ntrs_nat_probe_callback_t callback = NULL;
-    void*                     user_data = NULL;
-
-    if (flow == NULL) {
-        return;
-    }
-
-    flow->active_request_id = 0;
-    flow->stage = NatProbeStage::COMPLETE;
-    flow->result.cancelled = cancelled;
-    if (error_message != NULL && error_message[0] != '\0') {
-        copy_text(flow->result.error_message, sizeof(flow->result.error_message), error_message);
-    }
-    if (!flow->result.success) {
-        nat_probe_flow_cleanup_failed(flow);
-    }
-
-    callback = flow->callback;
-    user_data = flow->user_data;
-    flow->callback = NULL;
-    flow->user_data = NULL;
-    if (callback != NULL) {
-        callback(&flow->result, user_data);
-    }
-}
-
-static void nat_probe_flow_async_cb(const ntrs_async_result_t* result, void* user_data)
-{
-    ntrs_nat_probe_flow_t* flow = static_cast<ntrs_nat_probe_flow_t*>(user_data);
-
-    if (flow == NULL || result == NULL) {
-        return;
-    }
-
-    flow->active_request_id = 0;
-    if (result->cancelled) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, true, result->error_message);
-        return;
-    }
-    if (!result->success) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, result->error_message);
-        return;
-    }
-
-    switch (flow->stage) {
-    case NatProbeStage::CONNECT:
-        flow->result.control_fd = result->control_fd;
-        flow->stage = NatProbeStage::AUTH;
-        if (!ntrs_async_auth(flow->client, &flow->active_request_id, flow->result.control_fd, flow->peer_id.c_str(),
-                             flow->bootstrap_token.c_str(), nat_probe_flow_async_cb, flow)) {
-            flow->result.success = false;
-            nat_probe_flow_finish(flow, false, "start async auth failed");
-        }
-        return;
-    case NatProbeStage::AUTH:
-        copy_text(flow->result.session_token, sizeof(flow->result.session_token), result->session_token);
-        flow->result.lease_default_sec = result->lease_default_sec;
-        if (!flow->stun1_endpoint.empty()) {
-            copy_text(flow->result.stun1, sizeof(flow->result.stun1), flow->stun1_endpoint);
-            copy_text(flow->result.stun2, sizeof(flow->result.stun2), flow->stun2_endpoint);
-        } else {
-            flow->stage = NatProbeStage::REQUEST_ENDPOINTS;
-            if (!ntrs_async_request_probe_endpoints(flow->client, &flow->active_request_id, flow->result.control_fd,
-                                                    flow->result.session_token, nat_probe_flow_async_cb, flow)) {
-                flow->result.success = false;
-                nat_probe_flow_finish(flow, false, "start async probe endpoint request failed");
-            }
-            return;
-        }
-        break;
-    case NatProbeStage::REQUEST_ENDPOINTS:
-        copy_text(flow->result.stun1, sizeof(flow->result.stun1), result->stun1);
-        copy_text(flow->result.stun2, sizeof(flow->result.stun2), result->stun2);
-        break;
-    case NatProbeStage::DETECT_NAT:
-        flow->result.success = true;
-        flow->result.nat_info = result->nat_info;
-        nat_probe_flow_finish(flow, false, NULL);
-        return;
-    default:
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, "invalid nat probe flow state");
-        return;
-    }
-
-    flow->stun1_endpoint = flow->result.stun1;
-    flow->stun2_endpoint = flow->result.stun2;
-    if (!parse_endpoint_text(flow->stun1_endpoint, &flow->stun1_host, &flow->stun1_port)) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, "invalid stun1 endpoint");
-        return;
-    }
-    if (!flow->stun2_endpoint.empty() &&
-        !parse_endpoint_text(flow->stun2_endpoint, &flow->stun2_host, &flow->stun2_port)) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, "invalid stun2 endpoint");
-        return;
-    }
-
-    flow->result.udp_sock = create_probe_socket_fd(flow->bind_ip.empty() ? NULL : flow->bind_ip.c_str(),
-                                                   flow->bind_device.empty() ? NULL : flow->bind_device.c_str());
-    if (flow->result.udp_sock < 0) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, "create probe socket failed");
-        return;
-    }
-
-    flow->stage = NatProbeStage::DETECT_NAT;
-    if (!ntrs_async_detect_nat(flow->client, &flow->active_request_id, flow->result.udp_sock, flow->stun1_host.c_str(),
-                               flow->stun1_port, flow->stun2_endpoint.empty() ? NULL : flow->stun2_host.c_str(),
-                               flow->stun2_port, flow->result.control_fd, flow->result.session_token,
-                               &flow->detect_options, nat_probe_flow_async_cb, flow)) {
-        flow->result.success = false;
-        nat_probe_flow_finish(flow, false, "start async nat detect failed");
-    }
-}
-
-void ntrs_nat_probe_params_init(ntrs_nat_probe_params_t* params)
-{
-    if (params == NULL) {
-        return;
-    }
-
-    memset(params, 0, sizeof(*params));
-    params->peer_id = "probe_peer";
-    params->bootstrap_token = "ntrs-dev-secret";
-    ntrs_detect_nat_options_init(&params->detect_options);
-}
-
-ntrs_nat_probe_flow_t* ntrs_nat_probe_flow_create(ntrs_async_client_t* client)
-{
-    ntrs_nat_probe_flow_t* flow = NULL;
-
-    if (client == NULL) {
-        return NULL;
-    }
-
-    flow = new ntrs_nat_probe_flow_t();
-    flow->client = client;
-    return flow;
-}
-
-void ntrs_nat_probe_flow_destroy(ntrs_nat_probe_flow_t* flow)
-{
-    if (flow == NULL) {
-        return;
-    }
-
-    if (flow->active_request_id != 0) {
-        ntrs_async_client_cancel(flow->client, flow->active_request_id);
-    }
-    if (!flow->result.success) {
-        nat_probe_flow_cleanup_failed(flow);
-    }
-    delete flow;
-}
-
-bool ntrs_nat_probe_flow_start(ntrs_nat_probe_flow_t* flow, const ntrs_nat_probe_params_t* params,
-                               ntrs_nat_probe_callback_t callback, void* user_data)
-{
-    if (flow == NULL || params == NULL || callback == NULL || params->node_host == NULL ||
-        params->node_host[0] == '\0' || params->node_port == 0) {
-        return false;
-    }
-    if (flow->active_request_id != 0) {
-        return false;
-    }
-
-    memset(&flow->result, 0, sizeof(flow->result));
-    flow->result.control_fd = -1;
-    flow->result.udp_sock = -1;
-    ntrs_nat_info_init(&flow->result.nat_info);
-    memset(&flow->params, 0, sizeof(flow->params));
-    flow->params = *params;
-    flow->node_host = params->node_host;
-    flow->peer_id = params->peer_id == NULL || params->peer_id[0] == '\0' ? "probe_peer" : params->peer_id;
-    flow->bootstrap_token = params->bootstrap_token == NULL || params->bootstrap_token[0] == '\0'
-                                ? "ntrs-dev-secret"
-                                : params->bootstrap_token;
-    flow->bind_ip = params->bind_ip == NULL ? "" : params->bind_ip;
-    flow->bind_device = params->bind_device == NULL ? "" : params->bind_device;
-    flow->stun1_endpoint = params->stun1 == NULL ? "" : params->stun1;
-    flow->stun2_endpoint = params->stun2 == NULL ? "" : params->stun2;
-    ntrs_detect_nat_options_init(&flow->detect_options);
-    flow->detect_options.enable_filter_probe = params->detect_options.enable_filter_probe;
-    flow->detect_options.verbose = params->detect_options.verbose;
-    if (params->detect_options.probe_rounds > 0) {
-        flow->detect_options.probe_rounds = params->detect_options.probe_rounds;
-    }
-    if (params->detect_options.retries_per_round > 0) {
-        flow->detect_options.retries_per_round = params->detect_options.retries_per_round;
-    }
-    flow->callback = callback;
-    flow->user_data = user_data;
-    flow->stage = NatProbeStage::CONNECT;
-
-    return ntrs_async_connect_control(flow->client, &flow->active_request_id, flow->node_host.c_str(),
-                                      params->node_port, kControlIoTimeoutMs, nat_probe_flow_async_cb, flow);
-}
-
-bool ntrs_nat_probe_flow_cancel(ntrs_nat_probe_flow_t* flow)
-{
-    if (flow == NULL || flow->active_request_id == 0) {
-        return false;
-    }
-
-    return ntrs_async_client_cancel(flow->client, flow->active_request_id);
 }
 
 }  // extern "C"
