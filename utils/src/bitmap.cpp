@@ -196,7 +196,9 @@ bool BitMap::resize(uint32_t bitSize)
     mSize = bitSize;
 
     uint32_t bytes = (oldCap > mCapacity) ? (mCapacity / BITS_PEER_BYTE) : (oldCap / BITS_PEER_BYTE);
-    memcpy(newBitMap, mBitMap, bytes);
+    if (bytes > 0 && mBitMap != nullptr) {
+        memcpy(newBitMap, mBitMap, bytes);
+    }
 
     release();
     mBitMap = newBitMap;

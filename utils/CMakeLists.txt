@@ -12,13 +12,14 @@ include(CMakePackageConfigHelpers)
 option(UTILS_STATIC_LIB "Build static library" ON)
 option(UTILS_DYNAMIC_LIB "Build dynamic library" ON)
 option(UTILS_BIMAP_USE_STD_CONTAINER "Use std::map/std::unordered_map as BiMap backend" OFF)
-option(ENABLE_DEBUG "Enable debug symbol" OFF)
-option(ENABLE_TEST "Enable test" OFF)
+option(UTILS_ENABLE_DEBUG "Enable debug symbol" OFF)
+option(UTILS_ENABLE_TEST "Enable test" OFF)
+option(UTILS_ENABLE_ASAN "Enable AddressSanitizer for Linux builds" OFF)
 option(SUBMODULE_ENABLE_INSTALL "Whether to install relevant header files and libraries when used as a submodule?" ON)
 option(UTILS_SUBMODULE_ENABLE_INSTALL "" ${SUBMODULE_ENABLE_INSTALL})
 
-# Keep BUILD_TESTING strictly aligned with ENABLE_TEST.
-set(BUILD_TESTING ${ENABLE_TEST} CACHE BOOL "Enable building tests" FORCE)
+# Keep BUILD_TESTING strictly aligned with UTILS_ENABLE_TEST.
+set(BUILD_TESTING ${UTILS_ENABLE_TEST} CACHE BOOL "Enable building tests" FORCE)
 include(CTest)
 
 if (NOT UTILS_STATIC_LIB AND NOT UTILS_DYNAMIC_LIB)
@@ -29,9 +30,9 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type (Release MinSizeRel RelWithDebInfo Debug)")
 endif()
 
-if(ENABLE_DEBUG)
+if(UTILS_ENABLE_DEBUG)
     if(CMAKE_CONFIGURATION_TYPES)
-        message(STATUS "ENABLE_DEBUG is ON. Please build with Debug configuration for multi-config generators.")
+        message(STATUS "UTILS_ENABLE_DEBUG is ON. Please build with Debug configuration for multi-config generators.")
     else()
         set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type (Release MinSizeRel RelWithDebInfo Debug)" FORCE)
     endif()
@@ -45,6 +46,7 @@ set(MACRO_DEFINITIONS)
 set(C_WARNING_FLAGS)
 set(CXX_WARNING_FLAGS)
 set(COMMON_COMPILE_FLAGS)
+set(COMMON_LINK_FLAGS)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(MACRO_DEFINITIONS _GNU_SOURCE __USE_FILE_OFFSET64 _LARGEFILE64_SOURCE)
     set(C_WARNING_FLAGS -W -Wall -Werror -Wextra -Wno-unused-result -Wno-unused-function -Wno-unused-parameter)
@@ -69,6 +71,22 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # set(3RD_INC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/3rd/Linux/include)
 else()
     message(STATUS "Unknown compiler: ${CMAKE_CXX_COMPILER_ID}")
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    list(APPEND COMMON_COMPILE_FLAGS -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+
+    if(UTILS_ENABLE_ASAN)
+        list(APPEND COMMON_COMPILE_FLAGS
+            -fsanitize=address
+            -fsanitize=leak
+            -fsanitize=undefined)
+        list(APPEND COMMON_LINK_FLAGS
+            -fsanitize=address
+            -fsanitize=leak
+            -fsanitize=undefined)
+    endif()
 endif()
 
 if(NOT APPLE)
@@ -117,6 +135,10 @@ function(utils_apply_common_target_settings target)
             $<$<COMPILE_LANGUAGE:C>:${C_WARNING_FLAGS}>
             $<$<COMPILE_LANGUAGE:CXX>:${CXX_WARNING_FLAGS}>
     )
+
+    if(COMMON_LINK_FLAGS)
+        target_link_options(${target} PRIVATE ${COMMON_LINK_FLAGS})
+    endif()
 endfunction()
 
 # build the static library

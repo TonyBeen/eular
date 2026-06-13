@@ -2,6 +2,23 @@ file(GLOB TEST_SRC_LIST CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cc)
 set(TEST_MAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cc)
 list(REMOVE_ITEM TEST_SRC_LIST ${TEST_MAIN_FILE})
 
+function(utils_apply_test_sanitizers target)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTILS_ENABLE_ASAN)
+        target_compile_options(${target}
+            PRIVATE
+                -fno-omit-frame-pointer
+                -fno-optimize-sibling-calls
+                -fsanitize=address
+                -fsanitize=leak
+                -fsanitize=undefined)
+        target_link_options(${target}
+            PRIVATE
+                -fsanitize=address
+                -fsanitize=leak
+                -fsanitize=undefined)
+    endif()
+endfunction()
+
 if(UTILS_STATIC_LIB)
     set(LINK_LIBS eular::utils_static)
     set(TEST_DEFINITIONS UTILS_STATIC)
@@ -19,6 +36,15 @@ target_compile_definitions(utils_test_main_obj
         CATCH_CONFIG_ENABLE_BENCHMARKING
         CATCH_CONFIG_NO_POSIX_SIGNALS)
 target_include_directories(utils_test_main_obj PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTILS_ENABLE_ASAN)
+    target_compile_options(utils_test_main_obj
+        PRIVATE
+            -fno-omit-frame-pointer
+            -fno-optimize-sibling-calls
+            -fsanitize=address
+            -fsanitize=leak
+            -fsanitize=undefined)
+endif()
 if(MSVC)
     target_compile_options(utils_test_main_obj PRIVATE /utf-8)
 endif()
@@ -35,6 +61,7 @@ foreach(test_file ${TEST_SRC_LIST})
 
     target_link_libraries(${test} ${LINK_LIBS})
     target_include_directories(${test} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    utils_apply_test_sanitizers(${test})
     if(MSVC)
         target_compile_options(${test} PRIVATE /utf-8)
     endif()
