@@ -3,14 +3,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${SCRIPT_DIR}/stun_node"
+BIN="${SCRIPT_DIR}/ntrs_node"
 
 usage() {
-    cat <<'EOF'
+    cat <<'EOT'
 Usage:
-  node_start.sh --hub <hub_host:port> --node-id <node_id>
+  node_start.sh --hub <hub_host:port> [--node-id <node_id>]
                 [--public-host <ip_or_domain>]
-                [--control-port <port>] [--stun-port <port>] [--stun-alt-port <port>]
+                [--control-port <port=19000>] [--probe-port <port=33478>] [--probe-alt-port <port=33479>]
                 [--region <region>] [--mqtt-username <user>] [--mqtt-password <pass>]
                 [--auth-secret <secret>] [--verbose]
 
@@ -24,6 +24,8 @@ Environment fallback:
   NODE_ID
   NODE_PUBLIC_HOST
   NODE_CONTROL_PORT
+  NODE_PROBE_PORT
+  NODE_PROBE_ALT_PORT
   NODE_STUN_PORT
   NODE_STUN_ALT_PORT
   NODE_REGION
@@ -31,14 +33,19 @@ Environment fallback:
   NODE_MQTT_PASSWORD
   NODE_AUTH_SECRET
 
+Compatibility:
+  The script accepts legacy --stun-port/--stun-alt-port arguments and
+  NODE_STUN_PORT/NODE_STUN_ALT_PORT environment variables, but always forwards
+  --probe-port/--probe-alt-port to ntrs_node.
+
 Example:
-  ./node_start.sh --hub bd.eular.top:1883 --node-id node-a --mqtt-username stun --mqtt-password 'secret'
-EOF
+  ./node_start.sh --hub bd.eular.top:1883 --mqtt-username ntrs --mqtt-password 'secret'
+EOT
 }
 
 require_bin() {
     if [[ ! -x "${BIN}" ]]; then
-        echo "stun_node not found in script directory: ${BIN}" >&2
+        echo "ntrs_node not found in script directory: ${BIN}" >&2
         exit 1
     fi
 }
@@ -53,7 +60,7 @@ kill_old_process() {
         pids="$(pgrep -f "${BIN}" || true)"
     fi
     if [[ -n "${pids}" ]]; then
-        echo "stopping existing stun_node: ${pids}"
+        echo "stopping existing ntrs_node: ${pids}"
         if [[ -n "${node_id}" ]]; then
             pkill -f "${BIN}.*--node-id ${node_id}" || true
         else
@@ -66,7 +73,7 @@ kill_old_process() {
 detect_public_ip() {
     local output ip
 
-    output="$(curl -fsS myip.ipip.net)"
+    output="$(curl -fsS myip.ipip.net -4)"
     ip="$(printf '%s\n' "${output}" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
     if [[ -z "${ip}" ]]; then
         echo "failed to detect public IPv4 from myip.ipip.net: ${output}" >&2
@@ -79,8 +86,8 @@ HUB="${NODE_HUB:-}"
 NODE_ID="${NODE_ID:-}"
 PUBLIC_HOST="${NODE_PUBLIC_HOST:-}"
 CONTROL_PORT="${NODE_CONTROL_PORT:-19000}"
-STUN_PORT="${NODE_STUN_PORT:-3478}"
-STUN_ALT_PORT="${NODE_STUN_ALT_PORT:-3479}"
+PROBE_PORT="${NODE_PROBE_PORT:-${NODE_STUN_PORT:-33478}}"
+PROBE_ALT_PORT="${NODE_PROBE_ALT_PORT:-${NODE_STUN_ALT_PORT:-33479}}"
 REGION="${NODE_REGION:-default}"
 MQTT_USERNAME="${NODE_MQTT_USERNAME:-}"
 MQTT_PASSWORD="${NODE_MQTT_PASSWORD:-}"
@@ -105,12 +112,12 @@ while [[ $# -gt 0 ]]; do
             CONTROL_PORT="${2:-}"
             shift 2
             ;;
-        --stun-port)
-            STUN_PORT="${2:-}"
+        --probe-port|--stun-port)
+            PROBE_PORT="${2:-}"
             shift 2
             ;;
-        --stun-alt-port)
-            STUN_ALT_PORT="${2:-}"
+        --probe-alt-port|--stun-alt-port)
+            PROBE_ALT_PORT="${2:-}"
             shift 2
             ;;
         --region)
@@ -145,10 +152,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${HUB}" || -z "${NODE_ID}" ]]; then
-    echo "missing required arguments: --hub and --node-id" >&2
+if [[ -z "${HUB}" ]]; then
+    echo "missing required argument: --hub" >&2
     usage
     exit 1
+fi
+
+if [[ -z "${NODE_ID}" ]]; then
+    NODE_ID="node-$(hostname)-$(date +%s)"
+    if [[ "${VERBOSE}" -eq 1 ]]; then
+        echo "auto generated node-id: ${NODE_ID}"
+    fi
 fi
 
 require_bin
@@ -167,8 +181,8 @@ CMD=(
     --node-id "${NODE_ID}"
     --public-host "${PUBLIC_HOST}"
     --control-port "${CONTROL_PORT}"
-    --stun-port "${STUN_PORT}"
-    --stun-alt-port "${STUN_ALT_PORT}"
+    --probe-port "${PROBE_PORT}"
+    --probe-alt-port "${PROBE_ALT_PORT}"
     --region "${REGION}"
 )
 

@@ -5,11 +5,11 @@
 ## 文档列表
 
 - [多机器协作STUN服务设计方案](./多机器协作STUN服务设计方案.md)
-- [NTRSHub与STUN节点协同架构设计](./NTRSHub与STUN节点协同架构设计.md)
-- [NTRS Hub 的 Mosquitto 部署文档](./NTRS%20Hub的Mosquitto部署文档.md)
-- [NTRS双机最小部署指南](./NTRS双机最小部署指南.md)
+- [STUN Hub与STUN节点协同架构设计](./STUNHub与STUN节点协同架构设计.md)
+- [STUN Hub 的 Mosquitto 部署文档](./STUN%20Hub的Mosquitto部署文档.md)
+- [STUN双机最小部署指南](./STUN双机最小部署指南.md)
 - [NAT类型与探测信号说明](./NAT类型与探测信号说明.md)
-- [NTRS NAT探测流程图](./NTRS_NAT探测流程图.md)
+- [STUN NAT探测流程图](./STUN_NAT探测流程图.md)
 - [STUN开发任务单](./开发任务单.md)
 
 ## 构建补充
@@ -25,7 +25,7 @@
   - `CHANGE-REQUEST(change-port)`
   - `CHANGE-REQUEST(change-ip)`
   - `stun2`
-- `ntrs_peer` 与 `ntrs_nat_detect` 复用同一套异步 NAT probe flow，不再各自维护独立探测逻辑。
+- `stun_peer` 与 `stun_nat_detect` 复用同一套异步 NAT probe flow，不再各自维护独立探测逻辑。
 - 会话协商除公网 `srflx` 候选外，还会交换 `host_local` 候选；同机或同局域网场景会优先命中本地地址。
 - 候选列表会自动去重；当 `srflx_primary == srflx_secondary` 时，不再重复下发第二条公网候选。
 - 控制面协议热点路径已经基本切到 `FieldTag + typed TLV`，数值和枚举字段优先走二进制编码与按 tag 访问。

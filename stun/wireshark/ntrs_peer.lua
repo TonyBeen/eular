@@ -1,16 +1,16 @@
-local ntrs_peer_proto = Proto("ntrs_peer", "NTRS Peer Probe")
+local stun_peer_proto = Proto("stun_peer", "STUN Peer Probe")
 
-local f_msg_type = ProtoField.string("ntrs_peer.type", "Type")
-local f_candidate_type = ProtoField.string("ntrs_peer.candidate_type", "Candidate Type")
-local f_round = ProtoField.uint32("ntrs_peer.round", "Round", base.DEC)
-local f_owner_peer = ProtoField.string("ntrs_peer.owner_peer", "Owner Peer")
-local f_token = ProtoField.string("ntrs_peer.token", "Token")
-local f_seq = ProtoField.uint32("ntrs_peer.seq", "Sequence", base.DEC)
-local f_value = ProtoField.string("ntrs_peer.value", "Value")
-local f_payload_len = ProtoField.uint32("ntrs_peer.payload_len", "Payload Length", base.DEC)
-local f_raw = ProtoField.string("ntrs_peer.raw", "Raw")
+local f_msg_type = ProtoField.string("stun_peer.type", "Type")
+local f_candidate_type = ProtoField.string("stun_peer.candidate_type", "Candidate Type")
+local f_round = ProtoField.uint32("stun_peer.round", "Round", base.DEC)
+local f_owner_peer = ProtoField.string("stun_peer.owner_peer", "Owner Peer")
+local f_token = ProtoField.string("stun_peer.token", "Token")
+local f_seq = ProtoField.uint32("stun_peer.seq", "Sequence", base.DEC)
+local f_value = ProtoField.string("stun_peer.value", "Value")
+local f_payload_len = ProtoField.uint32("stun_peer.payload_len", "Payload Length", base.DEC)
+local f_raw = ProtoField.string("stun_peer.raw", "Raw")
 
-ntrs_peer_proto.fields = {
+stun_peer_proto.fields = {
     f_msg_type,
     f_candidate_type,
     f_round,
@@ -30,29 +30,29 @@ local function split_fields(s)
     return fields
 end
 
-local function looks_like_ntrs_peer(payload)
-    return payload:find("^NTRS_PUNCH_REQ|") ~= nil
-        or payload:find("^NTRS_PUNCH_ACK|") ~= nil
-        or payload:find("^NTRS_PROBE_PING|") ~= nil
-        or payload:find("^NTRS_PROBE_PONG|") ~= nil
-        or payload:find("^NTRS_MTU_PROBE|") ~= nil
-        or payload:find("^NTRS_MTU_ACK|") ~= nil
+local function looks_like_stun_peer(payload)
+    return payload:find("^STUN_PUNCH_REQ|") ~= nil
+        or payload:find("^STUN_PUNCH_ACK|") ~= nil
+        or payload:find("^STUN_PROBE_PING|") ~= nil
+        or payload:find("^STUN_PROBE_PONG|") ~= nil
+        or payload:find("^STUN_MTU_PROBE|") ~= nil
+        or payload:find("^STUN_MTU_ACK|") ~= nil
 end
 
-function ntrs_peer_proto.dissector(buf, pinfo, tree)
+function stun_peer_proto.dissector(buf, pinfo, tree)
     local length = buf:len()
     if length == 0 then
         return 0
     end
 
     local payload = buf(0, length):string()
-    if not looks_like_ntrs_peer(payload) then
+    if not looks_like_stun_peer(payload) then
         return 0
     end
 
-    pinfo.cols.protocol = "NTRS_PEER"
+    pinfo.cols.protocol = "STUN_PEER"
 
-    local subtree = tree:add(ntrs_peer_proto, buf(), "NTRS Peer Probe")
+    local subtree = tree:add(stun_peer_proto, buf(), "STUN Peer Probe")
     subtree:add(f_payload_len, buf(0, 0), length)
     subtree:add(f_raw, payload)
 
@@ -60,7 +60,7 @@ function ntrs_peer_proto.dissector(buf, pinfo, tree)
     local msg_type = fields[1] or "UNKNOWN"
     subtree:add(f_msg_type, buf(0, 0), msg_type)
 
-    if msg_type == "NTRS_PUNCH_REQ" or msg_type == "NTRS_PUNCH_ACK" then
+    if msg_type == "STUN_PUNCH_REQ" or msg_type == "STUN_PUNCH_ACK" then
         if fields[2] ~= nil then
             subtree:add(f_candidate_type, buf(0, 0), fields[2])
         end
@@ -86,4 +86,4 @@ function ntrs_peer_proto.dissector(buf, pinfo, tree)
 end
 
 local udp_table = DissectorTable.get("udp.port")
-udp_table:add_for_decode_as(ntrs_peer_proto)
+udp_table:add_for_decode_as(stun_peer_proto)

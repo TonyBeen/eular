@@ -1,4 +1,5 @@
 #include <netdb.h>
+#include <ntrs_binary_protocol.h>
 #include <ntrs_client.h>
 #include <ntrs_codec.h>
 #include <ntrs_io.h>
@@ -8,8 +9,6 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
-#include <stun.h>
-#include <stun_types.h>
 #include <unistd.h>
 
 #include <map>
@@ -37,6 +36,15 @@ static bool      set_nonblocking(int fd);
 static bool      refresh_local_endpoint_for_remote(int sock, const struct sockaddr* remote_addr, socklen_t remote_len,
                                                    std::string* ip, uint16_t* port);
 static bool      local_endpoint_is_explicit_bound(const struct sockaddr_storage* local_addr, socklen_t local_len);
+static bool      sockaddr_endpoint(const struct sockaddr_storage* addr, socklen_t len, std::string* ip,
+                                   uint16_t* port);
+
+static uint64_t current_time_ms()
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ull + (uint64_t)(tv.tv_usec / 1000ull);
+}
 
 static int socket_last_error()
 {
@@ -117,8 +125,8 @@ static const uint32_t kStunChangePort = 0x02u;
 static const int      kAsyncFilterMaxAttempts = 2;
 
 enum class AsyncNatPhase {
-    STUN1 = 0,
-    STUN2,
+    PROBE1 = 0,
+    PROBE2,
     FILTER_CHANGE_PORT,
     FILTER_CHANGE_IP,
 };
@@ -126,10 +134,10 @@ enum class AsyncNatPhase {
 static const char* async_nat_phase_name(AsyncNatPhase phase)
 {
     switch (phase) {
-    case AsyncNatPhase::STUN1:
-        return "stun1";
-    case AsyncNatPhase::STUN2:
-        return "stun2";
+    case AsyncNatPhase::PROBE1:
+        return "probe1";
+    case AsyncNatPhase::PROBE2:
+        return "probe2";
     case AsyncNatPhase::FILTER_CHANGE_PORT:
         return "change_port";
     case AsyncNatPhase::FILTER_CHANGE_IP:
@@ -185,15 +193,15 @@ static bool is_public_ipv4(const std::string& ip)
 static const char* nat_class_name(ntrs_nat_class_t nat_class)
 {
     switch (nat_class) {
-    case STUN_NAT_CLASS_OPEN_PUBLIC:
+    case NTRS_NAT_CLASS_OPEN_PUBLIC:
         return "open_public";
-    case STUN_NAT_CLASS_FULL_CONE:
+    case NTRS_NAT_CLASS_FULL_CONE:
         return "full_cone_nat";
-    case STUN_NAT_CLASS_IP_RESTRICTED:
+    case NTRS_NAT_CLASS_IP_RESTRICTED:
         return "ip_restricted_nat";
-    case STUN_NAT_CLASS_PORT_RESTRICTED:
+    case NTRS_NAT_CLASS_PORT_RESTRICTED:
         return "port_restricted_nat";
-    case STUN_NAT_CLASS_SYMMETRIC:
+    case NTRS_NAT_CLASS_SYMMETRIC:
         return "symmetric_nat";
     default:
         return "unknown";
@@ -294,63 +302,7 @@ static bool recv_message_timeout(int fd, int timeout_ms, eular::ntrs::Message* m
     return recv_message(fd, msg);
 }
 
-static bool parse_stun_response(const uint8_t* buffer, size_t len, const uint8_t* expected_txid,
-                                StunResponseInfo* out)
-{
-    eular::stun::StunMsgParser              parser;
-    const eular::stun::SocketAddress*       addr = NULL;
-    const eular::any*                       attr = NULL;
-
-    if (buffer == NULL || expected_txid == NULL || out == NULL) {
-        return false;
-    }
-    if (!parser.parse(buffer, len) ||
-        parser.msgType() != ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_RESPONSE) ||
-        memcmp(parser.transactionId(), expected_txid, STUN_TRX_ID_SIZE) != 0) {
-        return false;
-    }
-
-    *out = StunResponseInfo();
-
-    attr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_XOR_MAPPED_ADDRESS));
-    if (attr != NULL) {
-        addr = eular::any_cast<eular::stun::SocketAddress>(attr);
-    }
-    if (addr == NULL) {
-        attr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_MAPPED_ADDRESS));
-        if (attr != NULL) {
-            addr = eular::any_cast<eular::stun::SocketAddress>(attr);
-        }
-    }
-    if (addr == NULL) {
-        return false;
-    }
-
-    out->mapped_ip = addr->getIp();
-    out->mapped_port = addr->getPort();
-
-    attr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_RESPONSE_ORIGIN));
-    if (attr != NULL) {
-        addr = eular::any_cast<eular::stun::SocketAddress>(attr);
-        if (addr != NULL) {
-            out->response_origin_ip = addr->getIp();
-            out->response_origin_port = addr->getPort();
-        }
-    }
-
-    attr = parser.getAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_OTHER_ADDRESS));
-    if (attr != NULL) {
-        addr = eular::any_cast<eular::stun::SocketAddress>(attr);
-        if (addr != NULL) {
-            out->other_address_ip = addr->getIp();
-            out->other_address_port = addr->getPort();
-        }
-    }
-
-    return true;
-}
-
-static void evaluate_nat_result(NatSample* nat, bool has_stun2)
+static void evaluate_nat_result(NatSample* nat, bool has_probe2)
 {
     bool local_public = false;
     bool same_mapping = false;
@@ -361,10 +313,10 @@ static void evaluate_nat_result(NatSample* nat, bool has_stun2)
         return;
     }
 
-    nat->nat_class = STUN_NAT_CLASS_UNKNOWN;
-    nat->nat_flags = STUN_NAT_FLAG_NONE;
-    nat->mapping_behavior = STUN_MAPPING_UNKNOWN;
-    nat->filtering_behavior = STUN_FILTERING_UNKNOWN;
+    nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
+    nat->nat_flags = NTRS_NAT_FLAG_NONE;
+    nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
+    nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
 
     local_public = is_public_ipv4(nat->local_ip);
     same_mapping = nat->srflx_ip == nat->srflx_ip_2 && nat->srflx_port == nat->srflx_port_2;
@@ -372,28 +324,28 @@ static void evaluate_nat_result(NatSample* nat, bool has_stun2)
     filter_probe_has_evidence = nat->filter_same_ip_diff_port_rx || nat->filter_diff_ip_rx;
 
     if (local_public && nat->local_ip == nat->srflx_ip && nat->local_port == nat->srflx_port) {
-        nat->nat_flags |= STUN_NAT_FLAG_LOCAL_ADDR_PUBLIC;
+        nat->nat_flags |= NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC;
     }
     if (nat->probe2_ok && nat->srflx_ip != nat->srflx_ip_2 && is_ipv4_text(nat->srflx_ip) &&
         is_ipv4_text(nat->srflx_ip_2)) {
-        nat->nat_flags |= STUN_NAT_FLAG_MULTI_EXTERNAL_IP;
+        nat->nat_flags |= NTRS_NAT_FLAG_MULTI_EXTERNAL_IP;
     }
 
     if (!nat->probe1_ok) {
         nat->mapping_stable = false;
         nat->nat_risk = "high";
-        nat->nat_flags |= STUN_NAT_FLAG_UDP_BLOCKED | STUN_NAT_FLAG_PROBE_DEGRADED;
-        nat->filtering_behavior = STUN_FILTERING_BLOCKED;
+        nat->nat_flags |= NTRS_NAT_FLAG_UDP_BLOCKED | NTRS_NAT_FLAG_PROBE_DEGRADED;
+        nat->filtering_behavior = NTRS_FILTERING_BLOCKED;
         nat->nat_type = nat_class_name(nat->nat_class);
         return;
     }
 
-    if (!has_stun2) {
+    if (!has_probe2) {
         nat->mapping_stable = true;
-        nat->nat_flags |= STUN_NAT_FLAG_PROBE_DEGRADED;
-        nat->mapping_behavior = STUN_MAPPING_UNKNOWN;
-        nat->filtering_behavior = STUN_FILTERING_UNKNOWN;
-        nat->nat_class = local_public ? STUN_NAT_CLASS_OPEN_PUBLIC : STUN_NAT_CLASS_UNKNOWN;
+        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
+        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->nat_class = local_public ? NTRS_NAT_CLASS_OPEN_PUBLIC : NTRS_NAT_CLASS_UNKNOWN;
         nat->nat_risk = local_public ? "medium" : "high";
         nat->nat_type = nat_class_name(nat->nat_class);
         return;
@@ -401,11 +353,11 @@ static void evaluate_nat_result(NatSample* nat, bool has_stun2)
 
     if (!nat->probe2_ok) {
         nat->mapping_stable = false;
-        nat->nat_flags |= STUN_NAT_FLAG_MAPPING_UNSTABLE;
-        nat->nat_flags |= STUN_NAT_FLAG_PROBE_DEGRADED;
-        nat->mapping_behavior = STUN_MAPPING_UNKNOWN;
-        nat->filtering_behavior = STUN_FILTERING_UNKNOWN;
-        nat->nat_class = STUN_NAT_CLASS_UNKNOWN;
+        nat->nat_flags |= NTRS_NAT_FLAG_MAPPING_UNSTABLE;
+        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
+        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
         nat->nat_risk = "high";
         nat->nat_type = nat_class_name(nat->nat_class);
         return;
@@ -413,57 +365,57 @@ static void evaluate_nat_result(NatSample* nat, bool has_stun2)
 
     nat->mapping_stable = same_mapping;
     if (!nat->mapping_stable || unstable_mapping) {
-        nat->nat_flags |= STUN_NAT_FLAG_MAPPING_UNSTABLE;
+        nat->nat_flags |= NTRS_NAT_FLAG_MAPPING_UNSTABLE;
     }
 
     if (unstable_mapping) {
-        nat->mapping_behavior = STUN_MAPPING_UNSTABLE;
+        nat->mapping_behavior = NTRS_MAPPING_UNSTABLE;
     } else if (same_mapping) {
-        nat->mapping_behavior = STUN_MAPPING_ENDPOINT_INDEPENDENT;
+        nat->mapping_behavior = NTRS_MAPPING_ENDPOINT_INDEPENDENT;
     } else {
-        nat->mapping_behavior = STUN_MAPPING_ADDRESS_DEPENDENT;
+        nat->mapping_behavior = NTRS_MAPPING_ADDRESS_DEPENDENT;
     }
 
     if (!same_mapping || unstable_mapping) {
-        nat->filtering_behavior = STUN_FILTERING_UNKNOWN;
+        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
     } else if (nat->filter_same_ip_diff_port_rx && nat->filter_diff_ip_rx) {
-        nat->filtering_behavior = STUN_FILTERING_ENDPOINT_INDEPENDENT;
+        nat->filtering_behavior = NTRS_FILTERING_ENDPOINT_INDEPENDENT;
     } else if (nat->filter_same_ip_diff_port_rx && !nat->filter_diff_ip_rx) {
-        nat->filtering_behavior = STUN_FILTERING_ADDRESS_DEPENDENT;
+        nat->filtering_behavior = NTRS_FILTERING_ADDRESS_DEPENDENT;
     } else if (nat->filter_probe_executed && !filter_probe_has_evidence) {
-        nat->filtering_behavior = STUN_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
+        nat->filtering_behavior = NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
     } else {
-        nat->filtering_behavior = STUN_FILTERING_UNKNOWN;
+        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
         if (nat->filter_probe_executed) {
-            nat->nat_flags |= STUN_NAT_FLAG_PROBE_DEGRADED;
+            nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
         }
     }
 
     if (local_public && nat->local_ip == nat->srflx_ip && nat->local_port == nat->srflx_port &&
-        nat->mapping_behavior == STUN_MAPPING_ENDPOINT_INDEPENDENT && !unstable_mapping) {
+        nat->mapping_behavior == NTRS_MAPPING_ENDPOINT_INDEPENDENT && !unstable_mapping) {
         nat->nat_risk = "low";
-        nat->nat_class = STUN_NAT_CLASS_OPEN_PUBLIC;
-    } else if (nat->mapping_behavior == STUN_MAPPING_UNSTABLE ||
-               nat->mapping_behavior == STUN_MAPPING_ADDRESS_DEPENDENT ||
-               nat->mapping_behavior == STUN_MAPPING_ADDRESS_AND_PORT_DEPENDENT) {
+        nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC;
+    } else if (nat->mapping_behavior == NTRS_MAPPING_UNSTABLE ||
+               nat->mapping_behavior == NTRS_MAPPING_ADDRESS_DEPENDENT ||
+               nat->mapping_behavior == NTRS_MAPPING_ADDRESS_AND_PORT_DEPENDENT) {
         nat->nat_risk = "high";
-        nat->nat_class = STUN_NAT_CLASS_SYMMETRIC;
-    } else if (nat->filtering_behavior == STUN_FILTERING_ENDPOINT_INDEPENDENT) {
+        nat->nat_class = NTRS_NAT_CLASS_SYMMETRIC;
+    } else if (nat->filtering_behavior == NTRS_FILTERING_ENDPOINT_INDEPENDENT) {
         nat->nat_risk = "low";
-        nat->nat_class = STUN_NAT_CLASS_FULL_CONE;
-    } else if (nat->filtering_behavior == STUN_FILTERING_ADDRESS_DEPENDENT) {
+        nat->nat_class = NTRS_NAT_CLASS_FULL_CONE;
+    } else if (nat->filtering_behavior == NTRS_FILTERING_ADDRESS_DEPENDENT) {
         nat->nat_risk = "medium";
-        nat->nat_class = STUN_NAT_CLASS_IP_RESTRICTED;
-    } else if (nat->filtering_behavior == STUN_FILTERING_ADDRESS_AND_PORT_DEPENDENT) {
+        nat->nat_class = NTRS_NAT_CLASS_IP_RESTRICTED;
+    } else if (nat->filtering_behavior == NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT) {
         nat->nat_risk = "high";
-        nat->nat_class = STUN_NAT_CLASS_PORT_RESTRICTED;
+        nat->nat_class = NTRS_NAT_CLASS_PORT_RESTRICTED;
     } else {
         nat->nat_risk = "high";
-        nat->nat_class = STUN_NAT_CLASS_UNKNOWN;
+        nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
     }
 
-    if (nat->probe1_success_count < nat->probe_rounds || (has_stun2 && nat->probe2_success_count < nat->probe_rounds)) {
-        nat->nat_flags |= STUN_NAT_FLAG_PROBE_DEGRADED;
+    if (nat->probe1_success_count < nat->probe_rounds || (has_probe2 && nat->probe2_success_count < nat->probe_rounds)) {
+        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
     }
 
     nat->nat_type = nat_class_name(nat->nat_class);
@@ -517,14 +469,16 @@ static bool parse_session_signal_impl(const eular::ntrs::Message& msg, ntrs_sess
 
     memset(out, 0, sizeof(*out));
     copy_text(out->peer_id, sizeof(out->peer_id), eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_ID));
+    copy_text(out->peer_device_id, sizeof(out->peer_device_id),
+              eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_DEVICE_ID));
     out->peer_nat_class =
-        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_NAT_CLASS, STUN_NAT_CLASS_UNKNOWN);
+        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN);
     out->peer_nat_flags =
-        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_NAT_FLAGS, STUN_NAT_FLAG_NONE);
+        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_NAT_FLAGS, NTRS_NAT_FLAG_NONE);
     out->peer_mapping_behavior =
-        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR, STUN_MAPPING_UNKNOWN);
+        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN);
     out->peer_filtering_behavior =
-        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR, STUN_FILTERING_UNKNOWN);
+        msg_u16_tag(msg, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN);
     copy_text(out->peer_nat_type, sizeof(out->peer_nat_type),
               eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_NAT_TYPE));
     copy_text(out->session_id, sizeof(out->session_id),
@@ -544,7 +498,7 @@ static bool parse_session_signal_impl(const eular::ntrs::Message& msg, ntrs_sess
     peer_srflx_ip_2 = eular::ntrs::messageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_SRFLX_IP_2);
     eular::ntrs::messageGetU16ByTag(&msg, eular::ntrs::FieldTag::PEER_SRFLX_PORT_2, &peer_srflx_port_2);
 
-    if (count < STUN_MAX_CANDIDATES && peer_local_ip[0] != '\0' && peer_local_port > 0) {
+    if (count < NTRS_MAX_CANDIDATES && peer_local_ip[0] != '\0' && peer_local_port > 0) {
         copy_text(out->candidates[count].ip, sizeof(out->candidates[count].ip), peer_local_ip);
         out->candidates[count].port = peer_local_port;
         copy_text(out->candidates[count].type, sizeof(out->candidates[count].type), "host_local");
@@ -558,7 +512,7 @@ static bool parse_session_signal_impl(const eular::ntrs::Message& msg, ntrs_sess
         ++count;
     }
 
-    if (count < STUN_MAX_CANDIDATES && peer_srflx_ip_2[0] != '\0' && peer_srflx_port_2 > 0) {
+    if (count < NTRS_MAX_CANDIDATES && peer_srflx_ip_2[0] != '\0' && peer_srflx_port_2 > 0) {
         bool duplicate_primary =
             peer_srflx_ip[0] != '\0' && peer_srflx_port > 0 && strcmp(peer_srflx_ip, peer_srflx_ip_2) == 0 &&
             peer_srflx_port == peer_srflx_port_2;
@@ -602,14 +556,14 @@ struct AsyncRequest {
     void*                                user_data;
     ntrs_async_result_t                  result;
     NatSample                            nat_sample;
-    struct sockaddr_storage              stun_addrs[2];
-    socklen_t                            stun_addr_lens[2];
+    struct sockaddr_storage              probe_addrs[2];
+    socklen_t                            probe_addr_lens[2];
     int                                  udp_family;
     struct evdns_getaddrinfo_request*    dns_request;
-    int                                  resolving_stun_index;
-    std::string                          stun_hosts[2];
-    uint16_t                             stun_ports[2];
-    std::vector<stun_peer_candidate_t>   punch_candidates;
+    int                                  resolving_probe_index;
+    std::string                          probe_hosts[2];
+    uint16_t                             probe_ports[2];
+    std::vector<ntrs_peer_candidate_t>   punch_candidates;
     std::vector<struct sockaddr_storage> punch_addrs;
     std::vector<socklen_t>               punch_addr_lens;
     int                                  punch_round;
@@ -625,24 +579,24 @@ struct AsyncRequest {
     bool                                 nat_enable_filter_probe;
     bool                                 nat_verbose;
     bool                                 nat_explicit_bind;
-    bool                                 has_stun2;
+    bool                                 has_probe2;
     AsyncNatPhase                        nat_phase;
-    int                                  stun_index;
-    int                                  stun_attempts;
-    int                                  stun_max_attempts;
-    int                                  stun_probe_max_attempts;
-    int                                  stun_success_target;
-    int                                  stun_success_count[2];
-    long                                 stun_rtt_sum_ms[2];
-    std::set<std::string>                stun_mappings[2];
-    struct timeval                       stun_sent_at;
-    uint32_t                             stun_change_request;
-    uint8_t                              stun_transaction_id[STUN_TRX_ID_SIZE];
+    int                                  probe_index;
+    int                                  probe_attempts;
+    int                                  probe_max_attempts;
+    int                                  probe_phase_max_attempts;
+    int                                  probe_success_target;
+    int                                  probe_success_count[2];
+    long                                 probe_rtt_sum_ms[2];
+    std::set<std::string>                probe_mappings[2];
+    struct timeval                       probe_sent_at;
+    uint32_t                             probe_change_request;
+    uint8_t                              probe_token[NTRS_PROBE_TOKEN_WIRE_SIZE];
 
     AsyncRequest()
         : client(NULL),
           request_id(0),
-          type(STUN_ASYNC_AUTH),
+          type(NTRS_ASYNC_AUTH),
           fd(-1),
           expect_response(false),
           expected_type(eular::ntrs::MessageType::UNKNOWN),
@@ -653,7 +607,7 @@ struct AsyncRequest {
           user_data(NULL),
           udp_family(AF_UNSPEC),
           dns_request(NULL),
-          resolving_stun_index(0),
+          resolving_probe_index(0),
           punch_round(0),
           punch_max_rounds(0),
           punch_interval_ms(0),
@@ -665,25 +619,178 @@ struct AsyncRequest {
           nat_enable_filter_probe(false),
           nat_verbose(false),
           nat_explicit_bind(false),
-          has_stun2(false),
-          nat_phase(AsyncNatPhase::STUN1),
-          stun_index(0),
-          stun_attempts(0),
-          stun_max_attempts(0),
-          stun_probe_max_attempts(0),
-          stun_success_target(0),
-          stun_change_request(0)
+          has_probe2(false),
+          nat_phase(AsyncNatPhase::PROBE1),
+          probe_index(0),
+          probe_attempts(0),
+          probe_max_attempts(0),
+          probe_phase_max_attempts(0),
+          probe_success_target(0),
+          probe_change_request(0)
     {
         memset(&result, 0, sizeof(result));
-        memset(stun_addrs, 0, sizeof(stun_addrs));
-        memset(stun_addr_lens, 0, sizeof(stun_addr_lens));
-        memset(stun_ports, 0, sizeof(stun_ports));
-        memset(stun_success_count, 0, sizeof(stun_success_count));
-        memset(stun_rtt_sum_ms, 0, sizeof(stun_rtt_sum_ms));
-        memset(&stun_sent_at, 0, sizeof(stun_sent_at));
-        memset(stun_transaction_id, 0, sizeof(stun_transaction_id));
+        memset(probe_addrs, 0, sizeof(probe_addrs));
+        memset(probe_addr_lens, 0, sizeof(probe_addr_lens));
+        memset(probe_ports, 0, sizeof(probe_ports));
+        memset(probe_success_count, 0, sizeof(probe_success_count));
+        memset(probe_rtt_sum_ms, 0, sizeof(probe_rtt_sum_ms));
+        memset(&probe_sent_at, 0, sizeof(probe_sent_at));
+        memset(probe_token, 0, sizeof(probe_token));
     }
 };
+
+/**
+ * @brief 将 NAT 探测阶段映射为私有二进制协议阶段。
+ *
+ * @param phase 当前异步 NAT 探测阶段。
+ * @return ntrs_binary_phase_t 对应的私有协议阶段。
+ */
+static ntrs_binary_phase_t async_nat_phase_to_binary_phase(AsyncNatPhase phase)
+{
+    switch (phase) {
+    case AsyncNatPhase::PROBE1:
+        return NTRS_BINARY_PHASE_PROBE1;
+    case AsyncNatPhase::PROBE2:
+        return NTRS_BINARY_PHASE_PROBE2;
+    case AsyncNatPhase::FILTER_CHANGE_PORT:
+        return NTRS_BINARY_PHASE_CHANGE_PORT;
+    case AsyncNatPhase::FILTER_CHANGE_IP:
+        return NTRS_BINARY_PHASE_CHANGE_IP;
+    default:
+        return NTRS_BINARY_PHASE_UNKNOWN;
+    }
+}
+
+/**
+ * @brief 判断当前阶段是否属于过滤探测阶段。
+ *
+ * @param phase 当前异步 NAT 探测阶段。
+ * @return true 当前阶段为过滤探测。
+ * @return false 当前阶段为常规映射探测。
+ */
+static bool async_nat_phase_is_filter_binary(AsyncNatPhase phase)
+{
+    return phase == AsyncNatPhase::FILTER_CHANGE_PORT || phase == AsyncNatPhase::FILTER_CHANGE_IP;
+}
+
+/**
+ * @brief 基于请求上下文生成私有探测 token。
+ *
+ * 当前迁移阶段继续沿用既有 12 字节 token 生成规则，以便控制面转发、过滤探测
+ * 委托以及日志定位仍然能复用既有上下文；区别在于这些字节不再承载旧公开协议
+ * 的 transaction-id 语义，只作为 NTRS 私有二进制协议中的探测 token。
+ *
+ * @param request 请求上下文。
+ * @param out_token 输出 token 缓冲区，长度必须至少为 NTRS_PROBE_TOKEN_WIRE_SIZE。
+ */
+static void build_async_nat_probe_token(const AsyncRequest* request, uint8_t out_token[NTRS_PROBE_TOKEN_WIRE_SIZE])
+{
+    uint64_t seed = 0;
+
+    memset(out_token, 0, NTRS_PROBE_TOKEN_WIRE_SIZE);
+    if (request == NULL) {
+        return;
+    }
+
+    seed = request->request_id;
+    seed ^= ((uint64_t)request->nat_phase << 40);
+    seed ^= ((uint64_t)request->probe_index << 32);
+    memcpy(out_token, &seed, sizeof(seed));
+    out_token[8] = (uint8_t)((request->probe_change_request >> 24) & 0xFFu);
+    out_token[9] = (uint8_t)((request->probe_change_request >> 16) & 0xFFu);
+    out_token[10] = (uint8_t)((request->probe_change_request >> 8) & 0xFFu);
+    out_token[11] = (uint8_t)(request->probe_change_request & 0xFFu);
+}
+
+/**
+ * @brief 构造私有二进制 NAT 探测请求帧。
+ *
+ * @param request 请求上下文。
+ * @param token 当前探测 token。
+ * @param out 输出编码后的请求帧。
+ * @return true 构造成功。
+ * @return false 构造失败。
+ */
+static bool build_async_nat_probe_request_frame(const AsyncRequest* request, const uint8_t* token,
+                                                std::vector<uint8_t>* out)
+{
+    uint8_t                  buffer[256];
+    ntrs_binary_frame_t      frame;
+    ntrs_binary_frame_type_t frame_type;
+    ntrs_binary_phase_t      phase;
+
+    if (request == NULL || token == NULL || out == NULL) {
+        return false;
+    }
+
+    frame_type = async_nat_phase_is_filter_binary(request->nat_phase) ? NTRS_BINARY_FRAME_FILTER_REQ
+                                                                      : NTRS_BINARY_FRAME_PROBE_REQ;
+    phase = async_nat_phase_to_binary_phase(request->nat_phase);
+    if (!ntrs_binary_frame_init(&frame, buffer, sizeof(buffer)) ||
+        !ntrs_binary_frame_set_header(&frame, frame_type, phase, 0, (uint32_t)request->request_id,
+                                      (uint32_t)(request->probe_attempts + 1), current_time_ms()) ||
+        !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_PROBE_TOKEN, token, NTRS_PROBE_TOKEN_WIRE_SIZE)) {
+        return false;
+    }
+
+    out->assign(frame.buffer, frame.buffer + frame.length);
+    return true;
+}
+
+/**
+ * @brief 从私有二进制 NAT 探测响应中提取关键信息。
+ *
+ * @param buffer 输入缓冲区。
+ * @param len 输入长度。
+ * @param expected_phase 期望阶段。
+ * @param expected_token 期望 token。
+ * @param out 输出响应信息。
+ * @return true 解析成功且 token/阶段匹配。
+ * @return false 解析失败或不匹配。
+ */
+static bool parse_async_nat_probe_response_frame(const uint8_t* buffer, size_t len,
+                                                 ntrs_binary_phase_t expected_phase, const uint8_t* expected_token,
+                                                 StunResponseInfo* out)
+{
+    ntrs_binary_frame_view_t frame_view;
+    ntrs_binary_tlv_view_t   token_tlv;
+    ntrs_binary_tlv_view_t   tlv;
+    struct sockaddr_storage  endpoint_addr;
+    socklen_t                endpoint_len = 0;
+
+    if (buffer == NULL || expected_token == NULL || out == NULL ||
+        !ntrs_binary_frame_parse(buffer, len, &frame_view)) {
+        return false;
+    }
+    if (frame_view.header.phase != (uint8_t)expected_phase) {
+        return false;
+    }
+    if (frame_view.header.frame_type != NTRS_BINARY_FRAME_PROBE_RSP &&
+        frame_view.header.frame_type != NTRS_BINARY_FRAME_FILTER_RSP) {
+        return false;
+    }
+    if (!ntrs_binary_frame_find_tlv(&frame_view, NTRS_BINARY_TLV_PROBE_TOKEN, &token_tlv) ||
+        token_tlv.value_len != NTRS_PROBE_TOKEN_WIRE_SIZE ||
+        memcmp(token_tlv.value, expected_token, NTRS_PROBE_TOKEN_WIRE_SIZE) != 0) {
+        return false;
+    }
+
+    *out = StunResponseInfo();
+    if (!ntrs_binary_frame_find_tlv(&frame_view, NTRS_BINARY_TLV_MAPPED_ADDR, &tlv) ||
+        !ntrs_binary_tlv_parse_endpoint(&tlv, &endpoint_addr, &endpoint_len) ||
+        !sockaddr_endpoint(&endpoint_addr, endpoint_len, &out->mapped_ip, &out->mapped_port)) {
+        return false;
+    }
+    if (ntrs_binary_frame_find_tlv(&frame_view, NTRS_BINARY_TLV_ORIGIN_ADDR, &tlv) &&
+        ntrs_binary_tlv_parse_endpoint(&tlv, &endpoint_addr, &endpoint_len)) {
+        sockaddr_endpoint(&endpoint_addr, endpoint_len, &out->response_origin_ip, &out->response_origin_port);
+    }
+    if (ntrs_binary_frame_find_tlv(&frame_view, NTRS_BINARY_TLV_OTHER_ADDR, &tlv) &&
+        ntrs_binary_tlv_parse_endpoint(&tlv, &endpoint_addr, &endpoint_len)) {
+        sockaddr_endpoint(&endpoint_addr, endpoint_len, &out->other_address_ip, &out->other_address_port);
+    }
+    return true;
+}
 
 static void init_async_result(ntrs_async_result_t* result, uint64_t request_id, ntrs_async_request_type_t type)
 {
@@ -726,7 +833,7 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
     if (msg.type == eular::ntrs::MessageType::ERROR_RSP) {
         const char* code = msg_str_tag(msg, eular::ntrs::FieldTag::CODE);
         const char* message = msg_str_tag(msg, eular::ntrs::FieldTag::MESSAGE);
-        char        error_buf[STUN_MAX_TEXT_LEN];
+        char        error_buf[NTRS_MAX_TEXT_LEN];
 
         if (code[0] != '\0' && message[0] != '\0') {
             snprintf(error_buf, sizeof(error_buf), "%s: %s", code, message);
@@ -742,7 +849,7 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
     }
 
     switch (request->type) {
-    case STUN_ASYNC_AUTH:
+    case NTRS_ASYNC_AUTH:
         if (msg.type != eular::ntrs::MessageType::AUTH_RSP) {
             set_async_error(&request->result, "unexpected auth response");
             return false;
@@ -756,21 +863,23 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
             set_async_error(&request->result, "auth failed");
         }
         return request->result.success;
-    case STUN_ASYNC_REQUEST_PROBE_ENDPOINTS:
+    case NTRS_ASYNC_REQUEST_PROBE_ENDPOINTS:
         if (msg.type != eular::ntrs::MessageType::NAT_PROBE_RSP) {
             set_async_error(&request->result, "unexpected probe endpoint response");
             return false;
         }
-        copy_text(request->result.stun1, sizeof(request->result.stun1),
-                  msg_str_tag(msg, eular::ntrs::FieldTag::STUN1));
-        copy_text(request->result.stun2, sizeof(request->result.stun2),
-                  msg_str_tag(msg, eular::ntrs::FieldTag::STUN2));
-        request->result.success = request->result.stun1[0] != '\0';
+        {
+            const char* probe1_value = msg_str_tag(msg, eular::ntrs::FieldTag::PROBE1);
+            const char* probe2_value = msg_str_tag(msg, eular::ntrs::FieldTag::PROBE2);
+            copy_text(request->result.probe1, sizeof(request->result.probe1), probe1_value);
+            copy_text(request->result.probe2, sizeof(request->result.probe2), probe2_value);
+        }
+        request->result.success = request->result.probe1[0] != '\0';
         if (!request->result.success) {
             set_async_error(&request->result, "request probe endpoints failed");
         }
         return request->result.success;
-    case STUN_ASYNC_REGISTER_PEER:
+    case NTRS_ASYNC_REGISTER_PEER:
         if (msg.type != eular::ntrs::MessageType::REGISTER_RSP) {
             set_async_error(&request->result, "unexpected register response");
             return false;
@@ -780,7 +889,7 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
             set_async_error(&request->result, "register peer failed");
         }
         return request->result.success;
-    case STUN_ASYNC_CREATE_SESSION:
+    case NTRS_ASYNC_CREATE_SESSION:
         if (msg.type != eular::ntrs::MessageType::SESSION_CREATE_RSP) {
             set_async_error(&request->result, "unexpected create session response");
             return false;
@@ -790,7 +899,7 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
             set_async_error(&request->result, "create session failed");
         }
         return request->result.success;
-    case STUN_ASYNC_WAIT_FOR_SIGNAL:
+    case NTRS_ASYNC_WAIT_FOR_SIGNAL:
         if (msg.type != eular::ntrs::MessageType::SESSION_NOTIFY &&
             msg.type != eular::ntrs::MessageType::SESSION_CREATE_RSP) {
             set_async_error(&request->result, "unexpected signal response");
@@ -801,10 +910,10 @@ static bool fill_async_result_from_message(AsyncRequest* request, const eular::n
             set_async_error(&request->result, "wait for signal failed");
         }
         return request->result.success;
-    case STUN_ASYNC_UNREGISTER_PEER:
+    case NTRS_ASYNC_UNREGISTER_PEER:
         request->result.success = true;
         return true;
-    case STUN_ASYNC_HEARTBEAT:
+    case NTRS_ASYNC_HEARTBEAT:
         if (msg.type != eular::ntrs::MessageType::HEARTBEAT_RSP) {
             set_async_error(&request->result, "unexpected heartbeat response");
             return false;
@@ -892,7 +1001,7 @@ static bool async_process_input(AsyncRequest* request)
             return true;
         }
         request->input.erase(request->input.begin(), request->input.begin() + frame_size);
-        if (msg.request_id != (uint32_t)request->request_id && request->type != STUN_ASYNC_WAIT_FOR_SIGNAL) {
+        if (msg.request_id != (uint32_t)request->request_id && request->type != NTRS_ASYNC_WAIT_FOR_SIGNAL) {
             continue;
         }
         fill_async_result_from_message(request, msg);
@@ -996,7 +1105,7 @@ static bool async_filter_response_valid(const AsyncRequest* request, const struc
 
     if (request == NULL || src_addr == NULL || src_len == 0 ||
         !sockaddr_endpoint(src_addr, src_len, &source_ip, &source_port) ||
-        !sockaddr_endpoint(&request->stun_addrs[0], request->stun_addr_lens[0], &primary_ip, &primary_port)) {
+        !sockaddr_endpoint(&request->probe_addrs[0], request->probe_addr_lens[0], &primary_ip, &primary_port)) {
         return false;
     }
 
@@ -1012,8 +1121,8 @@ static bool async_filter_response_valid(const AsyncRequest* request, const struc
         return true;
     }
 
-    if (request->nat_phase != AsyncNatPhase::FILTER_CHANGE_IP || !request->has_stun2 ||
-        !sockaddr_endpoint(&request->stun_addrs[1], request->stun_addr_lens[1], &secondary_ip, &secondary_port)) {
+    if (request->nat_phase != AsyncNatPhase::FILTER_CHANGE_IP || !request->has_probe2 ||
+        !sockaddr_endpoint(&request->probe_addrs[1], request->probe_addr_lens[1], &secondary_ip, &secondary_port)) {
         return false;
     }
 
@@ -1087,14 +1196,14 @@ static void init_async_nat_sample(AsyncRequest* request)
     request->nat_sample.srflx_ip = "0.0.0.0";
     request->nat_sample.srflx_ip_2 = "0.0.0.0";
     request->nat_sample.nat_risk = "high";
-    request->nat_sample.nat_class = STUN_NAT_CLASS_UNKNOWN;
-    request->nat_sample.nat_flags = STUN_NAT_FLAG_NONE;
-    request->nat_sample.mapping_behavior = STUN_MAPPING_UNKNOWN;
-    request->nat_sample.filtering_behavior = STUN_FILTERING_UNKNOWN;
+    request->nat_sample.nat_class = NTRS_NAT_CLASS_UNKNOWN;
+    request->nat_sample.nat_flags = NTRS_NAT_FLAG_NONE;
+    request->nat_sample.mapping_behavior = NTRS_MAPPING_UNKNOWN;
+    request->nat_sample.filtering_behavior = NTRS_FILTERING_UNKNOWN;
     request->nat_sample.nat_type = "unknown";
     request->nat_sample.probe1_rtt_ms = -1;
     request->nat_sample.probe2_rtt_ms = -1;
-    request->nat_sample.probe_rounds = request->stun_success_target;
+    request->nat_sample.probe_rounds = request->probe_success_target;
 
     memset(&local_addr, 0, sizeof(local_addr));
     if (getsockname(request->fd, (struct sockaddr*)&local_addr, &local_len) == 0) {
@@ -1142,7 +1251,7 @@ static std::string txid_to_hex(const uint8_t* txid, size_t len)
     return out;
 }
 
-static bool send_async_stun_request(AsyncRequest* request);
+static bool send_async_probe_request(AsyncRequest* request);
 static void finish_async_nat_detection(AsyncRequest* request);
 
 static bool advance_async_nat_phase(AsyncRequest* request)
@@ -1159,33 +1268,33 @@ static bool advance_async_nat_phase(AsyncRequest* request)
     mapping_unstable =
         request->nat_sample.probe1_distinct_mappings > 1 || request->nat_sample.probe2_distinct_mappings > 1;
 
-    if (request->nat_phase == AsyncNatPhase::STUN1) {
-        if (request->has_stun2 && request->nat_enable_filter_probe) {
+    if (request->nat_phase == AsyncNatPhase::PROBE1) {
+        if (request->has_probe2 && request->nat_enable_filter_probe) {
             nat_probe_log(request, "nat probe advance phase=%s -> %s\n", async_nat_phase_name(request->nat_phase),
                           async_nat_phase_name(AsyncNatPhase::FILTER_CHANGE_PORT));
             request->nat_phase = AsyncNatPhase::FILTER_CHANGE_PORT;
-            request->stun_index = 0;
-            request->stun_attempts = 0;
-            request->stun_max_attempts = kAsyncFilterMaxAttempts;
-            request->stun_change_request = kStunChangePort;
+            request->probe_index = 0;
+            request->probe_attempts = 0;
+            request->probe_max_attempts = kAsyncFilterMaxAttempts;
+            request->probe_change_request = kStunChangePort;
             request->nat_sample.filter_probe_executed = true;
-            return send_async_stun_request(request);
+            return send_async_probe_request(request);
         }
-        if (request->has_stun2) {
+        if (request->has_probe2) {
             nat_probe_log(request, "nat probe advance phase=%s -> %s\n", async_nat_phase_name(request->nat_phase),
-                          async_nat_phase_name(AsyncNatPhase::STUN2));
-            request->nat_phase = AsyncNatPhase::STUN2;
-            request->stun_index = 1;
-            request->stun_attempts = 0;
-            request->stun_change_request = 0;
-            return send_async_stun_request(request);
+                          async_nat_phase_name(AsyncNatPhase::PROBE2));
+            request->nat_phase = AsyncNatPhase::PROBE2;
+            request->probe_index = 1;
+            request->probe_attempts = 0;
+            request->probe_change_request = 0;
+            return send_async_probe_request(request);
         }
         nat_probe_log(request, "nat probe finish after %s\n", async_nat_phase_name(request->nat_phase));
         finish_async_nat_detection(request);
         return true;
     }
 
-    if (request->nat_phase == AsyncNatPhase::STUN2) {
+    if (request->nat_phase == AsyncNatPhase::PROBE2) {
         nat_probe_log(request, "nat probe finish after %s mapping_changed=%s mapping_unstable=%s filter_probe=%s\n",
                       async_nat_phase_name(request->nat_phase), mapping_changed ? "true" : "false",
                       mapping_unstable ? "true" : "false", request->nat_enable_filter_probe ? "true" : "false");
@@ -1197,23 +1306,23 @@ static bool advance_async_nat_phase(AsyncRequest* request)
         nat_probe_log(request, "nat probe advance phase=%s -> %s\n", async_nat_phase_name(request->nat_phase),
                       async_nat_phase_name(AsyncNatPhase::FILTER_CHANGE_IP));
         request->nat_phase = AsyncNatPhase::FILTER_CHANGE_IP;
-        request->stun_index = 0;
-        request->stun_attempts = 0;
-        request->stun_max_attempts = kAsyncFilterMaxAttempts;
-        request->stun_change_request = kStunChangeIp;
-        return send_async_stun_request(request);
+        request->probe_index = 0;
+        request->probe_attempts = 0;
+        request->probe_max_attempts = kAsyncFilterMaxAttempts;
+        request->probe_change_request = kStunChangeIp;
+        return send_async_probe_request(request);
     }
 
     if (request->nat_phase == AsyncNatPhase::FILTER_CHANGE_IP) {
-        if (request->has_stun2) {
+        if (request->has_probe2) {
             nat_probe_log(request, "nat probe advance phase=%s -> %s\n", async_nat_phase_name(request->nat_phase),
-                          async_nat_phase_name(AsyncNatPhase::STUN2));
-            request->nat_phase = AsyncNatPhase::STUN2;
-            request->stun_index = 1;
-            request->stun_attempts = 0;
-            request->stun_max_attempts = request->stun_probe_max_attempts;
-            request->stun_change_request = 0;
-            return send_async_stun_request(request);
+                          async_nat_phase_name(AsyncNatPhase::PROBE2));
+            request->nat_phase = AsyncNatPhase::PROBE2;
+            request->probe_index = 1;
+            request->probe_attempts = 0;
+            request->probe_max_attempts = request->probe_phase_max_attempts;
+            request->probe_change_request = 0;
+            return send_async_probe_request(request);
         }
         nat_probe_log(request, "nat probe finish after %s\n", async_nat_phase_name(request->nat_phase));
         finish_async_nat_detection(request);
@@ -1227,19 +1336,19 @@ static bool advance_async_nat_phase(AsyncRequest* request)
 
 static void finish_async_nat_detection(AsyncRequest* request)
 {
-    bool has_stun2 = request->has_stun2 && request->stun_success_count[1] > 0;
+    bool has_probe2 = request->has_probe2 && request->probe_success_count[1] > 0;
 
-    if (request->stun_success_count[0] > 0) {
+    if (request->probe_success_count[0] > 0) {
         request->nat_sample.probe1_ok = true;
-        request->nat_sample.probe1_success_count = request->stun_success_count[0];
-        request->nat_sample.probe1_distinct_mappings = (int32_t)request->stun_mappings[0].size();
-        request->nat_sample.probe1_rtt_ms = (int32_t)(request->stun_rtt_sum_ms[0] / request->stun_success_count[0]);
+        request->nat_sample.probe1_success_count = request->probe_success_count[0];
+        request->nat_sample.probe1_distinct_mappings = (int32_t)request->probe_mappings[0].size();
+        request->nat_sample.probe1_rtt_ms = (int32_t)(request->probe_rtt_sum_ms[0] / request->probe_success_count[0]);
     }
-    if (request->stun_success_count[1] > 0) {
+    if (request->probe_success_count[1] > 0) {
         request->nat_sample.probe2_ok = true;
-        request->nat_sample.probe2_success_count = request->stun_success_count[1];
-        request->nat_sample.probe2_distinct_mappings = (int32_t)request->stun_mappings[1].size();
-        request->nat_sample.probe2_rtt_ms = (int32_t)(request->stun_rtt_sum_ms[1] / request->stun_success_count[1]);
+        request->nat_sample.probe2_success_count = request->probe_success_count[1];
+        request->nat_sample.probe2_distinct_mappings = (int32_t)request->probe_mappings[1].size();
+        request->nat_sample.probe2_rtt_ms = (int32_t)(request->probe_rtt_sum_ms[1] / request->probe_success_count[1]);
     }
 
     nat_probe_log(
@@ -1255,7 +1364,7 @@ static void finish_async_nat_detection(AsyncRequest* request)
         request->nat_sample.probe2_success_count, request->nat_sample.probe1_distinct_mappings,
         request->nat_sample.probe2_distinct_mappings);
 
-    evaluate_nat_result(&request->nat_sample, has_stun2);
+    evaluate_nat_result(&request->nat_sample, has_probe2);
     fill_nat_info(&request->result.nat_info, request->nat_sample);
     request->result.success = request->nat_sample.probe1_ok;
     if (!request->result.success) {
@@ -1272,10 +1381,10 @@ static void async_nat_timeout_cb(evutil_socket_t, short, void* arg)
         return;
     }
 
-    request->stun_attempts++;
-    if (request->stun_attempts < request->stun_max_attempts) {
-        if (!send_async_stun_request(request)) {
-            async_request_finish(request, false, "send stun request failed");
+    request->probe_attempts++;
+    if (request->probe_attempts < request->probe_max_attempts) {
+        if (!send_async_probe_request(request)) {
+            async_request_finish(request, false, "send probe request failed");
         }
         return;
     }
@@ -1285,7 +1394,7 @@ static void async_nat_timeout_cb(evutil_socket_t, short, void* arg)
     }
 }
 
-static bool arm_async_stun_timer(AsyncRequest* request)
+static bool arm_async_probe_timer(AsyncRequest* request)
 {
     struct timeval tv;
 
@@ -1294,41 +1403,29 @@ static bool arm_async_stun_timer(AsyncRequest* request)
     return evtimer_add(request->timeout_event, &tv) == 0;
 }
 
-static bool send_async_stun_request(AsyncRequest* request)
+static bool send_async_probe_request(AsyncRequest* request)
 {
-    eular::stun::StunMsgBuilder builder;
     std::vector<uint8_t>        message;
-    uint8_t                     transaction_id[STUN_TRX_ID_SIZE];
-    uint64_t                    seed = request->request_id;
-    uint32_t                    change_request = request->stun_change_request;
-    int                         target_index = request->stun_index;
+    uint8_t                     transaction_id[NTRS_PROBE_TOKEN_WIRE_SIZE];
+    uint32_t                    change_request = request->probe_change_request;
+    int                         target_index = request->probe_index;
 
-    memset(transaction_id, 0, sizeof(transaction_id));
-    seed ^= ((uint64_t)request->nat_phase << 40);
-    seed ^= ((uint64_t)target_index << 32);
-    memcpy(transaction_id, &seed, sizeof(seed));
-    transaction_id[8] = (uint8_t)((change_request >> 24) & 0xFFu);
-    transaction_id[9] = (uint8_t)((change_request >> 16) & 0xFFu);
-    transaction_id[10] = (uint8_t)((change_request >> 8) & 0xFFu);
-    transaction_id[11] = (uint8_t)(change_request & 0xFFu);
-    memcpy(request->stun_transaction_id, transaction_id, sizeof(request->stun_transaction_id));
+    build_async_nat_probe_token(request, transaction_id);
+    memcpy(request->probe_token, transaction_id, sizeof(request->probe_token));
 
-    nat_probe_log(request, "nat probe send phase=%s target=%s:%u change_request=0x%08x attempt=%d txid=%s\n",
-                  async_nat_phase_name(request->nat_phase), request->stun_hosts[target_index].c_str(),
-                  (unsigned)request->stun_ports[target_index], (unsigned)change_request, request->stun_attempts,
+    nat_probe_log(request, "nat probe send phase=%s target=%s:%u change_request=0x%08x attempt=%d token=%s\n",
+                  async_nat_phase_name(request->nat_phase), request->probe_hosts[target_index].c_str(),
+                  (unsigned)request->probe_ports[target_index], (unsigned)change_request, request->probe_attempts,
                   txid_to_hex(transaction_id, sizeof(transaction_id)).c_str());
 
-    builder.setMsgType(ENUM_CLASS(eular::stun::StunMsgType::STUN_BINDING_REQUEST));
-    builder.setTransactionId(transaction_id);
-    if (change_request != 0) {
-        builder.addAttribute(ENUM_CLASS(eular::stun::StunAttributeType::STUN_ATTR_CHANGE_REQUEST), change_request);
+    if (!build_async_nat_probe_request_frame(request, transaction_id, &message)) {
+        return false;
     }
-    message = builder.message();
 
-    if (sendto(request->fd, message.data(), message.size(), 0, (struct sockaddr*)&request->stun_addrs[target_index],
-               request->stun_addr_lens[target_index]) < 0) {
+    if (sendto(request->fd, message.data(), message.size(), 0, (struct sockaddr*)&request->probe_addrs[target_index],
+               request->probe_addr_lens[target_index]) < 0) {
         if (socket_err_rw_retriable(socket_last_error())) {
-            return arm_async_stun_timer(request);
+            return arm_async_probe_timer(request);
         }
         return false;
     }
@@ -1337,15 +1434,15 @@ static bool send_async_stun_request(AsyncRequest* request)
         std::string ip;
         uint16_t    port = 0;
 
-        if (refresh_local_endpoint_for_remote(request->fd, (const struct sockaddr*)&request->stun_addrs[target_index],
-                                              request->stun_addr_lens[target_index], &ip, &port)) {
+        if (refresh_local_endpoint_for_remote(request->fd, (const struct sockaddr*)&request->probe_addrs[target_index],
+                                              request->probe_addr_lens[target_index], &ip, &port)) {
             request->nat_sample.local_ip = ip;
             request->nat_sample.local_port = port;
         }
     }
 
-    gettimeofday(&request->stun_sent_at, NULL);
-    return arm_async_stun_timer(request);
+    gettimeofday(&request->probe_sent_at, NULL);
+    return arm_async_probe_timer(request);
 }
 
 static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
@@ -1372,19 +1469,11 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
             return;
         }
 
-        if (!parse_stun_response(buffer, (size_t)nread, request->stun_transaction_id, &response)) {
-            eular::stun::StunMsgParser parser;
-            if (parser.parse(buffer, (size_t)nread)) {
-                nat_probe_log(
-                    request,
-                    "nat probe drop phase=%s reason=txid_or_type_mismatch got_type=0x%04x got_txid=%s expected_txid=%s\n",
-                    async_nat_phase_name(request->nat_phase), (unsigned)parser.msgType(),
-                    txid_to_hex(parser.transactionId(), STUN_TRX_ID_SIZE).c_str(),
-                    txid_to_hex(request->stun_transaction_id, STUN_TRX_ID_SIZE).c_str());
-            } else {
-                nat_probe_log(request, "nat probe drop phase=%s reason=txid_or_type_mismatch parse_failed len=%zd\n",
-                              async_nat_phase_name(request->nat_phase), nread);
-            }
+        if (!parse_async_nat_probe_response_frame(buffer, (size_t)nread,
+                                                  async_nat_phase_to_binary_phase(request->nat_phase),
+                                                  request->probe_token, &response)) {
+            nat_probe_log(request, "nat probe drop phase=%s reason=binary_frame_invalid len=%zd\n",
+                          async_nat_phase_name(request->nat_phase), nread);
             continue;
         }
         if (async_nat_phase_is_filter(request)) {
@@ -1400,14 +1489,14 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
                     response.other_address_ip.c_str(), (unsigned)response.other_address_port);
                 continue;
             }
-        } else if (!sockaddr_same_endpoint(&src_addr, src_len, &request->stun_addrs[request->stun_index],
-                                           request->stun_addr_lens[request->stun_index])) {
+        } else if (!sockaddr_same_endpoint(&src_addr, src_len, &request->probe_addrs[request->probe_index],
+                                           request->probe_addr_lens[request->probe_index])) {
             std::string src_ip;
             uint16_t    src_port = 0;
             std::string exp_ip;
             uint16_t    exp_port = 0;
             sockaddr_endpoint(&src_addr, src_len, &src_ip, &src_port);
-            sockaddr_endpoint(&request->stun_addrs[request->stun_index], request->stun_addr_lens[request->stun_index],
+            sockaddr_endpoint(&request->probe_addrs[request->probe_index], request->probe_addr_lens[request->probe_index],
                               &exp_ip, &exp_port);
             nat_probe_log(request, "nat probe drop phase=%s src=%s:%u expected=%s:%u reason=unexpected_source\n",
                           async_nat_phase_name(request->nat_phase), src_ip.c_str(), (unsigned)src_port,
@@ -1418,8 +1507,8 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
         struct timeval now;
         long           rtt_ms = 0;
         gettimeofday(&now, NULL);
-        rtt_ms = (long)(now.tv_sec - request->stun_sent_at.tv_sec) * 1000L +
-                 (long)(now.tv_usec - request->stun_sent_at.tv_usec) / 1000L;
+        rtt_ms = (long)(now.tv_sec - request->probe_sent_at.tv_sec) * 1000L +
+                 (long)(now.tv_usec - request->probe_sent_at.tv_usec) / 1000L;
         if (rtt_ms < 0) {
             rtt_ms = 0;
         }
@@ -1446,12 +1535,12 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
             return;
         }
 
-        request->stun_success_count[request->stun_index]++;
-        request->stun_rtt_sum_ms[request->stun_index] += rtt_ms;
-        request->stun_mappings[request->stun_index].insert(response.mapped_ip + ":" +
+        request->probe_success_count[request->probe_index]++;
+        request->probe_rtt_sum_ms[request->probe_index] += rtt_ms;
+        request->probe_mappings[request->probe_index].insert(response.mapped_ip + ":" +
                                                            std::to_string((unsigned long long)response.mapped_port));
 
-        if (request->stun_index == 0) {
+        if (request->probe_index == 0) {
             request->nat_sample.srflx_ip = response.mapped_ip;
             request->nat_sample.srflx_port = response.mapped_port;
         } else {
@@ -1464,11 +1553,11 @@ static void async_nat_io_cb(evutil_socket_t fd, short events, void* arg)
                       (unsigned)response.response_origin_port, response.other_address_ip.c_str(),
                       (unsigned)response.other_address_port, rtt_ms);
 
-        if (request->stun_success_count[request->stun_index] < request->stun_success_target &&
-            request->stun_attempts + 1 < request->stun_max_attempts) {
-            request->stun_attempts++;
-            if (!send_async_stun_request(request)) {
-                async_request_finish(request, false, "send stun request failed");
+        if (request->probe_success_count[request->probe_index] < request->probe_success_target &&
+            request->probe_attempts + 1 < request->probe_max_attempts) {
+            request->probe_attempts++;
+            if (!send_async_probe_request(request)) {
+                async_request_finish(request, false, "send probe request failed");
             }
             return;
         }
@@ -1487,20 +1576,20 @@ static bool start_async_nat_io(AsyncRequest* request)
     }
 
     init_async_nat_sample(request);
-    nat_probe_log(request, "nat probe start local=%s:%u stun1=%s:%u stun2=%s:%u filter_probe=%s rounds=%d retries=%d\n",
+    nat_probe_log(request, "nat probe start local=%s:%u probe1=%s:%u probe2=%s:%u filter_probe=%s rounds=%d retries=%d\n",
                   request->nat_sample.local_ip.c_str(), (unsigned)request->nat_sample.local_port,
-                  request->stun_hosts[0].c_str(), (unsigned)request->stun_ports[0],
-                  request->has_stun2 ? request->stun_hosts[1].c_str() : "-",
-                  request->has_stun2 ? (unsigned)request->stun_ports[1] : 0u,
-                  request->nat_enable_filter_probe ? "true" : "false", request->stun_success_target,
-                  request->stun_max_attempts);
+                  request->probe_hosts[0].c_str(), (unsigned)request->probe_ports[0],
+                  request->has_probe2 ? request->probe_hosts[1].c_str() : "-",
+                  request->has_probe2 ? (unsigned)request->probe_ports[1] : 0u,
+                  request->nat_enable_filter_probe ? "true" : "false", request->probe_success_target,
+                  request->probe_max_attempts);
     request->io_event = event_new(request->client->base, request->fd, EV_READ | EV_PERSIST, async_nat_io_cb, request);
     request->timeout_event = evtimer_new(request->client->base, async_nat_timeout_cb, request);
     if (request->io_event == NULL || request->timeout_event == NULL) {
         async_request_finish(request, false, "create async nat event failed");
         return false;
     }
-    if (event_add(request->io_event, NULL) != 0 || !send_async_stun_request(request)) {
+    if (event_add(request->io_event, NULL) != 0 || !send_async_probe_request(request)) {
         async_request_finish(request, false, "start async nat request failed");
         return false;
     }
@@ -1515,7 +1604,7 @@ static bool resolve_async_nat_endpoint(AsyncRequest* request, int index)
     struct evutil_addrinfo hints;
 
     if (request == NULL || request->client == NULL || request->client->dns_base == NULL ||
-        request->stun_hosts[index].empty() || request->stun_ports[index] == 0) {
+        request->probe_hosts[index].empty() || request->probe_ports[index] == 0) {
         return false;
     }
 
@@ -1523,11 +1612,11 @@ static bool resolve_async_nat_endpoint(AsyncRequest* request, int index)
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_family =
         request->udp_family == AF_INET || request->udp_family == AF_INET6 ? request->udp_family : AF_UNSPEC;
-    snprintf(port_text, sizeof(port_text), "%u", (unsigned)request->stun_ports[index]);
-    request->resolving_stun_index = index;
-    request->dns_request = evdns_getaddrinfo(request->client->dns_base, request->stun_hosts[index].c_str(), port_text,
+    snprintf(port_text, sizeof(port_text), "%u", (unsigned)request->probe_ports[index]);
+    request->resolving_probe_index = index;
+    request->dns_request = evdns_getaddrinfo(request->client->dns_base, request->probe_hosts[index].c_str(), port_text,
                                              &hints, async_nat_dns_cb, request);
-    if (request->dns_request == NULL && request->stun_addr_lens[index] == 0) {
+    if (request->dns_request == NULL && request->probe_addr_lens[index] == 0) {
         return false;
     }
     return true;
@@ -1554,33 +1643,33 @@ static void async_nat_dns_cb(int result, struct evutil_addrinfo* res, void* arg)
     }
 
     request->dns_request = NULL;
-    index = request->resolving_stun_index;
+    index = request->resolving_probe_index;
     if (result != 0 || res == NULL) {
         if (res != NULL) {
             evutil_freeaddrinfo(res);
         }
         nat_probe_log(request, "nat probe resolve failed index=%d host=%s port=%u\n", index,
-                      request->stun_hosts[index].c_str(), (unsigned)request->stun_ports[index]);
-        async_request_finish(request, false, "resolve stun endpoint failed");
+                      request->probe_hosts[index].c_str(), (unsigned)request->probe_ports[index]);
+        async_request_finish(request, false, "resolve probe endpoint failed");
         return;
     }
 
-    memcpy(&request->stun_addrs[index], res->ai_addr, res->ai_addrlen);
-    request->stun_addr_lens[index] = (socklen_t)res->ai_addrlen;
+    memcpy(&request->probe_addrs[index], res->ai_addr, res->ai_addrlen);
+    request->probe_addr_lens[index] = (socklen_t)res->ai_addrlen;
     {
         std::string resolved_ip;
         uint16_t    resolved_port = 0;
-        sockaddr_endpoint(&request->stun_addrs[index], request->stun_addr_lens[index], &resolved_ip,
+        sockaddr_endpoint(&request->probe_addrs[index], request->probe_addr_lens[index], &resolved_ip,
                           &resolved_port);
         nat_probe_log(request, "nat probe resolve ok index=%d host=%s port=%u resolved=%s:%u\n", index,
-                      request->stun_hosts[index].c_str(), (unsigned)request->stun_ports[index],
+                      request->probe_hosts[index].c_str(), (unsigned)request->probe_ports[index],
                       resolved_ip.c_str(), (unsigned)resolved_port);
     }
     evutil_freeaddrinfo(res);
 
-    if (index == 0 && request->has_stun2) {
+    if (index == 0 && request->has_probe2) {
         if (!resolve_async_nat_endpoint(request, 1)) {
-            async_request_finish(request, false, "resolve stun endpoint failed");
+            async_request_finish(request, false, "resolve probe endpoint failed");
         }
         return;
     }
@@ -1588,8 +1677,8 @@ static void async_nat_dns_cb(int result, struct evutil_addrinfo* res, void* arg)
     start_async_nat_io(request);
 }
 
-static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, const char* stun1_host,
-                                     uint16_t stun1_port, const char* stun2_host, uint16_t stun2_port,
+static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, const char* probe1_host,
+                                     uint16_t probe1_port, const char* probe2_host, uint16_t probe2_port,
                                      int32_t control_fd, const char* session_token,
                                      const ntrs_detect_nat_options_t* options, ntrs_async_callback_t callback,
                                      void* user_data, uint64_t* request_id)
@@ -1600,7 +1689,7 @@ static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, 
     socklen_t                 local_len = sizeof(local_addr);
 
     if (client == NULL || client->base == NULL || client->dns_base == NULL || callback == NULL || udp_sock < 0 ||
-        stun1_host == NULL || stun1_host[0] == '\0' || stun1_port == 0) {
+        probe1_host == NULL || probe1_host[0] == '\0' || probe1_port == 0) {
         return false;
     }
     if (client->active_fds.find(udp_sock) != client->active_fds.end()) {
@@ -1609,7 +1698,7 @@ static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, 
     request = new AsyncRequest();
     request->client = client;
     request->request_id = client->next_request_id++;
-    request->type = STUN_ASYNC_DETECT_NAT;
+    request->type = NTRS_ASYNC_DETECT_NAT;
     request->fd = udp_sock;
     request->callback = callback;
     request->user_data = user_data;
@@ -1632,19 +1721,19 @@ static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, 
     if (effective_options.retries_per_round <= 0) {
         effective_options.retries_per_round = 3;
     }
-    request->stun_success_target = effective_options.probe_rounds;
-    request->stun_max_attempts = effective_options.probe_rounds * effective_options.retries_per_round;
-    request->stun_probe_max_attempts = request->stun_max_attempts;
+    request->probe_success_target = effective_options.probe_rounds;
+    request->probe_max_attempts = effective_options.probe_rounds * effective_options.retries_per_round;
+    request->probe_phase_max_attempts = request->probe_max_attempts;
     request->nat_enable_filter_probe = effective_options.enable_filter_probe;
     request->nat_verbose = effective_options.verbose;
-    request->has_stun2 = stun2_host != NULL && stun2_host[0] != '\0' && stun2_port > 0;
-    request->nat_phase = AsyncNatPhase::STUN1;
-    request->stun_change_request = 0;
-    request->stun_hosts[0] = stun1_host;
-    request->stun_ports[0] = stun1_port;
-    if (request->has_stun2) {
-        request->stun_hosts[1] = stun2_host;
-        request->stun_ports[1] = stun2_port;
+    request->has_probe2 = probe2_host != NULL && probe2_host[0] != '\0' && probe2_port > 0;
+    request->nat_phase = AsyncNatPhase::PROBE1;
+    request->probe_change_request = 0;
+    request->probe_hosts[0] = probe1_host;
+    request->probe_ports[0] = probe1_port;
+    if (request->has_probe2) {
+        request->probe_hosts[1] = probe2_host;
+        request->probe_ports[1] = probe2_port;
     }
 
     client->requests[request->request_id] = request;
@@ -1654,7 +1743,7 @@ static bool submit_async_nat_request(AsyncClientImpl* client, int32_t udp_sock, 
     }
     if (!continue_async_nat_resolution(request)) {
         if (client->requests.find(request->request_id) != client->requests.end()) {
-            async_request_finish(request, false, "resolve stun endpoint failed");
+            async_request_finish(request, false, "resolve probe endpoint failed");
             return false;
         }
         return true;
@@ -1869,7 +1958,7 @@ static bool submit_async_connect_request(AsyncClientImpl* client, const char* ho
     request = new AsyncRequest();
     request->client = client;
     request->request_id = client->next_request_id++;
-    request->type = STUN_ASYNC_CONNECT_CONTROL;
+    request->type = NTRS_ASYNC_CONNECT_CONTROL;
     request->fd = -1;
     request->callback = callback;
     request->user_data = user_data;
@@ -1896,7 +1985,7 @@ static bool submit_async_connect_request(AsyncClientImpl* client, const char* ho
     return true;
 }
 
-static bool candidate_to_sockaddr(const stun_peer_candidate_t* candidate, struct sockaddr_storage* out,
+static bool candidate_to_sockaddr(const ntrs_peer_candidate_t* candidate, struct sockaddr_storage* out,
                                   socklen_t* out_len)
 {
     struct sockaddr_in*  addr4 = NULL;
@@ -1927,7 +2016,7 @@ static bool candidate_to_sockaddr(const stun_peer_candidate_t* candidate, struct
     return false;
 }
 
-static void async_punch_finish(AsyncRequest* request, bool success, const stun_peer_candidate_t* selected)
+static void async_punch_finish(AsyncRequest* request, bool success, const ntrs_peer_candidate_t* selected)
 {
     request->result.success = success;
     if (success && selected != NULL) {
@@ -1938,34 +2027,148 @@ static void async_punch_finish(AsyncRequest* request, bool success, const stun_p
     async_request_finish(request, false, NULL);
 }
 
-static std::string build_punch_req_payload(const char* candidate_type, int round)
-{
-    char round_text[16];
+struct PunchFrameMeta {
+    ntrs_binary_frame_type_t frame_type;
+    uint32_t                 request_id;
+    uint32_t                 sequence;
+    uint8_t                  token[8];
+    uint8_t                  token_len;
+    char                     candidate_type[NTRS_MAX_TEXT_LEN];
+};
 
-    snprintf(round_text, sizeof(round_text), "%d", round);
-    return std::string("STUN_PUNCH_REQ|") +
-           (candidate_type == NULL || candidate_type[0] == '\0' ? "candidate" : candidate_type) + "|" + round_text;
+/**
+ * @brief 构造本轮打洞使用的固定 token。
+ *
+ * 当前阶段先使用请求编号派生一个稳定的 8 字节 token，避免继续依赖文本前缀。
+ * 后续接入真正的 `probe_token` 后，可以在不破坏二进制帧结构的前提下直接替换。
+ */
+static void fill_punch_token(uint64_t request_id, uint8_t token[8])
+{
+    uint32_t high = (uint32_t)((request_id >> 32) & 0xFFFFFFFFu);
+    uint32_t low = (uint32_t)(request_id & 0xFFFFFFFFu);
+
+    token[0] = (uint8_t)((high >> 24) & 0xFFu);
+    token[1] = (uint8_t)((high >> 16) & 0xFFu);
+    token[2] = (uint8_t)((high >> 8) & 0xFFu);
+    token[3] = (uint8_t)(high & 0xFFu);
+    token[4] = (uint8_t)((low >> 24) & 0xFFu);
+    token[5] = (uint8_t)((low >> 16) & 0xFFu);
+    token[6] = (uint8_t)((low >> 8) & 0xFFu);
+    token[7] = (uint8_t)(low & 0xFFu);
 }
 
-static std::string build_punch_ack_payload(const uint8_t* payload, size_t payload_len)
+/**
+ * @brief 构造二进制打洞帧。
+ */
+static bool build_punch_frame(ntrs_binary_frame_type_t frame_type, uint64_t request_id, const char* candidate_type,
+                              uint32_t round, uint8_t* out, size_t out_cap, size_t* out_len)
 {
-    static const char req_prefix[] = "STUN_PUNCH_REQ|";
-    static const char ack_prefix[] = "STUN_PUNCH_ACK|";
-    size_t            req_prefix_len = sizeof(req_prefix) - 1;
+    ntrs_binary_frame_t frame;
+    uint8_t             token[8];
+    uint64_t            timestamp_ms = current_time_ms();
+    const char*         type_text =
+        candidate_type == NULL || candidate_type[0] == '\0' ? "candidate" : candidate_type;
 
-    if (payload == NULL || payload_len < req_prefix_len) {
-        return std::string();
+    if (out == NULL || out_len == NULL || !ntrs_binary_frame_init(&frame, out, out_cap)) {
+        return false;
     }
-    return std::string(ack_prefix) +
-           std::string(reinterpret_cast<const char*>(payload) + req_prefix_len, payload_len - req_prefix_len);
+
+    fill_punch_token(request_id, token);
+    if (!ntrs_binary_frame_set_header(&frame, frame_type, NTRS_BINARY_PHASE_PUNCH, 0u, (uint32_t)request_id, round,
+                                      timestamp_ms)) {
+        return false;
+    }
+    if (!ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_PROBE_TOKEN, token, sizeof(token))) {
+        return false;
+    }
+    if (!ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_CANDIDATE_TYPE, type_text,
+                                   (uint16_t)strlen(type_text))) {
+        return false;
+    }
+
+    *out_len = frame.length;
+    return true;
+}
+
+/**
+ * @brief 解析二进制打洞帧的最小元数据。
+ */
+static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out)
+{
+    ntrs_binary_frame_view view;
+    ntrs_binary_tlv_view   tlv;
+    size_t                 cursor = 0;
+
+    if (payload == NULL || out == NULL || !ntrs_binary_frame_parse(payload, payload_len, &view)) {
+        return false;
+    }
+    if (view.header.phase != NTRS_BINARY_PHASE_PUNCH) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->frame_type = (ntrs_binary_frame_type_t)view.header.frame_type;
+    out->request_id = view.header.request_id;
+    out->sequence = view.header.sequence;
+
+    while (ntrs_binary_frame_next_tlv(&view, &cursor, &tlv)) {
+        if (tlv.type == NTRS_BINARY_TLV_PROBE_TOKEN) {
+            if (tlv.value_len > sizeof(out->token)) {
+                return false;
+            }
+            memcpy(out->token, tlv.value, tlv.value_len);
+            out->token_len = (uint8_t)tlv.value_len;
+        } else if (tlv.type == NTRS_BINARY_TLV_CANDIDATE_TYPE) {
+            size_t copy_len = tlv.value_len;
+            if (copy_len >= sizeof(out->candidate_type)) {
+                copy_len = sizeof(out->candidate_type) - 1u;
+            }
+            memcpy(out->candidate_type, tlv.value, copy_len);
+            out->candidate_type[copy_len] = '\0';
+        }
+    }
+
+    return out->frame_type == NTRS_BINARY_FRAME_PUNCH_REQ || out->frame_type == NTRS_BINARY_FRAME_PUNCH_ACK;
+}
+
+/**
+ * @brief 由请求帧元数据构造 ACK。
+ */
+static bool build_punch_ack_frame(const PunchFrameMeta* req_meta, uint8_t* out, size_t out_cap, size_t* out_len)
+{
+    ntrs_binary_frame_t frame;
+
+    if (req_meta == NULL || out == NULL || out_len == NULL || !ntrs_binary_frame_init(&frame, out, out_cap)) {
+        return false;
+    }
+    if (!ntrs_binary_frame_set_header(&frame, NTRS_BINARY_FRAME_PUNCH_ACK, NTRS_BINARY_PHASE_PUNCH, 0u,
+                                      req_meta->request_id, req_meta->sequence, current_time_ms())) {
+        return false;
+    }
+    if (req_meta->token_len > 0 &&
+        !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_PROBE_TOKEN, req_meta->token, req_meta->token_len)) {
+        return false;
+    }
+    if (req_meta->candidate_type[0] != '\0' &&
+        !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_CANDIDATE_TYPE, req_meta->candidate_type,
+                                   (uint16_t)strlen(req_meta->candidate_type))) {
+        return false;
+    }
+
+    *out_len = frame.length;
+    return true;
 }
 
 static void async_punch_send_round(AsyncRequest* request)
 {
     for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
-        std::string payload =
-            build_punch_req_payload(request->punch_candidates[i].type, request->punch_round + 1);
-        sendto(request->fd, payload.data(), payload.size(), 0, (struct sockaddr*)&request->punch_addrs[i],
+        uint8_t payload[256];
+        size_t  payload_len = 0;
+        if (!build_punch_frame(NTRS_BINARY_FRAME_PUNCH_REQ, request->request_id, request->punch_candidates[i].type,
+                               (uint32_t)(request->punch_round + 1), payload, sizeof(payload), &payload_len)) {
+            continue;
+        }
+        sendto(request->fd, payload, payload_len, 0, (struct sockaddr*)&request->punch_addrs[i],
                request->punch_addr_lens[i]);
     }
 }
@@ -2003,6 +2206,7 @@ static void async_punch_io_cb(evutil_socket_t fd, short events, void* arg)
         struct sockaddr_storage src;
         socklen_t               src_len = sizeof(src);
         ssize_t                 nread = recvfrom((int)fd, buffer, sizeof(buffer), 0, (struct sockaddr*)&src, &src_len);
+        PunchFrameMeta          meta;
         if (nread < 0 && socket_err_interrupted(socket_last_error())) {
             continue;
         }
@@ -2019,12 +2223,14 @@ static void async_punch_io_cb(evutil_socket_t fd, short events, void* arg)
 
         for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
             if (sockaddr_same_endpoint(&src, src_len, &request->punch_addrs[i], request->punch_addr_lens[i])) {
-                if (nread >= 15 && memcmp(buffer, "STUN_PUNCH_REQ|", 15) == 0) {
-                    std::string ack_payload = build_punch_ack_payload(buffer, (size_t)nread);
-                    if (!ack_payload.empty()) {
-                        sendto((int)fd, ack_payload.data(), ack_payload.size(), 0, (struct sockaddr*)&src, src_len);
+                if (parse_punch_frame(buffer, (size_t)nread, &meta) && meta.frame_type == NTRS_BINARY_FRAME_PUNCH_REQ) {
+                    uint8_t ack_payload[256];
+                    size_t  ack_len = 0;
+                    if (build_punch_ack_frame(&meta, ack_payload, sizeof(ack_payload), &ack_len)) {
+                        sendto((int)fd, ack_payload, ack_len, 0, (struct sockaddr*)&src, src_len);
                     }
-                } else if (nread >= 15 && memcmp(buffer, "STUN_PUNCH_ACK|", 15) != 0) {
+                } else if (!parse_punch_frame(buffer, (size_t)nread, &meta) ||
+                           meta.frame_type != NTRS_BINARY_FRAME_PUNCH_ACK) {
                     continue;
                 }
                 async_punch_finish(request, true, &request->punch_candidates[i]);
@@ -2032,13 +2238,14 @@ static void async_punch_io_cb(evutil_socket_t fd, short events, void* arg)
             }
         }
 
-        if (nread >= 15 && memcmp(buffer, "STUN_PUNCH_REQ|", 15) == 0) {
+        if (parse_punch_frame(buffer, (size_t)nread, &meta) && meta.frame_type == NTRS_BINARY_FRAME_PUNCH_REQ) {
             for (size_t i = 0; i < request->punch_candidates.size(); ++i) {
                 if (strcmp(request->punch_candidates[i].type, "host_local") == 0 &&
                     request->punch_candidates[i].port == src_port) {
-                    std::string ack_payload = build_punch_ack_payload(buffer, (size_t)nread);
-                    if (!ack_payload.empty()) {
-                        sendto((int)fd, ack_payload.data(), ack_payload.size(), 0, (struct sockaddr*)&src, src_len);
+                    uint8_t ack_payload[256];
+                    size_t  ack_len = 0;
+                    if (build_punch_ack_frame(&meta, ack_payload, sizeof(ack_payload), &ack_len)) {
+                        sendto((int)fd, ack_payload, ack_len, 0, (struct sockaddr*)&src, src_len);
                     }
                     async_punch_finish(request, true, &request->punch_candidates[i]);
                     return;
@@ -2049,7 +2256,7 @@ static void async_punch_io_cb(evutil_socket_t fd, short events, void* arg)
 }
 
 static bool submit_async_punch_request(AsyncClientImpl* client, int32_t udp_sock,
-                                       const stun_peer_candidate_t* candidates, uint32_t candidate_count,
+                                       const ntrs_peer_candidate_t* candidates, uint32_t candidate_count,
                                        int32_t send_rounds, int32_t interval_ms, ntrs_async_callback_t callback,
                                        void* user_data, uint64_t* request_id)
 {
@@ -2066,7 +2273,7 @@ static bool submit_async_punch_request(AsyncClientImpl* client, int32_t udp_sock
     request = new AsyncRequest();
     request->client = client;
     request->request_id = client->next_request_id++;
-    request->type = STUN_ASYNC_UDP_HOLE_PUNCH;
+    request->type = NTRS_ASYNC_UDP_HOLE_PUNCH;
     request->fd = udp_sock;
     request->callback = callback;
     request->user_data = user_data;
@@ -2128,10 +2335,10 @@ void ntrs_nat_info_init(ntrs_nat_info_t* info)
     copy_text(info->local_ip, sizeof(info->local_ip), "0.0.0.0");
     copy_text(info->srflx_ip, sizeof(info->srflx_ip), "0.0.0.0");
     copy_text(info->srflx_ip_2, sizeof(info->srflx_ip_2), "0.0.0.0");
-    info->nat_class = STUN_NAT_CLASS_UNKNOWN;
-    info->nat_flags = STUN_NAT_FLAG_NONE;
-    info->mapping_behavior = STUN_MAPPING_UNKNOWN;
-    info->filtering_behavior = STUN_FILTERING_UNKNOWN;
+    info->nat_class = NTRS_NAT_CLASS_UNKNOWN;
+    info->nat_flags = NTRS_NAT_FLAG_NONE;
+    info->mapping_behavior = NTRS_MAPPING_UNKNOWN;
+    info->filtering_behavior = NTRS_FILTERING_UNKNOWN;
     copy_text(info->nat_risk, sizeof(info->nat_risk), "high");
     copy_text(info->nat_type, sizeof(info->nat_type), "unknown");
     info->probe1_rtt_ms = -1;
@@ -2160,31 +2367,51 @@ int32_t ntrs_connect_control(const char* ntrs_ip, uint16_t ntrs_port)
     return fd;
 }
 
-bool ntrs_request_probe_endpoints(int32_t control_fd, const char* session_token, char* stun1, size_t stun1_len,
-                                  char* stun2, size_t stun2_len)
+bool ntrs_request_probe_endpoints(int32_t control_fd, const char* session_token, char* probe1, size_t probe1_len,
+                                  char* probe2, size_t probe2_len)
 {
+    static const int kProbeEndpointRetryCount = 10;
+    static const int kProbeEndpointRetryDelayUs = 200 * 1000;
     eular::ntrs::Message req;
     eular::ntrs::Message rsp;
+    const char*          probe1_value = NULL;
+    const char*          probe2_value = NULL;
+    int                  attempt = 0;
 
-    if (control_fd < 0 || stun1 == NULL || stun1_len == 0 || stun2 == NULL || stun2_len == 0) {
+    if (control_fd < 0 || probe1 == NULL || probe1_len == 0 || probe2 == NULL || probe2_len == 0) {
         return false;
     }
 
-    stun1[0] = '\0';
-    stun2[0] = '\0';
+    probe1[0] = '\0';
+    probe2[0] = '\0';
 
-    eular::ntrs::messageInit(&req, eular::ntrs::MessageType::NAT_PROBE_REQ, (uint32_t)g_ntrs_req++);
-    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::VERSION, "m1");
-    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, session_token == NULL ? "" : session_token);
+    for (attempt = 0; attempt < kProbeEndpointRetryCount; ++attempt) {
+        eular::ntrs::messageInit(&req, eular::ntrs::MessageType::NAT_PROBE_REQ, (uint32_t)g_ntrs_req++);
+        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::VERSION, "m1");
+        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN,
+                                           session_token == NULL ? "" : session_token);
 
-    if (!send_message(control_fd, req) || !recv_message(control_fd, &rsp) ||
-        rsp.type != eular::ntrs::MessageType::NAT_PROBE_RSP) {
-        return false;
+        if (!send_message(control_fd, req) || !recv_message(control_fd, &rsp) ||
+            rsp.type != eular::ntrs::MessageType::NAT_PROBE_RSP) {
+            return false;
+        }
+
+        probe1_value = msg_str_tag(rsp, eular::ntrs::FieldTag::PROBE1);
+        probe2_value = msg_str_tag(rsp, eular::ntrs::FieldTag::PROBE2);
+        copy_text(probe1, probe1_len, probe1_value);
+        copy_text(probe2, probe2_len, probe2_value);
+        if (probe1[0] == '\0') {
+            return false;
+        }
+        if (probe2[0] != '\0') {
+            return true;
+        }
+        if (attempt + 1 < kProbeEndpointRetryCount) {
+            usleep(kProbeEndpointRetryDelayUs);
+        }
     }
 
-    copy_text(stun1, stun1_len, msg_str_tag(rsp, eular::ntrs::FieldTag::STUN1));
-    copy_text(stun2, stun2_len, msg_str_tag(rsp, eular::ntrs::FieldTag::STUN2));
-    return stun1[0] != '\0';
+    return probe1[0] != '\0';
 }
 
 bool ntrs_auth(int32_t control_fd, const char* peer_id, const char* bootstrap_token, char* session_token,
@@ -2287,19 +2514,23 @@ bool ntrs_unregister_peer(int32_t control_fd, const char* peer_id, const char* s
     return send_message(control_fd, req);
 }
 
-bool ntrs_create_session(int32_t control_fd, const char* src_peer_id, const char* dst_peer_id,
-                         const char* session_token, ntrs_session_signal_t* out)
+bool ntrs_create_session(int32_t control_fd, const char* src_peer_id, const char* src_device_id,
+                         const char* dst_peer_id, const char* dst_device_id, const char* session_token,
+                         ntrs_session_signal_t* out)
 {
     eular::ntrs::Message req;
     eular::ntrs::Message rsp;
 
-    if (control_fd < 0 || src_peer_id == NULL || dst_peer_id == NULL || out == NULL) {
+    if (control_fd < 0 || src_peer_id == NULL || src_device_id == NULL || dst_peer_id == NULL || dst_device_id == NULL ||
+        out == NULL) {
         return false;
     }
 
     eular::ntrs::messageInit(&req, eular::ntrs::MessageType::SESSION_CREATE_REQ, (uint32_t)g_ntrs_req++);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_PEER_ID, src_peer_id);
+    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_DEVICE_ID, src_device_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::DST_PEER_ID, dst_peer_id);
+    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::DST_DEVICE_ID, dst_device_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, session_token == NULL ? "" : session_token);
 
     if (!send_message(control_fd, req) || !recv_message(control_fd, &rsp) ||
@@ -2330,8 +2561,8 @@ bool ntrs_wait_for_signal(int32_t control_fd, int32_t timeout_ms, ntrs_session_s
     return parse_session_signal_impl(msg, out);
 }
 
-bool ntrs_try_udp_hole_punch(int32_t udp_sock, const stun_peer_candidate_t* candidates, uint32_t candidate_count,
-                             int32_t send_rounds, int32_t select_wait_ms, stun_peer_candidate_t* selected)
+bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* candidates, uint32_t candidate_count,
+                             int32_t send_rounds, int32_t select_wait_ms, ntrs_peer_candidate_t* selected)
 {
     uint32_t i = 0;
 
@@ -2362,11 +2593,16 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const stun_peer_candidate_t* cand
         }
 
         for (round = 0; round < send_rounds; ++round) {
-            std::string    payload = build_punch_req_payload(candidates[i].type, round + 1);
+            uint8_t        payload[256];
+            size_t         payload_len = 0;
             fd_set         rfds;
             struct timeval tv;
 
-            sendto(udp_sock, payload.data(), payload.size(), 0, (struct sockaddr*)&dst, sizeof(dst));
+            if (!build_punch_frame(NTRS_BINARY_FRAME_PUNCH_REQ, (uint64_t)(i + 1), candidates[i].type,
+                                   (uint32_t)(round + 1), payload, sizeof(payload), &payload_len)) {
+                continue;
+            }
+            sendto(udp_sock, payload, payload_len, 0, (struct sockaddr*)&dst, sizeof(dst));
 
             FD_ZERO(&rfds);
             FD_SET(udp_sock, &rfds);
@@ -2378,6 +2614,20 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const stun_peer_candidate_t* cand
                 socklen_t          src_len = sizeof(src);
                 ssize_t nread = recvfrom(udp_sock, buffer, sizeof(buffer) - 1, 0, (struct sockaddr*)&src, &src_len);
                 if (nread > 0) {
+                    PunchFrameMeta meta;
+                    if (parse_punch_frame(buffer, (size_t)nread, &meta) &&
+                        meta.frame_type == NTRS_BINARY_FRAME_PUNCH_REQ) {
+                        uint8_t ack_payload[256];
+                        size_t  ack_len = 0;
+                        if (build_punch_ack_frame(&meta, ack_payload, sizeof(ack_payload), &ack_len)) {
+                            sendto(udp_sock, ack_payload, ack_len, 0, (struct sockaddr*)&src, src_len);
+                        }
+                    }
+                    if (!parse_punch_frame(buffer, (size_t)nread, &meta) ||
+                        (meta.frame_type != NTRS_BINARY_FRAME_PUNCH_REQ &&
+                         meta.frame_type != NTRS_BINARY_FRAME_PUNCH_ACK)) {
+                        continue;
+                    }
                     memset(selected, 0, sizeof(*selected));
                     memcpy(selected, &candidates[i], sizeof(*selected));
                     return true;
@@ -2449,7 +2699,7 @@ bool ntrs_async_auth(ntrs_async_client_t* client, uint64_t* request_id, int32_t 
     eular::ntrs::messageInit(&req, eular::ntrs::MessageType::AUTH_REQ, (uint32_t)impl->next_request_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID, peer_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, bootstrap_token);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_AUTH, &req, true, kControlIoTimeoutMs, callback,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_AUTH, &req, true, kControlIoTimeoutMs, callback,
                                         user_data, request_id);
 }
 
@@ -2471,17 +2721,17 @@ bool ntrs_async_request_probe_endpoints(ntrs_async_client_t* client, uint64_t* r
     eular::ntrs::messageInit(&req, eular::ntrs::MessageType::NAT_PROBE_REQ, (uint32_t)impl->next_request_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::VERSION, "m1");
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, session_token == NULL ? "" : session_token);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_REQUEST_PROBE_ENDPOINTS, &req, true,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_REQUEST_PROBE_ENDPOINTS, &req, true,
                                         kControlIoTimeoutMs, callback, user_data, request_id);
 }
 
-bool ntrs_async_detect_nat(ntrs_async_client_t* client, uint64_t* request_id, int32_t udp_sock, const char* stun1_host,
-                           uint16_t stun1_port, const char* stun2_host, uint16_t stun2_port, int32_t control_fd,
+bool ntrs_async_detect_nat(ntrs_async_client_t* client, uint64_t* request_id, int32_t udp_sock, const char* probe1_host,
+                           uint16_t probe1_port, const char* probe2_host, uint16_t probe2_port, int32_t control_fd,
                            const char* session_token, const ntrs_detect_nat_options_t* options,
                            ntrs_async_callback_t callback, void* user_data)
 {
-    return submit_async_nat_request(reinterpret_cast<AsyncClientImpl*>(client), udp_sock, stun1_host, stun1_port,
-                                    stun2_host, stun2_port, control_fd, session_token, options, callback, user_data,
+    return submit_async_nat_request(reinterpret_cast<AsyncClientImpl*>(client), udp_sock, probe1_host, probe1_port,
+                                    probe2_host, probe2_port, control_fd, session_token, options, callback, user_data,
                                     request_id);
 }
 
@@ -2539,7 +2789,7 @@ bool ntrs_async_register_peer(ntrs_async_client_t* client, uint64_t* request_id,
     eular::ntrs::messageAddBoolByTag(&req, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX,
                                      effective_nat->filter_diff_ip_rx);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::NAT_TYPE, effective_nat->nat_type);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_REGISTER_PEER, &req, true, kControlIoTimeoutMs,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_REGISTER_PEER, &req, true, kControlIoTimeoutMs,
                                         callback, user_data, request_id);
 }
 
@@ -2560,7 +2810,7 @@ bool ntrs_async_unregister_peer(ntrs_async_client_t* client, uint64_t* request_i
         reason_code = eular::ntrs::ReasonCode::CLIENT_EXIT;
     }
     eular::ntrs::messageAddU8ByTag(&req, eular::ntrs::FieldTag::REASON, (uint8_t)reason_code);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_UNREGISTER_PEER, &req, false, kControlIoTimeoutMs,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_UNREGISTER_PEER, &req, false, kControlIoTimeoutMs,
                                         callback, user_data, request_id);
 }
 
@@ -2577,24 +2827,28 @@ bool ntrs_async_heartbeat(ntrs_async_client_t* client, uint64_t* request_id, int
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID, peer_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, session_token == NULL ? "" : session_token);
     eular::ntrs::messageAddU32ByTag(&req, eular::ntrs::FieldTag::LEASE_SEQ, lease_seq);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_HEARTBEAT, &req, true, kControlIoTimeoutMs,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_HEARTBEAT, &req, true, kControlIoTimeoutMs,
                                         callback, user_data, request_id);
 }
 
 bool ntrs_async_create_session(ntrs_async_client_t* client, uint64_t* request_id, int32_t control_fd,
-                               const char* src_peer_id, const char* dst_peer_id, const char* session_token,
-                               ntrs_async_callback_t callback, void* user_data)
+                               const char* src_peer_id, const char* src_device_id, const char* dst_peer_id,
+                               const char* dst_device_id, const char* session_token, ntrs_async_callback_t callback,
+                               void* user_data)
 {
     AsyncClientImpl*     impl = reinterpret_cast<AsyncClientImpl*>(client);
     eular::ntrs::Message req;
-    if (impl == NULL || src_peer_id == NULL || dst_peer_id == NULL) {
+    if (impl == NULL || src_peer_id == NULL || src_device_id == NULL || dst_peer_id == NULL ||
+        dst_device_id == NULL) {
         return false;
     }
     eular::ntrs::messageInit(&req, eular::ntrs::MessageType::SESSION_CREATE_REQ, (uint32_t)impl->next_request_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_PEER_ID, src_peer_id);
+    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_DEVICE_ID, src_device_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::DST_PEER_ID, dst_peer_id);
+    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::DST_DEVICE_ID, dst_device_id);
     eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, session_token == NULL ? "" : session_token);
-    return submit_async_message_request(impl, control_fd, STUN_ASYNC_CREATE_SESSION, &req, true, kControlIoTimeoutMs,
+    return submit_async_message_request(impl, control_fd, NTRS_ASYNC_CREATE_SESSION, &req, true, kControlIoTimeoutMs,
                                         callback, user_data, request_id);
 }
 
@@ -2602,12 +2856,12 @@ bool ntrs_async_wait_for_signal(ntrs_async_client_t* client, uint64_t* request_i
                                 int32_t timeout_ms, ntrs_async_callback_t callback, void* user_data)
 {
     return submit_async_message_request(reinterpret_cast<AsyncClientImpl*>(client), control_fd,
-                                        STUN_ASYNC_WAIT_FOR_SIGNAL, NULL, true, timeout_ms, callback, user_data,
+                                        NTRS_ASYNC_WAIT_FOR_SIGNAL, NULL, true, timeout_ms, callback, user_data,
                                         request_id);
 }
 
 bool ntrs_async_try_udp_hole_punch(ntrs_async_client_t* client, uint64_t* request_id, int32_t udp_sock,
-                                   const stun_peer_candidate_t* candidates, uint32_t candidate_count,
+                                   const ntrs_peer_candidate_t* candidates, uint32_t candidate_count,
                                    int32_t send_rounds, int32_t interval_ms, ntrs_async_callback_t callback,
                                    void* user_data)
 {

@@ -1,7 +1,7 @@
 #include <mqtt_client.h>
 #include <ntrs_auth.h>
 #include <ntrs_codec.h>
-#include <stun_hub_state.h>
+#include <ntrs_hub_state.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,7 +131,7 @@ static void publish_cluster_event(eular::orion::MqttClient* mqtt, const std::str
     eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, node.boot_id.c_str());
     eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
     eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, node.region.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::STUN_ENDPOINT, node.stun_endpoint.c_str());
+    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, node.probe_endpoint.c_str());
     eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, node.control_endpoint.c_str());
     eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, node.nat_type.c_str());
     eular::ntrs::messageAddU32ByTag(&msg, eular::ntrs::FieldTag::LOAD, (uint32_t)node.load);
@@ -392,7 +392,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("stun_hub running broker=%s:%d\n", broker.c_str(), port);
+    printf("ntrs_hub running broker=%s:%d\n", broker.c_str(), port);
     loop.dispatch();
 
     return 0;

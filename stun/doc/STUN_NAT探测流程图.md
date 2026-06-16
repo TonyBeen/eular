@@ -1,6 +1,6 @@
-# NTRS NAT探测流程图
+# STUN NAT探测流程图
 
-本文描述当前实现的 NTRS NAT 探测流程：使用完整异步 full STUN 顺序采集事实，再推导 `MappingBehavior` 和 `FilteringBehavior`，最后组合得到兼容 `NatType` 与 `NatFlags`。随后 `peer` 会把 `local` / `srflx` 候选一并注册给 Node，用于会话协商和并发打洞。
+本文描述当前实现的 STUN NAT 探测流程：使用完整异步 full STUN 顺序采集事实，再推导 `MappingBehavior` 和 `FilteringBehavior`，最后组合得到兼容 `NatType` 与 `NatFlags`。随后 `peer` 会把 `local` / `srflx` 候选一并注册给 Node，用于会话协商和并发打洞。
 
 ## 流程图
 
@@ -92,10 +92,10 @@ flowchart TD
 
 `peer` 会使用与 NAT 探测相同的 UDP socket 并发尝试这些候选。对同机或同局域网场景，`host_local` 往往会先成功。
 
-## ntrs_node filter probe 端口
+## stun_node filter probe 端口
 
-`ntrs_node` 主 STUN 端口默认 `3478`，同 IP 备用端口默认 `3479`。filter probe 中：
+`stun_node` 主 STUN 端口默认 `3478`，同 IP 备用端口默认 `3479`。filter probe 中：
 
 - `same_ip_diff_port` 从本节点备用端口发出，默认 `ipA:3479 -> peer_srflx`。
-- `diff_ip` 从另一个 NTRS node 的主 STUN 端口代发，默认 `ipB:3478 -> peer_srflx`。
+- `diff_ip` 从另一个 STUN node 的主 STUN 端口代发，默认 `ipB:3478 -> peer_srflx`。
 - full STUN 顺序固定为 `stun1 -> change-port -> change-ip -> stun2`，这样可以在直接访问 `stun2` 之前先完成 filtering 判定，避免污染 `change-ip` 结果。

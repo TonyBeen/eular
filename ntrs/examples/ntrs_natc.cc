@@ -28,23 +28,23 @@ struct DetectArgs {
     std::string peer_id = "probe_peer";
     std::string bind_ip;
     std::string bind_device;
-    std::string stun1;
-    std::string stun2;
+    std::string probe1;
+    std::string probe2;
     bool        verbose = false;
 };
 
 static const char* nat_type_title(ntrs_nat_class_t nat_class)
 {
     switch (nat_class) {
-    case STUN_NAT_CLASS_OPEN_PUBLIC:
+    case NTRS_NAT_CLASS_OPEN_PUBLIC:
         return "Open Public";
-    case STUN_NAT_CLASS_FULL_CONE:
+    case NTRS_NAT_CLASS_FULL_CONE:
         return "Full Cone NAT";
-    case STUN_NAT_CLASS_IP_RESTRICTED:
+    case NTRS_NAT_CLASS_IP_RESTRICTED:
         return "IP Restricted NAT";
-    case STUN_NAT_CLASS_PORT_RESTRICTED:
+    case NTRS_NAT_CLASS_PORT_RESTRICTED:
         return "Port Restricted NAT";
-    case STUN_NAT_CLASS_SYMMETRIC:
+    case NTRS_NAT_CLASS_SYMMETRIC:
         return "Symmetric NAT";
     default:
         return "Unknown";
@@ -58,21 +58,21 @@ static const char* nat_type_hint(const ntrs_nat_info_t* nat)
     }
 
     switch (nat->nat_class) {
-    case STUN_NAT_CLASS_OPEN_PUBLIC:
-        if ((nat->nat_flags & STUN_NAT_FLAG_UDP_BLOCKED) != 0) {
+    case NTRS_NAT_CLASS_OPEN_PUBLIC:
+        if ((nat->nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0) {
             return "The host has a public address, but UDP probes indicate transport blocking.";
         }
         return "The host appears to be directly reachable on a public address.";
-    case STUN_NAT_CLASS_FULL_CONE:
+    case NTRS_NAT_CLASS_FULL_CONE:
         return "Mapping is stable and filtering is permissive; UDP hole punching should be easier.";
-    case STUN_NAT_CLASS_IP_RESTRICTED:
+    case NTRS_NAT_CLASS_IP_RESTRICTED:
         return "Mapping is stable, but return traffic usually requires a prior packet to the peer IP.";
-    case STUN_NAT_CLASS_PORT_RESTRICTED:
+    case NTRS_NAT_CLASS_PORT_RESTRICTED:
         return "Mapping is stable, but return traffic usually requires a prior packet to the peer IP and port.";
-    case STUN_NAT_CLASS_SYMMETRIC:
+    case NTRS_NAT_CLASS_SYMMETRIC:
         return "Different destinations produce different public mappings; UDP hole punching is difficult.";
     default:
-        if ((nat->nat_flags & STUN_NAT_FLAG_UDP_BLOCKED) != 0) {
+        if ((nat->nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0) {
             return "Basic UDP probes failed; verify that UDP is allowed on this network.";
         }
         return "The current sample is insufficient for a stronger conclusion.";
@@ -82,13 +82,13 @@ static const char* nat_type_hint(const ntrs_nat_info_t* nat)
 static const char* mapping_behavior_title(ntrs_mapping_behavior_t behavior)
 {
     switch (behavior) {
-    case STUN_MAPPING_ENDPOINT_INDEPENDENT:
+    case NTRS_MAPPING_ENDPOINT_INDEPENDENT:
         return "Endpoint Independent";
-    case STUN_MAPPING_ADDRESS_DEPENDENT:
+    case NTRS_MAPPING_ADDRESS_DEPENDENT:
         return "Changes Across Destinations";
-    case STUN_MAPPING_ADDRESS_AND_PORT_DEPENDENT:
+    case NTRS_MAPPING_ADDRESS_AND_PORT_DEPENDENT:
         return "Changes Across Destination Ports";
-    case STUN_MAPPING_UNSTABLE:
+    case NTRS_MAPPING_UNSTABLE:
         return "Unstable";
     default:
         return "Unknown";
@@ -98,13 +98,13 @@ static const char* mapping_behavior_title(ntrs_mapping_behavior_t behavior)
 static const char* filtering_behavior_title(ntrs_filtering_behavior_t behavior)
 {
     switch (behavior) {
-    case STUN_FILTERING_ENDPOINT_INDEPENDENT:
+    case NTRS_FILTERING_ENDPOINT_INDEPENDENT:
         return "Endpoint Independent";
-    case STUN_FILTERING_ADDRESS_DEPENDENT:
+    case NTRS_FILTERING_ADDRESS_DEPENDENT:
         return "Address Dependent";
-    case STUN_FILTERING_ADDRESS_AND_PORT_DEPENDENT:
+    case NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT:
         return "Address and Port Dependent";
-    case STUN_FILTERING_BLOCKED:
+    case NTRS_FILTERING_BLOCKED:
         return "Blocked";
     default:
         return "Unknown";
@@ -134,13 +134,13 @@ static std::string format_flags(ntrs_nat_flags_t nat_flags)
 {
     std::vector<std::string> flags;
 
-    append_flag_text(&flags, (nat_flags & STUN_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
-    append_flag_text(&flags, (nat_flags & STUN_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
-    append_flag_text(&flags, (nat_flags & STUN_NAT_FLAG_MAPPING_UNSTABLE) != 0,
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0,
                      "observed_mapping_instability");
-    append_flag_text(&flags, (nat_flags & STUN_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
                      "multiple_external_ips_observed");
-    append_flag_text(&flags, (nat_flags & STUN_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
+    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
 
     if (flags.empty()) {
         return "none";
@@ -148,7 +148,7 @@ static std::string format_flags(ntrs_nat_flags_t nat_flags)
     return join_flags(flags);
 }
 
-static void print_result(const ntrs_nat_info_t* nat, const std::string& stun1, const std::string& stun2)
+static void print_result(const ntrs_nat_info_t* nat, const std::string& probe1, const std::string& probe2)
 {
     printf("Detection Result: %s\n", nat_type_title(nat->nat_class));
     printf("Summary: %s\n", nat_type_hint(nat));
@@ -156,7 +156,7 @@ static void print_result(const ntrs_nat_info_t* nat, const std::string& stun1, c
     printf("Signals: %s\n", format_flags(nat->nat_flags).c_str());
     printf("Mapping Behavior: %s\n", mapping_behavior_title(nat->mapping_behavior));
     printf("Filtering Behavior: %s\n", filtering_behavior_title(nat->filtering_behavior));
-    printf("Probe Endpoints: stun1=%s stun2=%s\n", stun1.c_str(), stun2.empty() ? "-" : stun2.c_str());
+    printf("Probe Endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     printf("Local Address: %s:%u\n", nat->local_ip, nat->local_port);
     printf("Public Mapping #1: %s:%u\n", nat->srflx_ip, nat->srflx_port);
     printf("Public Mapping #2: %s:%u\n", nat->srflx_ip_2, nat->srflx_port_2);
@@ -180,11 +180,11 @@ struct AsyncResultWait {
 
 struct ProbeSession {
     bool            success;
-    char            error_message[STUN_MAX_TEXT_LEN];
-    char            session_token[STUN_MAX_TEXT_LEN];
+    char            error_message[NTRS_MAX_TEXT_LEN];
+    char            session_token[NTRS_MAX_TEXT_LEN];
     uint32_t        lease_default_sec;
-    char            stun1[STUN_MAX_TEXT_LEN];
-    char            stun2[STUN_MAX_TEXT_LEN];
+    char            probe1[NTRS_MAX_TEXT_LEN];
+    char            probe2[NTRS_MAX_TEXT_LEN];
     ntrs_nat_info_t nat_info;
     int             control_fd;
     int             udp_sock;
@@ -332,14 +332,14 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
 {
     int                       control_fd = -1;
     int                       udp_sock = -1;
-    char                      session_token[STUN_MAX_TEXT_LEN];
+    char                      session_token[NTRS_MAX_TEXT_LEN];
     uint32_t                  lease_default_sec = 0;
-    char                      stun1[STUN_MAX_TEXT_LEN];
-    char                      stun2[STUN_MAX_TEXT_LEN];
-    std::string               stun1_host;
-    std::string               stun2_host;
-    uint16_t                  stun1_port = 0;
-    uint16_t                  stun2_port = 0;
+    char                      probe1[NTRS_MAX_TEXT_LEN];
+    char                      probe2[NTRS_MAX_TEXT_LEN];
+    std::string               probe1_host;
+    std::string               probe2_host;
+    uint16_t                  probe1_port = 0;
+    uint16_t                  probe2_port = 0;
     ntrs_detect_nat_options_t detect_options;
     AsyncResultWait           wait;
     uint64_t                  request_id = 0;
@@ -353,8 +353,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     out->udp_sock = -1;
     ntrs_nat_info_init(&out->nat_info);
     memset(session_token, 0, sizeof(session_token));
-    memset(stun1, 0, sizeof(stun1));
-    memset(stun2, 0, sizeof(stun2));
+    memset(probe1, 0, sizeof(probe1));
+    memset(probe2, 0, sizeof(probe2));
 
     control_fd = ntrs_connect_control(args.node_host.c_str(), args.node_port);
     if (control_fd < 0) {
@@ -368,22 +368,22 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
         return false;
     }
 
-    if (!args.stun1.empty()) {
-        snprintf(stun1, sizeof(stun1), "%s", args.stun1.c_str());
-        snprintf(stun2, sizeof(stun2), "%s", args.stun2.c_str());
-    } else if (!ntrs_request_probe_endpoints(control_fd, session_token, stun1, sizeof(stun1), stun2, sizeof(stun2))) {
+    if (!args.probe1.empty()) {
+        snprintf(probe1, sizeof(probe1), "%s", args.probe1.c_str());
+        snprintf(probe2, sizeof(probe2), "%s", args.probe2.c_str());
+    } else if (!ntrs_request_probe_endpoints(control_fd, session_token, probe1, sizeof(probe1), probe2, sizeof(probe2))) {
         snprintf(out->error_message, sizeof(out->error_message), "request probe endpoints failed");
         close(control_fd);
         return false;
     }
 
-    if (!parse_endpoint_text(stun1, &stun1_host, &stun1_port)) {
-        snprintf(out->error_message, sizeof(out->error_message), "invalid stun1 endpoint");
+    if (!parse_endpoint_text(probe1, &probe1_host, &probe1_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid probe1 endpoint");
         close(control_fd);
         return false;
     }
-    if (stun2[0] != '\0' && !parse_endpoint_text(stun2, &stun2_host, &stun2_port)) {
-        snprintf(out->error_message, sizeof(out->error_message), "invalid stun2 endpoint");
+    if (probe2[0] != '\0' && !parse_endpoint_text(probe2, &probe2_host, &probe2_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid probe2 endpoint");
         close(control_fd);
         return false;
     }
@@ -400,8 +400,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     detect_options.verbose = args.verbose;
     memset(&wait, 0, sizeof(wait));
     wait.base = base;
-    if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, stun1_host.c_str(), stun1_port,
-                               stun2[0] == '\0' ? NULL : stun2_host.c_str(), stun2_port, control_fd, session_token,
+    if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, probe1_host.c_str(), probe1_port,
+                               probe2[0] == '\0' ? NULL : probe2_host.c_str(), probe2_port, control_fd, session_token,
                                &detect_options, async_result_callback, &wait) ||
         !wait_async_result(base, &wait, 10) || !wait.result.success) {
         snprintf(out->error_message, sizeof(out->error_message), "%s",
@@ -416,8 +416,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     out->udp_sock = udp_sock;
     out->lease_default_sec = lease_default_sec;
     snprintf(out->session_token, sizeof(out->session_token), "%s", session_token);
-    snprintf(out->stun1, sizeof(out->stun1), "%s", stun1);
-    snprintf(out->stun2, sizeof(out->stun2), "%s", stun2);
+    snprintf(out->probe1, sizeof(out->probe1), "%s", probe1);
+    snprintf(out->probe2, sizeof(out->probe2), "%s", probe2);
     out->nat_info = wait.result.nat_info;
     return true;
 }
@@ -426,7 +426,7 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
 
 int main(int argc, char** argv)
 {
-    CLI::App                app{"STUN NAT detection tool"};
+    CLI::App                app{"NTRS NAT detection tool"};
     DetectArgs              args;
     ntrs_async_client_t*    async_client = NULL;
     event_base*             base = NULL;
@@ -437,8 +437,8 @@ int main(int argc, char** argv)
     app.add_option("--peer-id", args.peer_id, "peer_id used for authentication");
     app.add_option("--bind-ip", args.bind_ip, "Bind the probe socket to a local IPv4 address");
     app.add_option("--bind-device", args.bind_device, "Bind the probe socket to a network interface");
-    app.add_option("--stun1", args.stun1, "Explicit STUN1 endpoint in host:port format");
-    app.add_option("--stun2", args.stun2, "Explicit STUN2 endpoint in host:port format");
+    app.add_option("--probe1", args.probe1, "Explicit probe1 endpoint in host:port format");
+    app.add_option("--probe2", args.probe2, "Explicit probe2 endpoint in host:port format");
     app.add_flag("-v,--verbose", args.verbose, "Print step-by-step probe progress");
 
     CLI11_PARSE(app, argc, argv);
@@ -459,8 +459,8 @@ int main(int argc, char** argv)
     if (args.verbose) {
         verbose_log(true, "Connecting to node...");
         verbose_log(true, "Authenticating...");
-        if (args.stun1.empty()) {
-            verbose_log(true, "Requesting STUN endpoints...");
+        if (args.probe1.empty()) {
+            verbose_log(true, "Requesting probe endpoints...");
         }
         if (!args.bind_device.empty()) {
             printf("Binding probe socket to device: %s\n", args.bind_device.c_str());
@@ -478,9 +478,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    args.stun1 = probe.stun1;
-    args.stun2 = probe.stun2;
-    print_result(&probe.nat_info, args.stun1, args.stun2);
+    args.probe1 = probe.probe1;
+    args.probe2 = probe.probe2;
+    print_result(&probe.nat_info, args.probe1, args.probe2);
 
     if (probe.udp_sock >= 0) {
         close(probe.udp_sock);

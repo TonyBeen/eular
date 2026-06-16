@@ -1,6 +1,6 @@
 # NAT类型与探测信号说明
 
-本文整理 `NTRS/STUN` 侧用于 P2P 穿透决策的 NAT/UDP 可达性类型，以及建议保留的最小探测信号集合。
+本文整理 `STUN/STUN` 侧用于 P2P 穿透决策的 NAT/UDP 可达性类型，以及建议保留的最小探测信号集合。
 
 ## 说明
 
@@ -19,7 +19,7 @@
   - 探测顺序为 `stun1 -> change-port -> change-ip -> stun2`
   - `change-port` 由本节点 `3479/udp` 回应，`change-ip` 由协同节点 `3478/udp` 代发回应
   - 若未显式指定 `--bind-ip` 或 `--bind-device`，探测逻辑会先根据 `stun1` 的路由选本地出口 IP，并把 probe socket 绑定到该出口，尽量避免多网卡路径漂移导致的误判
-  - `ntrs_peer` 会把 `local_ip:local_port` 一并注册，并在会话阶段交换 `host_local` 候选
+  - `stun_peer` 会把 `local_ip:local_port` 一并注册，并在会话阶段交换 `host_local` 候选
 
 ## 建议主类型
 

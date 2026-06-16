@@ -1,15 +1,15 @@
-# NTRS Hub + STUN Node 协同架构设计
+# STUN Hub + STUN Node 协同架构设计
 
 ## 1. 目标
 
-本文档用于将当前“多机器协作 STUN”架构整理为以 NTRS 为核心的两层模型：
+本文档用于将当前“多机器协作 STUN”架构整理为以 STUN 为核心的两层模型：
 
-- 数据面：每个 NTRS 实例同时作为一个 STUN Node，对外提供 STUN 能力，并与其他 STUN Node 协同完成多点探测。
-- 控制面：引入一个 NTRS Hub，负责节点注册、上下线事件汇聚、服务列表快照发布，以及异常掉线治理。
+- 数据面：每个 STUN 实例同时作为一个 STUN Node，对外提供 STUN 能力，并与其他 STUN Node 协同完成多点探测。
+- 控制面：引入一个 STUN Hub，负责节点注册、上下线事件汇聚、服务列表快照发布，以及异常掉线治理。
 
 目标如下：
 
-- 让 NTRS 节点自动发现其他可协作的 STUN Node。
+- 让 STUN 节点自动发现其他可协作的 STUN Node。
 - 让所有节点都能感知哪些节点上线、下线、异常掉线。
 - 使用 MQTT Last Will and Testament 管理异常断连。
 - 将 Hub 保持在控制面，不让 Hub 进入 STUN 实时转发路径。
@@ -17,8 +17,8 @@
 
 ## 2. 设计原则
 
-- NTRS Node 负责 STUN 探测与节点间协作。
-- NTRS Hub 负责成员关系和集群视图，不参与具体探测包转发。
+- STUN Node 负责 STUN 探测与节点间协作。
+- STUN Hub 负责成员关系和集群视图，不参与具体探测包转发。
 - 节点状态以“事件流 + 快照”双通道发布，避免仅靠瞬时消息导致新节点视图不完整。
 - 节点异常退出依赖 MQTT 遗嘱兜底，正常退出走显式下线流程。
 - 节点注册信息与运行期心跳分离，减少重复载荷。
@@ -28,7 +28,7 @@
 
 ```text
                       +----------------------+
-                      |       NTRS Hub       |
+                      |       STUN Hub       |
                       |  membership / view   |
                       |  snapshot / events   |
                       +----------+-----------+
@@ -36,7 +36,7 @@
                                  | MQTT
                                  v
      +------------------+   +------------------+   +------------------+
-     |    NTRS Node A   |   |    NTRS Node B   |   |    NTRS Node C   |
+     |    STUN Node A   |   |    STUN Node B   |   |    STUN Node C   |
      |  STUN + Control  |   |  STUN + Control  |   |  STUN + Control  |
      +--------+---------+   +--------+---------+   +--------+---------+
               \                    |                        /
@@ -48,15 +48,15 @@
 
 说明：
 
-- 客户端只需要访问某一个 NTRS Node。
-- 发起探测的 NTRS Node 会根据 Hub 下发的集群视图选择协作节点。
+- 客户端只需要访问某一个 STUN Node。
+- 发起探测的 STUN Node 会根据 Hub 下发的集群视图选择协作节点。
 - 协作节点之间直接通信，Hub 不参与探测数据面的转发。
 
 ## 4. 角色与职责
 
-### 4.1 NTRS Node
+### 4.1 STUN Node
 
-NTRS Node 是新的 STUN 服务主体，职责包括：
+STUN Node 是新的 STUN 服务主体，职责包括：
 
 - 对外提供 STUN Binding 能力。
 - 维护本地对等节点列表。
@@ -66,9 +66,9 @@ NTRS Node 是新的 STUN 服务主体，职责包括：
 - 周期性上报心跳、负载、健康状态。
 - 设置 MQTT 遗嘱，用于异常掉线后自动广播离线状态。
 
-### 4.2 NTRS Hub
+### 4.2 STUN Hub
 
-NTRS Hub 是控制面组件，职责包括：
+STUN Hub 是控制面组件，职责包括：
 
 - 订阅所有节点的注册、状态、心跳、离线事件。
 - 维护权威节点目录和最新快照。
@@ -112,7 +112,7 @@ MQTT Broker 作为事件总线，职责包括：
 建议区分三个标识：
 
 - node_id：节点稳定标识，对应一台逻辑 STUN 节点。
-- mqtt_client_id：MQTT 连接标识，建议格式为 ntrs-node-{node_id}。
+- mqtt_client_id：MQTT 连接标识，建议格式为 stun-node-{node_id}。
 - boot_id：节点进程启动代次，每次进程重启生成新的 UUID。
 
 其中：
@@ -125,43 +125,43 @@ MQTT Broker 作为事件总线，职责包括：
 
 ## 7. MQTT 主题设计
 
-建议统一使用 ntrs 前缀。
+建议统一使用 stun 前缀。
 
 ### 7.1 节点上报主题
 
-1. ntrs/node/{node_id}/register
+1. stun/node/{node_id}/register
 用途：节点启动后上报静态元数据。
 
-2. ntrs/node/{node_id}/presence
+2. stun/node/{node_id}/presence
 用途：节点在线状态主题。
 特点：retain=true，正常上线和遗嘱下线都发到这个主题。
 
-3. ntrs/node/{node_id}/heartbeat
+3. stun/node/{node_id}/heartbeat
 用途：节点周期性上报运行指标。
 
-4. ntrs/node/{node_id}/metrics
+4. stun/node/{node_id}/metrics
 用途：可选，承载更细颗粒度负载、RTT、错误率统计。
 
 ### 7.2 Hub 下发主题
 
-1. ntrs/hub/cluster/snapshot
+1. stun/hub/cluster/snapshot
 用途：Hub 发布当前完整节点视图。
 特点：retain=true，新节点订阅后立即获得完整列表。
 
-2. ntrs/hub/cluster/events
+2. stun/hub/cluster/events
 用途：Hub 发布成员变化增量事件。
 特点：retain=false。
 
-3. ntrs/hub/node/{node_id}/commands
+3. stun/hub/node/{node_id}/commands
 用途：可选，Hub 对指定节点下发控制命令。
 
 ### 7.3 订阅关系
 
-- Hub 订阅 ntrs/node/+/register。
-- Hub 订阅 ntrs/node/+/presence。
-- Hub 订阅 ntrs/node/+/heartbeat。
-- 所有 NTRS Node 订阅 ntrs/hub/cluster/snapshot。
-- 所有 NTRS Node 订阅 ntrs/hub/cluster/events。
+- Hub 订阅 stun/node/+/register。
+- Hub 订阅 stun/node/+/presence。
+- Hub 订阅 stun/node/+/heartbeat。
+- 所有 STUN Node 订阅 stun/hub/cluster/snapshot。
+- 所有 STUN Node 订阅 stun/hub/cluster/events。
 
 ## 8. 消息模型
 
@@ -305,7 +305,7 @@ MQTT Broker 作为事件总线，职责包括：
 ### 9.1 启动流程
 
 ```text
-1. NTRS Node 生成 node_id / boot_id
+1. STUN Node 生成 node_id / boot_id
 2. 初始化 MQTT 客户端，并设置 presence 主题的遗嘱消息
 3. 连接 Broker
 4. 发布 register
@@ -344,7 +344,7 @@ MQTT 遗嘱是本架构处理异常掉线的关键机制。
 
 建议配置：
 
-- will topic：ntrs/node/{node_id}/presence
+- will topic：stun/node/{node_id}/presence
 - will qos：1
 - will retain：true
 - will payload：offline + reason=lwt + boot_id
@@ -355,12 +355,12 @@ MQTT 遗嘱是本架构处理异常掉线的关键机制。
 - 节点上线后必须尽快发布 online retained，覆盖之前保留的 offline 状态。
 - Hub 必须校验 boot_id，忽略旧连接产生的过期遗嘱。
 
-## 11. NTRS Node 协同探测流程
+## 11. STUN Node 协同探测流程
 
 ### 11.1 典型探测流程
 
 ```text
-1. Client 向 NTRS Node A 发起 Binding Request
+1. Client 向 STUN Node A 发起 Binding Request
 2. Node A 查询本地 cluster view，选出 Node B 作为协作节点
 3. Node A 向 Node B 发送 probe-assist 请求
 4. Node B 从自身公网地址向 Client 发出辅助探测包
@@ -431,20 +431,20 @@ MQTT 遗嘱是本架构处理异常掉线的关键机制。
 ### 14.1 逻辑部署
 
 - 1 个 MQTT Broker
-- 1 个 NTRS Hub
-- N 个 NTRS Node
+- 1 个 STUN Hub
+- N 个 STUN Node
 
 最小可用部署：
 
 - 1 个 Hub
-- 2 个 NTRS Node
+- 2 个 STUN Node
 - 1 个 Broker
 
 ### 14.2 端口建议
 
 - MQTT：1883 或 8883(TLS)
 - STUN：3478/udp
-- NTRS Node 间控制端口：19000/tcp
+- STUN Node 间控制端口：19000/tcp
 
 ### 14.3 生产要求
 
@@ -456,7 +456,7 @@ MQTT 遗嘱是本架构处理异常掉线的关键机制。
 ## 15. 配置草案
 
 ```yaml
-ntrs_node:
+stun_node:
   node_id: "bj-prod-01"
   region: "cn-bj"
   stun_listen: "0.0.0.0:3478"
@@ -466,17 +466,17 @@ ntrs_node:
 mqtt:
   broker: "mqtt.example.com"
   port: 1883
-  client_id: "ntrs-node-bj-prod-01"
-  username: "ntrs"
+  client_id: "stun-node-bj-prod-01"
+  username: "stun"
   password: "***"
   keepalive_sec: 30
-  will_topic: "ntrs/node/bj-prod-01/presence"
+  will_topic: "stun/node/bj-prod-01/presence"
   will_qos: 1
   will_retain: true
 
 hub:
-  snapshot_topic: "ntrs/hub/cluster/snapshot"
-  events_topic: "ntrs/hub/cluster/events"
+  snapshot_topic: "stun/hub/cluster/snapshot"
+  events_topic: "stun/hub/cluster/events"
 
 cluster:
   heartbeat_interval_sec: 10
@@ -491,10 +491,10 @@ cluster:
 
 - OrionServer -> NtrsNode
 - OrionHub -> NtrsHub
-- orion/server/register -> ntrs/node/{node_id}/register
-- orion/server/status -> 拆分为 ntrs/node/{node_id}/presence 和 heartbeat
-- orion/services/update -> ntrs/hub/cluster/snapshot
-- orion/services/status -> ntrs/hub/cluster/events
+- orion/server/register -> stun/node/{node_id}/register
+- orion/server/status -> 拆分为 stun/node/{node_id}/presence 和 heartbeat
+- orion/services/update -> stun/hub/cluster/snapshot
+- orion/services/status -> stun/hub/cluster/events
 
 当前代码还缺少的关键能力：
 
@@ -508,7 +508,7 @@ cluster:
 
 ### Phase 1：控制面打通
 
-- 定义 NTRS Hub 和 NTRS Node 的主题与 JSON 协议。
+- 定义 STUN Hub 和 STUN Node 的主题与 JSON 协议。
 - Node 接入 register / presence / heartbeat。
 - Hub 接入 snapshot / events 维护。
 - 增加遗嘱与 graceful shutdown。
@@ -530,8 +530,8 @@ cluster:
 
 新的目标架构应当明确为：
 
-- NTRS 是 STUN Node，本身承载 NAT 探测能力。
-- NTRS Hub 是控制面成员中心，不进入 STUN 数据面。
+- STUN 是 STUN Node，本身承载 NAT 探测能力。
+- STUN Hub 是控制面成员中心，不进入 STUN 数据面。
 - 节点通过 MQTT 向 Hub 注册、心跳、上下线。
 - 节点通过订阅 Hub 快照和事件，感知其他 STUN Node 的上线与下线。
 - 节点通过 MQTT 遗嘱处理异常掉线，Hub 将其转换为标准集群事件。

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${SCRIPT_DIR}/stun_hub"
+BIN="${SCRIPT_DIR}/ntrs_hub"
 
 usage() {
     cat <<'EOF'
@@ -17,13 +17,13 @@ Environment fallback:
   HUB_PASSWORD
 
 Example:
-  ./hub_start.sh --host bd.eular.top --port 1883 --username stun --password 'secret'
+  ./hub_start.sh --host bd.eular.top --port 1883 --username ntrs --password 'secret'
 EOF
 }
 
 require_bin() {
     if [[ ! -x "${BIN}" ]]; then
-        echo "stun_hub not found in script directory: ${BIN}" >&2
+        echo "ntrs_hub not found in script directory: ${BIN}" >&2
         exit 1
     fi
 }
@@ -33,7 +33,7 @@ kill_old_process() {
 
     pids="$(pgrep -f "${BIN}" || true)"
     if [[ -n "${pids}" ]]; then
-        echo "stopping existing stun_hub: ${pids}"
+        echo "stopping existing ntrs_hub: ${pids}"
         pkill -f "${BIN}" || true
         sleep 1
     fi

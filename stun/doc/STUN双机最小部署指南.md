@@ -1,4 +1,4 @@
-# NTRS 双机最小部署指南（M1）
+# STUN 双机最小部署指南（M1）
 
 适用场景：
 - 你已经有两台公网服务器。
@@ -6,11 +6,11 @@
 
 ## 1. 拓扑建议
 
-- Node-A：NTRS-Control（TCP） + STUN 主端口 `3478/udp` + 备用端口 `3479/udp`
-- Node-B：NTRS-Control（TCP） + STUN 主端口 `3478/udp` + 备用端口 `3479/udp`
+- Node-A：STUN-Control（TCP） + STUN 主端口 `3478/udp` + 备用端口 `3479/udp`
+- Node-B：STUN-Control（TCP） + STUN 主端口 `3478/udp` + 备用端口 `3479/udp`
 
 推荐端口：
-- NTRS-Control: 19000/tcp
+- STUN-Control: 19000/tcp
 - STUN primary: 3478/udp
 - STUN alternate port: 3479/udp
 
@@ -33,19 +33,19 @@ cmake --build build -j
 ```
 
 会生成：
-- `build/bin/ntrs_hub`
-- `build/bin/ntrs_node`
-- `build/bin/ntrs_peer`
-- `build/bin/ntrs_nat_detect`
+- `build/bin/stun_hub`
+- `build/bin/stun_node`
+- `build/bin/stun_peer`
+- `build/bin/stun_nat_detect`
 
 ## 4. 服务启动
 
 ### 4.1 启动 Hub
 
-当前 `ntrs_hub` 使用 MQTT 作为 Hub 控制面总线。Node 启动时只需要知道这个 Hub/MQTT endpoint，不需要知道其他 Node。
+当前 `stun_hub` 使用 MQTT 作为 Hub 控制面总线。Node 启动时只需要知道这个 Hub/MQTT endpoint，不需要知道其他 Node。
 
 ```bash
-./build/bin/ntrs_hub <Hub域名或IP> 1883
+./build/bin/stun_hub <Hub域名或IP> 1883
 ```
 
 如果 MQTT broker 与 Hub 进程不在同一台机器，传 MQTT broker 的地址和端口。
@@ -53,7 +53,7 @@ cmake --build build -j
 ### 4.2 启动服务节点（Node-A）
 
 ```bash
-./build/bin/ntrs_node \
+./build/bin/stun_node \
   --hub <Hub域名或IP>:1883 \
   --node-id node-a \
   --public-host <NodeA公网IP或域名> \
@@ -64,7 +64,7 @@ cmake --build build -j
 ### 4.3 启动服务节点（Node-B）
 
 ```bash
-./build/bin/ntrs_node \
+./build/bin/stun_node \
   --hub <Hub域名或IP>:1883 \
   --node-id node-b \
   --public-host <NodeB公网IP或域名> \
@@ -73,7 +73,7 @@ cmake --build build -j
 ```
 
 Node 行为：
-- 本地绑定 `19000/tcp` 作为 NTRS control。
+- 本地绑定 `19000/tcp` 作为 STUN control。
 - 本地绑定 `3478/udp` 作为 STUN 主端口。
 - 本地绑定 `3479/udp` 作为 `change-port` / same-IP diff-port 响应端口。
 - 向 Hub 注册 `<public-host>:19000` 与 `<public-host>:3478`。
@@ -81,10 +81,10 @@ Node 行为：
 
 ### 4.4 STUN 说明
 
-当前 `ntrs_node` 已内置完整异步 full STUN 所需的基础能力。
+当前 `stun_node` 已内置完整异步 full STUN 所需的基础能力。
 
 含义：
-- 启动 `ntrs_node` 后，同进程会监听本地：
+- 启动 `stun_node` 后，同进程会监听本地：
   - `0.0.0.0:3478/udp` 作为主 STUN 端口
   - `0.0.0.0:3479/udp` 作为备用端口
 - 普通 Binding Response 会返回 `XOR-MAPPED-ADDRESS`、`RESPONSE-ORIGIN`、`OTHER-ADDRESS`。
@@ -97,12 +97,12 @@ Node 行为：
 ### 5.0 仅 NAT 探测（Peer 只需一个入口）
 
 ```bash
-./build/bin/ntrs_nat_detect <NodeA_NTRS_IP> 19000
-./build/bin/ntrs_nat_detect <NodeA_NTRS_IP> 19000 -v
+./build/bin/stun_nat_detect <NodeA_NTRS_IP> 19000
+./build/bin/stun_nat_detect <NodeA_NTRS_IP> 19000 -v
 ```
 
 说明：
-- `ntrs_nat_detect` 会先向 Node-A 请求探测端点。
+- `stun_nat_detect` 会先向 Node-A 请求探测端点。
 - Node-A 会与 Node-B 协同，返回双 STUN 端点（若对端不可达则降级为单 STUN）。
 - 探测顺序为：
   - `stun1`
@@ -116,18 +116,18 @@ Node 行为：
 ### 5.1 被叫端（Peer-B）先上线
 
 ```bash
-./build/bin/ntrs_peer <NodeA_IP> 19000 peer_b dev_b -
-./build/bin/ntrs_peer -v <NodeA_IP> 19000 peer_b dev_b -
+./build/bin/stun_peer <NodeA_IP> 19000 peer_b dev_b -
+./build/bin/stun_peer -v <NodeA_IP> 19000 peer_b dev_b -
 ```
 
 ### 5.2 主叫端（Peer-A）发起会话
 
 ```bash
-./build/bin/ntrs_peer <NodeA_IP> 19000 peer_a dev_a peer_b
-./build/bin/ntrs_peer -v <NodeA_IP> 19000 peer_a dev_a peer_b
+./build/bin/stun_peer <NodeA_IP> 19000 peer_a dev_a peer_b
+./build/bin/stun_peer -v <NodeA_IP> 19000 peer_a dev_a peer_b
 ```
 
-`ntrs_peer` 同样支持：
+`stun_peer` 同样支持：
 
 ```bash
 --bind-ip <ip>
@@ -177,8 +177,8 @@ Node 行为：
 
 ## 8. 常见问题
 
-1. 两台节点是否必须都跑 NTRS-Control？
-- Hub 模式下建议每个 Node 都跑 NTRS-Control 和 STUN。Hub 根据在线节点给每个 Node 下发协作对象。
+1. 两台节点是否必须都跑 STUN-Control？
+- Hub 模式下建议每个 Node 都跑 STUN-Control 和 STUN。Hub 根据在线节点给每个 Node 下发协作对象。
 
 2. 两台节点是否能显著提升判断能力？
 - 是。双 Node 既能提供双 STUN 视角，又能协同完成 `change-ip` 回应。

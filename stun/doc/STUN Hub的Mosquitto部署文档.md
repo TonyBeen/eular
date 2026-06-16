@@ -1,12 +1,12 @@
-# NTRS Hub 的 Mosquitto 部署文档
+# STUN Hub 的 Mosquitto 部署文档
 
 ## 1. 作用
 
-`ntrs_hub` 当前使用 Eclipse Mosquitto 作为 MQTT 控制面总线：
+`stun_hub` 当前使用 Eclipse Mosquitto 作为 MQTT 控制面总线：
 
-- `ntrs_node` 向 MQTT 发布节点注册、在线状态和心跳。
-- `ntrs_hub` 订阅 Node 事件，维护集群视图。
-- `ntrs_hub` 向每个 Node 发布 assignment，让 Node 自动发现其他协作 Node。
+- `stun_node` 向 MQTT 发布节点注册、在线状态和心跳。
+- `stun_hub` 订阅 Node 事件，维护集群视图。
+- `stun_hub` 向每个 Node 发布 assignment，让 Node 自动发现其他协作 Node。
 - Node 启动时只需要知道 Hub/MQTT 地址，不需要知道对端 Node。
 
 ## 2. 安装
@@ -29,16 +29,16 @@ sudo ss -lnup | grep mosquitto
 
 ## 3. 账号与密码
 
-公网部署不建议允许匿名连接。先创建 NTRS 专用用户：
+公网部署不建议允许匿名连接。先创建 STUN 专用用户：
 
 ```bash
-sudo mosquitto_passwd -c /etc/mosquitto/passwd ntrs
+sudo mosquitto_passwd -c /etc/mosquitto/passwd stun
 ```
 
 如果密码文件已经存在，新增或重置用户时不要加 `-c`：
 
 ```bash
-sudo mosquitto_passwd /etc/mosquitto/passwd ntrs
+sudo mosquitto_passwd /etc/mosquitto/passwd stun
 ```
 
 查看已有用户名：
@@ -55,27 +55,27 @@ sudo cut -d: -f1 /etc/mosquitto/passwd
 
 ```bash
 sudo tee /etc/mosquitto/aclfile >/dev/null <<'EOF'
-user ntrs
-topic readwrite ntrs/#
+user stun
+topic readwrite stun/#
 EOF
 ```
 
-最小权限可以后续再收敛。当前联调阶段先允许 `ntrs/#` 读写，避免 Hub 和 Node topic 权限不一致。
+最小权限可以后续再收敛。当前联调阶段先允许 `stun/#` 读写，避免 Hub 和 Node topic 权限不一致。
 
 当前使用到的 topic：
 
 ```text
-ntrs/node/+/register
-ntrs/node/+/presence
-ntrs/node/+/heartbeat
-ntrs/hub/cluster/snapshot
-ntrs/hub/cluster/events
-ntrs/hub/node/+/assignment
+stun/node/+/register
+stun/node/+/presence
+stun/node/+/heartbeat
+stun/hub/cluster/snapshot
+stun/hub/cluster/events
+stun/hub/node/+/assignment
 ```
 
 ## 5. Mosquitto 配置
 
-不要在已有 Mosquitto 配置上直接新增一份完整 `ntrs.conf`。`listener`、`allow_anonymous`、`password_file`、`acl_file`、`persistence_location` 等全局项重复会导致 Mosquitto 启动失败。
+不要在已有 Mosquitto 配置上直接新增一份完整 `stun.conf`。`listener`、`allow_anonymous`、`password_file`、`acl_file`、`persistence_location` 等全局项重复会导致 Mosquitto 启动失败。
 
 先检查现有配置：
 
@@ -101,7 +101,7 @@ acl_file /etc/mosquitto/aclfile
 如果主配置很干净，才考虑新增一个最小配置文件。不要包含已经在主配置中存在的项：
 
 ```bash
-sudo tee /etc/mosquitto/conf.d/ntrs.conf >/dev/null <<'EOF'
+sudo tee /etc/mosquitto/conf.d/stun.conf >/dev/null <<'EOF'
 acl_file /etc/mosquitto/aclfile
 EOF
 ```
@@ -109,9 +109,9 @@ EOF
 配置原则：
 
 - 同一个全局项只保留一处。
-- 如果主配置已有 `listener`，不要在 `ntrs.conf` 重复写 `listener`。
-- 如果主配置已有 `password_file`，不要在 `ntrs.conf` 重复写 `password_file`。
-- 如果主配置已有 `persistence_location`，不要在 `ntrs.conf` 重复写 `persistence_location`。
+- 如果主配置已有 `listener`，不要在 `stun.conf` 重复写 `listener`。
+- 如果主配置已有 `password_file`，不要在 `stun.conf` 重复写 `password_file`。
+- 如果主配置已有 `persistence_location`，不要在 `stun.conf` 重复写 `persistence_location`。
 
 重启服务：
 
@@ -133,10 +133,10 @@ Error: Duplicate password_file value in configuration.
 Error: Duplicate persistence_location value in configuration.
 ```
 
-说明配置重复。先禁用新增的 `ntrs.conf` 恢复服务：
+说明配置重复。先禁用新增的 `stun.conf` 恢复服务：
 
 ```bash
-sudo mv /etc/mosquitto/conf.d/ntrs.conf /etc/mosquitto/conf.d/ntrs.conf.disabled
+sudo mv /etc/mosquitto/conf.d/stun.conf /etc/mosquitto/conf.d/stun.conf.disabled
 sudo systemctl reset-failed mosquitto
 sudo systemctl restart mosquitto
 sudo systemctl status mosquitto
@@ -147,7 +147,7 @@ sudo systemctl status mosquitto
 匿名连接应该失败：
 
 ```bash
-mosquitto_sub -h <Hub域名或IP> -p 1883 -t 'ntrs/#' -C 1
+mosquitto_sub -h <Hub域名或IP> -p 1883 -t 'stun/#' -C 1
 ```
 
 预期类似：
@@ -161,34 +161,34 @@ Connection error: Connection Refused: not authorised.
 终端 1：
 
 ```bash
-mosquitto_sub -h <Hub域名或IP> -p 1883 -u ntrs -P '<密码>' -t 'ntrs/#' -v
+mosquitto_sub -h <Hub域名或IP> -p 1883 -u stun -P '<密码>' -t 'stun/#' -v
 ```
 
 终端 2：
 
 ```bash
-mosquitto_pub -h <Hub域名或IP> -p 1883 -u ntrs -P '<密码>' -t 'ntrs/test' -m ok
+mosquitto_pub -h <Hub域名或IP> -p 1883 -u stun -P '<密码>' -t 'stun/test' -m ok
 ```
 
 终端 1 应收到：
 
 ```text
-ntrs/test ok
+stun/test ok
 ```
 
-## 7. 启动 NTRS Hub
+## 7. 启动 STUN Hub
 
-`ntrs_hub` 参数：
+`stun_hub` 参数：
 
 ```bash
-./ntrs_hub [mqtt_host] [mqtt_port] [mqtt_username] [mqtt_password]
-./ntrs_hub --host <mqtt_host> [--port 1883] [--username <mqtt_username>] [--password <mqtt_password>]
+./stun_hub [mqtt_host] [mqtt_port] [mqtt_username] [mqtt_password]
+./stun_hub --host <mqtt_host> [--port 1883] [--username <mqtt_username>] [--password <mqtt_password>]
 ```
 
 示例：
 
 ```bash
-./ntrs_hub --host bd.eular.top --username ntrs --password '<密码>'
+./stun_hub --host bd.eular.top --username stun --password '<密码>'
 ```
 
 位置参数方式仍兼容，但不推荐在中间省略参数，否则容易发生错位。优先使用 `--host/--port/--username/--password`。
@@ -197,11 +197,11 @@ ntrs/test ok
 
 ```text
 Connected to MQTT broker
-Subscribed to topic: ntrs/node/+/register
-Subscribed to topic: ntrs/node/+/presence
-Subscribed to topic: ntrs/node/+/heartbeat
-Subscribed to topic: ntrs/hub/cluster/snapshot
-ntrs_hub running broker=bd.eular.top:1883
+Subscribed to topic: stun/node/+/register
+Subscribed to topic: stun/node/+/presence
+Subscribed to topic: stun/node/+/heartbeat
+Subscribed to topic: stun/hub/cluster/snapshot
+stun_hub running broker=bd.eular.top:1883
 ```
 
 如果出现：
@@ -213,33 +213,33 @@ mosquitto_loop_read failed: The connection was refused.
 
 说明 broker 拒绝连接，优先检查用户名、密码和 ACL。
 
-## 8. 启动 NTRS Node
+## 8. 启动 STUN Node
 
 Node 只需要知道 Hub/MQTT endpoint，不需要知道其他 Node。
 
 Node-A：
 
 ```bash
-./ntrs_node \
+./stun_node \
   --hub bd.eular.top:1883 \
   --node-id node-a \
   --public-host <NodeA公网IP或域名> \
   --control-port 19000 \
   --stun-port 3478 \
-  --mqtt-username ntrs \
+  --mqtt-username stun \
   --mqtt-password '<密码>'
 ```
 
 Node-B：
 
 ```bash
-./ntrs_node \
+./stun_node \
   --hub bd.eular.top:1883 \
   --node-id node-b \
   --public-host <NodeB公网IP或域名> \
   --control-port 19000 \
   --stun-port 3478 \
-  --mqtt-username ntrs \
+  --mqtt-username stun \
   --mqtt-password '<密码>'
 ```
 
@@ -258,7 +258,7 @@ Hub/MQTT 机器：
 1883/tcp
 ```
 
-每台 NTRS Node：
+每台 STUN Node：
 
 ```text
 19000/tcp
@@ -285,7 +285,7 @@ Connection Refused: not authorised.
 处理：
 
 ```bash
-mosquitto_sub -h <host> -p 1883 -u ntrs -P '<密码>' -t 'ntrs/#' -C 1
+mosquitto_sub -h <host> -p 1883 -u stun -P '<密码>' -t 'stun/#' -C 1
 ```
 
 如果仍失败，检查：
@@ -301,19 +301,19 @@ sudo journalctl -u mosquitto.service -b --no-pager -n 80
 检查 Hub 是否收到 Node 注册：
 
 ```bash
-mosquitto_sub -h <Hub> -p 1883 -u ntrs -P '<密码>' -t 'ntrs/#' -v
+mosquitto_sub -h <Hub> -p 1883 -u stun -P '<密码>' -t 'stun/#' -v
 ```
 
 应看到：
 
 ```text
-ntrs/node/node-a/register ...
-ntrs/node/node-b/register ...
-ntrs/hub/node/node-a/assignment ...
-ntrs/hub/node/node-b/assignment ...
+stun/node/node-a/register ...
+stun/node/node-b/register ...
+stun/hub/node/node-a/assignment ...
+stun/hub/node/node-b/assignment ...
 ```
 
-如果只有 register 没有 assignment，检查 `ntrs_hub` 是否运行。
+如果只有 register 没有 assignment，检查 `stun_hub` 是否运行。
 
 ## 11. 参考命令
 

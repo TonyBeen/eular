@@ -1,4 +1,5 @@
 #include <ntrs_client.h>
+#include <ntrs_binary_protocol.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -32,15 +33,35 @@ struct AsyncResultWait {
 
 struct ProbeSession {
     bool            success;
-    char            error_message[STUN_MAX_TEXT_LEN];
-    char            session_token[STUN_MAX_TEXT_LEN];
+    char            error_message[NTRS_MAX_TEXT_LEN];
+    char            session_token[NTRS_MAX_TEXT_LEN];
     uint32_t        lease_default_sec;
-    char            stun1[STUN_MAX_TEXT_LEN];
-    char            stun2[STUN_MAX_TEXT_LEN];
+    char            probe1[NTRS_MAX_TEXT_LEN];
+    char            probe2[NTRS_MAX_TEXT_LEN];
     ntrs_nat_info_t nat_info;
     int             control_fd;
     int             udp_sock;
 };
+
+struct PunchFrameMeta {
+    ntrs_binary_frame_type_t frame_type;
+    uint32_t                 request_id;
+    uint32_t                 sequence;
+    uint8_t                  token[8];
+    uint8_t                  token_len;
+    char                     candidate_type[NTRS_MAX_TEXT_LEN];
+};
+
+/**
+ * @brief 接收一帧探测相关 UDP 负载。
+ */
+static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, size_t* out_len,
+                              struct sockaddr_storage* src, socklen_t* src_len, int timeout_ms);
+
+/**
+ * @brief 解析二进制打洞帧。
+ */
+static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out);
 
 static void async_result_callback(const ntrs_async_result_t* result, void* user_data)
 {
@@ -72,6 +93,13 @@ static bool set_nonblocking_fd(int fd)
         return false;
     }
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+static uint64_t current_time_ms()
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ull + (uint64_t)(tv.tv_usec / 1000ull);
 }
 
 static bool parse_endpoint_text(const std::string& endpoint, std::string* host, uint16_t* port)
@@ -193,11 +221,11 @@ static int create_udp_probe_socket(const std::string& bind_ip, const std::string
 static const char* punch_order_text(ntrs_punch_order_t order)
 {
     switch (order) {
-    case STUN_PUNCH_ORDER_SEND_FIRST:
+    case NTRS_PUNCH_ORDER_SEND_FIRST:
         return "send_first";
-    case STUN_PUNCH_ORDER_WAIT_FIRST:
+    case NTRS_PUNCH_ORDER_WAIT_FIRST:
         return "wait_first";
-    case STUN_PUNCH_ORDER_SIMULTANEOUS:
+    case NTRS_PUNCH_ORDER_SIMULTANEOUS:
         return "simultaneous";
     default:
         return "unknown";
@@ -207,9 +235,9 @@ static const char* punch_order_text(ntrs_punch_order_t order)
 static const char* connect_role_text(ntrs_connect_role_t role)
 {
     switch (role) {
-    case STUN_CONNECT_ROLE_INITIATOR:
+    case NTRS_CONNECT_ROLE_INITIATOR:
         return "initiator";
-    case STUN_CONNECT_ROLE_LISTENER:
+    case NTRS_CONNECT_ROLE_LISTENER:
         return "listener";
     default:
         return "unknown";
@@ -225,9 +253,10 @@ static bool wait_for_warmup_packet(int sock, uint32_t wait_ms)
         fd_set         rfds;
         struct timeval tv;
         uint8_t        buffer[512];
+        size_t         nread = 0;
         struct sockaddr_storage src;
         socklen_t      src_len = sizeof(src);
-        ssize_t        nread = 0;
+        PunchFrameMeta meta;
 
         FD_ZERO(&rfds);
         FD_SET(sock, &rfds);
@@ -236,13 +265,10 @@ static bool wait_for_warmup_packet(int sock, uint32_t wait_ms)
         if (select(sock + 1, &rfds, NULL, NULL, &tv) <= 0 || !FD_ISSET(sock, &rfds)) {
             continue;
         }
-        nread = recvfrom(sock, buffer, sizeof(buffer) - 1, 0, (struct sockaddr*)&src, &src_len);
-        if (nread <= 0) {
+        if (!recv_probe_packet(sock, (char*)buffer, sizeof(buffer), &nread, &src, &src_len, 20)) {
             continue;
         }
-        buffer[nread] = '\0';
-        if (strstr((const char*)buffer, "STUN_PUNCH_REQ|") == (const char*)buffer ||
-            strstr((const char*)buffer, "STUN_PUNCH_ACK|") == (const char*)buffer) {
+        if (parse_punch_frame(buffer, nread, &meta)) {
             return true;
         }
     }
@@ -261,7 +287,7 @@ static void apply_signal_strategy_wait(int sock, const ntrs_session_signal_t* si
            from, punch_order_text(signal->punch_order), connect_role_text(signal->connect_role),
            signal->warmup_rounds, signal->warmup_interval_ms);
 
-    if (signal->punch_order != STUN_PUNCH_ORDER_WAIT_FIRST) {
+    if (signal->punch_order != NTRS_PUNCH_ORDER_WAIT_FIRST) {
         return;
     }
 
@@ -282,19 +308,19 @@ static void apply_signal_strategy_wait(int sock, const ntrs_session_signal_t* si
 
 static bool run_probe_session(event_base* base, ntrs_async_client_t* async_client, const std::string& node_host,
                               uint16_t node_port, const std::string& peer_id, const std::string& bind_ip,
-                              const std::string& bind_device, const std::string& explicit_stun1,
-                              const std::string& explicit_stun2, bool verbose, ProbeSession* out)
+                              const std::string& bind_device, const std::string& explicit_probe1,
+                              const std::string& explicit_probe2, bool verbose, ProbeSession* out)
 {
     int                      control_fd = -1;
     int                      udp_sock = -1;
-    char                     session_token[STUN_MAX_TEXT_LEN];
+    char                     session_token[NTRS_MAX_TEXT_LEN];
     uint32_t                 lease_default_sec = 0;
-    char                     stun1[STUN_MAX_TEXT_LEN];
-    char                     stun2[STUN_MAX_TEXT_LEN];
-    std::string              stun1_host;
-    std::string              stun2_host;
-    uint16_t                 stun1_port = 0;
-    uint16_t                 stun2_port = 0;
+    char                     probe1[NTRS_MAX_TEXT_LEN];
+    char                     probe2[NTRS_MAX_TEXT_LEN];
+    std::string              probe1_host;
+    std::string              probe2_host;
+    uint16_t                 probe1_port = 0;
+    uint16_t                 probe2_port = 0;
     ntrs_detect_nat_options_t detect_options;
     AsyncResultWait          wait_detect;
     uint64_t                 request_id = 0;
@@ -308,8 +334,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     out->udp_sock = -1;
     ntrs_nat_info_init(&out->nat_info);
     memset(session_token, 0, sizeof(session_token));
-    memset(stun1, 0, sizeof(stun1));
-    memset(stun2, 0, sizeof(stun2));
+    memset(probe1, 0, sizeof(probe1));
+    memset(probe2, 0, sizeof(probe2));
 
     control_fd = ntrs_connect_control(node_host.c_str(), node_port);
     if (control_fd < 0) {
@@ -323,22 +349,22 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
         return false;
     }
 
-    if (!explicit_stun1.empty()) {
-        snprintf(stun1, sizeof(stun1), "%s", explicit_stun1.c_str());
-        snprintf(stun2, sizeof(stun2), "%s", explicit_stun2.c_str());
-    } else if (!ntrs_request_probe_endpoints(control_fd, session_token, stun1, sizeof(stun1), stun2, sizeof(stun2))) {
+    if (!explicit_probe1.empty()) {
+        snprintf(probe1, sizeof(probe1), "%s", explicit_probe1.c_str());
+        snprintf(probe2, sizeof(probe2), "%s", explicit_probe2.c_str());
+    } else if (!ntrs_request_probe_endpoints(control_fd, session_token, probe1, sizeof(probe1), probe2, sizeof(probe2))) {
         snprintf(out->error_message, sizeof(out->error_message), "request probe endpoints failed");
         close(control_fd);
         return false;
     }
 
-    if (!parse_endpoint_text(stun1, &stun1_host, &stun1_port)) {
-        snprintf(out->error_message, sizeof(out->error_message), "invalid stun1 endpoint");
+    if (!parse_endpoint_text(probe1, &probe1_host, &probe1_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid probe1 endpoint");
         close(control_fd);
         return false;
     }
-    if (stun2[0] != '\0' && !parse_endpoint_text(stun2, &stun2_host, &stun2_port)) {
-        snprintf(out->error_message, sizeof(out->error_message), "invalid stun2 endpoint");
+    if (probe2[0] != '\0' && !parse_endpoint_text(probe2, &probe2_host, &probe2_port)) {
+        snprintf(out->error_message, sizeof(out->error_message), "invalid probe2 endpoint");
         close(control_fd);
         return false;
     }
@@ -356,8 +382,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
 
     memset(&wait_detect, 0, sizeof(wait_detect));
     wait_detect.base = base;
-    if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, stun1_host.c_str(), stun1_port,
-                               stun2[0] == '\0' ? NULL : stun2_host.c_str(), stun2_port, control_fd, session_token,
+    if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, probe1_host.c_str(), probe1_port,
+                               probe2[0] == '\0' ? NULL : probe2_host.c_str(), probe2_port, control_fd, session_token,
                                &detect_options, async_result_callback, &wait_detect) ||
         !wait_async_result(base, &wait_detect, 8) || !wait_detect.result.success) {
         snprintf(out->error_message, sizeof(out->error_message), "%s",
@@ -373,13 +399,13 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     out->udp_sock = udp_sock;
     out->lease_default_sec = lease_default_sec;
     snprintf(out->session_token, sizeof(out->session_token), "%s", session_token);
-    snprintf(out->stun1, sizeof(out->stun1), "%s", stun1);
-    snprintf(out->stun2, sizeof(out->stun2), "%s", stun2);
+    snprintf(out->probe1, sizeof(out->probe1), "%s", probe1);
+    snprintf(out->probe2, sizeof(out->probe2), "%s", probe2);
     out->nat_info = wait_detect.result.nat_info;
     return true;
 }
 
-static bool peer_candidate_to_sockaddr(const stun_peer_candidate_t* candidate, struct sockaddr_storage* out,
+static bool peer_candidate_to_sockaddr(const ntrs_peer_candidate_t* candidate, struct sockaddr_storage* out,
                                       socklen_t* out_len)
 {
     struct sockaddr_in* addr4 = NULL;
@@ -416,7 +442,7 @@ static std::string make_probe_token()
 }
 
 static bool sockaddr_matches_candidate(const struct sockaddr_storage* src, socklen_t src_len,
-                                       const stun_peer_candidate_t* candidate)
+                                       const ntrs_peer_candidate_t* candidate)
 {
     struct sockaddr_storage expected;
     socklen_t               expected_len = 0;
@@ -456,14 +482,14 @@ static std::string build_probe_packet(const char* prefix, const char* owner_peer
     return packet;
 }
 
-static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, struct sockaddr_storage* src,
-                              socklen_t* src_len, int timeout_ms)
+static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, size_t* out_len,
+                              struct sockaddr_storage* src, socklen_t* src_len, int timeout_ms)
 {
     fd_set         rfds;
     struct timeval tv;
     ssize_t        nread = 0;
 
-    if (buffer == NULL || buffer_size < 2 || src == NULL || src_len == NULL) {
+    if (buffer == NULL || buffer_size < 2 || out_len == NULL || src == NULL || src_len == NULL) {
         return false;
     }
 
@@ -481,21 +507,85 @@ static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, struct
         return false;
     }
     buffer[nread] = '\0';
+    *out_len = (size_t)nread;
     return true;
 }
 
 struct ProbePacketHeader {
     char     type[32];
-    char     owner_peer[STUN_MAX_TEXT_LEN];
+    char     owner_peer[NTRS_MAX_TEXT_LEN];
     char     token[32];
     uint32_t seq;
     uint64_t value;
 };
 
+static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out)
+{
+    ntrs_binary_frame_view view;
+    ntrs_binary_tlv_view   tlv;
+    size_t                 cursor = 0;
+
+    if (payload == NULL || out == NULL || !ntrs_binary_frame_parse(payload, payload_len, &view)) {
+        return false;
+    }
+    if (view.header.phase != NTRS_BINARY_PHASE_PUNCH) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->frame_type = (ntrs_binary_frame_type_t)view.header.frame_type;
+    out->request_id = view.header.request_id;
+    out->sequence = view.header.sequence;
+
+    while (ntrs_binary_frame_next_tlv(&view, &cursor, &tlv)) {
+        if (tlv.type == NTRS_BINARY_TLV_PROBE_TOKEN) {
+            if (tlv.value_len > sizeof(out->token)) {
+                return false;
+            }
+            memcpy(out->token, tlv.value, tlv.value_len);
+            out->token_len = (uint8_t)tlv.value_len;
+        } else if (tlv.type == NTRS_BINARY_TLV_CANDIDATE_TYPE) {
+            size_t copy_len = tlv.value_len;
+            if (copy_len >= sizeof(out->candidate_type)) {
+                copy_len = sizeof(out->candidate_type) - 1u;
+            }
+            memcpy(out->candidate_type, tlv.value, copy_len);
+            out->candidate_type[copy_len] = '\0';
+        }
+    }
+
+    return out->frame_type == NTRS_BINARY_FRAME_PUNCH_REQ || out->frame_type == NTRS_BINARY_FRAME_PUNCH_ACK;
+}
+
+static bool build_punch_ack_frame(const PunchFrameMeta* req_meta, uint8_t* out, size_t out_cap, size_t* out_len)
+{
+    ntrs_binary_frame_t frame;
+
+    if (req_meta == NULL || out == NULL || out_len == NULL || !ntrs_binary_frame_init(&frame, out, out_cap)) {
+        return false;
+    }
+    if (!ntrs_binary_frame_set_header(&frame, NTRS_BINARY_FRAME_PUNCH_ACK, NTRS_BINARY_PHASE_PUNCH, 0u,
+                                      req_meta->request_id, req_meta->sequence, current_time_ms())) {
+        return false;
+    }
+    if (req_meta->token_len > 0 &&
+        !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_PROBE_TOKEN, req_meta->token, req_meta->token_len)) {
+        return false;
+    }
+    if (req_meta->candidate_type[0] != '\0' &&
+        !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_CANDIDATE_TYPE, req_meta->candidate_type,
+                                   (uint16_t)strlen(req_meta->candidate_type))) {
+        return false;
+    }
+
+    *out_len = frame.length;
+    return true;
+}
+
 static bool parse_probe_packet_header(const char* buffer, ProbePacketHeader* out)
 {
     char type[32];
-    char owner_peer[STUN_MAX_TEXT_LEN];
+    char owner_peer[NTRS_MAX_TEXT_LEN];
     char token[32];
     unsigned long long seq = 0;
     unsigned long long value = 0;
@@ -515,32 +605,39 @@ static bool parse_probe_packet_header(const char* buffer, ProbePacketHeader* out
     return true;
 }
 
-static bool handle_probe_request(int sock, const char* buffer, const struct sockaddr_storage* src, socklen_t src_len)
+static bool handle_probe_request(int sock, const char* buffer, size_t buffer_len, const struct sockaddr_storage* src,
+                                 socklen_t src_len)
 {
     ProbePacketHeader header;
     std::string       reply;
+    PunchFrameMeta    punch_meta;
 
     if (buffer == NULL || src == NULL) {
         return false;
     }
-    if (strncmp(buffer, "STUN_PUNCH_REQ|", 15) == 0) {
-        std::string ack = std::string("STUN_PUNCH_ACK|") + (buffer + 15);
-        sendto(sock, ack.data(), ack.size(), 0, (const struct sockaddr*)src, src_len);
+    if (parse_punch_frame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
+        punch_meta.frame_type == NTRS_BINARY_FRAME_PUNCH_REQ) {
+        uint8_t ack[256];
+        size_t  ack_len = 0;
+        if (build_punch_ack_frame(&punch_meta, ack, sizeof(ack), &ack_len)) {
+            sendto(sock, ack, ack_len, 0, (const struct sockaddr*)src, src_len);
+        }
         return true;
     }
-    if (strncmp(buffer, "STUN_PUNCH_ACK|", 15) == 0) {
+    if (parse_punch_frame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
+        punch_meta.frame_type == NTRS_BINARY_FRAME_PUNCH_ACK) {
         return true;
     }
     if (!parse_probe_packet_header(buffer, &header)) {
         return false;
     }
-    if (strcmp(header.type, "STUN_PROBE_PING") == 0) {
-        reply = build_probe_packet("STUN_PROBE_PONG", header.owner_peer, header.token, header.seq, header.value, 96);
+    if (strcmp(header.type, "NTRS_PROBE_PING") == 0) {
+        reply = build_probe_packet("NTRS_PROBE_PONG", header.owner_peer, header.token, header.seq, header.value, 96);
         sendto(sock, reply.data(), reply.size(), 0, (const struct sockaddr*)src, src_len);
         return true;
     }
-    if (strcmp(header.type, "STUN_MTU_PROBE") == 0 && (uint64_t)strlen(buffer) <= header.value) {
-        reply = build_probe_packet("STUN_MTU_ACK", header.owner_peer, header.token, header.seq, header.value, 96);
+    if (strcmp(header.type, "NTRS_MTU_PROBE") == 0 && (uint64_t)strlen(buffer) <= header.value) {
+        reply = build_probe_packet("NTRS_MTU_ACK", header.owner_peer, header.token, header.seq, header.value, 96);
         sendto(sock, reply.data(), reply.size(), 0, (const struct sockaddr*)src, src_len);
         return true;
     }
@@ -554,16 +651,17 @@ static void run_probe_responder_tail(int sock, int timeout_ms)
 
     while (std::chrono::steady_clock::now() < deadline) {
         char                    buffer[2048];
+        size_t                  buffer_len = 0;
         struct sockaddr_storage src;
         socklen_t               src_len = sizeof(src);
-        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &src, &src_len, 100)) {
+        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 100)) {
             continue;
         }
-        handle_probe_request(sock, buffer, &src, src_len);
+        handle_probe_request(sock, buffer, buffer_len, &src, src_len);
     }
 }
 
-static void run_latency_loss_probe(int sock, const stun_peer_candidate_t* candidate, const char* local_peer_id,
+static void run_latency_loss_probe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                    const char* token, const char* from)
 {
     const int ping_count = 10;
@@ -582,19 +680,20 @@ static void run_latency_loss_probe(int sock, const stun_peer_candidate_t* candid
     for (int i = 0; i < ping_count; ++i) {
         uint32_t seq = (uint32_t)(i + 1);
         uint64_t sent_us = steady_now_us();
-        std::string packet = build_probe_packet("STUN_PROBE_PING", local_peer_id, token, seq, sent_us, 128);
+        std::string packet = build_probe_packet("NTRS_PROBE_PING", local_peer_id, token, seq, sent_us, 128);
         sendto(sock, packet.data(), packet.size(), 0, (struct sockaddr*)&dst, dst_len);
 
         for (;;) {
             char                    buffer[2048];
+            size_t                  buffer_len = 0;
             struct sockaddr_storage src;
             socklen_t               src_len = sizeof(src);
             ProbePacketHeader       header;
 
-            if (!recv_probe_packet(sock, buffer, sizeof(buffer), &src, &src_len, 1000)) {
+            if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
                 break;
             }
-            if (handle_probe_request(sock, buffer, &src, src_len)) {
+            if (handle_probe_request(sock, buffer, buffer_len, &src, src_len)) {
                 continue;
             }
             if (!sockaddr_matches_candidate(&src, src_len, candidate)) {
@@ -603,7 +702,7 @@ static void run_latency_loss_probe(int sock, const stun_peer_candidate_t* candid
             if (!parse_probe_packet_header(buffer, &header)) {
                 continue;
             }
-            if (strcmp(header.type, "STUN_PROBE_PONG") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
+            if (strcmp(header.type, "NTRS_PROBE_PONG") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
                 strcmp(header.token, token) == 0 && header.seq == seq && header.value == sent_us) {
                 uint64_t rtt_us = steady_now_us() - sent_us;
                 if (received == 0 || rtt_us < rtt_min_us) {
@@ -688,7 +787,7 @@ static void restore_mtu_probe_df_mode(int sock, int family, int previous_value, 
     }
 }
 
-static bool send_mtu_probe_once(int sock, const stun_peer_candidate_t* candidate, const char* local_peer_id,
+static bool send_mtu_probe_once(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                 const char* token, uint32_t seq, size_t payload_size)
 {
     struct sockaddr_storage dst;
@@ -698,7 +797,7 @@ static bool send_mtu_probe_once(int sock, const stun_peer_candidate_t* candidate
     if (candidate == NULL || !peer_candidate_to_sockaddr(candidate, &dst, &dst_len)) {
         return false;
     }
-    packet = build_probe_packet("STUN_MTU_PROBE", local_peer_id, token, seq, (uint64_t)payload_size, payload_size);
+    packet = build_probe_packet("NTRS_MTU_PROBE", local_peer_id, token, seq, (uint64_t)payload_size, payload_size);
     if (packet.size() != payload_size) {
         return false;
     }
@@ -710,14 +809,15 @@ static bool send_mtu_probe_once(int sock, const stun_peer_candidate_t* candidate
 
     for (;;) {
         char                    buffer[2048];
+        size_t                  buffer_len = 0;
         struct sockaddr_storage src;
         socklen_t               src_len = sizeof(src);
         ProbePacketHeader       header;
 
-        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &src, &src_len, 1000)) {
+        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
             return false;
         }
-        if (handle_probe_request(sock, buffer, &src, src_len)) {
+        if (handle_probe_request(sock, buffer, buffer_len, &src, src_len)) {
             continue;
         }
         if (!sockaddr_matches_candidate(&src, src_len, candidate)) {
@@ -726,14 +826,14 @@ static bool send_mtu_probe_once(int sock, const stun_peer_candidate_t* candidate
         if (!parse_probe_packet_header(buffer, &header)) {
             continue;
         }
-        if (strcmp(header.type, "STUN_MTU_ACK") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
+        if (strcmp(header.type, "NTRS_MTU_ACK") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
             strcmp(header.token, token) == 0 && header.seq == seq && header.value == payload_size) {
             return true;
         }
     }
 }
 
-static bool confirm_mtu_payload(int sock, const stun_peer_candidate_t* candidate, const char* local_peer_id,
+static bool confirm_mtu_payload(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                 const char* token, uint32_t* seq, size_t payload_size)
 {
     const int attempts = 3;
@@ -758,7 +858,7 @@ static bool confirm_mtu_payload(int sock, const stun_peer_candidate_t* candidate
     return false;
 }
 
-static void run_mtu_probe(int sock, const stun_peer_candidate_t* candidate, const char* local_peer_id,
+static void run_mtu_probe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                           const char* token, const char* from)
 {
     size_t   low = 1280;
@@ -842,8 +942,9 @@ static void try_hole_punch_from_async_signal(ntrs_async_client_t* client, event_
         return;
     }
 
-    printf("Session signal(%s): peer=%s class=%u flags=0x%04x mapping=%u filtering=%u nat=%s candidates=%u\n", from,
-           signal->peer_id, signal->peer_nat_class, signal->peer_nat_flags, signal->peer_mapping_behavior,
+    printf("Session signal(%s): peer=%s device=%s class=%u flags=0x%04x mapping=%u filtering=%u nat=%s candidates=%u\n",
+           from, signal->peer_id, signal->peer_device_id[0] == '\0' ? "-" : signal->peer_device_id,
+           signal->peer_nat_class, signal->peer_nat_flags, signal->peer_mapping_behavior,
            signal->peer_filtering_behavior, signal->peer_nat_type, signal->candidate_count);
     if (verbose) {
         for (uint32_t i = 0; i < signal->candidate_count; ++i) {
@@ -902,7 +1003,7 @@ int main(int argc, char** argv)
     if (positional.size() < 2) {
         printf(
             "Usage: %s [-v|--verbose] [--bind-ip <ip>] [--bind-device <ifname>] <ntrs_ip> <ntrs_port> "
-            "[peer_id device_id [dst_peer|-] [stun1_host:port] [stun2_host:port]]\n",
+            "[peer_id device_id [dst_peer|-] [dst_device|-] [probe1_host:port] [probe2_host:port]]\n",
             argv[0]);
         return 1;
     }
@@ -913,10 +1014,14 @@ int main(int argc, char** argv)
     std::string peer_id = (positional.size() > 2) ? positional[2] : "probe_peer";
     std::string device_id = (positional.size() > 3) ? positional[3] : "probe_device";
     std::string dst_peer = (positional.size() > 4) ? positional[4] : "";
-    std::string stun1 = (positional.size() > 5) ? positional[5] : "";
-    std::string stun2 = (positional.size() > 6) ? positional[6] : "";
+    std::string dst_device = (positional.size() > 5) ? positional[5] : "";
+    std::string probe1 = (positional.size() > 6) ? positional[6] : "";
+    std::string probe2 = (positional.size() > 7) ? positional[7] : "";
     if (dst_peer == "-") {
         dst_peer.clear();
+    }
+    if (dst_device == "-") {
+        dst_device.clear();
     }
 
     event_base* base = event_base_new();
@@ -938,8 +1043,8 @@ int main(int argc, char** argv)
     std::string           control_session_token;
     const ntrs_nat_info_t* nat = NULL;
 
-    if (!run_probe_session(base, async_client, ntrs_ip, (uint16_t)ntrs_port, peer_id, bind_ip, bind_device, stun1,
-                           stun2, verbose, &probe)) {
+    if (!run_probe_session(base, async_client, ntrs_ip, (uint16_t)ntrs_port, peer_id, bind_ip, bind_device, probe1,
+                           probe2, verbose, &probe)) {
         printf("async NAT detect failed: %s\n", probe.error_message);
         ntrs_async_client_destroy(async_client);
         event_base_free(base);
@@ -949,9 +1054,9 @@ int main(int argc, char** argv)
     fd = probe.control_fd;
     probe_sock = probe.udp_sock;
     control_session_token = probe.session_token;
-    stun1 = probe.stun1;
-    stun2 = probe.stun2;
-    printf("STUN probe endpoints: stun1=%s stun2=%s\n", stun1.c_str(), stun2.empty() ? "-" : stun2.c_str());
+    probe1 = probe.probe1;
+    probe2 = probe.probe2;
+    printf("NTRS probe endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     nat = &probe.nat_info;
     printf("NAT summary: local=%s:%u srflx=%s:%u srflx2=%s:%u class=%u flags=0x%04x mapping=%u filtering=%u type=%s "
            "risk=%s\n",
@@ -986,8 +1091,9 @@ int main(int argc, char** argv)
         AsyncResultWait wait_session;
         memset(&wait_session, 0, sizeof(wait_session));
         wait_session.base = base;
-        if (ntrs_async_create_session(async_client, &request_id, fd, peer_id.c_str(), dst_peer.c_str(),
-                                      control_session_token.c_str(), async_result_callback, &wait_session) &&
+        if (ntrs_async_create_session(async_client, &request_id, fd, peer_id.c_str(), device_id.c_str(),
+                                      dst_peer.c_str(), dst_device.c_str(), control_session_token.c_str(),
+                                      async_result_callback, &wait_session) &&
             wait_async_result(base, &wait_session, 5) && wait_session.result.success) {
             try_hole_punch_from_async_signal(async_client, base, probe_sock, &wait_session.result.session_signal,
                                              peer_id.c_str(), "session_create_rsp", verbose);
