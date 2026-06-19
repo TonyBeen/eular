@@ -6,14 +6,14 @@ set(RTTR_3RD_PARTY_DIR "${CMAKE_SOURCE_DIR}/3rd_party")
 
 include(GNUInstallDirs)
 
-option(BUILD_TEST "Build the unit tests of RTTR" ON)
-option(BUILD_EXAMPLES "Enable this to build the examples" OFF)
+option(VARIANT_BUILD_TEST       "Build the unit tests of RTTR"          ON)
+option(VARIANT_BUILD_EXAMPLES   "Enable this to build the examples"     OFF)
 
-if (BUILD_TEST)
+if (VARIANT_BUILD_TEST)
     add_subdirectory(test)
 endif()
 
-if (BUILD_EXAMPLES)
+if (VARIANT_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 

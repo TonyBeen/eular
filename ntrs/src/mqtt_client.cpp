@@ -14,8 +14,8 @@ namespace {
 std::mutex g_mosquitto_init_mu;
 int g_mosquitto_user_count = 0;
 
-bool acquire_mosquitto_library() {
-    std::lock_guard<std::mutex> lock(g_mosquitto_init_mu);
+bool AcquireMosquittoLibrary() {
+    std::lock_guard<std::mutex> Lock(g_mosquitto_init_mu);
     if (g_mosquitto_user_count == 0) {
         const int rc = mosquitto_lib_init();
         if (rc != MOSQ_ERR_SUCCESS) {
@@ -27,8 +27,8 @@ bool acquire_mosquitto_library() {
     return true;
 }
 
-void release_mosquitto_library() {
-    std::lock_guard<std::mutex> lock(g_mosquitto_init_mu);
+void ReleaseMosquittoLibrary() {
+    std::lock_guard<std::mutex> Lock(g_mosquitto_init_mu);
     if (g_mosquitto_user_count <= 0) {
         return;
     }
@@ -58,20 +58,20 @@ MqttClient::MqttClient(const std::string& broker, int port,
       ev_write(new ev::EventPoll()),
       ev_misc(new ev::EventTimer()),
       socket_fd(-1), libevent_attached(false) {
-    if (!acquire_mosquitto_library()) {
+    if (!AcquireMosquittoLibrary()) {
         return;
     }
 
     mosq = mosquitto_new(client_id.c_str(), true, this);
     if (!mosq) {
         std::cerr << "mosquitto_new failed" << std::endl;
-        release_mosquitto_library();
+        ReleaseMosquittoLibrary();
         return;
     }
 
-    mosquitto_connect_callback_set(mosq, on_connect);
-    mosquitto_disconnect_callback_set(mosq, on_disconnect);
-    mosquitto_message_callback_set(mosq, on_message);
+    mosquitto_connect_callback_set(mosq, onConnect);
+    mosquitto_disconnect_callback_set(mosq, onDisconnect);
+    mosquitto_message_callback_set(mosq, onMessage);
 
     if (!username.empty() && !password.empty()) {
         const int rc = mosquitto_username_pw_set(mosq, username.c_str(), password.c_str());
@@ -93,7 +93,7 @@ MqttClient::~MqttClient() {
         mosquitto_destroy(mosq);
         mosq = nullptr;
     }
-    release_mosquitto_library();
+    ReleaseMosquittoLibrary();
 }
 
 bool MqttClient::connect() {
@@ -333,7 +333,7 @@ void MqttClient::stopMiscEvent() {
     }
 }
 
-void MqttClient::on_connect(struct mosquitto* mosq, void* obj, int rc) {
+void MqttClient::onConnect(struct mosquitto* mosq, void* obj, int rc) {
     (void)mosq;
     MqttClient* client = static_cast<MqttClient*>(obj);
     if (!client) {
@@ -352,7 +352,7 @@ void MqttClient::on_connect(struct mosquitto* mosq, void* obj, int rc) {
     }
 }
 
-void MqttClient::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
+void MqttClient::onDisconnect(struct mosquitto* mosq, void* obj, int rc) {
     (void)mosq;
     MqttClient* client = static_cast<MqttClient*>(obj);
     if (!client) {
@@ -365,17 +365,17 @@ void MqttClient::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     }
 }
 
-void MqttClient::on_message(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message) {
+void MqttClient::onMessage(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message) {
     (void)mosq;
     MqttClient* client = static_cast<MqttClient*>(obj);
     if (!client || !message || !message->topic) {
         return;
     }
 
-    std::string topic_str(message->topic);
+    std::string TopicStr(message->topic);
     if (client->message_callback) {
         client->message_callback(
-            topic_str,
+            TopicStr,
             static_cast<const uint8_t *>(message->payload),
             message->payloadlen > 0 ? static_cast<size_t>(message->payloadlen) : 0u
         );

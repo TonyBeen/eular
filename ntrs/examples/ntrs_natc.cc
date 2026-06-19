@@ -2,10 +2,17 @@
 #include <ntrs_client.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <netdb.h>
+#if defined(__has_include)
+#if __has_include(<net/if.h>)
+#include <net/if.h>
+#endif
+#endif
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -16,11 +23,12 @@
 #include <event2/util.h>
 #include <utils/CLI11.hpp>
 #if defined(__linux__)
-#include <net/if.h>
 #include <sys/ioctl.h>
 #endif
 
 namespace {
+
+static const int kControlConnectTimeoutMs = 2000;
 
 struct DetectArgs {
     std::string node_host;
@@ -33,7 +41,7 @@ struct DetectArgs {
     bool        verbose = false;
 };
 
-static const char* nat_type_title(ntrs_nat_class_t nat_class)
+static const char* NatTypeTitle(ntrs_nat_class_t nat_class)
 {
     switch (nat_class) {
     case NTRS_NAT_CLASS_OPEN_PUBLIC:
@@ -51,7 +59,7 @@ static const char* nat_type_title(ntrs_nat_class_t nat_class)
     }
 }
 
-static const char* nat_type_hint(const ntrs_nat_info_t* nat)
+static const char* NatTypeHint(const ntrs_nat_info_t* nat)
 {
     if (nat == NULL) {
         return "";
@@ -79,7 +87,7 @@ static const char* nat_type_hint(const ntrs_nat_info_t* nat)
     }
 }
 
-static const char* mapping_behavior_title(ntrs_mapping_behavior_t behavior)
+static const char* MappingBehaviorTitle(ntrs_mapping_behavior_t behavior)
 {
     switch (behavior) {
     case NTRS_MAPPING_ENDPOINT_INDEPENDENT:
@@ -95,7 +103,7 @@ static const char* mapping_behavior_title(ntrs_mapping_behavior_t behavior)
     }
 }
 
-static const char* filtering_behavior_title(ntrs_filtering_behavior_t behavior)
+static const char* FilteringBehaviorTitle(ntrs_filtering_behavior_t behavior)
 {
     switch (behavior) {
     case NTRS_FILTERING_ENDPOINT_INDEPENDENT:
@@ -111,14 +119,14 @@ static const char* filtering_behavior_title(ntrs_filtering_behavior_t behavior)
     }
 }
 
-static void append_flag_text(std::vector<std::string>* flags, bool enabled, const char* text)
+static void AppendFlagText(std::vector<std::string>* flags, bool enabled, const char* text)
 {
     if (flags != NULL && enabled && text != NULL && text[0] != '\0') {
         flags->push_back(text);
     }
 }
 
-static std::string join_flags(const std::vector<std::string>& flags)
+static std::string JoinFlags(const std::vector<std::string>& flags)
 {
     std::string out;
     for (size_t i = 0; i < flags.size(); ++i) {
@@ -130,32 +138,32 @@ static std::string join_flags(const std::vector<std::string>& flags)
     return out;
 }
 
-static std::string format_flags(ntrs_nat_flags_t nat_flags)
+static std::string FormatFlags(ntrs_nat_flags_t nat_flags)
 {
     std::vector<std::string> flags;
 
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0,
+    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
+    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
+    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0,
                      "observed_mapping_instability");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
+    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
                      "multiple_external_ips_observed");
-    append_flag_text(&flags, (nat_flags & NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
+    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
 
     if (flags.empty()) {
         return "none";
     }
-    return join_flags(flags);
+    return JoinFlags(flags);
 }
 
-static void print_result(const ntrs_nat_info_t* nat, const std::string& probe1, const std::string& probe2)
+static void PrintResult(const ntrs_nat_info_t* nat, const std::string& probe1, const std::string& probe2)
 {
-    printf("Detection Result: %s\n", nat_type_title(nat->nat_class));
-    printf("Summary: %s\n", nat_type_hint(nat));
+    printf("Detection Result: %s\n", NatTypeTitle(nat->nat_class));
+    printf("Summary: %s\n", NatTypeHint(nat));
     printf("Risk: %s\n", nat->nat_risk);
-    printf("Signals: %s\n", format_flags(nat->nat_flags).c_str());
-    printf("Mapping Behavior: %s\n", mapping_behavior_title(nat->mapping_behavior));
-    printf("Filtering Behavior: %s\n", filtering_behavior_title(nat->filtering_behavior));
+    printf("Signals: %s\n", FormatFlags(nat->nat_flags).c_str());
+    printf("Mapping Behavior: %s\n", MappingBehaviorTitle(nat->mapping_behavior));
+    printf("Filtering Behavior: %s\n", FilteringBehaviorTitle(nat->filtering_behavior));
     printf("Probe Endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     printf("Local Address: %s:%u\n", nat->local_ip, nat->local_port);
     printf("Public Mapping #1: %s:%u\n", nat->srflx_ip, nat->srflx_port);
@@ -163,13 +171,6 @@ static void print_result(const ntrs_nat_info_t* nat, const std::string& probe1, 
     printf("Samples: rounds=%d p1=%d p2=%d p1_map=%d p2_map=%d rtt1=%dms rtt2=%dms\n", nat->probe_rounds,
            nat->probe1_success_count, nat->probe2_success_count, nat->probe1_distinct_mappings,
            nat->probe2_distinct_mappings, nat->probe1_rtt_ms, nat->probe2_rtt_ms);
-}
-
-static void verbose_log(bool verbose, const char* message)
-{
-    if (verbose && message != NULL) {
-        printf("%s\n", message);
-    }
 }
 
 struct AsyncResultWait {
@@ -190,7 +191,7 @@ struct ProbeSession {
     int             udp_sock;
 };
 
-static void async_result_callback(const ntrs_async_result_t* result, void* user_data)
+static void AsyncResultCallback(const ntrs_async_result_t* result, void* user_data)
 {
     AsyncResultWait* wait = static_cast<AsyncResultWait*>(user_data);
     if (wait == NULL || result == NULL) {
@@ -202,7 +203,7 @@ static void async_result_callback(const ntrs_async_result_t* result, void* user_
     event_base_loopbreak(wait->base);
 }
 
-static bool wait_async_result(event_base* base, AsyncResultWait* wait, int timeout_sec)
+static bool WaitAsyncResult(event_base* base, AsyncResultWait* wait, int timeout_sec)
 {
     time_t deadline = time(NULL) + timeout_sec;
     while (wait != NULL && !wait->done && time(NULL) < deadline) {
@@ -213,7 +214,7 @@ static bool wait_async_result(event_base* base, AsyncResultWait* wait, int timeo
     return wait != NULL && wait->done;
 }
 
-static bool set_nonblocking_fd(int fd)
+static bool SetNonblockingFd(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
@@ -222,7 +223,65 @@ static bool set_nonblocking_fd(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-static bool parse_endpoint_text(const std::string& endpoint, std::string* host, uint16_t* port)
+static bool SetBlockingFd(int fd, bool blocking)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    if (blocking) {
+        flags &= ~O_NONBLOCK;
+    } else {
+        flags |= O_NONBLOCK;
+    }
+    return fcntl(fd, F_SETFL, flags) == 0;
+}
+
+static bool WaitWritableFd(int fd, int timeout_ms)
+{
+    fd_set wfds;
+    struct timeval tv;
+
+    if (fd < 0 || timeout_ms < 0) {
+        return false;
+    }
+
+    FD_ZERO(&wfds);
+    FD_SET(fd, &wfds);
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    for (;;) {
+        int ret = select(fd + 1, NULL, &wfds, NULL, &tv);
+        if (ret > 0) {
+            return true;
+        }
+        if (ret == 0) {
+            return false;
+        }
+        if (errno != EINTR) {
+            return false;
+        }
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+    }
+}
+
+static bool SetSocketTimeoutsMs(int fd, int timeout_ms)
+{
+    struct timeval tv;
+
+    if (fd < 0 || timeout_ms < 0) {
+        return false;
+    }
+
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0 &&
+           setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
+}
+
+static bool ParseEndpointText(const std::string& endpoint, std::string* host, uint16_t* port)
 {
     size_t colon = endpoint.rfind(':');
     int    parsed = 0;
@@ -242,7 +301,58 @@ static bool parse_endpoint_text(const std::string& endpoint, std::string* host, 
     return true;
 }
 
-static bool resolve_bind_ipv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
+static bool ResolveInterfaceIpv4(const std::string& bind_device, std::string* resolved_ip)
+{
+    struct ifaddrs* addrs = NULL;
+
+    if (resolved_ip == NULL || bind_device.empty()) {
+        return false;
+    }
+
+    resolved_ip->clear();
+    if (getifaddrs(&addrs) != 0) {
+        return false;
+    }
+
+    for (struct ifaddrs* it = addrs; it != NULL; it = it->ifa_next) {
+        char current_ip[INET_ADDRSTRLEN] = {0};
+        const struct sockaddr_in* addr = NULL;
+
+        if (it->ifa_addr == NULL || it->ifa_addr->sa_family != AF_INET || it->ifa_name == NULL) {
+            continue;
+        }
+        if (bind_device != it->ifa_name) {
+            continue;
+        }
+        addr = reinterpret_cast<const struct sockaddr_in*>(it->ifa_addr);
+        if (inet_ntop(AF_INET, &addr->sin_addr, current_ip, sizeof(current_ip)) == NULL) {
+            continue;
+        }
+        *resolved_ip = current_ip;
+        freeifaddrs(addrs);
+        return true;
+    }
+
+    freeifaddrs(addrs);
+    return false;
+}
+
+static bool ApplyBindDeviceIfSupported(int sock, const std::string& bind_device)
+{
+    if (sock < 0 || bind_device.empty()) {
+        return true;
+    }
+
+#if defined(__linux__) && defined(SO_BINDTODEVICE)
+    return setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_device.c_str(), bind_device.size() + 1) == 0;
+#else
+    (void)sock;
+    (void)bind_device;
+    return true;
+#endif
+}
+
+static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
 {
     if (resolved_ip == NULL) {
         return false;
@@ -256,46 +366,21 @@ static bool resolve_bind_ipv4(const std::string& bind_ip, const std::string& bin
         return true;
     }
 
-#if defined(SIOCGIFADDR)
     if (!bind_device.empty()) {
-        int          sock = socket(AF_INET, SOCK_DGRAM, 0);
-        struct ifreq ifr;
-        char         ip_buffer[INET_ADDRSTRLEN] = {0};
-
-        if (sock < 0) {
-            return false;
-        }
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, bind_device.c_str(), IFNAMSIZ - 1);
-        ifr.ifr_name[IFNAMSIZ - 1] = '\0';
-        ifr.ifr_addr.sa_family = AF_INET;
-        if (ioctl(sock, SIOCGIFADDR, &ifr) != 0) {
-            close(sock);
-            return false;
-        }
-        close(sock);
-        if (inet_ntop(AF_INET, &((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr, ip_buffer, sizeof(ip_buffer)) ==
-            NULL) {
-            return false;
-        }
-        *resolved_ip = ip_buffer;
-        return true;
+        return ResolveInterfaceIpv4(bind_device, resolved_ip);
     }
-#else
-    (void)bind_device;
-#endif
 
     resolved_ip->clear();
     return true;
 }
 
-static int create_udp_probe_socket(const std::string& bind_ip, const std::string& bind_device)
+static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device)
 {
     int                sock = -1;
     std::string        resolved_ip;
     struct sockaddr_in local_addr;
 
-    if (!resolve_bind_ipv4(bind_ip, bind_device, &resolved_ip)) {
+    if (!ResolveBindIpv4(bind_ip, bind_device, &resolved_ip)) {
         return -1;
     }
 
@@ -303,7 +388,11 @@ static int create_udp_probe_socket(const std::string& bind_ip, const std::string
     if (sock < 0) {
         return -1;
     }
-    if (!set_nonblocking_fd(sock)) {
+    if (!ApplyBindDeviceIfSupported(sock, bind_device)) {
+        close(sock);
+        return -1;
+    }
+    if (!SetNonblockingFd(sock)) {
         close(sock);
         return -1;
     }
@@ -327,7 +416,99 @@ static int create_udp_probe_socket(const std::string& bind_ip, const std::string
     return sock;
 }
 
-static bool run_probe_session(event_base* base, ntrs_async_client_t* async_client, const DetectArgs& args,
+static int ConnectControlWithBind(const DetectArgs& args, std::string* error_message)
+{
+    struct addrinfo hints;
+    struct addrinfo* result = NULL;
+    char port_text[16];
+    std::string bind_ip;
+    int fd = -1;
+
+    if (error_message == NULL) {
+        return -1;
+    }
+    error_message->clear();
+
+    if (!ResolveBindIpv4(args.bind_ip, args.bind_device, &bind_ip)) {
+        *error_message = "resolve bind IPv4 failed";
+        return -1;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(port_text, sizeof(port_text), "%u", (unsigned)args.node_port);
+    if (getaddrinfo(args.node_host.c_str(), port_text, &hints, &result) != 0 || result == NULL) {
+        *error_message = "resolve control host failed";
+        return -1;
+    }
+
+    for (struct addrinfo* it = result; it != NULL; it = it->ai_next) {
+        struct sockaddr_in local_addr;
+
+        fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+        if (!ApplyBindDeviceIfSupported(fd, args.bind_device)) {
+            close(fd);
+            fd = -1;
+            continue;
+        }
+
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_port = htons(0);
+        if (!bind_ip.empty()) {
+            if (inet_pton(AF_INET, bind_ip.c_str(), &local_addr.sin_addr) != 1 ||
+                bind(fd, reinterpret_cast<const struct sockaddr*>(&local_addr), sizeof(local_addr)) != 0) {
+                close(fd);
+                fd = -1;
+                continue;
+            }
+        } else {
+            local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+
+        if (!SetNonblockingFd(fd)) {
+            close(fd);
+            fd = -1;
+            continue;
+        }
+
+        if (connect(fd, it->ai_addr, it->ai_addrlen) != 0) {
+            if (errno != EINPROGRESS) {
+                close(fd);
+                fd = -1;
+                continue;
+            }
+            if (!WaitWritableFd(fd, kControlConnectTimeoutMs)) {
+                close(fd);
+                fd = -1;
+                continue;
+            }
+
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0 || so_error != 0) {
+                close(fd);
+                fd = -1;
+                continue;
+            }
+        }
+
+        SetBlockingFd(fd, true);
+        SetSocketTimeoutsMs(fd, kControlConnectTimeoutMs);
+        freeaddrinfo(result);
+        return fd;
+    }
+
+    freeaddrinfo(result);
+    *error_message = "connect control failed";
+    return -1;
+}
+
+static bool RunProbeSession(event_base* base, ntrs_async_client_t* async_client, const DetectArgs& args,
                               ProbeSession* out)
 {
     int                       control_fd = -1;
@@ -336,6 +517,7 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     uint32_t                  lease_default_sec = 0;
     char                      probe1[NTRS_MAX_TEXT_LEN];
     char                      probe2[NTRS_MAX_TEXT_LEN];
+    std::string               connect_error;
     std::string               probe1_host;
     std::string               probe2_host;
     uint16_t                  probe1_port = 0;
@@ -356,9 +538,10 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     memset(probe1, 0, sizeof(probe1));
     memset(probe2, 0, sizeof(probe2));
 
-    control_fd = ntrs_connect_control(args.node_host.c_str(), args.node_port);
+    control_fd = ConnectControlWithBind(args, &connect_error);
     if (control_fd < 0) {
-        snprintf(out->error_message, sizeof(out->error_message), "connect control failed");
+        snprintf(out->error_message, sizeof(out->error_message), "%s",
+                 connect_error.empty() ? "connect control failed" : connect_error.c_str());
         return false;
     }
     if (!ntrs_auth(control_fd, args.peer_id.c_str(), "ntrs-dev-secret", session_token, sizeof(session_token),
@@ -377,18 +560,18 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
         return false;
     }
 
-    if (!parse_endpoint_text(probe1, &probe1_host, &probe1_port)) {
+    if (!ParseEndpointText(probe1, &probe1_host, &probe1_port)) {
         snprintf(out->error_message, sizeof(out->error_message), "invalid probe1 endpoint");
         close(control_fd);
         return false;
     }
-    if (probe2[0] != '\0' && !parse_endpoint_text(probe2, &probe2_host, &probe2_port)) {
+    if (probe2[0] != '\0' && !ParseEndpointText(probe2, &probe2_host, &probe2_port)) {
         snprintf(out->error_message, sizeof(out->error_message), "invalid probe2 endpoint");
         close(control_fd);
         return false;
     }
 
-    udp_sock = create_udp_probe_socket(args.bind_ip, args.bind_device);
+    udp_sock = CreateUdpProbeSocket(args.bind_ip, args.bind_device);
     if (udp_sock < 0) {
         snprintf(out->error_message, sizeof(out->error_message), "create probe socket failed");
         close(control_fd);
@@ -402,8 +585,20 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     wait.base = base;
     if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, probe1_host.c_str(), probe1_port,
                                probe2[0] == '\0' ? NULL : probe2_host.c_str(), probe2_port, control_fd, session_token,
-                               &detect_options, async_result_callback, &wait) ||
-        !wait_async_result(base, &wait, 10) || !wait.result.success) {
+                               &detect_options, AsyncResultCallback, &wait)) {
+        snprintf(out->error_message, sizeof(out->error_message), "submit async NAT detect failed");
+        close(udp_sock);
+        close(control_fd);
+        return false;
+    }
+    if (!WaitAsyncResult(base, &wait, 10)) {
+        ntrs_async_client_cancel(async_client, request_id);
+        snprintf(out->error_message, sizeof(out->error_message), "async NAT detect timed out");
+        close(udp_sock);
+        close(control_fd);
+        return false;
+    }
+    if (!wait.result.success) {
         snprintf(out->error_message, sizeof(out->error_message), "%s",
                  wait.result.error_message[0] != '\0' ? wait.result.error_message : "async NAT detect failed");
         close(udp_sock);
@@ -457,21 +652,15 @@ int main(int argc, char** argv)
     }
 
     if (args.verbose) {
-        verbose_log(true, "Connecting to node...");
-        verbose_log(true, "Authenticating...");
-        if (args.probe1.empty()) {
-            verbose_log(true, "Requesting probe endpoints...");
-        }
         if (!args.bind_device.empty()) {
             printf("Binding probe socket to device: %s\n", args.bind_device.c_str());
         }
         if (!args.bind_ip.empty()) {
             printf("Binding probe socket to local IP: %s\n", args.bind_ip.c_str());
         }
-        verbose_log(true, "Starting NAT detection...");
     }
 
-    if (!run_probe_session(base, async_client, args, &probe)) {
+    if (!RunProbeSession(base, async_client, args, &probe)) {
         printf("NAT detection failed: %s\n", probe.error_message);
         ntrs_async_client_destroy(async_client);
         event_base_free(base);
@@ -480,7 +669,7 @@ int main(int argc, char** argv)
 
     args.probe1 = probe.probe1;
     args.probe2 = probe.probe2;
-    print_result(&probe.nat_info, args.probe1, args.probe2);
+    PrintResult(&probe.nat_info, args.probe1, args.probe2);
 
     if (probe.udp_sock >= 0) {
         close(probe.udp_sock);

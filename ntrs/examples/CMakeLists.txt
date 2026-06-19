@@ -1,9 +1,14 @@
 list(APPEND EXAMPLES
+    ntrs_natc
     ntrs_natc_multi
     ntrs_peer
     ntrs_hub
     ntrs_node
 )
+
+add_executable(ntrs_natc ntrs_natc.cc)
+target_compile_options(ntrs_natc PRIVATE -std=c++11)
+target_link_libraries(ntrs_natc ntrs)
 
 add_executable(ntrs_natc_multi ntrs_natc_multi.cc)
 target_compile_options(ntrs_natc_multi PRIVATE -std=c++11)

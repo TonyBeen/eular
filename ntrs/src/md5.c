@@ -87,7 +87,7 @@
  * This processes one or more 64-byte data blocks, but does NOT update
  * the bit counters.  There are no alignment requirements.
  */
-static const void *body(MD5_CTX *ctx, const void *data, size_t size)
+static const void *Body(MD5_CTX *ctx, const void *data, size_t size)
 {
   const uint8_t *ptr;
   MD5_u32plus a, b, c, d;
@@ -228,11 +228,11 @@ void MD5_Update(MD5_CTX *ctx, const void *data, size_t size)
     memcpy(&ctx->buffer[used], data, available);
     data = (const uint8_t *)data + available;
     size -= available;
-    body(ctx, ctx->buffer, 64);
+    Body(ctx, ctx->buffer, 64);
   }
 
   if (size >= 64) {
-    data = body(ctx, data, size & ~(uint32_t)0x3f);
+    data = Body(ctx, data, size & ~(uint32_t)0x3f);
     size &= 0x3f;
   }
 
@@ -251,7 +251,7 @@ void MD5_Final(uint8_t *result, MD5_CTX *ctx)
 
   if (available < 8) {
     memset(&ctx->buffer[used], 0, available);
-    body(ctx, ctx->buffer, 64);
+    Body(ctx, ctx->buffer, 64);
     used = 0;
     available = 64;
   }
@@ -268,7 +268,7 @@ void MD5_Final(uint8_t *result, MD5_CTX *ctx)
   ctx->buffer[62] = (uint8_t)(ctx->hi >> 16);
   ctx->buffer[63] = (uint8_t)(ctx->hi >> 24);
 
-  body(ctx, ctx->buffer, 64);
+  Body(ctx, ctx->buffer, 64);
 
   result[0] = (uint8_t)ctx->a;
   result[1] = (uint8_t)(ctx->a >> 8);

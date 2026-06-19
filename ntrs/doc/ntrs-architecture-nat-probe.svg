@@ -1,0 +1,246 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180">
+<style>
+text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+.small { letter-spacing: 0; }
+</style>
+<defs>
+<marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/></marker>
+<marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/></marker>
+<marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/></marker>
+<marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#9333ea"/></marker>
+<marker id="arrow-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#dc2626"/></marker>
+<marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/></marker>
+</defs>
+<rect width="1600" height="1180" fill="#ffffff"/>
+<text x="800.0" y="34" text-anchor="middle" font-size="26" fill="#111827" font-weight="800" class="">NTRS 架构与 NAT 探测流程</text>
+<text x="800.0" y="60" text-anchor="middle" font-size="14" fill="#6b7280" font-weight="400" class="">控制面负责认证、注册、会话规划；节点侧完成私有 UDP 探测、候选选择与 KCP 数据通路衔接</text>
+<rect x="30" y="88" width="1540" height="252" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2" stroke-dasharray="8,6"/>
+<text x="46" y="112" text-anchor="start" font-size="14" fill="#374151" font-weight="700" class="">一、整体分层架构</text>
+<rect x="60" y="126" width="170" height="76" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="145.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">应用 / KCP</text>
+<text x="145.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">kcp_bind()</text>
+<text x="145.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">复用同一 UDP socket</text>
+<rect x="270" y="126" width="170" height="76" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="355.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">NTRS C API</text>
+<text x="355.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">auth / register</text>
+<text x="355.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">detect / punch</text>
+<rect x="60" y="230" width="380" height="74" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="250.0" y="258" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">异步客户端</text>
+<text x="250.0" y="282" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">libevent + evdns</text>
+<text x="250.0" y="299" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">active_fds 防止并发复用</text>
+<text x="250" y="108" text-anchor="middle" font-size="13" fill="#1d4ed8" font-weight="700" class="">客户端 / KCP 接入</text>
+<rect x="500" y="126" width="180" height="76" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="590.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">TCP 控制通道</text>
+<text x="590.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">AUTH_REQ/RSP</text>
+<text x="590.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">NAT_PROBE_REQ</text>
+<rect x="720" y="126" width="190" height="76" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="815.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">鉴权与租约</text>
+<text x="815.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">ControlAuthManager</text>
+<text x="815.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">session token / peer lease</text>
+<rect x="950" y="126" width="150" height="76" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="1025.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">注册表</text>
+<text x="1025.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">peer / device</text>
+<text x="1025.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">NAT info 快照</text>
+<rect x="560" y="230" width="190" height="74" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="655.0" y="258" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">会话规划</text>
+<text x="655.0" y="282" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">角色排序</text>
+<text x="655.0" y="299" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">warmup 计划</text>
+<rect x="790" y="230" width="190" height="74" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="885.0" y="258" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">编解码 / 签名</text>
+<text x="885.0" y="282" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">TLV 控制帧</text>
+<text x="885.0" y="299" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">HMAC 探测认证</text>
+<text x="740" y="108" text-anchor="middle" font-size="13" fill="#c2410c" font-weight="700" class="">NTRS 控制面</text>
+<rect x="1150" y="126" width="150" height="76" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="1225.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">ntrs_node A</text>
+<text x="1225.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">控制 TCP</text>
+<text x="1225.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">探测主端口</text>
+<rect x="1330" y="126" width="150" height="76" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="1405.0" y="154" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">备用端口</text>
+<text x="1405.0" y="178" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">change-port</text>
+<text x="1405.0" y="195" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">同 IP 不同端口</text>
+<rect x="1150" y="230" width="150" height="74" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="1225.0" y="258" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">ntrs_node B</text>
+<text x="1225.0" y="282" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">federation</text>
+<text x="1225.0" y="299" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">change-ip</text>
+<rect x="1330" y="230" width="150" height="74" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="1405.0" y="258" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">Hub / MQTT</text>
+<text x="1405.0" y="282" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">assignment</text>
+<text x="1405.0" y="299" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">presence 快照</text>
+<text x="1318" y="108" text-anchor="middle" font-size="13" fill="#15803d" font-weight="700" class="">节点集群 / 服务运行时</text>
+<line x1="230" y1="164" x2="270" y2="164" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<line x1="440" y1="164" x2="500" y2="164" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+<line x1="680" y1="164" x2="720" y2="164" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+<line x1="910" y1="164" x2="950" y2="164" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+<line x1="1100" y1="164" x2="1150" y2="164" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+<line x1="1300" y1="164" x2="1330" y2="164" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-purple)"/>
+<line x1="1300" y1="267" x2="1330" y2="267" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-purple)"/>
+<path d="M 355 202 L 355 230" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<path d="M 660 202 L 660 230" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrow-orange)"/>
+<path d="M 885 202 L 885 230" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrow-orange)"/>
+<rect x="238" y="151" width="70" height="24" rx="12.0" fill="#f8fafc" stroke="#d1d5db" stroke-width="1"/>
+<text x="273.0" y="168.0" text-anchor="middle" font-size="12" fill="#374151" font-weight="600" class="">API 调用</text>
+<rect x="454" y="151" width="76" height="24" rx="12.0" fill="#fff7ed" stroke="#fed7aa" stroke-width="1"/>
+<text x="492.0" y="168.0" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="600" class="">控制 TCP</text>
+<rect x="1110" y="151" width="58" height="24" rx="12.0" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+<text x="1139.0" y="168.0" text-anchor="middle" font-size="12" fill="#15803d" font-weight="600" class="">节点</text>
+<rect x="30" y="370" width="1540" height="360" rx="10" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.2" stroke-dasharray="8,6"/>
+<text x="46" y="394" text-anchor="start" font-size="14" fill="#374151" font-weight="700" class="">二、NAT 探测主流程</text>
+<rect x="70" y="420" width="180" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="92" cy="447" r="15" fill="#2563eb"/>
+<text x="92" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">1</text>
+<text x="122" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">启动认证</text>
+<text x="122" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">引导密钥 / token</text>
+<text x="122" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">建立控制会话</text>
+<rect x="285" y="420" width="190" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="307" cy="447" r="15" fill="#2563eb"/>
+<text x="307" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">2</text>
+<text x="337" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">下发探测端点</text>
+<text x="337" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">probe1 / probe2</text>
+<text x="337" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">短租约，防重放</text>
+<rect x="510" y="420" width="190" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="532" cy="447" r="15" fill="#2563eb"/>
+<text x="532" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">3</text>
+<text x="562" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">主端口 PROBE1</text>
+<text x="562" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">客户端发 UDP</text>
+<text x="562" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">节点记录 srflx</text>
+<rect x="735" y="420" width="190" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="757" cy="447" r="15" fill="#2563eb"/>
+<text x="757" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">4</text>
+<text x="787" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">变端口验证</text>
+<text x="787" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">FILTER_REQ</text>
+<text x="787" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">同 IP 备用端口响应</text>
+<rect x="960" y="420" width="190" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="982" cy="447" r="15" fill="#2563eb"/>
+<text x="982" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">5</text>
+<text x="1012" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">异 IP 委派</text>
+<text x="1012" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">delegate 到节点 B</text>
+<text x="1012" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">验证 IP 相关过滤</text>
+<rect x="1185" y="420" width="190" height="92" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
+<circle cx="1207" cy="447" r="15" fill="#2563eb"/>
+<text x="1207" y="452" text-anchor="middle" font-size="14" fill="#ffffff" font-weight="700" class="">6</text>
+<text x="1237" y="450" text-anchor="start" font-size="15" fill="#111827" font-weight="700" class="">PROBE2 比较</text>
+<text x="1237" y="475" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">第二端点回包</text>
+<text x="1237" y="492" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">比较映射地址</text>
+<polygon points="1480,411.0 1550.0,466 1480,521.0 1410.0,466" fill="#fff7ed" stroke="#fdba74" stroke-width="1.8"/>
+<text x="1480" y="462" text-anchor="middle" font-size="15" fill="#111827" font-weight="700" class="">探测成功?</text>
+<text x="1480" y="484" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">失败则重试/降级</text>
+<line x1="250" y1="466" x2="285" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<line x1="475" y1="466" x2="510" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<line x1="700" y1="466" x2="735" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<line x1="925" y1="466" x2="960" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<line x1="1150" y1="466" x2="1185" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<line x1="1375" y1="466" x2="1410" y2="466" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrow-blue)"/>
+<path d="M 1480 521 L 1480 580 L 600 580 L 600 512" fill="none" stroke="#dc2626" stroke-width="2" stroke-dasharray="7,5" marker-end="url(#arrow-red)"/>
+<rect x="920" y="566" width="122" height="24" rx="12.0" fill="#fef2f2" stroke="#fecaca" stroke-width="1"/>
+<text x="981.0" y="583.0" text-anchor="middle" font-size="12" fill="#b91c1c" font-weight="600" class="">重试 / 超时耗尽</text>
+<rect x="70" y="620" width="435" height="78" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="287.5" y="648" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">NAT 分类依据</text>
+<text x="287.5" y="672" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">映射是否随目标变化：端点独立 / 地址相关 / 地址端口相关</text>
+<text x="287.5" y="689" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">过滤是否允许换端口、换 IP 响应；丢包或多轮不一致进入未知/降级</text>
+<rect x="535" y="620" width="330" height="78" rx="8" fill="#f8fafc" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="700.0" y="648" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">探测安全边界</text>
+<text x="700.0" y="672" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">短期租约 + request_id + HMAC</text>
+<text x="700.0" y="689" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">只接受匹配 phase/sequence/token 的响应</text>
+<rect x="895" y="620" width="310" height="78" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="1050.0" y="648" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">节点协同</text>
+<text x="1050.0" y="672" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">主节点负责 origin/other addr</text>
+<text x="1050.0" y="689" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">备用端口与节点 B 只承担过滤验证</text>
+<rect x="1235" y="620" width="260" height="78" rx="8" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.5"/>
+<text x="1365.0" y="648" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">输出结果</text>
+<text x="1365.0" y="672" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">ntrs_nat_info_t</text>
+<text x="1365.0" y="689" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">候选地址 + 风险标记 + 诊断原因</text>
+<path d="M 600 304 L 600 388 L 160 388 L 160 420" fill="none" stroke="#ea580c" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#arrow-orange)"/>
+<path d="M 1218 304 L 1218 384 L 605 384 L 605 420" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#arrow-green)"/>
+<path d="M 1405 304 L 1405 396 L 830 396 L 830 420" fill="none" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#arrow-purple)"/>
+<path d="M 1290 267 L 1318 267 L 1318 408 L 1055 408 L 1055 420" fill="none" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#arrow-purple)"/>
+<rect x="510" y="374" width="105" height="24" rx="12.0" fill="#fff7ed" stroke="#fed7aa" stroke-width="1"/>
+<text x="562.5" y="391.0" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="600" class="">控制面下发</text>
+<rect x="960" y="374" width="105" height="24" rx="12.0" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+<text x="1012.5" y="391.0" text-anchor="middle" font-size="12" fill="#15803d" font-weight="600" class="">节点执行探测</text>
+<rect x="30" y="760" width="1540" height="210" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="8,6"/>
+<text x="46" y="784" text-anchor="start" font-size="14" fill="#374151" font-weight="700" class="">三、私有 UDP 数据面与 KCP 接入</text>
+<rect x="70" y="810" width="170" height="88" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="155.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">客户端 UDP socket</text>
+<text x="155.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">NTRS 读写</text>
+<text x="155.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">KCP 后续复用</text>
+<rect x="275" y="810" width="140" height="88" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+<text x="345.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">本地 NAT</text>
+<text x="345.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">映射</text>
+<text x="345.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">过滤</text>
+<rect x="455" y="810" width="180" height="88" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="545.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">节点 A 主端口</text>
+<text x="545.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">PROBE_RSP</text>
+<text x="545.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">origin / other addr</text>
+<rect x="675" y="810" width="180" height="88" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="765.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">节点 A 备用端口</text>
+<text x="765.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">FILTER_RSP</text>
+<text x="765.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">change-port</text>
+<rect x="895" y="810" width="180" height="88" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+<text x="985.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">节点 B 委派端口</text>
+<text x="985.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">FILTER_RSP</text>
+<text x="985.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">change-ip</text>
+<rect x="1115" y="810" width="185" height="88" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="1207.5" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">Peer 候选地址</text>
+<text x="1207.5" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">host / srflx</text>
+<text x="1207.5" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">device peer</text>
+<rect x="1340" y="810" width="170" height="88" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="1425.0" y="838" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">二进制帧</text>
+<text x="1425.0" y="862" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">magic/version/type</text>
+<text x="1425.0" y="879" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">phase/seq/token/TLV</text>
+<line x1="240" y1="854" x2="275" y2="854" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+<line x1="415" y1="854" x2="455" y2="854" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+<line x1="635" y1="854" x2="675" y2="854" stroke="#16a34a" stroke-width="2.2" marker-end="url(#arrow-green)"/>
+<line x1="855" y1="854" x2="895" y2="854" stroke="#9333ea" stroke-width="2.2" stroke-dasharray="6,4" marker-end="url(#arrow-purple)"/>
+<line x1="1075" y1="854" x2="1115" y2="854" stroke="#16a34a" stroke-width="2.2" marker-end="url(#arrow-green)"/>
+<line x1="1300" y1="854" x2="1340" y2="854" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+<rect x="241" y="838" width="46" height="22" rx="11.0" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="264.0" y="854.0" text-anchor="middle" font-size="12" fill="#1d4ed8" font-weight="600" class="">UDP</text>
+<rect x="430" y="838" width="60" height="22" rx="11.0" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="460.0" y="854.0" text-anchor="middle" font-size="12" fill="#1d4ed8" font-weight="600" class="">PROBE</text>
+<rect x="852" y="838" width="70" height="22" rx="11.0" fill="#faf5ff" stroke="#ddd6fe" stroke-width="1"/>
+<text x="887.0" y="854.0" text-anchor="middle" font-size="12" fill="#7e22ce" font-weight="600" class="">委派响应</text>
+<rect x="1288" y="838" width="54" height="22" rx="11.0" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="1315.0" y="854.0" text-anchor="middle" font-size="12" fill="#1d4ed8" font-weight="600" class="">编码</text>
+<rect x="30" y="1000" width="1540" height="118" rx="10" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.2" stroke-dasharray="8,6"/>
+<text x="46" y="1024" text-anchor="start" font-size="14" fill="#374151" font-weight="700" class="">四、集成输出</text>
+<rect x="80" y="1040" width="200" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="180.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">ntrs_nat_info_t</text>
+<text x="180.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">class / flags / rtt / loss</text>
+<rect x="335" y="1040" width="210" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="440.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">会话信令</text>
+<text x="440.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">候选、角色、warmup</text>
+<rect x="600" y="1040" width="210" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="705.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">UDP 打洞循环</text>
+<text x="705.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">PUNCH_REQ / PUNCH_ACK</text>
+<rect x="865" y="1040" width="230" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="980.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">选中候选地址</text>
+<text x="980.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">local / srflx / relay-like</text>
+<rect x="1150" y="1040" width="210" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="1255.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">KCP connect/listen</text>
+<text x="1255.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">复用 socket，数据面继续</text>
+<rect x="1410" y="1040" width="120" height="52" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+<text x="1470.0" y="1068" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">诊断</text>
+<text x="1470.0" y="1092" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="400" class="">timeout / loss</text>
+<path d="M 1450 898 L 1450 1040" fill="none" stroke="#dc2626" stroke-width="2" stroke-dasharray="7,5" marker-end="url(#arrow-red)"/>
+<path d="M 1235 898 L 705 1040" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<line x1="810" y1="1066" x2="865" y2="1066" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<line x1="1095" y1="1066" x2="1150" y2="1066" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<path d="M 770 898 L 440 1040" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+<path d="M 555 898 L 180 1040" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+<rect x="60" y="922" width="1450" height="38" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="785.0" y="950" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">代码模块映射：ntrs_auth.cpp 鉴权；ntrs_codec.cpp / ntrs_binary_protocol.cpp 编解码；ntrs_natc.cc 客户端探测；ntrs_node.cc 节点响应；KCP 侧只承接最终可用候选</text>
+<g transform="translate(70 1130)">
+<rect x="-10" y="-4" width="1125" height="30" rx="8" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<line x1="10" y1="12" x2="48" y2="12" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+<text x="60" y="17" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">主请求 / UDP 数据</text>
+<line x1="240" y1="12" x2="278" y2="12" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+<text x="290" y="17" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">控制 / 鉴权</text>
+<line x1="440" y1="12" x2="478" y2="12" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+<text x="490" y="17" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">状态结果</text>
+<line x1="620" y1="12" x2="658" y2="12" stroke="#9333ea" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrow-purple)"/>
+<text x="670" y="17" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">节点委派</text>
+<line x1="800" y1="12" x2="838" y2="12" stroke="#dc2626" stroke-width="2" stroke-dasharray="7,5" marker-end="url(#arrow-red)"/>
+<text x="850" y="17" text-anchor="start" font-size="12" fill="#6b7280" font-weight="400" class="">重试 / 失败</text>
+</g>
+<text x="1485" y="1165" text-anchor="middle" font-size="11" fill="#9ca3af" font-weight="400" class="">根据 NTRS 文档与代码结构整理</text>
+</svg>

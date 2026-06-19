@@ -59,15 +59,15 @@ private:
     std::map<std::string, PeerSessionLease> peer_sessions_;
 };
 
-std::string mintPeerSessionId(const std::string& src_peer_id, const std::string& dst_peer_id, uint64_t now_sec);
-std::string mintPeerSessionToken(const std::string& src_peer_id, const std::string& dst_peer_id, uint64_t now_sec);
-std::string mintProbeAuthorization(const std::string& shared_secret,
+std::string MintPeerSessionId(const std::string& src_peer_id, const std::string& dst_peer_id, uint64_t now_sec);
+std::string MintPeerSessionToken(const std::string& src_peer_id, const std::string& dst_peer_id, uint64_t now_sec);
+std::string MintProbeAuthorization(const std::string& shared_secret,
                                    const std::string& owner_peer_id,
                                    const std::string& target_ip,
                                    uint16_t           target_port,
                                    const std::string& probe_token,
                                    uint64_t           expire_at_sec);
-bool        validateProbeAuthorization(const std::string& shared_secret,
+bool        ValidateProbeAuthorization(const std::string& shared_secret,
                                        const std::string& owner_peer_id,
                                        const std::string& target_ip,
                                        uint16_t           target_port,

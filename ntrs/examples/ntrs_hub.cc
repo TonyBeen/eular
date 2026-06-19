@@ -21,7 +21,7 @@ struct Assignment {
     std::string backup1;
 };
 
-static void print_usage(const char* program)
+static void PrintUsage(const char* program)
 {
     printf(
         "Usage: %s [mqtt_host] [mqtt_port] [mqtt_username] [mqtt_password]\n"
@@ -45,7 +45,7 @@ static void print_usage(const char* program)
         program, program, program);
 }
 
-static std::string now_iso8601()
+static std::string NowIso8601()
 {
     time_t    t = time(NULL);
     struct tm tmv;
@@ -55,7 +55,7 @@ static std::string now_iso8601()
     return std::string(buf);
 }
 
-static std::string parse_node_id_from_topic(const std::string& topic)
+static std::string ParseNodeIdFromTopic(const std::string& topic)
 {
     const std::string prefix = "ntrs/node/";
     const std::string suffix_register = "/register";
@@ -78,25 +78,25 @@ static std::string parse_node_id_from_topic(const std::string& topic)
     return node_id;
 }
 
-static bool mqtt_publish_message(eular::orion::MqttClient* mqtt, const std::string& topic,
+static bool MqttPublishMessage(eular::orion::MqttClient* Mqtt, const std::string& topic,
                                  const eular::ntrs::Message& msg, bool retain)
 {
     uint8_t buf[8192];
     size_t  len = 0;
-    if (mqtt == NULL || eular::ntrs::encodeMessage(msg, buf, sizeof(buf), &len) != 0) {
-        printf("hub mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
+    if (Mqtt == NULL || eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
+        printf("hub Mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
         return false;
     }
-    if (!mqtt->publish(topic, buf, len, 1, retain)) {
-        printf("hub mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
+    if (!Mqtt->publish(topic, buf, len, 1, retain)) {
+        printf("hub Mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
         return false;
     }
-    printf("hub mqtt publish ok topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
+    printf("hub Mqtt publish ok topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
     return true;
 }
 
-static void publish_cluster_event(eular::orion::MqttClient* mqtt, const std::string& event,
-                                  const eular::ntrs::ClusterNodeState& node, uint64_t cluster_version)
+static void PublishClusterEvent(eular::orion::MqttClient* Mqtt, const std::string& event,
+                                  const eular::ntrs::ClusterNodeState& node, uint64_t clusterVersion)
 {
     eular::ntrs::Message msg;
     eular::ntrs::EventCode event_code = eular::ntrs::EventCode::UNKNOWN;
@@ -125,37 +125,37 @@ static void publish_cluster_event(eular::orion::MqttClient* mqtt, const std::str
     } else if (node.status == "offline") {
         status_code = eular::ntrs::NodeStatusCode::OFFLINE;
     }
-    eular::ntrs::messageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)cluster_version);
-    eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)event_code);
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node.node_id.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, node.boot_id.c_str());
-    eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, node.region.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, node.probe_endpoint.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, node.control_endpoint.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, node.nat_type.c_str());
-    eular::ntrs::messageAddU32ByTag(&msg, eular::ntrs::FieldTag::LOAD, (uint32_t)node.load);
-    eular::ntrs::messageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec);
-    const std::string ts = now_iso8601();
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)clusterVersion);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)event_code);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node.node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, node.boot_id.c_str());
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, node.region.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, node.probe_endpoint.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, node.control_endpoint.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, node.nat_type.c_str());
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::LOAD, (uint32_t)node.load);
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec);
+    const std::string ts = NowIso8601();
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
 
-    mqtt_publish_message(mqtt, "ntrs/hub/cluster/events", msg, false);
+    MqttPublishMessage(Mqtt, "ntrs/hub/cluster/events", msg, false);
 }
 
-static void publish_cluster_snapshot(eular::orion::MqttClient*                                   mqtt,
+static void PublishClusterSnapshot(eular::orion::MqttClient*                                   Mqtt,
                                      const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes,
-                                     uint64_t                                                    cluster_version)
+                                     uint64_t                                                    clusterVersion)
 {
     eular::ntrs::Message msg;
-    const std::string    ts = now_iso8601();
-    if (!eular::ntrs::buildClusterSnapshotMessage(nodes, cluster_version, ts, &msg)) {
+    const std::string    ts = NowIso8601();
+    if (!eular::ntrs::BuildClusterSnapshotMessage(nodes, clusterVersion, ts, &msg)) {
         return;
     }
 
-    mqtt_publish_message(mqtt, "ntrs/hub/cluster/snapshot", msg, true);
+    MqttPublishMessage(Mqtt, "ntrs/hub/cluster/snapshot", msg, true);
 }
 
-static Assignment build_assignment_for(const std::string&                                          self_node,
+static Assignment BuildAssignmentFor(const std::string&                                          self_node,
                                        const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes)
 {
     Assignment               a;
@@ -184,47 +184,47 @@ static Assignment build_assignment_for(const std::string&                       
     return a;
 }
 
-static void publish_assignment_for_node(eular::orion::MqttClient* mqtt, const std::string& node_id, const Assignment& a,
-                                        uint64_t cluster_version)
+static void PublishAssignmentForNode(eular::orion::MqttClient* Mqtt, const std::string& node_id, const Assignment& a,
+                                        uint64_t clusterVersion)
 {
     eular::ntrs::Message msg;
-    eular::ntrs::messageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)cluster_version);
-    eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)eular::ntrs::EventCode::ASSIGNMENT);
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL, a.primary1.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL, a.primary2.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::BACKUP1_CONTROL, a.backup1.c_str());
-    const std::string ts = now_iso8601();
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)clusterVersion);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)eular::ntrs::EventCode::ASSIGNMENT);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL, a.primary1.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL, a.primary2.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BACKUP1_CONTROL, a.backup1.c_str());
+    const std::string ts = NowIso8601();
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
 
     std::string topic = "ntrs/hub/node/" + node_id + "/assignment";
     printf("hub publish assignment node=%s v=%llu p1=%s p2=%s b1=%s\n", node_id.c_str(),
-           (unsigned long long)cluster_version, a.primary1.c_str(), a.primary2.c_str(), a.backup1.c_str());
-    mqtt_publish_message(mqtt, topic, msg, true);
+           (unsigned long long)clusterVersion, a.primary1.c_str(), a.primary2.c_str(), a.backup1.c_str());
+    MqttPublishMessage(Mqtt, topic, msg, true);
 }
 
-static void publish_all_assignments(eular::orion::MqttClient*                                   mqtt,
+static void PublishAllAssignments(eular::orion::MqttClient*                                   Mqtt,
                                     const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes,
-                                    uint64_t                                                    cluster_version)
+                                    uint64_t                                                    clusterVersion)
 {
     for (std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = nodes.begin(); it != nodes.end();
          ++it) {
-        Assignment a = build_assignment_for(it->first, nodes);
-        publish_assignment_for_node(mqtt, it->first, a, cluster_version);
+        Assignment a = BuildAssignmentFor(it->first, nodes);
+        PublishAssignmentForNode(Mqtt, it->first, a, clusterVersion);
     }
 }
 
-static void publish_cluster_update(eular::orion::MqttClient* mqtt, const eular::ntrs::HubClusterState& cluster_state,
+static void PublishClusterUpdate(eular::orion::MqttClient* Mqtt, const eular::ntrs::HubClusterState& cluster_state,
                                    const std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> >& events)
 {
-    publish_cluster_snapshot(mqtt, cluster_state.nodes(), cluster_state.cluster_version());
+    PublishClusterSnapshot(Mqtt, cluster_state.nodes(), cluster_state.clusterVersion());
     for (size_t i = 0; i < events.size(); ++i) {
         if (events[i].first.empty()) {
             continue;
         }
-        publish_cluster_event(mqtt, events[i].first, events[i].second, cluster_state.cluster_version());
+        PublishClusterEvent(Mqtt, events[i].first, events[i].second, cluster_state.clusterVersion());
     }
-    publish_all_assignments(mqtt, cluster_state.nodes(), cluster_state.cluster_version());
+    PublishAllAssignments(Mqtt, cluster_state.nodes(), cluster_state.clusterVersion());
 }
 
 int main(int argc, char** argv)
@@ -243,13 +243,13 @@ int main(int argc, char** argv)
         const char* value = (i + 1 < argc) ? argv[i + 1] : NULL;
 
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
-            print_usage(argv[0]);
+            PrintUsage(argv[0]);
             return 0;
         }
         if (strncmp(arg, "--", 2) == 0) {
             use_named_args = true;
             if (value == NULL) {
-                print_usage(argv[0]);
+                PrintUsage(argv[0]);
                 return 1;
             }
             if (strcmp(arg, "--host") == 0) {
@@ -258,7 +258,7 @@ int main(int argc, char** argv)
                 port = atoi(value);
                 if (port <= 0 || port > 65535) {
                     printf("invalid mqtt_port: %s\n", value);
-                    print_usage(argv[0]);
+                    PrintUsage(argv[0]);
                     return 1;
                 }
             } else if (strcmp(arg, "--username") == 0) {
@@ -266,7 +266,7 @@ int main(int argc, char** argv)
             } else if (strcmp(arg, "--password") == 0) {
                 password = value;
             } else {
-                print_usage(argv[0]);
+                PrintUsage(argv[0]);
                 return 1;
             }
             ++i;
@@ -274,7 +274,7 @@ int main(int argc, char** argv)
         }
 
         if (use_named_args) {
-            print_usage(argv[0]);
+            PrintUsage(argv[0]);
             return 1;
         }
         if (positional_index == 0) {
@@ -283,7 +283,7 @@ int main(int argc, char** argv)
             port = atoi(arg);
             if (port <= 0 || port > 65535) {
                 printf("invalid mqtt_port: %s\n", arg);
-                print_usage(argv[0]);
+                PrintUsage(argv[0]);
                 return 1;
             }
         } else if (positional_index == 2) {
@@ -291,15 +291,15 @@ int main(int argc, char** argv)
         } else if (positional_index == 3) {
             password = arg;
         } else {
-            print_usage(argv[0]);
+            PrintUsage(argv[0]);
             return 1;
         }
         ++positional_index;
     }
 
-    eular::orion::MqttClient mqtt(broker, port, "ntrs-hub", username, password);
+    eular::orion::MqttClient Mqtt(broker, port, "ntrs-hub", username, password);
     ev::EventLoop            loop;
-    if (!mqtt.attachEventLoop(loop.loop())) {
+    if (!Mqtt.attachEventLoop(loop.loop())) {
         printf("hub attach event loop failed\n");
         return 1;
     }
@@ -308,43 +308,43 @@ int main(int argc, char** argv)
     bool                         mqtt_bootstrap_done = false;
 
     auto ensure_hub_subscriptions = [&]() {
-        if (!mqtt.isConnected()) {
+        if (!Mqtt.isConnected()) {
             return;
         }
-        mqtt.subscribe("ntrs/node/+/register", 1);
-        mqtt.subscribe("ntrs/node/+/presence", 1);
-        mqtt.subscribe("ntrs/node/+/heartbeat", 1);
-        mqtt.subscribe("ntrs/hub/cluster/snapshot", 1);
+        Mqtt.subscribe("ntrs/node/+/register", 1);
+        Mqtt.subscribe("ntrs/node/+/presence", 1);
+        Mqtt.subscribe("ntrs/node/+/heartbeat", 1);
+        Mqtt.subscribe("ntrs/hub/cluster/snapshot", 1);
         if (!mqtt_bootstrap_done) {
             mqtt_bootstrap_done = true;
-            printf("hub mqtt subscriptions ready\n");
+            printf("hub Mqtt subscriptions ready\n");
         } else {
-            printf("hub mqtt subscriptions refreshed\n");
+            printf("hub Mqtt subscriptions refreshed\n");
         }
     };
 
-    mqtt.setMessageCallback([&](const std::string& topic, const uint8_t* payload, size_t payload_len) {
+    Mqtt.setMessageCallback([&](const std::string& topic, const uint8_t* payload, size_t payload_len) {
         eular::ntrs::Message msg;
-        printf("hub mqtt message topic=%s len=%zu\n", topic.c_str(), payload_len);
-        if (!eular::ntrs::decodeMessage(payload, payload_len, &msg)) {
+        printf("hub Mqtt message topic=%s len=%zu\n", topic.c_str(), payload_len);
+        if (!eular::ntrs::DecodeMessage(payload, payload_len, &msg)) {
             printf("hub ignore undecodable payload topic=%s\n", topic.c_str());
             return;
         }
         uint8_t event_code = (uint8_t)eular::ntrs::EventCode::UNKNOWN;
-        eular::ntrs::messageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
-        printf("hub mqtt decoded topic=%s type=%u node_id=%s event=%s request_id=%u\n", topic.c_str(),
-               (unsigned)msg.type, eular::ntrs::messageGetString(&msg, "node_id"),
-               eular::ntrs::event_code_name((eular::ntrs::EventCode)event_code), msg.request_id);
+        eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
+        printf("hub Mqtt decoded topic=%s type=%u node_id=%s event=%s request_id=%u\n", topic.c_str(),
+               (unsigned)msg.type, eular::ntrs::MessageGetString(&msg, "node_id"),
+               eular::ntrs::EventCodeName((eular::ntrs::EventCode)event_code), msg.request_id);
 
         if (topic == "ntrs/hub/cluster/snapshot") {
             if (cluster_state.restoreFromSnapshot(msg)) {
                 printf("hub restored snapshot version=%llu nodes=%zu\n",
-                       (unsigned long long)cluster_state.cluster_version(), cluster_state.nodes().size());
+                       (unsigned long long)cluster_state.clusterVersion(), cluster_state.nodes().size());
             }
             return;
         }
 
-        std::string node_id = parse_node_id_from_topic(topic);
+        std::string node_id = ParseNodeIdFromTopic(topic);
         if (node_id.empty()) {
             return;
         }
@@ -352,23 +352,23 @@ int main(int argc, char** argv)
         std::string                   event_name;
         eular::ntrs::ClusterNodeState node;
         uint64_t                      now_sec = (uint64_t)time(NULL);
-        if (!cluster_state.applyMessage(node_id, msg, now_sec, now_iso8601(), &event_name, &node)) {
+        if (!cluster_state.applyMessage(node_id, msg, now_sec, NowIso8601(), &event_name, &node)) {
             return;
         }
 
         std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
         events.push_back(std::make_pair(event_name, node));
-        publish_cluster_update(&mqtt, cluster_state, events);
+        PublishClusterUpdate(&Mqtt, cluster_state, events);
 
         printf("hub updated node=%s status=%s version=%llu\n", node.node_id.c_str(), node.status.c_str(),
-               (unsigned long long)cluster_state.cluster_version());
+               (unsigned long long)cluster_state.clusterVersion());
     });
-    mqtt.setConnectCallback([&]() { ensure_hub_subscriptions(); });
-    mqtt.setDisconnectCallback([&](int rc) {
-        printf("hub mqtt disconnected rc=%d\n", rc);
+    Mqtt.setConnectCallback([&]() { ensure_hub_subscriptions(); });
+    Mqtt.setDisconnectCallback([&](int rc) {
+        printf("hub Mqtt disconnected rc=%d\n", rc);
     });
-    if (!mqtt.connect()) {
-        printf("hub mqtt connect failed: %s:%d\n", broker.c_str(), port);
+    if (!Mqtt.connect()) {
+        printf("hub Mqtt connect failed: %s:%d\n", broker.c_str(), port);
         return 1;
     }
 
@@ -385,7 +385,7 @@ int main(int argc, char** argv)
                                for (size_t i = 0; i < evicted_nodes.size(); ++i) {
                                    events.push_back(std::make_pair("node_evicted", evicted_nodes[i]));
                                }
-                               publish_cluster_update(&mqtt, cluster_state, events);
+                               PublishClusterUpdate(&Mqtt, cluster_state, events);
                            }) ||
         !sweep_timer.start(1, 1000)) {
         printf("hub setup sweep timer failed\n");

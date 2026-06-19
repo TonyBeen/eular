@@ -36,13 +36,13 @@ public:
     HubClusterState();
 
     bool applyMessage(const std::string& topic_node_id, const Message& msg, uint64_t now_mono_sec,
-                      const std::string& now_iso8601, std::string* event_name, ClusterNodeState* event_node);
+                      const std::string& NowIso8601, std::string* event_name, ClusterNodeState* event_node);
 
     bool sweepExpired(uint64_t now_mono_sec, std::vector<ClusterNodeState>* evicted_nodes);
     bool restoreFromSnapshot(const Message& msg);
 
     const std::map<std::string, ClusterNodeState>& nodes() const;
-    uint64_t                                       cluster_version() const;
+    uint64_t                                       clusterVersion() const;
 
 private:
     bool     shouldReplaceGeneration(const ClusterNodeState& current, const std::string& incoming_boot_id) const;
@@ -55,13 +55,13 @@ private:
     uint64_t                                cluster_version_;
 };
 
-bool encodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState>& nodes, std::vector<uint8_t>* out);
-bool decodeClusterSnapshotNodes(const void* data, size_t len, std::vector<ClusterNodeState>* nodes);
-bool buildClusterSnapshotMessage(const std::map<std::string, ClusterNodeState>& nodes,
-                                 uint64_t                                       cluster_version,
+bool EncodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState>& nodes, std::vector<uint8_t>* out);
+bool DecodeClusterSnapshotNodes(const void* data, size_t len, std::vector<ClusterNodeState>* nodes);
+bool BuildClusterSnapshotMessage(const std::map<std::string, ClusterNodeState>& nodes,
+                                 uint64_t                                       clusterVersion,
                                  const std::string&                             ts,
                                  Message*                                       msg);
-bool parseClusterSnapshotMessage(const Message& msg, uint64_t* cluster_version, std::vector<ClusterNodeState>* nodes);
+bool ParseClusterSnapshotMessage(const Message& msg, uint64_t* clusterVersion, std::vector<ClusterNodeState>* nodes);
 
 }  // namespace ntrs
 }  // namespace eular

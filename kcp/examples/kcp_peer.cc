@@ -388,7 +388,7 @@ int main(int argc, char** argv)
     }
 
     if (positional.size() < 5) {
-        printf("Usage: %s [-v] [--bind-ip ip] [--bind-device ifname] [--auth-token token] <node_host> <node_port> <peer_id> <device_id> <dst_peer|->\n",
+        printf("Usage: %s [-v] [--bind-ip ip] [--bind-device ifname] [--auth-token token] <node_host> <node_port> <peer_id> <device_id> <dst_peer|-> [dst_device|-]\n",
                argv[0]);
         return 1;
     }
@@ -398,8 +398,12 @@ int main(int argc, char** argv)
     std::string peer_id = positional[2];
     std::string device_id = positional[3];
     std::string dst_peer = positional[4];
+    std::string dst_device = positional.size() > 5 ? positional[5] : "";
     if (dst_peer == "-") {
         dst_peer.clear();
+    }
+    if (dst_device == "-") {
+        dst_device.clear();
     }
 
     kcp_log_level(verbose ? LOG_LEVEL_INFO : LOG_LEVEL_WARN);
@@ -465,17 +469,17 @@ int main(int argc, char** argv)
         fprintf(stderr, "request probe endpoints failed: %s\n", wait.result.error_message);
         return 1;
     }
-    std::string stun1 = wait.result.stun1;
-    std::string stun2 = wait.result.stun2;
-    std::string stun1_host;
-    std::string stun2_host;
-    uint16_t    stun1_port = 0;
-    uint16_t    stun2_port = 0;
-    if (!parse_endpoint(stun1, &stun1_host, &stun1_port) || !parse_endpoint(stun2, &stun2_host, &stun2_port)) {
-        fprintf(stderr, "invalid stun endpoints: %s %s\n", stun1.c_str(), stun2.c_str());
+    std::string probe1 = wait.result.probe1;
+    std::string probe2 = wait.result.probe2;
+    std::string probe1_host;
+    std::string probe2_host;
+    uint16_t    probe1_port = 0;
+    uint16_t    probe2_port = 0;
+    if (!parse_endpoint(probe1, &probe1_host, &probe1_port) || !parse_endpoint(probe2, &probe2_host, &probe2_port)) {
+        fprintf(stderr, "invalid probe endpoints: %s %s\n", probe1.c_str(), probe2.c_str());
         return 1;
     }
-    printf("NTRS probe endpoints: stun1=%s stun2=%s\n", stun1.c_str(), stun2.c_str());
+    printf("NTRS probe endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.c_str());
 
     ntrs_detect_nat_options_t detect_options;
     ntrs_detect_nat_options_init(&detect_options);
@@ -483,8 +487,8 @@ int main(int argc, char** argv)
     detect_options.verbose = verbose;
     memset(&wait, 0, sizeof(wait));
     wait.base = g_base;
-    if (!ntrs_async_detect_nat(client, &request_id, udp_sock, stun1_host.c_str(), stun1_port, stun2_host.c_str(),
-                               stun2_port, control_fd, session_token.c_str(), &detect_options, async_cb, &wait) ||
+    if (!ntrs_async_detect_nat(client, &request_id, udp_sock, probe1_host.c_str(), probe1_port, probe2_host.c_str(),
+                               probe2_port, control_fd, session_token.c_str(), &detect_options, async_cb, &wait) ||
         !wait_async(g_base, &wait, 10) || !wait.result.success) {
         fprintf(stderr, "detect NAT failed: %s\n", wait.result.error_message);
         return 1;
@@ -533,8 +537,8 @@ int main(int argc, char** argv)
     } else {
         memset(&wait, 0, sizeof(wait));
         wait.base = g_base;
-        if (!ntrs_async_create_session(client, &request_id, control_fd, peer_id.c_str(), dst_peer.c_str(),
-                                       session_token.c_str(), async_cb, &wait) ||
+        if (!ntrs_async_create_session(client, &request_id, control_fd, peer_id.c_str(), device_id.c_str(),
+                                       dst_peer.c_str(), dst_device.c_str(), session_token.c_str(), async_cb, &wait) ||
             !wait_async(g_base, &wait, 10) || !wait.result.success) {
             fprintf(stderr, "create session failed: %s\n", wait.result.error_message);
             return 1;

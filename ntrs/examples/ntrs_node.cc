@@ -32,7 +32,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 
-static void node_verbose_log(bool verbose, const char* fmt, ...)
+static void NodeVerboseLog(bool verbose, const char* fmt, ...)
 {
     va_list args;
 
@@ -50,7 +50,7 @@ static void node_verbose_log(bool verbose, const char* fmt, ...)
  * @param controls 控制节点端点列表。
  * @return std::string 逗号分隔后的端点文本；若为空则返回 "-"。
  */
-static std::string join_control_endpoints(const std::vector<std::string>& controls)
+static std::string JoinControlEndpoints(const std::vector<std::string>& controls)
 {
     std::string text;
 
@@ -94,7 +94,7 @@ struct PeerSession {
  * @param device_id 具体设备。
  * @return std::string 组合键。
  */
-static std::string make_peer_key(const std::string& peer_id, const std::string& device_id)
+static std::string MakePeerKey(const std::string& peer_id, const std::string& device_id)
 {
     return peer_id + "\n" + device_id;
 }
@@ -106,7 +106,7 @@ static std::string make_peer_key(const std::string& peer_id, const std::string& 
  * @param device_id 具体设备。
  * @return std::string 展示文本。
  */
-static std::string format_peer_device(const std::string& peer_id, const std::string& device_id)
+static std::string FormatPeerDevice(const std::string& peer_id, const std::string& device_id)
 {
     if (device_id.empty()) {
         return peer_id + "/-";
@@ -125,7 +125,7 @@ struct SessionStrategyPlan {
     uint32_t dst_warmup_interval_ms;
 };
 
-static uint32_t nat_strictness_score(ntrs_nat_class_t nat_class)
+static uint32_t NatStrictnessScore(ntrs_nat_class_t nat_class)
 {
     switch (nat_class) {
     case NTRS_NAT_CLASS_OPEN_PUBLIC:
@@ -143,11 +143,11 @@ static uint32_t nat_strictness_score(ntrs_nat_class_t nat_class)
     }
 }
 
-static SessionStrategyPlan build_session_strategy(const PeerSession& src, const PeerSession& dst)
+static SessionStrategyPlan BuildSessionStrategy(const PeerSession& src, const PeerSession& dst)
 {
     SessionStrategyPlan plan;
-    uint32_t            src_score = nat_strictness_score(src.nat_class);
-    uint32_t            dst_score = nat_strictness_score(dst.nat_class);
+    uint32_t            src_score = NatStrictnessScore(src.nat_class);
+    uint32_t            dst_score = NatStrictnessScore(dst.nat_class);
 
     memset(&plan, 0, sizeof(plan));
     plan.src_punch_order = (uint8_t)eular::ntrs::PunchOrderCode::SIMULTANEOUS;
@@ -270,9 +270,9 @@ struct FederationRequest {
 static const int             kLeaseSec = 30;
 static volatile sig_atomic_t g_stop = 0;
 
-static void on_process_signal(int) { g_stop = 1; }
+static void OnProcessSignal(int) { g_stop = 1; }
 
-static bool parse_endpoint(const std::string& input, std::string* host, uint16_t* port)
+static bool ParseEndpoint(const std::string& input, std::string* host, uint16_t* port)
 {
     size_t      pos = std::string::npos;
     std::string host_part;
@@ -311,17 +311,17 @@ static bool parse_endpoint(const std::string& input, std::string* host, uint16_t
     return !host->empty();
 }
 
-static uint16_t endpoint_port(const std::string& endpoint)
+static uint16_t EndpointPort(const std::string& endpoint)
 {
     std::string host;
     uint16_t    port = 0;
-    if (!parse_endpoint(endpoint, &host, &port)) {
+    if (!ParseEndpoint(endpoint, &host, &port)) {
         return 0;
     }
     return port;
 }
 
-static std::string format_endpoint(const std::string& host, uint16_t port)
+static std::string FormatEndpoint(const std::string& host, uint16_t port)
 {
     if (host.find(':') != std::string::npos && (host.empty() || host[0] != '[')) {
         return "[" + host + "]:" + std::to_string(port);
@@ -334,7 +334,7 @@ static std::string format_endpoint(const std::string& host, uint16_t port)
  *
  * @param program 当前程序名。
  */
-static void print_usage(const char* program)
+static void PrintUsage(const char* program)
 {
     printf(
         "Usage:\n"
@@ -350,8 +350,8 @@ static void print_usage(const char* program)
         "  --probe-port UINT          Primary probe UDP port [default: 33478]\n"
         "  --probe-alt-port UINT      Alternate probe UDP port [default: 33479]\n"
         "  --region TEXT              Region label [default: default]\n"
-        "  --mqtt-username TEXT       MQTT username\n"
-        "  --mqtt-password TEXT       MQTT password\n"
+        "  --Mqtt-username TEXT       MQTT username\n"
+        "  --Mqtt-password TEXT       MQTT password\n"
         "  --auth-secret TEXT         Federation auth secret [default: ntrs-dev-secret]\n"
         "  --verbose, -v              Enable verbose logs\n"
         "  --help, -h                 Show this help message\n"
@@ -381,7 +381,7 @@ static void print_usage(const char* program)
  * @return true 参数名字匹配。
  * @return false 参数名字不匹配。
  */
-static bool match_long_option(const std::string& arg, const char* name, const char* next_value, bool* consumed_next,
+static bool MatchLongOption(const std::string& arg, const char* name, const char* next_value, bool* consumed_next,
                               std::string* out_value)
 {
     const size_t name_len = strlen(name);
@@ -410,12 +410,12 @@ static bool match_long_option(const std::string& arg, const char* name, const ch
  *
  * @param option 选项名字。
  */
-static void print_missing_option_value(const char* option)
+static void PrintMissingOptionValue(const char* option)
 {
     printf("missing value for %s\n", option);
 }
 
-static std::string now_iso8601()
+static std::string NowIso8601()
 {
     time_t    t = time(NULL);
     struct tm tmv;
@@ -425,70 +425,70 @@ static std::string now_iso8601()
     return std::string(buf);
 }
 
-static std::string topic_for(const std::string& node_id, const std::string& suffix)
+static std::string TopicFor(const std::string& node_id, const std::string& suffix)
 {
     return std::string("ntrs/node/") + node_id + "/" + suffix;
 }
 
-static const char* msg_str_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag)
+static const char* MsgStrTag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag)
 {
-    const char* value = eular::ntrs::messageGetStringByTag(&msg, tag);
+    const char* value = eular::ntrs::MessageGetStringByTag(&msg, tag);
     return value == NULL ? "" : value;
 }
 
-static uint16_t msg_u16_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, uint16_t default_value = 0)
+static uint16_t MsgU16Tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, uint16_t default_value = 0)
 {
     uint16_t value = default_value;
-    if (eular::ntrs::messageGetU16ByTag(&msg, tag, &value)) {
+    if (eular::ntrs::MessageGetU16ByTag(&msg, tag, &value)) {
         return value;
     }
     return default_value;
 }
 
-static uint32_t msg_u32_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, uint32_t default_value = 0)
+static uint32_t MsgU32Tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, uint32_t default_value = 0)
 {
     uint32_t value = default_value;
-    if (eular::ntrs::messageGetU32ByTag(&msg, tag, &value)) {
+    if (eular::ntrs::MessageGetU32ByTag(&msg, tag, &value)) {
         return value;
     }
     return default_value;
 }
 
-static bool msg_bool_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, bool default_value = false)
+static bool MsgBoolTag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, bool default_value = false)
 {
     bool value = default_value;
-    if (eular::ntrs::messageGetBoolByTag(&msg, tag, &value)) {
+    if (eular::ntrs::MessageGetBoolByTag(&msg, tag, &value)) {
         return value;
     }
     return default_value;
 }
 
-static int32_t msg_i32_tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, int32_t default_value = 0)
+static int32_t MsgI32Tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag, int32_t default_value = 0)
 {
     int32_t value = default_value;
-    if (eular::ntrs::messageGetI32ByTag(&msg, tag, &value)) {
+    if (eular::ntrs::MessageGetI32ByTag(&msg, tag, &value)) {
         return value;
     }
     return default_value;
 }
 
-static bool mqtt_publish_message(eular::orion::MqttClient* mqtt, const std::string& topic,
+static bool MqttPublishMessage(eular::orion::MqttClient* Mqtt, const std::string& topic,
                                  const eular::ntrs::Message& msg, bool retain)
 {
     uint8_t buf[8192];
     size_t  len = 0;
-    if (mqtt == NULL || eular::ntrs::encodeMessage(msg, buf, sizeof(buf), &len) != 0) {
-        printf("mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
+    if (Mqtt == NULL || eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
+        printf("Mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
         return false;
     }
-    if (!mqtt->publish(topic, buf, len, 1, retain)) {
-        printf("mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
+    if (!Mqtt->publish(topic, buf, len, 1, retain)) {
+        printf("Mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
         return false;
     }
     return true;
 }
 
-static bool resolve_ipv4_literal(const std::string& host, std::string* ip_out)
+static bool ResolveIpv4Literal(const std::string& host, std::string* ip_out)
 {
     struct addrinfo  hints;
     struct addrinfo* result = NULL;
@@ -518,7 +518,7 @@ static bool resolve_ipv4_literal(const std::string& host, std::string* ip_out)
     return !ip_out->empty();
 }
 
-static bool resolve_probe_other_address(const std::vector<std::string>& probe_controls, uint16_t probe_port,
+static bool ResolveProbeOtherAddress(const std::vector<std::string>& probe_controls, uint16_t probe_port,
                                         std::string* other_ip, uint16_t* other_port)
 {
     size_t i = 0;
@@ -532,10 +532,10 @@ static bool resolve_probe_other_address(const std::vector<std::string>& probe_co
         uint16_t    port = 0;
         std::string resolved_ip;
 
-        if (!parse_endpoint(probe_controls[i], &host, &port)) {
+        if (!ParseEndpoint(probe_controls[i], &host, &port)) {
             continue;
         }
-        if (!resolve_ipv4_literal(host, &resolved_ip)) {
+        if (!ResolveIpv4Literal(host, &resolved_ip)) {
             resolved_ip = host;
         }
         if (!resolved_ip.empty()) {
@@ -548,7 +548,7 @@ static bool resolve_probe_other_address(const std::vector<std::string>& probe_co
     return false;
 }
 
-static void publish_presence(eular::orion::MqttClient* mqtt, const std::string& node_id, const std::string& boot_id,
+static void PublishPresence(eular::orion::MqttClient* Mqtt, const std::string& node_id, const std::string& boot_id,
                              const std::string& status, const std::string& reason, uint64_t request_id)
 {
     eular::ntrs::Message msg;
@@ -568,17 +568,17 @@ static void publish_presence(eular::orion::MqttClient* mqtt, const std::string& 
     } else if (reason == "client_exit") {
         reason_code = eular::ntrs::ReasonCode::CLIENT_EXIT;
     }
-    eular::ntrs::messageInit(&msg, eular::ntrs::MessageType::NODE_PRESENCE, (uint32_t)request_id);
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-    eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
-    eular::ntrs::messageAddU8ByTag(&msg, eular::ntrs::FieldTag::REASON, (uint8_t)reason_code);
-    const std::string ts = now_iso8601();
-    eular::ntrs::messageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
-    mqtt_publish_message(mqtt, topic_for(node_id, "presence"), msg, true);
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_PRESENCE, (uint32_t)request_id);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::REASON, (uint8_t)reason_code);
+    const std::string ts = NowIso8601();
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    MqttPublishMessage(Mqtt, TopicFor(node_id, "presence"), msg, true);
 }
 
-static void append_unique(std::vector<std::string>* out, const std::string& value)
+static void AppendUnique(std::vector<std::string>* out, const std::string& value)
 {
     if (value.empty()) {
         return;
@@ -599,14 +599,14 @@ static void append_unique(std::vector<std::string>* out, const std::string& valu
  * @param device_id 设备标识。
  * @return std::map<std::string, PeerSession>::iterator 查找到的设备。
  */
-static std::map<std::string, PeerSession>::iterator find_peer_exact(std::map<std::string, PeerSession>* peers,
+static std::map<std::string, PeerSession>::iterator FindPeerExact(std::map<std::string, PeerSession>* peers,
                                                                     const std::string& peer_id,
                                                                     const std::string& device_id)
 {
     if (peers == NULL) {
         return std::map<std::string, PeerSession>::iterator();
     }
-    return peers->find(make_peer_key(peer_id, device_id));
+    return peers->find(MakePeerKey(peer_id, device_id));
 }
 
 /**
@@ -620,7 +620,7 @@ static std::map<std::string, PeerSession>::iterator find_peer_exact(std::map<std
  * @param fd 当前控制连接。
  * @return std::map<std::string, PeerSession>::iterator 查找到的设备。
  */
-static std::map<std::string, PeerSession>::iterator find_peer_by_fd_and_peer_id(
+static std::map<std::string, PeerSession>::iterator FindPeerByFdAndPeerId(
     std::map<std::string, PeerSession>* peers, const std::string& peer_id, int fd)
 {
     if (peers == NULL) {
@@ -644,7 +644,7 @@ static std::map<std::string, PeerSession>::iterator find_peer_by_fd_and_peer_id(
  * @param ambiguous 输出是否存在歧义。
  * @return std::map<std::string, PeerSession>::iterator 唯一设备或 `end()`。
  */
-static std::map<std::string, PeerSession>::iterator find_unique_peer_by_peer_id(
+static std::map<std::string, PeerSession>::iterator FindUniquePeerByPeerId(
     std::map<std::string, PeerSession>* peers, const std::string& peer_id, bool* ambiguous)
 {
     std::map<std::string, PeerSession>::iterator found;
@@ -675,22 +675,22 @@ static std::map<std::string, PeerSession>::iterator find_unique_peer_by_peer_id(
     return has_found ? found : peers->end();
 }
 
-static std::vector<std::string> build_probe_controls(const std::string& p1, const std::string& p2,
+static std::vector<std::string> BuildProbeControls(const std::string& p1, const std::string& p2,
                                                      const std::string& b1, const std::string& fallback)
 {
     std::vector<std::string> out;
-    append_unique(&out, p1);
-    append_unique(&out, p2);
-    append_unique(&out, b1);
-    append_unique(&out, fallback);
+    AppendUnique(&out, p1);
+    AppendUnique(&out, p2);
+    AppendUnique(&out, b1);
+    AppendUnique(&out, fallback);
     return out;
 }
 
-static void erase_peer_for_fd(std::map<std::string, PeerSession>* peers, int fd)
+static void ErasePeerForFd(std::map<std::string, PeerSession>* peers, int fd)
 {
     for (std::map<std::string, PeerSession>::iterator it = peers->begin(); it != peers->end();) {
         if (it->second.fd == fd) {
-            printf("peer offline: %s\n", format_peer_device(it->second.peer_id, it->second.device_id).c_str());
+            printf("peer offline: %s\n", FormatPeerDevice(it->second.peer_id, it->second.device_id).c_str());
             std::map<std::string, PeerSession>::iterator to_erase = it++;
             peers->erase(to_erase);
         } else {
@@ -699,12 +699,12 @@ static void erase_peer_for_fd(std::map<std::string, PeerSession>* peers, int fd)
     }
 }
 
-static void sweep_expired_peers(std::map<std::string, PeerSession>* peers)
+static void SweepExpiredPeers(std::map<std::string, PeerSession>* peers)
 {
     time_t now = time(NULL);
     for (std::map<std::string, PeerSession>::iterator it = peers->begin(); it != peers->end();) {
         if (it->second.expire_at <= now) {
-            printf("peer lease expired: %s\n", format_peer_device(it->second.peer_id, it->second.device_id).c_str());
+            printf("peer lease expired: %s\n", FormatPeerDevice(it->second.peer_id, it->second.device_id).c_str());
             std::map<std::string, PeerSession>::iterator to_erase = it++;
             peers->erase(to_erase);
         } else {
@@ -713,7 +713,7 @@ static void sweep_expired_peers(std::map<std::string, PeerSession>* peers)
     }
 }
 
-static bool send_all(int fd, const void* buf, size_t len)
+static bool SendAll(int fd, const void* buf, size_t len)
 {
     const uint8_t* p = static_cast<const uint8_t*>(buf);
     size_t         left = len;
@@ -728,7 +728,7 @@ static bool send_all(int fd, const void* buf, size_t len)
     return true;
 }
 
-static bool set_nonblocking(int fd)
+static bool SetNonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
@@ -737,17 +737,17 @@ static bool set_nonblocking(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-static bool send_message(int fd, const eular::ntrs::Message& msg)
+static bool SendMessage(int fd, const eular::ntrs::Message& msg)
 {
     uint8_t buf[8192];
     size_t  len = 0;
-    if (eular::ntrs::encodeMessage(msg, buf, sizeof(buf), &len) != 0) {
+    if (eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
         return false;
     }
-    return send_all(fd, buf, len);
+    return SendAll(fd, buf, len);
 }
 
-static bool drain_control_messages(int fd, ControlClientRxState* state, std::deque<eular::ntrs::Message>* messages,
+static bool DrainControlMessages(int fd, ControlClientRxState* state, std::deque<eular::ntrs::Message>* messages,
                                    bool* peer_closed)
 {
     uint8_t chunk[2048];
@@ -780,7 +780,7 @@ static bool drain_control_messages(int fd, ControlClientRxState* state, std::deq
     while (state->buffer.size() >= eular::ntrs::FRAME_HDR_SIZE) {
         uint32_t frame_size = 0;
 
-        if (!eular::ntrs::frameSizeFromHeader(state->buffer.data(), eular::ntrs::FRAME_HDR_SIZE, &frame_size) ||
+        if (!eular::ntrs::FrameSizeFromHeader(state->buffer.data(), eular::ntrs::FRAME_HDR_SIZE, &frame_size) ||
             frame_size < eular::ntrs::FRAME_HDR_SIZE || frame_size > 8192u) {
             *peer_closed = true;
             return false;
@@ -789,7 +789,7 @@ static bool drain_control_messages(int fd, ControlClientRxState* state, std::deq
             break;
         }
         messages->emplace_back();
-        if (!eular::ntrs::decodeMessage(state->buffer.data(), frame_size, &messages->back())) {
+        if (!eular::ntrs::DecodeMessage(state->buffer.data(), frame_size, &messages->back())) {
             messages->pop_back();
             *peer_closed = true;
             return false;
@@ -806,9 +806,9 @@ static bool drain_control_messages(int fd, ControlClientRxState* state, std::deq
  * @param self_probe_endpoint 节点对外公布的主探测端点。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int create_probe_socket(const std::string& self_probe_endpoint)
+static int CreateProbeSocket(const std::string& self_probe_endpoint)
 {
-    uint16_t port = endpoint_port(self_probe_endpoint);
+    uint16_t port = EndpointPort(self_probe_endpoint);
     if (port == 0) {
         return -1;
     }
@@ -841,7 +841,7 @@ static int create_probe_socket(const std::string& self_probe_endpoint)
  * @param port 备用探测端口号。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int create_probe_socket_with_port(uint16_t port)
+static int CreateProbeSocketWithPort(uint16_t port)
 {
     if (port == 0) {
         return -1;
@@ -869,7 +869,7 @@ static int create_probe_socket_with_port(uint16_t port)
     return fd;
 }
 
-static bool send_udp_filter_probe(int udp_fd, const std::string& target_ip, uint16_t target_port,
+static bool SendUdpFilterProbe(int udp_fd, const std::string& target_ip, uint16_t target_port,
                                   const std::string& token, const std::string& tag)
 {
     static const int kFilterProbeBurstCount = 3;
@@ -896,7 +896,7 @@ static bool send_udp_filter_probe(int udp_fd, const std::string& target_ip, uint
     return true;
 }
 
-static bool peer_ipv4_string(int fd, std::string* ip_out)
+static bool PeerIpv4String(int fd, std::string* ip_out)
 {
     struct sockaddr_storage addr;
     socklen_t               addr_len = sizeof(addr);
@@ -930,7 +930,7 @@ static bool peer_ipv4_string(int fd, std::string* ip_out)
     return !ip_out->empty();
 }
 
-static void init_federation_result(FederationRequest* request)
+static void InitFederationResult(FederationRequest* request)
 {
     request->result.type = request->job.type;
     request->result.fd = request->job.fd;
@@ -953,7 +953,7 @@ static void init_federation_result(FederationRequest* request)
  * @return true 为合法的私有探测请求。
  * @return false 不是合法的私有探测请求。
  */
-static bool parse_binary_probe_request(const uint8_t* buffer, size_t len, ntrs_binary_frame_type_t* frame_type,
+static bool ParseBinaryProbeRequest(const uint8_t* buffer, size_t len, ntrs_binary_frame_type_t* frame_type,
                                        ntrs_binary_phase_t* phase, uint8_t* token, uint16_t* token_len)
 {
     ntrs_binary_frame_view_t frame_view;
@@ -988,7 +988,7 @@ static bool parse_binary_probe_request(const uint8_t* buffer, size_t len, ntrs_b
  * @return true 转换成功。
  * @return false 参数非法或地址文本无效。
  */
-static bool make_ipv4_sockaddr(const std::string& ip, uint16_t port, struct sockaddr_in* out)
+static bool MakeIpv4Sockaddr(const std::string& ip, uint16_t port, struct sockaddr_in* out)
 {
     if (out == NULL || ip.empty() || port == 0) {
         return false;
@@ -1016,7 +1016,7 @@ static bool make_ipv4_sockaddr(const std::string& ip, uint16_t port, struct sock
  * @return true 构造成功。
  * @return false 构造失败。
  */
-static bool build_binary_probe_response(ntrs_binary_frame_type_t frame_type, ntrs_binary_phase_t phase,
+static bool BuildBinaryProbeResponse(ntrs_binary_frame_type_t frame_type, ntrs_binary_phase_t phase,
                                         const uint8_t* token, uint16_t token_len,
                                         const struct sockaddr_in* mapped_addr,
                                         const std::string& response_origin_ip, uint16_t response_origin_port,
@@ -1042,7 +1042,7 @@ static bool build_binary_probe_response(ntrs_binary_frame_type_t frame_type, ntr
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_MAPPED_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(mapped_addr),
                                             sizeof(*mapped_addr)) ||
-        !make_ipv4_sockaddr(response_origin_ip, response_origin_port, &origin_addr) ||
+        !MakeIpv4Sockaddr(response_origin_ip, response_origin_port, &origin_addr) ||
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_ORIGIN_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(&origin_addr),
                                             sizeof(origin_addr))) {
@@ -1050,7 +1050,7 @@ static bool build_binary_probe_response(ntrs_binary_frame_type_t frame_type, ntr
     }
 
     has_other = !other_address_ip.empty() && other_address_port != 0 &&
-                make_ipv4_sockaddr(other_address_ip, other_address_port, &other_addr);
+                MakeIpv4Sockaddr(other_address_ip, other_address_port, &other_addr);
     if (has_other &&
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_OTHER_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(&other_addr),
@@ -1079,7 +1079,7 @@ static bool build_binary_probe_response(ntrs_binary_frame_type_t frame_type, ntr
  * @return true 发送成功。
  * @return false 发送失败。
  */
-static bool send_binary_probe_response(int udp_fd, const struct sockaddr_in* target_addr,
+static bool SendBinaryProbeResponse(int udp_fd, const struct sockaddr_in* target_addr,
                                        ntrs_binary_frame_type_t frame_type, ntrs_binary_phase_t phase,
                                        const uint8_t* token, uint16_t token_len, const struct sockaddr_in* mapped_addr,
                                        const std::string& response_origin_ip, uint16_t response_origin_port,
@@ -1090,7 +1090,7 @@ static bool send_binary_probe_response(int udp_fd, const struct sockaddr_in* tar
     if (udp_fd < 0 || target_addr == NULL || mapped_addr == NULL) {
         return false;
     }
-    if (!build_binary_probe_response(frame_type, phase, token, token_len, mapped_addr, response_origin_ip,
+    if (!BuildBinaryProbeResponse(frame_type, phase, token, token_len, mapped_addr, response_origin_ip,
                                      response_origin_port, other_address_ip, other_address_port, &rsp)) {
         return false;
     }
@@ -1099,25 +1099,25 @@ static bool send_binary_probe_response(int udp_fd, const struct sockaddr_in* tar
                   sizeof(*target_addr)) > 0;
 }
 
-static std::string endpoint_text(const struct sockaddr_in& addr)
+static std::string EndpointText(const struct sockaddr_in& addr)
 {
     char ip[INET_ADDRSTRLEN] = {0};
     inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
     return std::string(ip) + ":" + std::to_string((unsigned)ntohs(addr.sin_port));
 }
 
-static bool encode_tx_message(const eular::ntrs::Message& msg, std::vector<uint8_t>* out)
+static bool EncodeTxMessage(const eular::ntrs::Message& msg, std::vector<uint8_t>* out)
 {
     uint8_t buf[8192];
     size_t  len = 0;
-    if (out == NULL || eular::ntrs::encodeMessage(msg, buf, sizeof(buf), &len) != 0) {
+    if (out == NULL || eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
         return false;
     }
     out->assign(buf, buf + len);
     return true;
 }
 
-static void federation_dns_cb(int result, struct evutil_addrinfo* res, void* arg)
+static void FederationDnsCb(int result, struct evutil_addrinfo* res, void* arg)
 {
     FederationRequest* request = static_cast<FederationRequest*>(arg);
     if (request == NULL) {
@@ -1139,7 +1139,7 @@ static void federation_dns_cb(int result, struct evutil_addrinfo* res, void* arg
     request->state = FederationState::CONNECTING;
 }
 
-static bool start_federation_attempt(FederationRequest* request, struct evdns_base* dns_base)
+static bool StartFederationAttempt(FederationRequest* request, struct evdns_base* dns_base)
 {
     while (request != NULL && request->control_index < request->job.controls.size()) {
         if (request->resolved_addrs == NULL) {
@@ -1148,7 +1148,7 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
             char                   port_text[16];
             struct evutil_addrinfo hints;
 
-            if (!parse_endpoint(request->job.controls[request->control_index], &host, &port)) {
+            if (!ParseEndpoint(request->job.controls[request->control_index], &host, &port)) {
                 request->control_index++;
                 continue;
             }
@@ -1157,7 +1157,7 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
             hints.ai_socktype = SOCK_STREAM;
             hints.ai_family = AF_UNSPEC;
             snprintf(port_text, sizeof(port_text), "%u", (unsigned)port);
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation resolve start req=%u type=%d control=%s\n",
                              request->job.request_id,
                              (int)request->job.type,
@@ -1165,10 +1165,10 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
             request->state = FederationState::RESOLVING;
             request->deadline = time(NULL) + 3;
             request->dns_request =
-                evdns_getaddrinfo(dns_base, host.c_str(), port_text, &hints, federation_dns_cb, request);
+                evdns_getaddrinfo(dns_base, host.c_str(), port_text, &hints, FederationDnsCb, request);
             if (request->state == FederationState::RESOLVING && request->dns_request == NULL &&
                 request->resolved_addrs == NULL) {
-                node_verbose_log(request->job.verbose,
+                NodeVerboseLog(request->job.verbose,
                                  "federation resolve submit failed req=%u type=%d control=%s\n",
                                  request->job.request_id,
                                  (int)request->job.type,
@@ -1190,7 +1190,7 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
         request->next_addr = request->next_addr->ai_next;
         request->fd = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
         if (request->fd < 0) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation socket failed req=%u type=%d control=%s errno=%d\n",
                              request->job.request_id,
                              (int)request->job.type,
@@ -1198,25 +1198,25 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
                              errno);
             continue;
         }
-        set_nonblocking(request->fd);
+        SetNonblocking(request->fd);
 
         int rc = connect(request->fd, addr->ai_addr, addr->ai_addrlen);
         if (rc == 0) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation connect immediate req=%u type=%d control=%s\n",
                              request->job.request_id,
                              (int)request->job.type,
                              request->job.controls[request->control_index].c_str());
             request->state = FederationState::SENDING_AUTH;
         } else if (errno == EINPROGRESS) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation connect pending req=%u type=%d control=%s\n",
                              request->job.request_id,
                              (int)request->job.type,
                              request->job.controls[request->control_index].c_str());
             request->state = FederationState::CONNECTING;
         } else {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation connect failed req=%u type=%d control=%s errno=%d\n",
                              request->job.request_id,
                              (int)request->job.type,
@@ -1238,72 +1238,72 @@ static bool start_federation_attempt(FederationRequest* request, struct evdns_ba
     return false;
 }
 
-static bool prepare_federation_auth(FederationRequest* request)
+static bool PrepareFederationAuth(FederationRequest* request)
 {
     eular::ntrs::Message req;
-    eular::ntrs::messageInit(&req, eular::ntrs::MessageType::AUTH_REQ, 1);
-    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID, request->job.federation_peer_id.c_str());
-    eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->job.auth_secret.c_str());
-    node_verbose_log(request->job.verbose,
+    eular::ntrs::MessageInit(&req, eular::ntrs::MessageType::AUTH_REQ, 1);
+    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID, request->job.federation_peer_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->job.auth_secret.c_str());
+    NodeVerboseLog(request->job.verbose,
                      "federation auth send req=%u type=%d control=%s peer=%s\n",
                      request->job.request_id,
                      (int)request->job.type,
                      request->job.controls[request->control_index].c_str(),
                      request->job.federation_peer_id.c_str());
     request->tx_offset = 0;
-    return encode_tx_message(req, &request->tx_buffer);
+    return EncodeTxMessage(req, &request->tx_buffer);
 }
 
-static bool prepare_federation_request(FederationRequest* request)
+static bool PrepareFederationRequest(FederationRequest* request)
 {
     eular::ntrs::Message req;
     if (request->job.type == AsyncFederationJobType::FETCH_PROBE_ENDPOINT) {
-        eular::ntrs::messageInit(&req, eular::ntrs::MessageType::SERVER_INFO_REQ, 2);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::QUERY, "probe_endpoint");
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->session_token.c_str());
-        node_verbose_log(request->job.verbose,
+        eular::ntrs::MessageInit(&req, eular::ntrs::MessageType::SERVER_INFO_REQ, 2);
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::QUERY, "probe_endpoint");
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->session_token.c_str());
+        NodeVerboseLog(request->job.verbose,
                          "federation request send req=%u type=%d control=%s message=SERVER_INFO_REQ\n",
                          request->job.request_id,
                          (int)request->job.type,
                          request->job.controls[request->control_index].c_str());
     } else if (request->job.type == AsyncFederationJobType::SEND_PROBE) {
-        eular::ntrs::messageInit(&req, eular::ntrs::MessageType::SERVER_SEND_PROBE_REQ, 2);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TARGET_IP, request->job.target_ip.c_str());
-        eular::ntrs::messageAddU16ByTag(&req, eular::ntrs::FieldTag::TARGET_PORT, request->job.target_port);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->job.probe_token.c_str());
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID,
+        eular::ntrs::MessageInit(&req, eular::ntrs::MessageType::SERVER_SEND_PROBE_REQ, 2);
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::TARGET_IP, request->job.target_ip.c_str());
+        eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::TARGET_PORT, request->job.target_port);
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::TOKEN, request->job.probe_token.c_str());
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::PEER_ID,
                                            request->job.federation_peer_id.c_str());
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_PEER_ID,
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::SRC_PEER_ID,
                                            request->job.owner_peer_id.c_str());
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::QUERY, request->job.probe_auth.c_str());
-        eular::ntrs::messageAddU32ByTag(&req, eular::ntrs::FieldTag::EXPIRE_AT,
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::QUERY, request->job.probe_auth.c_str());
+        eular::ntrs::MessageAddU32ByTag(&req, eular::ntrs::FieldTag::EXPIRE_AT,
                                         (uint32_t)request->job.probe_expire_at);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SESSION_ID, request->session_token.c_str());
-        node_verbose_log(request->job.verbose,
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::SESSION_ID, request->session_token.c_str());
+        NodeVerboseLog(request->job.verbose,
                          "federation request send req=%u type=%d control=%s message=SERVER_SEND_PROBE_REQ\n",
                          request->job.request_id,
                          (int)request->job.type,
                          request->job.controls[request->control_index].c_str());
     } else {
-        eular::ntrs::messageInit(&req, eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_REQ, 2);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::TARGET_IP, request->job.target_ip.c_str());
-        eular::ntrs::messageAddU16ByTag(&req, eular::ntrs::FieldTag::TARGET_PORT, request->job.target_port);
-        eular::ntrs::messageAddBytesByTag(&req, eular::ntrs::FieldTag::PROBE_TOKEN,
+        eular::ntrs::MessageInit(&req, eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_REQ, 2);
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::TARGET_IP, request->job.target_ip.c_str());
+        eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::TARGET_PORT, request->job.target_port);
+        eular::ntrs::MessageAddBytesByTag(&req, eular::ntrs::FieldTag::PROBE_TOKEN,
                                           request->job.probe_token_bytes.data(),
                                           (uint16_t)request->job.probe_token_bytes.size());
-        eular::ntrs::messageAddBoolByTag(&req, eular::ntrs::FieldTag::USE_ALT_PORT, request->job.use_alt_port);
-        eular::ntrs::messageAddStringByTag(&req, eular::ntrs::FieldTag::SESSION_ID, request->session_token.c_str());
-        node_verbose_log(request->job.verbose,
+        eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::USE_ALT_PORT, request->job.use_alt_port);
+        eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::SESSION_ID, request->session_token.c_str());
+        NodeVerboseLog(request->job.verbose,
                          "federation request send req=%u type=%d control=%s message=SERVER_PROBE_DELEGATE_REQ\n",
                          request->job.request_id,
                          (int)request->job.type,
                          request->job.controls[request->control_index].c_str());
     }
     request->tx_offset = 0;
-    return encode_tx_message(req, &request->tx_buffer);
+    return EncodeTxMessage(req, &request->tx_buffer);
 }
 
-static bool flush_federation_tx(FederationRequest* request)
+static bool FlushFederationTx(FederationRequest* request)
 {
     while (request->tx_offset < request->tx_buffer.size()) {
         ssize_t n = send(request->fd, request->tx_buffer.data() + request->tx_offset,
@@ -1322,7 +1322,7 @@ static bool flush_federation_tx(FederationRequest* request)
     return true;
 }
 
-static void close_federation_socket(FederationRequest* request)
+static void CloseFederationSocket(FederationRequest* request)
 {
     if (request->fd >= 0) {
         close(request->fd);
@@ -1330,9 +1330,9 @@ static void close_federation_socket(FederationRequest* request)
     }
 }
 
-static void close_federation_attempt(FederationRequest* request)
+static void CloseFederationAttempt(FederationRequest* request)
 {
-    close_federation_socket(request);
+    CloseFederationSocket(request);
     if (request->dns_request != NULL) {
         evdns_getaddrinfo_cancel(request->dns_request);
         request->dns_request = NULL;
@@ -1348,11 +1348,11 @@ static void close_federation_attempt(FederationRequest* request)
     request->session_token.clear();
 }
 
-static bool federation_result_from_response(FederationRequest* request, const eular::ntrs::Message& rsp)
+static bool FederationResultFromResponse(FederationRequest* request, const eular::ntrs::Message& rsp)
 {
     if (request->job.type == AsyncFederationJobType::FETCH_PROBE_ENDPOINT) {
         if (rsp.type != eular::ntrs::MessageType::SERVER_INFO_RSP) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation response mismatch req=%u type=%d control=%s expected=SERVER_INFO_RSP got=%u\n",
                              request->job.request_id,
                              (int)request->job.type,
@@ -1360,16 +1360,16 @@ static bool federation_result_from_response(FederationRequest* request, const eu
                              (unsigned)rsp.type);
             return false;
         }
-        std::string endpoint = msg_str_tag(rsp, eular::ntrs::FieldTag::PROBE_ENDPOINT);
+        std::string endpoint = MsgStrTag(rsp, eular::ntrs::FieldTag::PROBE_ENDPOINT);
         if (endpoint.empty()) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation response empty probe endpoint req=%u type=%d control=%s\n",
                              request->job.request_id,
                              (int)request->job.type,
                              request->job.controls[request->control_index].c_str());
             return false;
         }
-        node_verbose_log(request->job.verbose,
+        NodeVerboseLog(request->job.verbose,
                          "federation response ok req=%u type=%d control=%s probe=%s\n",
                          request->job.request_id,
                          (int)request->job.type,
@@ -1383,10 +1383,10 @@ static bool federation_result_from_response(FederationRequest* request, const eu
 
     if (request->job.type == AsyncFederationJobType::SEND_PROBE_DELEGATE) {
         uint8_t result_code = (uint8_t)eular::ntrs::ResultCode::UNKNOWN;
-        eular::ntrs::messageGetU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT, &result_code);
+        eular::ntrs::MessageGetU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT, &result_code);
         if (rsp.type != eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_RSP ||
             result_code != (uint8_t)eular::ntrs::ResultCode::OK) {
-            node_verbose_log(request->job.verbose,
+            NodeVerboseLog(request->job.verbose,
                              "federation response mismatch req=%u type=%d control=%s expected=SERVER_PROBE_DELEGATE_RSP got=%u result=%u\n",
                              request->job.request_id,
                              (int)request->job.type,
@@ -1401,10 +1401,10 @@ static bool federation_result_from_response(FederationRequest* request, const eu
     }
 
     uint8_t result_code = (uint8_t)eular::ntrs::ResultCode::UNKNOWN;
-    eular::ntrs::messageGetU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT, &result_code);
+    eular::ntrs::MessageGetU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT, &result_code);
     if (rsp.type != eular::ntrs::MessageType::SERVER_SEND_PROBE_RSP ||
         result_code != (uint8_t)eular::ntrs::ResultCode::OK) {
-        node_verbose_log(request->job.verbose,
+        NodeVerboseLog(request->job.verbose,
                          "federation response mismatch req=%u type=%d control=%s expected=SERVER_SEND_PROBE_RSP got=%u result=%u\n",
                          request->job.request_id,
                          (int)request->job.type,
@@ -1419,9 +1419,9 @@ static bool federation_result_from_response(FederationRequest* request, const eu
     return true;
 }
 
-static void fail_federation_attempt(FederationRequest* request, struct evdns_base* dns_base)
+static void FailFederationAttempt(FederationRequest* request, struct evdns_base* dns_base)
 {
-    node_verbose_log(request->job.verbose,
+    NodeVerboseLog(request->job.verbose,
                      "federation attempt failed req=%u type=%d control=%s state=%d next_addr=%s errno=%d\n",
                      request->job.request_id,
                      (int)request->job.type,
@@ -1431,7 +1431,7 @@ static void fail_federation_attempt(FederationRequest* request, struct evdns_bas
                      (int)request->state,
                      request->next_addr == NULL ? "null" : "set",
                      errno);
-    close_federation_socket(request);
+    CloseFederationSocket(request);
     request->tx_buffer.clear();
     request->tx_offset = 0;
     request->rx_state.buffer.clear();
@@ -1443,10 +1443,10 @@ static void fail_federation_attempt(FederationRequest* request, struct evdns_bas
         }
         request->control_index++;
     }
-    start_federation_attempt(request, dns_base);
+    StartFederationAttempt(request, dns_base);
 }
 
-static bool advance_federation_request(FederationRequest* request, bool readable, bool writable,
+static bool AdvanceFederationRequest(FederationRequest* request, bool readable, bool writable,
                                        AsyncFederationResult* completed, struct evdns_base* dns_base)
 {
     if (request == NULL || completed == NULL) {
@@ -1458,10 +1458,10 @@ static bool advance_federation_request(FederationRequest* request, bool readable
             evdns_getaddrinfo_cancel(request->dns_request);
             request->dns_request = NULL;
         }
-        fail_federation_attempt(request, dns_base);
+        FailFederationAttempt(request, dns_base);
     }
     if (request->state == FederationState::CONNECTING && request->fd < 0) {
-        start_federation_attempt(request, dns_base);
+        StartFederationAttempt(request, dns_base);
     }
     if (request->state == FederationState::RESOLVING) {
         return false;
@@ -1475,16 +1475,16 @@ static bool advance_federation_request(FederationRequest* request, bool readable
         int       err = 0;
         socklen_t err_len = sizeof(err);
                 if (getsockopt(request->fd, SOL_SOCKET, SO_ERROR, &err, &err_len) != 0 || err != 0) {
-                    node_verbose_log(request->job.verbose,
+                    NodeVerboseLog(request->job.verbose,
                                      "federation connect completion failed req=%u type=%d control=%s so_error=%d errno=%d\n",
                                      request->job.request_id,
                                      (int)request->job.type,
                                      request->job.controls[request->control_index].c_str(),
                                      err,
                                      errno);
-                    fail_federation_attempt(request, dns_base);
+                    FailFederationAttempt(request, dns_base);
                 } else {
-                    node_verbose_log(request->job.verbose,
+                    NodeVerboseLog(request->job.verbose,
                                      "federation connect ok req=%u type=%d control=%s\n",
                                      request->job.request_id,
                                      (int)request->job.type,
@@ -1494,10 +1494,10 @@ static bool advance_federation_request(FederationRequest* request, bool readable
             }
 
     if (request->state == FederationState::SENDING_AUTH) {
-        if (request->tx_buffer.empty() && !prepare_federation_auth(request)) {
-            fail_federation_attempt(request, dns_base);
-        } else if (writable && !flush_federation_tx(request)) {
-            fail_federation_attempt(request, dns_base);
+        if (request->tx_buffer.empty() && !PrepareFederationAuth(request)) {
+            FailFederationAttempt(request, dns_base);
+        } else if (writable && !FlushFederationTx(request)) {
+            FailFederationAttempt(request, dns_base);
         } else if (request->tx_offset == request->tx_buffer.size()) {
             request->state = FederationState::READING_AUTH;
             request->tx_buffer.clear();
@@ -1509,42 +1509,42 @@ static bool advance_federation_request(FederationRequest* request, bool readable
         readable) {
         std::deque<eular::ntrs::Message> messages;
         bool                              peer_closed = false;
-        if (!drain_control_messages(request->fd, &request->rx_state, &messages, &peer_closed) || peer_closed) {
-            fail_federation_attempt(request, dns_base);
+        if (!DrainControlMessages(request->fd, &request->rx_state, &messages, &peer_closed) || peer_closed) {
+            FailFederationAttempt(request, dns_base);
         } else {
             for (size_t i = 0; i < messages.size(); ++i) {
                 if (request->state == FederationState::READING_AUTH) {
                     if (messages[i].type != eular::ntrs::MessageType::AUTH_RSP ||
-                        msg_str_tag(messages[i], eular::ntrs::FieldTag::TOKEN)[0] == '\0') {
-                        node_verbose_log(request->job.verbose,
+                        MsgStrTag(messages[i], eular::ntrs::FieldTag::TOKEN)[0] == '\0') {
+                        NodeVerboseLog(request->job.verbose,
                                          "federation auth rsp invalid req=%u type=%d control=%s message_type=%u token_empty=%s\n",
                                          request->job.request_id,
                                          (int)request->job.type,
                                          request->job.controls[request->control_index].c_str(),
                                          (unsigned)messages[i].type,
-                                         msg_str_tag(messages[i], eular::ntrs::FieldTag::TOKEN)[0] == '\0' ? "true"
+                                         MsgStrTag(messages[i], eular::ntrs::FieldTag::TOKEN)[0] == '\0' ? "true"
                                                                                                            : "false");
-                        fail_federation_attempt(request, dns_base);
+                        FailFederationAttempt(request, dns_base);
                         break;
                     }
-                    request->session_token = msg_str_tag(messages[i], eular::ntrs::FieldTag::TOKEN);
-                    node_verbose_log(request->job.verbose,
+                    request->session_token = MsgStrTag(messages[i], eular::ntrs::FieldTag::TOKEN);
+                    NodeVerboseLog(request->job.verbose,
                                      "federation auth rsp ok req=%u type=%d control=%s session_token_len=%zu\n",
                                      request->job.request_id,
                                      (int)request->job.type,
                                      request->job.controls[request->control_index].c_str(),
                                      request->session_token.size());
-                    if (!prepare_federation_request(request)) {
-                        fail_federation_attempt(request, dns_base);
+                    if (!PrepareFederationRequest(request)) {
+                        FailFederationAttempt(request, dns_base);
                         break;
                     }
                     request->state = FederationState::SENDING_REQUEST;
-                } else if (federation_result_from_response(request, messages[i])) {
-                    close_federation_attempt(request);
+                } else if (FederationResultFromResponse(request, messages[i])) {
+                    CloseFederationAttempt(request);
                     *completed = request->result;
                     return true;
                 } else {
-                    fail_federation_attempt(request, dns_base);
+                    FailFederationAttempt(request, dns_base);
                     break;
                 }
             }
@@ -1552,8 +1552,8 @@ static bool advance_federation_request(FederationRequest* request, bool readable
     }
 
     if (request->state == FederationState::SENDING_REQUEST) {
-        if (writable && !flush_federation_tx(request)) {
-            fail_federation_attempt(request, dns_base);
+        if (writable && !FlushFederationTx(request)) {
+            FailFederationAttempt(request, dns_base);
         } else if (request->tx_offset == request->tx_buffer.size()) {
             request->state = FederationState::READING_RESPONSE;
             request->tx_buffer.clear();
@@ -1569,14 +1569,14 @@ static bool advance_federation_request(FederationRequest* request, bool readable
     return false;
 }
 
-static bool start_federation_job(const AsyncFederationJob& job, std::list<FederationRequest>* requests,
+static bool StartFederationJob(const AsyncFederationJob& job, std::list<FederationRequest>* requests,
                                  AsyncFederationResult* immediate_result, struct evdns_base* dns_base)
 {
     requests->push_back(FederationRequest());
     FederationRequest* request = &requests->back();
     request->job = job;
-    init_federation_result(request);
-    if (!start_federation_attempt(request, dns_base)) {
+    InitFederationResult(request);
+    if (!StartFederationAttempt(request, dns_base)) {
         if (immediate_result != NULL) {
             *immediate_result = request->result;
         }
@@ -1605,7 +1605,7 @@ static bool start_federation_job(const AsyncFederationJob& job, std::list<Federa
  * @param federation_dns_base 联邦 DNS 解析上下文。
  * @param verbose 是否输出详细日志。
  */
-static void handle_probe_packet(int probe_fd, bool is_alt_socket, int probe_primary_fd, int probe_alt_fd,
+static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primary_fd, int probe_alt_fd,
                                 const std::string& self_probe_ip, uint16_t self_probe_port,
                                 uint16_t probe_alt_bind_port, const std::vector<std::string>& probe_controls,
                                 const std::string& auth_secret, std::list<FederationRequest>* federation_requests,
@@ -1628,17 +1628,27 @@ static void handle_probe_packet(int probe_fd, bool is_alt_socket, int probe_prim
         return;
     }
 
-    if (parse_binary_probe_request(buf, (size_t)n, &binary_frame_type, &binary_phase, binary_token,
+    if (ParseBinaryProbeRequest(buf, (size_t)n, &binary_frame_type, &binary_phase, binary_token,
                                    &binary_token_len)) {
         if (binary_phase == NTRS_BINARY_PHASE_PROBE1 || binary_phase == NTRS_BINARY_PHASE_PROBE2) {
             std::string other_ip;
             uint16_t    other_port = 0;
 
-            if (!resolve_probe_other_address(probe_controls, self_probe_port, &other_ip, &other_port)) {
+            if (!ResolveProbeOtherAddress(probe_controls, self_probe_port, &other_ip, &other_port)) {
                 other_ip = self_probe_ip;
                 other_port = probe_alt_bind_port;
             }
-            if (!send_binary_probe_response(probe_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
+            NodeVerboseLog(verbose,
+                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u\n",
+                             probe_fd,
+                             (unsigned)binary_phase,
+                             EndpointText(peer_addr).c_str(),
+                             EndpointText(peer_addr).c_str(),
+                             self_probe_ip.c_str(),
+                             self_probe_port,
+                             other_ip.c_str(),
+                             other_port);
+            if (!SendBinaryProbeResponse(probe_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
                                             binary_token_len, &peer_addr, self_probe_ip, self_probe_port, other_ip,
                                             other_port)) {
                 printf("binary probe rsp send failed errno=%d(%s)\n", errno, strerror(errno));
@@ -1649,7 +1659,18 @@ static void handle_probe_packet(int probe_fd, bool is_alt_socket, int probe_prim
             if (probe_alt_fd < 0) {
                 return;
             }
-            if (!send_binary_probe_response(probe_alt_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
+            NodeVerboseLog(verbose,
+                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u via_alt_fd=%d\n",
+                             probe_alt_fd,
+                             (unsigned)binary_phase,
+                             EndpointText(peer_addr).c_str(),
+                             EndpointText(peer_addr).c_str(),
+                             self_probe_ip.c_str(),
+                             probe_alt_bind_port,
+                             self_probe_ip.c_str(),
+                             self_probe_port,
+                             probe_alt_fd);
+            if (!SendBinaryProbeResponse(probe_alt_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
                                             binary_token_len, &peer_addr, self_probe_ip, probe_alt_bind_port,
                                             self_probe_ip, self_probe_port)) {
                 printf("binary change-port rsp send failed errno=%d(%s)\n", errno, strerror(errno));
@@ -1670,10 +1691,18 @@ static void handle_probe_packet(int probe_fd, bool is_alt_socket, int probe_prim
             job.same_ip_diff_port = false;
             job.use_alt_port = false;
             job.probe_token_bytes.assign(binary_token, binary_token + binary_token_len);
+            NodeVerboseLog(verbose,
+                             "probe delegate fd=%d phase=%u src=%s target=%s:%u controls=%zu\n",
+                             probe_fd,
+                             (unsigned)binary_phase,
+                             EndpointText(peer_addr).c_str(),
+                             job.target_ip.c_str(),
+                             job.target_port,
+                             job.controls.size());
 
             AsyncFederationResult result;
             if (!probe_controls.empty() && federation_requests != NULL && federation_dns_base != NULL &&
-                !start_federation_job(job, federation_requests, &result, federation_dns_base)) {
+                !StartFederationJob(job, federation_requests, &result, federation_dns_base)) {
                 if (async_results != NULL) {
                     async_results->push_back(result);
                 }
@@ -1682,17 +1711,17 @@ static void handle_probe_packet(int probe_fd, bool is_alt_socket, int probe_prim
         }
     }
 
-    node_verbose_log(verbose, "probe packet dropped fd=%d src=%s reason=invalid_or_unsupported_binary\n", probe_fd,
-                     endpoint_text(peer_addr).c_str());
+    NodeVerboseLog(verbose, "probe packet dropped fd=%d src=%s reason=invalid_or_unsupported_binary\n", probe_fd,
+                     EndpointText(peer_addr).c_str());
 }
 
-static void send_error(int fd, uint64_t req, const char* code, const char* message)
+static void SendError(int fd, uint64_t req, const char* code, const char* message)
 {
     eular::ntrs::Message rsp;
-    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::ERROR_RSP, (uint32_t)req);
-    eular::ntrs::messageAddString(&rsp, "code", code);
-    eular::ntrs::messageAddString(&rsp, "message", message);
-    send_message(fd, rsp);
+    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::ERROR_RSP, (uint32_t)req);
+    eular::ntrs::MessageAddString(&rsp, "code", code);
+    eular::ntrs::MessageAddString(&rsp, "message", message);
+    SendMessage(fd, rsp);
 }
 
 int main(int argc, char** argv)
@@ -1721,44 +1750,44 @@ int main(int argc, char** argv)
             std::string value;
             bool        consumed_next = false;
             if (arg == "--help" || arg == "-h") {
-                print_usage(argv[0]);
+                PrintUsage(argv[0]);
                 return 0;
-            } else if (match_long_option(arg, "--hub", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--hub", next_value, &consumed_next, &value)) {
                 std::string hub_host;
                 uint16_t    hub_port = 0;
                 if (value.empty()) {
-                    print_missing_option_value("--hub");
+                    PrintMissingOptionValue("--hub");
                     return 1;
                 }
-                if (!parse_endpoint(value.c_str(), &hub_host, &hub_port)) {
+                if (!ParseEndpoint(value.c_str(), &hub_host, &hub_port)) {
                     printf("invalid --hub endpoint: %s\n", value.c_str());
                     return 1;
                 }
                 mqtt_broker = hub_host;
                 mqtt_port = hub_port;
-            } else if (match_long_option(arg, "--node-id", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--node-id", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--node-id");
+                    PrintMissingOptionValue("--node-id");
                     return 1;
                 }
                 node_id = value;
-            } else if (match_long_option(arg, "--public-host", next_value, &consumed_next, &value) ||
-                       match_long_option(arg, "--advertise-host", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--public-host", next_value, &consumed_next, &value) ||
+                       MatchLongOption(arg, "--advertise-host", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--public-host");
+                    PrintMissingOptionValue("--public-host");
                     return 1;
                 }
                 public_host = value;
-            } else if (match_long_option(arg, "--control-port", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--control-port", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--control-port");
+                    PrintMissingOptionValue("--control-port");
                     return 1;
                 }
                 port = atoi(value.c_str());
-            } else if (match_long_option(arg, "--probe-port", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--probe-port", next_value, &consumed_next, &value)) {
                 int parsed = value.empty() ? 0 : atoi(value.c_str());
                 if (value.empty()) {
-                    print_missing_option_value("--probe-port");
+                    PrintMissingOptionValue("--probe-port");
                     return 1;
                 }
                 if (parsed <= 0 || parsed > 65535) {
@@ -1766,10 +1795,10 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 probe_bind_port = (uint16_t)parsed;
-            } else if (match_long_option(arg, "--probe-alt-port", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--probe-alt-port", next_value, &consumed_next, &value)) {
                 int parsed = value.empty() ? 0 : atoi(value.c_str());
                 if (value.empty()) {
-                    print_missing_option_value("--probe-alt-port");
+                    PrintMissingOptionValue("--probe-alt-port");
                     return 1;
                 }
                 if (parsed <= 0 || parsed > 65535) {
@@ -1777,27 +1806,27 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 probe_alt_bind_port = (uint16_t)parsed;
-            } else if (match_long_option(arg, "--region", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--region", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--region");
+                    PrintMissingOptionValue("--region");
                     return 1;
                 }
                 region = value;
-            } else if (match_long_option(arg, "--mqtt-username", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--Mqtt-username", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--mqtt-username");
+                    PrintMissingOptionValue("--Mqtt-username");
                     return 1;
                 }
                 mqtt_username = value;
-            } else if (match_long_option(arg, "--mqtt-password", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--Mqtt-password", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--mqtt-password");
+                    PrintMissingOptionValue("--Mqtt-password");
                     return 1;
                 }
                 mqtt_password = value;
-            } else if (match_long_option(arg, "--auth-secret", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--auth-secret", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    print_missing_option_value("--auth-secret");
+                    PrintMissingOptionValue("--auth-secret");
                     return 1;
                 }
                 auth_secret = value;
@@ -1805,7 +1834,7 @@ int main(int argc, char** argv)
                 verbose = true;
             } else {
                 printf("unknown argument: %s\n\n", arg.c_str());
-                print_usage(argv[0]);
+                PrintUsage(argv[0]);
                 return 1;
             }
             if (consumed_next) {
@@ -1814,14 +1843,14 @@ int main(int argc, char** argv)
         }
 
         if (mqtt_broker.empty() || node_id.empty() || public_host.empty()) {
-            print_usage(argv[0]);
+            PrintUsage(argv[0]);
             return 1;
         }
         if (port <= 0 || port > 65535) {
             printf("invalid --control-port: %d\n", port);
             return 1;
         }
-        self_probe_endpoint = format_endpoint(public_host, probe_bind_port);
+        self_probe_endpoint = FormatEndpoint(public_host, probe_bind_port);
     } else {
         if (argc > 1) {
             port = atoi(argv[1]);
@@ -1842,14 +1871,14 @@ int main(int argc, char** argv)
     }
 
     if (self_probe_endpoint.empty()) {
-        print_usage(argv[0]);
+        PrintUsage(argv[0]);
         return 1;
     }
 
-    signal(SIGINT, on_process_signal);
-    signal(SIGTERM, on_process_signal);
+    signal(SIGINT, OnProcessSignal);
+    signal(SIGTERM, OnProcessSignal);
 
-    eular::ntrs::ControlAuthManager auth_manager(auth_secret, kLeaseSec);
+    eular::ntrs::ControlAuthManager AuthManager(auth_secret, kLeaseSec);
 
     bool        use_hub_assignment = (!mqtt_broker.empty() && !node_id.empty());
     std::string boot_id =
@@ -1868,7 +1897,7 @@ int main(int argc, char** argv)
             mqtt_broker, mqtt_port, "ntrs-node-" + node_id + "-" + std::to_string((unsigned long long)getpid()),
             mqtt_username, mqtt_password));
         if (!mqtt_client->attachEventLoop(mqtt_loop.loop())) {
-            printf("hub mode disabled because mqtt attach event loop failed\n");
+            printf("hub mode disabled because Mqtt attach event loop failed\n");
             mqtt_client.reset();
             use_hub_assignment = false;
         }
@@ -1878,21 +1907,21 @@ int main(int argc, char** argv)
         eular::ntrs::Message will;
         uint8_t              will_buf[8192];
         size_t               will_len = 0;
-        const std::string    will_ts = now_iso8601();
-        eular::ntrs::messageInit(&will, eular::ntrs::MessageType::NODE_PRESENCE, 0);
-        eular::ntrs::messageAddStringByTag(&will, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-        eular::ntrs::messageAddStringByTag(&will, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-        eular::ntrs::messageAddU8ByTag(&will, eular::ntrs::FieldTag::STATUS,
+        const std::string    will_ts = NowIso8601();
+        eular::ntrs::MessageInit(&will, eular::ntrs::MessageType::NODE_PRESENCE, 0);
+        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+        eular::ntrs::MessageAddU8ByTag(&will, eular::ntrs::FieldTag::STATUS,
                                        (uint8_t)eular::ntrs::NodeStatusCode::OFFLINE);
-        eular::ntrs::messageAddU8ByTag(&will, eular::ntrs::FieldTag::REASON,
+        eular::ntrs::MessageAddU8ByTag(&will, eular::ntrs::FieldTag::REASON,
                                        (uint8_t)eular::ntrs::ReasonCode::LWT);
-        eular::ntrs::messageAddStringByTag(&will, eular::ntrs::FieldTag::TS, will_ts.c_str());
-        if (eular::ntrs::encodeMessage(will, will_buf, sizeof(will_buf), &will_len) != 0) {
-            printf("hub mode disabled because mqtt will encode failed\n");
+        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::TS, will_ts.c_str());
+        if (eular::ntrs::EncodeMessage(will, will_buf, sizeof(will_buf), &will_len) != 0) {
+            printf("hub mode disabled because Mqtt will encode failed\n");
             mqtt_client.reset();
             use_hub_assignment = false;
         } else {
-            mqtt_client->setWillMessage(topic_for(node_id, "presence"), will_buf, will_len, 1, true);
+            mqtt_client->setWillMessage(TopicFor(node_id, "presence"), will_buf, will_len, 1, true);
         }
     }
 
@@ -1900,50 +1929,50 @@ int main(int argc, char** argv)
     uint16_t    self_probe_port = 0;
     std::string self_probe_ip;
     std::string self_control_endpoint;
-    if (!parse_endpoint(self_probe_endpoint, &self_probe_host, &self_probe_port)) {
+    if (!ParseEndpoint(self_probe_endpoint, &self_probe_host, &self_probe_port)) {
         self_probe_host = "127.0.0.1";
     }
-    if (!resolve_ipv4_literal(self_probe_host, &self_probe_ip)) {
+    if (!ResolveIpv4Literal(self_probe_host, &self_probe_ip)) {
         self_probe_ip = self_probe_host;
     }
-    self_control_endpoint = format_endpoint(self_probe_host, (uint16_t)port);
+    self_control_endpoint = FormatEndpoint(self_probe_host, (uint16_t)port);
     if (use_hub_assignment && mqtt_client) {
         const std::string assignment_topic = "ntrs/hub/node/" + node_id + "/assignment";
         publish_node_registration = [&]() {
             eular::ntrs::Message reg;
-            const std::string    reg_ts = now_iso8601();
-            eular::ntrs::messageInit(&reg, eular::ntrs::MessageType::NODE_REGISTER, 1);
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::REGION, region.c_str());
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::PROBE_ENDPOINT, self_probe_endpoint.c_str());
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::CONTROL_ENDPOINT,
+            const std::string    reg_ts = NowIso8601();
+            eular::ntrs::MessageInit(&reg, eular::ntrs::MessageType::NODE_REGISTER, 1);
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::REGION, region.c_str());
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::PROBE_ENDPOINT, self_probe_endpoint.c_str());
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::CONTROL_ENDPOINT,
                                                self_control_endpoint.c_str());
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
-            eular::ntrs::messageAddU32ByTag(&reg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
-            eular::ntrs::messageAddStringByTag(&reg, eular::ntrs::FieldTag::TS, reg_ts.c_str());
-            node_verbose_log(verbose, "publishing node register node=%s control=%s probe=%s\n", node_id.c_str(),
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
+            eular::ntrs::MessageAddU32ByTag(&reg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
+            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::TS, reg_ts.c_str());
+            NodeVerboseLog(verbose, "publishing node register node=%s control=%s probe=%s\n", node_id.c_str(),
                              self_control_endpoint.c_str(), self_probe_endpoint.c_str());
-            mqtt_publish_message(mqtt_client.get(), topic_for(node_id, "register"), reg, true);
-            publish_presence(mqtt_client.get(), node_id, boot_id, "online", "startup", 2);
+            MqttPublishMessage(mqtt_client.get(), TopicFor(node_id, "register"), reg, true);
+            PublishPresence(mqtt_client.get(), node_id, boot_id, "online", "startup", 2);
         };
 
         mqtt_client->setMessageCallback(
             [&, assignment_topic](const std::string& topic, const uint8_t* payload, size_t payload_len) {
                 eular::ntrs::Message msg;
-                if (!eular::ntrs::decodeMessage(payload, payload_len, &msg)) {
-                    printf("node mqtt decode failed topic=%s len=%zu\n", topic.c_str(), payload_len);
+                if (!eular::ntrs::DecodeMessage(payload, payload_len, &msg)) {
+                    printf("node Mqtt decode failed topic=%s len=%zu\n", topic.c_str(), payload_len);
                     return;
                 }
                 uint8_t event_code = (uint8_t)eular::ntrs::EventCode::UNKNOWN;
-                eular::ntrs::messageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
+                eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
                 if (topic == assignment_topic && msg.type == eular::ntrs::MessageType::HUB_CLUSTER_EVENT &&
                     event_code == (uint8_t)eular::ntrs::EventCode::ASSIGNMENT) {
-                    assignment_p1 = msg_str_tag(msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL);
-                    assignment_p2 = msg_str_tag(msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL);
-                    assignment_b1 = msg_str_tag(msg, eular::ntrs::FieldTag::BACKUP1_CONTROL);
+                    assignment_p1 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL);
+                    assignment_p2 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL);
+                    assignment_b1 = MsgStrTag(msg, eular::ntrs::FieldTag::BACKUP1_CONTROL);
                     assignment_version = msg.request_id;
-                    node_verbose_log(verbose,
+                    NodeVerboseLog(verbose,
                                      "assignment updated version=%u p1=%s p2=%s b1=%s\n",
                                      assignment_version,
                                      assignment_p1.empty() ? "-" : assignment_p1.c_str(),
@@ -1952,10 +1981,10 @@ int main(int argc, char** argv)
                 }
             });
         mqtt_client->setConnectCallback([&, assignment_topic]() {
-            node_verbose_log(verbose, "node mqtt connected node=%s subscribing topic=%s\n", node_id.c_str(),
+            NodeVerboseLog(verbose, "node Mqtt connected node=%s subscribing topic=%s\n", node_id.c_str(),
                              assignment_topic.c_str());
             if (!mqtt_client->subscribe(assignment_topic, 1)) {
-                printf("node mqtt subscribe failed node=%s topic=%s\n", node_id.c_str(), assignment_topic.c_str());
+                printf("node Mqtt subscribe failed node=%s topic=%s\n", node_id.c_str(), assignment_topic.c_str());
             }
             publish_node_registration();
             if (!mqtt_assignment_ready) {
@@ -1963,27 +1992,27 @@ int main(int argc, char** argv)
             }
         });
         mqtt_client->setDisconnectCallback(
-            [&](int rc) { printf("node mqtt disconnected rc=%d node=%s\n", rc, node_id.c_str()); });
+            [&](int rc) { printf("node Mqtt disconnected rc=%d node=%s\n", rc, node_id.c_str()); });
         if (!mqtt_client->connect()) {
-            printf("hub mode disabled because mqtt connect failed: %s:%d\n", mqtt_broker.c_str(), mqtt_port);
+            printf("hub mode disabled because Mqtt connect failed: %s:%d\n", mqtt_broker.c_str(), mqtt_port);
             mqtt_client.reset();
             use_hub_assignment = false;
         }
     }
 
-    int probe_fd = create_probe_socket(self_probe_endpoint);
+    int probe_fd = CreateProbeSocket(self_probe_endpoint);
     if (probe_fd < 0) {
         printf("failed to start built-in probe service on %s\n", self_probe_endpoint.c_str());
         return 1;
     }
 
-    uint16_t probe_port = endpoint_port(self_probe_endpoint);
+    uint16_t probe_port = EndpointPort(self_probe_endpoint);
     int      probe_alt_fd = -1;
     if (probe_alt_bind_port == probe_port && probe_port > 0 && probe_port < 65535) {
         probe_alt_bind_port = (uint16_t)(probe_port + 1);
     }
     if (probe_alt_bind_port > 0) {
-        probe_alt_fd = create_probe_socket_with_port(probe_alt_bind_port);
+        probe_alt_fd = CreateProbeSocketWithPort(probe_alt_bind_port);
     }
 
     int listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -2102,8 +2131,8 @@ int main(int argc, char** argv)
             continue;
         }
 
-        sweep_expired_peers(&peers);
-        auth_manager.sweepExpired((uint64_t)time(NULL));
+        SweepExpiredPeers(&peers);
+        AuthManager.sweepExpired((uint64_t)time(NULL));
         event_base_loop(federation_event_base, EVLOOP_NONBLOCK | EVLOOP_NO_EXIT_ON_EMPTY);
 
         if (use_hub_assignment && mqtt_client) {
@@ -2111,39 +2140,39 @@ int main(int argc, char** argv)
             time_t now = time(NULL);
             if (now - last_hb_ts >= 5) {
                 eular::ntrs::Message hb;
-                const std::string    hb_ts = now_iso8601();
-                eular::ntrs::messageInit(&hb, eular::ntrs::MessageType::NODE_HEARTBEAT, (uint32_t)now);
-                eular::ntrs::messageAddStringByTag(&hb, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-                eular::ntrs::messageAddStringByTag(&hb, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-                eular::ntrs::messageAddU8ByTag(&hb, eular::ntrs::FieldTag::STATUS,
+                const std::string    hb_ts = NowIso8601();
+                eular::ntrs::MessageInit(&hb, eular::ntrs::MessageType::NODE_HEARTBEAT, (uint32_t)now);
+                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+                eular::ntrs::MessageAddU8ByTag(&hb, eular::ntrs::FieldTag::STATUS,
                                                (uint8_t)eular::ntrs::NodeStatusCode::ONLINE);
-                eular::ntrs::messageAddU32ByTag(&hb, eular::ntrs::FieldTag::LOAD, (uint32_t)clients.size());
-                eular::ntrs::messageAddStringByTag(&hb, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
-                eular::ntrs::messageAddU32ByTag(&hb, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
-                eular::ntrs::messageAddU32ByTag(&hb, eular::ntrs::FieldTag::ASSIGNMENT_VERSION, assignment_version);
-                eular::ntrs::messageAddStringByTag(&hb, eular::ntrs::FieldTag::TS, hb_ts.c_str());
-                mqtt_publish_message(mqtt_client.get(), topic_for(node_id, "heartbeat"), hb, false);
+                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::LOAD, (uint32_t)clients.size());
+                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
+                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
+                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::ASSIGNMENT_VERSION, assignment_version);
+                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::TS, hb_ts.c_str());
+                MqttPublishMessage(mqtt_client.get(), TopicFor(node_id, "heartbeat"), hb, false);
                 last_hb_ts = now;
             }
         }
 
         if (FD_ISSET(probe_fd, &rfds)) {
-            handle_probe_packet(
+            HandleProbePacket(
                 probe_fd, false, probe_fd, probe_alt_fd, self_probe_ip, self_probe_port, probe_alt_bind_port,
-                build_probe_controls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
+                BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
                 auth_secret, &federation_requests, &async_results, federation_dns_base, verbose);
         }
         if (probe_alt_fd >= 0 && FD_ISSET(probe_alt_fd, &rfds)) {
-            handle_probe_packet(
+            HandleProbePacket(
                 probe_alt_fd, true, probe_fd, probe_alt_fd, self_probe_ip, self_probe_port, probe_alt_bind_port,
-                build_probe_controls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
+                BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
                 auth_secret, &federation_requests, &async_results, federation_dns_base, verbose);
         }
 
         if (FD_ISSET(listen_fd, &rfds)) {
             int fd = accept(listen_fd, NULL, NULL);
             if (fd >= 0) {
-                set_nonblocking(fd);
+                SetNonblocking(fd);
                 clients.insert(fd);
                 client_generations[fd] = next_client_generation++;
                 client_rx_states[fd] = ControlClientRxState();
@@ -2160,7 +2189,7 @@ int main(int argc, char** argv)
 
             std::deque<eular::ntrs::Message> pending_messages;
             bool                              peer_closed = false;
-            if (!drain_control_messages(fd, &client_rx_states[fd], &pending_messages, &peer_closed)) {
+            if (!DrainControlMessages(fd, &client_rx_states[fd], &pending_messages, &peer_closed)) {
                 peer_closed = true;
             }
             if (peer_closed) {
@@ -2175,65 +2204,65 @@ int main(int argc, char** argv)
                 eular::ntrs::Message& msg = pending_messages[msg_index];
                 switch (msg.type) {
                 case eular::ntrs::MessageType::AUTH_REQ: {
-                    std::string                 peer_id = msg_str_tag(msg, eular::ntrs::FieldTag::PEER_ID);
-                    std::string                 token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string                 peer_id = MsgStrTag(msg, eular::ntrs::FieldTag::PEER_ID);
+                    std::string                 token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     eular::ntrs::ControlSession session;
                     std::string                 reason;
-                    if (!auth_manager.issueSession(peer_id, token, fd, (uint64_t)time(NULL), &session, &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
+                    if (!AuthManager.issueSession(peer_id, token, fd, (uint64_t)time(NULL), &session, &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
                         break;
                     }
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::AUTH_RSP, msg.request_id);
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::AUTH_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
                                                    (uint8_t)eular::ntrs::ResultCode::OK);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, session.token.c_str());
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_DEFAULT_SEC,
-                                                    auth_manager.sessionTtlSec());
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, session.token.c_str());
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_DEFAULT_SEC,
+                                                    AuthManager.sessionTtlSec());
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
                                                     (uint32_t)session.expire_at_sec);
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::REGISTER_REQ: {
-                    std::string peer_id = msg_str_tag(msg, eular::ntrs::FieldTag::PEER_ID);
-                    std::string device_id = msg_str_tag(msg, eular::ntrs::FieldTag::DEVICE_ID);
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string peer_id = MsgStrTag(msg, eular::ntrs::FieldTag::PEER_ID);
+                    std::string device_id = MsgStrTag(msg, eular::ntrs::FieldTag::DEVICE_ID);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string peer_key;
                     std::string reason;
                     if (peer_id.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
                         break;
                     }
                     if (device_id.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "device_id required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "device_id required");
                         break;
                     }
-                    if (!auth_manager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    if (!AuthManager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
 
                     PeerSession s;
                     s.peer_id = peer_id;
                     s.device_id = device_id;
-                    s.local_ip = msg_str_tag(msg, eular::ntrs::FieldTag::LOCAL_IP);
-                    s.local_port = msg_u16_tag(msg, eular::ntrs::FieldTag::LOCAL_PORT);
-                    s.srflx_ip = msg_str_tag(msg, eular::ntrs::FieldTag::SRFLX_IP);
-                    s.srflx_port = msg_u16_tag(msg, eular::ntrs::FieldTag::SRFLX_PORT);
-                    s.srflx_ip_2 = msg_str_tag(msg, eular::ntrs::FieldTag::SRFLX_IP_2);
-                    s.srflx_port_2 = msg_u16_tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2);
-                    s.nat_class = msg_u16_tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN);
-                    s.nat_flags = msg_u16_tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE);
+                    s.local_ip = MsgStrTag(msg, eular::ntrs::FieldTag::LOCAL_IP);
+                    s.local_port = MsgU16Tag(msg, eular::ntrs::FieldTag::LOCAL_PORT);
+                    s.srflx_ip = MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP);
+                    s.srflx_port = MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT);
+                    s.srflx_ip_2 = MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2);
+                    s.srflx_port_2 = MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2);
+                    s.nat_class = MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN);
+                    s.nat_flags = MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE);
                     s.mapping_behavior =
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN);
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN);
                     s.filtering_behavior =
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN);
-                    s.nat_type = msg_str_tag(msg, eular::ntrs::FieldTag::NAT_TYPE);
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN);
+                    s.nat_type = MsgStrTag(msg, eular::ntrs::FieldTag::NAT_TYPE);
                     s.fd = fd;
                     s.expire_at = time(NULL) + kLeaseSec;
-                    peer_key = make_peer_key(peer_id, device_id);
+                    peer_key = MakePeerKey(peer_id, device_id);
                     peers[peer_key] = s;
 
                     printf(
@@ -2241,231 +2270,231 @@ int main(int argc, char** argv)
                         "flags=0x%04x mapping=%u filtering=%u type=%s "
                         "probe1_ok=%s probe2_ok=%s probe1_rtt_ms=%d probe2_rtt_ms=%d rounds=%u p1succ=%u p2succ=%u "
                         "p1distinct=%u p2distinct=%u f_same_ip_port=%s f_diff_ip=%s\n",
-                        peer_id.c_str(), device_id.c_str(), msg_str_tag(msg, eular::ntrs::FieldTag::LOCAL_IP),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::LOCAL_PORT),
-                        msg_str_tag(msg, eular::ntrs::FieldTag::SRFLX_IP),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::SRFLX_PORT),
-                        msg_str_tag(msg, eular::ntrs::FieldTag::SRFLX_IP_2),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2),
-                        msg_bool_tag(msg, eular::ntrs::FieldTag::MAPPING_STABLE) ? "true" : "false",
-                        msg_str_tag(msg, eular::ntrs::FieldTag::NAT_RISK),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN),
-                        msg_u16_tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN),
-                        msg_str_tag(msg, eular::ntrs::FieldTag::NAT_TYPE),
-                        msg_bool_tag(msg, eular::ntrs::FieldTag::PROBE1_OK) ? "true" : "false",
-                        msg_bool_tag(msg, eular::ntrs::FieldTag::PROBE2_OK) ? "true" : "false",
-                        msg_i32_tag(msg, eular::ntrs::FieldTag::PROBE1_RTT_MS),
-                        msg_i32_tag(msg, eular::ntrs::FieldTag::PROBE2_RTT_MS),
-                        msg_u32_tag(msg, eular::ntrs::FieldTag::PROBE_ROUNDS),
-                        msg_u32_tag(msg, eular::ntrs::FieldTag::PROBE1_SUCCESS_COUNT),
-                        msg_u32_tag(msg, eular::ntrs::FieldTag::PROBE2_SUCCESS_COUNT),
-                        msg_u32_tag(msg, eular::ntrs::FieldTag::PROBE1_DISTINCT_MAPPINGS),
-                        msg_u32_tag(msg, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS),
-                        msg_bool_tag(msg, eular::ntrs::FieldTag::FILTER_SAME_IP_DIFF_PORT_RX) ? "true" : "false",
-                        msg_bool_tag(msg, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX) ? "true" : "false");
+                        peer_id.c_str(), device_id.c_str(), MsgStrTag(msg, eular::ntrs::FieldTag::LOCAL_IP),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::LOCAL_PORT),
+                        MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT),
+                        MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2),
+                        MsgBoolTag(msg, eular::ntrs::FieldTag::MAPPING_STABLE) ? "true" : "false",
+                        MsgStrTag(msg, eular::ntrs::FieldTag::NAT_RISK),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN),
+                        MsgU16Tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN),
+                        MsgStrTag(msg, eular::ntrs::FieldTag::NAT_TYPE),
+                        MsgBoolTag(msg, eular::ntrs::FieldTag::PROBE1_OK) ? "true" : "false",
+                        MsgBoolTag(msg, eular::ntrs::FieldTag::PROBE2_OK) ? "true" : "false",
+                        MsgI32Tag(msg, eular::ntrs::FieldTag::PROBE1_RTT_MS),
+                        MsgI32Tag(msg, eular::ntrs::FieldTag::PROBE2_RTT_MS),
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE_ROUNDS),
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE1_SUCCESS_COUNT),
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE2_SUCCESS_COUNT),
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE1_DISTINCT_MAPPINGS),
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS),
+                        MsgBoolTag(msg, eular::ntrs::FieldTag::FILTER_SAME_IP_DIFF_PORT_RX) ? "true" : "false",
+                        MsgBoolTag(msg, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX) ? "true" : "false");
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::REGISTER_RSP, msg.request_id);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_SEC, 30);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 10);
-                    send_message(fd, rsp);
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::REGISTER_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_SEC, 30);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 10);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::HEARTBEAT_REQ: {
-                    std::string peer_id = msg_str_tag(msg, eular::ntrs::FieldTag::PEER_ID);
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string peer_id = MsgStrTag(msg, eular::ntrs::FieldTag::PEER_ID);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string reason;
                     if (peer_id.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
                         break;
                     }
-                    if (!auth_manager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    if (!AuthManager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
 
-                    std::map<std::string, PeerSession>::iterator pit = find_peer_by_fd_and_peer_id(&peers, peer_id, fd);
+                    std::map<std::string, PeerSession>::iterator pit = FindPeerByFdAndPeerId(&peers, peer_id, fd);
                     if (pit == peers.end() || pit->second.fd != fd) {
-                        send_error(fd, msg.request_id, "NOT_REGISTERED", "peer not registered");
+                        SendError(fd, msg.request_id, "NOT_REGISTERED", "peer not registered");
                         break;
                     }
                     pit->second.expire_at = time(NULL) + kLeaseSec;
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::HEARTBEAT_RSP, msg.request_id);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_SEC, 30);
-                    send_message(fd, rsp);
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::HEARTBEAT_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_SEC, 30);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::UNREGISTER_REQ: {
-                    std::string peer_id = msg_str_tag(msg, eular::ntrs::FieldTag::PEER_ID);
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string peer_id = MsgStrTag(msg, eular::ntrs::FieldTag::PEER_ID);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string reason;
                     if (peer_id.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "peer_id required");
                         break;
                     }
-                    if (!auth_manager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    if (!AuthManager.validateSession(fd, peer_id, session_token, (uint64_t)time(NULL), &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
 
-                    std::map<std::string, PeerSession>::iterator pit = find_peer_by_fd_and_peer_id(&peers, peer_id, fd);
+                    std::map<std::string, PeerSession>::iterator pit = FindPeerByFdAndPeerId(&peers, peer_id, fd);
                     if (pit != peers.end() && pit->second.fd == fd) {
                         uint8_t reason_code = (uint8_t)eular::ntrs::ReasonCode::NONE;
-                        eular::ntrs::messageGetU8ByTag(&msg, eular::ntrs::FieldTag::REASON, &reason_code);
+                        eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::REASON, &reason_code);
                         printf("UNREGISTER peer=%s device=%s reason=%s\n", peer_id.c_str(), pit->second.device_id.c_str(),
-                               eular::ntrs::reason_code_name((eular::ntrs::ReasonCode)reason_code));
+                               eular::ntrs::ReasonCodeName((eular::ntrs::ReasonCode)reason_code));
                         peers.erase(pit);
                     }
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::UNREGISTER_RSP, msg.request_id);
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::UNREGISTER_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
                                                    (uint8_t)eular::ntrs::ResultCode::OK);
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::SESSION_CREATE_REQ: {
-                    std::string                   src = msg_str_tag(msg, eular::ntrs::FieldTag::SRC_PEER_ID);
-                    std::string                   src_device = msg_str_tag(msg, eular::ntrs::FieldTag::SRC_DEVICE_ID);
-                    std::string                   dst = msg_str_tag(msg, eular::ntrs::FieldTag::DST_PEER_ID);
-                    std::string                   dst_device = msg_str_tag(msg, eular::ntrs::FieldTag::DST_DEVICE_ID);
-                    std::string                   session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string                   src = MsgStrTag(msg, eular::ntrs::FieldTag::SRC_PEER_ID);
+                    std::string                   src_device = MsgStrTag(msg, eular::ntrs::FieldTag::SRC_DEVICE_ID);
+                    std::string                   dst = MsgStrTag(msg, eular::ntrs::FieldTag::DST_PEER_ID);
+                    std::string                   dst_device = MsgStrTag(msg, eular::ntrs::FieldTag::DST_DEVICE_ID);
+                    std::string                   session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string                   reason;
                     eular::ntrs::PeerSessionLease peer_session;
                     uint64_t                      now_sec = (uint64_t)time(NULL);
                     bool                          dst_ambiguous = false;
                     if (src.empty() || src_device.empty() || dst.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "src peer/device and dst peer required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "src peer/device and dst peer required");
                         break;
                     }
-                    if (!auth_manager.validateSession(fd, src, session_token, now_sec, &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    if (!AuthManager.validateSession(fd, src, session_token, now_sec, &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
 
-                    std::map<std::string, PeerSession>::iterator src_it = find_peer_exact(&peers, src, src_device);
+                    std::map<std::string, PeerSession>::iterator src_it = FindPeerExact(&peers, src, src_device);
                     std::map<std::string, PeerSession>::iterator dst_it =
-                        dst_device.empty() ? find_unique_peer_by_peer_id(&peers, dst, &dst_ambiguous)
-                                           : find_peer_exact(&peers, dst, dst_device);
+                        dst_device.empty() ? FindUniquePeerByPeerId(&peers, dst, &dst_ambiguous)
+                                           : FindPeerExact(&peers, dst, dst_device);
                     if (src_it == peers.end() || src_it->second.fd != fd) {
-                        send_error(fd, msg.request_id, "NOT_REGISTERED", "src peer not registered on this connection");
+                        SendError(fd, msg.request_id, "NOT_REGISTERED", "src peer not registered on this connection");
                         break;
                     }
                     if (dst_ambiguous) {
-                        send_error(fd, msg.request_id, "DST_DEVICE_REQUIRED", "dst peer has multiple devices");
+                        SendError(fd, msg.request_id, "DST_DEVICE_REQUIRED", "dst peer has multiple devices");
                         break;
                     }
                     if (dst_it == peers.end()) {
-                        send_error(fd, msg.request_id, "DST_OFFLINE", "dst peer not online");
+                        SendError(fd, msg.request_id, "DST_OFFLINE", "dst peer not online");
                         break;
                     }
 
-                    std::string         sid = eular::ntrs::mintPeerSessionId(src, dst, now_sec);
+                    std::string         sid = eular::ntrs::MintPeerSessionId(src, dst, now_sec);
                     SessionStrategyPlan strategy;
-                    if (!auth_manager.issuePeerSession(src, dst, sid, now_sec, 60, &peer_session, &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
+                    if (!AuthManager.issuePeerSession(src, dst, sid, now_sec, 60, &peer_session, &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
                         break;
                     }
-                    strategy = build_session_strategy(src_it->second, dst_it->second);
+                    strategy = BuildSessionStrategy(src_it->second, dst_it->second);
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::SESSION_CREATE_RSP, msg.request_id);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::SESSION_ID, sid.c_str());
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::ROLE,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::SESSION_CREATE_RSP, msg.request_id);
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::SESSION_ID, sid.c_str());
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::ROLE,
                                                    (uint8_t)eular::ntrs::RoleCode::INITIATOR);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.src_punch_order);
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.src_connect_role);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.src_warmup_rounds);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.src_warmup_interval_ms);
-                    eular::ntrs::messageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.src_punch_order);
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.src_connect_role);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.src_warmup_rounds);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.src_warmup_interval_ms);
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
                                                     (uint32_t)peer_session.expire_at_sec);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_ID,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_ID,
                                                        dst_it->second.peer_id.c_str());
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_DEVICE_ID,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_DEVICE_ID,
                                                        dst_it->second.device_id.c_str());
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_LOCAL_IP,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_LOCAL_IP,
                                                        dst_it->second.local_ip.c_str());
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_LOCAL_PORT,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_LOCAL_PORT,
                                                     dst_it->second.local_port);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_IP,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_IP,
                                                        dst_it->second.srflx_ip.c_str());
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_PORT,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_PORT,
                                                     dst_it->second.srflx_port);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_IP_2,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_IP_2,
                                                        dst_it->second.srflx_ip_2.c_str());
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_PORT_2,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_SRFLX_PORT_2,
                                                     dst_it->second.srflx_port_2);
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_CLASS,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_CLASS,
                                                     dst_it->second.nat_class);
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
                                                     dst_it->second.nat_flags);
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
                                                     dst_it->second.mapping_behavior);
-                    eular::ntrs::messageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
+                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
                                                     dst_it->second.filtering_behavior);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_TYPE,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_TYPE,
                                                        dst_it->second.nat_type.c_str());
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
 
                     eular::ntrs::Message notify;
-                    eular::ntrs::messageInit(&notify, eular::ntrs::MessageType::SESSION_NOTIFY, 0);
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::SESSION_ID, sid.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
-                    eular::ntrs::messageAddU8ByTag(&notify, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.dst_punch_order);
-                    eular::ntrs::messageAddU8ByTag(&notify, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.dst_connect_role);
-                    eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.dst_warmup_rounds);
-                    eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.dst_warmup_interval_ms);
-                    eular::ntrs::messageAddU32ByTag(&notify, eular::ntrs::FieldTag::EXPIRE_AT,
+                    eular::ntrs::MessageInit(&notify, eular::ntrs::MessageType::SESSION_NOTIFY, 0);
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::SESSION_ID, sid.c_str());
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::TOKEN, peer_session.token.c_str());
+                    eular::ntrs::MessageAddU8ByTag(&notify, eular::ntrs::FieldTag::PUNCH_ORDER, strategy.dst_punch_order);
+                    eular::ntrs::MessageAddU8ByTag(&notify, eular::ntrs::FieldTag::CONNECT_ROLE, strategy.dst_connect_role);
+                    eular::ntrs::MessageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_ROUNDS, strategy.dst_warmup_rounds);
+                    eular::ntrs::MessageAddU32ByTag(&notify, eular::ntrs::FieldTag::WARMUP_INTERVAL_MS, strategy.dst_warmup_interval_ms);
+                    eular::ntrs::MessageAddU32ByTag(&notify, eular::ntrs::FieldTag::EXPIRE_AT,
                                                     (uint32_t)peer_session.expire_at_sec);
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::SRC_PEER_ID, src.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::SRC_DEVICE_ID, src_device.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::DST_PEER_ID, dst.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::DST_DEVICE_ID,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::SRC_PEER_ID, src.c_str());
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::SRC_DEVICE_ID, src_device.c_str());
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::DST_PEER_ID, dst.c_str());
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::DST_DEVICE_ID,
                                                        dst_it->second.device_id.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_ID,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_ID,
                                                        src_it->second.peer_id.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_DEVICE_ID,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_DEVICE_ID,
                                                        src_it->second.device_id.c_str());
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_LOCAL_IP,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_LOCAL_IP,
                                                        src_it->second.local_ip.c_str());
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_LOCAL_PORT,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_LOCAL_PORT,
                                                     src_it->second.local_port);
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_IP,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_IP,
                                                        src_it->second.srflx_ip.c_str());
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_PORT,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_PORT,
                                                     src_it->second.srflx_port);
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_IP_2,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_IP_2,
                                                        src_it->second.srflx_ip_2.c_str());
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_PORT_2,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_SRFLX_PORT_2,
                                                     src_it->second.srflx_port_2);
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_CLASS,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_CLASS,
                                                     src_it->second.nat_class);
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
                                                     src_it->second.nat_flags);
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
                                                     src_it->second.mapping_behavior);
-                    eular::ntrs::messageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
+                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
                                                     src_it->second.filtering_behavior);
-                    eular::ntrs::messageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_TYPE,
+                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_TYPE,
                                                        src_it->second.nat_type.c_str());
-                    send_message(dst_it->second.fd, notify);
+                    SendMessage(dst_it->second.fd, notify);
                     break;
                 }
                 case eular::ntrs::MessageType::NAT_PROBE_REQ: {
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string reason;
-                    if (!auth_manager.validateSession(fd, "", session_token, (uint64_t)time(NULL), &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    if (!AuthManager.validateSession(fd, "", session_token, (uint64_t)time(NULL), &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
                     AsyncFederationJob job;
                     std::vector<std::string> probe_controls =
-                        build_probe_controls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint);
+                        BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint);
                     job.type = AsyncFederationJobType::FETCH_PROBE_ENDPOINT;
                     job.fd = fd;
                     job.client_generation = client_generations[fd];
@@ -2473,16 +2502,16 @@ int main(int argc, char** argv)
                     job.controls = probe_controls;
                     job.auth_secret = auth_secret;
                     job.federation_peer_id = "service_node_federation";
-                    node_verbose_log(verbose,
+                    NodeVerboseLog(verbose,
                                      "NAT_PROBE_REQ fd=%d req=%u assignment_version=%u controls=%s\n",
                                      fd,
                                      msg.request_id,
                                      assignment_version,
-                                     join_control_endpoints(probe_controls).c_str());
+                                     JoinControlEndpoints(probe_controls).c_str());
                     {
                         AsyncFederationResult result;
-                        if (!start_federation_job(job, &federation_requests, &result, federation_dns_base)) {
-                            node_verbose_log(verbose,
+                        if (!StartFederationJob(job, &federation_requests, &result, federation_dns_base)) {
+                            NodeVerboseLog(verbose,
                                              "NAT_PROBE_REQ immediate federation fallback fd=%d req=%u selected=%s ok=%s\n",
                                              fd,
                                              msg.request_id,
@@ -2494,50 +2523,50 @@ int main(int argc, char** argv)
                     break;
                 }
                 case eular::ntrs::MessageType::FILTER_PROBE_REQ: {
-                    std::string target_ip = msg_str_tag(msg, eular::ntrs::FieldTag::TARGET_IP);
-                    uint16_t    target_port = msg_u16_tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
-                    std::string token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::SESSION_ID);
+                    std::string target_ip = MsgStrTag(msg, eular::ntrs::FieldTag::TARGET_IP);
+                    uint16_t    target_port = MsgU16Tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
+                    std::string token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::SESSION_ID);
                     std::string peer_ip;
                     std::string owner_peer_id;
                     std::string reason;
                     if (target_ip.empty() || target_port == 0 || token.empty()) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "target_ip/target_port/token required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "target_ip/target_port/token required");
                         break;
                     }
-                    node_verbose_log(verbose, "FILTER_PROBE_REQ fd=%d req=%u target=%s:%u token=%s\n", fd,
+                    NodeVerboseLog(verbose, "FILTER_PROBE_REQ fd=%d req=%u target=%s:%u token=%s\n", fd,
                                      msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str());
-                    if (!auth_manager.validateSession(fd, "", session_token, (uint64_t)time(NULL), &reason)) {
+                    if (!AuthManager.validateSession(fd, "", session_token, (uint64_t)time(NULL), &reason)) {
                         printf("FILTER_PROBE_REQ auth failed fd=%d req=%u reason=%s\n", fd, msg.request_id,
                                reason.c_str());
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
-                    if (!peer_ipv4_string(fd, &peer_ip) || target_ip != peer_ip) {
-                        node_verbose_log(verbose,
+                    if (!PeerIpv4String(fd, &peer_ip) || target_ip != peer_ip) {
+                        NodeVerboseLog(verbose,
                                          "FILTER_PROBE_REQ scope mismatch fd=%d req=%u peer_ip=%s target_ip=%s\n", fd,
                                          msg.request_id, peer_ip.c_str(), target_ip.c_str());
-                        send_error(fd, msg.request_id, "TARGET_SCOPE_MISMATCH", "target_ip must match control peer IP");
+                        SendError(fd, msg.request_id, "TARGET_SCOPE_MISMATCH", "target_ip must match control peer IP");
                         break;
                     }
-                    if (!auth_manager.sessionPeerId(fd, &owner_peer_id)) {
-                        node_verbose_log(verbose, "FILTER_PROBE_REQ missing session peer fd=%d req=%u\n", fd,
+                    if (!AuthManager.sessionPeerId(fd, &owner_peer_id)) {
+                        NodeVerboseLog(verbose, "FILTER_PROBE_REQ missing session peer fd=%d req=%u\n", fd,
                                          msg.request_id);
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", "session peer missing");
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", "session peer missing");
                         break;
                     }
 
                     bool same_ip_diff_port = false;
                     if (probe_alt_fd >= 0) {
                         same_ip_diff_port =
-                            send_udp_filter_probe(probe_alt_fd, target_ip, target_port, token, "same_ip_diff_port");
+                            SendUdpFilterProbe(probe_alt_fd, target_ip, target_port, token, "same_ip_diff_port");
                     }
-                    node_verbose_log(verbose,
+                    NodeVerboseLog(verbose,
                                      "FILTER_PROBE_REQ local send fd=%d req=%u same_ip_diff_port_sent=%s alt_fd=%d\n",
                                      fd, msg.request_id, same_ip_diff_port ? "true" : "false", probe_alt_fd);
 
                     uint64_t    probe_expire_at = (uint64_t)time(NULL) + 5;
-                    std::string probe_auth = eular::ntrs::mintProbeAuthorization(auth_secret, owner_peer_id, target_ip,
+                    std::string probe_auth = eular::ntrs::MintProbeAuthorization(auth_secret, owner_peer_id, target_ip,
                                                                                  target_port, token, probe_expire_at);
                     AsyncFederationJob job;
                     job.type = AsyncFederationJobType::SEND_PROBE;
@@ -2545,7 +2574,7 @@ int main(int argc, char** argv)
                     job.client_generation = client_generations[fd];
                     job.request_id = msg.request_id;
                     job.controls =
-                        build_probe_controls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint);
+                        BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint);
                     job.auth_secret = auth_secret;
                     job.federation_peer_id = "service_node_federation";
                     job.target_ip = target_ip;
@@ -2557,110 +2586,110 @@ int main(int argc, char** argv)
                     job.same_ip_diff_port = same_ip_diff_port;
                     {
                         AsyncFederationResult result;
-                        if (!start_federation_job(job, &federation_requests, &result, federation_dns_base)) {
-                            node_verbose_log(verbose,
+                        if (!StartFederationJob(job, &federation_requests, &result, federation_dns_base)) {
+                            NodeVerboseLog(verbose,
                                              "FILTER_PROBE_REQ federation start failed fd=%d req=%u selected=%s\n",
                                              fd, msg.request_id, result.selected_control.c_str());
                             async_results.push_back(result);
                         } else {
-                            node_verbose_log(verbose, "FILTER_PROBE_REQ federation started fd=%d req=%u controls=%zu\n",
+                            NodeVerboseLog(verbose, "FILTER_PROBE_REQ federation started fd=%d req=%u controls=%zu\n",
                                              fd, msg.request_id, job.controls.size());
                         }
                     }
                     break;
                 }
                 case eular::ntrs::MessageType::SERVER_INFO_REQ: {
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
                     std::string reason;
-                    if (!auth_manager.validateSession(fd, "service_node_federation", session_token,
+                    if (!AuthManager.validateSession(fd, "service_node_federation", session_token,
                                                       (uint64_t)time(NULL), &reason)) {
-                        node_verbose_log(verbose,
+                        NodeVerboseLog(verbose,
                                          "SERVER_INFO_REQ auth failed fd=%d req=%u reason=%s\n",
                                          fd,
                                          msg.request_id,
                                          reason.c_str());
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
-                    node_verbose_log(verbose,
+                    NodeVerboseLog(verbose,
                                      "SERVER_INFO_REQ fd=%d req=%u self_probe_endpoint=%s\n",
                                      fd,
                                      msg.request_id,
                                      self_probe_endpoint.empty() ? "-" : self_probe_endpoint.c_str());
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::SERVER_INFO_RSP, msg.request_id);
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE_ENDPOINT,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::SERVER_INFO_RSP, msg.request_id);
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE_ENDPOINT,
                                                        self_probe_endpoint.c_str());
-                    node_verbose_log(verbose,
+                    NodeVerboseLog(verbose,
                                      "SERVER_INFO_RSP fd=%d req=%u probe_endpoint=%s\n",
                                      fd,
                                      msg.request_id,
                                      self_probe_endpoint.empty() ? "-" : self_probe_endpoint.c_str());
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::SERVER_SEND_PROBE_REQ: {
-                    std::string target_ip = msg_str_tag(msg, eular::ntrs::FieldTag::TARGET_IP);
-                    uint16_t    target_port = msg_u16_tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
-                    std::string token = msg_str_tag(msg, eular::ntrs::FieldTag::TOKEN);
-                    std::string owner_peer_id = msg_str_tag(msg, eular::ntrs::FieldTag::SRC_PEER_ID);
-                    std::string probe_auth = msg_str_tag(msg, eular::ntrs::FieldTag::QUERY);
-                    uint32_t    expire_at = msg_u32_tag(msg, eular::ntrs::FieldTag::EXPIRE_AT);
-                    std::string session_token = msg_str_tag(msg, eular::ntrs::FieldTag::SESSION_ID);
+                    std::string target_ip = MsgStrTag(msg, eular::ntrs::FieldTag::TARGET_IP);
+                    uint16_t    target_port = MsgU16Tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
+                    std::string token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
+                    std::string owner_peer_id = MsgStrTag(msg, eular::ntrs::FieldTag::SRC_PEER_ID);
+                    std::string probe_auth = MsgStrTag(msg, eular::ntrs::FieldTag::QUERY);
+                    uint32_t    expire_at = MsgU32Tag(msg, eular::ntrs::FieldTag::EXPIRE_AT);
+                    std::string session_token = MsgStrTag(msg, eular::ntrs::FieldTag::SESSION_ID);
                     std::string reason;
-                    if (!auth_manager.validateSession(fd, "service_node_federation", session_token,
+                    if (!AuthManager.validateSession(fd, "service_node_federation", session_token,
                                                       (uint64_t)time(NULL), &reason)) {
-                        node_verbose_log(verbose, "SERVER_SEND_PROBE_REQ auth failed fd=%d req=%u reason=%s\n", fd,
+                        NodeVerboseLog(verbose, "SERVER_SEND_PROBE_REQ auth failed fd=%d req=%u reason=%s\n", fd,
                                          msg.request_id, reason.c_str());
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
                     if ((uint64_t)expire_at <= (uint64_t)time(NULL) ||
-                        !eular::ntrs::validateProbeAuthorization(auth_secret, owner_peer_id, target_ip, target_port,
+                        !eular::ntrs::ValidateProbeAuthorization(auth_secret, owner_peer_id, target_ip, target_port,
                                                                  token, expire_at, probe_auth)) {
-                        node_verbose_log(
+                        NodeVerboseLog(
                             verbose,
                             "SERVER_SEND_PROBE_REQ authorization invalid fd=%d req=%u target=%s:%u token=%s\n", fd,
                             msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str());
-                        send_error(fd, msg.request_id, "PROBE_AUTH_INVALID", "probe authorization invalid");
+                        SendError(fd, msg.request_id, "PROBE_AUTH_INVALID", "probe authorization invalid");
                         break;
                     }
-                    bool ok = send_udp_filter_probe(probe_fd, target_ip, target_port, token, "diff_ip");
-                    node_verbose_log(verbose,
+                    bool ok = SendUdpFilterProbe(probe_fd, target_ip, target_port, token, "diff_ip");
+                    NodeVerboseLog(verbose,
                                      "SERVER_SEND_PROBE_REQ fd=%d req=%u target=%s:%u token=%s diff_ip_sent=%s\n",
                                      fd, msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str(),
                                      ok ? "true" : "false");
 
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::SERVER_SEND_PROBE_RSP, msg.request_id);
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::SERVER_SEND_PROBE_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
                                               (uint8_t)(ok ? eular::ntrs::ResultCode::OK
                                                            : eular::ntrs::ResultCode::FAILED));
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 case eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_REQ: {
-                    std::string            target_ip = msg_str_tag(msg, eular::ntrs::FieldTag::TARGET_IP);
-                    uint16_t               target_port = msg_u16_tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
-                    std::string            session_token = msg_str_tag(msg, eular::ntrs::FieldTag::SESSION_ID);
+                    std::string            target_ip = MsgStrTag(msg, eular::ntrs::FieldTag::TARGET_IP);
+                    uint16_t               target_port = MsgU16Tag(msg, eular::ntrs::FieldTag::TARGET_PORT);
+                    std::string            session_token = MsgStrTag(msg, eular::ntrs::FieldTag::SESSION_ID);
                     const uint8_t*         txid_data = NULL;
                     uint16_t               txid_len = 0;
-                    bool                   use_alt_port = msg_bool_tag(msg, eular::ntrs::FieldTag::USE_ALT_PORT);
+                    bool                   use_alt_port = MsgBoolTag(msg, eular::ntrs::FieldTag::USE_ALT_PORT);
                     std::string            reason;
                     struct sockaddr_in     target_addr;
                     int                    send_fd = use_alt_port ? probe_alt_fd : probe_fd;
                     uint16_t               response_port = use_alt_port ? probe_alt_bind_port : self_probe_port;
 
-                    if (!auth_manager.validateSession(fd, "service_node_federation", session_token,
+                    if (!AuthManager.validateSession(fd, "service_node_federation", session_token,
                                                       (uint64_t)time(NULL), &reason)) {
-                        send_error(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                        SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
                     if (target_ip.empty() || target_port == 0 ||
-                        !eular::ntrs::messageGetBytesByTag(&msg, eular::ntrs::FieldTag::PROBE_TOKEN, &txid_data,
+                        !eular::ntrs::MessageGetBytesByTag(&msg, eular::ntrs::FieldTag::PROBE_TOKEN, &txid_data,
                                                            &txid_len) ||
                         txid_len != NTRS_PROBE_TOKEN_WIRE_SIZE || send_fd < 0) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "target/txid required");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "target/txid required");
                         break;
                     }
 
@@ -2668,25 +2697,25 @@ int main(int argc, char** argv)
                     target_addr.sin_family = AF_INET;
                     target_addr.sin_port = htons(target_port);
                     if (inet_pton(AF_INET, target_ip.c_str(), &target_addr.sin_addr) != 1) {
-                        send_error(fd, msg.request_id, "INVALID_PARAM", "invalid target_ip");
+                        SendError(fd, msg.request_id, "INVALID_PARAM", "invalid target_ip");
                         break;
                     }
 
-                    bool ok = send_binary_probe_response(
+                    bool ok = SendBinaryProbeResponse(
                         send_fd, &target_addr, NTRS_BINARY_FRAME_FILTER_REQ, NTRS_BINARY_PHASE_CHANGE_IP, txid_data,
                         txid_len, &target_addr, self_probe_ip, response_port, self_probe_ip,
                         use_alt_port ? self_probe_port : probe_alt_bind_port);
                     eular::ntrs::Message rsp;
-                    eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_RSP,
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_RSP,
                                              msg.request_id);
-                    eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
                                               (uint8_t)(ok ? eular::ntrs::ResultCode::OK
                                                            : eular::ntrs::ResultCode::FAILED));
-                    send_message(fd, rsp);
+                    SendMessage(fd, rsp);
                     break;
                 }
                 default:
-                    send_error(fd, msg.request_id, "UNSUPPORTED", "message unsupported in M1");
+                    SendError(fd, msg.request_id, "UNSUPPORTED", "message unsupported in M1");
                     break;
                 }
                 if (std::find(closed.begin(), closed.end(), fd) != closed.end()) {
@@ -2701,12 +2730,12 @@ int main(int argc, char** argv)
             clients.erase(fd);
             client_generations.erase(fd);
             client_rx_states.erase(fd);
-            erase_peer_for_fd(&peers, fd);
-            auth_manager.revokeFd(fd);
+            ErasePeerForFd(&peers, fd);
+            AuthManager.revokeFd(fd);
             for (std::list<FederationRequest>::iterator fit = federation_requests.begin();
                  fit != federation_requests.end();) {
                 if (fit->job.fd == fd) {
-                    close_federation_attempt(&*fit);
+                    CloseFederationAttempt(&*fit);
                     fit = federation_requests.erase(fit);
                 } else {
                     ++fit;
@@ -2720,7 +2749,7 @@ int main(int argc, char** argv)
             bool                  readable = fd >= 0 && FD_ISSET(fd, &rfds);
             bool                  writable = fd >= 0 && FD_ISSET(fd, &wfds);
             AsyncFederationResult result;
-            if (advance_federation_request(&*it, readable, writable, &result, federation_dns_base)) {
+            if (AdvanceFederationRequest(&*it, readable, writable, &result, federation_dns_base)) {
                 async_results.push_back(result);
                 it = federation_requests.erase(it);
             } else {
@@ -2750,26 +2779,26 @@ int main(int argc, char** argv)
 
             eular::ntrs::Message rsp;
             if (result.type == AsyncFederationJobType::FETCH_PROBE_ENDPOINT) {
-                node_verbose_log(verbose,
+                NodeVerboseLog(verbose,
                                  "NAT_PROBE_RSP federation result fd=%d req=%u ok=%s selected=%s peer_probe=%s\n",
                                  result.fd,
                                  result.request_id,
                                  result.ok ? "true" : "false",
                                  result.selected_control.empty() ? "-" : result.selected_control.c_str(),
                                  result.peer_probe_endpoint.empty() ? "-" : result.peer_probe_endpoint.c_str());
-                eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::NAT_PROBE_RSP, result.request_id);
-                eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE1, self_probe_endpoint.c_str());
+                eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::NAT_PROBE_RSP, result.request_id);
+                eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE1, self_probe_endpoint.c_str());
                 if (result.ok) {
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::SELECTED_CONTROL,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::SELECTED_CONTROL,
                                                        result.selected_control.c_str());
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE2,
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE2,
                                                        result.peer_probe_endpoint.c_str());
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::FEDERATION, "ok");
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::FEDERATION, "ok");
                 } else {
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE2, "");
-                    eular::ntrs::messageAddStringByTag(&rsp, eular::ntrs::FieldTag::FEDERATION, "degraded");
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PROBE2, "");
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::FEDERATION, "degraded");
                 }
-                send_message(result.fd, rsp);
+                SendMessage(result.fd, rsp);
                 continue;
             }
 
@@ -2780,15 +2809,15 @@ int main(int argc, char** argv)
                     result.fd, result.request_id, (result.same_ip_diff_port || result.diff_ip) ? "ok" : "degraded",
                     result.same_ip_diff_port ? "true" : "false", result.diff_ip ? "true" : "false",
                     result.selected_control.c_str(), result.ok ? "none" : "federation_failed");
-                eular::ntrs::messageInit(&rsp, eular::ntrs::MessageType::FILTER_PROBE_RSP, result.request_id);
-                eular::ntrs::messageAddBoolByTag(&rsp, eular::ntrs::FieldTag::SAME_IP_DIFF_PORT_SENT,
+                eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::FILTER_PROBE_RSP, result.request_id);
+                eular::ntrs::MessageAddBoolByTag(&rsp, eular::ntrs::FieldTag::SAME_IP_DIFF_PORT_SENT,
                                                  result.same_ip_diff_port);
-                eular::ntrs::messageAddBoolByTag(&rsp, eular::ntrs::FieldTag::DIFF_IP_SENT, result.diff_ip);
-                eular::ntrs::messageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                eular::ntrs::MessageAddBoolByTag(&rsp, eular::ntrs::FieldTag::DIFF_IP_SENT, result.diff_ip);
+                eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
                                           (uint8_t)((result.same_ip_diff_port || result.diff_ip)
                                                         ? eular::ntrs::ResultCode::OK
                                                         : eular::ntrs::ResultCode::DEGRADED));
-                send_message(result.fd, rsp);
+                SendMessage(result.fd, rsp);
             }
         }
     }
@@ -2798,7 +2827,7 @@ int main(int argc, char** argv)
     }
     for (std::list<FederationRequest>::iterator it = federation_requests.begin(); it != federation_requests.end();
          ++it) {
-        close_federation_attempt(&*it);
+        CloseFederationAttempt(&*it);
     }
     evdns_base_free(federation_dns_base, 1);
     event_base_free(federation_event_base);
@@ -2809,7 +2838,7 @@ int main(int argc, char** argv)
     }
 
     if (use_hub_assignment && mqtt_client) {
-        publish_presence(mqtt_client.get(), node_id, boot_id, "offline", "graceful_shutdown", 3);
+        PublishPresence(mqtt_client.get(), node_id, boot_id, "offline", "graceful_shutdown", 3);
         mqtt_client->disconnect();
     }
 

@@ -11,13 +11,13 @@ static const size_t kNtrsBinaryTlvHeaderSize = sizeof(ntrs_binary_tlv_header_t);
 static const size_t kNtrsBinaryIpv4EndpointSize = 8;
 static const size_t kNtrsBinaryIpv6EndpointSize = 20;
 
-static void put_u16_be(uint8_t* dst, uint16_t value)
+static void PutU16Be(uint8_t* dst, uint16_t value)
 {
     dst[0] = static_cast<uint8_t>((value >> 8) & 0xFFu);
     dst[1] = static_cast<uint8_t>(value & 0xFFu);
 }
 
-static void put_u32_be(uint8_t* dst, uint32_t value)
+static void PutU32Be(uint8_t* dst, uint32_t value)
 {
     dst[0] = static_cast<uint8_t>((value >> 24) & 0xFFu);
     dst[1] = static_cast<uint8_t>((value >> 16) & 0xFFu);
@@ -25,7 +25,7 @@ static void put_u32_be(uint8_t* dst, uint32_t value)
     dst[3] = static_cast<uint8_t>(value & 0xFFu);
 }
 
-static void put_u64_be(uint8_t* dst, uint64_t value)
+static void PutU64Be(uint8_t* dst, uint64_t value)
 {
     dst[0] = static_cast<uint8_t>((value >> 56) & 0xFFu);
     dst[1] = static_cast<uint8_t>((value >> 48) & 0xFFu);
@@ -37,18 +37,18 @@ static void put_u64_be(uint8_t* dst, uint64_t value)
     dst[7] = static_cast<uint8_t>(value & 0xFFu);
 }
 
-static uint16_t get_u16_be(const uint8_t* src)
+static uint16_t GetU16Be(const uint8_t* src)
 {
     return static_cast<uint16_t>((static_cast<uint16_t>(src[0]) << 8) | static_cast<uint16_t>(src[1]));
 }
 
-static uint32_t get_u32_be(const uint8_t* src)
+static uint32_t GetU32Be(const uint8_t* src)
 {
     return (static_cast<uint32_t>(src[0]) << 24) | (static_cast<uint32_t>(src[1]) << 16) |
            (static_cast<uint32_t>(src[2]) << 8) | static_cast<uint32_t>(src[3]);
 }
 
-static uint64_t get_u64_be(const uint8_t* src)
+static uint64_t GetU64Be(const uint8_t* src)
 {
     return (static_cast<uint64_t>(src[0]) << 56) | (static_cast<uint64_t>(src[1]) << 48) |
            (static_cast<uint64_t>(src[2]) << 40) | (static_cast<uint64_t>(src[3]) << 32) |
@@ -83,17 +83,17 @@ bool ntrs_binary_frame_set_header(ntrs_binary_frame_t* frame, ntrs_binary_frame_
     }
 
     cursor = frame->buffer;
-    put_u32_be(cursor, NTRS_BINARY_FRAME_MAGIC);
+    PutU32Be(cursor, NTRS_BINARY_FRAME_MAGIC);
     cursor += sizeof(uint32_t);
     *cursor++ = NTRS_BINARY_FRAME_VERSION;
     *cursor++ = static_cast<uint8_t>(frame_type);
     *cursor++ = static_cast<uint8_t>(phase);
     *cursor++ = flags;
-    put_u32_be(cursor, request_id);
+    PutU32Be(cursor, request_id);
     cursor += sizeof(uint32_t);
-    put_u32_be(cursor, sequence);
+    PutU32Be(cursor, sequence);
     cursor += sizeof(uint32_t);
-    put_u64_be(cursor, timestamp_ms);
+    PutU64Be(cursor, timestamp_ms);
 
     frame->length = kNtrsBinaryHeaderSize;
     return true;
@@ -113,9 +113,9 @@ bool ntrs_binary_frame_add_tlv(ntrs_binary_frame_t* frame, ntrs_binary_tlv_type_
     }
 
     cursor = frame->buffer + frame->length;
-    put_u16_be(cursor, static_cast<uint16_t>(type));
+    PutU16Be(cursor, static_cast<uint16_t>(type));
     cursor += sizeof(uint16_t);
-    put_u16_be(cursor, value_len);
+    PutU16Be(cursor, value_len);
     cursor += sizeof(uint16_t);
     memcpy(cursor, value, value_len);
     frame->length += kNtrsBinaryTlvHeaderSize + value_len;
@@ -129,7 +129,7 @@ bool ntrs_binary_frame_parse(const uint8_t* data, size_t data_len, ntrs_binary_f
     }
 
     memset(view, 0, sizeof(*view));
-    view->header.magic = get_u32_be(data);
+    view->header.magic = GetU32Be(data);
     if (view->header.magic != NTRS_BINARY_FRAME_MAGIC) {
         return false;
     }
@@ -138,9 +138,9 @@ bool ntrs_binary_frame_parse(const uint8_t* data, size_t data_len, ntrs_binary_f
     view->header.frame_type = data[5];
     view->header.phase = data[6];
     view->header.flags = data[7];
-    view->header.request_id = get_u32_be(data + 8);
-    view->header.sequence = get_u32_be(data + 12);
-    view->header.timestamp_ms = get_u64_be(data + 16);
+    view->header.request_id = GetU32Be(data + 8);
+    view->header.sequence = GetU32Be(data + 12);
+    view->header.timestamp_ms = GetU64Be(data + 16);
     if (view->header.version != NTRS_BINARY_FRAME_VERSION ||
         !ntrs_binary_frame_type_is_valid(static_cast<ntrs_binary_frame_type_t>(view->header.frame_type)) ||
         !ntrs_binary_phase_is_valid(static_cast<ntrs_binary_phase_t>(view->header.phase))) {
@@ -170,8 +170,8 @@ bool ntrs_binary_frame_next_tlv(const ntrs_binary_frame_view_t* view, size_t* cu
         return false;
     }
 
-    type = get_u16_be(view->payload + offset);
-    value_len = get_u16_be(view->payload + offset + sizeof(uint16_t));
+    type = GetU16Be(view->payload + offset);
+    value_len = GetU16Be(view->payload + offset + sizeof(uint16_t));
     offset += kNtrsBinaryTlvHeaderSize;
     if (view->payload_len - offset < value_len) {
         return false;
@@ -219,13 +219,13 @@ bool ntrs_binary_frame_add_endpoint_tlv(ntrs_binary_frame_t* frame, ntrs_binary_
     if (addr->sa_family == AF_INET) {
         addr4 = reinterpret_cast<const struct sockaddr_in*>(addr);
         buffer[0] = static_cast<uint8_t>(NTRS_BINARY_ADDR_FAMILY_IPV4);
-        put_u16_be(buffer + 2, ntohs(addr4->sin_port));
+        PutU16Be(buffer + 2, ntohs(addr4->sin_port));
         memcpy(buffer + 4, &addr4->sin_addr, sizeof(addr4->sin_addr));
         payload_len = static_cast<uint16_t>(kNtrsBinaryIpv4EndpointSize);
     } else if (addr->sa_family == AF_INET6) {
         addr6 = reinterpret_cast<const struct sockaddr_in6*>(addr);
         buffer[0] = static_cast<uint8_t>(NTRS_BINARY_ADDR_FAMILY_IPV6);
-        put_u16_be(buffer + 2, ntohs(addr6->sin6_port));
+        PutU16Be(buffer + 2, ntohs(addr6->sin6_port));
         memcpy(buffer + 4, &addr6->sin6_addr, sizeof(addr6->sin6_addr));
         payload_len = static_cast<uint16_t>(kNtrsBinaryIpv6EndpointSize);
     } else {
@@ -249,7 +249,7 @@ bool ntrs_binary_tlv_parse_endpoint(const ntrs_binary_tlv_view_t* tlv, struct so
 
     memset(addr, 0, sizeof(*addr));
     family = tlv->value[0];
-    port = get_u16_be(tlv->value + 2);
+    port = GetU16Be(tlv->value + 2);
     if (family == NTRS_BINARY_ADDR_FAMILY_IPV4 && tlv->value_len == kNtrsBinaryIpv4EndpointSize) {
         addr4 = reinterpret_cast<struct sockaddr_in*>(addr);
         addr4->sin_family = AF_INET;

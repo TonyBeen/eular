@@ -80,9 +80,9 @@ private:
     void onWriteEvent();
     void onMiscEvent();
 
-    static void on_connect(struct mosquitto* mosq, void* obj, int rc);
-    static void on_disconnect(struct mosquitto* mosq, void* obj, int rc);
-    static void on_message(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message);
+    static void onConnect(struct mosquitto* mosq, void* obj, int rc);
+    static void onDisconnect(struct mosquitto* mosq, void* obj, int rc);
+    static void onMessage(struct mosquitto* mosq, void* obj, const struct mosquitto_message* message);
 };
 
 } // namespace orion

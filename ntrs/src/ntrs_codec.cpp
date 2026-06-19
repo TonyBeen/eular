@@ -25,10 +25,10 @@ static const FieldDef kFieldDefs[] = {
     {"assignment_version", FieldTag::ASSIGNMENT_VERSION, FieldType::U32},
     {"backup1_control", FieldTag::BACKUP1_CONTROL, FieldType::BYTES},
     {"boot_id", FieldTag::BOOT_ID, FieldType::BYTES},
-    {"cluster_version", FieldTag::CLUSTER_VERSION, FieldType::U64},
+    {"clusterVersion", FieldTag::CLUSTER_VERSION, FieldType::U64},
     {"code", FieldTag::CODE, FieldType::BYTES},
     {"control_endpoint", FieldTag::CONTROL_ENDPOINT, FieldType::BYTES},
-        {"connect_role", FieldTag::CONNECT_ROLE, FieldType::U8},
+    {"connect_role", FieldTag::CONNECT_ROLE, FieldType::U8},
     {"device_id", FieldTag::DEVICE_ID, FieldType::BYTES},
     {"dst_device_id", FieldTag::DST_DEVICE_ID, FieldType::BYTES},
     {"diff_ip_sent", FieldTag::DIFF_IP_SENT, FieldType::BOOL},
@@ -110,7 +110,7 @@ static const FieldDef kFieldDefs[] = {
     {"version", FieldTag::VERSION, FieldType::BYTES},
 };
 
-static void putU64Be(uint8_t* p, uint64_t value)
+static void PutU64Be(uint8_t* p, uint64_t value)
 {
     p[0] = (uint8_t)((value >> 56) & 0xFFu);
     p[1] = (uint8_t)((value >> 48) & 0xFFu);
@@ -122,13 +122,13 @@ static void putU64Be(uint8_t* p, uint64_t value)
     p[7] = (uint8_t)(value & 0xFFu);
 }
 
-static uint64_t getU64Be(const uint8_t* p)
+static uint64_t GetU64Be(const uint8_t* p)
 {
     return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
            ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) | ((uint64_t)p[6] << 8) | (uint64_t)p[7];
 }
 
-static const FieldDef* findFieldDefByKey(const char* key)
+static const FieldDef* FindFieldDefByKey(const char* key)
 {
     size_t i = 0;
     if (key == NULL) {
@@ -142,7 +142,7 @@ static const FieldDef* findFieldDefByKey(const char* key)
     return NULL;
 }
 
-static const FieldDef* findFieldDefByTag(uint16_t tag)
+static const FieldDef* FindFieldDefByTag(uint16_t tag)
 {
     static const FieldDef* tag_index[Message::TAG_INDEX_SIZE] = {0};
     static bool            initialized = false;
@@ -166,13 +166,13 @@ static const FieldDef* findFieldDefByTag(uint16_t tag)
     return NULL;
 }
 
-static void putU16Be(uint8_t* p, uint16_t value)
+static void PutU16Be(uint8_t* p, uint16_t value)
 {
     p[0] = (uint8_t)((value >> 8) & 0xFFu);
     p[1] = (uint8_t)(value & 0xFFu);
 }
 
-static void putU32Be(uint8_t* p, uint32_t value)
+static void PutU32Be(uint8_t* p, uint32_t value)
 {
     p[0] = (uint8_t)((value >> 24) & 0xFFu);
     p[1] = (uint8_t)((value >> 16) & 0xFFu);
@@ -180,23 +180,26 @@ static void putU32Be(uint8_t* p, uint32_t value)
     p[3] = (uint8_t)(value & 0xFFu);
 }
 
-static uint16_t getU16Be(const uint8_t* p) { return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]); }
+static uint16_t GetU16Be(const uint8_t* p) { return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]); }
 
-static uint32_t getU32Be(const uint8_t* p)
+static uint32_t GetU32Be(const uint8_t* p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-static bool appendField(Message* msg, const char* key, FieldType type, const void* data, uint16_t len, uint64_t u64_num,
+static bool AppendField(Message* msg, const char* key, FieldType type, const void* data, uint16_t len, uint64_t u64_num,
                         int32_t i32_num)
 {
-    MessageField* field = NULL;
+    MessageField*   field = NULL;
     const FieldDef* def = NULL;
     if (msg == NULL || key == NULL || msg->field_count >= Message::MAX_FIELDS) {
         return false;
     }
 
-    def = findFieldDefByKey(key);
+    def = FindFieldDefByKey(key);
+    if (type == FieldType::BYTES && msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
+        return false;
+    }
     field = &msg->fields[msg->field_count++];
     field->key = def != NULL ? def->key : key;
     field->tag = def != NULL ? (uint16_t)def->tag : 0;
@@ -223,9 +226,6 @@ static bool appendField(Message* msg, const char* key, FieldType type, const voi
         break;
     case FieldType::BYTES:
     default:
-        if (msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
-            return false;
-        }
         if (len > 0 && data != NULL) {
             memcpy(msg->storage + msg->storage_len, data, len);
         }
@@ -240,7 +240,7 @@ static bool appendField(Message* msg, const char* key, FieldType type, const voi
     return true;
 }
 
-static bool appendFieldByTag(Message* msg, FieldTag tag, FieldType type, const void* data, uint16_t len,
+static bool AppendFieldByTag(Message* msg, FieldTag tag, FieldType type, const void* data, uint16_t len,
                              uint64_t u64_num, int32_t i32_num)
 {
     MessageField*   field = NULL;
@@ -250,7 +250,10 @@ static bool appendFieldByTag(Message* msg, FieldTag tag, FieldType type, const v
         return false;
     }
 
-    def = findFieldDefByTag(tag_value);
+    def = FindFieldDefByTag(tag_value);
+    if (type == FieldType::BYTES && msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
+        return false;
+    }
     field = &msg->fields[msg->field_count++];
     field->key = def != NULL ? def->key : NULL;
     field->tag = tag_value;
@@ -277,9 +280,6 @@ static bool appendFieldByTag(Message* msg, FieldTag tag, FieldType type, const v
         break;
     case FieldType::BYTES:
     default:
-        if (msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
-            return false;
-        }
         if (len > 0 && data != NULL) {
             memcpy(msg->storage + msg->storage_len, data, len);
         }
@@ -294,7 +294,7 @@ static bool appendFieldByTag(Message* msg, FieldTag tag, FieldType type, const v
     return true;
 }
 
-static MessageField* findField(Message* msg, const char* key)
+static MessageField* FindField(Message* msg, const char* key)
 {
     uint16_t i = 0;
     if (msg == NULL || key == NULL) {
@@ -308,12 +308,12 @@ static MessageField* findField(Message* msg, const char* key)
     return NULL;
 }
 
-static const MessageField* findFieldConst(const Message* msg, const char* key)
+static const MessageField* FindFieldConst(const Message* msg, const char* key)
 {
-    return findField(const_cast<Message*>(msg), key);
+    return FindField(const_cast<Message*>(msg), key);
 }
 
-static MessageField* findFieldByTag(Message* msg, FieldTag tag)
+static MessageField* FindFieldByTag(Message* msg, FieldTag tag)
 {
     if (msg == NULL) {
         return NULL;
@@ -335,12 +335,12 @@ static MessageField* findFieldByTag(Message* msg, FieldTag tag)
     return NULL;
 }
 
-static const MessageField* findFieldConstByTag(const Message* msg, FieldTag tag)
+static const MessageField* FindFieldConstByTag(const Message* msg, FieldTag tag)
 {
-    return findFieldByTag(const_cast<Message*>(msg), tag);
+    return FindFieldByTag(const_cast<Message*>(msg), tag);
 }
 
-static bool copyDecodedBytes(Message* msg, const FieldDef* def, const uint8_t* data, uint16_t len)
+static bool CopyDecodedBytes(Message* msg, const FieldDef* def, const uint8_t* data, uint16_t len)
 {
     MessageField* field = NULL;
     if (msg == NULL || def == NULL || data == NULL) {
@@ -350,6 +350,36 @@ static bool copyDecodedBytes(Message* msg, const FieldDef* def, const uint8_t* d
     if (msg->field_count >= Message::MAX_FIELDS) {
         return false;
     }
+    switch (def->type) {
+    case FieldType::BOOL:
+    case FieldType::U8:
+        if (len != 1) {
+            return false;
+        }
+        break;
+    case FieldType::U16:
+        if (len != 2) {
+            return false;
+        }
+        break;
+    case FieldType::U32:
+    case FieldType::I32:
+        if (len != 4) {
+            return false;
+        }
+        break;
+    case FieldType::U64:
+        if (len != 8) {
+            return false;
+        }
+        break;
+    case FieldType::BYTES:
+    default:
+        if (msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
+            return false;
+        }
+        break;
+    }
 
     field = &msg->fields[msg->field_count++];
     field->key = def->key;
@@ -358,53 +388,32 @@ static bool copyDecodedBytes(Message* msg, const FieldDef* def, const uint8_t* d
 
     switch (def->type) {
     case FieldType::BOOL:
-        if (len == 1) {
-            field->value.boolean = data[0] == 0 ? 0 : 1;
-            field->value_len = 1;
-            break;
-        }
-        return false;
+        field->value.boolean = data[0] == 0 ? 0 : 1;
+        field->value_len = 1;
+        break;
     case FieldType::U8:
-        if (len == 1) {
-            field->value.u8 = data[0];
-            field->value_len = 1;
-            break;
-        }
-        return false;
+        field->value.u8 = data[0];
+        field->value_len = 1;
+        break;
     case FieldType::U16:
-        if (len == 2) {
-            field->value.u16 = getU16Be(data);
-            field->value_len = 2;
-            break;
-        }
-        return false;
+        field->value.u16 = GetU16Be(data);
+        field->value_len = 2;
+        break;
     case FieldType::U32:
-        if (len == 4) {
-            field->value.u32 = getU32Be(data);
-            field->value_len = 4;
-            break;
-        }
-        return false;
+        field->value.u32 = GetU32Be(data);
+        field->value_len = 4;
+        break;
     case FieldType::I32:
-        if (len == 4) {
-            field->value.i32 = (int32_t)getU32Be(data);
-            field->value_len = 4;
-            break;
-        }
-        return false;
+        field->value.i32 = (int32_t)GetU32Be(data);
+        field->value_len = 4;
+        break;
     case FieldType::U64:
-        if (len == 8) {
-            field->value.u64 = getU64Be(data);
-            field->value_len = 8;
-            break;
-        }
-        return false;
+        field->value.u64 = GetU64Be(data);
+        field->value_len = 8;
+        break;
     case FieldType::BYTES:
     default:
         field->value_len = len;
-        if (msg->storage_len + (size_t)len + 1u > Message::STORAGE_SIZE) {
-            return false;
-        }
         memcpy(msg->storage + msg->storage_len, data, len);
         msg->storage[msg->storage_len + len] = '\0';
         field->value.bytes = msg->storage + msg->storage_len;
@@ -419,7 +428,7 @@ static bool copyDecodedBytes(Message* msg, const FieldDef* def, const uint8_t* d
 
 }  // namespace
 
-const char* result_code_name(ResultCode code)
+const char* ResultCodeName(ResultCode code)
 {
     switch (code) {
     case ResultCode::OK:
@@ -433,7 +442,7 @@ const char* result_code_name(ResultCode code)
     }
 }
 
-const char* role_code_name(RoleCode code)
+const char* RoleCodeName(RoleCode code)
 {
     switch (code) {
     case RoleCode::INITIATOR:
@@ -445,7 +454,7 @@ const char* role_code_name(RoleCode code)
     }
 }
 
-const char* node_status_code_name(NodeStatusCode code)
+const char* NodeStatusCodeName(NodeStatusCode code)
 {
     switch (code) {
     case NodeStatusCode::REGISTERED:
@@ -459,7 +468,7 @@ const char* node_status_code_name(NodeStatusCode code)
     }
 }
 
-const char* reason_code_name(ReasonCode code)
+const char* ReasonCodeName(ReasonCode code)
 {
     switch (code) {
     case ReasonCode::STARTUP:
@@ -473,7 +482,7 @@ const char* reason_code_name(ReasonCode code)
     }
 }
 
-const char* event_code_name(EventCode code)
+const char* EventCodeName(EventCode code)
 {
     switch (code) {
     case EventCode::ASSIGNMENT:
@@ -499,7 +508,7 @@ const char* event_code_name(EventCode code)
     }
 }
 
-void messageInit(Message* msg, MessageType type, uint32_t request_id)
+void MessageInit(Message* msg, MessageType type, uint32_t request_id)
 {
     if (msg == NULL) {
         return;
@@ -512,120 +521,120 @@ void messageInit(Message* msg, MessageType type, uint32_t request_id)
     }
 }
 
-bool messageAddString(Message* msg, const char* key, const char* value)
+bool MessageAddString(Message* msg, const char* key, const char* value)
 {
     if (value == NULL) {
         value = "";
     }
 
-    return appendField(msg, key, FieldType::BYTES, value, (uint16_t)strlen(value), 0, 0);
+    return AppendField(msg, key, FieldType::BYTES, value, (uint16_t)strlen(value), 0, 0);
 }
 
-bool messageAddStringByTag(Message* msg, FieldTag tag, const char* value)
+bool MessageAddStringByTag(Message* msg, FieldTag tag, const char* value)
 {
     if (value == NULL) {
         value = "";
     }
-    return appendFieldByTag(msg, tag, FieldType::BYTES, value, (uint16_t)strlen(value), 0, 0);
+    return AppendFieldByTag(msg, tag, FieldType::BYTES, value, (uint16_t)strlen(value), 0, 0);
 }
 
-bool messageAddBytes(Message* msg, const char* key, const void* data, uint16_t len)
+bool MessageAddBytes(Message* msg, const char* key, const void* data, uint16_t len)
 {
     if (data == NULL && len != 0) {
         return false;
     }
-    return appendField(msg, key, FieldType::BYTES, data, len, 0, 0);
+    return AppendField(msg, key, FieldType::BYTES, data, len, 0, 0);
 }
 
-bool messageAddBytesByTag(Message* msg, FieldTag tag, const void* data, uint16_t len)
+bool MessageAddBytesByTag(Message* msg, FieldTag tag, const void* data, uint16_t len)
 {
     if (data == NULL && len != 0) {
         return false;
     }
-    return appendFieldByTag(msg, tag, FieldType::BYTES, data, len, 0, 0);
+    return AppendFieldByTag(msg, tag, FieldType::BYTES, data, len, 0, 0);
 }
 
-bool messageAddBool(Message* msg, const char* key, bool value)
+bool MessageAddBool(Message* msg, const char* key, bool value)
 {
-    return appendField(msg, key, FieldType::BOOL, NULL, 1, value ? 1u : 0u, 0);
+    return AppendField(msg, key, FieldType::BOOL, NULL, 1, value ? 1u : 0u, 0);
 }
 
-bool messageAddBoolByTag(Message* msg, FieldTag tag, bool value)
+bool MessageAddBoolByTag(Message* msg, FieldTag tag, bool value)
 {
-    return appendFieldByTag(msg, tag, FieldType::BOOL, NULL, 1, value ? 1u : 0u, 0);
+    return AppendFieldByTag(msg, tag, FieldType::BOOL, NULL, 1, value ? 1u : 0u, 0);
 }
 
-bool messageAddU8(Message* msg, const char* key, uint8_t value)
+bool MessageAddU8(Message* msg, const char* key, uint8_t value)
 {
-    return appendField(msg, key, FieldType::U8, NULL, 1, value, 0);
+    return AppendField(msg, key, FieldType::U8, NULL, 1, value, 0);
 }
 
-bool messageAddU8ByTag(Message* msg, FieldTag tag, uint8_t value)
+bool MessageAddU8ByTag(Message* msg, FieldTag tag, uint8_t value)
 {
-    return appendFieldByTag(msg, tag, FieldType::U8, NULL, 1, value, 0);
+    return AppendFieldByTag(msg, tag, FieldType::U8, NULL, 1, value, 0);
 }
 
-bool messageAddU16(Message* msg, const char* key, uint16_t value)
+bool MessageAddU16(Message* msg, const char* key, uint16_t value)
 {
-    return appendField(msg, key, FieldType::U16, NULL, 2, value, 0);
+    return AppendField(msg, key, FieldType::U16, NULL, 2, value, 0);
 }
 
-bool messageAddU16ByTag(Message* msg, FieldTag tag, uint16_t value)
+bool MessageAddU16ByTag(Message* msg, FieldTag tag, uint16_t value)
 {
-    return appendFieldByTag(msg, tag, FieldType::U16, NULL, 2, value, 0);
+    return AppendFieldByTag(msg, tag, FieldType::U16, NULL, 2, value, 0);
 }
 
-bool messageAddU32(Message* msg, const char* key, uint32_t value)
+bool MessageAddU32(Message* msg, const char* key, uint32_t value)
 {
-    return appendField(msg, key, FieldType::U32, NULL, 4, value, 0);
+    return AppendField(msg, key, FieldType::U32, NULL, 4, value, 0);
 }
 
-bool messageAddU32ByTag(Message* msg, FieldTag tag, uint32_t value)
+bool MessageAddU32ByTag(Message* msg, FieldTag tag, uint32_t value)
 {
-    return appendFieldByTag(msg, tag, FieldType::U32, NULL, 4, value, 0);
+    return AppendFieldByTag(msg, tag, FieldType::U32, NULL, 4, value, 0);
 }
 
-bool messageAddI32(Message* msg, const char* key, int32_t value)
+bool MessageAddI32(Message* msg, const char* key, int32_t value)
 {
-    return appendField(msg, key, FieldType::I32, NULL, 4, 0, value);
+    return AppendField(msg, key, FieldType::I32, NULL, 4, 0, value);
 }
 
-bool messageAddI32ByTag(Message* msg, FieldTag tag, int32_t value)
+bool MessageAddI32ByTag(Message* msg, FieldTag tag, int32_t value)
 {
-    return appendFieldByTag(msg, tag, FieldType::I32, NULL, 4, 0, value);
+    return AppendFieldByTag(msg, tag, FieldType::I32, NULL, 4, 0, value);
 }
 
-bool messageAddU64(Message* msg, const char* key, uint64_t value)
+bool MessageAddU64(Message* msg, const char* key, uint64_t value)
 {
-    return appendField(msg, key, FieldType::U64, NULL, 8, value, 0);
+    return AppendField(msg, key, FieldType::U64, NULL, 8, value, 0);
 }
 
-bool messageAddU64ByTag(Message* msg, FieldTag tag, uint64_t value)
+bool MessageAddU64ByTag(Message* msg, FieldTag tag, uint64_t value)
 {
-    return appendFieldByTag(msg, tag, FieldType::U64, NULL, 8, value, 0);
+    return AppendFieldByTag(msg, tag, FieldType::U64, NULL, 8, value, 0);
 }
 
-const char* messageGetString(const Message* msg, const char* key)
+const char* MessageGetString(const Message* msg, const char* key)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || field->type != FieldType::BYTES || field->value.bytes == NULL) {
         return "";
     }
     return reinterpret_cast<const char*>(field->value.bytes);
 }
 
-const char* messageGetStringByTag(const Message* msg, FieldTag tag)
+const char* MessageGetStringByTag(const Message* msg, FieldTag tag)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || field->type != FieldType::BYTES || field->value.bytes == NULL) {
         return "";
     }
     return reinterpret_cast<const char*>(field->value.bytes);
 }
 
-bool messageGetBytes(const Message* msg, const char* key, const uint8_t** data, uint16_t* len)
+bool MessageGetBytes(const Message* msg, const char* key, const uint8_t** data, uint16_t* len)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || data == NULL || len == NULL || field->type != FieldType::BYTES) {
         return false;
     }
@@ -635,9 +644,9 @@ bool messageGetBytes(const Message* msg, const char* key, const uint8_t** data, 
     return true;
 }
 
-bool messageGetBytesByTag(const Message* msg, FieldTag tag, const uint8_t** data, uint16_t* len)
+bool MessageGetBytesByTag(const Message* msg, FieldTag tag, const uint8_t** data, uint16_t* len)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || data == NULL || len == NULL || field->type != FieldType::BYTES) {
         return false;
     }
@@ -647,9 +656,9 @@ bool messageGetBytesByTag(const Message* msg, FieldTag tag, const uint8_t** data
     return true;
 }
 
-bool messageGetBool(const Message* msg, const char* key, bool* value)
+bool MessageGetBool(const Message* msg, const char* key, bool* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::BOOL) {
         return false;
     }
@@ -657,9 +666,9 @@ bool messageGetBool(const Message* msg, const char* key, bool* value)
     return true;
 }
 
-bool messageGetBoolByTag(const Message* msg, FieldTag tag, bool* value)
+bool MessageGetBoolByTag(const Message* msg, FieldTag tag, bool* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL || field->type != FieldType::BOOL) {
         return false;
     }
@@ -667,9 +676,9 @@ bool messageGetBoolByTag(const Message* msg, FieldTag tag, bool* value)
     return true;
 }
 
-bool messageGetU8(const Message* msg, const char* key, uint8_t* value)
+bool MessageGetU8(const Message* msg, const char* key, uint8_t* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::U8) {
         return false;
     }
@@ -677,9 +686,9 @@ bool messageGetU8(const Message* msg, const char* key, uint8_t* value)
     return true;
 }
 
-bool messageGetU8ByTag(const Message* msg, FieldTag tag, uint8_t* value)
+bool MessageGetU8ByTag(const Message* msg, FieldTag tag, uint8_t* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL || field->type != FieldType::U8) {
         return false;
     }
@@ -687,9 +696,9 @@ bool messageGetU8ByTag(const Message* msg, FieldTag tag, uint8_t* value)
     return true;
 }
 
-bool messageGetU16(const Message* msg, const char* key, uint16_t* value)
+bool MessageGetU16(const Message* msg, const char* key, uint16_t* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::U16) {
         return false;
     }
@@ -697,9 +706,9 @@ bool messageGetU16(const Message* msg, const char* key, uint16_t* value)
     return true;
 }
 
-bool messageGetU16ByTag(const Message* msg, FieldTag tag, uint16_t* value)
+bool MessageGetU16ByTag(const Message* msg, FieldTag tag, uint16_t* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL || field->type != FieldType::U16) {
         return false;
     }
@@ -707,9 +716,9 @@ bool messageGetU16ByTag(const Message* msg, FieldTag tag, uint16_t* value)
     return true;
 }
 
-bool messageGetU32(const Message* msg, const char* key, uint32_t* value)
+bool MessageGetU32(const Message* msg, const char* key, uint32_t* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::U32) {
         return false;
     }
@@ -717,9 +726,9 @@ bool messageGetU32(const Message* msg, const char* key, uint32_t* value)
     return true;
 }
 
-bool messageGetU32ByTag(const Message* msg, FieldTag tag, uint32_t* value)
+bool MessageGetU32ByTag(const Message* msg, FieldTag tag, uint32_t* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL || field->type != FieldType::U32) {
         return false;
     }
@@ -727,9 +736,9 @@ bool messageGetU32ByTag(const Message* msg, FieldTag tag, uint32_t* value)
     return true;
 }
 
-bool messageGetI32(const Message* msg, const char* key, int32_t* value)
+bool MessageGetI32(const Message* msg, const char* key, int32_t* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::I32) {
         return false;
     }
@@ -737,9 +746,9 @@ bool messageGetI32(const Message* msg, const char* key, int32_t* value)
     return true;
 }
 
-bool messageGetI32ByTag(const Message* msg, FieldTag tag, int32_t* value)
+bool MessageGetI32ByTag(const Message* msg, FieldTag tag, int32_t* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL) {
         return false;
     }
@@ -750,9 +759,9 @@ bool messageGetI32ByTag(const Message* msg, FieldTag tag, int32_t* value)
     return true;
 }
 
-bool messageGetU64(const Message* msg, const char* key, uint64_t* value)
+bool MessageGetU64(const Message* msg, const char* key, uint64_t* value)
 {
-    const MessageField* field = findFieldConst(msg, key);
+    const MessageField* field = FindFieldConst(msg, key);
     if (field == NULL || value == NULL || field->type != FieldType::U64) {
         return false;
     }
@@ -760,9 +769,9 @@ bool messageGetU64(const Message* msg, const char* key, uint64_t* value)
     return true;
 }
 
-bool messageGetU64ByTag(const Message* msg, FieldTag tag, uint64_t* value)
+bool MessageGetU64ByTag(const Message* msg, FieldTag tag, uint64_t* value)
 {
-    const MessageField* field = findFieldConstByTag(msg, tag);
+    const MessageField* field = FindFieldConstByTag(msg, tag);
     if (field == NULL || value == NULL) {
         return false;
     }
@@ -773,25 +782,25 @@ bool messageGetU64ByTag(const Message* msg, FieldTag tag, uint64_t* value)
     return true;
 }
 
-bool messageFieldEquals(const Message* msg, const char* key, const char* value)
+bool MessageFieldEquals(const Message* msg, const char* key, const char* value)
 {
-    const char* current = messageGetString(msg, key);
+    const char* current = MessageGetString(msg, key);
     if (value == NULL) {
         value = "";
     }
     return strcmp(current, value) == 0;
 }
 
-bool messageFieldEqualsByTag(const Message* msg, FieldTag tag, const char* value)
+bool MessageFieldEqualsByTag(const Message* msg, FieldTag tag, const char* value)
 {
-    const char* current = messageGetStringByTag(msg, tag);
+    const char* current = MessageGetStringByTag(msg, tag);
     if (value == NULL) {
         value = "";
     }
     return strcmp(current, value) == 0;
 }
 
-int encodeMessage(const Message& msg, void* buf, size_t cap, size_t* out_len)
+int EncodeMessage(const Message& msg, void* buf, size_t cap, size_t* out_len)
 {
     uint8_t* out = static_cast<uint8_t*>(buf);
     size_t   off = FRAME_HDR_SIZE;
@@ -811,8 +820,8 @@ int encodeMessage(const Message& msg, void* buf, size_t cap, size_t* out_len)
             return -2;
         }
 
-        putU16Be(out + off, field.tag);
-        putU16Be(out + off + 2u, field.value_len);
+        PutU16Be(out + off, field.tag);
+        PutU16Be(out + off + 2u, field.value_len);
         off += TLV_HDR_SIZE;
 
         switch (field.type) {
@@ -823,16 +832,16 @@ int encodeMessage(const Message& msg, void* buf, size_t cap, size_t* out_len)
             out[off] = field.value.u8;
             break;
         case FieldType::U16:
-            putU16Be(out + off, field.value.u16);
+            PutU16Be(out + off, field.value.u16);
             break;
         case FieldType::U32:
-            putU32Be(out + off, field.value.u32);
+            PutU32Be(out + off, field.value.u32);
             break;
         case FieldType::I32:
-            putU32Be(out + off, (uint32_t)field.value.i32);
+            PutU32Be(out + off, (uint32_t)field.value.i32);
             break;
         case FieldType::U64:
-            putU64Be(out + off, field.value.u64);
+            PutU64Be(out + off, field.value.u64);
             break;
         case FieldType::BYTES:
         default:
@@ -844,32 +853,32 @@ int encodeMessage(const Message& msg, void* buf, size_t cap, size_t* out_len)
         off += field.value_len;
     }
 
-    putU32Be(out + 0u, FRAME_MAGIC);
+    PutU32Be(out + 0u, FRAME_MAGIC);
     out[4] = FRAME_VERSION;
     out[5] = (uint8_t)msg.type;
-    putU16Be(out + 6u, 0);
-    putU32Be(out + 8u, msg.request_id);
-    putU32Be(out + 12u, (uint32_t)(off - FRAME_HDR_SIZE));
+    PutU16Be(out + 6u, 0);
+    PutU32Be(out + 8u, msg.request_id);
+    PutU32Be(out + 12u, (uint32_t)(off - FRAME_HDR_SIZE));
     *out_len = off;
     return 0;
 }
 
-bool frameSizeFromHeader(const void* data, size_t len, uint32_t* frame_size)
+bool FrameSizeFromHeader(const void* data, size_t len, uint32_t* frame_size)
 {
     const uint8_t* p = static_cast<const uint8_t*>(data);
     uint32_t       body_len = 0;
     if (p == NULL || frame_size == NULL || len < FRAME_HDR_SIZE) {
         return false;
     }
-    if (getU32Be(p) != FRAME_MAGIC || p[4] != FRAME_VERSION) {
+    if (GetU32Be(p) != FRAME_MAGIC || p[4] != FRAME_VERSION) {
         return false;
     }
-    body_len = getU32Be(p + 12u);
+    body_len = GetU32Be(p + 12u);
     *frame_size = (uint32_t)(FRAME_HDR_SIZE + body_len);
     return true;
 }
 
-bool decodeMessage(const void* data, size_t len, Message* msg)
+bool DecodeMessage(const void* data, size_t len, Message* msg)
 {
     const uint8_t* p = static_cast<const uint8_t*>(data);
     uint32_t       frame_size = 0;
@@ -880,8 +889,8 @@ bool decodeMessage(const void* data, size_t len, Message* msg)
         return false;
     }
 
-    messageInit(msg, MessageType::UNKNOWN, 0);
-    if (!frameSizeFromHeader(data, len, &frame_size)) {
+    MessageInit(msg, MessageType::UNKNOWN, 0);
+    if (!FrameSizeFromHeader(data, len, &frame_size)) {
         return false;
     }
     if ((size_t)frame_size > len || frame_size < FRAME_HDR_SIZE) {
@@ -890,18 +899,18 @@ bool decodeMessage(const void* data, size_t len, Message* msg)
     body_len = frame_size - (uint32_t)FRAME_HDR_SIZE;
 
     msg->type = (MessageType)p[5];
-    msg->request_id = getU32Be(p + 8u);
+    msg->request_id = GetU32Be(p + 8u);
 
     while (off + TLV_HDR_SIZE <= FRAME_HDR_SIZE + (size_t)body_len) {
         const FieldDef* def = NULL;
-        uint16_t        tag = getU16Be(p + off);
-        uint16_t        value_len = getU16Be(p + off + 2u);
+        uint16_t        tag = GetU16Be(p + off);
+        uint16_t        value_len = GetU16Be(p + off + 2u);
         off += TLV_HDR_SIZE;
         if (off + value_len > FRAME_HDR_SIZE + (size_t)body_len) {
             return false;
         }
-        def = findFieldDefByTag(tag);
-        if (def != NULL && !copyDecodedBytes(msg, def, p + off, value_len)) {
+        def = FindFieldDefByTag(tag);
+        if (def != NULL && !CopyDecodedBytes(msg, def, p + off, value_len)) {
             return false;
         }
         off += value_len;

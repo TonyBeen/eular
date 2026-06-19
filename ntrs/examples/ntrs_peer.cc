@@ -55,15 +55,15 @@ struct PunchFrameMeta {
 /**
  * @brief 接收一帧探测相关 UDP 负载。
  */
-static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, size_t* out_len,
+static bool RecvProbePacket(int sock, char* buffer, size_t buffer_size, size_t* out_len,
                               struct sockaddr_storage* src, socklen_t* src_len, int timeout_ms);
 
 /**
  * @brief 解析二进制打洞帧。
  */
-static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out);
+static bool ParsePunchFrame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out);
 
-static void async_result_callback(const ntrs_async_result_t* result, void* user_data)
+static void AsyncResultCallback(const ntrs_async_result_t* result, void* user_data)
 {
     AsyncResultWait* wait = static_cast<AsyncResultWait*>(user_data);
     if (wait == NULL || result == NULL) {
@@ -74,7 +74,7 @@ static void async_result_callback(const ntrs_async_result_t* result, void* user_
     event_base_loopbreak(wait->base);
 }
 
-static bool wait_async_result(event_base* base, AsyncResultWait* wait, int timeout_sec)
+static bool WaitAsyncResult(event_base* base, AsyncResultWait* wait, int timeout_sec)
 {
     std::chrono::steady_clock::time_point deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
@@ -86,7 +86,7 @@ static bool wait_async_result(event_base* base, AsyncResultWait* wait, int timeo
     return wait != NULL && wait->done;
 }
 
-static bool set_nonblocking_fd(int fd)
+static bool SetNonblockingFd(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
@@ -95,14 +95,14 @@ static bool set_nonblocking_fd(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-static uint64_t current_time_ms()
+static uint64_t CurrentTimeMs()
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000ull + (uint64_t)(tv.tv_usec / 1000ull);
 }
 
-static bool parse_endpoint_text(const std::string& endpoint, std::string* host, uint16_t* port)
+static bool ParseEndpointText(const std::string& endpoint, std::string* host, uint16_t* port)
 {
     size_t      colon = endpoint.rfind(':');
     std::string host_part;
@@ -129,7 +129,7 @@ static bool parse_endpoint_text(const std::string& endpoint, std::string* host, 
     return true;
 }
 
-static bool resolve_bind_ipv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
+static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
 {
     if (resolved_ip == NULL) {
         return false;
@@ -180,13 +180,13 @@ static bool resolve_bind_ipv4(const std::string& bind_ip, const std::string& bin
     return true;
 }
 
-static int create_udp_probe_socket(const std::string& bind_ip, const std::string& bind_device)
+static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device)
 {
     int                sock = -1;
     std::string        resolved_ip;
     struct sockaddr_in local_addr;
 
-    if (!resolve_bind_ipv4(bind_ip, bind_device, &resolved_ip)) {
+    if (!ResolveBindIpv4(bind_ip, bind_device, &resolved_ip)) {
         return -1;
     }
 
@@ -194,7 +194,7 @@ static int create_udp_probe_socket(const std::string& bind_ip, const std::string
     if (sock < 0) {
         return -1;
     }
-    if (!set_nonblocking_fd(sock)) {
+    if (!SetNonblockingFd(sock)) {
         close(sock);
         return -1;
     }
@@ -218,7 +218,7 @@ static int create_udp_probe_socket(const std::string& bind_ip, const std::string
     return sock;
 }
 
-static const char* punch_order_text(ntrs_punch_order_t order)
+static const char* PunchOrderText(ntrs_punch_order_t order)
 {
     switch (order) {
     case NTRS_PUNCH_ORDER_SEND_FIRST:
@@ -232,7 +232,7 @@ static const char* punch_order_text(ntrs_punch_order_t order)
     }
 }
 
-static const char* connect_role_text(ntrs_connect_role_t role)
+static const char* ConnectRoleText(ntrs_connect_role_t role)
 {
     switch (role) {
     case NTRS_CONNECT_ROLE_INITIATOR:
@@ -244,7 +244,7 @@ static const char* connect_role_text(ntrs_connect_role_t role)
     }
 }
 
-static bool wait_for_warmup_packet(int sock, uint32_t wait_ms)
+static bool WaitForWarmupPacket(int sock, uint32_t wait_ms)
 {
     std::chrono::steady_clock::time_point deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
@@ -265,10 +265,10 @@ static bool wait_for_warmup_packet(int sock, uint32_t wait_ms)
         if (select(sock + 1, &rfds, NULL, NULL, &tv) <= 0 || !FD_ISSET(sock, &rfds)) {
             continue;
         }
-        if (!recv_probe_packet(sock, (char*)buffer, sizeof(buffer), &nread, &src, &src_len, 20)) {
+        if (!RecvProbePacket(sock, (char*)buffer, sizeof(buffer), &nread, &src, &src_len, 20)) {
             continue;
         }
-        if (parse_punch_frame(buffer, nread, &meta)) {
+        if (ParsePunchFrame(buffer, nread, &meta)) {
             return true;
         }
     }
@@ -276,7 +276,7 @@ static bool wait_for_warmup_packet(int sock, uint32_t wait_ms)
     return false;
 }
 
-static void apply_signal_strategy_wait(int sock, const ntrs_session_signal_t* signal, const char* from)
+static void ApplySignalStrategyWait(int sock, const ntrs_session_signal_t* signal, const char* from)
 {
     uint32_t wait_ms = 0;
 
@@ -284,7 +284,7 @@ static void apply_signal_strategy_wait(int sock, const ntrs_session_signal_t* si
         return;
     }
     printf("Punch strategy(%s): order=%s connect_role=%s warmup_rounds=%" PRIu32 " warmup_interval_ms=%" PRIu32 "\n",
-           from, punch_order_text(signal->punch_order), connect_role_text(signal->connect_role),
+           from, PunchOrderText(signal->punch_order), ConnectRoleText(signal->connect_role),
            signal->warmup_rounds, signal->warmup_interval_ms);
 
     if (signal->punch_order != NTRS_PUNCH_ORDER_WAIT_FIRST) {
@@ -299,14 +299,14 @@ static void apply_signal_strategy_wait(int sock, const ntrs_session_signal_t* si
     if (wait_ms == 0) {
         wait_ms = 200;
     }
-    if (wait_for_warmup_packet(sock, wait_ms)) {
+    if (WaitForWarmupPacket(sock, wait_ms)) {
         printf("Warmup packet received early (%s), continue immediately\n", from);
     } else {
         printf("Warmup window elapsed (%s): waited=%" PRIu32 "ms\n", from, wait_ms);
     }
 }
 
-static bool run_probe_session(event_base* base, ntrs_async_client_t* async_client, const std::string& node_host,
+static bool RunProbeSession(event_base* base, ntrs_async_client_t* async_client, const std::string& node_host,
                               uint16_t node_port, const std::string& peer_id, const std::string& bind_ip,
                               const std::string& bind_device, const std::string& explicit_probe1,
                               const std::string& explicit_probe2, bool verbose, ProbeSession* out)
@@ -358,18 +358,18 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
         return false;
     }
 
-    if (!parse_endpoint_text(probe1, &probe1_host, &probe1_port)) {
+    if (!ParseEndpointText(probe1, &probe1_host, &probe1_port)) {
         snprintf(out->error_message, sizeof(out->error_message), "invalid probe1 endpoint");
         close(control_fd);
         return false;
     }
-    if (probe2[0] != '\0' && !parse_endpoint_text(probe2, &probe2_host, &probe2_port)) {
+    if (probe2[0] != '\0' && !ParseEndpointText(probe2, &probe2_host, &probe2_port)) {
         snprintf(out->error_message, sizeof(out->error_message), "invalid probe2 endpoint");
         close(control_fd);
         return false;
     }
 
-    udp_sock = create_udp_probe_socket(bind_ip, bind_device);
+    udp_sock = CreateUdpProbeSocket(bind_ip, bind_device);
     if (udp_sock < 0) {
         snprintf(out->error_message, sizeof(out->error_message), "create probe socket failed");
         close(control_fd);
@@ -384,8 +384,8 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     wait_detect.base = base;
     if (!ntrs_async_detect_nat(async_client, &request_id, udp_sock, probe1_host.c_str(), probe1_port,
                                probe2[0] == '\0' ? NULL : probe2_host.c_str(), probe2_port, control_fd, session_token,
-                               &detect_options, async_result_callback, &wait_detect) ||
-        !wait_async_result(base, &wait_detect, 8) || !wait_detect.result.success) {
+                               &detect_options, AsyncResultCallback, &wait_detect) ||
+        !WaitAsyncResult(base, &wait_detect, 8) || !wait_detect.result.success) {
         snprintf(out->error_message, sizeof(out->error_message), "%s",
                  wait_detect.result.error_message[0] != '\0' ? wait_detect.result.error_message
                                                              : "async NAT detect failed");
@@ -405,7 +405,7 @@ static bool run_probe_session(event_base* base, ntrs_async_client_t* async_clien
     return true;
 }
 
-static bool peer_candidate_to_sockaddr(const ntrs_peer_candidate_t* candidate, struct sockaddr_storage* out,
+static bool PeerCandidateToSockaddr(const ntrs_peer_candidate_t* candidate, struct sockaddr_storage* out,
                                       socklen_t* out_len)
 {
     struct sockaddr_in* addr4 = NULL;
@@ -425,23 +425,23 @@ static bool peer_candidate_to_sockaddr(const ntrs_peer_candidate_t* candidate, s
     return true;
 }
 
-static uint64_t steady_now_us()
+static uint64_t SteadyNowUs()
 {
     return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 
-static std::string make_probe_token()
+static std::string MakeProbeToken()
 {
-    static std::mt19937_64 rng(
+    static std::mt19937_64 Rng(
         (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count() ^ (uint64_t)getpid());
     char buffer[17];
-    snprintf(buffer, sizeof(buffer), "%016" PRIx64, (uint64_t)rng());
+    snprintf(buffer, sizeof(buffer), "%016" PRIx64, (uint64_t)Rng());
     return std::string(buffer);
 }
 
-static bool sockaddr_matches_candidate(const struct sockaddr_storage* src, socklen_t src_len,
+static bool SockaddrMatchesCandidate(const struct sockaddr_storage* src, socklen_t src_len,
                                        const ntrs_peer_candidate_t* candidate)
 {
     struct sockaddr_storage expected;
@@ -450,7 +450,7 @@ static bool sockaddr_matches_candidate(const struct sockaddr_storage* src, sockl
     char                    service[NI_MAXSERV];
 
     if (src == NULL || candidate == NULL ||
-        !peer_candidate_to_sockaddr(candidate, &expected, &expected_len)) {
+        !PeerCandidateToSockaddr(candidate, &expected, &expected_len)) {
         return false;
     }
     if (src->ss_family == expected.ss_family && src_len == expected_len &&
@@ -464,7 +464,7 @@ static bool sockaddr_matches_candidate(const struct sockaddr_storage* src, sockl
     return strcmp(host, candidate->ip) == 0 && (uint16_t)atoi(service) == candidate->port;
 }
 
-static std::string build_probe_packet(const char* prefix, const char* owner_peer, const char* token, uint32_t seq,
+static std::string BuildProbePacket(const char* prefix, const char* owner_peer, const char* token, uint32_t seq,
                                       uint64_t value, size_t payload_size)
 {
     char        header[256];
@@ -482,7 +482,7 @@ static std::string build_probe_packet(const char* prefix, const char* owner_peer
     return packet;
 }
 
-static bool recv_probe_packet(int sock, char* buffer, size_t buffer_size, size_t* out_len,
+static bool RecvProbePacket(int sock, char* buffer, size_t buffer_size, size_t* out_len,
                               struct sockaddr_storage* src, socklen_t* src_len, int timeout_ms)
 {
     fd_set         rfds;
@@ -519,7 +519,7 @@ struct ProbePacketHeader {
     uint64_t value;
 };
 
-static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out)
+static bool ParsePunchFrame(const uint8_t* payload, size_t payload_len, PunchFrameMeta* out)
 {
     ntrs_binary_frame_view view;
     ntrs_binary_tlv_view   tlv;
@@ -557,7 +557,7 @@ static bool parse_punch_frame(const uint8_t* payload, size_t payload_len, PunchF
     return out->frame_type == NTRS_BINARY_FRAME_PUNCH_REQ || out->frame_type == NTRS_BINARY_FRAME_PUNCH_ACK;
 }
 
-static bool build_punch_ack_frame(const PunchFrameMeta* req_meta, uint8_t* out, size_t out_cap, size_t* out_len)
+static bool BuildPunchAckFrame(const PunchFrameMeta* req_meta, uint8_t* out, size_t out_cap, size_t* out_len)
 {
     ntrs_binary_frame_t frame;
 
@@ -565,7 +565,7 @@ static bool build_punch_ack_frame(const PunchFrameMeta* req_meta, uint8_t* out, 
         return false;
     }
     if (!ntrs_binary_frame_set_header(&frame, NTRS_BINARY_FRAME_PUNCH_ACK, NTRS_BINARY_PHASE_PUNCH, 0u,
-                                      req_meta->request_id, req_meta->sequence, current_time_ms())) {
+                                      req_meta->request_id, req_meta->sequence, CurrentTimeMs())) {
         return false;
     }
     if (req_meta->token_len > 0 &&
@@ -582,7 +582,7 @@ static bool build_punch_ack_frame(const PunchFrameMeta* req_meta, uint8_t* out, 
     return true;
 }
 
-static bool parse_probe_packet_header(const char* buffer, ProbePacketHeader* out)
+static bool ParseProbePacketHeader(const char* buffer, ProbePacketHeader* out)
 {
     char type[32];
     char owner_peer[NTRS_MAX_TEXT_LEN];
@@ -605,7 +605,7 @@ static bool parse_probe_packet_header(const char* buffer, ProbePacketHeader* out
     return true;
 }
 
-static bool handle_probe_request(int sock, const char* buffer, size_t buffer_len, const struct sockaddr_storage* src,
+static bool HandleProbeRequest(int sock, const char* buffer, size_t buffer_len, const struct sockaddr_storage* src,
                                  socklen_t src_len)
 {
     ProbePacketHeader header;
@@ -615,36 +615,36 @@ static bool handle_probe_request(int sock, const char* buffer, size_t buffer_len
     if (buffer == NULL || src == NULL) {
         return false;
     }
-    if (parse_punch_frame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
+    if (ParsePunchFrame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
         punch_meta.frame_type == NTRS_BINARY_FRAME_PUNCH_REQ) {
         uint8_t ack[256];
         size_t  ack_len = 0;
-        if (build_punch_ack_frame(&punch_meta, ack, sizeof(ack), &ack_len)) {
+        if (BuildPunchAckFrame(&punch_meta, ack, sizeof(ack), &ack_len)) {
             sendto(sock, ack, ack_len, 0, (const struct sockaddr*)src, src_len);
         }
         return true;
     }
-    if (parse_punch_frame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
+    if (ParsePunchFrame((const uint8_t*)buffer, buffer_len, &punch_meta) &&
         punch_meta.frame_type == NTRS_BINARY_FRAME_PUNCH_ACK) {
         return true;
     }
-    if (!parse_probe_packet_header(buffer, &header)) {
+    if (!ParseProbePacketHeader(buffer, &header)) {
         return false;
     }
     if (strcmp(header.type, "NTRS_PROBE_PING") == 0) {
-        reply = build_probe_packet("NTRS_PROBE_PONG", header.owner_peer, header.token, header.seq, header.value, 96);
+        reply = BuildProbePacket("NTRS_PROBE_PONG", header.owner_peer, header.token, header.seq, header.value, 96);
         sendto(sock, reply.data(), reply.size(), 0, (const struct sockaddr*)src, src_len);
         return true;
     }
     if (strcmp(header.type, "NTRS_MTU_PROBE") == 0 && (uint64_t)strlen(buffer) <= header.value) {
-        reply = build_probe_packet("NTRS_MTU_ACK", header.owner_peer, header.token, header.seq, header.value, 96);
+        reply = BuildProbePacket("NTRS_MTU_ACK", header.owner_peer, header.token, header.seq, header.value, 96);
         sendto(sock, reply.data(), reply.size(), 0, (const struct sockaddr*)src, src_len);
         return true;
     }
     return false;
 }
 
-static void run_probe_responder_tail(int sock, int timeout_ms)
+static void RunProbeResponderTail(int sock, int timeout_ms)
 {
     std::chrono::steady_clock::time_point deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -654,14 +654,14 @@ static void run_probe_responder_tail(int sock, int timeout_ms)
         size_t                  buffer_len = 0;
         struct sockaddr_storage src;
         socklen_t               src_len = sizeof(src);
-        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 100)) {
+        if (!RecvProbePacket(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 100)) {
             continue;
         }
-        handle_probe_request(sock, buffer, buffer_len, &src, src_len);
+        HandleProbeRequest(sock, buffer, buffer_len, &src, src_len);
     }
 }
 
-static void run_latency_loss_probe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
+static void RunLatencyLossProbe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                    const char* token, const char* from)
 {
     const int ping_count = 10;
@@ -672,15 +672,15 @@ static void run_latency_loss_probe(int sock, const ntrs_peer_candidate_t* candid
     struct sockaddr_storage dst;
     socklen_t               dst_len = 0;
 
-    if (candidate == NULL || !peer_candidate_to_sockaddr(candidate, &dst, &dst_len)) {
+    if (candidate == NULL || !PeerCandidateToSockaddr(candidate, &dst, &dst_len)) {
         printf("UDP stats (%s): invalid candidate\n", from);
         return;
     }
 
     for (int i = 0; i < ping_count; ++i) {
         uint32_t seq = (uint32_t)(i + 1);
-        uint64_t sent_us = steady_now_us();
-        std::string packet = build_probe_packet("NTRS_PROBE_PING", local_peer_id, token, seq, sent_us, 128);
+        uint64_t sent_us = SteadyNowUs();
+        std::string packet = BuildProbePacket("NTRS_PROBE_PING", local_peer_id, token, seq, sent_us, 128);
         sendto(sock, packet.data(), packet.size(), 0, (struct sockaddr*)&dst, dst_len);
 
         for (;;) {
@@ -690,21 +690,21 @@ static void run_latency_loss_probe(int sock, const ntrs_peer_candidate_t* candid
             socklen_t               src_len = sizeof(src);
             ProbePacketHeader       header;
 
-            if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
+            if (!RecvProbePacket(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
                 break;
             }
-            if (handle_probe_request(sock, buffer, buffer_len, &src, src_len)) {
+            if (HandleProbeRequest(sock, buffer, buffer_len, &src, src_len)) {
                 continue;
             }
-            if (!sockaddr_matches_candidate(&src, src_len, candidate)) {
+            if (!SockaddrMatchesCandidate(&src, src_len, candidate)) {
                 continue;
             }
-            if (!parse_probe_packet_header(buffer, &header)) {
+            if (!ParseProbePacketHeader(buffer, &header)) {
                 continue;
             }
             if (strcmp(header.type, "NTRS_PROBE_PONG") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
                 strcmp(header.token, token) == 0 && header.seq == seq && header.value == sent_us) {
-                uint64_t rtt_us = steady_now_us() - sent_us;
+                uint64_t rtt_us = SteadyNowUs() - sent_us;
                 if (received == 0 || rtt_us < rtt_min_us) {
                     rtt_min_us = rtt_us;
                 }
@@ -728,7 +728,7 @@ static void run_latency_loss_probe(int sock, const ntrs_peer_candidate_t* candid
            from, ping_count, received, lost, loss_pct, min_ms, avg_ms, max_ms);
 }
 
-static bool set_mtu_probe_df_mode(int sock, int family, int* previous_value, bool* changed)
+static bool SetMtuProbeDfMode(int sock, int family, int* previous_value, bool* changed)
 {
     if (previous_value == NULL || changed == NULL) {
         return false;
@@ -769,7 +769,7 @@ static bool set_mtu_probe_df_mode(int sock, int family, int* previous_value, boo
     return false;
 }
 
-static void restore_mtu_probe_df_mode(int sock, int family, int previous_value, bool changed)
+static void RestoreMtuProbeDfMode(int sock, int family, int previous_value, bool changed)
 {
     if (!changed) {
         return;
@@ -787,17 +787,17 @@ static void restore_mtu_probe_df_mode(int sock, int family, int previous_value, 
     }
 }
 
-static bool send_mtu_probe_once(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
+static bool SendMtuProbeOnce(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                 const char* token, uint32_t seq, size_t payload_size)
 {
     struct sockaddr_storage dst;
     socklen_t               dst_len = 0;
     std::string             packet;
 
-    if (candidate == NULL || !peer_candidate_to_sockaddr(candidate, &dst, &dst_len)) {
+    if (candidate == NULL || !PeerCandidateToSockaddr(candidate, &dst, &dst_len)) {
         return false;
     }
-    packet = build_probe_packet("NTRS_MTU_PROBE", local_peer_id, token, seq, (uint64_t)payload_size, payload_size);
+    packet = BuildProbePacket("NTRS_MTU_PROBE", local_peer_id, token, seq, (uint64_t)payload_size, payload_size);
     if (packet.size() != payload_size) {
         return false;
     }
@@ -814,16 +814,16 @@ static bool send_mtu_probe_once(int sock, const ntrs_peer_candidate_t* candidate
         socklen_t               src_len = sizeof(src);
         ProbePacketHeader       header;
 
-        if (!recv_probe_packet(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
+        if (!RecvProbePacket(sock, buffer, sizeof(buffer), &buffer_len, &src, &src_len, 1000)) {
             return false;
         }
-        if (handle_probe_request(sock, buffer, buffer_len, &src, src_len)) {
+        if (HandleProbeRequest(sock, buffer, buffer_len, &src, src_len)) {
             continue;
         }
-        if (!sockaddr_matches_candidate(&src, src_len, candidate)) {
+        if (!SockaddrMatchesCandidate(&src, src_len, candidate)) {
             continue;
         }
-        if (!parse_probe_packet_header(buffer, &header)) {
+        if (!ParseProbePacketHeader(buffer, &header)) {
             continue;
         }
         if (strcmp(header.type, "NTRS_MTU_ACK") == 0 && strcmp(header.owner_peer, local_peer_id) == 0 &&
@@ -833,7 +833,7 @@ static bool send_mtu_probe_once(int sock, const ntrs_peer_candidate_t* candidate
     }
 }
 
-static bool confirm_mtu_payload(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
+static bool ConfirmMtuPayload(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                                 const char* token, uint32_t* seq, size_t payload_size)
 {
     const int attempts = 3;
@@ -844,7 +844,7 @@ static bool confirm_mtu_payload(int sock, const ntrs_peer_candidate_t* candidate
     }
 
     for (int i = 0; i < attempts; ++i) {
-        if (send_mtu_probe_once(sock, candidate, local_peer_id, token, (*seq)++, payload_size)) {
+        if (SendMtuProbeOnce(sock, candidate, local_peer_id, token, (*seq)++, payload_size)) {
             success_count++;
             if (success_count >= 2) {
                 return true;
@@ -858,7 +858,7 @@ static bool confirm_mtu_payload(int sock, const ntrs_peer_candidate_t* candidate
     return false;
 }
 
-static void run_mtu_probe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
+static void RunMtuProbe(int sock, const ntrs_peer_candidate_t* candidate, const char* local_peer_id,
                           const char* token, const char* from)
 {
     size_t   low = 1280;
@@ -884,11 +884,11 @@ static void run_mtu_probe(int sock, const ntrs_peer_candidate_t* candidate, cons
             family = AF_INET6;
         }
     }
-    set_mtu_probe_df_mode(sock, family, &previous_value, &changed);
+    SetMtuProbeDfMode(sock, family, &previous_value, &changed);
 
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
-        bool   ok = confirm_mtu_payload(sock, candidate, local_peer_id, token, &seq, mid);
+        bool   ok = ConfirmMtuPayload(sock, candidate, local_peer_id, token, &seq, mid);
         if (ok) {
             best = mid;
             low = mid + 1;
@@ -900,7 +900,7 @@ static void run_mtu_probe(int sock, const ntrs_peer_candidate_t* candidate, cons
         }
     }
 
-    restore_mtu_probe_df_mode(sock, family, previous_value, changed);
+    RestoreMtuProbeDfMode(sock, family, previous_value, changed);
 
     if (best == 0) {
         printf("UDP mtu (%s): no payload accepted in range [1280,1500]\n", from);
@@ -908,7 +908,7 @@ static void run_mtu_probe(int sock, const ntrs_peer_candidate_t* candidate, cons
         printf("UDP mtu (%s): payload_max=%zu range=[1280,1500]\n", from, best);
     }
 }
-static int compute_punch_interval_ms(const ntrs_session_signal_t* signal)
+static int ComputePunchIntervalMs(const ntrs_session_signal_t* signal)
 {
     if (signal != NULL && signal->warmup_interval_ms > 0) {
         return (int)signal->warmup_interval_ms;
@@ -916,21 +916,21 @@ static int compute_punch_interval_ms(const ntrs_session_signal_t* signal)
     return 100;
 }
 
-static int compute_punch_rounds(const ntrs_session_signal_t*)
+static int ComputePunchRounds(const ntrs_session_signal_t*)
 {
     return 3;
 }
 
-static int compute_punch_wait_timeout_sec(const ntrs_session_signal_t* signal)
+static int ComputePunchWaitTimeoutSec(const ntrs_session_signal_t* signal)
 {
-    int rounds = compute_punch_rounds(signal);
-    int interval_ms = compute_punch_interval_ms(signal);
+    int rounds = ComputePunchRounds(signal);
+    int interval_ms = ComputePunchIntervalMs(signal);
     int timeout_ms = rounds * interval_ms + 1000;
     int timeout_sec = (timeout_ms + 999) / 1000;
     return timeout_sec < 3 ? 3 : timeout_sec;
 }
 
-static void try_hole_punch_from_async_signal(ntrs_async_client_t* client, event_base* base, int sock,
+static void TryHolePunchFromAsyncSignal(ntrs_async_client_t* client, event_base* base, int sock,
                                              const ntrs_session_signal_t* signal, const char* local_peer_id,
                                              const char* from, bool verbose)
 {
@@ -954,24 +954,24 @@ static void try_hole_punch_from_async_signal(ntrs_async_client_t* client, event_
         }
     }
 
-    apply_signal_strategy_wait(sock, signal, from);
+    ApplySignalStrategyWait(sock, signal, from);
 
     memset(&wait_punch, 0, sizeof(wait_punch));
     wait_punch.base = base;
-    int punch_rounds = compute_punch_rounds(signal);
-    int punch_interval_ms = compute_punch_interval_ms(signal);
-    int punch_wait_timeout_sec = compute_punch_wait_timeout_sec(signal);
+    int punch_rounds = ComputePunchRounds(signal);
+    int punch_interval_ms = ComputePunchIntervalMs(signal);
+    int punch_wait_timeout_sec = ComputePunchWaitTimeoutSec(signal);
     if (ntrs_async_try_udp_hole_punch(client, &request_id, sock, signal->candidates, signal->candidate_count,
-                                      punch_rounds, punch_interval_ms, async_result_callback, &wait_punch) &&
-        wait_async_result(base, &wait_punch, punch_wait_timeout_sec) && wait_punch.result.success) {
+                                      punch_rounds, punch_interval_ms, AsyncResultCallback, &wait_punch) &&
+        WaitAsyncResult(base, &wait_punch, punch_wait_timeout_sec) && wait_punch.result.success) {
         printf("UDP hole punch result (%s): ok selected=%s:%u type=%s\n", from,
                wait_punch.result.selected_candidate.ip, wait_punch.result.selected_candidate.port,
                wait_punch.result.selected_candidate.type[0] == '\0' ? "candidate"
                                                                     : wait_punch.result.selected_candidate.type);
-        probe_token = make_probe_token();
-        run_latency_loss_probe(sock, &wait_punch.result.selected_candidate, local_peer_id, probe_token.c_str(), from);
-        run_mtu_probe(sock, &wait_punch.result.selected_candidate, local_peer_id, probe_token.c_str(), from);
-        run_probe_responder_tail(sock, 1000);
+        probe_token = MakeProbeToken();
+        RunLatencyLossProbe(sock, &wait_punch.result.selected_candidate, local_peer_id, probe_token.c_str(), from);
+        RunMtuProbe(sock, &wait_punch.result.selected_candidate, local_peer_id, probe_token.c_str(), from);
+        RunProbeResponderTail(sock, 1000);
     } else {
         printf("UDP hole punch result (%s): failed\n", from);
     }
@@ -1043,7 +1043,7 @@ int main(int argc, char** argv)
     std::string           control_session_token;
     const ntrs_nat_info_t* nat = NULL;
 
-    if (!run_probe_session(base, async_client, ntrs_ip, (uint16_t)ntrs_port, peer_id, bind_ip, bind_device, probe1,
+    if (!RunProbeSession(base, async_client, ntrs_ip, (uint16_t)ntrs_port, peer_id, bind_ip, bind_device, probe1,
                            probe2, verbose, &probe)) {
         printf("async NAT detect failed: %s\n", probe.error_message);
         ntrs_async_client_destroy(async_client);
@@ -1076,8 +1076,8 @@ int main(int argc, char** argv)
     memset(&wait_register, 0, sizeof(wait_register));
     wait_register.base = base;
     if (!ntrs_async_register_peer(async_client, &request_id, fd, peer_id.c_str(), device_id.c_str(),
-                                  control_session_token.c_str(), nat, async_result_callback, &wait_register) ||
-        !wait_async_result(base, &wait_register, 3) || !wait_register.result.success) {
+                                  control_session_token.c_str(), nat, AsyncResultCallback, &wait_register) ||
+        !WaitAsyncResult(base, &wait_register, 3) || !wait_register.result.success) {
         printf("async register failed: %s\n", wait_register.result.error_message);
         close(probe_sock);
         close(fd);
@@ -1093,9 +1093,9 @@ int main(int argc, char** argv)
         wait_session.base = base;
         if (ntrs_async_create_session(async_client, &request_id, fd, peer_id.c_str(), device_id.c_str(),
                                       dst_peer.c_str(), dst_device.c_str(), control_session_token.c_str(),
-                                      async_result_callback, &wait_session) &&
-            wait_async_result(base, &wait_session, 5) && wait_session.result.success) {
-            try_hole_punch_from_async_signal(async_client, base, probe_sock, &wait_session.result.session_signal,
+                                      AsyncResultCallback, &wait_session) &&
+            WaitAsyncResult(base, &wait_session, 5) && wait_session.result.success) {
+            TryHolePunchFromAsyncSignal(async_client, base, probe_sock, &wait_session.result.session_signal,
                                              peer_id.c_str(), "session_create_rsp", verbose);
         } else {
             printf("async create session failed: %s\n", wait_session.result.error_message);
@@ -1105,9 +1105,9 @@ int main(int argc, char** argv)
         memset(&wait_signal, 0, sizeof(wait_signal));
         wait_signal.base = base;
         printf("waiting for session signal...\n");
-        if (ntrs_async_wait_for_signal(async_client, &request_id, fd, 15000, async_result_callback, &wait_signal) &&
-            wait_async_result(base, &wait_signal, 16) && wait_signal.result.success) {
-            try_hole_punch_from_async_signal(async_client, base, probe_sock, &wait_signal.result.session_signal,
+        if (ntrs_async_wait_for_signal(async_client, &request_id, fd, 15000, AsyncResultCallback, &wait_signal) &&
+            WaitAsyncResult(base, &wait_signal, 16) && wait_signal.result.success) {
+            TryHolePunchFromAsyncSignal(async_client, base, probe_sock, &wait_signal.result.session_signal,
                                              peer_id.c_str(), "session_notify", verbose);
         }
     }
@@ -1116,8 +1116,8 @@ int main(int argc, char** argv)
     memset(&wait_unregister, 0, sizeof(wait_unregister));
     wait_unregister.base = base;
     ntrs_async_unregister_peer(async_client, &request_id, fd, peer_id.c_str(), control_session_token.c_str(),
-                               "client_exit", async_result_callback, &wait_unregister);
-    wait_async_result(base, &wait_unregister, 2);
+                               "client_exit", AsyncResultCallback, &wait_unregister);
+    WaitAsyncResult(base, &wait_unregister, 2);
 
     close(probe_sock);
     close(fd);

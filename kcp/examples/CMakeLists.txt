@@ -23,7 +23,7 @@ target_link_libraries(ntrs_kcp_client.out kcpp_static ${LIBEVENT_STATIC_LIBRARIE
 if(KCPP_ENABLE_NTRS)
     add_executable(kcp_peer.out kcp_peer.cc)
     target_compile_options(kcp_peer.out PRIVATE -std=c++11)
-    target_link_libraries(kcp_peer.out kcpp_static stun ${LIBEVENT_STATIC_LIBRARIES} pthread)
+    target_link_libraries(kcp_peer.out kcpp_static ntrs ${LIBEVENT_STATIC_LIBRARIES} pthread)
 endif()
 
 add_executable(kcp_sendfile.out kcp_sendfile.cc file_info.cc)

@@ -8,22 +8,22 @@ namespace ntrs {
 
 namespace {
 
-static std::string safeMsgStringTag(const Message &msg, FieldTag tag)
+static std::string SafeMsgStringTag(const Message &msg, FieldTag tag)
 {
-    const char *value = messageGetStringByTag(&msg, tag);
+    const char *value = MessageGetStringByTag(&msg, tag);
     return value == NULL ? "" : value;
 }
 
-static uint32_t safeMsgU32Tag(const Message &msg, FieldTag tag, uint32_t default_value)
+static uint32_t SafeMsgU32Tag(const Message &msg, FieldTag tag, uint32_t default_value)
 {
     uint32_t value = default_value;
-    if (!messageGetU32ByTag(&msg, tag, &value)) {
+    if (!MessageGetU32ByTag(&msg, tag, &value)) {
         return default_value;
     }
     return value;
 }
 
-static uint64_t parseBootPrefix(const std::string &boot_id)
+static uint64_t ParseBootPrefix(const std::string &boot_id)
 {
     if (boot_id.empty()) {
         return 0;
@@ -40,13 +40,13 @@ static uint64_t parseBootPrefix(const std::string &boot_id)
     return (uint64_t)parsed;
 }
 
-static void appendU16(std::vector<uint8_t> *out, uint16_t value)
+static void AppendU16(std::vector<uint8_t> *out, uint16_t value)
 {
     out->push_back((uint8_t)((value >> 8) & 0xFFu));
     out->push_back((uint8_t)(value & 0xFFu));
 }
 
-static void appendU32(std::vector<uint8_t> *out, uint32_t value)
+static void AppendU32(std::vector<uint8_t> *out, uint32_t value)
 {
     out->push_back((uint8_t)((value >> 24) & 0xFFu));
     out->push_back((uint8_t)((value >> 16) & 0xFFu));
@@ -54,7 +54,7 @@ static void appendU32(std::vector<uint8_t> *out, uint32_t value)
     out->push_back((uint8_t)(value & 0xFFu));
 }
 
-static void appendU64(std::vector<uint8_t> *out, uint64_t value)
+static void AppendU64(std::vector<uint8_t> *out, uint64_t value)
 {
     out->push_back((uint8_t)((value >> 56) & 0xFFu));
     out->push_back((uint8_t)((value >> 48) & 0xFFu));
@@ -66,12 +66,12 @@ static void appendU64(std::vector<uint8_t> *out, uint64_t value)
     out->push_back((uint8_t)(value & 0xFFu));
 }
 
-static uint16_t readU16(const uint8_t *data)
+static uint16_t ReadU16(const uint8_t *data)
 {
     return (uint16_t)(((uint16_t)data[0] << 8) | (uint16_t)data[1]);
 }
 
-static uint32_t readU32(const uint8_t *data)
+static uint32_t ReadU32(const uint8_t *data)
 {
     return ((uint32_t)data[0] << 24) |
            ((uint32_t)data[1] << 16) |
@@ -79,7 +79,7 @@ static uint32_t readU32(const uint8_t *data)
            (uint32_t)data[3];
 }
 
-static uint64_t readU64(const uint8_t *data)
+static uint64_t ReadU64(const uint8_t *data)
 {
     return ((uint64_t)data[0] << 56) |
            ((uint64_t)data[1] << 48) |
@@ -91,18 +91,18 @@ static uint64_t readU64(const uint8_t *data)
            (uint64_t)data[7];
 }
 
-static bool appendString(std::vector<uint8_t> *out, const std::string &value)
+static bool AppendString(std::vector<uint8_t> *out, const std::string &value)
 {
     if (value.size() > 0xFFFFu) {
         return false;
     }
 
-    appendU16(out, (uint16_t)value.size());
+    AppendU16(out, (uint16_t)value.size());
     out->insert(out->end(), value.begin(), value.end());
     return true;
 }
 
-static bool readString(const uint8_t *data, size_t len, size_t *offset, std::string *out)
+static bool ReadString(const uint8_t *data, size_t len, size_t *offset, std::string *out)
 {
     uint16_t field_len = 0;
 
@@ -110,7 +110,7 @@ static bool readString(const uint8_t *data, size_t len, size_t *offset, std::str
         return false;
     }
 
-    field_len = readU16(data + *offset);
+    field_len = ReadU16(data + *offset);
     *offset += 2u;
     if (*offset + field_len > len) {
         return false;
@@ -121,36 +121,36 @@ static bool readString(const uint8_t *data, size_t len, size_t *offset, std::str
     return true;
 }
 
-static bool appendNode(std::vector<uint8_t> *out, const ClusterNodeState &node)
+static bool AppendNode(std::vector<uint8_t> *out, const ClusterNodeState &node)
 {
-    if (!appendString(out, node.node_id) ||
-        !appendString(out, node.boot_id) ||
-        !appendString(out, node.status) ||
-        !appendString(out, node.region) ||
-        !appendString(out, node.probe_endpoint) ||
-        !appendString(out, node.control_endpoint) ||
-        !appendString(out, node.nat_type) ||
-        !appendString(out, node.last_heartbeat)) {
+    if (!AppendString(out, node.node_id) ||
+        !AppendString(out, node.boot_id) ||
+        !AppendString(out, node.status) ||
+        !AppendString(out, node.region) ||
+        !AppendString(out, node.probe_endpoint) ||
+        !AppendString(out, node.control_endpoint) ||
+        !AppendString(out, node.nat_type) ||
+        !AppendString(out, node.last_heartbeat)) {
         return false;
     }
 
-    appendU32(out, node.heartbeat_interval_sec);
-    appendU64(out, node.last_seen_mono_sec);
-    appendU32(out, (uint32_t)node.load);
+    AppendU32(out, node.heartbeat_interval_sec);
+    AppendU64(out, node.last_seen_mono_sec);
+    AppendU32(out, (uint32_t)node.load);
     return true;
 }
 
-static bool readNode(const uint8_t *data, size_t len, size_t *offset, ClusterNodeState *node)
+static bool ReadNode(const uint8_t *data, size_t len, size_t *offset, ClusterNodeState *node)
 {
     if (node == NULL ||
-        !readString(data, len, offset, &node->node_id) ||
-        !readString(data, len, offset, &node->boot_id) ||
-        !readString(data, len, offset, &node->status) ||
-        !readString(data, len, offset, &node->region) ||
-        !readString(data, len, offset, &node->probe_endpoint) ||
-        !readString(data, len, offset, &node->control_endpoint) ||
-        !readString(data, len, offset, &node->nat_type) ||
-        !readString(data, len, offset, &node->last_heartbeat)) {
+        !ReadString(data, len, offset, &node->node_id) ||
+        !ReadString(data, len, offset, &node->boot_id) ||
+        !ReadString(data, len, offset, &node->status) ||
+        !ReadString(data, len, offset, &node->region) ||
+        !ReadString(data, len, offset, &node->probe_endpoint) ||
+        !ReadString(data, len, offset, &node->control_endpoint) ||
+        !ReadString(data, len, offset, &node->nat_type) ||
+        !ReadString(data, len, offset, &node->last_heartbeat)) {
         return false;
     }
 
@@ -158,11 +158,11 @@ static bool readNode(const uint8_t *data, size_t len, size_t *offset, ClusterNod
         return false;
     }
 
-    node->heartbeat_interval_sec = readU32(data + *offset);
+    node->heartbeat_interval_sec = ReadU32(data + *offset);
     *offset += 4u;
-    node->last_seen_mono_sec = readU64(data + *offset);
+    node->last_seen_mono_sec = ReadU64(data + *offset);
     *offset += 8u;
-    node->load = (int32_t)readU32(data + *offset);
+    node->load = (int32_t)ReadU32(data + *offset);
     *offset += 4u;
     return !node->node_id.empty();
 }
@@ -177,7 +177,7 @@ HubClusterState::HubClusterState()
 bool HubClusterState::applyMessage(const std::string &topic_node_id,
                                    const Message &msg,
                                    uint64_t now_mono_sec,
-                                   const std::string &now_iso8601,
+                                   const std::string &NowIso8601,
                                    std::string *event_name,
                                    ClusterNodeState *event_node)
 {
@@ -190,12 +190,12 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
         return false;
     }
 
-    field_node_id = safeMsgStringTag(msg, FieldTag::NODE_ID);
+    field_node_id = SafeMsgStringTag(msg, FieldTag::NODE_ID);
     if (!field_node_id.empty() && field_node_id != topic_node_id) {
         return false;
     }
 
-    incoming_boot_id = safeMsgStringTag(msg, FieldTag::BOOT_ID);
+    incoming_boot_id = SafeMsgStringTag(msg, FieldTag::BOOT_ID);
     if (incoming_boot_id.empty()) {
         return false;
     }
@@ -204,7 +204,7 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
     if (it == nodes_.end()) {
         uint8_t incoming_status = (uint8_t)NodeStatusCode::UNKNOWN;
         if (msg.type == MessageType::NODE_PRESENCE &&
-            messageGetU8ByTag(&msg, FieldTag::STATUS, &incoming_status) &&
+            MessageGetU8ByTag(&msg, FieldTag::STATUS, &incoming_status) &&
             incoming_status == (uint8_t)NodeStatusCode::OFFLINE) {
             return false;
         }
@@ -214,7 +214,7 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
         node.status = "unknown";
         node.heartbeat_interval_sec = 5;
         node.last_seen_mono_sec = now_mono_sec;
-        node.last_heartbeat = now_iso8601;
+        node.last_heartbeat = NowIso8601;
         nodes_[topic_node_id] = node;
         it = nodes_.find(topic_node_id);
         created = true;
@@ -230,7 +230,7 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
         node.node_id = topic_node_id;
         node.heartbeat_interval_sec = 5;
         node.last_seen_mono_sec = now_mono_sec;
-        node.last_heartbeat = now_iso8601;
+        node.last_heartbeat = NowIso8601;
     }
 
     std::string next_event;
@@ -239,26 +239,26 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
     if (msg.type == MessageType::NODE_REGISTER) {
         node.node_id = topic_node_id;
         node.boot_id = incoming_boot_id;
-        node.region = safeMsgStringTag(msg, FieldTag::REGION);
-        node.probe_endpoint = safeMsgStringTag(msg, FieldTag::PROBE_ENDPOINT);
-        node.control_endpoint = safeMsgStringTag(msg, FieldTag::CONTROL_ENDPOINT);
-        node.nat_type = safeMsgStringTag(msg, FieldTag::NAT_TYPE);
-        node.heartbeat_interval_sec = safeMsgU32Tag(
+        node.region = SafeMsgStringTag(msg, FieldTag::REGION);
+        node.probe_endpoint = SafeMsgStringTag(msg, FieldTag::PROBE_ENDPOINT);
+        node.control_endpoint = SafeMsgStringTag(msg, FieldTag::CONTROL_ENDPOINT);
+        node.nat_type = SafeMsgStringTag(msg, FieldTag::NAT_TYPE);
+        node.heartbeat_interval_sec = SafeMsgU32Tag(
             msg, FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec == 0 ? 5 : node.heartbeat_interval_sec);
         node.last_seen_mono_sec = now_mono_sec;
-        node.last_heartbeat = now_iso8601;
+        node.last_heartbeat = NowIso8601;
         if (node.status.empty()) {
-            node.status = node_status_code_name(NodeStatusCode::REGISTERED);
+            node.status = NodeStatusCodeName(NodeStatusCode::REGISTERED);
         }
         next_event = created ? "node_registered" : "node_generation_replaced";
         changed = true;
     } else if (msg.type == MessageType::NODE_PRESENCE) {
         uint8_t status_code = (uint8_t)NodeStatusCode::UNKNOWN;
-        if (!messageGetU8ByTag(&msg, FieldTag::STATUS, &status_code) ||
+        if (!MessageGetU8ByTag(&msg, FieldTag::STATUS, &status_code) ||
             status_code == (uint8_t)NodeStatusCode::UNKNOWN) {
             return false;
         }
-        std::string status = node_status_code_name((NodeStatusCode)status_code);
+        std::string status = NodeStatusCodeName((NodeStatusCode)status_code);
 
         if (status_code == (uint8_t)NodeStatusCode::OFFLINE && !isCurrentGeneration(node, incoming_boot_id)) {
             return false;
@@ -268,35 +268,35 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
         node.boot_id = incoming_boot_id;
         node.status = status;
         node.last_seen_mono_sec = now_mono_sec;
-        node.last_heartbeat = safeMsgStringTag(msg, FieldTag::TS);
+        node.last_heartbeat = SafeMsgStringTag(msg, FieldTag::TS);
         if (node.last_heartbeat.empty()) {
-            node.last_heartbeat = now_iso8601;
+            node.last_heartbeat = NowIso8601;
         }
         if (status_code == (uint8_t)NodeStatusCode::ONLINE) {
             next_event = created ? "node_online" : "node_online";
         } else if (status_code == (uint8_t)NodeStatusCode::OFFLINE) {
             uint8_t reason_code = (uint8_t)ReasonCode::NONE;
-            messageGetU8ByTag(&msg, FieldTag::REASON, &reason_code);
+            MessageGetU8ByTag(&msg, FieldTag::REASON, &reason_code);
             next_event = reason_code == (uint8_t)ReasonCode::LWT ? "node_abnormal_offline" : "node_offline";
         } else {
             next_event = "node_status_changed";
         }
         changed = true;
     } else if (msg.type == MessageType::NODE_HEARTBEAT) {
-        std::string nat_type = safeMsgStringTag(msg, FieldTag::NAT_TYPE);
+        std::string nat_type = SafeMsgStringTag(msg, FieldTag::NAT_TYPE);
         node.node_id = topic_node_id;
         node.boot_id = incoming_boot_id;
-        node.status = node_status_code_name(NodeStatusCode::ONLINE);
+        node.status = NodeStatusCodeName(NodeStatusCode::ONLINE);
         if (!nat_type.empty()) {
             node.nat_type = nat_type;
         }
-        node.load = (int32_t)safeMsgU32Tag(msg, FieldTag::LOAD, 0);
+        node.load = (int32_t)SafeMsgU32Tag(msg, FieldTag::LOAD, 0);
         node.last_seen_mono_sec = now_mono_sec;
-        node.last_heartbeat = safeMsgStringTag(msg, FieldTag::TS);
+        node.last_heartbeat = SafeMsgStringTag(msg, FieldTag::TS);
         if (node.last_heartbeat.empty()) {
-            node.last_heartbeat = now_iso8601;
+            node.last_heartbeat = NowIso8601;
         }
-        node.heartbeat_interval_sec = safeMsgU32Tag(
+        node.heartbeat_interval_sec = SafeMsgU32Tag(
             msg, FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec == 0 ? 5 : node.heartbeat_interval_sec);
         next_event = "node_heartbeat";
         changed = true;
@@ -344,20 +344,20 @@ bool HubClusterState::sweepExpired(uint64_t now_mono_sec,
 
 bool HubClusterState::restoreFromSnapshot(const Message &msg)
 {
-    uint64_t cluster_version = 0;
+    uint64_t clusterVersion = 0;
     std::vector<ClusterNodeState> nodes;
 
     if (!nodes_.empty() || cluster_version_ != 0) {
         return false;
     }
-    if (!parseClusterSnapshotMessage(msg, &cluster_version, &nodes)) {
+    if (!ParseClusterSnapshotMessage(msg, &clusterVersion, &nodes)) {
         return false;
     }
 
     for (size_t i = 0; i < nodes.size(); ++i) {
         nodes_[nodes[i].node_id] = nodes[i];
     }
-    cluster_version_ = cluster_version;
+    cluster_version_ = clusterVersion;
     return true;
 }
 
@@ -366,7 +366,7 @@ const std::map<std::string, ClusterNodeState> &HubClusterState::nodes() const
     return nodes_;
 }
 
-uint64_t HubClusterState::cluster_version() const
+uint64_t HubClusterState::clusterVersion() const
 {
     return cluster_version_;
 }
@@ -394,7 +394,7 @@ bool HubClusterState::isCurrentGeneration(const ClusterNodeState &current,
 
 uint64_t HubClusterState::bootGenerationOrder(const std::string &boot_id) const
 {
-    return parseBootPrefix(boot_id);
+    return ParseBootPrefix(boot_id);
 }
 
 uint32_t HubClusterState::heartbeatTimeoutSec(const ClusterNodeState &node) const
@@ -409,7 +409,7 @@ void HubClusterState::bumpVersion()
     ++cluster_version_;
 }
 
-bool encodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState> &nodes, std::vector<uint8_t> *out)
+bool EncodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState> &nodes, std::vector<uint8_t> *out)
 {
     if (out == NULL) {
         return false;
@@ -421,11 +421,11 @@ bool encodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState> &n
     }
 
     out->push_back(1u);
-    appendU16(out, (uint16_t)nodes.size());
+    AppendU16(out, (uint16_t)nodes.size());
     for (std::map<std::string, ClusterNodeState>::const_iterator it = nodes.begin();
          it != nodes.end();
          ++it) {
-        if (!appendNode(out, it->second)) {
+        if (!AppendNode(out, it->second)) {
             out->clear();
             return false;
         }
@@ -433,7 +433,7 @@ bool encodeClusterSnapshotNodes(const std::map<std::string, ClusterNodeState> &n
     return true;
 }
 
-bool decodeClusterSnapshotNodes(const void *data, size_t len, std::vector<ClusterNodeState> *nodes)
+bool DecodeClusterSnapshotNodes(const void *data, size_t len, std::vector<ClusterNodeState> *nodes)
 {
     const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data);
     uint16_t expected_count = 0;
@@ -447,14 +447,14 @@ bool decodeClusterSnapshotNodes(const void *data, size_t len, std::vector<Cluste
     }
 
     offset = 1u;
-    expected_count = readU16(bytes + offset);
+    expected_count = ReadU16(bytes + offset);
     offset += 2u;
     nodes->clear();
     nodes->reserve(expected_count);
 
     for (uint16_t i = 0; i < expected_count; ++i) {
         ClusterNodeState node;
-        if (!readNode(bytes, len, &offset, &node)) {
+        if (!ReadNode(bytes, len, &offset, &node)) {
             nodes->clear();
             return false;
         }
@@ -468,42 +468,42 @@ bool decodeClusterSnapshotNodes(const void *data, size_t len, std::vector<Cluste
     return true;
 }
 
-bool buildClusterSnapshotMessage(const std::map<std::string, ClusterNodeState> &nodes,
-                                 uint64_t cluster_version,
+bool BuildClusterSnapshotMessage(const std::map<std::string, ClusterNodeState> &nodes,
+                                 uint64_t clusterVersion,
                                  const std::string &ts,
                                  Message *msg)
 {
     std::vector<uint8_t> encoded_nodes;
 
-    if (msg == NULL || !encodeClusterSnapshotNodes(nodes, &encoded_nodes)) {
+    if (msg == NULL || !EncodeClusterSnapshotNodes(nodes, &encoded_nodes)) {
         return false;
     }
 
-    messageInit(msg, MessageType::HUB_CLUSTER_SNAPSHOT, (uint32_t)cluster_version);
-    if (!messageAddU64ByTag(msg, FieldTag::CLUSTER_VERSION, cluster_version) ||
-        !messageAddU32ByTag(msg, FieldTag::NODE_COUNT, (uint32_t)nodes.size()) ||
-        !messageAddBytesByTag(msg, FieldTag::NODES, encoded_nodes.data(), (uint16_t)encoded_nodes.size()) ||
-        !messageAddStringByTag(msg, FieldTag::TS, ts.c_str())) {
+    MessageInit(msg, MessageType::HUB_CLUSTER_SNAPSHOT, (uint32_t)clusterVersion);
+    if (!MessageAddU64ByTag(msg, FieldTag::CLUSTER_VERSION, clusterVersion) ||
+        !MessageAddU32ByTag(msg, FieldTag::NODE_COUNT, (uint32_t)nodes.size()) ||
+        !MessageAddBytesByTag(msg, FieldTag::NODES, encoded_nodes.data(), (uint16_t)encoded_nodes.size()) ||
+        !MessageAddStringByTag(msg, FieldTag::TS, ts.c_str())) {
         return false;
     }
 
     return true;
 }
 
-bool parseClusterSnapshotMessage(const Message &msg, uint64_t *cluster_version, std::vector<ClusterNodeState> *nodes)
+bool ParseClusterSnapshotMessage(const Message &msg, uint64_t *clusterVersion, std::vector<ClusterNodeState> *nodes)
 {
     const uint8_t *encoded_nodes = NULL;
     uint16_t encoded_nodes_len = 0;
     uint32_t node_count = 0;
     uint64_t parsed_cluster_version = 0;
 
-    if (cluster_version == NULL || nodes == NULL || msg.type != MessageType::HUB_CLUSTER_SNAPSHOT) {
+    if (clusterVersion == NULL || nodes == NULL || msg.type != MessageType::HUB_CLUSTER_SNAPSHOT) {
         return false;
     }
-    if (!messageGetU64(&msg, "cluster_version", &parsed_cluster_version) ||
-        !messageGetU32ByTag(&msg, FieldTag::NODE_COUNT, &node_count) ||
-        !messageGetBytesByTag(&msg, FieldTag::NODES, &encoded_nodes, &encoded_nodes_len) ||
-        !decodeClusterSnapshotNodes(encoded_nodes, encoded_nodes_len, nodes)) {
+    if (!MessageGetU64(&msg, "clusterVersion", &parsed_cluster_version) ||
+        !MessageGetU32ByTag(&msg, FieldTag::NODE_COUNT, &node_count) ||
+        !MessageGetBytesByTag(&msg, FieldTag::NODES, &encoded_nodes, &encoded_nodes_len) ||
+        !DecodeClusterSnapshotNodes(encoded_nodes, encoded_nodes_len, nodes)) {
         return false;
     }
     if (nodes->size() != node_count) {
@@ -511,7 +511,7 @@ bool parseClusterSnapshotMessage(const Message &msg, uint64_t *cluster_version, 
         return false;
     }
 
-    *cluster_version = parsed_cluster_version;
+    *clusterVersion = parsed_cluster_version;
     return true;
 }
 

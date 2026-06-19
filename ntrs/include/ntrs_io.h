@@ -8,10 +8,10 @@
 namespace eular {
 namespace ntrs {
 
-bool waitReadable(int fd, int timeout_ms);
-bool setSocketTimeoutsMs(int fd, int timeout_ms);
-bool connectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd_out);
-bool recvMessageWithTimeout(int fd, int timeout_ms, Message* msg);
+bool WaitReadable(int fd, int timeout_ms);
+bool SetSocketTimeoutsMs(int fd, int timeout_ms);
+bool ConnectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd_out);
+bool RecvMessageWithTimeout(int fd, int timeout_ms, Message* msg);
 
 }  // namespace ntrs
 }  // namespace eular

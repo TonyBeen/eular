@@ -14,12 +14,12 @@ namespace ntrs {
 
 namespace {
 
-static int socketLastError()
+static int SocketLastError()
 {
     return EVUTIL_SOCKET_ERROR();
 }
 
-static bool socketInterrupted(int err)
+static bool SocketInterrupted(int err)
 {
 #if defined(_WIN32)
     return err == WSAEINTR;
@@ -28,19 +28,19 @@ static bool socketInterrupted(int err)
 #endif
 }
 
-static bool recvExactTimeout(int fd, void* buf, size_t len, int timeout_ms)
+static bool RecvExactTimeout(int fd, void* buf, size_t len, int timeout_ms)
 {
     uint8_t* ptr = static_cast<uint8_t*>(buf);
     size_t   used = 0;
 
     while (used < len) {
-        if (!waitReadable(fd, timeout_ms)) {
+        if (!WaitReadable(fd, timeout_ms)) {
             return false;
         }
 
         ssize_t nread = recv(fd, ptr + used, len - used, 0);
         if (nread <= 0) {
-            if (nread < 0 && socketInterrupted(socketLastError())) {
+            if (nread < 0 && SocketInterrupted(SocketLastError())) {
                 continue;
             }
             return false;
@@ -54,7 +54,7 @@ static bool recvExactTimeout(int fd, void* buf, size_t len, int timeout_ms)
 
 }  // namespace
 
-bool waitReadable(int fd, int timeout_ms)
+bool WaitReadable(int fd, int timeout_ms)
 {
     fd_set rfds;
     struct timeval tv;
@@ -76,7 +76,7 @@ bool waitReadable(int fd, int timeout_ms)
         if (ret == 0) {
             return false;
         }
-        if (!socketInterrupted(socketLastError())) {
+        if (!SocketInterrupted(SocketLastError())) {
             return false;
         }
 
@@ -85,7 +85,7 @@ bool waitReadable(int fd, int timeout_ms)
     }
 }
 
-bool setSocketTimeoutsMs(int fd, int timeout_ms)
+bool SetSocketTimeoutsMs(int fd, int timeout_ms)
 {
     struct timeval tv;
 
@@ -99,7 +99,7 @@ bool setSocketTimeoutsMs(int fd, int timeout_ms)
            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
 }
 
-bool connectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd_out)
+bool ConnectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd_out)
 {
     struct addrinfo  hints;
     struct addrinfo* result = NULL;
@@ -126,7 +126,7 @@ bool connectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd
             continue;
         }
         if (connect(fd, it->ai_addr, it->ai_addrlen) == 0) {
-            setSocketTimeoutsMs(fd, timeout_ms);
+            SetSocketTimeoutsMs(fd, timeout_ms);
             *fd_out = fd;
             freeaddrinfo(result);
             return true;
@@ -139,7 +139,7 @@ bool connectTcpHostPort(const char* host, uint16_t port, int timeout_ms, int* fd
     return false;
 }
 
-bool recvMessageWithTimeout(int fd, int timeout_ms, Message* msg)
+bool RecvMessageWithTimeout(int fd, int timeout_ms, Message* msg)
 {
     uint8_t  header[FRAME_HDR_SIZE];
     uint8_t  frame[8192];
@@ -148,21 +148,21 @@ bool recvMessageWithTimeout(int fd, int timeout_ms, Message* msg)
     if (msg == NULL) {
         return false;
     }
-    if (!recvExactTimeout(fd, header, sizeof(header), timeout_ms)) {
+    if (!RecvExactTimeout(fd, header, sizeof(header), timeout_ms)) {
         return false;
     }
-    if (!frameSizeFromHeader(header, sizeof(header), &frame_size) ||
+    if (!FrameSizeFromHeader(header, sizeof(header), &frame_size) ||
         frame_size < FRAME_HDR_SIZE || frame_size > sizeof(frame)) {
         return false;
     }
 
     memcpy(frame, header, sizeof(header));
     if (frame_size > sizeof(header) &&
-        !recvExactTimeout(fd, frame + sizeof(header), frame_size - sizeof(header), timeout_ms)) {
+        !RecvExactTimeout(fd, frame + sizeof(header), frame_size - sizeof(header), timeout_ms)) {
         return false;
     }
 
-    return decodeMessage(frame, frame_size, msg);
+    return DecodeMessage(frame, frame_size, msg);
 }
 
 }  // namespace ntrs
