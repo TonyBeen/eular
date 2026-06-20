@@ -2,43 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-#include <utils/sysdef.h>
 
 #include "sha256.h"
 
-#if defined(OS_WINDOWS)
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-
-#if defined(OS_WINDOWS)
-#include <errno.h>
-#else
-#include <fcntl.h>
-#endif
+#include <random>
 #include <sstream>
-
-#if defined(__linux__)
-#include <sys/random.h>
-#endif
-
-#if defined(OS_WINDOWS)
-static bool FillRandomBytesWindows(void* buf, size_t len)
-{
-    uint8_t* out = static_cast<uint8_t*>(buf);
-    for (size_t i = 0; i < len; ++i) {
-        unsigned int value = 0;
-        if (rand_s(&value) != 0) {
-            return false;
-        }
-        out[i] = (uint8_t)(value & 0xFFu);
-    }
-    return true;
-}
-#endif
 
 namespace eular {
 namespace ntrs {
@@ -97,57 +65,21 @@ static std::string HmacSha256Hex(const std::string& key, const std::string& mess
 static bool FillRandomBytes(void* buf, size_t len)
 {
     uint8_t* out = static_cast<uint8_t*>(buf);
-    size_t   offset = 0;
 
-#if defined(OS_WINDOWS)
-    return FillRandomBytesWindows(buf, len);
-#endif
-
-#if defined(__linux__)
-    while (offset < len) {
-        ssize_t n = getrandom(out + offset, len - offset, 0);
-        if (n > 0) {
-            offset += (size_t)n;
-            continue;
-        }
-        break;
-    }
-    if (offset == len) {
-        return true;
-    }
-    offset = 0;
-#endif
-
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd >= 0) {
+    try {
+        // 鉴权 token 需要不可预测性，使用 random_device 获取系统熵源
+        static thread_local std::random_device rd;
+        size_t                                 offset = 0;
         while (offset < len) {
-            ssize_t n = read(fd, out + offset, len - offset);
-            if (n <= 0) {
-                break;
+            unsigned int value = rd();
+            for (size_t i = 0; i < sizeof(value) && offset < len; ++i) {
+                out[offset++] = static_cast<uint8_t>((value >> (i * 8u)) & 0xFFu);
             }
-            offset += (size_t)n;
         }
-        close(fd);
-        if (offset == len) {
-            return true;
-        }
+        return true;
+    } catch (...) {
+        return false;
     }
-
-    return false;
-}
-
-static uint64_t WeakRandom64()
-{
-    uint64_t a = (uint64_t)time(NULL);
-    uint64_t b = (uint64_t)
-#if defined(OS_WINDOWS)
-        _getpid();
-#else
-        getpid();
-#endif
-    uint64_t c = (uint64_t)rand();
-    uint64_t d = (uint64_t)rand();
-    return (a << 32) ^ (b << 16) ^ (c << 8) ^ d;
 }
 
 static std::string RandomHexToken(const char* prefix)
@@ -157,12 +89,7 @@ static std::string RandomHexToken(const char* prefix)
     std::ostringstream oss;
 
     if (!FillRandomBytes(bytes, sizeof(bytes))) {
-        uint64_t value1 = WeakRandom64();
-        uint64_t value2 = WeakRandom64();
-        for (size_t i = 0; i < 8; ++i) {
-            bytes[i] = (uint8_t)((value1 >> ((7u - i) * 8u)) & 0xFFu);
-            bytes[i + 8] = (uint8_t)((value2 >> ((7u - i) * 8u)) & 0xFFu);
-        }
+        return "";
     }
 
     oss << prefix;
@@ -199,6 +126,12 @@ bool ControlAuthManager::issueSession(const std::string& peer_id, const std::str
     ControlSession current;
     current.peer_id = peer_id;
     current.token = mintToken(peer_id, fd, now_sec);
+    if (current.token.empty()) {
+        if (reason != NULL) {
+            *reason = "token random source unavailable";
+        }
+        return false;
+    }
     current.fd = fd;
     current.expire_at_sec = now_sec + session_ttl_sec_;
     sessions_[fd] = current;
@@ -264,6 +197,12 @@ bool ControlAuthManager::issuePeerSession(const std::string& src_peer_id, const 
 
     current.session_id = session_id;
     current.token = MintPeerSessionToken(src_peer_id, dst_peer_id, now_sec);
+    if (current.token.empty()) {
+        if (reason != NULL) {
+            *reason = "token random source unavailable";
+        }
+        return false;
+    }
     current.src_peer_id = src_peer_id;
     current.dst_peer_id = dst_peer_id;
     current.expire_at_sec = now_sec + (ttl_sec == 0 ? session_ttl_sec_ : ttl_sec);
