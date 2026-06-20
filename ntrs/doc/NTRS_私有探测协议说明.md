@@ -1,0 +1,230 @@
+# NTRS 私有探测协议说明
+
+## 摘要
+
+NTRS 不以标准 STUN/RFC5780 作为长期公开探测协议，而是采用私有 NAT 探测和打洞协议。目标是减少默认公开暴露面，避免 `3478/3479` 固定端口和标准 STUN 线协议指纹，同时保留双节点 NAT 分类、候选生成和打洞编排能力。
+
+本文档描述当前 `ntrs` 实现中的控制面鉴权、会话 token、私有探测授权和后续协议演进方向。
+
+## 控制面鉴权
+
+控制面鉴权采用两阶段模型：
+
+1. client 使用 `bootstrap_token` 发起 `AUTH_REQ`。
+2. node 校验 `bootstrap_token` 后签发短期 `session_token`。
+3. 后续控制面请求携带 `session_token`，node 按连接 fd、peer_id、过期时间进行校验。
+
+### `bootstrap_token`
+
+`bootstrap_token` 是 client 初次接入控制面时提交的引导密钥。node 侧对应 `ControlAuthManager` 的 `shared_secret`。
+
+- 默认值为 `ntrs-dev-secret`。
+- 生产环境必须通过 `--auth-secret` 或等价配置替换为强随机密钥。
+- `bootstrap_token` 只用于换取短期 `session_token`，不直接作为后续控制请求的长期凭据。
+
+### `session_token`
+
+`session_token` 是 node 签发的短期控制会话 token，当前格式为：
+
+- `ctl_` 前缀
+- 16 字节随机数
+- 32 个十六进制字符编码
+
+node 将 `session_token` 绑定到当前控制连接 fd，并记录：
+
+- `peer_id`
+- `token`
+- `fd`
+- `expire_at_sec`
+
+后续请求通过 `validateSession(fd, peer_id, session_token, now_sec)` 校验：
+
+- fd 必须存在已签发 session。
+- `session_token` 必须匹配。
+- 如果请求指定 `peer_id`，必须与 session 中的 `peer_id` 一致。
+- 当前时间必须早于 `expire_at_sec`。
+- 校验成功后刷新 session 过期时间。
+
+当前默认 session TTL 为 30 秒，属于滑动续期。
+
+## 控制面请求鉴权范围
+
+以下请求必须携带有效 `session_token`：
+
+- `REGISTER_REQ`
+- `HEARTBEAT_REQ`
+- `UNREGISTER_REQ`
+- `SESSION_CREATE_REQ`
+- `NAT_PROBE_REQ`
+- `FILTER_PROBE_REQ`
+- 节点联邦请求，例如 `SERVER_INFO_REQ`、`SERVER_SEND_PROBE_REQ`
+
+其中：
+
+- peer 普通请求通常校验 `fd + peer_id + session_token`。
+- NAT probe 类请求可只校验 `fd + session_token`，再从 session 中取 owner peer id。
+- 节点联邦请求使用固定 peer id `service_node_federation` 进行控制面 session 校验。
+
+## Peer 会话授权
+
+当一个 peer 请求与另一个 peer 建立穿透会话时，node 处理 `SESSION_CREATE_REQ`：
+
+1. 校验发起方的控制面 `session_token`。
+2. 确认发起方 peer/device 已注册在当前 fd 上。
+3. 查找目标 peer/device 是否在线。
+4. 生成 `session_id` 和 `peer_session_token`。
+5. 返回目标地址、角色、打洞策略和短期会话凭据。
+
+当前格式：
+
+- `session_id`: `sid_` + 16 字节随机数的 hex 编码
+- `peer_session_token`: `peer_` + 16 字节随机数的 hex 编码
+
+peer session 由 `ControlAuthManager` 保存，并带有独立过期时间。
+
+## 随机 token 生成
+
+控制面 session、peer session id、peer session token 均使用随机 token。
+
+当前随机源优先级：
+
+1. `std::random_device`
+2. 平台安全随机源
+   - Linux: `getrandom()`
+   - Unix-like fallback: `/dev/urandom`
+   - Windows: `rand_s()`
+3. 极端情况下使用弱随机兜底，保证探测流程可继续
+
+弱随机兜底只用于系统安全随机源不可用的异常环境。正常生产环境应命中前两级随机源。
+
+## 私有 UDP 探测
+
+私有 UDP 探测包采用二进制帧，不使用标准 STUN 文本或公开线协议指纹。允许个别业务字段内容为文本，例如 `peer_id`，但 framing、类型、长度和校验字段应使用二进制结构。
+
+私有 UDP 探测包至少覆盖：
+
+- `PROBE_REQ`
+- `PROBE_RSP`
+- `FILTER_REQ`
+- `FILTER_RSP`
+- `PUNCH_REQ`
+- `PUNCH_ACK`
+
+保留双节点协同语义：
+
+- `probe1`
+- `change-port`
+- `change-ip`
+- `probe2`
+
+## 探测包字段
+
+私有探测/打洞包至少应携带：
+
+- `version`
+- `msg_type`
+- `request_id`
+- `probe_token`
+- `phase`
+- `sequence`
+- `timestamp`
+- `auth_tag` 或等价授权字段
+
+响应包根据需要附带：
+
+- `mapped_addr`
+- `origin_addr`
+- `other_addr`
+- 对应 request 的 `sequence/request_id`
+
+## `probe_token` 与 `probe_auth`
+
+当前实现中需要区分两个概念：
+
+- `probe_token`: 探测流程中的随机 token，用于匹配请求和响应。
+- `probe_auth`: 跨节点 probe 授权 HMAC，用于证明某个节点被允许向指定目标发送 probe。
+
+当前 `probe_auth` 由 `MintProbeAuthorization()` 生成，签名消息为：
+
+```text
+probe|owner_peer_id|target_ip|target_port|probe_token|expire_at_sec
+```
+
+签名算法：
+
+```text
+HMAC-SHA256(shared_secret, payload)
+```
+
+输出为 32 字节摘要的 64 字符十六进制字符串。
+
+接收方通过 `ValidateProbeAuthorization()` 校验：
+
+- `owner_peer_id` 非空
+- `target_ip` 非空
+- `target_port != 0`
+- `probe_token` 非空
+- `authorization` 非空
+- `expire_at_sec` 未过期
+- HMAC 重新计算结果匹配
+
+默认不绑定完整 `src_ip:src_port`，避免 NAT 映射变化导致误杀。如需绑定，应优先绑定更稳定的上下文信息。
+
+## 结果判定语义
+
+NTRS 结果不能只有成功/失败，必须输出结构化结果，至少区分：
+
+- `SUCCESS`
+- `PROBABLE_LOSS`
+- `NO_RESPONSE`
+- `BLOCKED`
+- `LOCAL_SEND_FAILED`
+- `ICMP_UNREACHABLE`
+- `TIMED_OUT`
+
+### NAT 探测判定要求
+
+- 不允许“一次超时就判死”。
+- 需要多轮发送和多数成功规则。
+- 本地明确发送失败与纯超时必须区分。
+- 明确 ICMP 不可达与纯无响应必须区分。
+
+### UDP 打洞判定要求
+
+- 成功依据必须是合法 `PUNCH_REQ/ACK` 闭环。
+- 不允许“收到任意 UDP 包就视为成功”。
+- `PUNCH_ACK` 不允许继续触发回包，避免自激回环。
+
+### MTU/探测失败解释要求
+
+若后续示例层继续做 MTU 测试，示例也应区分：
+
+- 本地 `EMSGSIZE`
+- 对端未回 ACK
+- 疑似丢包
+
+不把所有 probe timeout 都直接解释为 MTU 过大。
+
+## 端口和暴露面
+
+- 不再默认固定 `3478/3479`。
+- node 应通过配置决定私有 probe 端口。
+- 数据面端口只对携带合法 token 或合法私有探测上下文的包响应。
+- 对未知包、公开 STUN 包、非法 token 包一律静默丢弃。
+
+## 后续演进
+
+当前实现采用随机 `probe_token` + 独立 `probe_auth` 的方式。后续可以演进为自描述 MAC token：
+
+- token payload 包含 `ver`、`kid`、`exp`、`nonce`、`peer_id`、`session_id`、`target_node_id`、`phase_mask`、端点 flags。
+- token 使用 `HMAC-SHA256(secret[kid], payload)`。
+- 可截断 MAC 以缩短包长。
+- token 过期、phase 不符、target node 不符时静默丢弃。
+
+## 当前范围约束
+
+本文档只服务于 `ntrs + kcp` 路线：
+
+- 不定义 `utp` 接口
+- 不定义 TURN
+- 不定义对第三方标准 STUN client 的兼容模式

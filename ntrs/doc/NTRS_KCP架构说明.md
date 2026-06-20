@@ -6,6 +6,8 @@
 
 当前范围只覆盖 `ntrs + kcp`，不涉及 `utp`。
 
+私有探测协议和鉴权细节见 `NTRS_私有探测协议说明.md`。本文只描述 `ntrs` 与 `kcp` 的模块边界和数据流。
+
 ## 分层
 
 ### `ntrs/core`
@@ -13,6 +15,9 @@
 负责：
 
 - control/auth/session
+- `bootstrap_token` 到短期 `session_token` 的控制面鉴权
+- `session_id` / `peer_session_token` 的短期会话授权
+- `probe_token` 匹配与跨节点 `probe_auth` HMAC 授权
 - 私有 NAT 探测协议编解码
 - NAT 分类状态机
 - UDP 打洞状态机
@@ -48,7 +53,7 @@
 2. `kcp_bind()` 绑定唯一 UDP socket。
 3. `kcp_ntrs_configure()` 注入 node/auth/local 参数。
 4. `kcp_ntrs_start()` 启动 NTRS：
-   - control connect/auth
+   - control connect/auth，使用 `bootstrap_token` 换取短期 `session_token`
    - request probe endpoints
    - NAT detect
    - register
@@ -65,6 +70,7 @@
 - NTRS 数据面协议统一使用二进制帧，不再使用文本前缀识别消息类型。
 - `peer_id`、`device_id` 等业务字段内容可以是文本，但必须通过二进制 TLV 或定长二进制字段承载。
 - `probe/punch` 二进制帧的消息类型、阶段、请求编号、序列号、长度和认证字段必须全部是二进制。
+- 当前实现中 `probe_token` 用于匹配探测上下文；跨节点授权使用独立 `probe_auth = HMAC-SHA256(shared_secret, payload)`。
 
 ## 接口边界
 

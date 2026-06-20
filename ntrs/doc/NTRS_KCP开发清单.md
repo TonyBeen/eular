@@ -11,6 +11,8 @@
 - `kcp_peer.out` 已验证“同一 UDP socket 复用 + NAT 探测 + UDP 打洞 + KCP 建连”的示例链路可行。
 - 现有 `stun` 仍以标准 STUN/RFC5780 语义和 `3478/3479` 默认端口为主，需要迁移为私有 NTRS 协议。
 
+私有探测协议、控制面鉴权、`probe_token` 与 `probe_auth` 的当前实现见 `NTRS_私有探测协议说明.md`。
+
 ## 阶段 1：建立 `ntrs` 项目骨架
 
 ### 目标
@@ -42,8 +44,10 @@
 ### 必做项
 
 - `ntrs` 只负责：
-  - control/auth/session
+  - control/auth/session，包括 `bootstrap_token` 到短期 `session_token` 的控制面鉴权
+  - `session_id` / `peer_session_token` 的短期会话授权
   - 私有 NAT 探测
+  - `probe_token` 匹配与跨节点 `probe_auth` HMAC 授权
   - UDP 打洞
   - 候选选择
   - 结果诊断
@@ -63,7 +67,7 @@
 
 - 文档中不再要求 `ntrs` 修改 socket 绑定、关闭或 socket 策略。
 - `kcp_ntrs_*` 的责任边界明确且稳定。
-- 结构化探测结果和 `probe_token` 类型已在 `ntrs/include` 建立稳定入口。
+- 结构化探测结果、`probe_token` 匹配语义和 `probe_auth` 授权语义已在 `ntrs/include` 建立稳定入口。
 
 ## 阶段 3：私有 NAT 探测协议替代公开 STUN
 
@@ -88,9 +92,10 @@
   - `change-port`
   - `change-ip`
   - `probe2`
-- 数据面探测包必须带短期 `probe_token`。
+- 数据面探测包必须带短期 `probe_token`，用于匹配请求、响应和探测阶段。
+- 跨节点 probe 请求必须带 `probe_auth`，当前实现为 `HMAC-SHA256(shared_secret, payload)`。
 - 默认不再硬编码 `3478/3479`，改为 node 显式配置私有 probe 端口。
-- 非法 token、过期 token、错误 phase 一律静默丢弃，不返回标准 STUN 错误响应。
+- 非法 token、过期授权、错误 phase 一律静默丢弃，不返回标准 STUN 错误响应。
 
 ### 验收标准
 
