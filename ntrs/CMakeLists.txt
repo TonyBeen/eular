@@ -50,6 +50,7 @@ endif()
 
 set(NTRS_SOURCES
     src/md5.c
+    src/sha256.c
     src/mqtt_client.cpp
     src/ntrs_auth.cpp
     src/ntrs_binary_protocol.cpp
