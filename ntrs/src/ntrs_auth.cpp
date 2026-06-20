@@ -2,11 +2,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "sha256.h"
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include <random>
 #include <sstream>
+
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 
 namespace eular {
 namespace ntrs {
@@ -67,7 +79,8 @@ static bool FillRandomBytes(void* buf, size_t len)
     uint8_t* out = static_cast<uint8_t*>(buf);
 
     try {
-        // 鉴权 token 需要不可预测性，使用 random_device 获取系统熵源
+        // 优先使用 random_device 获取系统熵源，避免使用可预测的统计型伪随机序列；
+        // 构造 random_device 可能有系统开销，因此每个线程复用一个实例。
         static thread_local std::random_device rd;
         size_t                                 offset = 0;
         while (offset < len) {
@@ -82,14 +95,90 @@ static bool FillRandomBytes(void* buf, size_t len)
     }
 }
 
+static bool FillRandomBytesPlatform(void* buf, size_t len)
+{
+    uint8_t* out = static_cast<uint8_t*>(buf);
+    size_t   offset = 0;
+
+#if defined(_WIN32)
+    while (offset < len) {
+        unsigned int value = 0;
+        if (rand_s(&value) != 0) {
+            return false;
+        }
+        for (size_t i = 0; i < sizeof(value) && offset < len; ++i) {
+            out[offset++] = static_cast<uint8_t>((value >> (i * 8u)) & 0xFFu);
+        }
+    }
+    return true;
+#else
+#if defined(__linux__)
+    while (offset < len) {
+        ssize_t n = getrandom(out + offset, len - offset, 0);
+        if (n > 0) {
+            offset += static_cast<size_t>(n);
+            continue;
+        }
+        break;
+    }
+    if (offset == len) {
+        return true;
+    }
+    offset = 0;
+#endif
+
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+    while (offset < len) {
+        ssize_t n = read(fd, out + offset, len - offset);
+        if (n <= 0) {
+            break;
+        }
+        offset += static_cast<size_t>(n);
+    }
+    close(fd);
+    return offset == len;
+#endif
+}
+
+static uint64_t WeakRandom64()
+{
+    uint64_t a = static_cast<uint64_t>(time(NULL));
+    uint64_t b =
+#if defined(_WIN32)
+        static_cast<uint64_t>(_getpid());
+#else
+        static_cast<uint64_t>(getpid());
+#endif
+    uint64_t c = static_cast<uint64_t>(rand());
+    uint64_t d = static_cast<uint64_t>(rand());
+    return (a << 32) ^ (b << 16) ^ (c << 8) ^ d;
+}
+
+static void FillRandomBytesWeak(void* buf, size_t len)
+{
+    uint8_t* out = static_cast<uint8_t*>(buf);
+    size_t   offset = 0;
+
+    while (offset < len) {
+        uint64_t value = WeakRandom64();
+        for (size_t i = 0; i < sizeof(value) && offset < len; ++i) {
+            out[offset++] = static_cast<uint8_t>((value >> ((7u - i) * 8u)) & 0xFFu);
+        }
+    }
+}
+
 static std::string RandomHexToken(const char* prefix)
 {
     static const char  kHex[] = "0123456789abcdef";
     uint8_t            bytes[16];
     std::ostringstream oss;
 
-    if (!FillRandomBytes(bytes, sizeof(bytes))) {
-        return "";
+    if (!FillRandomBytes(bytes, sizeof(bytes)) && !FillRandomBytesPlatform(bytes, sizeof(bytes))) {
+        // 极端情况下安全随机源不可用时，最后使用弱随机兜底，保证探测流程可继续。
+        FillRandomBytesWeak(bytes, sizeof(bytes));
     }
 
     oss << prefix;
