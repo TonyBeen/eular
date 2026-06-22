@@ -19,4 +19,79 @@ cmake --build build
 CMake 方式卸载（先执行过 install 才有 install_manifest.txt）:
 cmake --build build --target uninstall
 
+#### 配置观察者
+`config/observer.h` 提供模板类 `eular::ConfigObserver<Parser, Node>`, 可用于在配置更新后通知订阅者更新子配置. 观察者类不负责加载配置, 调用方需要在 `load()` 或 `loadFromString()` 成功后显式调用 `notify()`.
+
+当前观察者模板适用于 YAML 和 JSON:
+- `eular::ConfigObserver<eular::YamlParser, eular::YamlNode>`
+- `eular::ConfigObserver<eular::JsonParser, eular::JsonNode>`
+
+模板要求 `Parser` 提供 `paths()` 和 `getNode(const std::string &)` 接口, 且返回的 `Node` 提供 `valid()` 接口. `IniConfig` 和 `XmlConfig` 当前是 key-value 查询接口, 没有 `paths()`、`getNode()` 和节点类型, 因此不能直接传给 `ConfigObserver`. 如果直接实例化类似 `ConfigObserver<IniConfig, ...>` 或 `ConfigObserver<XmlConfig, ...>`, 在调用 `notify()` 时会因缺少接口而编译失败. 如需支持 INI/XML, 需要额外提供适配器或为它们增加节点式接口.
+
+完整示例见 `examples/example_config_observer.cpp`:
+```shell
+cmake -S . -B build -DCONFIG_BUILD_EXAMPLES=ON
+cmake --build build --target example_config_observer
+./build/examples/example_config_observer
+```
+
+常用接口:
+```cpp
+uint64_t subscribe(const std::string &pattern, Callback callback);
+bool unsubscribe(uint64_t id);
+void clear();
+size_t notify(const Parser &parser) const;
+size_t notify(const Parser &parser, const std::string &path) const;
+```
+
+回调签名:
+```cpp
+void(const std::string &path, const Node &node)
+```
+
+##### 订阅路径规则
+路径必须以 `$` 开头, `$` 表示根节点. 对象层级使用 `.` 分隔. 数组下标和字段名属于同一个路径段, 如 `$spec.volum.containers[0]`.
+
+合法路径示例:
+```text
+$
+$metadata
+$metadata.labels
+$metadata.labels.app
+$spec.volum.containers[0]
+```
+
+普通路径为精确匹配:
+```text
+订阅: $metadata
+匹配: $metadata
+不匹配: $metadata.name, $metadata.labels.app
+```
+
+`+` 匹配一个路径段:
+```text
+订阅: $plugins.+
+匹配: $plugins.auth, $plugins.metrics
+不匹配: $plugins, $plugins.auth.enabled
+```
+
+`#` 匹配零个或多个剩余路径段, 且只能放在最后:
+```text
+订阅: $plugins.#
+匹配: $plugins, $plugins.auth, $plugins.auth.enabled, $plugins.metrics.port
+```
+
+非法订阅会失败, `subscribe()` 返回 `0`:
+```text
+""
+"metadata"
+"$metadata."
+"$metadata..name"
+"$metadata.#.name"
+```
+
+`notify(parser)` 会通过 `parser.paths()` 自发现当前配置里的所有路径, 并对每个路径匹配所有订阅 pattern. 匹配成功后调用 `parser.getNode(path)`, 仅当节点有效时触发回调. 这是完整配置加载后的推荐通知方式, 不需要调用方手动枚举所有 key.
+
+`notify(parser, path)` 用于已知某个路径发生变化的增量通知. 因此 `subscribe("$metadata.#", cb)` 后调用 `notify(parser, "$metadata.name")`, 回调收到的是 `$metadata.name` 对应节点; 若需要整个 metadata 子树, 应调用 `notify(parser, "$metadata")`.
+
 > TODO 后面可能会将tinyxml2改为Markup来解析xml

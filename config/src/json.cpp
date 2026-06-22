@@ -29,6 +29,7 @@ struct JsonParserPrivate
     yyjson_doc*      document = nullptr;
     bool             initialized = false;
     std::unordered_map<std::string, yyjson_val*> pathNodeMap;
+    std::unordered_map<std::string, std::vector<std::string>> pathTokensMap;
 
     void clear() noexcept
     {
@@ -39,6 +40,7 @@ struct JsonParserPrivate
 
         initialized = false;
         pathNodeMap.clear();
+        pathTokensMap.clear();
     }
 
     ~JsonParserPrivate()
@@ -160,6 +162,79 @@ JsonNode JsonParser::getNode(const std::string &key) const noexcept
     return node;
 }
 
+std::vector<std::string> JsonParser::paths() const noexcept
+{
+    std::vector<std::string> result;
+    if (m_private == nullptr || !m_private->initialized) {
+        return result;
+    }
+
+    result.reserve(m_private->pathNodeMap.size());
+    for (const auto &pair : m_private->pathNodeMap) {
+        result.push_back(pair.first);
+    }
+
+    return result;
+}
+
+void JsonParser::foreachPath(const std::function<void(const std::string &, const std::vector<std::string> &)> &visitor) const
+{
+    if (!visitor || m_private == nullptr || !m_private->initialized) {
+        return;
+    }
+
+    for (const auto &pair : m_private->pathTokensMap) {
+        visitor(pair.first, pair.second);
+    }
+}
+
+void JsonParser::foreachNode(const std::function<void(const std::string &, const JsonNode &)> &visitor) const
+{
+    if (!visitor || m_private == nullptr || !m_private->initialized) {
+        return;
+    }
+
+    for (const auto &pair : m_private->pathNodeMap) {
+        JsonNode node;
+        std::shared_ptr<JsonNodePrivate> nodePrivate = std::make_shared<JsonNodePrivate>();
+        nodePrivate->snapshot = m_private;
+        nodePrivate->document = m_private->document;
+        nodePrivate->node = pair.second;
+        if (nodePrivate->node == nullptr) {
+            continue;
+        }
+
+        node.m_private = nodePrivate;
+        visitor(pair.first, node);
+    }
+}
+
+void JsonParser::foreachNode(const std::function<void(const std::string &, const std::vector<std::string> &, const JsonNode &)> &visitor) const
+{
+    if (!visitor || m_private == nullptr || !m_private->initialized) {
+        return;
+    }
+
+    for (const auto &pair : m_private->pathNodeMap) {
+        auto tokenIt = m_private->pathTokensMap.find(pair.first);
+        if (tokenIt == m_private->pathTokensMap.end()) {
+            continue;
+        }
+
+        JsonNode node;
+        std::shared_ptr<JsonNodePrivate> nodePrivate = std::make_shared<JsonNodePrivate>();
+        nodePrivate->snapshot = m_private;
+        nodePrivate->document = m_private->document;
+        nodePrivate->node = pair.second;
+        if (nodePrivate->node == nullptr) {
+            continue;
+        }
+
+        node.m_private = nodePrivate;
+        visitor(pair.first, tokenIt->second, node);
+    }
+}
+
 std::string JsonParser::readFromFile(const char *filePath, ConfigResult &result)
 {
     std::string fileContent;
@@ -248,9 +323,32 @@ static std::string JoinKey(const std::string &base, const char *key, size_t size
     return path;
 }
 
+static std::vector<std::string> TokenizePath(const std::string &path)
+{
+    std::vector<std::string> tokens;
+    if (path.empty() || path[0] != '$' || path.size() == 1) {
+        return tokens;
+    }
+
+    size_t begin = 1;
+    while (begin < path.size()) {
+        size_t end = path.find('.', begin);
+        if (end == std::string::npos) {
+            end = path.size();
+        }
+        if (end > begin) {
+            tokens.push_back(path.substr(begin, end - begin));
+        }
+        begin = end + 1;
+    }
+
+    return tokens;
+}
+
 void JsonParser::buildMap(JsonParserPrivate &snapshot, ConfigResult &result)
 {
     snapshot.pathNodeMap.clear();
+    snapshot.pathTokensMap.clear();
 
     yyjson_val *root = yyjson_doc_get_root(snapshot.document);
     if (root == nullptr) {
@@ -271,6 +369,7 @@ void JsonParser::buildMap(JsonParserPrivate &snapshot, ConfigResult &result)
 
         if (!current.path.empty()) {
             snapshot.pathNodeMap.emplace(current.path, current.node);
+            snapshot.pathTokensMap.emplace(current.path, TokenizePath(current.path));
         }
 
         if (yyjson_is_obj(current.node)) {

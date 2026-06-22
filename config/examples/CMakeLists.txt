@@ -3,6 +3,7 @@ set(CONFIG_EXAMPLE_SOURCES
     example_xml_complex.cpp
     example_yaml_complex.cpp
     example_json_complex.cpp
+    example_config_observer.cpp
 )
 
 foreach(example_source ${CONFIG_EXAMPLE_SOURCES})

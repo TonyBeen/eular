@@ -29,6 +29,7 @@ struct YamlParserPrivate
     yaml_document_t     document;
     bool                initialized = false;
     std::unordered_map<std::string, int32_t> pathIdMap;
+    std::unordered_map<std::string, std::vector<std::string>> pathTokensMap;
 
     YamlParserPrivate()
     {
@@ -43,6 +44,7 @@ struct YamlParserPrivate
         }
 
         pathIdMap.clear();
+        pathTokensMap.clear();
     }
 
     ~YamlParserPrivate()
@@ -164,6 +166,97 @@ YamlNode YamlParser::getNode(const std::string &key) const noexcept
     return node;
 }
 
+std::vector<std::string> YamlParser::paths() const noexcept
+{
+    std::vector<std::string> result;
+    auto snapshot = std::atomic_load_explicit(&m_private, std::memory_order_acquire);
+    if (snapshot == nullptr || !snapshot->initialized) {
+        return result;
+    }
+
+    result.reserve(snapshot->pathIdMap.size());
+    for (const auto &pair : snapshot->pathIdMap) {
+        result.push_back(pair.first);
+    }
+
+    return result;
+}
+
+void YamlParser::foreachPath(const std::function<void(const std::string &, const std::vector<std::string> &)> &visitor) const
+{
+    if (!visitor) {
+        return;
+    }
+
+    auto snapshot = std::atomic_load_explicit(&m_private, std::memory_order_acquire);
+    if (snapshot == nullptr || !snapshot->initialized) {
+        return;
+    }
+
+    for (const auto &pair : snapshot->pathTokensMap) {
+        visitor(pair.first, pair.second);
+    }
+}
+
+void YamlParser::foreachNode(const std::function<void(const std::string &, const YamlNode &)> &visitor) const
+{
+    if (!visitor) {
+        return;
+    }
+
+    auto snapshot = std::atomic_load_explicit(&m_private, std::memory_order_acquire);
+    if (snapshot == nullptr || !snapshot->initialized) {
+        return;
+    }
+
+    for (const auto &pair : snapshot->pathIdMap) {
+        YamlNode node;
+        std::shared_ptr<YamlNodePrivate> nodePrivate = std::make_shared<YamlNodePrivate>();
+        nodePrivate->snapshot = snapshot;
+        nodePrivate->document = &snapshot->document;
+        nodePrivate->id = pair.second;
+        nodePrivate->node = yaml_document_get_node(nodePrivate->document, nodePrivate->id);
+        if (nodePrivate->node == nullptr) {
+            continue;
+        }
+
+        node.m_private = nodePrivate;
+        visitor(pair.first, node);
+    }
+}
+
+void YamlParser::foreachNode(const std::function<void(const std::string &, const std::vector<std::string> &, const YamlNode &)> &visitor) const
+{
+    if (!visitor) {
+        return;
+    }
+
+    auto snapshot = std::atomic_load_explicit(&m_private, std::memory_order_acquire);
+    if (snapshot == nullptr || !snapshot->initialized) {
+        return;
+    }
+
+    for (const auto &pair : snapshot->pathIdMap) {
+        auto tokenIt = snapshot->pathTokensMap.find(pair.first);
+        if (tokenIt == snapshot->pathTokensMap.end()) {
+            continue;
+        }
+
+        YamlNode node;
+        std::shared_ptr<YamlNodePrivate> nodePrivate = std::make_shared<YamlNodePrivate>();
+        nodePrivate->snapshot = snapshot;
+        nodePrivate->document = &snapshot->document;
+        nodePrivate->id = pair.second;
+        nodePrivate->node = yaml_document_get_node(nodePrivate->document, nodePrivate->id);
+        if (nodePrivate->node == nullptr) {
+            continue;
+        }
+
+        node.m_private = nodePrivate;
+        visitor(pair.first, tokenIt->second, node);
+    }
+}
+
 void YamlParser::foreachNode() const noexcept
 {
     auto snapshot = std::atomic_load_explicit(&m_private, std::memory_order_acquire);
@@ -260,9 +353,32 @@ static std::string JoinKey(const std::string &base, const char *key, size_t size
     return path;
 }
 
+static std::vector<std::string> TokenizePath(const std::string &path)
+{
+    std::vector<std::string> tokens;
+    if (path.empty() || path[0] != '$' || path.size() == 1) {
+        return tokens;
+    }
+
+    size_t begin = 1;
+    while (begin < path.size()) {
+        size_t end = path.find('.', begin);
+        if (end == std::string::npos) {
+            end = path.size();
+        }
+        if (end > begin) {
+            tokens.push_back(path.substr(begin, end - begin));
+        }
+        begin = end + 1;
+    }
+
+    return tokens;
+}
+
 void YamlParser::buildMap(YamlParserPrivate &snapshot, ConfigResult &result)
 {
     snapshot.pathIdMap.clear();
+    snapshot.pathTokensMap.clear();
     yaml_node_t *node = yaml_document_get_root_node(&snapshot.document);
     if (node == nullptr) {
         return;
@@ -284,6 +400,7 @@ void YamlParser::buildMap(YamlParserPrivate &snapshot, ConfigResult &result)
 
         if (!current.path.empty()) {
             snapshot.pathIdMap.emplace(current.path, current.id);
+            snapshot.pathTokensMap.emplace(current.path, TokenizePath(current.path));
         }
 
         if (currentNode->type == YAML_MAPPING_NODE) {

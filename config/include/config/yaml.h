@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <functional>
 
 #include <c4/charconv.hpp>
 
@@ -44,6 +45,10 @@ public:
     void            reset();
 
     YamlNode        getNode(const std::string &key) const noexcept;
+    std::vector<std::string> paths() const noexcept;
+    void            foreachPath(const std::function<void(const std::string &, const std::vector<std::string> &)> &visitor) const;
+    void            foreachNode(const std::function<void(const std::string &, const YamlNode &)> &visitor) const;
+    void            foreachNode(const std::function<void(const std::string &, const std::vector<std::string> &, const YamlNode &)> &visitor) const;
 
     void            foreachNode() const noexcept;
 
