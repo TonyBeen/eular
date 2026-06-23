@@ -29,6 +29,8 @@
 #include <event/loop.h>
 #include <event2/dns.h>
 #include <event2/event.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 
@@ -335,6 +337,99 @@ static bool IsIpv6Literal(const std::string& host)
     return inet_pton(AF_INET6, host.c_str(), &addr6) == 1;
 }
 
+static bool IsUsableInterfaceIpv6(const struct in6_addr& addr)
+{
+    static const struct in6_addr kAny = IN6ADDR_ANY_INIT;
+    static const struct in6_addr kLoopback = IN6ADDR_LOOPBACK_INIT;
+    const uint8_t*               bytes = reinterpret_cast<const uint8_t*>(&addr);
+
+    if (memcmp(&addr, &kAny, sizeof(addr)) == 0 || memcmp(&addr, &kLoopback, sizeof(addr)) == 0) {
+        return false;
+    }
+    return !(bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80);
+}
+
+static bool ResolveInterfaceIp(const std::string& bind_device, int family, std::string* resolved_ip)
+{
+    struct ifaddrs* addrs = NULL;
+
+    if (resolved_ip == NULL || bind_device.empty() || (family != AF_INET && family != AF_INET6)) {
+        return false;
+    }
+
+    resolved_ip->clear();
+    if (getifaddrs(&addrs) != 0) {
+        return false;
+    }
+
+    for (struct ifaddrs* it = addrs; it != NULL; it = it->ifa_next) {
+        char current_ip[INET6_ADDRSTRLEN] = {0};
+
+        if (it->ifa_addr == NULL || it->ifa_addr->sa_family != family || it->ifa_name == NULL) {
+            continue;
+        }
+        if (bind_device != it->ifa_name) {
+            continue;
+        }
+        if (family == AF_INET &&
+            inet_ntop(AF_INET, &reinterpret_cast<const struct sockaddr_in*>(it->ifa_addr)->sin_addr, current_ip,
+                      sizeof(current_ip)) == NULL) {
+            continue;
+        }
+        if (family == AF_INET6) {
+            const struct sockaddr_in6* addr6 = reinterpret_cast<const struct sockaddr_in6*>(it->ifa_addr);
+            if (!IsUsableInterfaceIpv6(addr6->sin6_addr) ||
+                inet_ntop(AF_INET6, &addr6->sin6_addr, current_ip, sizeof(current_ip)) == NULL) {
+                continue;
+            }
+        }
+        *resolved_ip = current_ip;
+        freeifaddrs(addrs);
+        return true;
+    }
+
+    freeifaddrs(addrs);
+    return false;
+}
+
+static bool ApplyBindDeviceIfSupported(int sock, const std::string& bind_device)
+{
+    if (sock < 0 || bind_device.empty()) {
+        return true;
+    }
+
+#if defined(__linux__) && defined(SO_BINDTODEVICE)
+    return setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_device.c_str(), bind_device.size() + 1) == 0;
+#else
+    (void)sock;
+    (void)bind_device;
+    return true;
+#endif
+}
+
+static bool ResolveBindIp(const std::string& bind_ip, const std::string& bind_device, int family,
+                          std::string* resolved_ip)
+{
+    if (resolved_ip == NULL) {
+        return false;
+    }
+    if (!bind_ip.empty()) {
+        uint8_t addr[sizeof(struct in6_addr)];
+        if ((family != AF_INET && family != AF_INET6) || inet_pton(family, bind_ip.c_str(), addr) != 1) {
+            return false;
+        }
+        *resolved_ip = bind_ip;
+        return true;
+    }
+
+    if (!bind_device.empty()) {
+        return ResolveInterfaceIp(bind_device, family, resolved_ip);
+    }
+
+    resolved_ip->clear();
+    return true;
+}
+
 /**
  * @brief 打印更清晰的命令行帮助信息。
  *
@@ -355,11 +450,13 @@ static void PrintUsage(const char* program)
         "  --control-port UINT        Control listen port [default: 19000]\n"
         "  --probe-port UINT          Primary probe UDP port [default: 33478]\n"
         "  --probe-alt-port UINT      Alternate probe UDP port [default: 33479]\n"
+        "  --bind-ip TEXT             Bind probe UDP sockets to a local IP address\n"
+        "  --bind-device TEXT         Bind probe UDP sockets to a network interface\n"
         "  -4, --ipv4                 Use IPv4 UDP probing [default]\n"
         "  -6, --ipv6                 Use IPv6 UDP probing\n"
         "  --region TEXT              Region label [default: default]\n"
-        "  --Mqtt-username TEXT       MQTT username\n"
-        "  --Mqtt-password TEXT       MQTT password\n"
+        "  --mqtt-username TEXT       MQTT username\n"
+        "  --mqtt-password TEXT       MQTT password\n"
         "  --auth-secret TEXT         Federation auth secret [default: ntrs-dev-secret]\n"
         "  --verbose, -v              Enable verbose logs\n"
         "  --help, -h                 Show this help message\n"
@@ -851,10 +948,16 @@ static bool DrainControlMessages(int fd, ControlClientRxState* state, std::deque
  * @param self_probe_endpoint 节点对外公布的主探测端点。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int CreateProbeSocket(const std::string& self_probe_endpoint, int address_family)
+static int CreateProbeSocket(const std::string& self_probe_endpoint, int address_family, const std::string& bind_ip,
+                             const std::string& bind_device)
 {
     uint16_t port = EndpointPort(self_probe_endpoint);
+    std::string resolved_ip;
+
     if (port == 0) {
+        return -1;
+    }
+    if (!ResolveBindIp(bind_ip, bind_device, address_family, &resolved_ip)) {
         return -1;
     }
 
@@ -865,6 +968,10 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint, int address
 
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (!ApplyBindDeviceIfSupported(fd, bind_device)) {
+        close(fd);
+        return -1;
+    }
 
     if (address_family == AF_INET6) {
         int v6_only = 1;
@@ -874,7 +981,14 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint, int address
         memset(&addr6, 0, sizeof(addr6));
         addr6.sin6_family = AF_INET6;
         addr6.sin6_port = htons(port);
-        addr6.sin6_addr = in6addr_any;
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET6, resolved_ip.c_str(), &addr6.sin6_addr) != 1) {
+                close(fd);
+                return -1;
+            }
+        } else {
+            addr6.sin6_addr = in6addr_any;
+        }
         if (bind(fd, (struct sockaddr*)&addr6, sizeof(addr6)) < 0) {
             close(fd);
             return -1;
@@ -884,7 +998,14 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint, int address
         memset(&addr4, 0, sizeof(addr4));
         addr4.sin_family = AF_INET;
         addr4.sin_port = htons(port);
-        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET, resolved_ip.c_str(), &addr4.sin_addr) != 1) {
+                close(fd);
+                return -1;
+            }
+        } else {
+            addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
         if (bind(fd, (struct sockaddr*)&addr4, sizeof(addr4)) < 0) {
             close(fd);
             return -1;
@@ -900,9 +1021,15 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint, int address
  * @param port 备用探测端口号。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int CreateProbeSocketWithPort(uint16_t port, int address_family)
+static int CreateProbeSocketWithPort(uint16_t port, int address_family, const std::string& bind_ip,
+                                     const std::string& bind_device)
 {
+    std::string resolved_ip;
+
     if (port == 0) {
+        return -1;
+    }
+    if (!ResolveBindIp(bind_ip, bind_device, address_family, &resolved_ip)) {
         return -1;
     }
 
@@ -913,6 +1040,10 @@ static int CreateProbeSocketWithPort(uint16_t port, int address_family)
 
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (!ApplyBindDeviceIfSupported(fd, bind_device)) {
+        close(fd);
+        return -1;
+    }
 
     if (address_family == AF_INET6) {
         int v6_only = 1;
@@ -922,7 +1053,14 @@ static int CreateProbeSocketWithPort(uint16_t port, int address_family)
         memset(&addr6, 0, sizeof(addr6));
         addr6.sin6_family = AF_INET6;
         addr6.sin6_port = htons(port);
-        addr6.sin6_addr = in6addr_any;
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET6, resolved_ip.c_str(), &addr6.sin6_addr) != 1) {
+                close(fd);
+                return -1;
+            }
+        } else {
+            addr6.sin6_addr = in6addr_any;
+        }
         if (bind(fd, (struct sockaddr*)&addr6, sizeof(addr6)) < 0) {
             close(fd);
             return -1;
@@ -932,7 +1070,14 @@ static int CreateProbeSocketWithPort(uint16_t port, int address_family)
         memset(&addr4, 0, sizeof(addr4));
         addr4.sin_family = AF_INET;
         addr4.sin_port = htons(port);
-        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET, resolved_ip.c_str(), &addr4.sin_addr) != 1) {
+                close(fd);
+                return -1;
+            }
+        } else {
+            addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
         if (bind(fd, (struct sockaddr*)&addr4, sizeof(addr4)) < 0) {
             close(fd);
             return -1;
@@ -1852,6 +1997,8 @@ int main(int argc, char** argv)
     std::string mqtt_username;
     std::string mqtt_password;
     std::string auth_secret = "ntrs-dev-secret";
+    std::string bind_ip;
+    std::string bind_device;
     int         address_family = AF_INET;
     bool        verbose = false;
 
@@ -1918,21 +2065,35 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 probe_alt_bind_port = (uint16_t)parsed;
+            } else if (MatchLongOption(arg, "--bind-ip", next_value, &consumed_next, &value)) {
+                if (value.empty()) {
+                    PrintMissingOptionValue("--bind-ip");
+                    return 1;
+                }
+                bind_ip = value;
+            } else if (MatchLongOption(arg, "--bind-device", next_value, &consumed_next, &value)) {
+                if (value.empty()) {
+                    PrintMissingOptionValue("--bind-device");
+                    return 1;
+                }
+                bind_device = value;
             } else if (MatchLongOption(arg, "--region", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
                     PrintMissingOptionValue("--region");
                     return 1;
                 }
                 region = value;
-            } else if (MatchLongOption(arg, "--Mqtt-username", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--mqtt-username", next_value, &consumed_next, &value) ||
+                       MatchLongOption(arg, "--Mqtt-username", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    PrintMissingOptionValue("--Mqtt-username");
+                    PrintMissingOptionValue("--mqtt-username");
                     return 1;
                 }
                 mqtt_username = value;
-            } else if (MatchLongOption(arg, "--Mqtt-password", next_value, &consumed_next, &value)) {
+            } else if (MatchLongOption(arg, "--mqtt-password", next_value, &consumed_next, &value) ||
+                       MatchLongOption(arg, "--Mqtt-password", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
-                    PrintMissingOptionValue("--Mqtt-password");
+                    PrintMissingOptionValue("--mqtt-password");
                     return 1;
                 }
                 mqtt_password = value;
@@ -2054,6 +2215,11 @@ int main(int argc, char** argv)
     if (!ResolveProbeHostLiteral(self_probe_host, address_family, &self_probe_ip)) {
         self_probe_ip = self_probe_host;
     }
+    std::string resolved_bind_ip;
+    if (!ResolveBindIp(bind_ip, bind_device, address_family, &resolved_bind_ip)) {
+        printf("invalid --bind-ip/--bind-device for selected address family\n");
+        return 1;
+    }
     self_control_endpoint = FormatEndpoint(self_probe_host, (uint16_t)port);
     if (use_hub_assignment && mqtt_client) {
         const std::string assignment_topic = "ntrs/hub/node/" + node_id + "/assignment";
@@ -2119,7 +2285,14 @@ int main(int argc, char** argv)
         }
     }
 
-    int probe_fd = CreateProbeSocket(self_probe_endpoint, address_family);
+    if (verbose && !bind_device.empty()) {
+        printf("binding probe sockets to device: %s\n", bind_device.c_str());
+    }
+    if (verbose && !bind_ip.empty()) {
+        printf("binding probe sockets to local IP: %s\n", bind_ip.c_str());
+    }
+
+    int probe_fd = CreateProbeSocket(self_probe_endpoint, address_family, bind_ip, bind_device);
     if (probe_fd < 0) {
         printf("failed to start built-in probe service on %s\n", self_probe_endpoint.c_str());
         return 1;
@@ -2131,7 +2304,7 @@ int main(int argc, char** argv)
         probe_alt_bind_port = (uint16_t)(probe_port + 1);
     }
     if (probe_alt_bind_port > 0) {
-        probe_alt_fd = CreateProbeSocketWithPort(probe_alt_bind_port, address_family);
+        probe_alt_fd = CreateProbeSocketWithPort(probe_alt_bind_port, address_family, bind_ip, bind_device);
     }
 
     int listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
