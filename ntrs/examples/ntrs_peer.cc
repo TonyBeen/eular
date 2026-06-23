@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -102,20 +103,40 @@ static uint64_t CurrentTimeMs()
     return (uint64_t)tv.tv_sec * 1000ull + (uint64_t)(tv.tv_usec / 1000ull);
 }
 
+static bool IsUsableInterfaceIpv6(const struct in6_addr& addr)
+{
+    return !IN6_IS_ADDR_UNSPECIFIED(&addr) && !IN6_IS_ADDR_LOOPBACK(&addr) && !IN6_IS_ADDR_LINKLOCAL(&addr);
+}
+
 static bool ParseEndpointText(const std::string& endpoint, std::string* host, uint16_t* port)
 {
-    size_t      colon = endpoint.rfind(':');
     std::string host_part;
     std::string port_part;
     int         parsed = 0;
 
-    if (host == NULL || port == NULL || colon == std::string::npos) {
+    if (host == NULL || port == NULL || endpoint.empty()) {
         return false;
     }
 
-    host_part = endpoint.substr(0, colon);
-    port_part = endpoint.substr(colon + 1);
-    if (host_part.empty() || port_part.empty() || host_part.find(':') != std::string::npos) {
+    if (endpoint[0] == '[') {
+        size_t close = endpoint.find(']');
+        if (close == std::string::npos || close + 1 >= endpoint.size() || endpoint[close + 1] != ':') {
+            return false;
+        }
+        host_part = endpoint.substr(1, close - 1);
+        port_part = endpoint.substr(close + 2);
+    } else {
+        size_t colon = endpoint.rfind(':');
+        if (colon == std::string::npos) {
+            return false;
+        }
+        host_part = endpoint.substr(0, colon);
+        port_part = endpoint.substr(colon + 1);
+        if (host_part.find(':') != std::string::npos) {
+            return false;
+        }
+    }
+    if (host_part.empty() || port_part.empty()) {
         return false;
     }
 
@@ -129,15 +150,16 @@ static bool ParseEndpointText(const std::string& endpoint, std::string* host, ui
     return true;
 }
 
-static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
+static bool ResolveBindIp(const std::string& bind_ip, const std::string& bind_device, int family,
+                          std::string* resolved_ip)
 {
     if (resolved_ip == NULL) {
         return false;
     }
 
     if (!bind_ip.empty()) {
-        struct in_addr addr;
-        if (inet_pton(AF_INET, bind_ip.c_str(), &addr) != 1) {
+        uint8_t addr[sizeof(struct in6_addr)];
+        if ((family != AF_INET && family != AF_INET6) || inet_pton(family, bind_ip.c_str(), addr) != 1) {
             return false;
         }
         *resolved_ip = bind_ip;
@@ -145,7 +167,7 @@ static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_
     }
 
 #if defined(SIOCGIFADDR)
-    if (!bind_device.empty()) {
+    if (!bind_device.empty() && family == AF_INET) {
         int          sock = -1;
         struct ifreq ifr;
         char         ip_buffer[INET_ADDRSTRLEN] = {0};
@@ -172,25 +194,47 @@ static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_
         *resolved_ip = ip_buffer;
         return true;
     }
-#else
-    (void)bind_device;
 #endif
+
+    if (!bind_device.empty() && family == AF_INET6) {
+        struct ifaddrs* addrs = NULL;
+        if (getifaddrs(&addrs) != 0) {
+            return false;
+        }
+        for (struct ifaddrs* it = addrs; it != NULL; it = it->ifa_next) {
+            char current_ip[INET6_ADDRSTRLEN] = {0};
+            const struct sockaddr_in6* addr6 = NULL;
+            if (it->ifa_addr == NULL || it->ifa_addr->sa_family != AF_INET6 || it->ifa_name == NULL ||
+                bind_device != it->ifa_name) {
+                continue;
+            }
+            addr6 = reinterpret_cast<const struct sockaddr_in6*>(it->ifa_addr);
+            if (!IsUsableInterfaceIpv6(addr6->sin6_addr) ||
+                inet_ntop(AF_INET6, &addr6->sin6_addr, current_ip, sizeof(current_ip)) == NULL) {
+                continue;
+            }
+            *resolved_ip = current_ip;
+            freeifaddrs(addrs);
+            return true;
+        }
+        freeifaddrs(addrs);
+        return false;
+    }
 
     resolved_ip->clear();
     return true;
 }
 
-static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device)
+static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device, int family)
 {
-    int                sock = -1;
-    std::string        resolved_ip;
-    struct sockaddr_in local_addr;
+    int         sock = -1;
+    std::string resolved_ip;
 
-    if (!ResolveBindIpv4(bind_ip, bind_device, &resolved_ip)) {
+    if (!ResolveBindIp(bind_ip, bind_device, family, &resolved_ip)) {
         return -1;
     }
 
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    sock = socket(family, SOCK_DGRAM, 0);
     if (sock < 0) {
         return -1;
     }
@@ -199,18 +243,43 @@ static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& b
         return -1;
     }
 
-    memset(&local_addr, 0, sizeof(local_addr));
-    local_addr.sin_family = AF_INET;
-    local_addr.sin_port = htons(0);
-    if (!resolved_ip.empty()) {
-        if (inet_pton(AF_INET, resolved_ip.c_str(), &local_addr.sin_addr) != 1) {
+    if (family == AF_INET) {
+        struct sockaddr_in local_addr;
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_port = htons(0);
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET, resolved_ip.c_str(), &local_addr.sin_addr) != 1) {
+                close(sock);
+                return -1;
+            }
+        } else {
+            local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+        if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
+            close(sock);
+            return -1;
+        }
+    } else if (family == AF_INET6) {
+        struct sockaddr_in6 local_addr;
+        int                 v6only = 1;
+        setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin6_family = AF_INET6;
+        local_addr.sin6_port = htons(0);
+        if (!resolved_ip.empty()) {
+            if (inet_pton(AF_INET6, resolved_ip.c_str(), &local_addr.sin6_addr) != 1) {
+                close(sock);
+                return -1;
+            }
+        } else {
+            local_addr.sin6_addr = in6addr_any;
+        }
+        if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
             close(sock);
             return -1;
         }
     } else {
-        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    }
-    if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
         close(sock);
         return -1;
     }
@@ -309,7 +378,7 @@ static void ApplySignalStrategyWait(int sock, const ntrs_session_signal_t* signa
 static bool RunProbeSession(event_base* base, ntrs_async_client_t* async_client, const std::string& node_host,
                               uint16_t node_port, const std::string& peer_id, const std::string& bind_ip,
                               const std::string& bind_device, const std::string& explicit_probe1,
-                              const std::string& explicit_probe2, bool verbose, ProbeSession* out)
+                              const std::string& explicit_probe2, int address_family, bool verbose, ProbeSession* out)
 {
     int                      control_fd = -1;
     int                      udp_sock = -1;
@@ -369,7 +438,7 @@ static bool RunProbeSession(event_base* base, ntrs_async_client_t* async_client,
         return false;
     }
 
-    udp_sock = CreateUdpProbeSocket(bind_ip, bind_device);
+    udp_sock = CreateUdpProbeSocket(bind_ip, bind_device, address_family);
     if (udp_sock < 0) {
         snprintf(out->error_message, sizeof(out->error_message), "create probe socket failed");
         close(control_fd);
@@ -409,6 +478,7 @@ static bool PeerCandidateToSockaddr(const ntrs_peer_candidate_t* candidate, stru
                                       socklen_t* out_len)
 {
     struct sockaddr_in* addr4 = NULL;
+    struct sockaddr_in6* addr6 = NULL;
 
     if (candidate == NULL || out == NULL || out_len == NULL || candidate->ip[0] == '\0' || candidate->port == 0) {
         return false;
@@ -418,11 +488,20 @@ static bool PeerCandidateToSockaddr(const ntrs_peer_candidate_t* candidate, stru
     addr4 = (struct sockaddr_in*)out;
     addr4->sin_family = AF_INET;
     addr4->sin_port = htons(candidate->port);
-    if (inet_pton(AF_INET, candidate->ip, &addr4->sin_addr) != 1) {
-        return false;
+    if (inet_pton(AF_INET, candidate->ip, &addr4->sin_addr) == 1) {
+        *out_len = sizeof(*addr4);
+        return true;
     }
-    *out_len = sizeof(*addr4);
-    return true;
+
+    memset(out, 0, sizeof(*out));
+    addr6 = (struct sockaddr_in6*)out;
+    addr6->sin6_family = AF_INET6;
+    addr6->sin6_port = htons(candidate->port);
+    if (inet_pton(AF_INET6, candidate->ip, &addr6->sin6_addr) == 1) {
+        *out_len = sizeof(*addr6);
+        return true;
+    }
+    return false;
 }
 
 static uint64_t SteadyNowUs()
@@ -730,6 +809,7 @@ static void RunLatencyLossProbe(int sock, const ntrs_peer_candidate_t* candidate
 
 static bool SetMtuProbeDfMode(int sock, int family, int* previous_value, bool* changed)
 {
+    (void)sock;
     if (previous_value == NULL || changed == NULL) {
         return false;
     }
@@ -771,6 +851,8 @@ static bool SetMtuProbeDfMode(int sock, int family, int* previous_value, bool* c
 
 static void RestoreMtuProbeDfMode(int sock, int family, int previous_value, bool changed)
 {
+    (void)sock;
+    (void)previous_value;
     if (!changed) {
         return;
     }
@@ -980,6 +1062,7 @@ static void TryHolePunchFromAsyncSignal(ntrs_async_client_t* client, event_base*
 int main(int argc, char** argv)
 {
     bool                     verbose = false;
+    int                      address_family = AF_INET;
     std::string              bind_ip;
     std::string              bind_device;
     std::vector<std::string> positional;
@@ -987,6 +1070,14 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             verbose = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-4") == 0 || strcmp(argv[i], "--ipv4") == 0) {
+            address_family = AF_INET;
+            continue;
+        }
+        if (strcmp(argv[i], "-6") == 0 || strcmp(argv[i], "--ipv6") == 0) {
+            address_family = AF_INET6;
             continue;
         }
         if ((strcmp(argv[i], "--bind-ip") == 0 || strcmp(argv[i], "--bind-device") == 0) && i + 1 < argc) {
@@ -1002,7 +1093,7 @@ int main(int argc, char** argv)
 
     if (positional.size() < 2) {
         printf(
-            "Usage: %s [-v|--verbose] [--bind-ip <ip>] [--bind-device <ifname>] <ntrs_ip> <ntrs_port> "
+            "Usage: %s [-4|-6] [-v|--verbose] [--bind-ip <ip>] [--bind-device <ifname>] <ntrs_ip> <ntrs_port> "
             "[peer_id device_id [dst_peer|-] [dst_device|-] [probe1_host:port] [probe2_host:port]]\n",
             argv[0]);
         return 1;
@@ -1044,7 +1135,7 @@ int main(int argc, char** argv)
     const ntrs_nat_info_t* nat = NULL;
 
     if (!RunProbeSession(base, async_client, ntrs_ip, (uint16_t)ntrs_port, peer_id, bind_ip, bind_device, probe1,
-                           probe2, verbose, &probe)) {
+                           probe2, address_family, verbose, &probe)) {
         printf("async NAT detect failed: %s\n", probe.error_message);
         ntrs_async_client_destroy(async_client);
         event_base_free(base);

@@ -39,6 +39,7 @@ struct DetectArgs {
     std::string probe1;
     std::string probe2;
     bool        verbose = false;
+    int         address_family = AF_INET;
 };
 
 static const char* NatTypeTitle(ntrs_nat_class_t nat_class)
@@ -283,29 +284,53 @@ static bool SetSocketTimeoutsMs(int fd, int timeout_ms)
 
 static bool ParseEndpointText(const std::string& endpoint, std::string* host, uint16_t* port)
 {
-    size_t colon = endpoint.rfind(':');
-    int    parsed = 0;
+    std::string host_part;
+    std::string port_part;
+    int         parsed = 0;
 
-    if (host == NULL || port == NULL || colon == std::string::npos) {
+    if (host == NULL || port == NULL || endpoint.empty()) {
         return false;
     }
-    *host = endpoint.substr(0, colon);
-    if (host->empty() || host->find(':') != std::string::npos) {
+    if (endpoint[0] == '[') {
+        size_t close = endpoint.find(']');
+        if (close == std::string::npos || close + 1 >= endpoint.size() || endpoint[close + 1] != ':') {
+            return false;
+        }
+        host_part = endpoint.substr(1, close - 1);
+        port_part = endpoint.substr(close + 2);
+    } else {
+        size_t colon = endpoint.rfind(':');
+        if (colon == std::string::npos) {
+            return false;
+        }
+        host_part = endpoint.substr(0, colon);
+        port_part = endpoint.substr(colon + 1);
+        if (host_part.find(':') != std::string::npos) {
+            return false;
+        }
+    }
+    if (host_part.empty() || port_part.empty()) {
         return false;
     }
-    parsed = atoi(endpoint.substr(colon + 1).c_str());
+    parsed = atoi(port_part.c_str());
     if (parsed <= 0 || parsed > 65535) {
         return false;
     }
+    *host = host_part;
     *port = (uint16_t)parsed;
     return true;
 }
 
-static bool ResolveInterfaceIpv4(const std::string& bind_device, std::string* resolved_ip)
+static bool IsUsableInterfaceIpv6(const struct in6_addr& addr)
+{
+    return !IN6_IS_ADDR_UNSPECIFIED(&addr) && !IN6_IS_ADDR_LOOPBACK(&addr) && !IN6_IS_ADDR_LINKLOCAL(&addr);
+}
+
+static bool ResolveInterfaceIp(const std::string& bind_device, int family, std::string* resolved_ip)
 {
     struct ifaddrs* addrs = NULL;
 
-    if (resolved_ip == NULL || bind_device.empty()) {
+    if (resolved_ip == NULL || bind_device.empty() || (family != AF_INET && family != AF_INET6)) {
         return false;
     }
 
@@ -315,18 +340,25 @@ static bool ResolveInterfaceIpv4(const std::string& bind_device, std::string* re
     }
 
     for (struct ifaddrs* it = addrs; it != NULL; it = it->ifa_next) {
-        char current_ip[INET_ADDRSTRLEN] = {0};
-        const struct sockaddr_in* addr = NULL;
+        char current_ip[INET6_ADDRSTRLEN] = {0};
 
-        if (it->ifa_addr == NULL || it->ifa_addr->sa_family != AF_INET || it->ifa_name == NULL) {
+        if (it->ifa_addr == NULL || it->ifa_addr->sa_family != family || it->ifa_name == NULL) {
             continue;
         }
         if (bind_device != it->ifa_name) {
             continue;
         }
-        addr = reinterpret_cast<const struct sockaddr_in*>(it->ifa_addr);
-        if (inet_ntop(AF_INET, &addr->sin_addr, current_ip, sizeof(current_ip)) == NULL) {
+        if (family == AF_INET &&
+            inet_ntop(AF_INET, &reinterpret_cast<const struct sockaddr_in*>(it->ifa_addr)->sin_addr, current_ip,
+                      sizeof(current_ip)) == NULL) {
             continue;
+        }
+        if (family == AF_INET6) {
+            const struct sockaddr_in6* addr6 = reinterpret_cast<const struct sockaddr_in6*>(it->ifa_addr);
+            if (!IsUsableInterfaceIpv6(addr6->sin6_addr) ||
+                inet_ntop(AF_INET6, &addr6->sin6_addr, current_ip, sizeof(current_ip)) == NULL) {
+                continue;
+            }
         }
         *resolved_ip = current_ip;
         freeifaddrs(addrs);
@@ -352,14 +384,15 @@ static bool ApplyBindDeviceIfSupported(int sock, const std::string& bind_device)
 #endif
 }
 
-static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_device, std::string* resolved_ip)
+static bool ResolveBindIp(const std::string& bind_ip, const std::string& bind_device, int family,
+                          std::string* resolved_ip)
 {
     if (resolved_ip == NULL) {
         return false;
     }
     if (!bind_ip.empty()) {
-        struct in_addr addr;
-        if (inet_pton(AF_INET, bind_ip.c_str(), &addr) != 1) {
+        uint8_t addr[sizeof(struct in6_addr)];
+        if ((family != AF_INET && family != AF_INET6) || inet_pton(family, bind_ip.c_str(), addr) != 1) {
             return false;
         }
         *resolved_ip = bind_ip;
@@ -367,24 +400,58 @@ static bool ResolveBindIpv4(const std::string& bind_ip, const std::string& bind_
     }
 
     if (!bind_device.empty()) {
-        return ResolveInterfaceIpv4(bind_device, resolved_ip);
+        return ResolveInterfaceIp(bind_device, family, resolved_ip);
     }
 
     resolved_ip->clear();
     return true;
 }
 
-static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device)
+static bool BindAnyOrIp(int fd, int family, const std::string& bind_ip)
 {
-    int                sock = -1;
-    std::string        resolved_ip;
-    struct sockaddr_in local_addr;
+    if (family == AF_INET) {
+        struct sockaddr_in local_addr;
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_port = htons(0);
+        if (!bind_ip.empty()) {
+            if (inet_pton(AF_INET, bind_ip.c_str(), &local_addr.sin_addr) != 1) {
+                return false;
+            }
+        } else {
+            local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+        return bind(fd, reinterpret_cast<const struct sockaddr*>(&local_addr), sizeof(local_addr)) == 0;
+    }
+    if (family == AF_INET6) {
+        struct sockaddr_in6 local_addr;
+        int                 v6only = 1;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin6_family = AF_INET6;
+        local_addr.sin6_port = htons(0);
+        if (!bind_ip.empty()) {
+            if (inet_pton(AF_INET6, bind_ip.c_str(), &local_addr.sin6_addr) != 1) {
+                return false;
+            }
+        } else {
+            local_addr.sin6_addr = in6addr_any;
+        }
+        return bind(fd, reinterpret_cast<const struct sockaddr*>(&local_addr), sizeof(local_addr)) == 0;
+    }
+    return false;
+}
 
-    if (!ResolveBindIpv4(bind_ip, bind_device, &resolved_ip)) {
+static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& bind_device, int family)
+{
+    int         sock = -1;
+    std::string resolved_ip;
+
+    if (!ResolveBindIp(bind_ip, bind_device, family, &resolved_ip)) {
         return -1;
     }
 
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    sock = socket(family, SOCK_DGRAM, 0);
     if (sock < 0) {
         return -1;
     }
@@ -397,18 +464,7 @@ static int CreateUdpProbeSocket(const std::string& bind_ip, const std::string& b
         return -1;
     }
 
-    memset(&local_addr, 0, sizeof(local_addr));
-    local_addr.sin_family = AF_INET;
-    local_addr.sin_port = htons(0);
-    if (!resolved_ip.empty()) {
-        if (inet_pton(AF_INET, resolved_ip.c_str(), &local_addr.sin_addr) != 1) {
-            close(sock);
-            return -1;
-        }
-    } else {
-        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    }
-    if (bind(sock, (const struct sockaddr*)&local_addr, sizeof(local_addr)) != 0) {
+    if (!BindAnyOrIp(sock, family, resolved_ip)) {
         close(sock);
         return -1;
     }
@@ -429,13 +485,13 @@ static int ConnectControlWithBind(const DetectArgs& args, std::string* error_mes
     }
     error_message->clear();
 
-    if (!ResolveBindIpv4(args.bind_ip, args.bind_device, &bind_ip)) {
-        *error_message = "resolve bind IPv4 failed";
+    if (!ResolveBindIp(args.bind_ip, args.bind_device, args.address_family, &bind_ip)) {
+        *error_message = "resolve bind IP failed";
         return -1;
     }
 
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = args.address_family;
     hints.ai_socktype = SOCK_STREAM;
     snprintf(port_text, sizeof(port_text), "%u", (unsigned)args.node_port);
     if (getaddrinfo(args.node_host.c_str(), port_text, &hints, &result) != 0 || result == NULL) {
@@ -444,8 +500,6 @@ static int ConnectControlWithBind(const DetectArgs& args, std::string* error_mes
     }
 
     for (struct addrinfo* it = result; it != NULL; it = it->ai_next) {
-        struct sockaddr_in local_addr;
-
         fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
         if (fd < 0) {
             continue;
@@ -456,18 +510,10 @@ static int ConnectControlWithBind(const DetectArgs& args, std::string* error_mes
             continue;
         }
 
-        memset(&local_addr, 0, sizeof(local_addr));
-        local_addr.sin_family = AF_INET;
-        local_addr.sin_port = htons(0);
-        if (!bind_ip.empty()) {
-            if (inet_pton(AF_INET, bind_ip.c_str(), &local_addr.sin_addr) != 1 ||
-                bind(fd, reinterpret_cast<const struct sockaddr*>(&local_addr), sizeof(local_addr)) != 0) {
-                close(fd);
-                fd = -1;
-                continue;
-            }
-        } else {
-            local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (!BindAnyOrIp(fd, it->ai_family, bind_ip)) {
+            close(fd);
+            fd = -1;
+            continue;
         }
 
         if (!SetNonblockingFd(fd)) {
@@ -571,7 +617,7 @@ static bool RunProbeSession(event_base* base, ntrs_async_client_t* async_client,
         return false;
     }
 
-    udp_sock = CreateUdpProbeSocket(args.bind_ip, args.bind_device);
+    udp_sock = CreateUdpProbeSocket(args.bind_ip, args.bind_device, args.address_family);
     if (udp_sock < 0) {
         snprintf(out->error_message, sizeof(out->error_message), "create probe socket failed");
         close(control_fd);
@@ -630,10 +676,12 @@ int main(int argc, char** argv)
     app.add_option("node_host", args.node_host, "Node host or IP")->required();
     app.add_option("node_port", args.node_port, "Node control port")->required();
     app.add_option("--peer-id", args.peer_id, "peer_id used for authentication");
-    app.add_option("--bind-ip", args.bind_ip, "Bind the probe socket to a local IPv4 address");
+    app.add_option("--bind-ip", args.bind_ip, "Bind the probe socket to a local IP address");
     app.add_option("--bind-device", args.bind_device, "Bind the probe socket to a network interface");
-    app.add_option("--probe1", args.probe1, "Explicit probe1 endpoint in host:port format");
-    app.add_option("--probe2", args.probe2, "Explicit probe2 endpoint in host:port format");
+    app.add_option("--probe1", args.probe1, "Explicit probe1 endpoint in host:port or [ipv6]:port format");
+    app.add_option("--probe2", args.probe2, "Explicit probe2 endpoint in host:port or [ipv6]:port format");
+    app.add_flag_callback("-4,--ipv4", [&args]() { args.address_family = AF_INET; }, "Use IPv4 probing");
+    app.add_flag_callback("-6,--ipv6", [&args]() { args.address_family = AF_INET6; }, "Use IPv6 probing");
     app.add_flag("-v,--verbose", args.verbose, "Print step-by-step probe progress");
 
     CLI11_PARSE(app, argc, argv);

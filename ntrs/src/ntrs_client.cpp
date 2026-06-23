@@ -153,6 +153,12 @@ static bool IsIpv4Text(const std::string& ip)
     return !ip.empty() && inet_pton(AF_INET, ip.c_str(), &addr) == 1;
 }
 
+static bool IsIpv6Text(const std::string& ip)
+{
+    struct in6_addr addr;
+    return !ip.empty() && inet_pton(AF_INET6, ip.c_str(), &addr) == 1;
+}
+
 static bool IsPublicIpv4(const std::string& ip)
 {
     struct in_addr addr;
@@ -308,6 +314,7 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
     bool same_mapping = false;
     bool unstable_mapping = false;
     bool filter_probe_has_evidence = false;
+    bool ipv6_sample = false;
 
     if (nat == NULL) {
         return;
@@ -317,6 +324,35 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
     nat->nat_flags = NTRS_NAT_FLAG_NONE;
     nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
     nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+
+    ipv6_sample = IsIpv6Text(nat->local_ip) || IsIpv6Text(nat->srflx_ip) || IsIpv6Text(nat->srflx_ip_2);
+    if (ipv6_sample) {
+        if (!nat->probe1_ok) {
+            nat->mapping_stable = false;
+            nat->nat_risk = "high";
+            nat->nat_flags |= NTRS_NAT_FLAG_UDP_BLOCKED | NTRS_NAT_FLAG_PROBE_DEGRADED;
+            nat->filtering_behavior = NTRS_FILTERING_BLOCKED;
+            nat->nat_type = "ipv6_timeout";
+            return;
+        }
+
+        nat->mapping_stable = true;
+        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
+        nat->nat_risk = "medium";
+        nat->nat_type = "ipv6_reachable";
+        if (nat->filter_probe_executed && !nat->filter_same_ip_diff_port_rx && !nat->filter_diff_ip_rx) {
+            nat->filtering_behavior = NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
+            nat->nat_risk = "high";
+            nat->nat_type = "ipv6_filtered";
+        }
+        if (nat->probe1_success_count < nat->probe_rounds ||
+            (has_probe2 && nat->probe2_success_count < nat->probe_rounds)) {
+            nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
+        }
+        return;
+    }
 
     local_public = IsPublicIpv4(nat->local_ip);
     same_mapping = nat->srflx_ip == nat->srflx_ip_2 && nat->srflx_port == nat->srflx_port_2;
@@ -2582,17 +2618,11 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* cand
     }
 
     for (i = 0; i < candidate_count; ++i) {
-        int                round = 0;
-        struct sockaddr_in dst;
+        int                     round = 0;
+        struct sockaddr_storage dst;
+        socklen_t               dst_len = 0;
 
-        if (candidates[i].ip[0] == '\0' || candidates[i].port == 0) {
-            continue;
-        }
-
-        memset(&dst, 0, sizeof(dst));
-        dst.sin_family = AF_INET;
-        dst.sin_port = htons(candidates[i].port);
-        if (inet_pton(AF_INET, candidates[i].ip, &dst.sin_addr) != 1) {
+        if (!CandidateToSockaddr(&candidates[i], &dst, &dst_len)) {
             continue;
         }
 
@@ -2606,17 +2636,18 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* cand
                                    (uint32_t)(round + 1), payload, sizeof(payload), &payload_len)) {
                 continue;
             }
-            sendto(udp_sock, payload, payload_len, 0, (struct sockaddr*)&dst, sizeof(dst));
+            sendto(udp_sock, payload, payload_len, 0, reinterpret_cast<struct sockaddr*>(&dst), dst_len);
 
             FD_ZERO(&rfds);
             FD_SET(udp_sock, &rfds);
             tv.tv_sec = select_wait_ms / 1000;
             tv.tv_usec = (select_wait_ms % 1000) * 1000;
             if (select(udp_sock + 1, &rfds, NULL, NULL, &tv) > 0 && FD_ISSET(udp_sock, &rfds)) {
-                uint8_t            buffer[512];
-                struct sockaddr_in src;
-                socklen_t          src_len = sizeof(src);
-                ssize_t nread = recvfrom(udp_sock, buffer, sizeof(buffer) - 1, 0, (struct sockaddr*)&src, &src_len);
+                uint8_t                 buffer[512];
+                struct sockaddr_storage src;
+                socklen_t               src_len = sizeof(src);
+                ssize_t nread = recvfrom(udp_sock, buffer, sizeof(buffer) - 1, 0,
+                                         reinterpret_cast<struct sockaddr*>(&src), &src_len);
                 if (nread > 0) {
                     PunchFrameMeta meta;
                     if (ParsePunchFrame(buffer, (size_t)nread, &meta) &&
@@ -2624,7 +2655,8 @@ bool ntrs_try_udp_hole_punch(int32_t udp_sock, const ntrs_peer_candidate_t* cand
                         uint8_t ack_payload[256];
                         size_t  ack_len = 0;
                         if (BuildPunchAckFrame(&meta, ack_payload, sizeof(ack_payload), &ack_len)) {
-                            sendto(udp_sock, ack_payload, ack_len, 0, (struct sockaddr*)&src, src_len);
+                            sendto(udp_sock, ack_payload, ack_len, 0, reinterpret_cast<struct sockaddr*>(&src),
+                                   src_len);
                         }
                     }
                     if (!ParsePunchFrame(buffer, (size_t)nread, &meta) ||

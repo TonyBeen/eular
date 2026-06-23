@@ -1,6 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include <ntrs_auth.h>
+#include <ntrs_binary_protocol.h>
 #include <ntrs_codec.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <cstring>
 #include <string>
@@ -71,4 +76,36 @@ TEST_CASE("probe authorization uses keyed HMAC and requires a secret")
         eular::ntrs::ValidateProbeAuthorization("secret", "peer-a", "192.0.2.10", 33478, "token", 12345, tampered));
     REQUIRE(eular::ntrs::MintProbeAuthorization("", "peer-a", "192.0.2.10", 33478, "token", 12345).empty());
     REQUIRE_FALSE(eular::ntrs::ValidateProbeAuthorization("", "peer-a", "192.0.2.10", 33478, "token", 12345, auth));
+}
+
+TEST_CASE("binary endpoint TLV preserves IPv6 address and port")
+{
+    uint8_t                 buffer[256];
+    ntrs_binary_frame_t     frame;
+    ntrs_binary_frame_view_t view;
+    ntrs_binary_tlv_view_t  tlv;
+    struct sockaddr_in6     input;
+    struct sockaddr_storage output;
+    socklen_t               output_len = 0;
+    const struct sockaddr_in6* parsed = NULL;
+
+    memset(&input, 0, sizeof(input));
+    input.sin6_family = AF_INET6;
+    input.sin6_port = htons(33478);
+    REQUIRE(inet_pton(AF_INET6, "2001:db8::1234", &input.sin6_addr) == 1);
+
+    REQUIRE(ntrs_binary_frame_init(&frame, buffer, sizeof(buffer)));
+    REQUIRE(ntrs_binary_frame_set_header(&frame, NTRS_BINARY_FRAME_PROBE_RSP, NTRS_BINARY_PHASE_PROBE1, 0, 1, 0, 0));
+    REQUIRE(ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_MAPPED_ADDR,
+                                               reinterpret_cast<const struct sockaddr*>(&input), sizeof(input)));
+
+    REQUIRE(ntrs_binary_frame_parse(frame.buffer, frame.length, &view));
+    REQUIRE(ntrs_binary_frame_find_tlv(&view, NTRS_BINARY_TLV_MAPPED_ADDR, &tlv));
+    REQUIRE(ntrs_binary_tlv_parse_endpoint(&tlv, &output, &output_len));
+    REQUIRE(output.ss_family == AF_INET6);
+    REQUIRE(output_len == sizeof(struct sockaddr_in6));
+
+    parsed = reinterpret_cast<const struct sockaddr_in6*>(&output);
+    REQUIRE(ntohs(parsed->sin6_port) == 33478);
+    REQUIRE(memcmp(&parsed->sin6_addr, &input.sin6_addr, sizeof(input.sin6_addr)) == 0);
 }

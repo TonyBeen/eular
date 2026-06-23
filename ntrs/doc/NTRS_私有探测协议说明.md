@@ -101,6 +101,10 @@ peer session 由 `ControlAuthManager` 保存，并带有独立过期时间。
 
 私有 UDP 探测包采用二进制帧，不使用标准 STUN 文本或公开线协议指纹。允许个别业务字段内容为文本，例如 `peer_id`，但 framing、类型、长度和校验字段应使用二进制结构。
 
+当前实现默认使用 IPv4 探测。`natc`、`natc_multi`、`peer`、`node` 示例支持通过 `-4/--ipv4` 或 `-6/--ipv6` 选择 UDP 探测地址族；IPv6 endpoint 使用 `[ipv6]:port` 文本格式，避免和端口分隔符冲突。
+
+IPv6 当前作为可选探测能力接入，用于验证 IPv6 UDP 可达性和过滤行为；不把 IPv4 的 NAT44 类型分类逻辑直接套用到 IPv6。IPv6 结果应按 `ipv6_reachable`、`ipv6_filtered`、`ipv6_timeout` 等语义解释，后续如需支持 NAT66/NPTv6 细分类，应单独定义判定规则。
+
 私有 UDP 探测包至少覆盖：
 
 - `PROBE_REQ`

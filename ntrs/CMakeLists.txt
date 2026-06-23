@@ -38,8 +38,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+set(NTRS_PRIVATE_COMPILE_OPTIONS)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    list(APPEND NTRS_PRIVATE_COMPILE_OPTIONS -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER MATCHES "musl")
@@ -67,6 +68,7 @@ else()
     add_library(${PROJECT_NAME} STATIC ${NTRS_SOURCES})
 endif()
 add_library(eular::ntrs ALIAS ${PROJECT_NAME})
+target_compile_options(${PROJECT_NAME} PRIVATE ${NTRS_PRIVATE_COMPILE_OPTIONS})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -329,6 +329,12 @@ static std::string FormatEndpoint(const std::string& host, uint16_t port)
     return host + ":" + std::to_string(port);
 }
 
+static bool IsIpv6Literal(const std::string& host)
+{
+    struct in6_addr addr6;
+    return inet_pton(AF_INET6, host.c_str(), &addr6) == 1;
+}
+
 /**
  * @brief 打印更清晰的命令行帮助信息。
  *
@@ -343,12 +349,14 @@ static void PrintUsage(const char* program)
         "Required:\n"
         "  --hub TEXT                 MQTT hub endpoint, format: host:port\n"
         "  --node-id TEXT             Node identifier\n"
-        "  --public-host TEXT         Public IPv4/domain advertised to peers\n"
+        "  --public-host TEXT         Public IPv4/IPv6/domain advertised to peers\n"
         "\n"
         "Options:\n"
         "  --control-port UINT        Control listen port [default: 19000]\n"
         "  --probe-port UINT          Primary probe UDP port [default: 33478]\n"
         "  --probe-alt-port UINT      Alternate probe UDP port [default: 33479]\n"
+        "  -4, --ipv4                 Use IPv4 UDP probing [default]\n"
+        "  -6, --ipv6                 Use IPv6 UDP probing\n"
         "  --region TEXT              Region label [default: default]\n"
         "  --Mqtt-username TEXT       MQTT username\n"
         "  --Mqtt-password TEXT       MQTT password\n"
@@ -363,11 +371,12 @@ static void PrintUsage(const char* program)
         "Examples:\n"
         "  %s --hub bd.eular.top:1883 --node-id node-a --public-host 120.48.107.15 --verbose\n"
         "  %s --hub=bd.eular.top:1883 --node-id=node-a --public-host=120.48.107.15\n"
+        "  %s -6 --hub bd.eular.top:1883 --node-id node-v6 --public-host 2001:db8::10\n"
         "\n"
         "Legacy positional mode:\n"
         "  %s <control_port> <self_probe_host:port> [peer_node_control_host:port]\n"
         "     [mqtt_broker] [mqtt_port] [node_id] [region] [mqtt_username] [mqtt_password] [auth_secret]\n",
-        program, program, program, program);
+        program, program, program, program, program);
 }
 
 /**
@@ -518,8 +527,44 @@ static bool ResolveIpv4Literal(const std::string& host, std::string* ip_out)
     return !ip_out->empty();
 }
 
+static bool ResolveProbeHostLiteral(const std::string& host, int address_family, std::string* ip_out)
+{
+    struct addrinfo  hints;
+    struct addrinfo* result = NULL;
+
+    if (ip_out == NULL || host.empty()) {
+        return false;
+    }
+
+    if (address_family == AF_INET) {
+        return ResolveIpv4Literal(host, ip_out);
+    }
+
+    struct in6_addr addr6;
+    if (address_family == AF_INET6 && inet_pton(AF_INET6, host.c_str(), &addr6) == 1) {
+        *ip_out = host;
+        return true;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = address_family;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host.c_str(), NULL, &hints, &result) != 0 || result == NULL) {
+        return false;
+    }
+
+    char host_buffer[NI_MAXHOST] = {0};
+    bool ok = getnameinfo(result->ai_addr, result->ai_addrlen, host_buffer, sizeof(host_buffer), NULL, 0,
+                          NI_NUMERICHOST) == 0;
+    if (ok) {
+        *ip_out = host_buffer;
+    }
+    freeaddrinfo(result);
+    return ok && !ip_out->empty();
+}
+
 static bool ResolveProbeOtherAddress(const std::vector<std::string>& probe_controls, uint16_t probe_port,
-                                        std::string* other_ip, uint16_t* other_port)
+                                        int address_family, std::string* other_ip, uint16_t* other_port)
 {
     size_t i = 0;
 
@@ -535,7 +580,7 @@ static bool ResolveProbeOtherAddress(const std::vector<std::string>& probe_contr
         if (!ParseEndpoint(probe_controls[i], &host, &port)) {
             continue;
         }
-        if (!ResolveIpv4Literal(host, &resolved_ip)) {
+        if (!ResolveProbeHostLiteral(host, address_family, &resolved_ip)) {
             resolved_ip = host;
         }
         if (!resolved_ip.empty()) {
@@ -806,14 +851,14 @@ static bool DrainControlMessages(int fd, ControlClientRxState* state, std::deque
  * @param self_probe_endpoint 节点对外公布的主探测端点。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int CreateProbeSocket(const std::string& self_probe_endpoint)
+static int CreateProbeSocket(const std::string& self_probe_endpoint, int address_family)
 {
     uint16_t port = EndpointPort(self_probe_endpoint);
     if (port == 0) {
         return -1;
     }
 
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = socket(address_family, SOCK_DGRAM, 0);
     if (fd < 0) {
         return -1;
     }
@@ -821,15 +866,29 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint)
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (address_family == AF_INET6) {
+        int v6_only = 1;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only, sizeof(v6_only));
 
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(fd);
-        return -1;
+        struct sockaddr_in6 addr6;
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port);
+        addr6.sin6_addr = in6addr_any;
+        if (bind(fd, (struct sockaddr*)&addr6, sizeof(addr6)) < 0) {
+            close(fd);
+            return -1;
+        }
+    } else {
+        struct sockaddr_in addr4;
+        memset(&addr4, 0, sizeof(addr4));
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(port);
+        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(fd, (struct sockaddr*)&addr4, sizeof(addr4)) < 0) {
+            close(fd);
+            return -1;
+        }
     }
 
     return fd;
@@ -841,13 +900,13 @@ static int CreateProbeSocket(const std::string& self_probe_endpoint)
  * @param port 备用探测端口号。
  * @return int 创建成功返回 UDP socket，失败返回 -1。
  */
-static int CreateProbeSocketWithPort(uint16_t port)
+static int CreateProbeSocketWithPort(uint16_t port, int address_family)
 {
     if (port == 0) {
         return -1;
     }
 
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = socket(address_family, SOCK_DGRAM, 0);
     if (fd < 0) {
         return -1;
     }
@@ -855,18 +914,89 @@ static int CreateProbeSocketWithPort(uint16_t port)
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (address_family == AF_INET6) {
+        int v6_only = 1;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only, sizeof(v6_only));
 
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(fd);
-        return -1;
+        struct sockaddr_in6 addr6;
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port);
+        addr6.sin6_addr = in6addr_any;
+        if (bind(fd, (struct sockaddr*)&addr6, sizeof(addr6)) < 0) {
+            close(fd);
+            return -1;
+        }
+    } else {
+        struct sockaddr_in addr4;
+        memset(&addr4, 0, sizeof(addr4));
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(port);
+        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(fd, (struct sockaddr*)&addr4, sizeof(addr4)) < 0) {
+            close(fd);
+            return -1;
+        }
     }
 
     return fd;
+}
+
+static bool MakeSockaddrStorage(const std::string& ip, uint16_t port, struct sockaddr_storage* out, socklen_t* out_len)
+{
+    if (out == NULL || out_len == NULL || ip.empty() || port == 0) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    struct sockaddr_in* addr4 = reinterpret_cast<struct sockaddr_in*>(out);
+    addr4->sin_family = AF_INET;
+    addr4->sin_port = htons(port);
+    if (inet_pton(AF_INET, ip.c_str(), &addr4->sin_addr) == 1) {
+        *out_len = static_cast<socklen_t>(sizeof(*addr4));
+        return true;
+    }
+
+    memset(out, 0, sizeof(*out));
+    struct sockaddr_in6* addr6 = reinterpret_cast<struct sockaddr_in6*>(out);
+    addr6->sin6_family = AF_INET6;
+    addr6->sin6_port = htons(port);
+    if (inet_pton(AF_INET6, ip.c_str(), &addr6->sin6_addr) == 1) {
+        *out_len = static_cast<socklen_t>(sizeof(*addr6));
+        return true;
+    }
+
+    memset(out, 0, sizeof(*out));
+    *out_len = 0;
+    return false;
+}
+
+static bool SockaddrHostPort(const struct sockaddr* addr, socklen_t addr_len, std::string* host, uint16_t* port)
+{
+    char host_buffer[NI_MAXHOST] = {0};
+    char port_buffer[NI_MAXSERV] = {0};
+
+    if (addr == NULL || host == NULL || port == NULL ||
+        getnameinfo(addr, addr_len, host_buffer, sizeof(host_buffer), port_buffer, sizeof(port_buffer),
+                    NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+        return false;
+    }
+
+    *host = host_buffer;
+    *port = static_cast<uint16_t>(atoi(port_buffer));
+    return !host->empty() && *port != 0;
+}
+
+static std::string EndpointText(const struct sockaddr* addr, socklen_t addr_len)
+{
+    std::string host;
+    uint16_t    port = 0;
+
+    if (!SockaddrHostPort(addr, addr_len, &host, &port)) {
+        return "-";
+    }
+    return FormatEndpoint(host, port);
 }
 
 static bool SendUdpFilterProbe(int udp_fd, const std::string& target_ip, uint16_t target_port,
@@ -877,18 +1007,16 @@ static bool SendUdpFilterProbe(int udp_fd, const std::string& target_ip, uint16_
         return false;
     }
 
-    struct sockaddr_in dst;
-    memset(&dst, 0, sizeof(dst));
-    dst.sin_family = AF_INET;
-    dst.sin_port = htons(target_port);
-    if (inet_pton(AF_INET, target_ip.c_str(), &dst.sin_addr) != 1) {
+    struct sockaddr_storage dst;
+    socklen_t               dst_len = 0;
+    if (!MakeSockaddrStorage(target_ip, target_port, &dst, &dst_len)) {
         return false;
     }
 
     char payload[256];
     snprintf(payload, sizeof(payload), "NTRS_FILTER_PROBE|%s|%s", token.c_str(), tag.c_str());
     for (int i = 0; i < kFilterProbeBurstCount; ++i) {
-        ssize_t n = sendto(udp_fd, payload, strlen(payload), 0, (struct sockaddr*)&dst, sizeof(dst));
+        ssize_t n = sendto(udp_fd, payload, strlen(payload), 0, reinterpret_cast<struct sockaddr*>(&dst), dst_len);
         if (n <= 0) {
             return false;
         }
@@ -896,7 +1024,7 @@ static bool SendUdpFilterProbe(int udp_fd, const std::string& target_ip, uint16_
     return true;
 }
 
-static bool PeerIpv4String(int fd, std::string* ip_out)
+static bool PeerIpString(int fd, std::string* ip_out)
 {
     struct sockaddr_storage addr;
     socklen_t               addr_len = sizeof(addr);
@@ -980,27 +1108,6 @@ static bool ParseBinaryProbeRequest(const uint8_t* buffer, size_t len, ntrs_bina
 }
 
 /**
- * @brief 将 IPv4 文本地址和端口转换为 sockaddr_in。
- *
- * @param ip IPv4 文本地址。
- * @param port 端口。
- * @param out 输出地址。
- * @return true 转换成功。
- * @return false 参数非法或地址文本无效。
- */
-static bool MakeIpv4Sockaddr(const std::string& ip, uint16_t port, struct sockaddr_in* out)
-{
-    if (out == NULL || ip.empty() || port == 0) {
-        return false;
-    }
-
-    memset(out, 0, sizeof(*out));
-    out->sin_family = AF_INET;
-    out->sin_port = htons(port);
-    return inet_pton(AF_INET, ip.c_str(), &out->sin_addr) == 1;
-}
-
-/**
  * @brief 构造私有二进制 NAT 探测响应帧。
  *
  * @param frame_type 请求帧类型。
@@ -1018,7 +1125,7 @@ static bool MakeIpv4Sockaddr(const std::string& ip, uint16_t port, struct sockad
  */
 static bool BuildBinaryProbeResponse(ntrs_binary_frame_type_t frame_type, ntrs_binary_phase_t phase,
                                         const uint8_t* token, uint16_t token_len,
-                                        const struct sockaddr_in* mapped_addr,
+                                        const struct sockaddr* mapped_addr, socklen_t mapped_addr_len,
                                         const std::string& response_origin_ip, uint16_t response_origin_port,
                                         const std::string& other_address_ip, uint16_t other_address_port,
                                         std::vector<uint8_t>* out)
@@ -1026,8 +1133,10 @@ static bool BuildBinaryProbeResponse(ntrs_binary_frame_type_t frame_type, ntrs_b
     uint8_t                  buffer[256];
     ntrs_binary_frame_t      frame;
     ntrs_binary_frame_type_t response_type;
-    struct sockaddr_in       origin_addr;
-    struct sockaddr_in       other_addr;
+    struct sockaddr_storage  origin_addr;
+    socklen_t                origin_addr_len = 0;
+    struct sockaddr_storage  other_addr;
+    socklen_t                other_addr_len = 0;
     bool                     has_other = false;
 
     if (token == NULL || token_len == 0 || mapped_addr == NULL || out == NULL || response_origin_ip.empty()) {
@@ -1041,20 +1150,20 @@ static bool BuildBinaryProbeResponse(ntrs_binary_frame_type_t frame_type, ntrs_b
         !ntrs_binary_frame_add_tlv(&frame, NTRS_BINARY_TLV_PROBE_TOKEN, token, token_len) ||
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_MAPPED_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(mapped_addr),
-                                            sizeof(*mapped_addr)) ||
-        !MakeIpv4Sockaddr(response_origin_ip, response_origin_port, &origin_addr) ||
+                                            mapped_addr_len) ||
+        !MakeSockaddrStorage(response_origin_ip, response_origin_port, &origin_addr, &origin_addr_len) ||
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_ORIGIN_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(&origin_addr),
-                                            sizeof(origin_addr))) {
+                                            origin_addr_len)) {
         return false;
     }
 
     has_other = !other_address_ip.empty() && other_address_port != 0 &&
-                MakeIpv4Sockaddr(other_address_ip, other_address_port, &other_addr);
+                MakeSockaddrStorage(other_address_ip, other_address_port, &other_addr, &other_addr_len);
     if (has_other &&
         !ntrs_binary_frame_add_endpoint_tlv(&frame, NTRS_BINARY_TLV_OTHER_ADDR,
                                             reinterpret_cast<const struct sockaddr*>(&other_addr),
-                                            sizeof(other_addr))) {
+                                            other_addr_len)) {
         return false;
     }
 
@@ -1079,9 +1188,10 @@ static bool BuildBinaryProbeResponse(ntrs_binary_frame_type_t frame_type, ntrs_b
  * @return true 发送成功。
  * @return false 发送失败。
  */
-static bool SendBinaryProbeResponse(int udp_fd, const struct sockaddr_in* target_addr,
+static bool SendBinaryProbeResponse(int udp_fd, const struct sockaddr* target_addr, socklen_t target_addr_len,
                                        ntrs_binary_frame_type_t frame_type, ntrs_binary_phase_t phase,
-                                       const uint8_t* token, uint16_t token_len, const struct sockaddr_in* mapped_addr,
+                                       const uint8_t* token, uint16_t token_len, const struct sockaddr* mapped_addr,
+                                       socklen_t mapped_addr_len,
                                        const std::string& response_origin_ip, uint16_t response_origin_port,
                                        const std::string& other_address_ip, uint16_t other_address_port)
 {
@@ -1090,20 +1200,12 @@ static bool SendBinaryProbeResponse(int udp_fd, const struct sockaddr_in* target
     if (udp_fd < 0 || target_addr == NULL || mapped_addr == NULL) {
         return false;
     }
-    if (!BuildBinaryProbeResponse(frame_type, phase, token, token_len, mapped_addr, response_origin_ip,
+    if (!BuildBinaryProbeResponse(frame_type, phase, token, token_len, mapped_addr, mapped_addr_len, response_origin_ip,
                                      response_origin_port, other_address_ip, other_address_port, &rsp)) {
         return false;
     }
 
-    return sendto(udp_fd, rsp.data(), rsp.size(), 0, reinterpret_cast<const struct sockaddr*>(target_addr),
-                  sizeof(*target_addr)) > 0;
-}
-
-static std::string EndpointText(const struct sockaddr_in& addr)
-{
-    char ip[INET_ADDRSTRLEN] = {0};
-    inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
-    return std::string(ip) + ":" + std::to_string((unsigned)ntohs(addr.sin_port));
+    return sendto(udp_fd, rsp.data(), rsp.size(), 0, target_addr, target_addr_len) > 0;
 }
 
 static bool EncodeTxMessage(const eular::ntrs::Message& msg, std::vector<uint8_t>* out)
@@ -1607,8 +1709,9 @@ static bool StartFederationJob(const AsyncFederationJob& job, std::list<Federati
  */
 static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primary_fd, int probe_alt_fd,
                                 const std::string& self_probe_ip, uint16_t self_probe_port,
-                                uint16_t probe_alt_bind_port, const std::vector<std::string>& probe_controls,
-                                const std::string& auth_secret, std::list<FederationRequest>* federation_requests,
+                                uint16_t probe_alt_bind_port, int address_family,
+                                const std::vector<std::string>& probe_controls, const std::string& auth_secret,
+                                std::list<FederationRequest>* federation_requests,
                                 std::deque<AsyncFederationResult>* async_results,
                                 struct evdns_base* federation_dns_base, bool verbose)
 {
@@ -1617,13 +1720,13 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
     ntrs_binary_phase_t      binary_phase = NTRS_BINARY_PHASE_UNKNOWN;
     uint8_t                  binary_token[NTRS_PROBE_TOKEN_WIRE_SIZE];
     uint16_t                 binary_token_len = 0;
-    struct sockaddr_in peer_addr;
-    socklen_t          peer_len = sizeof(peer_addr);
+    struct sockaddr_storage peer_addr;
+    socklen_t               peer_len = sizeof(peer_addr);
 
     (void)is_alt_socket;
     (void)probe_primary_fd;
 
-    ssize_t            n = recvfrom(probe_fd, buf, sizeof(buf), 0, (struct sockaddr*)&peer_addr, &peer_len);
+    ssize_t n = recvfrom(probe_fd, buf, sizeof(buf), 0, reinterpret_cast<struct sockaddr*>(&peer_addr), &peer_len);
     if (n <= 0) {
         return;
     }
@@ -1634,7 +1737,7 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
             std::string other_ip;
             uint16_t    other_port = 0;
 
-            if (!ResolveProbeOtherAddress(probe_controls, self_probe_port, &other_ip, &other_port)) {
+            if (!ResolveProbeOtherAddress(probe_controls, self_probe_port, address_family, &other_ip, &other_port)) {
                 other_ip = self_probe_ip;
                 other_port = probe_alt_bind_port;
             }
@@ -1642,15 +1745,16 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
                              "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u\n",
                              probe_fd,
                              (unsigned)binary_phase,
-                             EndpointText(peer_addr).c_str(),
-                             EndpointText(peer_addr).c_str(),
+                             EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
+                             EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
                              self_probe_ip.c_str(),
                              self_probe_port,
                              other_ip.c_str(),
                              other_port);
-            if (!SendBinaryProbeResponse(probe_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
-                                            binary_token_len, &peer_addr, self_probe_ip, self_probe_port, other_ip,
-                                            other_port)) {
+            if (!SendBinaryProbeResponse(probe_fd, reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
+                                            binary_frame_type, binary_phase, binary_token, binary_token_len,
+                                            reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
+                                            self_probe_ip, self_probe_port, other_ip, other_port)) {
                 printf("binary probe rsp send failed errno=%d(%s)\n", errno, strerror(errno));
             }
             return;
@@ -1663,21 +1767,28 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
                              "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u via_alt_fd=%d\n",
                              probe_alt_fd,
                              (unsigned)binary_phase,
-                             EndpointText(peer_addr).c_str(),
-                             EndpointText(peer_addr).c_str(),
+                             EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
+                             EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
                              self_probe_ip.c_str(),
                              probe_alt_bind_port,
                              self_probe_ip.c_str(),
                              self_probe_port,
                              probe_alt_fd);
-            if (!SendBinaryProbeResponse(probe_alt_fd, &peer_addr, binary_frame_type, binary_phase, binary_token,
-                                            binary_token_len, &peer_addr, self_probe_ip, probe_alt_bind_port,
-                                            self_probe_ip, self_probe_port)) {
+            if (!SendBinaryProbeResponse(probe_alt_fd, reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
+                                            binary_frame_type, binary_phase, binary_token, binary_token_len,
+                                            reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
+                                            self_probe_ip, probe_alt_bind_port, self_probe_ip, self_probe_port)) {
                 printf("binary change-port rsp send failed errno=%d(%s)\n", errno, strerror(errno));
             }
             return;
         }
         if (binary_phase == NTRS_BINARY_PHASE_CHANGE_IP) {
+            std::string peer_host;
+            uint16_t    peer_port = 0;
+            if (!SockaddrHostPort(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len, &peer_host,
+                                  &peer_port)) {
+                return;
+            }
             AsyncFederationJob job;
             job.type = AsyncFederationJobType::SEND_PROBE_DELEGATE;
             job.fd = -1;
@@ -1686,8 +1797,8 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
             job.controls = probe_controls;
             job.auth_secret = auth_secret;
             job.federation_peer_id = "service_node_federation";
-            job.target_ip = inet_ntoa(peer_addr.sin_addr);
-            job.target_port = ntohs(peer_addr.sin_port);
+            job.target_ip = peer_host;
+            job.target_port = peer_port;
             job.same_ip_diff_port = false;
             job.use_alt_port = false;
             job.probe_token_bytes.assign(binary_token, binary_token + binary_token_len);
@@ -1695,7 +1806,7 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
                              "probe delegate fd=%d phase=%u src=%s target=%s:%u controls=%zu\n",
                              probe_fd,
                              (unsigned)binary_phase,
-                             EndpointText(peer_addr).c_str(),
+                             EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
                              job.target_ip.c_str(),
                              job.target_port,
                              job.controls.size());
@@ -1712,7 +1823,7 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
     }
 
     NodeVerboseLog(verbose, "probe packet dropped fd=%d src=%s reason=invalid_or_unsupported_binary\n", probe_fd,
-                     EndpointText(peer_addr).c_str());
+                     EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str());
 }
 
 static void SendError(int fd, uint64_t req, const char* code, const char* message)
@@ -1741,9 +1852,10 @@ int main(int argc, char** argv)
     std::string mqtt_username;
     std::string mqtt_password;
     std::string auth_secret = "ntrs-dev-secret";
+    int         address_family = AF_INET;
     bool        verbose = false;
 
-    if (argc > 1 && strncmp(argv[1], "--", 2) == 0) {
+    if (argc > 1 && argv[1][0] == '-') {
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             const char* next_value = (i + 1 < argc) ? argv[i + 1] : NULL;
@@ -1830,6 +1942,10 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 auth_secret = value;
+            } else if (arg == "--ipv4" || arg == "-4") {
+                address_family = AF_INET;
+            } else if (arg == "--ipv6" || arg == "-6") {
+                address_family = AF_INET6;
             } else if (arg == "--verbose" || arg == "-v") {
                 verbose = true;
             } else {
@@ -1932,7 +2048,10 @@ int main(int argc, char** argv)
     if (!ParseEndpoint(self_probe_endpoint, &self_probe_host, &self_probe_port)) {
         self_probe_host = "127.0.0.1";
     }
-    if (!ResolveIpv4Literal(self_probe_host, &self_probe_ip)) {
+    if (IsIpv6Literal(self_probe_host)) {
+        address_family = AF_INET6;
+    }
+    if (!ResolveProbeHostLiteral(self_probe_host, address_family, &self_probe_ip)) {
         self_probe_ip = self_probe_host;
     }
     self_control_endpoint = FormatEndpoint(self_probe_host, (uint16_t)port);
@@ -2000,7 +2119,7 @@ int main(int argc, char** argv)
         }
     }
 
-    int probe_fd = CreateProbeSocket(self_probe_endpoint);
+    int probe_fd = CreateProbeSocket(self_probe_endpoint, address_family);
     if (probe_fd < 0) {
         printf("failed to start built-in probe service on %s\n", self_probe_endpoint.c_str());
         return 1;
@@ -2012,7 +2131,7 @@ int main(int argc, char** argv)
         probe_alt_bind_port = (uint16_t)(probe_port + 1);
     }
     if (probe_alt_bind_port > 0) {
-        probe_alt_fd = CreateProbeSocketWithPort(probe_alt_bind_port);
+        probe_alt_fd = CreateProbeSocketWithPort(probe_alt_bind_port, address_family);
     }
 
     int listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -2159,13 +2278,13 @@ int main(int argc, char** argv)
         if (FD_ISSET(probe_fd, &rfds)) {
             HandleProbePacket(
                 probe_fd, false, probe_fd, probe_alt_fd, self_probe_ip, self_probe_port, probe_alt_bind_port,
-                BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
+                address_family, BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
                 auth_secret, &federation_requests, &async_results, federation_dns_base, verbose);
         }
         if (probe_alt_fd >= 0 && FD_ISSET(probe_alt_fd, &rfds)) {
             HandleProbePacket(
                 probe_alt_fd, true, probe_fd, probe_alt_fd, self_probe_ip, self_probe_port, probe_alt_bind_port,
-                BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
+                address_family, BuildProbeControls(assignment_p1, assignment_p2, assignment_b1, peer_node_control_endpoint),
                 auth_secret, &federation_requests, &async_results, federation_dns_base, verbose);
         }
 
@@ -2542,7 +2661,7 @@ int main(int argc, char** argv)
                         SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
                         break;
                     }
-                    if (!PeerIpv4String(fd, &peer_ip) || target_ip != peer_ip) {
+                    if (!PeerIpString(fd, &peer_ip) || target_ip != peer_ip) {
                         NodeVerboseLog(verbose,
                                          "FILTER_PROBE_REQ scope mismatch fd=%d req=%u peer_ip=%s target_ip=%s\n", fd,
                                          msg.request_id, peer_ip.c_str(), target_ip.c_str());
@@ -2676,9 +2795,10 @@ int main(int argc, char** argv)
                     uint16_t               txid_len = 0;
                     bool                   use_alt_port = MsgBoolTag(msg, eular::ntrs::FieldTag::USE_ALT_PORT);
                     std::string            reason;
-                    struct sockaddr_in     target_addr;
-                    int                    send_fd = use_alt_port ? probe_alt_fd : probe_fd;
-                    uint16_t               response_port = use_alt_port ? probe_alt_bind_port : self_probe_port;
+                    struct sockaddr_storage target_addr;
+                    socklen_t               target_addr_len = 0;
+                    int                     send_fd = use_alt_port ? probe_alt_fd : probe_fd;
+                    uint16_t                response_port = use_alt_port ? probe_alt_bind_port : self_probe_port;
 
                     if (!AuthManager.validateSession(fd, "service_node_federation", session_token,
                                                       (uint64_t)time(NULL), &reason)) {
@@ -2693,18 +2813,16 @@ int main(int argc, char** argv)
                         break;
                     }
 
-                    memset(&target_addr, 0, sizeof(target_addr));
-                    target_addr.sin_family = AF_INET;
-                    target_addr.sin_port = htons(target_port);
-                    if (inet_pton(AF_INET, target_ip.c_str(), &target_addr.sin_addr) != 1) {
+                    if (!MakeSockaddrStorage(target_ip, target_port, &target_addr, &target_addr_len)) {
                         SendError(fd, msg.request_id, "INVALID_PARAM", "invalid target_ip");
                         break;
                     }
 
                     bool ok = SendBinaryProbeResponse(
-                        send_fd, &target_addr, NTRS_BINARY_FRAME_FILTER_REQ, NTRS_BINARY_PHASE_CHANGE_IP, txid_data,
-                        txid_len, &target_addr, self_probe_ip, response_port, self_probe_ip,
-                        use_alt_port ? self_probe_port : probe_alt_bind_port);
+                        send_fd, reinterpret_cast<const struct sockaddr*>(&target_addr), target_addr_len,
+                        NTRS_BINARY_FRAME_FILTER_REQ, NTRS_BINARY_PHASE_CHANGE_IP, txid_data, txid_len,
+                        reinterpret_cast<const struct sockaddr*>(&target_addr), target_addr_len, self_probe_ip,
+                        response_port, self_probe_ip, use_alt_port ? self_probe_port : probe_alt_bind_port);
                     eular::ntrs::Message rsp;
                     eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::SERVER_PROBE_DELEGATE_RSP,
                                              msg.request_id);

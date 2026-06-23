@@ -95,6 +95,8 @@
 - 数据面探测包必须带短期 `probe_token`，用于匹配请求、响应和探测阶段。
 - 跨节点 probe 请求必须带 `probe_auth`，当前实现为 `HMAC-SHA256(shared_secret, payload)`。
 - 默认不再硬编码 `3478/3479`，改为 node 显式配置私有 probe 端口。
+- 探测默认使用 IPv4；示例工具支持 `-4/--ipv4` 和 `-6/--ipv6` 显式选择地址族，IPv6 endpoint 使用 `[ipv6]:port` 格式。
+- IPv6 第一阶段只要求可达性、超时和过滤行为可观测，不要求复用 IPv4 NAT44 类型分类。
 - 非法 token、过期授权、错误 phase 一律静默丢弃，不返回标准 STUN 错误响应。
 
 ### 验收标准
@@ -102,6 +104,7 @@
 - 探测端口对标准 STUN `Binding Request` 无响应。
 - 抓包中不再出现标准 STUN magic cookie、Binding type 和标准 attribute 作为主探测协议。
 - 双节点 NAT 分类链路仍可表达现有 mapping/filtering 推断需求。
+- IPv6 模式下可以完成二进制 probe/filter 收发，并输出 IPv6 专属可达性结果。
 
 ## 阶段 4：KCP 薄适配落地
 

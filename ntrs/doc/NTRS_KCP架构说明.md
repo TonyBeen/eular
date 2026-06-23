@@ -71,6 +71,7 @@
 - `peer_id`、`device_id` 等业务字段内容可以是文本，但必须通过二进制 TLV 或定长二进制字段承载。
 - `probe/punch` 二进制帧的消息类型、阶段、请求编号、序列号、长度和认证字段必须全部是二进制。
 - 当前实现中 `probe_token` 用于匹配探测上下文；跨节点授权使用独立 `probe_auth = HMAC-SHA256(shared_secret, payload)`。
+- 当前默认使用 IPv4 UDP 探测，示例工具通过 `-4/--ipv4` 和 `-6/--ipv6` 显式选择地址族；IPv6 endpoint 使用 `[ipv6]:port` 格式。IPv6 现阶段用于可达性和过滤判断，不直接复用 IPv4 NAT44 分类结论。
 
 ## 接口边界
 
