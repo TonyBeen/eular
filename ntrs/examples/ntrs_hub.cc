@@ -1,19 +1,33 @@
-#include <mqtt_client.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <ntrs_auth.h>
 #include <ntrs_codec.h>
 #include <ntrs_hub_state.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <ctime>
+#include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
-#include <event/loop.h>
-#include <event/timer.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+
+static const int      kDefaultHubPort = 18083;
+static const uint32_t kHubAuthTtlSec = 60;
+static const uint8_t  kHubStateMagic[8] = {'N', 'T', 'R', 'S', 'H', 'U', 'B', 'S'};
+static const uint32_t kHubStateVersion = 1;
+static const uint32_t kMaxHubStatePayloadSize = 16u * 1024u * 1024u;
+
+static volatile sig_atomic_t g_stop = 0;
 
 struct Assignment {
     std::string primary1;
@@ -21,28 +35,83 @@ struct Assignment {
     std::string backup1;
 };
 
+struct HubClientRxState {
+    std::vector<uint8_t> buffer;
+};
+
+struct HubClientSession {
+    HubClientRxState rx;
+    bool             authed;
+    std::string      node_id;
+    std::string      session_token;
+
+    HubClientSession()
+        : authed(false)
+    {
+    }
+};
+
+static void OnSignal(int)
+{
+    g_stop = 1;
+}
+
 static void PrintUsage(const char* program)
 {
     printf(
-        "Usage: %s [mqtt_host] [mqtt_port] [mqtt_username] [mqtt_password]\n"
-        "       %s [--host mqtt_host] [--port mqtt_port] [--username mqtt_username] [--password mqtt_password]\n"
+        "Usage:\n"
+        "  %s [OPTIONS]\n"
         "\n"
         "Options:\n"
-        "  -h, --help              Show this help message.\n"
-        "  --host                  MQTT broker host or domain. Default: 127.0.0.1\n"
-        "  --port                  MQTT broker port. Default: 1883\n"
-        "  --username              MQTT username.\n"
-        "  --password              MQTT password.\n"
+        "  --host TEXT             Hub listen host/IP [default: ::]\n"
+        "  --port UINT             Hub listen port [default: 18083]\n"
+        "  --state-file TEXT       Snapshot state file [default: ./ntrs_hub_state.bin]\n"
+        "  --auth-secret TEXT      Node-hub auth secret [default: ntrs-dev-secret]\n"
+        "  --help, -h              Show this help message\n"
         "\n"
-        "Arguments:\n"
-        "  mqtt_host               MQTT broker host or domain. Default: 127.0.0.1\n"
-        "  mqtt_port               MQTT broker port. Default: 1883\n"
-        "  mqtt_username           Optional MQTT username.\n"
-        "  mqtt_password           Optional MQTT password.\n"
+        "Long option forms:\n"
+        "  --name value            Space separated form\n"
+        "  --name=value            Equals form\n"
         "\n"
         "Example:\n"
-        "  %s --host bd.eular.top --username ntrs --password '<password>'\n",
-        program, program, program);
+        "  %s --host :: --port 18083 --state-file ./ntrs_hub_state.bin --auth-secret '<secret>'\n",
+        program,
+        program);
+}
+
+static bool MatchLongOption(const std::string& arg, const char* name, const char* next_value, bool* consumed_next,
+                            std::string* out_value)
+{
+    const size_t name_len = strlen(name);
+
+    if (consumed_next == NULL || out_value == NULL) {
+        return false;
+    }
+    *consumed_next = false;
+    out_value->clear();
+    if (arg == name) {
+        if (next_value != NULL) {
+            *out_value = next_value;
+            *consumed_next = true;
+        }
+        return true;
+    }
+    if (arg.size() > name_len && arg.compare(0, name_len, name) == 0 && arg[name_len] == '=') {
+        *out_value = arg.substr(name_len + 1);
+        return true;
+    }
+    return false;
+}
+
+static void PrintMissingOptionValue(const char* option)
+{
+    printf("missing value for %s\n", option);
+}
+
+static const char* MsgStrTag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag)
+{
+    const char* value = eular::ntrs::MessageGetStringByTag(&msg, tag);
+    return value == NULL ? "" : value;
 }
 
 static std::string NowIso8601()
@@ -55,111 +124,291 @@ static std::string NowIso8601()
     return std::string(buf);
 }
 
-static std::string ParseNodeIdFromTopic(const std::string& topic)
+static bool SendAll(int fd, const void* buf, size_t len)
 {
-    const std::string prefix = "ntrs/node/";
-    const std::string suffix_register = "/register";
-    const std::string suffix_presence = "/presence";
-    const std::string suffix_heartbeat = "/heartbeat";
-    if (topic.find(prefix) != 0) {
-        return "";
-    }
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t         left = len;
 
-    size_t pos = topic.find('/', prefix.size());
-    if (pos == std::string::npos) {
-        return "";
-    }
-
-    std::string node_id = topic.substr(prefix.size(), pos - prefix.size());
-    std::string suffix = topic.substr(pos);
-    if (suffix != suffix_register && suffix != suffix_presence && suffix != suffix_heartbeat) {
-        return "";
-    }
-    return node_id;
-}
-
-static bool MqttPublishMessage(eular::orion::MqttClient* Mqtt, const std::string& topic,
-                                 const eular::ntrs::Message& msg, bool retain)
-{
-    uint8_t buf[8192];
-    size_t  len = 0;
-    if (Mqtt == NULL || eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
-        printf("hub Mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
+    while (left > 0) {
+        ssize_t n = send(fd, p, left, 0);
+        if (n > 0) {
+            p += n;
+            left -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
         return false;
     }
-    if (!Mqtt->publish(topic, buf, len, 1, retain)) {
-        printf("hub Mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
-        return false;
-    }
-    printf("hub Mqtt publish ok topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
     return true;
 }
 
-static void PublishClusterEvent(eular::orion::MqttClient* Mqtt, const std::string& event,
-                                  const eular::ntrs::ClusterNodeState& node, uint64_t clusterVersion)
+static void AppendUniqueFd(std::vector<int>* fds, int fd)
+{
+    if (fds == NULL || fd < 0) {
+        return;
+    }
+    if (std::find(fds->begin(), fds->end(), fd) == fds->end()) {
+        fds->push_back(fd);
+    }
+}
+
+static bool SendMessage(int fd, const eular::ntrs::Message& msg)
+{
+    uint8_t buf[8192];
+    size_t  len = 0;
+
+    if (eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
+        return false;
+    }
+    return SendAll(fd, buf, len);
+}
+
+static void AppendU32(std::vector<uint8_t>* out, uint32_t value)
+{
+    out->push_back((uint8_t)((value >> 24) & 0xFFu));
+    out->push_back((uint8_t)((value >> 16) & 0xFFu));
+    out->push_back((uint8_t)((value >> 8) & 0xFFu));
+    out->push_back((uint8_t)(value & 0xFFu));
+}
+
+static void AppendU64(std::vector<uint8_t>* out, uint64_t value)
+{
+    out->push_back((uint8_t)((value >> 56) & 0xFFu));
+    out->push_back((uint8_t)((value >> 48) & 0xFFu));
+    out->push_back((uint8_t)((value >> 40) & 0xFFu));
+    out->push_back((uint8_t)((value >> 32) & 0xFFu));
+    out->push_back((uint8_t)((value >> 24) & 0xFFu));
+    out->push_back((uint8_t)((value >> 16) & 0xFFu));
+    out->push_back((uint8_t)((value >> 8) & 0xFFu));
+    out->push_back((uint8_t)(value & 0xFFu));
+}
+
+static uint32_t ReadU32(const uint8_t* data)
+{
+    return ((uint32_t)data[0] << 24) |
+           ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] << 8) |
+           (uint32_t)data[3];
+}
+
+static uint64_t ReadU64(const uint8_t* data)
+{
+    return ((uint64_t)data[0] << 56) |
+           ((uint64_t)data[1] << 48) |
+           ((uint64_t)data[2] << 40) |
+           ((uint64_t)data[3] << 32) |
+           ((uint64_t)data[4] << 24) |
+           ((uint64_t)data[5] << 16) |
+           ((uint64_t)data[6] << 8) |
+           (uint64_t)data[7];
+}
+
+static bool DrainMessages(int fd, HubClientRxState* state, std::deque<eular::ntrs::Message>* messages,
+                          bool* peer_closed)
+{
+    uint8_t chunk[2048];
+
+    if (state == NULL || messages == NULL || peer_closed == NULL) {
+        return false;
+    }
+
+    *peer_closed = false;
+    for (;;) {
+        ssize_t n = recv(fd, chunk, sizeof(chunk), MSG_DONTWAIT);
+        if (n > 0) {
+            state->buffer.insert(state->buffer.end(), chunk, chunk + n);
+            continue;
+        }
+        if (n == 0) {
+            *peer_closed = true;
+            break;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        *peer_closed = true;
+        break;
+    }
+
+    while (state->buffer.size() >= eular::ntrs::FRAME_HDR_SIZE) {
+        uint32_t frame_size = 0;
+
+        if (!eular::ntrs::FrameSizeFromHeader(state->buffer.data(), eular::ntrs::FRAME_HDR_SIZE, &frame_size) ||
+            frame_size < eular::ntrs::FRAME_HDR_SIZE || frame_size > 8192u) {
+            *peer_closed = true;
+            return false;
+        }
+        if (state->buffer.size() < frame_size) {
+            break;
+        }
+        messages->emplace_back();
+        if (!eular::ntrs::DecodeMessage(state->buffer.data(), frame_size, &messages->back())) {
+            messages->pop_back();
+            *peer_closed = true;
+            return false;
+        }
+        state->buffer.erase(state->buffer.begin(), state->buffer.begin() + frame_size);
+    }
+
+    return true;
+}
+
+static bool SetNonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+static bool IsIpv6Literal(const std::string& host)
+{
+    struct in6_addr addr6;
+    return inet_pton(AF_INET6, host.c_str(), &addr6) == 1;
+}
+
+static bool CreateListenSocket(const std::string& host, uint16_t port, int* listen_fd)
+{
+    int fd = -1;
+
+    if (listen_fd == NULL || port == 0) {
+        return false;
+    }
+    *listen_fd = -1;
+
+    if (host.empty() || IsIpv6Literal(host) || host == "::") {
+        struct sockaddr_in6 addr6;
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port);
+        if (host.empty() || host == "::") {
+            addr6.sin6_addr = in6addr_any;
+        } else if (inet_pton(AF_INET6, host.c_str(), &addr6.sin6_addr) != 1) {
+            return false;
+        }
+
+        fd = socket(AF_INET6, SOCK_STREAM, 0);
+        if (fd < 0) {
+            return false;
+        }
+        int on = 1;
+        int off = 0;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+        if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr6), sizeof(addr6)) != 0 ||
+            listen(fd, 128) != 0 ||
+            !SetNonblocking(fd)) {
+            close(fd);
+            return false;
+        }
+        *listen_fd = fd;
+        return true;
+    }
+
+    struct sockaddr_in addr4;
+    memset(&addr4, 0, sizeof(addr4));
+    addr4.sin_family = AF_INET;
+    addr4.sin_port = htons(port);
+    if (host == "0.0.0.0") {
+        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, host.c_str(), &addr4.sin_addr) != 1) {
+        return false;
+    }
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return false;
+    }
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr4), sizeof(addr4)) != 0 ||
+        listen(fd, 128) != 0 ||
+        !SetNonblocking(fd)) {
+        close(fd);
+        return false;
+    }
+    *listen_fd = fd;
+    return true;
+}
+
+static eular::ntrs::EventCode EventCodeForName(const std::string& event)
+{
+    if (event == "node_registered") {
+        return eular::ntrs::EventCode::NODE_REGISTERED;
+    }
+    if (event == "node_generation_replaced") {
+        return eular::ntrs::EventCode::NODE_GENERATION_REPLACED;
+    }
+    if (event == "node_online") {
+        return eular::ntrs::EventCode::NODE_ONLINE;
+    }
+    if (event == "node_abnormal_offline") {
+        return eular::ntrs::EventCode::NODE_ABNORMAL_OFFLINE;
+    }
+    if (event == "node_offline") {
+        return eular::ntrs::EventCode::NODE_OFFLINE;
+    }
+    if (event == "node_status_changed") {
+        return eular::ntrs::EventCode::NODE_STATUS_CHANGED;
+    }
+    if (event == "node_heartbeat") {
+        return eular::ntrs::EventCode::NODE_HEARTBEAT;
+    }
+    if (event == "node_evicted") {
+        return eular::ntrs::EventCode::NODE_EVICTED;
+    }
+    return eular::ntrs::EventCode::UNKNOWN;
+}
+
+static eular::ntrs::NodeStatusCode StatusCodeForName(const std::string& status)
+{
+    if (status == "registered") {
+        return eular::ntrs::NodeStatusCode::REGISTERED;
+    }
+    if (status == "online") {
+        return eular::ntrs::NodeStatusCode::ONLINE;
+    }
+    if (status == "offline") {
+        return eular::ntrs::NodeStatusCode::OFFLINE;
+    }
+    return eular::ntrs::NodeStatusCode::UNKNOWN;
+}
+
+static eular::ntrs::Message BuildClusterEventMessage(const std::string& event,
+                                                     const eular::ntrs::ClusterNodeState& node,
+                                                     uint64_t cluster_version)
 {
     eular::ntrs::Message msg;
-    eular::ntrs::EventCode event_code = eular::ntrs::EventCode::UNKNOWN;
-    eular::ntrs::NodeStatusCode status_code = eular::ntrs::NodeStatusCode::UNKNOWN;
-    if (event == "node_registered") {
-        event_code = eular::ntrs::EventCode::NODE_REGISTERED;
-    } else if (event == "node_generation_replaced") {
-        event_code = eular::ntrs::EventCode::NODE_GENERATION_REPLACED;
-    } else if (event == "node_online") {
-        event_code = eular::ntrs::EventCode::NODE_ONLINE;
-    } else if (event == "node_abnormal_offline") {
-        event_code = eular::ntrs::EventCode::NODE_ABNORMAL_OFFLINE;
-    } else if (event == "node_offline") {
-        event_code = eular::ntrs::EventCode::NODE_OFFLINE;
-    } else if (event == "node_status_changed") {
-        event_code = eular::ntrs::EventCode::NODE_STATUS_CHANGED;
-    } else if (event == "node_heartbeat") {
-        event_code = eular::ntrs::EventCode::NODE_HEARTBEAT;
-    } else if (event == "node_evicted") {
-        event_code = eular::ntrs::EventCode::NODE_EVICTED;
-    }
-    if (node.status == "registered") {
-        status_code = eular::ntrs::NodeStatusCode::REGISTERED;
-    } else if (node.status == "online") {
-        status_code = eular::ntrs::NodeStatusCode::ONLINE;
-    } else if (node.status == "offline") {
-        status_code = eular::ntrs::NodeStatusCode::OFFLINE;
-    }
-    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)clusterVersion);
-    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)event_code);
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)cluster_version);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)EventCodeForName(event));
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node.node_id.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, node.boot_id.c_str());
-    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status_code);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)StatusCodeForName(node.status));
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, node.region.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, node.probe_endpoint.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, node.control_endpoint.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, node.nat_type.c_str());
     eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::LOAD, (uint32_t)node.load);
-    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec);
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC,
+                                    node.heartbeat_interval_sec);
     const std::string ts = NowIso8601();
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
-
-    MqttPublishMessage(Mqtt, "ntrs/hub/cluster/events", msg, false);
+    return msg;
 }
 
-static void PublishClusterSnapshot(eular::orion::MqttClient*                                   Mqtt,
-                                     const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes,
-                                     uint64_t                                                    clusterVersion)
-{
-    eular::ntrs::Message msg;
-    const std::string    ts = NowIso8601();
-    if (!eular::ntrs::BuildClusterSnapshotMessage(nodes, clusterVersion, ts, &msg)) {
-        return;
-    }
-
-    MqttPublishMessage(Mqtt, "ntrs/hub/cluster/snapshot", msg, true);
-}
-
-static Assignment BuildAssignmentFor(const std::string&                                          self_node,
-                                       const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes)
+static Assignment BuildAssignmentFor(const std::string& self_node,
+                                     const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes)
 {
     Assignment               a;
     std::vector<std::string> candidates;
+
     for (std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = nodes.begin(); it != nodes.end();
          ++it) {
         if (it->first == self_node) {
@@ -180,15 +429,15 @@ static Assignment BuildAssignmentFor(const std::string&                         
     if (candidates.size() > 2) {
         a.backup1 = candidates[2];
     }
-
     return a;
 }
 
-static void PublishAssignmentForNode(eular::orion::MqttClient* Mqtt, const std::string& node_id, const Assignment& a,
-                                        uint64_t clusterVersion)
+static eular::ntrs::Message BuildAssignmentMessage(const std::string& node_id, const Assignment& a,
+                                                   uint64_t cluster_version)
 {
     eular::ntrs::Message msg;
-    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)clusterVersion);
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)cluster_version);
     eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)eular::ntrs::EventCode::ASSIGNMENT);
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL, a.primary1.c_str());
@@ -196,204 +445,556 @@ static void PublishAssignmentForNode(eular::orion::MqttClient* Mqtt, const std::
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BACKUP1_CONTROL, a.backup1.c_str());
     const std::string ts = NowIso8601();
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
-
-    std::string topic = "ntrs/hub/node/" + node_id + "/assignment";
-    printf("hub publish assignment node=%s v=%llu p1=%s p2=%s b1=%s\n", node_id.c_str(),
-           (unsigned long long)clusterVersion, a.primary1.c_str(), a.primary2.c_str(), a.backup1.c_str());
-    MqttPublishMessage(Mqtt, topic, msg, true);
+    return msg;
 }
 
-static void PublishAllAssignments(eular::orion::MqttClient*                                   Mqtt,
-                                    const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes,
-                                    uint64_t                                                    clusterVersion)
+static void SendAssignments(const eular::ntrs::HubClusterState& cluster_state,
+                            const std::map<int, HubClientSession>& sessions,
+                            std::vector<int>* failed_fds)
 {
-    for (std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = nodes.begin(); it != nodes.end();
-         ++it) {
-        Assignment a = BuildAssignmentFor(it->first, nodes);
-        PublishAssignmentForNode(Mqtt, it->first, a, clusterVersion);
-    }
-}
-
-static void PublishClusterUpdate(eular::orion::MqttClient* Mqtt, const eular::ntrs::HubClusterState& cluster_state,
-                                   const std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> >& events)
-{
-    PublishClusterSnapshot(Mqtt, cluster_state.nodes(), cluster_state.clusterVersion());
-    for (size_t i = 0; i < events.size(); ++i) {
-        if (events[i].first.empty()) {
+    for (std::map<int, HubClientSession>::const_iterator it = sessions.begin(); it != sessions.end(); ++it) {
+        if (!it->second.authed || it->second.node_id.empty()) {
             continue;
         }
-        PublishClusterEvent(Mqtt, events[i].first, events[i].second, cluster_state.clusterVersion());
+        Assignment a = BuildAssignmentFor(it->second.node_id, cluster_state.nodes());
+        eular::ntrs::Message msg = BuildAssignmentMessage(it->second.node_id, a, cluster_state.clusterVersion());
+        printf("hub send assignment node=%s v=%llu p1=%s p2=%s b1=%s\n",
+               it->second.node_id.c_str(),
+               (unsigned long long)cluster_state.clusterVersion(),
+               a.primary1.empty() ? "-" : a.primary1.c_str(),
+               a.primary2.empty() ? "-" : a.primary2.c_str(),
+               a.backup1.empty() ? "-" : a.backup1.c_str());
+        if (!SendMessage(it->first, msg)) {
+            AppendUniqueFd(failed_fds, it->first);
+        }
     }
-    PublishAllAssignments(Mqtt, cluster_state.nodes(), cluster_state.clusterVersion());
+}
+
+static bool SaveSnapshot(const std::string& state_file, const eular::ntrs::HubClusterState& cluster_state)
+{
+    std::vector<uint8_t> payload;
+    std::vector<uint8_t> buf;
+    std::string          tmp_file = state_file + ".tmp";
+
+    if (state_file.empty()) {
+        return false;
+    }
+    if (!eular::ntrs::EncodeClusterSnapshotNodes(cluster_state.nodes(), &payload) ||
+        payload.size() > kMaxHubStatePayloadSize ||
+        cluster_state.nodes().size() > 0xFFFFFFFFu) {
+        return false;
+    }
+
+    buf.reserve(sizeof(kHubStateMagic) + 20u + payload.size());
+    buf.insert(buf.end(), kHubStateMagic, kHubStateMagic + sizeof(kHubStateMagic));
+    AppendU32(&buf, kHubStateVersion);
+    AppendU64(&buf, cluster_state.clusterVersion());
+    AppendU32(&buf, (uint32_t)cluster_state.nodes().size());
+    AppendU32(&buf, (uint32_t)payload.size());
+    buf.insert(buf.end(), payload.begin(), payload.end());
+
+    if (buf.empty()) {
+        return false;
+    }
+
+    FILE* fp = fopen(tmp_file.c_str(), "wb");
+    if (fp == NULL) {
+        return false;
+    }
+    bool ok = fwrite(buf.data(), 1, buf.size(), fp) == buf.size();
+    if (fclose(fp) != 0) {
+        ok = false;
+    }
+    if (!ok) {
+        unlink(tmp_file.c_str());
+        return false;
+    }
+    if (rename(tmp_file.c_str(), state_file.c_str()) != 0) {
+        unlink(tmp_file.c_str());
+        return false;
+    }
+    return true;
+}
+
+static bool LoadSnapshot(const std::string& state_file, eular::ntrs::HubClusterState* cluster_state)
+{
+    static const size_t kHeaderSize = 8u + 4u + 8u + 4u + 4u;
+
+    FILE* fp = NULL;
+    long  size = 0;
+
+    if (state_file.empty() || cluster_state == NULL) {
+        return false;
+    }
+    fp = fopen(state_file.c_str(), "rb");
+    if (fp == NULL) {
+        return false;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return false;
+    }
+    size = ftell(fp);
+    if (size < (long)kHeaderSize || size > (long)(kHeaderSize + kMaxHubStatePayloadSize)) {
+        fclose(fp);
+        return false;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return false;
+    }
+
+    std::vector<uint8_t> data((size_t)size);
+    bool                ok = fread(data.data(), 1, data.size(), fp) == data.size();
+    fclose(fp);
+    if (!ok) {
+        return false;
+    }
+
+    size_t offset = 0;
+    if (memcmp(data.data(), kHubStateMagic, sizeof(kHubStateMagic)) != 0) {
+        eular::ntrs::Message msg;
+        return eular::ntrs::DecodeMessage(data.data(), data.size(), &msg) && cluster_state->restoreFromSnapshot(msg);
+    }
+    offset += sizeof(kHubStateMagic);
+
+    uint32_t state_version = ReadU32(data.data() + offset);
+    offset += 4u;
+    if (state_version != kHubStateVersion) {
+        return false;
+    }
+
+    uint64_t cluster_version = ReadU64(data.data() + offset);
+    offset += 8u;
+    uint32_t node_count = ReadU32(data.data() + offset);
+    offset += 4u;
+    uint32_t payload_len = ReadU32(data.data() + offset);
+    offset += 4u;
+    if (payload_len > kMaxHubStatePayloadSize || offset + payload_len != data.size()) {
+        return false;
+    }
+
+    std::vector<eular::ntrs::ClusterNodeState> nodes;
+    if (!eular::ntrs::DecodeClusterSnapshotNodes(data.data() + offset, payload_len, &nodes) ||
+        nodes.size() != node_count) {
+        return false;
+    }
+    return cluster_state->restoreFromNodes(cluster_version, nodes);
+}
+
+static std::string MessageNodeId(const eular::ntrs::Message& msg)
+{
+    return MsgStrTag(msg, eular::ntrs::FieldTag::NODE_ID);
+}
+
+static bool ApplyNodeMessage(const std::string& node_id, const eular::ntrs::Message& msg,
+                             eular::ntrs::HubClusterState* cluster_state,
+                             std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> >* events)
+{
+    std::string                   event_name;
+    eular::ntrs::ClusterNodeState node;
+
+    if (cluster_state == NULL || events == NULL || node_id.empty()) {
+        return false;
+    }
+    if (!cluster_state->applyMessage(node_id, msg, (uint64_t)time(NULL), NowIso8601(), &event_name, &node)) {
+        return false;
+    }
+    events->push_back(std::make_pair(event_name, node));
+    return true;
+}
+
+static eular::ntrs::Message BuildPresenceMessage(const std::string& node_id, const std::string& boot_id,
+                                                 eular::ntrs::NodeStatusCode status,
+                                                 eular::ntrs::ReasonCode reason_code)
+{
+    eular::ntrs::Message msg;
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_PRESENCE, (uint32_t)time(NULL));
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS, (uint8_t)status);
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::REASON, (uint8_t)reason_code);
+    const std::string ts = NowIso8601();
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    return msg;
+}
+
+static std::string CurrentBootIdForNode(const eular::ntrs::HubClusterState& cluster_state,
+                                        const std::string& node_id)
+{
+    std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = cluster_state.nodes().find(node_id);
+    if (it == cluster_state.nodes().end()) {
+        return "";
+    }
+    return it->second.boot_id;
+}
+
+static bool IsNodeOffline(const eular::ntrs::HubClusterState& cluster_state, const std::string& node_id)
+{
+    std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = cluster_state.nodes().find(node_id);
+    return it != cluster_state.nodes().end() && it->second.status == "offline";
+}
+
+static void PublishUpdates(const std::string& state_file,
+                           eular::ntrs::HubClusterState* cluster_state,
+                           const std::map<int, HubClientSession>& sessions,
+                           const std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> >& events,
+                           std::vector<int>* failed_fds)
+{
+    if (cluster_state == NULL || events.empty()) {
+        return;
+    }
+    if (!SaveSnapshot(state_file, *cluster_state)) {
+        printf("hub save snapshot failed state_file=%s nodes=%zu version=%llu\n",
+               state_file.c_str(),
+               cluster_state->nodes().size(),
+               (unsigned long long)cluster_state->clusterVersion());
+    }
+    for (size_t i = 0; i < events.size(); ++i) {
+        eular::ntrs::Message event_msg =
+            BuildClusterEventMessage(events[i].first, events[i].second, cluster_state->clusterVersion());
+        for (std::map<int, HubClientSession>::const_iterator it = sessions.begin(); it != sessions.end(); ++it) {
+            if (it->second.authed) {
+                if (!SendMessage(it->first, event_msg)) {
+                    AppendUniqueFd(failed_fds, it->first);
+                }
+            }
+        }
+    }
+    SendAssignments(*cluster_state, sessions, failed_fds);
+}
+
+static void CloseClient(int fd,
+                        std::set<int>* clients,
+                        std::map<int, HubClientSession>* sessions,
+                        eular::ntrs::ControlAuthManager* auth_manager,
+                        eular::ntrs::HubClusterState* cluster_state,
+                        const std::string& state_file,
+                        bool mark_offline,
+                        eular::ntrs::ReasonCode reason_code)
+{
+    std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
+    std::string                                                        node_id;
+
+    if (sessions != NULL) {
+        std::map<int, HubClientSession>::iterator it = sessions->find(fd);
+        if (it != sessions->end()) {
+            node_id = it->second.node_id;
+            sessions->erase(it);
+        }
+    }
+    if (auth_manager != NULL) {
+        auth_manager->revokeFd(fd);
+    }
+    if (clients != NULL) {
+        clients->erase(fd);
+    }
+    close(fd);
+
+    if (mark_offline && !node_id.empty() && cluster_state != NULL && !IsNodeOffline(*cluster_state, node_id)) {
+        std::string boot_id = CurrentBootIdForNode(*cluster_state, node_id);
+        if (!boot_id.empty()) {
+            std::vector<int> failed_fds;
+            eular::ntrs::Message offline =
+                BuildPresenceMessage(node_id, boot_id, eular::ntrs::NodeStatusCode::OFFLINE, reason_code);
+            ApplyNodeMessage(node_id, offline, cluster_state, &events);
+            PublishUpdates(state_file, cluster_state, *sessions, events, &failed_fds);
+            for (size_t i = 0; i < failed_fds.size(); ++i) {
+                if (clients != NULL && clients->find(failed_fds[i]) != clients->end()) {
+                    CloseClient(failed_fds[i], clients, sessions, auth_manager, cluster_state, state_file, false,
+                                eular::ntrs::ReasonCode::NONE);
+                }
+            }
+        }
+    }
+}
+
+static void CloseDuplicateNode(const std::string& node_id,
+                               int keep_fd,
+                               std::set<int>* clients,
+                               std::map<int, HubClientSession>* sessions,
+                               eular::ntrs::ControlAuthManager* auth_manager)
+{
+    std::vector<int> duplicates;
+
+    if (sessions == NULL) {
+        return;
+    }
+    for (std::map<int, HubClientSession>::const_iterator it = sessions->begin(); it != sessions->end(); ++it) {
+        if (it->first != keep_fd && it->second.node_id == node_id) {
+            duplicates.push_back(it->first);
+        }
+    }
+    for (size_t i = 0; i < duplicates.size(); ++i) {
+        int fd = duplicates[i];
+        if (auth_manager != NULL) {
+            auth_manager->revokeFd(fd);
+        }
+        if (clients != NULL) {
+            clients->erase(fd);
+        }
+        sessions->erase(fd);
+        close(fd);
+        printf("hub closed duplicate node session node=%s fd=%d\n", node_id.c_str(), fd);
+    }
+}
+
+static void SendError(int fd, uint32_t request_id, const char* code, const char* message)
+{
+    eular::ntrs::Message rsp;
+
+    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::ERROR_RSP, request_id);
+    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::CODE, code == NULL ? "ERROR" : code);
+    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::MESSAGE, message == NULL ? "" : message);
+    SendMessage(fd, rsp);
 }
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    std::string broker = "127.0.0.1";
-    int         port = 1883;
-    std::string username;
-    std::string password;
-    bool        use_named_args = false;
-    int         positional_index = 0;
+    std::string host = "::";
+    int         port = kDefaultHubPort;
+    std::string state_file = "./ntrs_hub_state.bin";
+    std::string auth_secret = "ntrs-dev-secret";
 
     for (int i = 1; i < argc; ++i) {
-        const char* arg = argv[i];
-        const char* value = (i + 1 < argc) ? argv[i + 1] : NULL;
+        std::string arg = argv[i];
+        const char* next_value = (i + 1 < argc) ? argv[i + 1] : NULL;
+        std::string value;
+        bool        consumed_next = false;
 
-        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
+        if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             return 0;
+        } else if (MatchLongOption(arg, "--host", next_value, &consumed_next, &value)) {
+            if (value.empty()) {
+                PrintMissingOptionValue("--host");
+                return 1;
+            }
+            host = value;
+        } else if (MatchLongOption(arg, "--port", next_value, &consumed_next, &value)) {
+            int parsed = value.empty() ? 0 : atoi(value.c_str());
+            if (value.empty()) {
+                PrintMissingOptionValue("--port");
+                return 1;
+            }
+            if (parsed <= 0 || parsed > 65535) {
+                printf("invalid --port: %s\n", value.c_str());
+                return 1;
+            }
+            port = parsed;
+        } else if (MatchLongOption(arg, "--state-file", next_value, &consumed_next, &value)) {
+            if (value.empty()) {
+                PrintMissingOptionValue("--state-file");
+                return 1;
+            }
+            state_file = value;
+        } else if (MatchLongOption(arg, "--auth-secret", next_value, &consumed_next, &value)) {
+            if (value.empty()) {
+                PrintMissingOptionValue("--auth-secret");
+                return 1;
+            }
+            auth_secret = value;
+        } else {
+            printf("unknown argument: %s\n\n", arg.c_str());
+            PrintUsage(argv[0]);
+            return 1;
         }
-        if (strncmp(arg, "--", 2) == 0) {
-            use_named_args = true;
-            if (value == NULL) {
-                PrintUsage(argv[0]);
-                return 1;
-            }
-            if (strcmp(arg, "--host") == 0) {
-                broker = value;
-            } else if (strcmp(arg, "--port") == 0) {
-                port = atoi(value);
-                if (port <= 0 || port > 65535) {
-                    printf("invalid mqtt_port: %s\n", value);
-                    PrintUsage(argv[0]);
-                    return 1;
-                }
-            } else if (strcmp(arg, "--username") == 0) {
-                username = value;
-            } else if (strcmp(arg, "--password") == 0) {
-                password = value;
-            } else {
-                PrintUsage(argv[0]);
-                return 1;
-            }
+        if (consumed_next) {
             ++i;
+        }
+    }
+
+    signal(SIGINT, OnSignal);
+    signal(SIGTERM, OnSignal);
+#if !defined(_WIN32)
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
+    int listen_fd = -1;
+    if (!CreateListenSocket(host, (uint16_t)port, &listen_fd)) {
+        printf("hub listen failed host=%s port=%d errno=%d\n", host.c_str(), port, errno);
+        return 1;
+    }
+
+    eular::ntrs::HubClusterState      cluster_state;
+    eular::ntrs::ControlAuthManager   auth_manager(auth_secret, kHubAuthTtlSec);
+    std::set<int>                     clients;
+    std::map<int, HubClientSession>   sessions;
+
+    if (LoadSnapshot(state_file, &cluster_state)) {
+        printf("hub restored snapshot version=%llu nodes=%zu state_file=%s\n",
+               (unsigned long long)cluster_state.clusterVersion(),
+               cluster_state.nodes().size(),
+               state_file.c_str());
+    }
+
+    printf("ntrs_hub listening on %s:%d state_file=%s\n", host.c_str(), port, state_file.c_str());
+
+    while (!g_stop) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_fd, &rfds);
+        int maxfd = listen_fd;
+
+        for (std::set<int>::iterator it = clients.begin(); it != clients.end(); ++it) {
+            FD_SET(*it, &rfds);
+            if (*it > maxfd) {
+                maxfd = *it;
+            }
+        }
+
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        int ret = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("select");
             continue;
         }
 
-        if (use_named_args) {
-            PrintUsage(argv[0]);
-            return 1;
-        }
-        if (positional_index == 0) {
-            broker = arg;
-        } else if (positional_index == 1) {
-            port = atoi(arg);
-            if (port <= 0 || port > 65535) {
-                printf("invalid mqtt_port: %s\n", arg);
-                PrintUsage(argv[0]);
-                return 1;
+        auth_manager.sweepExpired((uint64_t)time(NULL));
+
+        if (FD_ISSET(listen_fd, &rfds)) {
+            int fd = accept(listen_fd, NULL, NULL);
+            if (fd >= 0) {
+                SetNonblocking(fd);
+                clients.insert(fd);
+                sessions[fd] = HubClientSession();
+                printf("hub client connected fd=%d\n", fd);
             }
-        } else if (positional_index == 2) {
-            username = arg;
-        } else if (positional_index == 3) {
-            password = arg;
-        } else {
-            PrintUsage(argv[0]);
-            return 1;
         }
-        ++positional_index;
-    }
 
-    eular::orion::MqttClient Mqtt(broker, port, "ntrs-hub", username, password);
-    ev::EventLoop            loop;
-    if (!Mqtt.attachEventLoop(loop.loop())) {
-        printf("hub attach event loop failed\n");
-        return 1;
-    }
-
-    eular::ntrs::HubClusterState cluster_state;
-    bool                         mqtt_bootstrap_done = false;
-
-    auto ensure_hub_subscriptions = [&]() {
-        if (!Mqtt.isConnected()) {
-            return;
-        }
-        Mqtt.subscribe("ntrs/node/+/register", 1);
-        Mqtt.subscribe("ntrs/node/+/presence", 1);
-        Mqtt.subscribe("ntrs/node/+/heartbeat", 1);
-        Mqtt.subscribe("ntrs/hub/cluster/snapshot", 1);
-        if (!mqtt_bootstrap_done) {
-            mqtt_bootstrap_done = true;
-            printf("hub Mqtt subscriptions ready\n");
-        } else {
-            printf("hub Mqtt subscriptions refreshed\n");
-        }
-    };
-
-    Mqtt.setMessageCallback([&](const std::string& topic, const uint8_t* payload, size_t payload_len) {
-        eular::ntrs::Message msg;
-        printf("hub Mqtt message topic=%s len=%zu\n", topic.c_str(), payload_len);
-        if (!eular::ntrs::DecodeMessage(payload, payload_len, &msg)) {
-            printf("hub ignore undecodable payload topic=%s\n", topic.c_str());
-            return;
-        }
-        uint8_t event_code = (uint8_t)eular::ntrs::EventCode::UNKNOWN;
-        eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
-        printf("hub Mqtt decoded topic=%s type=%u node_id=%s event=%s request_id=%u\n", topic.c_str(),
-               (unsigned)msg.type, eular::ntrs::MessageGetString(&msg, "node_id"),
-               eular::ntrs::EventCodeName((eular::ntrs::EventCode)event_code), msg.request_id);
-
-        if (topic == "ntrs/hub/cluster/snapshot") {
-            if (cluster_state.restoreFromSnapshot(msg)) {
-                printf("hub restored snapshot version=%llu nodes=%zu\n",
-                       (unsigned long long)cluster_state.clusterVersion(), cluster_state.nodes().size());
+        std::vector<int> closed;
+        for (std::set<int>::iterator it = clients.begin(); it != clients.end(); ++it) {
+            int fd = *it;
+            if (!FD_ISSET(fd, &rfds)) {
+                continue;
             }
-            return;
+
+            bool                              peer_closed = false;
+            std::deque<eular::ntrs::Message> messages;
+            if (!DrainMessages(fd, &sessions[fd].rx, &messages, &peer_closed)) {
+                peer_closed = true;
+            }
+            if (peer_closed) {
+                closed.push_back(fd);
+                continue;
+            }
+
+            for (size_t i = 0; i < messages.size(); ++i) {
+                eular::ntrs::Message& msg = messages[i];
+                if (msg.type == eular::ntrs::MessageType::AUTH_REQ) {
+                    std::string                 node_id = MsgStrTag(msg, eular::ntrs::FieldTag::PEER_ID);
+                    std::string                 token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
+                    eular::ntrs::ControlSession session;
+                    std::string                 reason;
+
+                    if (sessions[fd].authed) {
+                        SendError(fd, msg.request_id, "AUTH_ALREADY_DONE", "hub auth already completed");
+                        closed.push_back(fd);
+                        break;
+                    }
+                    if (!auth_manager.issueSession(node_id, token, fd, (uint64_t)time(NULL), &session, &reason)) {
+                        SendError(fd, msg.request_id, "AUTH_FAILED", reason.c_str());
+                        closed.push_back(fd);
+                        break;
+                    }
+
+                    sessions[fd].authed = true;
+                    sessions[fd].node_id = node_id;
+                    sessions[fd].session_token = session.token;
+
+                    eular::ntrs::Message rsp;
+                    eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::AUTH_RSP, msg.request_id);
+                    eular::ntrs::MessageAddU8ByTag(&rsp, eular::ntrs::FieldTag::RESULT,
+                                                   (uint8_t)eular::ntrs::ResultCode::OK);
+                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::TOKEN, session.token.c_str());
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::LEASE_DEFAULT_SEC,
+                                                    auth_manager.sessionTtlSec());
+                    eular::ntrs::MessageAddU32ByTag(&rsp, eular::ntrs::FieldTag::EXPIRE_AT,
+                                                    (uint32_t)session.expire_at_sec);
+                    SendMessage(fd, rsp);
+                    printf("hub auth ok node=%s fd=%d\n", node_id.c_str(), fd);
+                    continue;
+                }
+
+                if (!sessions[fd].authed) {
+                    SendError(fd, msg.request_id, "AUTH_REQUIRED", "hub auth required");
+                    closed.push_back(fd);
+                    break;
+                }
+
+                std::string message_node_id = MessageNodeId(msg);
+                if (message_node_id.empty() || message_node_id != sessions[fd].node_id) {
+                    SendError(fd, msg.request_id, "NODE_ID_MISMATCH", "node_id mismatch");
+                    closed.push_back(fd);
+                    break;
+                }
+
+                if (msg.type != eular::ntrs::MessageType::NODE_REGISTER &&
+                    msg.type != eular::ntrs::MessageType::NODE_PRESENCE &&
+                    msg.type != eular::ntrs::MessageType::NODE_HEARTBEAT) {
+                    SendError(fd, msg.request_id, "UNSUPPORTED", "unsupported hub message");
+                    continue;
+                }
+
+                std::string reason;
+                if (!auth_manager.validateSession(fd, sessions[fd].node_id, sessions[fd].session_token,
+                                                  (uint64_t)time(NULL), &reason)) {
+                    SendError(fd, msg.request_id, "AUTH_REQUIRED", reason.c_str());
+                    closed.push_back(fd);
+                    break;
+                }
+
+                std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
+                if (!ApplyNodeMessage(message_node_id, msg, &cluster_state, &events)) {
+                    continue;
+                }
+                if (msg.type == eular::ntrs::MessageType::NODE_REGISTER) {
+                    CloseDuplicateNode(message_node_id, fd, &clients, &sessions, &auth_manager);
+                }
+                PublishUpdates(state_file, &cluster_state, sessions, events, &closed);
+
+                printf("hub updated node=%s type=%u status=%s version=%llu\n",
+                       message_node_id.c_str(),
+                       (unsigned)msg.type,
+                       cluster_state.nodes().find(message_node_id) == cluster_state.nodes().end()
+                           ? "-"
+                           : cluster_state.nodes().find(message_node_id)->second.status.c_str(),
+                       (unsigned long long)cluster_state.clusterVersion());
+            }
         }
 
-        std::string node_id = ParseNodeIdFromTopic(topic);
-        if (node_id.empty()) {
-            return;
+        std::sort(closed.begin(), closed.end());
+        closed.erase(std::unique(closed.begin(), closed.end()), closed.end());
+        for (size_t i = 0; i < closed.size(); ++i) {
+            if (clients.find(closed[i]) != clients.end()) {
+                CloseClient(closed[i], &clients, &sessions, &auth_manager, &cluster_state, state_file, true,
+                            eular::ntrs::ReasonCode::LWT);
+            }
         }
 
-        std::string                   event_name;
-        eular::ntrs::ClusterNodeState node;
-        uint64_t                      now_sec = (uint64_t)time(NULL);
-        if (!cluster_state.applyMessage(node_id, msg, now_sec, NowIso8601(), &event_name, &node)) {
-            return;
+        std::vector<eular::ntrs::ClusterNodeState> evicted_nodes;
+        if (cluster_state.sweepExpired((uint64_t)time(NULL), &evicted_nodes)) {
+            std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
+            for (size_t i = 0; i < evicted_nodes.size(); ++i) {
+                events.push_back(std::make_pair("node_evicted", evicted_nodes[i]));
+            }
+            PublishUpdates(state_file, &cluster_state, sessions, events, &closed);
         }
-
-        std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
-        events.push_back(std::make_pair(event_name, node));
-        PublishClusterUpdate(&Mqtt, cluster_state, events);
-
-        printf("hub updated node=%s status=%s version=%llu\n", node.node_id.c_str(), node.status.c_str(),
-               (unsigned long long)cluster_state.clusterVersion());
-    });
-    Mqtt.setConnectCallback([&]() { ensure_hub_subscriptions(); });
-    Mqtt.setDisconnectCallback([&](int rc) {
-        printf("hub Mqtt disconnected rc=%d\n", rc);
-    });
-    if (!Mqtt.connect()) {
-        printf("hub Mqtt connect failed: %s:%d\n", broker.c_str(), port);
-        return 1;
     }
 
-    ev::EventTimer sweep_timer;
-    if (!sweep_timer.reset(loop.loop(),
-                           [&]() {
-                               std::vector<eular::ntrs::ClusterNodeState> evicted_nodes;
-                               uint64_t                                   now_sec = (uint64_t)time(NULL);
-                               if (!cluster_state.sweepExpired(now_sec, &evicted_nodes)) {
-                                   return;
-                               }
-
-                               std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> > events;
-                               for (size_t i = 0; i < evicted_nodes.size(); ++i) {
-                                   events.push_back(std::make_pair("node_evicted", evicted_nodes[i]));
-                               }
-                               PublishClusterUpdate(&Mqtt, cluster_state, events);
-                           }) ||
-        !sweep_timer.start(1, 1000)) {
-        printf("hub setup sweep timer failed\n");
-        return 1;
+    std::vector<int> all_clients(clients.begin(), clients.end());
+    for (size_t i = 0; i < all_clients.size(); ++i) {
+        CloseClient(all_clients[i], &clients, &sessions, &auth_manager, &cluster_state, state_file, false,
+                    eular::ntrs::ReasonCode::NONE);
     }
-
-    printf("ntrs_hub running broker=%s:%d\n", broker.c_str(), port);
-    loop.dispatch();
-
+    close(listen_fd);
     return 0;
 }

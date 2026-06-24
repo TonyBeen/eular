@@ -25,8 +25,6 @@ Behavior:
     --region           from NODE_REGION when set
     --auth-secret      from NODE_AUTH_SECRET when set
     --hub              from NODE_HUB when set
-    --mqtt-username    from NODE_MQTT_USERNAME when set
-    --mqtt-password    from NODE_MQTT_PASSWORD when set
     -4/-6              from NODE_ADDRESS_FAMILY when set
 
   In IPv4 mode it detects --public-host with curl -4.
@@ -47,8 +45,6 @@ Environment fallback:
   NODE_BIND_IP
   NODE_BIND_DEVICE
   NODE_REGION
-  NODE_MQTT_USERNAME
-  NODE_MQTT_PASSWORD
   NODE_AUTH_SECRET
   NODE_ADDRESS_FAMILY
 
@@ -57,7 +53,7 @@ Compatibility:
   NODE_PROBE_PORT/NODE_PROBE_ALT_PORT.
 
 Example:
-  ./node_start.sh --hub bd.eular.top:1883 --mqtt-username ntrs --mqtt-password 'secret' -6 --verbose
+  ./node_start.sh --hub bd.eular.top:18083 -6 --verbose
 EOT
 }
 
@@ -150,28 +146,6 @@ detect_public_ip() {
     return 1
 }
 
-normalize_node_arg() {
-    local arg="$1"
-
-    case "${arg}" in
-        --mqtt-username)
-            printf '%s\n' "--Mqtt-username"
-            ;;
-        --mqtt-password)
-            printf '%s\n' "--Mqtt-password"
-            ;;
-        --mqtt-username=*)
-            printf '%s\n' "--Mqtt-username=${arg#*=}"
-            ;;
-        --mqtt-password=*)
-            printf '%s\n' "--Mqtt-password=${arg#*=}"
-            ;;
-        *)
-            printf '%s\n' "${arg}"
-            ;;
-    esac
-}
-
 option_value() {
     local arg="$1"
     local name="$2"
@@ -193,8 +167,6 @@ has_probe_alt_port=0
 has_bind_ip=0
 has_bind_device=0
 has_region=0
-has_mqtt_username=0
-has_mqtt_password=0
 has_auth_secret=0
 has_address_family=0
 verbose=0
@@ -204,10 +176,7 @@ bind_ip_arg="${NODE_BIND_IP:-}"
 bind_device_arg="${NODE_BIND_DEVICE:-}"
 
 args=("$@")
-node_args=()
-for arg in "$@"; do
-    node_args+=("$(normalize_node_arg "${arg}")")
-done
+node_args=("$@")
 i=0
 while [[ ${i} -lt ${#args[@]} ]]; do
     arg="${args[${i}]}"
@@ -302,22 +271,6 @@ while [[ ${i} -lt ${#args[@]} ]]; do
         --region=*)
             has_region=1
             ;;
-        --mqtt-username|--Mqtt-username)
-            has_mqtt_username=1
-            ((i += 2))
-            continue
-            ;;
-        --mqtt-username=*|--Mqtt-username=*)
-            has_mqtt_username=1
-            ;;
-        --mqtt-password|--Mqtt-password)
-            has_mqtt_password=1
-            ((i += 2))
-            continue
-            ;;
-        --mqtt-password=*|--Mqtt-password=*)
-            has_mqtt_password=1
-            ;;
         --auth-secret)
             has_auth_secret=1
             ((i += 2))
@@ -405,12 +358,6 @@ if [[ ${has_address_family} -eq 0 && -n "${NODE_ADDRESS_FAMILY:-}" ]]; then
     else
         cmd+=(--ipv4)
     fi
-fi
-if [[ ${has_mqtt_username} -eq 0 && -n "${NODE_MQTT_USERNAME:-}" ]]; then
-    cmd+=(--Mqtt-username "${NODE_MQTT_USERNAME}")
-fi
-if [[ ${has_mqtt_password} -eq 0 && -n "${NODE_MQTT_PASSWORD:-}" ]]; then
-    cmd+=(--Mqtt-password "${NODE_MQTT_PASSWORD}")
 fi
 if [[ ${has_auth_secret} -eq 0 && -n "${NODE_AUTH_SECRET:-}" ]]; then
     cmd+=(--auth-secret "${NODE_AUTH_SECRET}")

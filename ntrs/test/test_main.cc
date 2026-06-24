@@ -3,13 +3,16 @@
 #include <ntrs_binary_protocol.h>
 #include <ntrs_client.h>
 #include <ntrs_codec.h>
+#include <ntrs_hub_state.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <cstring>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "catch/catch.hpp"
 
@@ -111,7 +114,84 @@ TEST_CASE("binary endpoint TLV preserves IPv6 address and port")
     REQUIRE(memcmp(&parsed->sin6_addr, &input.sin6_addr, sizeof(input.sin6_addr)) == 0);
 }
 
-TEST_CASE("Open public with firewall NAT class has stable public value")
+TEST_CASE("Open public with firewall NAT class is a distinct generic class")
 {
-    REQUIRE(NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL == 6);
+    REQUIRE(NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL != NTRS_NAT_CLASS_UNKNOWN);
+    REQUIRE(NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL != NTRS_NAT_CLASS_OPEN_PUBLIC);
+    REQUIRE(NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL != NTRS_NAT_CLASS_FULL_CONE);
+}
+
+TEST_CASE("HubClusterState applies direct node register messages by node id")
+{
+    eular::ntrs::HubClusterState      state;
+    eular::ntrs::Message              msg;
+    std::string                       event_name;
+    eular::ntrs::ClusterNodeState     event_node;
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_REGISTER, 1);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, "node-a");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, "100-1");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, "cn");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, "203.0.113.10:33478");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, "203.0.113.10:19000");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
+
+    REQUIRE(state.applyMessage("node-a", msg, 10, "2026-06-24T00:00:00Z", &event_name, &event_node));
+    REQUIRE(event_name == "node_registered");
+    REQUIRE(event_node.node_id == "node-a");
+    REQUIRE(event_node.control_endpoint == "203.0.113.10:19000");
+    REQUIRE(state.nodes().size() == 1);
+    REQUIRE(state.nodes().find("node-a") != state.nodes().end());
+}
+
+TEST_CASE("HubClusterState rejects mismatched direct node id")
+{
+    eular::ntrs::HubClusterState  state;
+    eular::ntrs::Message          msg;
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_REGISTER, 1);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, "node-b");
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, "100-1");
+
+    REQUIRE_FALSE(state.applyMessage("node-a", msg, 10, "2026-06-24T00:00:00Z", NULL, NULL));
+    REQUIRE(state.nodes().empty());
+}
+
+TEST_CASE("HubClusterState raw node snapshot can exceed Message storage size")
+{
+    std::map<std::string, eular::ntrs::ClusterNodeState> nodes;
+
+    for (int i = 0; i < 100; ++i) {
+        char suffix[16];
+        snprintf(suffix, sizeof(suffix), "%03d", i);
+
+        eular::ntrs::ClusterNodeState node;
+        node.node_id = std::string("node-very-long-identifier-for-capacity-test-") + suffix;
+        node.boot_id = std::string("1782220000-") + suffix;
+        node.status = "online";
+        node.region = "capacity-test-region-with-long-name";
+        node.probe_endpoint = std::string("[2408:8256:d178:481d:60bd:5f44:38a6:") + suffix + "]:33478";
+        node.control_endpoint = std::string("[2408:8256:d178:481d:60bd:5f44:38a6:") + suffix + "]:19000";
+        node.nat_type = "open_public_with_firewall";
+        node.last_heartbeat = "2026-06-24T00:00:00Z";
+        node.heartbeat_interval_sec = 5;
+        node.last_seen_mono_sec = 1000u + (uint64_t)i;
+        node.load = i;
+        nodes[node.node_id] = node;
+    }
+
+    std::vector<uint8_t> payload;
+    REQUIRE(eular::ntrs::EncodeClusterSnapshotNodes(nodes, &payload));
+    REQUIRE(payload.size() > sizeof(static_cast<eular::ntrs::Message*>(NULL)->storage));
+
+    std::vector<eular::ntrs::ClusterNodeState> decoded;
+    REQUIRE(eular::ntrs::DecodeClusterSnapshotNodes(payload.data(), payload.size(), &decoded));
+    REQUIRE(decoded.size() == nodes.size());
+
+    eular::ntrs::HubClusterState restored;
+    REQUIRE(restored.restoreFromNodes(1234, decoded));
+    REQUIRE(restored.clusterVersion() == 1234);
+    REQUIRE(restored.nodes().size() == nodes.size());
+    REQUIRE(restored.nodes().find("node-very-long-identifier-for-capacity-test-099") != restored.nodes().end());
 }

@@ -40,6 +40,7 @@ public:
 
     bool sweepExpired(uint64_t now_mono_sec, std::vector<ClusterNodeState>* evicted_nodes);
     bool restoreFromSnapshot(const Message& msg);
+    bool restoreFromNodes(uint64_t cluster_version, const std::vector<ClusterNodeState>& nodes);
 
     const std::map<std::string, ClusterNodeState>& nodes() const;
     uint64_t                                       clusterVersion() const;

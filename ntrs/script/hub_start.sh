@@ -8,16 +8,22 @@ BIN="${SCRIPT_DIR}/ntrs_hub"
 usage() {
     cat <<'EOF'
 Usage:
-  hub_start.sh --host <mqtt_host> [--port <mqtt_port>] [--username <user>] [--password <pass>] [--verbose]
+  hub_start.sh [--host <listen_host>] [--port <listen_port>]
+               [--state-file <path>] [--auth-secret <secret>] [--verbose]
 
 Environment fallback:
   HUB_HOST
   HUB_PORT
-  HUB_USERNAME
-  HUB_PASSWORD
+  HUB_STATE_FILE
+  HUB_AUTH_SECRET
+
+Defaults:
+  --host ::
+  --port 18083
+  --state-file ./ntrs_hub_state.bin
 
 Example:
-  ./hub_start.sh --host bd.eular.top --port 1883 --username ntrs --password 'secret'
+  ./hub_start.sh --host :: --port 18083 --auth-secret 'secret'
 EOF
 }
 
@@ -39,10 +45,10 @@ kill_old_process() {
     fi
 }
 
-HOST="${HUB_HOST:-}"
-PORT="${HUB_PORT:-1883}"
-USERNAME="${HUB_USERNAME:-}"
-PASSWORD="${HUB_PASSWORD:-}"
+HOST="${HUB_HOST:-::}"
+PORT="${HUB_PORT:-18083}"
+STATE_FILE="${HUB_STATE_FILE:-./ntrs_hub_state.bin}"
+AUTH_SECRET="${HUB_AUTH_SECRET:-}"
 VERBOSE=0
 
 while [[ $# -gt 0 ]]; do
@@ -51,17 +57,33 @@ while [[ $# -gt 0 ]]; do
             HOST="${2:-}"
             shift 2
             ;;
+        --host=*)
+            HOST="${1#*=}"
+            shift
+            ;;
         --port)
             PORT="${2:-}"
             shift 2
             ;;
-        --username)
-            USERNAME="${2:-}"
+        --port=*)
+            PORT="${1#*=}"
+            shift
+            ;;
+        --state-file)
+            STATE_FILE="${2:-}"
             shift 2
             ;;
-        --password)
-            PASSWORD="${2:-}"
+        --state-file=*)
+            STATE_FILE="${1#*=}"
+            shift
+            ;;
+        --auth-secret)
+            AUTH_SECRET="${2:-}"
             shift 2
+            ;;
+        --auth-secret=*)
+            AUTH_SECRET="${1#*=}"
+            shift
             ;;
         --verbose|-v)
             VERBOSE=1
@@ -79,8 +101,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${HOST}" ]]; then
-    echo "missing MQTT host" >&2
+if [[ -z "${HOST}" || -z "${PORT}" || -z "${STATE_FILE}" ]]; then
+    echo "missing required hub argument" >&2
     usage
     exit 1
 fi
@@ -88,12 +110,9 @@ fi
 require_bin
 kill_old_process
 
-CMD=("${BIN}" --host "${HOST}" --port "${PORT}")
-if [[ -n "${USERNAME}" ]]; then
-    CMD+=(--username "${USERNAME}")
-fi
-if [[ -n "${PASSWORD}" ]]; then
-    CMD+=(--password "${PASSWORD}")
+CMD=("${BIN}" --host "${HOST}" --port "${PORT}" --state-file "${STATE_FILE}")
+if [[ -n "${AUTH_SECRET}" ]]; then
+    CMD+=(--auth-secret "${AUTH_SECRET}")
 fi
 
 if [[ "${VERBOSE}" -eq 1 ]]; then

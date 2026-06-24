@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <mqtt_client.h>
 #include <netdb.h>
 #include <ntrs_auth.h>
 #include <ntrs_binary_protocol.h>
@@ -20,13 +19,11 @@
 #include <deque>
 #include <list>
 #include <map>
-#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include <arpa/inet.h>
-#include <event/loop.h>
 #include <event2/dns.h>
 #include <event2/event.h>
 #include <ifaddrs.h>
@@ -444,7 +441,7 @@ static void PrintUsage(const char* program)
         "  %s [OPTIONS]\n"
         "\n"
         "Required:\n"
-        "  --hub TEXT                 MQTT hub endpoint, format: host:port\n"
+        "  --hub TEXT                 NTRS hub endpoint, format: host:port\n"
         "  --node-id TEXT             Node identifier\n"
         "  --public-host TEXT         Public IPv4/IPv6/domain advertised to peers\n"
         "\n"
@@ -457,9 +454,7 @@ static void PrintUsage(const char* program)
         "  -4, --ipv4                 Use IPv4 UDP probing [default]\n"
         "  -6, --ipv6                 Use IPv6 UDP probing\n"
         "  --region TEXT              Region label [default: default]\n"
-        "  --mqtt-username TEXT       MQTT username\n"
-        "  --mqtt-password TEXT       MQTT password\n"
-        "  --auth-secret TEXT         Federation auth secret [default: ntrs-dev-secret]\n"
+        "  --auth-secret TEXT         Control and hub auth secret [default: ntrs-dev-secret]\n"
         "  --verbose, -v              Enable verbose logs\n"
         "  --help, -h                 Show this help message\n"
         "\n"
@@ -468,13 +463,13 @@ static void PrintUsage(const char* program)
         "  --name=value               Equals form\n"
         "\n"
         "Examples:\n"
-        "  %s --hub bd.eular.top:1883 --node-id node-a --public-host 120.48.107.15 --verbose\n"
-        "  %s --hub=bd.eular.top:1883 --node-id=node-a --public-host=120.48.107.15\n"
-        "  %s -6 --hub bd.eular.top:1883 --node-id node-v6 --public-host 2001:db8::10\n"
+        "  %s --hub bd.eular.top:18083 --node-id node-a --public-host 120.48.107.15 --verbose\n"
+        "  %s --hub=bd.eular.top:18083 --node-id=node-a --public-host=120.48.107.15\n"
+        "  %s -6 --hub bd.eular.top:18083 --node-id node-v6 --public-host 2001:db8::10\n"
         "\n"
         "Legacy positional mode:\n"
         "  %s <control_port> <self_probe_host:port> [peer_node_control_host:port]\n"
-        "     [mqtt_broker] [mqtt_port] [node_id] [region] [mqtt_username] [mqtt_password] [auth_secret]\n",
+        "     [hub_host] [hub_port] [node_id] [region] [auth_secret]\n",
         program, program, program, program, program);
 }
 
@@ -533,11 +528,6 @@ static std::string NowIso8601()
     return std::string(buf);
 }
 
-static std::string TopicFor(const std::string& node_id, const std::string& suffix)
-{
-    return std::string("ntrs/node/") + node_id + "/" + suffix;
-}
-
 static const char* MsgStrTag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag tag)
 {
     const char* value = eular::ntrs::MessageGetStringByTag(&msg, tag);
@@ -578,22 +568,6 @@ static int32_t MsgI32Tag(const eular::ntrs::Message& msg, eular::ntrs::FieldTag 
         return value;
     }
     return default_value;
-}
-
-static bool MqttPublishMessage(eular::orion::MqttClient* Mqtt, const std::string& topic,
-                                 const eular::ntrs::Message& msg, bool retain)
-{
-    uint8_t buf[8192];
-    size_t  len = 0;
-    if (Mqtt == NULL || eular::ntrs::EncodeMessage(msg, buf, sizeof(buf), &len) != 0) {
-        printf("Mqtt publish encode failed topic=%s retain=%s\n", topic.c_str(), retain ? "true" : "false");
-        return false;
-    }
-    if (!Mqtt->publish(topic, buf, len, 1, retain)) {
-        printf("Mqtt publish failed topic=%s len=%zu retain=%s\n", topic.c_str(), len, retain ? "true" : "false");
-        return false;
-    }
-    return true;
 }
 
 static bool ResolveIpv4Literal(const std::string& host, std::string* ip_out)
@@ -692,26 +666,14 @@ static bool ResolveProbeOtherAddress(const std::vector<std::string>& probe_contr
     return false;
 }
 
-static void PublishPresence(eular::orion::MqttClient* Mqtt, const std::string& node_id, const std::string& boot_id,
-                             const std::string& status, const std::string& reason, uint64_t request_id)
+static eular::ntrs::Message BuildNodePresenceMessage(const std::string& node_id,
+                                                     const std::string& boot_id,
+                                                     eular::ntrs::NodeStatusCode status_code,
+                                                     eular::ntrs::ReasonCode reason_code,
+                                                     uint64_t request_id)
 {
     eular::ntrs::Message msg;
-    eular::ntrs::NodeStatusCode status_code = eular::ntrs::NodeStatusCode::UNKNOWN;
-    eular::ntrs::ReasonCode     reason_code = eular::ntrs::ReasonCode::NONE;
-    if (status == "online") {
-        status_code = eular::ntrs::NodeStatusCode::ONLINE;
-    } else if (status == "offline") {
-        status_code = eular::ntrs::NodeStatusCode::OFFLINE;
-    } else if (status == "registered") {
-        status_code = eular::ntrs::NodeStatusCode::REGISTERED;
-    }
-    if (reason == "lwt") {
-        reason_code = eular::ntrs::ReasonCode::LWT;
-    } else if (reason == "startup") {
-        reason_code = eular::ntrs::ReasonCode::STARTUP;
-    } else if (reason == "client_exit") {
-        reason_code = eular::ntrs::ReasonCode::CLIENT_EXIT;
-    }
+
     eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_PRESENCE, (uint32_t)request_id);
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
@@ -719,7 +681,7 @@ static void PublishPresence(eular::orion::MqttClient* Mqtt, const std::string& n
     eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::REASON, (uint8_t)reason_code);
     const std::string ts = NowIso8601();
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
-    MqttPublishMessage(Mqtt, TopicFor(node_id, "presence"), msg, true);
+    return msg;
 }
 
 static void AppendUnique(std::vector<std::string>* out, const std::string& value)
@@ -891,6 +853,31 @@ static bool SendMessage(int fd, const eular::ntrs::Message& msg)
     return SendAll(fd, buf, len);
 }
 
+struct HubConnection {
+    int                  fd;
+    bool                 connecting;
+    bool                 auth_sent;
+    bool                 authed;
+    bool                 registered;
+    std::string          session_token;
+    ControlClientRxState rx_state;
+    uint32_t             next_request_id;
+    time_t               next_reconnect_ts;
+    time_t               last_heartbeat_ts;
+
+    HubConnection()
+        : fd(-1),
+          connecting(false),
+          auth_sent(false),
+          authed(false),
+          registered(false),
+          next_request_id(1),
+          next_reconnect_ts(0),
+          last_heartbeat_ts(0)
+    {
+    }
+};
+
 static bool DrainControlMessages(int fd, ControlClientRxState* state, std::deque<eular::ntrs::Message>* messages,
                                    bool* peer_closed)
 {
@@ -942,6 +929,132 @@ static bool DrainControlMessages(int fd, ControlClientRxState* state, std::deque
     }
 
     return true;
+}
+
+static void CloseHubConnection(HubConnection* hub)
+{
+    if (hub == NULL) {
+        return;
+    }
+    if (hub->fd >= 0) {
+        close(hub->fd);
+    }
+    hub->fd = -1;
+    hub->connecting = false;
+    hub->auth_sent = false;
+    hub->authed = false;
+    hub->registered = false;
+    hub->session_token.clear();
+    hub->rx_state.buffer.clear();
+    hub->next_reconnect_ts = time(NULL) + 3;
+    hub->last_heartbeat_ts = 0;
+}
+
+static bool ConnectHub(HubConnection* hub, const std::string& hub_host, uint16_t hub_port, bool verbose)
+{
+    struct addrinfo  hints;
+    struct addrinfo* result = NULL;
+
+    if (hub == NULL || hub_host.empty() || hub_port == 0 || hub->fd >= 0) {
+        return false;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_ADDRCONFIG;
+
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%u", (unsigned)hub_port);
+    if (getaddrinfo(hub_host.c_str(), port_text, &hints, &result) != 0 || result == NULL) {
+        hub->next_reconnect_ts = time(NULL) + 3;
+        return false;
+    }
+
+    for (struct addrinfo* it = result; it != NULL; it = it->ai_next) {
+        int fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+        SetNonblocking(fd);
+        int rc = connect(fd, it->ai_addr, it->ai_addrlen);
+        if (rc == 0 || errno == EINPROGRESS) {
+            hub->fd = fd;
+            hub->connecting = (rc != 0);
+            hub->auth_sent = false;
+            hub->authed = false;
+            hub->registered = false;
+            hub->session_token.clear();
+            hub->rx_state.buffer.clear();
+            hub->last_heartbeat_ts = 0;
+            NodeVerboseLog(verbose, "hub connecting endpoint=%s fd=%d\n",
+                           FormatEndpoint(hub_host, hub_port).c_str(), fd);
+            freeaddrinfo(result);
+            return true;
+        }
+        close(fd);
+    }
+
+    freeaddrinfo(result);
+    hub->next_reconnect_ts = time(NULL) + 3;
+    return false;
+}
+
+static bool SendHubAuth(HubConnection* hub, const std::string& node_id, const std::string& auth_secret)
+{
+    eular::ntrs::Message msg;
+
+    if (hub == NULL || hub->fd < 0 || node_id.empty()) {
+        return false;
+    }
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::AUTH_REQ, hub->next_request_id++);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PEER_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TOKEN, auth_secret.c_str());
+    return SendMessage(hub->fd, msg);
+}
+
+static eular::ntrs::Message BuildNodeRegisterMessage(const std::string& node_id,
+                                                     const std::string& boot_id,
+                                                     const std::string& region,
+                                                     const std::string& self_probe_endpoint,
+                                                     const std::string& self_control_endpoint,
+                                                     uint32_t request_id)
+{
+    eular::ntrs::Message msg;
+    const std::string    ts = NowIso8601();
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_REGISTER, request_id);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::REGION, region.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PROBE_ENDPOINT, self_probe_endpoint.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::CONTROL_ENDPOINT, self_control_endpoint.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    return msg;
+}
+
+static eular::ntrs::Message BuildNodeHeartbeatMessage(const std::string& node_id,
+                                                      const std::string& boot_id,
+                                                      uint32_t assignment_version,
+                                                      uint32_t load,
+                                                      uint32_t request_id)
+{
+    eular::ntrs::Message msg;
+    const std::string    ts = NowIso8601();
+
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::NODE_HEARTBEAT, request_id);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
+    eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::STATUS,
+                                   (uint8_t)eular::ntrs::NodeStatusCode::ONLINE);
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::LOAD, load);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::ASSIGNMENT_VERSION, assignment_version);
+    eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::TS, ts.c_str());
+    return msg;
 }
 
 /**
@@ -1987,12 +2100,10 @@ int main(int argc, char** argv)
     std::string public_host;
     std::string self_probe_endpoint;
     std::string peer_node_control_endpoint;
-    std::string mqtt_broker;
-    int         mqtt_port = 1883;
+    std::string hub_host;
+    int         hub_port = 18083;
     std::string node_id;
     std::string region = "default";
-    std::string mqtt_username;
-    std::string mqtt_password;
     std::string auth_secret = "ntrs-dev-secret";
     std::string bind_ip;
     std::string bind_device;
@@ -2009,18 +2120,18 @@ int main(int argc, char** argv)
                 PrintUsage(argv[0]);
                 return 0;
             } else if (MatchLongOption(arg, "--hub", next_value, &consumed_next, &value)) {
-                std::string hub_host;
-                uint16_t    hub_port = 0;
+                std::string parsed_host;
+                uint16_t    parsed_port = 0;
                 if (value.empty()) {
                     PrintMissingOptionValue("--hub");
                     return 1;
                 }
-                if (!ParseEndpoint(value.c_str(), &hub_host, &hub_port)) {
+                if (!ParseEndpoint(value.c_str(), &parsed_host, &parsed_port)) {
                     printf("invalid --hub endpoint: %s\n", value.c_str());
                     return 1;
                 }
-                mqtt_broker = hub_host;
-                mqtt_port = hub_port;
+                hub_host = parsed_host;
+                hub_port = parsed_port;
             } else if (MatchLongOption(arg, "--node-id", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
                     PrintMissingOptionValue("--node-id");
@@ -2080,20 +2191,6 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 region = value;
-            } else if (MatchLongOption(arg, "--mqtt-username", next_value, &consumed_next, &value) ||
-                       MatchLongOption(arg, "--Mqtt-username", next_value, &consumed_next, &value)) {
-                if (value.empty()) {
-                    PrintMissingOptionValue("--mqtt-username");
-                    return 1;
-                }
-                mqtt_username = value;
-            } else if (MatchLongOption(arg, "--mqtt-password", next_value, &consumed_next, &value) ||
-                       MatchLongOption(arg, "--Mqtt-password", next_value, &consumed_next, &value)) {
-                if (value.empty()) {
-                    PrintMissingOptionValue("--mqtt-password");
-                    return 1;
-                }
-                mqtt_password = value;
             } else if (MatchLongOption(arg, "--auth-secret", next_value, &consumed_next, &value)) {
                 if (value.empty()) {
                     PrintMissingOptionValue("--auth-secret");
@@ -2116,7 +2213,7 @@ int main(int argc, char** argv)
             }
         }
 
-        if (mqtt_broker.empty() || node_id.empty() || public_host.empty()) {
+        if (hub_host.empty() || node_id.empty() || public_host.empty()) {
             PrintUsage(argv[0]);
             return 1;
         }
@@ -2135,13 +2232,11 @@ int main(int argc, char** argv)
         if (argc > 3) {
             peer_node_control_endpoint = argv[3];
         }
-        mqtt_broker = (argc > 4) ? argv[4] : "";
-        mqtt_port = (argc > 5) ? atoi(argv[5]) : 1883;
+        hub_host = (argc > 4) ? argv[4] : "";
+        hub_port = (argc > 5) ? atoi(argv[5]) : 18083;
         node_id = (argc > 6) ? argv[6] : "";
         region = (argc > 7) ? argv[7] : "default";
-        mqtt_username = (argc > 8) ? argv[8] : "";
-        mqtt_password = (argc > 9) ? argv[9] : "";
-        auth_secret = (argc > 10) ? argv[10] : "ntrs-dev-secret";
+        auth_secret = (argc > 8) ? argv[8] : "ntrs-dev-secret";
     }
 
     if (self_probe_endpoint.empty()) {
@@ -2151,53 +2246,20 @@ int main(int argc, char** argv)
 
     signal(SIGINT, OnProcessSignal);
     signal(SIGTERM, OnProcessSignal);
+#if !defined(_WIN32)
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     eular::ntrs::ControlAuthManager AuthManager(auth_secret, kLeaseSec);
 
-    bool        use_hub_assignment = (!mqtt_broker.empty() && !node_id.empty());
+    bool        use_hub_assignment = (!hub_host.empty() && !node_id.empty());
     std::string boot_id =
         std::to_string((unsigned long long)time(NULL)) + "-" + std::to_string((unsigned long long)getpid());
-    std::string                               assignment_p1;
-    std::string                               assignment_p2;
-    std::string                               assignment_b1;
-    uint32_t                                  assignment_version = 0;
-    ev::EventLoop                             mqtt_loop;
-    std::unique_ptr<eular::orion::MqttClient> mqtt_client;
-    bool                                      mqtt_assignment_ready = false;
-    std::function<void()>                     publish_node_registration;
-
-    if (use_hub_assignment) {
-        mqtt_client.reset(new eular::orion::MqttClient(
-            mqtt_broker, mqtt_port, "ntrs-node-" + node_id + "-" + std::to_string((unsigned long long)getpid()),
-            mqtt_username, mqtt_password));
-        if (!mqtt_client->attachEventLoop(mqtt_loop.loop())) {
-            printf("hub mode disabled because Mqtt attach event loop failed\n");
-            mqtt_client.reset();
-            use_hub_assignment = false;
-        }
-    }
-
-    if (use_hub_assignment && mqtt_client) {
-        eular::ntrs::Message will;
-        uint8_t              will_buf[8192];
-        size_t               will_len = 0;
-        const std::string    will_ts = NowIso8601();
-        eular::ntrs::MessageInit(&will, eular::ntrs::MessageType::NODE_PRESENCE, 0);
-        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-        eular::ntrs::MessageAddU8ByTag(&will, eular::ntrs::FieldTag::STATUS,
-                                       (uint8_t)eular::ntrs::NodeStatusCode::OFFLINE);
-        eular::ntrs::MessageAddU8ByTag(&will, eular::ntrs::FieldTag::REASON,
-                                       (uint8_t)eular::ntrs::ReasonCode::LWT);
-        eular::ntrs::MessageAddStringByTag(&will, eular::ntrs::FieldTag::TS, will_ts.c_str());
-        if (eular::ntrs::EncodeMessage(will, will_buf, sizeof(will_buf), &will_len) != 0) {
-            printf("hub mode disabled because Mqtt will encode failed\n");
-            mqtt_client.reset();
-            use_hub_assignment = false;
-        } else {
-            mqtt_client->setWillMessage(TopicFor(node_id, "presence"), will_buf, will_len, 1, true);
-        }
-    }
+    std::string assignment_p1;
+    std::string assignment_p2;
+    std::string assignment_b1;
+    uint32_t    assignment_version = 0;
+    HubConnection hub_conn;
 
     std::string self_probe_host;
     uint16_t    self_probe_port = 0;
@@ -2218,70 +2280,6 @@ int main(int argc, char** argv)
         return 1;
     }
     self_control_endpoint = FormatEndpoint(self_probe_host, (uint16_t)port);
-    if (use_hub_assignment && mqtt_client) {
-        const std::string assignment_topic = "ntrs/hub/node/" + node_id + "/assignment";
-        publish_node_registration = [&]() {
-            eular::ntrs::Message reg;
-            const std::string    reg_ts = NowIso8601();
-            eular::ntrs::MessageInit(&reg, eular::ntrs::MessageType::NODE_REGISTER, 1);
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::REGION, region.c_str());
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::PROBE_ENDPOINT, self_probe_endpoint.c_str());
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::CONTROL_ENDPOINT,
-                                               self_control_endpoint.c_str());
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
-            eular::ntrs::MessageAddU32ByTag(&reg, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
-            eular::ntrs::MessageAddStringByTag(&reg, eular::ntrs::FieldTag::TS, reg_ts.c_str());
-            NodeVerboseLog(verbose, "publishing node register node=%s control=%s probe=%s\n", node_id.c_str(),
-                             self_control_endpoint.c_str(), self_probe_endpoint.c_str());
-            MqttPublishMessage(mqtt_client.get(), TopicFor(node_id, "register"), reg, true);
-            PublishPresence(mqtt_client.get(), node_id, boot_id, "online", "startup", 2);
-        };
-
-        mqtt_client->setMessageCallback(
-            [&, assignment_topic](const std::string& topic, const uint8_t* payload, size_t payload_len) {
-                eular::ntrs::Message msg;
-                if (!eular::ntrs::DecodeMessage(payload, payload_len, &msg)) {
-                    printf("node Mqtt decode failed topic=%s len=%zu\n", topic.c_str(), payload_len);
-                    return;
-                }
-                uint8_t event_code = (uint8_t)eular::ntrs::EventCode::UNKNOWN;
-                eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
-                if (topic == assignment_topic && msg.type == eular::ntrs::MessageType::HUB_CLUSTER_EVENT &&
-                    event_code == (uint8_t)eular::ntrs::EventCode::ASSIGNMENT) {
-                    assignment_p1 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL);
-                    assignment_p2 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL);
-                    assignment_b1 = MsgStrTag(msg, eular::ntrs::FieldTag::BACKUP1_CONTROL);
-                    assignment_version = msg.request_id;
-                    NodeVerboseLog(verbose,
-                                     "assignment updated version=%u p1=%s p2=%s b1=%s\n",
-                                     assignment_version,
-                                     assignment_p1.empty() ? "-" : assignment_p1.c_str(),
-                                     assignment_p2.empty() ? "-" : assignment_p2.c_str(),
-                                     assignment_b1.empty() ? "-" : assignment_b1.c_str());
-                }
-            });
-        mqtt_client->setConnectCallback([&, assignment_topic]() {
-            NodeVerboseLog(verbose, "node Mqtt connected node=%s subscribing topic=%s\n", node_id.c_str(),
-                             assignment_topic.c_str());
-            if (!mqtt_client->subscribe(assignment_topic, 1)) {
-                printf("node Mqtt subscribe failed node=%s topic=%s\n", node_id.c_str(), assignment_topic.c_str());
-            }
-            publish_node_registration();
-            if (!mqtt_assignment_ready) {
-                mqtt_assignment_ready = true;
-            }
-        });
-        mqtt_client->setDisconnectCallback(
-            [&](int rc) { printf("node Mqtt disconnected rc=%d node=%s\n", rc, node_id.c_str()); });
-        if (!mqtt_client->connect()) {
-            printf("hub mode disabled because Mqtt connect failed: %s\n",
-                   FormatEndpoint(mqtt_broker, (uint16_t)mqtt_port).c_str());
-            mqtt_client.reset();
-            use_hub_assignment = false;
-        }
-    }
 
     if (verbose && !bind_device.empty()) {
         printf("binding probe sockets to device: %s\n", bind_device.c_str());
@@ -2343,7 +2341,6 @@ int main(int argc, char** argv)
     std::deque<AsyncFederationResult>   async_results;
     std::list<FederationRequest>        federation_requests;
     uint64_t                            next_client_generation = 1;
-    time_t                              last_hb_ts = 0;
     event_base*                         federation_event_base = event_base_new();
     evdns_base*                         federation_dns_base = NULL;
     if (federation_event_base != NULL) {
@@ -2360,6 +2357,11 @@ int main(int argc, char** argv)
     evdns_base_set_option(federation_dns_base, "attempts", "2");
 
     while (!g_stop) {
+        time_t loop_now = time(NULL);
+        if (use_hub_assignment && hub_conn.fd < 0 && loop_now >= hub_conn.next_reconnect_ts) {
+            ConnectHub(&hub_conn, hub_host, (uint16_t)hub_port, verbose);
+        }
+
         fd_set rfds;
         fd_set wfds;
         FD_ZERO(&rfds);
@@ -2374,6 +2376,15 @@ int main(int argc, char** argv)
             FD_SET(probe_alt_fd, &rfds);
             if (probe_alt_fd > maxfd) {
                 maxfd = probe_alt_fd;
+            }
+        }
+        if (use_hub_assignment && hub_conn.fd >= 0) {
+            FD_SET(hub_conn.fd, &rfds);
+            if (hub_conn.connecting) {
+                FD_SET(hub_conn.fd, &wfds);
+            }
+            if (hub_conn.fd > maxfd) {
+                maxfd = hub_conn.fd;
             }
         }
         for (std::set<int>::iterator it = clients.begin(); it != clients.end(); ++it) {
@@ -2425,24 +2436,114 @@ int main(int argc, char** argv)
         AuthManager.sweepExpired((uint64_t)time(NULL));
         event_base_loop(federation_event_base, EVLOOP_NONBLOCK | EVLOOP_NO_EXIT_ON_EMPTY);
 
-        if (use_hub_assignment && mqtt_client) {
-            event_base_loop(mqtt_loop.loop(), EVLOOP_NONBLOCK | EVLOOP_NO_EXIT_ON_EMPTY);
-            time_t now = time(NULL);
-            if (now - last_hb_ts >= 5) {
-                eular::ntrs::Message hb;
-                const std::string    hb_ts = NowIso8601();
-                eular::ntrs::MessageInit(&hb, eular::ntrs::MessageType::NODE_HEARTBEAT, (uint32_t)now);
-                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
-                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::BOOT_ID, boot_id.c_str());
-                eular::ntrs::MessageAddU8ByTag(&hb, eular::ntrs::FieldTag::STATUS,
-                                               (uint8_t)eular::ntrs::NodeStatusCode::ONLINE);
-                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::LOAD, (uint32_t)clients.size());
-                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::NAT_TYPE, "service_node");
-                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::HEARTBEAT_INTERVAL_SEC, 5);
-                eular::ntrs::MessageAddU32ByTag(&hb, eular::ntrs::FieldTag::ASSIGNMENT_VERSION, assignment_version);
-                eular::ntrs::MessageAddStringByTag(&hb, eular::ntrs::FieldTag::TS, hb_ts.c_str());
-                MqttPublishMessage(mqtt_client.get(), TopicFor(node_id, "heartbeat"), hb, false);
-                last_hb_ts = now;
+        if (use_hub_assignment && hub_conn.fd >= 0) {
+            bool hub_closed = false;
+
+            if (hub_conn.connecting && FD_ISSET(hub_conn.fd, &wfds)) {
+                int       err = 0;
+                socklen_t err_len = sizeof(err);
+                if (getsockopt(hub_conn.fd, SOL_SOCKET, SO_ERROR, &err, &err_len) != 0 || err != 0) {
+                    printf("hub connect failed endpoint=%s errno=%d\n",
+                           FormatEndpoint(hub_host, (uint16_t)hub_port).c_str(), err);
+                    CloseHubConnection(&hub_conn);
+                    hub_closed = true;
+                } else {
+                    hub_conn.connecting = false;
+                    if (!SendHubAuth(&hub_conn, node_id, auth_secret)) {
+                        CloseHubConnection(&hub_conn);
+                        hub_closed = true;
+                    } else {
+                        hub_conn.auth_sent = true;
+                        NodeVerboseLog(verbose, "hub auth sent node=%s\n", node_id.c_str());
+                    }
+                }
+            }
+            if (!hub_closed && !hub_conn.connecting && !hub_conn.authed && !hub_conn.auth_sent) {
+                if (!SendHubAuth(&hub_conn, node_id, auth_secret)) {
+                    CloseHubConnection(&hub_conn);
+                    hub_closed = true;
+                } else {
+                    hub_conn.auth_sent = true;
+                    NodeVerboseLog(verbose, "hub auth sent node=%s\n", node_id.c_str());
+                }
+            }
+
+            if (!hub_closed && FD_ISSET(hub_conn.fd, &rfds)) {
+                std::deque<eular::ntrs::Message> hub_messages;
+                bool                              peer_closed = false;
+                if (!DrainControlMessages(hub_conn.fd, &hub_conn.rx_state, &hub_messages, &peer_closed)) {
+                    peer_closed = true;
+                }
+                if (peer_closed) {
+                    printf("hub disconnected endpoint=%s\n", FormatEndpoint(hub_host, (uint16_t)hub_port).c_str());
+                    CloseHubConnection(&hub_conn);
+                    hub_closed = true;
+                }
+
+                for (size_t i = 0; !hub_closed && i < hub_messages.size(); ++i) {
+                    eular::ntrs::Message& msg = hub_messages[i];
+                    if (msg.type == eular::ntrs::MessageType::AUTH_RSP) {
+                        uint8_t result_code = (uint8_t)eular::ntrs::ResultCode::UNKNOWN;
+                        eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::RESULT, &result_code);
+                        if (result_code != (uint8_t)eular::ntrs::ResultCode::OK ||
+                            MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN)[0] == '\0') {
+                            printf("hub auth rejected node=%s\n", node_id.c_str());
+                            CloseHubConnection(&hub_conn);
+                            hub_closed = true;
+                            break;
+                        }
+                        hub_conn.authed = true;
+                        hub_conn.session_token = MsgStrTag(msg, eular::ntrs::FieldTag::TOKEN);
+                        eular::ntrs::Message reg = BuildNodeRegisterMessage(
+                            node_id, boot_id, region, self_probe_endpoint, self_control_endpoint,
+                            hub_conn.next_request_id++);
+                        eular::ntrs::Message online = BuildNodePresenceMessage(
+                            node_id, boot_id, eular::ntrs::NodeStatusCode::ONLINE,
+                            eular::ntrs::ReasonCode::STARTUP, hub_conn.next_request_id++);
+                        if (!SendMessage(hub_conn.fd, reg) || !SendMessage(hub_conn.fd, online)) {
+                            CloseHubConnection(&hub_conn);
+                            hub_closed = true;
+                            break;
+                        }
+                        hub_conn.registered = true;
+                        hub_conn.last_heartbeat_ts = 0;
+                        NodeVerboseLog(verbose, "hub register sent node=%s control=%s probe=%s\n",
+                                       node_id.c_str(), self_control_endpoint.c_str(), self_probe_endpoint.c_str());
+                    } else if (msg.type == eular::ntrs::MessageType::HUB_CLUSTER_EVENT) {
+                        uint8_t event_code = (uint8_t)eular::ntrs::EventCode::UNKNOWN;
+                        eular::ntrs::MessageGetU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, &event_code);
+                        if (event_code == (uint8_t)eular::ntrs::EventCode::ASSIGNMENT) {
+                            std::string event_node = MsgStrTag(msg, eular::ntrs::FieldTag::NODE_ID);
+                            if (event_node.empty() || event_node == node_id) {
+                                assignment_p1 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL);
+                                assignment_p2 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL);
+                                assignment_b1 = MsgStrTag(msg, eular::ntrs::FieldTag::BACKUP1_CONTROL);
+                                assignment_version = msg.request_id;
+                                NodeVerboseLog(verbose, "assignment updated version=%u p1=%s p2=%s b1=%s\n",
+                                               assignment_version,
+                                               assignment_p1.empty() ? "-" : assignment_p1.c_str(),
+                                               assignment_p2.empty() ? "-" : assignment_p2.c_str(),
+                                               assignment_b1.empty() ? "-" : assignment_b1.c_str());
+                            }
+                        }
+                    } else if (msg.type == eular::ntrs::MessageType::ERROR_RSP) {
+                        printf("hub error code=%s message=%s\n",
+                               MsgStrTag(msg, eular::ntrs::FieldTag::CODE),
+                               MsgStrTag(msg, eular::ntrs::FieldTag::MESSAGE));
+                    }
+                }
+            }
+
+            if (!hub_closed && hub_conn.authed && hub_conn.registered &&
+                time(NULL) - hub_conn.last_heartbeat_ts >= 5) {
+                eular::ntrs::Message hb = BuildNodeHeartbeatMessage(node_id, boot_id, assignment_version,
+                                                                    (uint32_t)clients.size(),
+                                                                    hub_conn.next_request_id++);
+                if (!SendMessage(hub_conn.fd, hb)) {
+                    CloseHubConnection(&hub_conn);
+                } else {
+                    hub_conn.last_heartbeat_ts = time(NULL);
+                }
             }
         }
 
@@ -3112,6 +3213,13 @@ int main(int argc, char** argv)
         }
     }
 
+    if (use_hub_assignment && hub_conn.fd >= 0) {
+        eular::ntrs::Message offline = BuildNodePresenceMessage(
+            node_id, boot_id, eular::ntrs::NodeStatusCode::OFFLINE,
+            eular::ntrs::ReasonCode::CLIENT_EXIT, hub_conn.next_request_id++);
+        SendMessage(hub_conn.fd, offline);
+    }
+
     for (std::set<int>::iterator it = clients.begin(); it != clients.end(); ++it) {
         close(*it);
     }
@@ -3127,9 +3235,8 @@ int main(int argc, char** argv)
         close(probe_alt_fd);
     }
 
-    if (use_hub_assignment && mqtt_client) {
-        PublishPresence(mqtt_client.get(), node_id, boot_id, "offline", "graceful_shutdown", 3);
-        mqtt_client->disconnect();
+    if (use_hub_assignment && hub_conn.fd >= 0) {
+        CloseHubConnection(&hub_conn);
     }
 
     return 0;

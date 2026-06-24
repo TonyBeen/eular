@@ -247,9 +247,7 @@ bool HubClusterState::applyMessage(const std::string &topic_node_id,
             msg, FieldTag::HEARTBEAT_INTERVAL_SEC, node.heartbeat_interval_sec == 0 ? 5 : node.heartbeat_interval_sec);
         node.last_seen_mono_sec = now_mono_sec;
         node.last_heartbeat = NowIso8601;
-        if (node.status.empty()) {
-            node.status = NodeStatusCodeName(NodeStatusCode::REGISTERED);
-        }
+        node.status = NodeStatusCodeName(NodeStatusCode::REGISTERED);
         next_event = created ? "node_registered" : "node_generation_replaced";
         changed = true;
     } else if (msg.type == MessageType::NODE_PRESENCE) {
@@ -354,10 +352,24 @@ bool HubClusterState::restoreFromSnapshot(const Message &msg)
         return false;
     }
 
+    return restoreFromNodes(clusterVersion, nodes);
+}
+
+bool HubClusterState::restoreFromNodes(uint64_t cluster_version, const std::vector<ClusterNodeState> &nodes)
+{
+    if (!nodes_.empty() || cluster_version_ != 0) {
+        return false;
+    }
+
     for (size_t i = 0; i < nodes.size(); ++i) {
+        if (nodes[i].node_id.empty() || nodes_.find(nodes[i].node_id) != nodes_.end()) {
+            nodes_.clear();
+            cluster_version_ = 0;
+            return false;
+        }
         nodes_[nodes[i].node_id] = nodes[i];
     }
-    cluster_version_ = clusterVersion;
+    cluster_version_ = cluster_version;
     return true;
 }
 
