@@ -92,6 +92,8 @@ static const char* NatTypeTitle(ntrs_nat_class_t nat_class)
     switch (nat_class) {
     case NTRS_NAT_CLASS_OPEN_PUBLIC:
         return "Open Public";
+    case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
+        return "Open Public With Firewall";
     case NTRS_NAT_CLASS_FULL_CONE:
         return "Full Cone NAT";
     case NTRS_NAT_CLASS_IP_RESTRICTED:
@@ -100,12 +102,6 @@ static const char* NatTypeTitle(ntrs_nat_class_t nat_class)
         return "Port Restricted NAT";
     case NTRS_NAT_CLASS_SYMMETRIC:
         return "Symmetric NAT";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC:
-        return "IPv6 Open Public";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL:
-        return "IPv6 Open Public With Firewall";
-    case NTRS_NAT_CLASS_IPV6_UDP_BLOCKED:
-        return "IPv6 UDP Blocked";
     default:
         return "Unknown";
     }
@@ -123,6 +119,8 @@ static const char* NatTypeHint(const ntrs_nat_info_t* nat)
             return "The host has a public address, but UDP probes indicate transport blocking.";
         }
         return "The host appears to be directly reachable on a public address.";
+    case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
+        return "The host has a public address, but changed-source UDP replies are filtered.";
     case NTRS_NAT_CLASS_FULL_CONE:
         return "Mapping is stable and filtering is permissive; UDP hole punching should be easier.";
     case NTRS_NAT_CLASS_IP_RESTRICTED:
@@ -131,12 +129,6 @@ static const char* NatTypeHint(const ntrs_nat_info_t* nat)
         return "Mapping is stable, but return traffic usually requires a prior packet to the peer IP and port.";
     case NTRS_NAT_CLASS_SYMMETRIC:
         return "Different destinations produce different public mappings; UDP hole punching is difficult.";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC:
-        return "IPv6 UDP is reachable and ordinary probe replies are received.";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL:
-        return "IPv6 UDP is reachable, but changed-source replies are filtered.";
-    case NTRS_NAT_CLASS_IPV6_UDP_BLOCKED:
-        return "IPv6 UDP probes failed; verify that IPv6 UDP is allowed on this network.";
     default:
         if ((nat->nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0) {
             return "Basic UDP probes failed; verify that UDP is allowed on this network.";

@@ -111,9 +111,7 @@ TEST_CASE("binary endpoint TLV preserves IPv6 address and port")
     REQUIRE(memcmp(&parsed->sin6_addr, &input.sin6_addr, sizeof(input.sin6_addr)) == 0);
 }
 
-TEST_CASE("IPv6 NAT classes have stable public values")
+TEST_CASE("Open public with firewall NAT class has stable public value")
 {
-    REQUIRE(NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC == 6);
-    REQUIRE(NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL == 7);
-    REQUIRE(NTRS_NAT_CLASS_IPV6_UDP_BLOCKED == 8);
+    REQUIRE(NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL == 6);
 }

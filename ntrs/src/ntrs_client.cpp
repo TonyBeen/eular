@@ -217,12 +217,8 @@ static const char* NatClassName(ntrs_nat_class_t nat_class)
         return "port_restricted_nat";
     case NTRS_NAT_CLASS_SYMMETRIC:
         return "symmetric_nat";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC:
-        return "ipv6_open_public";
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL:
-        return "ipv6_open_public_with_firewall";
-    case NTRS_NAT_CLASS_IPV6_UDP_BLOCKED:
-        return "ipv6_udp_blocked";
+    case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
+        return "open_public_with_firewall";
     default:
         return "unknown";
     }
@@ -346,7 +342,7 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
             nat->nat_risk = "high";
             nat->nat_flags |= NTRS_NAT_FLAG_UDP_BLOCKED | NTRS_NAT_FLAG_PROBE_DEGRADED;
             nat->filtering_behavior = NTRS_FILTERING_BLOCKED;
-            nat->nat_class = NTRS_NAT_CLASS_IPV6_UDP_BLOCKED;
+            nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
             nat->nat_type = NatClassName(nat->nat_class);
             return;
         }
@@ -354,13 +350,13 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
         nat->mapping_stable = true;
         nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
         nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
-        nat->nat_class = NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC;
+        nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC;
         nat->nat_risk = "medium";
         nat->nat_type = NatClassName(nat->nat_class);
         if (nat->filter_probe_executed && !nat->filter_same_ip_diff_port_rx && !nat->filter_diff_ip_rx) {
             nat->filtering_behavior = NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
             nat->nat_risk = "high";
-            nat->nat_class = NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL;
+            nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL;
             nat->nat_type = NatClassName(nat->nat_class);
         }
         if (nat->probe1_success_count < nat->probe_rounds ||

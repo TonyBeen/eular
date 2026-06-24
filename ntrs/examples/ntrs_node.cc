@@ -132,6 +132,8 @@ static uint32_t NatStrictnessScore(ntrs_nat_class_t nat_class)
     switch (nat_class) {
     case NTRS_NAT_CLASS_OPEN_PUBLIC:
         return 1;
+    case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
+        return 2;
     case NTRS_NAT_CLASS_FULL_CONE:
         return 2;
     case NTRS_NAT_CLASS_IP_RESTRICTED:
@@ -140,12 +142,6 @@ static uint32_t NatStrictnessScore(ntrs_nat_class_t nat_class)
         return 4;
     case NTRS_NAT_CLASS_SYMMETRIC:
         return 5;
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC:
-        return 1;
-    case NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL:
-        return 4;
-    case NTRS_NAT_CLASS_IPV6_UDP_BLOCKED:
-        return 6;
     default:
         return 0;
     }
