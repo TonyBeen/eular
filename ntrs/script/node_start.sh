@@ -29,8 +29,9 @@ Behavior:
     --mqtt-password    from NODE_MQTT_PASSWORD when set
     -4/-6              from NODE_ADDRESS_FAMILY when set
 
-  In IPv4 mode it runs "curl -fsS myip.ipip.net -4" for --public-host.
-  In IPv6 mode it runs "curl -fsS myip.ipip.net -6" for --public-host.
+  In IPv4 mode it detects --public-host with curl -4.
+  In IPv6 mode it detects --public-host with curl -6.
+  Detection retries several public IP services before failing.
   If --bind-device/--bind-ip is provided, public-host detection also passes
   that value to curl through --interface.
 
@@ -87,28 +88,88 @@ kill_old_process() {
     fi
 }
 
-detect_public_ip() {
+extract_public_ip() {
     local output ip
     local family="${1:-4}"
+
+    output="${2:-}"
+    if [[ "${family}" == "6" ]]; then
+        ip="$(printf '%s\n' "${output}" | grep -Eio '([0-9a-f]{1,4}:){2,}[0-9a-f:]{0,}' | head -n1 || true)"
+    else
+        ip="$(printf '%s\n' "${output}" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
+    fi
+    printf '%s\n' "${ip}"
+}
+
+detect_public_ip() {
+    local output ip service
+    local family="${1:-4}"
     local bind_interface="${2:-}"
-    local curl_args=(-fsS myip.ipip.net)
+    local services=(
+        "myip.ipip.net"
+        "ifconfig.co"
+        "ip.sb"
+        "icanhazip.com"
+    )
+    local curl_args=(-sS --retry 2 --connect-timeout 5 --max-time 10)
 
     if [[ -n "${bind_interface}" ]]; then
         curl_args+=(--interface "${bind_interface}")
     fi
 
-    if [[ "${family}" == "6" ]]; then
-        output="$(curl "${curl_args[@]}" -6)"
-        ip="$(printf '%s\n' "${output}" | grep -Eio '([0-9a-f]{1,4}:){2,}[0-9a-f:]{0,}' | head -n1 || true)"
-    else
-        output="$(curl "${curl_args[@]}" -4)"
-        ip="$(printf '%s\n' "${output}" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
-    fi
-    if [[ -z "${ip}" ]]; then
-        echo "failed to detect public IPv${family} from myip.ipip.net: ${output}" >&2
-        return 1
-    fi
-    printf '%s\n' "${ip}"
+    for service in "${services[@]}"; do
+        if [[ "${family}" == "6" ]]; then
+            output="$(curl "${service}" -6 2>/dev/null || true)"
+        else
+            output="$(curl "${service}" -4 2>/dev/null || true)"
+        fi
+        ip="$(extract_public_ip "${family}" "${output}")"
+        if [[ -n "${ip}" ]]; then
+            printf '%s\n' "${ip}"
+            return 0
+        fi
+
+        if [[ "${family}" == "6" ]]; then
+            output="$(curl "${curl_args[@]}" "${service}" -6 2>/dev/null || true)"
+        else
+            output="$(curl "${curl_args[@]}" "${service}" -4 2>/dev/null || true)"
+        fi
+        ip="$(extract_public_ip "${family}" "${output}")"
+        if [[ -n "${ip}" ]]; then
+            printf '%s\n' "${ip}"
+            return 0
+        fi
+        if [[ -n "${output}" ]]; then
+            echo "public IPv${family} detection failed via ${service}: ${output}" >&2
+        else
+            echo "public IPv${family} detection failed via ${service}" >&2
+        fi
+    done
+
+    echo "failed to detect public IPv${family}; please pass --public-host explicitly" >&2
+    return 1
+}
+
+normalize_node_arg() {
+    local arg="$1"
+
+    case "${arg}" in
+        --mqtt-username)
+            printf '%s\n' "--Mqtt-username"
+            ;;
+        --mqtt-password)
+            printf '%s\n' "--Mqtt-password"
+            ;;
+        --mqtt-username=*)
+            printf '%s\n' "--Mqtt-username=${arg#*=}"
+            ;;
+        --mqtt-password=*)
+            printf '%s\n' "--Mqtt-password=${arg#*=}"
+            ;;
+        *)
+            printf '%s\n' "${arg}"
+            ;;
+    esac
 }
 
 option_value() {
@@ -143,6 +204,10 @@ bind_ip_arg="${NODE_BIND_IP:-}"
 bind_device_arg="${NODE_BIND_DEVICE:-}"
 
 args=("$@")
+node_args=()
+for arg in "$@"; do
+    node_args+=("$(normalize_node_arg "${arg}")")
+done
 i=0
 while [[ ${i} -lt ${#args[@]} ]]; do
     arg="${args[${i}]}"
@@ -282,7 +347,7 @@ if [[ ${has_option} -eq 0 && $# -gt 0 ]]; then
     exec "${BIN}" "$@"
 fi
 
-cmd=("${BIN}" "$@")
+cmd=("${BIN}" "${node_args[@]}")
 
 if [[ ${has_hub} -eq 0 && -n "${NODE_HUB:-}" ]]; then
     cmd+=(--hub "${NODE_HUB}")
@@ -342,10 +407,10 @@ if [[ ${has_address_family} -eq 0 && -n "${NODE_ADDRESS_FAMILY:-}" ]]; then
     fi
 fi
 if [[ ${has_mqtt_username} -eq 0 && -n "${NODE_MQTT_USERNAME:-}" ]]; then
-    cmd+=(--mqtt-username "${NODE_MQTT_USERNAME}")
+    cmd+=(--Mqtt-username "${NODE_MQTT_USERNAME}")
 fi
 if [[ ${has_mqtt_password} -eq 0 && -n "${NODE_MQTT_PASSWORD:-}" ]]; then
-    cmd+=(--mqtt-password "${NODE_MQTT_PASSWORD}")
+    cmd+=(--Mqtt-password "${NODE_MQTT_PASSWORD}")
 fi
 if [[ ${has_auth_secret} -eq 0 && -n "${NODE_AUTH_SECRET:-}" ]]; then
     cmd+=(--auth-secret "${NODE_AUTH_SECRET}")

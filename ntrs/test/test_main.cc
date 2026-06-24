@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include <ntrs_auth.h>
 #include <ntrs_binary_protocol.h>
+#include <ntrs_client.h>
 #include <ntrs_codec.h>
 
 #include <arpa/inet.h>
@@ -108,4 +109,11 @@ TEST_CASE("binary endpoint TLV preserves IPv6 address and port")
     parsed = reinterpret_cast<const struct sockaddr_in6*>(&output);
     REQUIRE(ntohs(parsed->sin6_port) == 33478);
     REQUIRE(memcmp(&parsed->sin6_addr, &input.sin6_addr, sizeof(input.sin6_addr)) == 0);
+}
+
+TEST_CASE("IPv6 NAT classes have stable public values")
+{
+    REQUIRE(NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC == 6);
+    REQUIRE(NTRS_NAT_CLASS_IPV6_OPEN_PUBLIC_WITH_FIREWALL == 7);
+    REQUIRE(NTRS_NAT_CLASS_IPV6_UDP_BLOCKED == 8);
 }
