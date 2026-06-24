@@ -214,6 +214,16 @@ static std::string FormatFlags(ntrs_nat_flags_t nat_flags)
     return JoinFlags(flags);
 }
 
+static std::string FormatEndpointText(const char* ip, uint16_t port)
+{
+    const std::string host = ip == NULL ? "" : ip;
+
+    if (host.find(':') != std::string::npos && (host.empty() || host[0] != '[')) {
+        return "[" + host + "]:" + std::to_string((unsigned)port);
+    }
+    return host + ":" + std::to_string((unsigned)port);
+}
+
 static void PrintResult(const ntrs_nat_info_t* nat, const std::string& probe1, const std::string& probe2)
 {
     printf("Detection Result: %s\n", NatTypeTitle(nat->nat_class));
@@ -223,9 +233,9 @@ static void PrintResult(const ntrs_nat_info_t* nat, const std::string& probe1, c
     printf("Mapping Behavior: %s\n", MappingBehaviorTitle(nat->mapping_behavior));
     printf("Filtering Behavior: %s\n", FilteringBehaviorTitle(nat->filtering_behavior));
     printf("Probe Endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
-    printf("Local Address: %s:%u\n", nat->local_ip, nat->local_port);
-    printf("Public Mapping #1: %s:%u\n", nat->srflx_ip, nat->srflx_port);
-    printf("Public Mapping #2: %s:%u\n", nat->srflx_ip_2, nat->srflx_port_2);
+    printf("Local Address: %s\n", FormatEndpointText(nat->local_ip, nat->local_port).c_str());
+    printf("Public Mapping #1: %s\n", FormatEndpointText(nat->srflx_ip, nat->srflx_port).c_str());
+    printf("Public Mapping #2: %s\n", FormatEndpointText(nat->srflx_ip_2, nat->srflx_port_2).c_str());
     printf("Samples: rounds=%d p1=%d p2=%d p1_map=%d p2_map=%d rtt1=%dms rtt2=%dms\n", nat->probe_rounds,
            nat->probe1_success_count, nat->probe2_success_count, nat->probe1_distinct_mappings,
            nat->probe2_distinct_mappings, nat->probe1_rtt_ms, nat->probe2_rtt_ms);
@@ -725,8 +735,9 @@ static int ConnectControlWithBind(const DetectArgs& args, const char* phase, std
             *resolved_node_ip = node_ip;
         }
         if (args.verbose) {
-            printf("%s: connect control %s:%u resolved=%s bind_ip=%s\n", phase, args.node_host.c_str(),
-                   (unsigned)args.node_port, resolved_node_ip->empty() ? "-" : resolved_node_ip->c_str(),
+            printf("%s: connect control %s resolved=%s bind_ip=%s\n", phase,
+                   FormatEndpointText(args.node_host.c_str(), args.node_port).c_str(),
+                   resolved_node_ip->empty() ? "-" : resolved_node_ip->c_str(),
                    bind_ip.empty() ? "-" : bind_ip.c_str());
         }
 

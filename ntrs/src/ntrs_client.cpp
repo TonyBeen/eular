@@ -159,6 +159,14 @@ static bool IsIpv6Text(const std::string& ip)
     return !ip.empty() && inet_pton(AF_INET6, ip.c_str(), &addr) == 1;
 }
 
+static std::string FormatEndpointText(const std::string& ip, uint16_t port)
+{
+    if (IsIpv6Text(ip)) {
+        return "[" + ip + "]:" + std::to_string((unsigned)port);
+    }
+    return ip + ":" + std::to_string((unsigned)port);
+}
+
 static bool IsPublicIpv4(const std::string& ip)
 {
     struct in_addr addr;
@@ -1401,11 +1409,11 @@ static void FinishAsyncNatDetection(AsyncRequest* request)
 
     NatProbeLog(
         request,
-        "nat probe finish local=%s:%u srflx1=%s:%u srflx2=%s:%u mapping=%u filter=%u flags=0x%04x class=%u "
+        "nat probe finish local=%s srflx1=%s srflx2=%s mapping=%u filter=%u flags=0x%04x class=%u "
         "rounds=%d p1=%d p2=%d p1_map=%d p2_map=%d\n",
-        request->nat_sample.local_ip.c_str(), (unsigned)request->nat_sample.local_port,
-        request->nat_sample.srflx_ip.c_str(), (unsigned)request->nat_sample.srflx_port,
-        request->nat_sample.srflx_ip_2.c_str(), (unsigned)request->nat_sample.srflx_port_2,
+        FormatEndpointText(request->nat_sample.local_ip, request->nat_sample.local_port).c_str(),
+        FormatEndpointText(request->nat_sample.srflx_ip, request->nat_sample.srflx_port).c_str(),
+        FormatEndpointText(request->nat_sample.srflx_ip_2, request->nat_sample.srflx_port_2).c_str(),
         (unsigned)request->nat_sample.mapping_behavior, (unsigned)request->nat_sample.filtering_behavior,
         (unsigned)request->nat_sample.nat_flags, (unsigned)request->nat_sample.nat_class,
         request->nat_sample.probe_rounds, request->nat_sample.probe1_success_count,
@@ -1461,9 +1469,10 @@ static bool SendAsyncProbeRequest(AsyncRequest* request)
     BuildAsyncNatProbeToken(request, transaction_id);
     memcpy(request->probe_token, transaction_id, sizeof(request->probe_token));
 
-    NatProbeLog(request, "nat probe send phase=%s target=%s:%u change_request=0x%08x attempt=%d token=%s\n",
-                  AsyncNatPhaseName(request->nat_phase), request->probe_hosts[target_index].c_str(),
-                  (unsigned)request->probe_ports[target_index], (unsigned)change_request, request->probe_attempts,
+    NatProbeLog(request, "nat probe send phase=%s target=%s change_request=0x%08x attempt=%d token=%s\n",
+                  AsyncNatPhaseName(request->nat_phase),
+                  FormatEndpointText(request->probe_hosts[target_index], request->probe_ports[target_index]).c_str(),
+                  (unsigned)change_request, request->probe_attempts,
                   TxidToHex(transaction_id, sizeof(transaction_id)).c_str());
 
     if (!BuildAsyncNatProbeRequestFrame(request, transaction_id, &message)) {
@@ -1531,10 +1540,10 @@ static void AsyncNatIoCb(evutil_socket_t fd, short events, void* arg)
                 SockaddrEndpoint(&src_addr, src_len, &src_ip, &src_port);
                 NatProbeLog(
                     request,
-                    "nat probe drop phase=%s src=%s:%u reason=filter_source_invalid resp_origin=%s:%u other=%s:%u\n",
-                    AsyncNatPhaseName(request->nat_phase), src_ip.c_str(), (unsigned)src_port,
-                    response.response_origin_ip.c_str(), (unsigned)response.response_origin_port,
-                    response.other_address_ip.c_str(), (unsigned)response.other_address_port);
+                    "nat probe drop phase=%s src=%s reason=filter_source_invalid resp_origin=%s other=%s\n",
+                    AsyncNatPhaseName(request->nat_phase), FormatEndpointText(src_ip, src_port).c_str(),
+                    FormatEndpointText(response.response_origin_ip, response.response_origin_port).c_str(),
+                    FormatEndpointText(response.other_address_ip, response.other_address_port).c_str());
                 continue;
             }
         } else if (!SockaddrSameEndpoint(&src_addr, src_len, &request->probe_addrs[request->probe_index],
@@ -1546,9 +1555,9 @@ static void AsyncNatIoCb(evutil_socket_t fd, short events, void* arg)
             SockaddrEndpoint(&src_addr, src_len, &src_ip, &src_port);
             SockaddrEndpoint(&request->probe_addrs[request->probe_index], request->probe_addr_lens[request->probe_index],
                               &exp_ip, &exp_port);
-            NatProbeLog(request, "nat probe drop phase=%s src=%s:%u expected=%s:%u reason=unexpected_source\n",
-                          AsyncNatPhaseName(request->nat_phase), src_ip.c_str(), (unsigned)src_port,
-                          exp_ip.c_str(), (unsigned)exp_port);
+            NatProbeLog(request, "nat probe drop phase=%s src=%s expected=%s reason=unexpected_source\n",
+                          AsyncNatPhaseName(request->nat_phase), FormatEndpointText(src_ip, src_port).c_str(),
+                          FormatEndpointText(exp_ip, exp_port).c_str());
             continue;
         }
 
@@ -1595,11 +1604,11 @@ static void AsyncNatIoCb(evutil_socket_t fd, short events, void* arg)
             request->nat_sample.srflx_ip_2 = response.mapped_ip;
             request->nat_sample.srflx_port_2 = response.mapped_port;
         }
-        NatProbeLog(request, "nat probe receive phase=%s mapped=%s:%u origin=%s:%u other=%s:%u rtt=%ldms\n",
-                      AsyncNatPhaseName(request->nat_phase), response.mapped_ip.c_str(),
-                      (unsigned)response.mapped_port, response.response_origin_ip.c_str(),
-                      (unsigned)response.response_origin_port, response.other_address_ip.c_str(),
-                      (unsigned)response.other_address_port, rtt_ms);
+        NatProbeLog(request, "nat probe receive phase=%s mapped=%s origin=%s other=%s rtt=%ldms\n",
+                      AsyncNatPhaseName(request->nat_phase),
+                      FormatEndpointText(response.mapped_ip, response.mapped_port).c_str(),
+                      FormatEndpointText(response.response_origin_ip, response.response_origin_port).c_str(),
+                      FormatEndpointText(response.other_address_ip, response.other_address_port).c_str(), rtt_ms);
 
         if (request->probe_success_count[request->probe_index] < request->probe_success_target &&
             request->probe_attempts + 1 < request->probe_max_attempts) {
@@ -1624,11 +1633,10 @@ static bool StartAsyncNatIo(AsyncRequest* request)
     }
 
     InitAsyncNatSample(request);
-    NatProbeLog(request, "nat probe start local=%s:%u probe1=%s:%u probe2=%s:%u filter_probe=%s rounds=%d retries=%d\n",
-                  request->nat_sample.local_ip.c_str(), (unsigned)request->nat_sample.local_port,
-                  request->probe_hosts[0].c_str(), (unsigned)request->probe_ports[0],
-                  request->has_probe2 ? request->probe_hosts[1].c_str() : "-",
-                  request->has_probe2 ? (unsigned)request->probe_ports[1] : 0u,
+    NatProbeLog(request, "nat probe start local=%s probe1=%s probe2=%s filter_probe=%s rounds=%d retries=%d\n",
+                  FormatEndpointText(request->nat_sample.local_ip, request->nat_sample.local_port).c_str(),
+                  FormatEndpointText(request->probe_hosts[0], request->probe_ports[0]).c_str(),
+                  request->has_probe2 ? FormatEndpointText(request->probe_hosts[1], request->probe_ports[1]).c_str() : "-",
                   request->nat_enable_filter_probe ? "true" : "false", request->probe_success_target,
                   request->probe_max_attempts);
     request->io_event = event_new(request->client->base, request->fd, EV_READ | EV_PERSIST, AsyncNatIoCb, request);
@@ -1709,9 +1717,9 @@ static void AsyncNatDnsCb(int result, struct evutil_addrinfo* res, void* arg)
         uint16_t    resolved_port = 0;
         SockaddrEndpoint(&request->probe_addrs[index], request->probe_addr_lens[index], &resolved_ip,
                           &resolved_port);
-        NatProbeLog(request, "nat probe resolve ok index=%d host=%s port=%u resolved=%s:%u\n", index,
+        NatProbeLog(request, "nat probe resolve ok index=%d host=%s port=%u resolved=%s\n", index,
                       request->probe_hosts[index].c_str(), (unsigned)request->probe_ports[index],
-                      resolved_ip.c_str(), (unsigned)resolved_port);
+                      FormatEndpointText(resolved_ip, resolved_port).c_str());
     }
     evutil_freeaddrinfo(res);
 

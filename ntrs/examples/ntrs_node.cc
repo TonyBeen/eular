@@ -1893,15 +1893,13 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
                 other_port = probe_alt_bind_port;
             }
             NodeVerboseLog(verbose,
-                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u\n",
+                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s other=%s\n",
                              probe_fd,
                              (unsigned)binary_phase,
                              EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
                              EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
-                             self_probe_ip.c_str(),
-                             self_probe_port,
-                             other_ip.c_str(),
-                             other_port);
+                             FormatEndpoint(self_probe_ip, self_probe_port).c_str(),
+                             FormatEndpoint(other_ip, other_port).c_str());
             if (!SendBinaryProbeResponse(probe_fd, reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
                                             binary_frame_type, binary_phase, binary_token, binary_token_len,
                                             reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
@@ -1915,15 +1913,13 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
                 return;
             }
             NodeVerboseLog(verbose,
-                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s:%u other=%s:%u via_alt_fd=%d\n",
+                             "probe rsp fd=%d phase=%u src=%s mapped=%s origin=%s other=%s via_alt_fd=%d\n",
                              probe_alt_fd,
                              (unsigned)binary_phase,
                              EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
                              EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
-                             self_probe_ip.c_str(),
-                             probe_alt_bind_port,
-                             self_probe_ip.c_str(),
-                             self_probe_port,
+                             FormatEndpoint(self_probe_ip, probe_alt_bind_port).c_str(),
+                             FormatEndpoint(self_probe_ip, self_probe_port).c_str(),
                              probe_alt_fd);
             if (!SendBinaryProbeResponse(probe_alt_fd, reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len,
                                             binary_frame_type, binary_phase, binary_token, binary_token_len,
@@ -1954,12 +1950,11 @@ static void HandleProbePacket(int probe_fd, bool is_alt_socket, int probe_primar
             job.use_alt_port = false;
             job.probe_token_bytes.assign(binary_token, binary_token + binary_token_len);
             NodeVerboseLog(verbose,
-                             "probe delegate fd=%d phase=%u src=%s target=%s:%u controls=%zu\n",
+                             "probe delegate fd=%d phase=%u src=%s target=%s controls=%zu\n",
                              probe_fd,
                              (unsigned)binary_phase,
                              EndpointText(reinterpret_cast<const struct sockaddr*>(&peer_addr), peer_len).c_str(),
-                             job.target_ip.c_str(),
-                             job.target_port,
+                             FormatEndpoint(job.target_ip, job.target_port).c_str(),
                              job.controls.size());
 
             AsyncFederationResult result;
@@ -2285,7 +2280,8 @@ int main(int argc, char** argv)
         mqtt_client->setDisconnectCallback(
             [&](int rc) { printf("node Mqtt disconnected rc=%d node=%s\n", rc, node_id.c_str()); });
         if (!mqtt_client->connect()) {
-            printf("hub mode disabled because Mqtt connect failed: %s:%d\n", mqtt_broker.c_str(), mqtt_port);
+            printf("hub mode disabled because Mqtt connect failed: %s\n",
+                   FormatEndpoint(mqtt_broker, (uint16_t)mqtt_port).c_str());
             mqtt_client.reset();
             use_hub_assignment = false;
         }
@@ -2564,16 +2560,17 @@ int main(int argc, char** argv)
                     peers[peer_key] = s;
 
                     printf(
-                        "REGISTER peer=%s device=%s local=%s:%u srflx=%s:%u srflx2=%s:%u stable=%s risk=%s class=%u "
+                        "REGISTER peer=%s device=%s local=%s srflx=%s srflx2=%s stable=%s risk=%s class=%u "
                         "flags=0x%04x mapping=%u filtering=%u type=%s "
                         "probe1_ok=%s probe2_ok=%s probe1_rtt_ms=%d probe2_rtt_ms=%d rounds=%u p1succ=%u p2succ=%u "
                         "p1distinct=%u p2distinct=%u f_same_ip_port=%s f_diff_ip=%s\n",
-                        peer_id.c_str(), device_id.c_str(), MsgStrTag(msg, eular::ntrs::FieldTag::LOCAL_IP),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::LOCAL_PORT),
-                        MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT),
-                        MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2),
+                        peer_id.c_str(), device_id.c_str(),
+                        FormatEndpoint(MsgStrTag(msg, eular::ntrs::FieldTag::LOCAL_IP),
+                                       MsgU16Tag(msg, eular::ntrs::FieldTag::LOCAL_PORT)).c_str(),
+                        FormatEndpoint(MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP),
+                                       MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT)).c_str(),
+                        FormatEndpoint(MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2),
+                                       MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2)).c_str(),
                         MsgBoolTag(msg, eular::ntrs::FieldTag::MAPPING_STABLE) ? "true" : "false",
                         MsgStrTag(msg, eular::ntrs::FieldTag::NAT_RISK),
                         MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN),
@@ -2832,8 +2829,8 @@ int main(int argc, char** argv)
                         SendError(fd, msg.request_id, "INVALID_PARAM", "target_ip/target_port/token required");
                         break;
                     }
-                    NodeVerboseLog(verbose, "FILTER_PROBE_REQ fd=%d req=%u target=%s:%u token=%s\n", fd,
-                                     msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str());
+                    NodeVerboseLog(verbose, "FILTER_PROBE_REQ fd=%d req=%u target=%s token=%s\n", fd,
+                                     msg.request_id, FormatEndpoint(target_ip, target_port).c_str(), token.c_str());
                     if (!AuthManager.validateSession(fd, "", session_token, (uint64_t)time(NULL), &reason)) {
                         printf("FILTER_PROBE_REQ auth failed fd=%d req=%u reason=%s\n", fd, msg.request_id,
                                reason.c_str());
@@ -2947,15 +2944,15 @@ int main(int argc, char** argv)
                                                                  token, expire_at, probe_auth)) {
                         NodeVerboseLog(
                             verbose,
-                            "SERVER_SEND_PROBE_REQ authorization invalid fd=%d req=%u target=%s:%u token=%s\n", fd,
-                            msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str());
+                            "SERVER_SEND_PROBE_REQ authorization invalid fd=%d req=%u target=%s token=%s\n", fd,
+                            msg.request_id, FormatEndpoint(target_ip, target_port).c_str(), token.c_str());
                         SendError(fd, msg.request_id, "PROBE_AUTH_INVALID", "probe authorization invalid");
                         break;
                     }
                     bool ok = SendUdpFilterProbe(probe_fd, target_ip, target_port, token, "diff_ip");
                     NodeVerboseLog(verbose,
-                                     "SERVER_SEND_PROBE_REQ fd=%d req=%u target=%s:%u token=%s diff_ip_sent=%s\n",
-                                     fd, msg.request_id, target_ip.c_str(), (unsigned)target_port, token.c_str(),
+                                     "SERVER_SEND_PROBE_REQ fd=%d req=%u target=%s token=%s diff_ip_sent=%s\n",
+                                     fd, msg.request_id, FormatEndpoint(target_ip, target_port).c_str(), token.c_str(),
                                      ok ? "true" : "false");
 
                     eular::ntrs::Message rsp;

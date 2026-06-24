@@ -108,6 +108,16 @@ static bool IsUsableInterfaceIpv6(const struct in6_addr& addr)
     return !IN6_IS_ADDR_UNSPECIFIED(&addr) && !IN6_IS_ADDR_LOOPBACK(&addr) && !IN6_IS_ADDR_LINKLOCAL(&addr);
 }
 
+static std::string FormatEndpointText(const char* ip, uint16_t port)
+{
+    const std::string host = ip == NULL ? "" : ip;
+
+    if (host.find(':') != std::string::npos && (host.empty() || host[0] != '[')) {
+        return "[" + host + "]:" + std::to_string((unsigned)port);
+    }
+    return host + ":" + std::to_string((unsigned)port);
+}
+
 static bool ParseEndpointText(const std::string& endpoint, std::string* host, uint16_t* port)
 {
     std::string host_part;
@@ -1030,9 +1040,9 @@ static void TryHolePunchFromAsyncSignal(ntrs_async_client_t* client, event_base*
            signal->peer_filtering_behavior, signal->peer_nat_type, signal->candidate_count);
     if (verbose) {
         for (uint32_t i = 0; i < signal->candidate_count; ++i) {
-            printf("  candidate[%u]: type=%s endpoint=%s:%u\n", i,
+            printf("  candidate[%u]: type=%s endpoint=%s\n", i,
                    signal->candidates[i].type[0] == '\0' ? "candidate" : signal->candidates[i].type,
-                   signal->candidates[i].ip, signal->candidates[i].port);
+                   FormatEndpointText(signal->candidates[i].ip, signal->candidates[i].port).c_str());
         }
     }
 
@@ -1046,8 +1056,8 @@ static void TryHolePunchFromAsyncSignal(ntrs_async_client_t* client, event_base*
     if (ntrs_async_try_udp_hole_punch(client, &request_id, sock, signal->candidates, signal->candidate_count,
                                       punch_rounds, punch_interval_ms, AsyncResultCallback, &wait_punch) &&
         WaitAsyncResult(base, &wait_punch, punch_wait_timeout_sec) && wait_punch.result.success) {
-        printf("UDP hole punch result (%s): ok selected=%s:%u type=%s\n", from,
-               wait_punch.result.selected_candidate.ip, wait_punch.result.selected_candidate.port,
+        printf("UDP hole punch result (%s): ok selected=%s type=%s\n", from,
+               FormatEndpointText(wait_punch.result.selected_candidate.ip, wait_punch.result.selected_candidate.port).c_str(),
                wait_punch.result.selected_candidate.type[0] == '\0' ? "candidate"
                                                                     : wait_punch.result.selected_candidate.type);
         probe_token = MakeProbeToken();
@@ -1149,9 +1159,11 @@ int main(int argc, char** argv)
     probe2 = probe.probe2;
     printf("NTRS probe endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     nat = &probe.nat_info;
-    printf("NAT summary: local=%s:%u srflx=%s:%u srflx2=%s:%u class=%u flags=0x%04x mapping=%u filtering=%u type=%s "
+    printf("NAT summary: local=%s srflx=%s srflx2=%s class=%u flags=0x%04x mapping=%u filtering=%u type=%s "
            "risk=%s\n",
-           nat->local_ip, nat->local_port, nat->srflx_ip, nat->srflx_port, nat->srflx_ip_2, nat->srflx_port_2,
+           FormatEndpointText(nat->local_ip, nat->local_port).c_str(),
+           FormatEndpointText(nat->srflx_ip, nat->srflx_port).c_str(),
+           FormatEndpointText(nat->srflx_ip_2, nat->srflx_port_2).c_str(),
            nat->nat_class, nat->nat_flags, nat->mapping_behavior, nat->filtering_behavior, nat->nat_type,
            nat->nat_risk);
 
