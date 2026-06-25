@@ -2,9 +2,11 @@ cmake_minimum_required(VERSION 3.10)
 
 cmake_policy(SET CMP0054 NEW)
 
-project(utils VERSION 1.0.0)
+project(utils VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -117,7 +119,7 @@ function(utils_apply_common_target_settings target)
 
     target_link_libraries(${target} PRIVATE iconv charset)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_link_libraries(${target} PUBLIC Threads::Threads)
+    target_link_libraries(${target} PUBLIC Threads::Threads)
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_link_libraries(${target}
             PRIVATE

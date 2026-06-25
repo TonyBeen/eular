@@ -36,7 +36,7 @@ uuid_t UUID::V5(const uuid_t &ns, const std::string &name)
 
 std::string UUID::ToString(const uuid_t &uuid)
 {
-    char buf[64];
+    char buf[128];
     snprintf_(buf, sizeof(buf),
               "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
               uuid[0], uuid[1], uuid[2], uuid[3],
