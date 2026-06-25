@@ -1503,6 +1503,13 @@ static void FederationDnsCb(int result, struct evutil_addrinfo* res, void* arg)
 
 static bool StartFederationAttempt(FederationRequest* request, struct evdns_base* dns_base)
 {
+    /*
+     * TODO: 当前 node-node federation 每个协助任务都会临时建立 TCP 连接并重新认证，
+     * 适合测试和中低频探测。线上 PCDN 高频 NAT 探测应改为按 hub assignment 维护
+     * 到 primary/backup node 的长连接或连接池，并复用已认证会话发送 SERVER_INFO_REQ、
+     * SERVER_SEND_PROBE_REQ、SERVER_PROBE_DELEGATE_REQ，避免握手、认证、TIME_WAIT 和
+     * 跨地域 RTT 成为探测性能瓶颈。
+     */
     while (request != NULL && request->control_index < request->job.controls.size()) {
         if (request->resolved_addrs == NULL) {
             std::string            host;
@@ -2518,7 +2525,10 @@ int main(int argc, char** argv)
                                 assignment_p1 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL);
                                 assignment_p2 = MsgStrTag(msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL);
                                 assignment_b1 = MsgStrTag(msg, eular::ntrs::FieldTag::BACKUP1_CONTROL);
-                                assignment_version = msg.request_id;
+                                assignment_version = MsgU32Tag(msg, eular::ntrs::FieldTag::ASSIGNMENT_VERSION);
+                                if (assignment_version == 0) {
+                                    assignment_version = msg.request_id;
+                                }
                                 NodeVerboseLog(verbose, "assignment updated version=%u p1=%s p2=%s b1=%s\n",
                                                assignment_version,
                                                assignment_p1.empty() ? "-" : assignment_p1.c_str(),

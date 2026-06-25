@@ -26,6 +26,8 @@ static const uint32_t kHubAuthTtlSec = 60;
 static const uint8_t  kHubStateMagic[8] = {'N', 'T', 'R', 'S', 'H', 'U', 'B', 'S'};
 static const uint32_t kHubStateVersion = 1;
 static const uint32_t kMaxHubStatePayloadSize = 16u * 1024u * 1024u;
+static const uint32_t kAssignmentMinStableSec = 15;
+static const uint32_t kAssignmentMinHeartbeatCount = 2;
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -34,6 +36,11 @@ struct Assignment {
     std::string primary2;
     std::string backup1;
 };
+
+static bool operator==(const Assignment& lhs, const Assignment& rhs)
+{
+    return lhs.primary1 == rhs.primary1 && lhs.primary2 == rhs.primary2 && lhs.backup1 == rhs.backup1;
+}
 
 struct HubClientRxState {
     std::vector<uint8_t> buffer;
@@ -44,12 +51,65 @@ struct HubClientSession {
     bool             authed;
     std::string      node_id;
     std::string      session_token;
+    bool             has_assignment;
+    Assignment       last_assignment;
+    uint32_t         last_assignment_version;
+    uint64_t         connected_at_sec;
+    uint64_t         connected_order;
+    uint32_t         heartbeat_count;
 
     HubClientSession()
         : authed(false)
+        , has_assignment(false)
+        , last_assignment_version(0)
+        , connected_at_sec(0)
+        , connected_order(0)
+        , heartbeat_count(0)
     {
     }
 };
+
+struct AssignmentCandidate {
+    std::string node_id;
+    std::string control_endpoint;
+    uint64_t    connected_order;
+    uint64_t    hrw_score;
+};
+
+static bool AssignmentCandidateScoreGreater(const AssignmentCandidate& lhs, const AssignmentCandidate& rhs)
+{
+    return lhs.hrw_score > rhs.hrw_score;
+}
+
+static uint64_t Fnv1a64Update(uint64_t hash, const std::string& value)
+{
+    for (size_t i = 0; i < value.size(); ++i) {
+        hash ^= (uint8_t)value[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static uint64_t AssignmentHrwScore(const std::string& self_node, const std::string& candidate_node)
+{
+    uint64_t hash = 1469598103934665603ULL;
+
+    hash = Fnv1a64Update(hash, self_node);
+    hash ^= 0xFFu;
+    hash *= 1099511628211ULL;
+    hash = Fnv1a64Update(hash, candidate_node);
+    return hash;
+}
+
+static bool IsAssignmentCandidateStable(const HubClientSession& session, uint64_t now_sec)
+{
+    if (session.heartbeat_count >= kAssignmentMinHeartbeatCount) {
+        return true;
+    }
+    return session.connected_at_sec > 0 &&
+           now_sec >= session.connected_at_sec &&
+           now_sec - session.connected_at_sec >= kAssignmentMinStableSec;
+}
 
 static void OnSignal(int)
 {
@@ -404,42 +464,61 @@ static eular::ntrs::Message BuildClusterEventMessage(const std::string& event,
 }
 
 static Assignment BuildAssignmentFor(const std::string& self_node,
-                                     const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes)
+                                     const std::map<std::string, eular::ntrs::ClusterNodeState>& nodes,
+                                     const std::map<int, HubClientSession>& sessions,
+                                     uint64_t now_sec)
 {
-    Assignment               a;
-    std::vector<std::string> candidates;
+    Assignment                       a;
+    std::vector<AssignmentCandidate> all_candidates;
+    std::vector<AssignmentCandidate> stable_candidates;
 
-    for (std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator it = nodes.begin(); it != nodes.end();
-         ++it) {
-        if (it->first == self_node) {
+    for (std::map<int, HubClientSession>::const_iterator it = sessions.begin(); it != sessions.end(); ++it) {
+        if (!it->second.authed || it->second.node_id.empty() || it->second.node_id == self_node) {
             continue;
         }
-        const eular::ntrs::ClusterNodeState& n = it->second;
-        if (n.status == "online" && !n.control_endpoint.empty()) {
-            candidates.push_back(n.control_endpoint);
+        std::map<std::string, eular::ntrs::ClusterNodeState>::const_iterator node_it =
+            nodes.find(it->second.node_id);
+        if (node_it == nodes.end() ||
+            node_it->second.status != "online" ||
+            node_it->second.control_endpoint.empty()) {
+            continue;
+        }
+        AssignmentCandidate c;
+        c.node_id = it->second.node_id;
+        c.control_endpoint = node_it->second.control_endpoint;
+        c.connected_order = it->second.connected_order;
+        c.hrw_score = AssignmentHrwScore(self_node, c.node_id);
+        all_candidates.push_back(c);
+        if (IsAssignmentCandidateStable(it->second, now_sec)) {
+            stable_candidates.push_back(c);
         }
     }
 
+    std::vector<AssignmentCandidate>& candidates =
+        stable_candidates.size() >= 3u ? stable_candidates : all_candidates;
+
+    std::stable_sort(candidates.begin(), candidates.end(), AssignmentCandidateScoreGreater);
     if (candidates.size() > 0) {
-        a.primary1 = candidates[0];
+        a.primary1 = candidates[0].control_endpoint;
     }
     if (candidates.size() > 1) {
-        a.primary2 = candidates[1];
+        a.primary2 = candidates[1].control_endpoint;
     }
     if (candidates.size() > 2) {
-        a.backup1 = candidates[2];
+        a.backup1 = candidates[2].control_endpoint;
     }
     return a;
 }
 
 static eular::ntrs::Message BuildAssignmentMessage(const std::string& node_id, const Assignment& a,
-                                                   uint64_t cluster_version)
+                                                   uint32_t assignment_version)
 {
     eular::ntrs::Message msg;
 
-    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, (uint32_t)cluster_version);
+    eular::ntrs::MessageInit(&msg, eular::ntrs::MessageType::HUB_CLUSTER_EVENT, assignment_version);
     eular::ntrs::MessageAddU8ByTag(&msg, eular::ntrs::FieldTag::EVENT, (uint8_t)eular::ntrs::EventCode::ASSIGNMENT);
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::NODE_ID, node_id.c_str());
+    eular::ntrs::MessageAddU32ByTag(&msg, eular::ntrs::FieldTag::ASSIGNMENT_VERSION, assignment_version);
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY1_CONTROL, a.primary1.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::PRIMARY2_CONTROL, a.primary2.c_str());
     eular::ntrs::MessageAddStringByTag(&msg, eular::ntrs::FieldTag::BACKUP1_CONTROL, a.backup1.c_str());
@@ -449,24 +528,43 @@ static eular::ntrs::Message BuildAssignmentMessage(const std::string& node_id, c
 }
 
 static void SendAssignments(const eular::ntrs::HubClusterState& cluster_state,
-                            const std::map<int, HubClientSession>& sessions,
+                            std::map<int, HubClientSession>* sessions,
+                            uint32_t* assignment_version,
                             std::vector<int>* failed_fds)
 {
-    for (std::map<int, HubClientSession>::const_iterator it = sessions.begin(); it != sessions.end(); ++it) {
+    if (sessions == NULL || assignment_version == NULL) {
+        return;
+    }
+
+    uint64_t now_sec = (uint64_t)time(NULL);
+    for (std::map<int, HubClientSession>::iterator it = sessions->begin(); it != sessions->end(); ++it) {
         if (!it->second.authed || it->second.node_id.empty()) {
             continue;
         }
-        Assignment a = BuildAssignmentFor(it->second.node_id, cluster_state.nodes());
-        eular::ntrs::Message msg = BuildAssignmentMessage(it->second.node_id, a, cluster_state.clusterVersion());
-        printf("hub send assignment node=%s v=%llu p1=%s p2=%s b1=%s\n",
+        Assignment a = BuildAssignmentFor(it->second.node_id, cluster_state.nodes(), *sessions, now_sec);
+        if (it->second.has_assignment && it->second.last_assignment == a) {
+            continue;
+        }
+
+        ++(*assignment_version);
+        if (*assignment_version == 0) {
+            *assignment_version = 1;
+        }
+        eular::ntrs::Message msg = BuildAssignmentMessage(it->second.node_id, a, *assignment_version);
+        printf("hub send assignment node=%s assignment_version=%u cluster_version=%llu p1=%s p2=%s b1=%s\n",
                it->second.node_id.c_str(),
+               *assignment_version,
                (unsigned long long)cluster_state.clusterVersion(),
                a.primary1.empty() ? "-" : a.primary1.c_str(),
                a.primary2.empty() ? "-" : a.primary2.c_str(),
                a.backup1.empty() ? "-" : a.backup1.c_str());
         if (!SendMessage(it->first, msg)) {
             AppendUniqueFd(failed_fds, it->first);
+            continue;
         }
+        it->second.has_assignment = true;
+        it->second.last_assignment = a;
+        it->second.last_assignment_version = *assignment_version;
     }
 }
 
@@ -638,8 +736,9 @@ static bool IsNodeOffline(const eular::ntrs::HubClusterState& cluster_state, con
 
 static void PublishUpdates(const std::string& state_file,
                            eular::ntrs::HubClusterState* cluster_state,
-                           const std::map<int, HubClientSession>& sessions,
+                           std::map<int, HubClientSession>* sessions,
                            const std::vector<std::pair<std::string, eular::ntrs::ClusterNodeState> >& events,
+                           uint32_t* assignment_version,
                            std::vector<int>* failed_fds)
 {
     if (cluster_state == NULL || events.empty()) {
@@ -654,7 +753,7 @@ static void PublishUpdates(const std::string& state_file,
     for (size_t i = 0; i < events.size(); ++i) {
         eular::ntrs::Message event_msg =
             BuildClusterEventMessage(events[i].first, events[i].second, cluster_state->clusterVersion());
-        for (std::map<int, HubClientSession>::const_iterator it = sessions.begin(); it != sessions.end(); ++it) {
+        for (std::map<int, HubClientSession>::const_iterator it = sessions->begin(); it != sessions->end(); ++it) {
             if (it->second.authed) {
                 if (!SendMessage(it->first, event_msg)) {
                     AppendUniqueFd(failed_fds, it->first);
@@ -662,7 +761,7 @@ static void PublishUpdates(const std::string& state_file,
             }
         }
     }
-    SendAssignments(*cluster_state, sessions, failed_fds);
+    SendAssignments(*cluster_state, sessions, assignment_version, failed_fds);
 }
 
 static void CloseClient(int fd,
@@ -671,6 +770,7 @@ static void CloseClient(int fd,
                         eular::ntrs::ControlAuthManager* auth_manager,
                         eular::ntrs::HubClusterState* cluster_state,
                         const std::string& state_file,
+                        uint32_t* assignment_version,
                         bool mark_offline,
                         eular::ntrs::ReasonCode reason_code)
 {
@@ -699,11 +799,11 @@ static void CloseClient(int fd,
             eular::ntrs::Message offline =
                 BuildPresenceMessage(node_id, boot_id, eular::ntrs::NodeStatusCode::OFFLINE, reason_code);
             ApplyNodeMessage(node_id, offline, cluster_state, &events);
-            PublishUpdates(state_file, cluster_state, *sessions, events, &failed_fds);
+            PublishUpdates(state_file, cluster_state, sessions, events, assignment_version, &failed_fds);
             for (size_t i = 0; i < failed_fds.size(); ++i) {
                 if (clients != NULL && clients->find(failed_fds[i]) != clients->end()) {
-                    CloseClient(failed_fds[i], clients, sessions, auth_manager, cluster_state, state_file, false,
-                                eular::ntrs::ReasonCode::NONE);
+                    CloseClient(failed_fds[i], clients, sessions, auth_manager, cluster_state, state_file,
+                                assignment_version, false, eular::ntrs::ReasonCode::NONE);
                 }
             }
         }
@@ -823,6 +923,8 @@ int main(int argc, char** argv)
     eular::ntrs::ControlAuthManager   auth_manager(auth_secret, kHubAuthTtlSec);
     std::set<int>                     clients;
     std::map<int, HubClientSession>   sessions;
+    uint32_t                          assignment_version = 0;
+    uint64_t                          next_connected_order = 1;
 
     if (LoadSnapshot(state_file, &cluster_state)) {
         printf("hub restored snapshot version=%llu nodes=%zu state_file=%s\n",
@@ -909,6 +1011,8 @@ int main(int argc, char** argv)
                     sessions[fd].authed = true;
                     sessions[fd].node_id = node_id;
                     sessions[fd].session_token = session.token;
+                    sessions[fd].connected_at_sec = (uint64_t)time(NULL);
+                    sessions[fd].connected_order = next_connected_order++;
 
                     eular::ntrs::Message rsp;
                     eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::AUTH_RSP, msg.request_id);
@@ -956,10 +1060,13 @@ int main(int argc, char** argv)
                 if (!ApplyNodeMessage(message_node_id, msg, &cluster_state, &events)) {
                     continue;
                 }
+                if (msg.type == eular::ntrs::MessageType::NODE_HEARTBEAT) {
+                    ++sessions[fd].heartbeat_count;
+                }
                 if (msg.type == eular::ntrs::MessageType::NODE_REGISTER) {
                     CloseDuplicateNode(message_node_id, fd, &clients, &sessions, &auth_manager);
                 }
-                PublishUpdates(state_file, &cluster_state, sessions, events, &closed);
+                PublishUpdates(state_file, &cluster_state, &sessions, events, &assignment_version, &closed);
 
                 printf("hub updated node=%s type=%u status=%s version=%llu\n",
                        message_node_id.c_str(),
@@ -975,8 +1082,8 @@ int main(int argc, char** argv)
         closed.erase(std::unique(closed.begin(), closed.end()), closed.end());
         for (size_t i = 0; i < closed.size(); ++i) {
             if (clients.find(closed[i]) != clients.end()) {
-                CloseClient(closed[i], &clients, &sessions, &auth_manager, &cluster_state, state_file, true,
-                            eular::ntrs::ReasonCode::LWT);
+                CloseClient(closed[i], &clients, &sessions, &auth_manager, &cluster_state, state_file,
+                            &assignment_version, true, eular::ntrs::ReasonCode::LWT);
             }
         }
 
@@ -986,14 +1093,14 @@ int main(int argc, char** argv)
             for (size_t i = 0; i < evicted_nodes.size(); ++i) {
                 events.push_back(std::make_pair("node_evicted", evicted_nodes[i]));
             }
-            PublishUpdates(state_file, &cluster_state, sessions, events, &closed);
+            PublishUpdates(state_file, &cluster_state, &sessions, events, &assignment_version, &closed);
         }
     }
 
     std::vector<int> all_clients(clients.begin(), clients.end());
     for (size_t i = 0; i < all_clients.size(); ++i) {
-        CloseClient(all_clients[i], &clients, &sessions, &auth_manager, &cluster_state, state_file, false,
-                    eular::ntrs::ReasonCode::NONE);
+        CloseClient(all_clients[i], &clients, &sessions, &auth_manager, &cluster_state, state_file,
+                    &assignment_version, false, eular::ntrs::ReasonCode::NONE);
     }
     close(listen_fd);
     return 0;
