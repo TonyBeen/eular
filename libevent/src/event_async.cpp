@@ -10,7 +10,6 @@
 #include <cstring>
 #include <errno.h>
 #include <stdio.h>
-#include <unordered_set>
 #include <vector>
 #include <event2/event.h>
 
@@ -19,20 +18,6 @@
 
 namespace ev {
 namespace {
-struct TokenHash {
-    size_t operator()(const EventAsync::AsyncToken &token) const noexcept
-    {
-        return (static_cast<size_t>(token.id) << 32) ^ static_cast<size_t>(token.generation);
-    }
-};
-
-struct TokenEqual {
-    bool operator()(const EventAsync::AsyncToken &lhs, const EventAsync::AsyncToken &rhs) const noexcept
-    {
-        return lhs.id == rhs.id && lhs.generation == rhs.generation;
-    }
-};
-
 static inline bool PopOneAsyncToken(
     const std::vector<uint8_t> &buffer, size_t *offset, EventAsync::AsyncToken *outToken)
 {
@@ -196,23 +181,30 @@ void EventAsync::reset(event_base *loop)
             return;
         }
 
-        assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_RECV]));
-        assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_SEND]));
+        // 必须真实执行非阻塞设置, 不能只放在 assert() 中。
+        // Release/NDEBUG 构建会移除 assert 参数求值, 导致 recv 清空 buffer 时阻塞卡死。
+        int32_t recvNonblock = evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_RECV]);
+        int32_t sendNonblock = evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_SEND]);
+        assert(0 == recvNonblock);
+        assert(0 == sendNonblock);
+        if (recvNonblock != 0 || sendNonblock != 0) {
+            evutil_closesocket(m_sockPair[SOCK_PAIR_RECV]);
+            evutil_closesocket(m_sockPair[SOCK_PAIR_SEND]);
+            m_sockPair[SOCK_PAIR_RECV] = -1;
+            m_sockPair[SOCK_PAIR_SEND] = -1;
+            return;
+        }
+        m_recvBuffer.clear();
+        m_recvBuffer.reserve(4096);
 
         m_event = event_new(loop, m_sockPair[SOCK_PAIR_RECV], EV_READ | EV_PERSIST, [](evutil_socket_t, short, void *data) {
             auto self = static_cast<EventAsync *>(data);
-
-            // 流式socket没有消息边界，必须保留尾部半包到下一轮继续拼接。
-            static thread_local std::vector<uint8_t> recvBuffer;
-            if (recvBuffer.capacity() < 1024) {
-                recvBuffer.reserve(1024);
-            }
 
             do {
                 char buffer[1024];
                 auto nRecv = ::recv(self->m_sockPair[SOCK_PAIR_RECV], buffer, sizeof(buffer), 0);
                 if (nRecv > 0) {
-                    recvBuffer.insert(recvBuffer.end(), buffer, buffer + nRecv);
+                    self->m_recvBuffer.insert(self->m_recvBuffer.end(), buffer, buffer + nRecv);
                 } else {
                     if (!WouldBlock()) {
                         perror("recv error");
@@ -222,21 +214,12 @@ void EventAsync::reset(event_base *loop)
             } while (true);
 
             std::shared_ptr<const AsyncMap> snapshot = std::atomic_load(&self->m_asyncSnapshot);
-            std::unordered_set<AsyncToken, TokenHash, TokenEqual> seenTokens;
-            if (snapshot) {
-                seenTokens.reserve(snapshot->size());
-            }
 
             std::vector<AsyncCallback> callbacks;
             std::vector<AsyncId> callbackIds;
             size_t readOffset = 0;
             AsyncToken token;
-            while (PopOneAsyncToken(recvBuffer, &readOffset, &token)) {
-                // 消费阶段按token去重，同一轮里相同id/generation最多执行一次。
-                if (!seenTokens.insert(token).second) {
-                    continue;
-                }
-
+            while (PopOneAsyncToken(self->m_recvBuffer, &readOffset, &token)) {
                 if (!snapshot) {
                     continue;
                 }
@@ -258,9 +241,9 @@ void EventAsync::reset(event_base *loop)
             }
 
             if (readOffset > 0) {
-                recvBuffer.erase(
-                    recvBuffer.begin(),
-                    recvBuffer.begin() + static_cast<std::vector<uint8_t>::difference_type>(readOffset));
+                self->m_recvBuffer.erase(
+                    self->m_recvBuffer.begin(),
+                    self->m_recvBuffer.begin() + static_cast<std::vector<uint8_t>::difference_type>(readOffset));
             }
 
             for (size_t i = 0; i < callbacks.size(); ++i) {

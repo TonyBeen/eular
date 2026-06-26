@@ -1,199 +1,283 @@
 /*************************************************************************
     > File Name: test_event_async_perf.cc
-    > Author: Copilot
-    > Brief: EventAsync performance benchmark
+    > Author: Codex
+    > Brief: EventAsync 单通知往返延迟基准
  ************************************************************************/
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <iostream>
+#include <limits>
+#include <memory>
 #include <thread>
 #include <vector>
-#include <unistd.h>
 
-#include <event2/event.h>
 #include <event/async.h>
-#include <event/loop.h>
+#include <event2/event.h>
 
 namespace {
 
-struct Options {
-    uint64_t totalNotify = 1000000;
-    uint32_t producerThreads = 1;
-    uint32_t idPoolSize = 4096;
-    uint32_t drainMs = 2000;
-    uint32_t warmupMs = 200;
-    bool sharedId = false;
+using Clock = std::chrono::steady_clock;
+
+struct Configuration {
+    int         threadCount = 1;
+    std::size_t iterationsPerThread = 100000;
 };
 
-uint64_t ParseU64(const char* s, uint64_t defaultValue)
-{
-    if (s == nullptr || *s == '\0') {
-        return defaultValue;
+// 每个 worker 拥有一个独立的 EventAsync，但都挂在同一个 event_base 上。
+// worker 线程发送一次 notify 后，自旋等待 loop 线程回调确认，然后再进入下一轮。
+struct Worker {
+    explicit Worker(event_base* loopBase) :
+        async(loopBase)
+    {
     }
 
-    char* end = nullptr;
-    unsigned long long v = std::strtoull(s, &end, 10);
-    if (end == s || *end != '\0') {
-        return defaultValue;
+    bool Init()
+    {
+        if (!async.addAsync(kAsyncId, [this](ev::EventAsync::AsyncId) { OnNotify(); })) {
+            return false;
+        }
+
+        return async.start();
     }
-    return static_cast<uint64_t>(v);
-}
 
-Options ParseArgs(int argc, char** argv)
-{
-    Options opt;
+    void OnNotify()
+    {
+        acked.fetch_add(1, std::memory_order_release);
+    }
 
-    for (int i = 1; i < argc; ++i) {
-        const char* arg = argv[i];
-        if (std::strcmp(arg, "--total") == 0 && i + 1 < argc) {
-            opt.totalNotify = ParseU64(argv[++i], opt.totalNotify);
-        } else if (std::strcmp(arg, "--producers") == 0 && i + 1 < argc) {
-            opt.producerThreads = static_cast<uint32_t>(ParseU64(argv[++i], opt.producerThreads));
-        } else if (std::strcmp(arg, "--ids") == 0 && i + 1 < argc) {
-            opt.idPoolSize = static_cast<uint32_t>(ParseU64(argv[++i], opt.idPoolSize));
-        } else if (std::strcmp(arg, "--drain-ms") == 0 && i + 1 < argc) {
-            opt.drainMs = static_cast<uint32_t>(ParseU64(argv[++i], opt.drainMs));
-        } else if (std::strcmp(arg, "--warmup-ms") == 0 && i + 1 < argc) {
-            opt.warmupMs = static_cast<uint32_t>(ParseU64(argv[++i], opt.warmupMs));
-        } else if (std::strcmp(arg, "--shared-id") == 0) {
-            opt.sharedId = true;
-        } else if (std::strcmp(arg, "--help") == 0) {
-            std::cout
-                << "Usage: test_event_async_perf [--total N] [--producers N] [--ids N] [--drain-ms N] [--warmup-ms N] [--shared-id]\n"
-                << "  --total      total notify attempts (default 1000000)\n"
-                << "  --producers  producer thread count (default 1)\n"
-                << "  --ids        async id pool size [1..2^32-1] (default 4096)\n"
-                << "  --drain-ms   post-send drain wait in ms (default 2000)\n"
-                << "  --warmup-ms  wait after all producer threads are ready (default 200)\n"
-                << "  --shared-id  all producers notify the same id to maximize lock contention\n";
-            std::exit(0);
+    void Run()
+    {
+        for (std::size_t i = 0; i < iterations; ++i) {
+            const std::size_t before = acked.load(std::memory_order_acquire);
+            while (!async.notify(kAsyncId)) {
+                if (aborted.load(std::memory_order_acquire)) {
+                    return;
+                }
+                std::this_thread::yield();
+            }
+            sent.fetch_add(1, std::memory_order_release);
+
+            while (acked.load(std::memory_order_acquire) <= before) {
+                if (aborted.load(std::memory_order_acquire)) {
+                    return;
+                }
+                std::this_thread::yield();
+            }
         }
     }
 
-    if (opt.producerThreads == 0) {
-        opt.producerThreads = 1;
+    static constexpr ev::EventAsync::AsyncId kAsyncId = 1;
+
+    ev::EventAsync             async;
+    std::atomic<std::size_t>   acked {0};
+    std::atomic<std::size_t>   sent {0};
+    std::atomic<bool>          aborted {false};
+    std::size_t                iterations = 0;
+};
+
+Configuration ParseArgs(int argc, char** argv)
+{
+    Configuration cfg;
+    if (argc > 1) {
+        cfg.iterationsPerThread = static_cast<std::size_t>(std::strtoull(argv[1], nullptr, 10));
+        if (cfg.iterationsPerThread == 0) {
+            cfg.iterationsPerThread = 100000;
+        }
     }
-    if (opt.idPoolSize == 0) {
-        opt.idPoolSize = 1;
+    return cfg;
+}
+
+double RunBenchmark(const Configuration& cfg)
+{
+    event_base* base = event_base_new();
+    if (base == nullptr) {
+        std::fprintf(stderr, "failed to create event_base\n");
+        return -1.0;
     }
 
-    return opt;
+    std::vector<std::unique_ptr<Worker> > workers;
+    workers.reserve(static_cast<std::size_t>(cfg.threadCount));
+    for (int i = 0; i < cfg.threadCount; ++i) {
+        std::unique_ptr<Worker> worker(new Worker(base));
+        worker->iterations = cfg.iterationsPerThread;
+        if (!worker->Init()) {
+            std::fprintf(stderr, "worker %d init failed\n", i);
+            workers.clear();
+            event_base_free(base);
+            return -1.0;
+        }
+        workers.push_back(std::move(worker));
+    }
+
+    struct WatchdogContext {
+        std::vector<std::unique_ptr<Worker> >* workers = nullptr;
+        std::size_t total = 0;
+        std::size_t lastAcked = std::numeric_limits<std::size_t>::max();
+        int idleTicks = 0;
+        bool timedOut = false;
+        event_base* base = nullptr;
+        event* timer = nullptr;
+    };
+
+    WatchdogContext watchdog;
+    watchdog.workers = &workers;
+    watchdog.total = static_cast<std::size_t>(cfg.threadCount) * cfg.iterationsPerThread;
+    watchdog.base = base;
+
+    timeval oneSecond;
+    oneSecond.tv_sec = 1;
+    oneSecond.tv_usec = 0;
+    watchdog.timer = event_new(base, -1, EV_PERSIST, [](evutil_socket_t, short, void* data) {
+        WatchdogContext* ctx = static_cast<WatchdogContext*>(data);
+        std::size_t totalAcked = 0;
+        std::size_t totalSent = 0;
+        for (std::size_t i = 0; i < ctx->workers->size(); ++i) {
+            totalAcked += (*ctx->workers)[i]->acked.load(std::memory_order_acquire);
+            totalSent += (*ctx->workers)[i]->sent.load(std::memory_order_acquire);
+        }
+
+        if (totalAcked >= ctx->total) {
+            event_base_loopbreak(ctx->base);
+            return;
+        }
+
+        if (ctx->lastAcked == totalAcked) {
+            ++ctx->idleTicks;
+        } else {
+            ctx->lastAcked = totalAcked;
+            ctx->idleTicks = 0;
+        }
+
+        // 异常保护: 正常基准不会走到这里。10秒无任何回调进展时中止, 避免测试永久卡死。
+        if (ctx->idleTicks >= 10) {
+            ctx->timedOut = true;
+            std::fprintf(stderr,
+                         "benchmark stalled: sent=%zu acked=%zu expected=%zu\n",
+                         totalSent,
+                         totalAcked,
+                         ctx->total);
+            for (std::size_t i = 0; i < ctx->workers->size(); ++i) {
+                (*ctx->workers)[i]->aborted.store(true, std::memory_order_release);
+            }
+            event_base_loopbreak(ctx->base);
+        }
+    }, &watchdog);
+    if (watchdog.timer == nullptr || event_add(watchdog.timer, &oneSecond) != 0) {
+        std::fprintf(stderr, "failed to create watchdog timer\n");
+        if (watchdog.timer != nullptr) {
+            event_free(watchdog.timer);
+        }
+        workers.clear();
+        event_base_free(base);
+        return -1.0;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(cfg.threadCount));
+
+    const auto start = Clock::now();
+    for (std::size_t i = 0; i < workers.size(); ++i) {
+        Worker* worker = workers[i].get();
+        threads.emplace_back([worker] { worker->Run(); });
+    }
+
+    const std::size_t total = static_cast<std::size_t>(cfg.threadCount) * cfg.iterationsPerThread;
+    std::size_t totalAcked = 0;
+    while (totalAcked < total) {
+        const int rc = event_base_loop(base, EVLOOP_ONCE);
+        if (rc < 0 || watchdog.timedOut) {
+            break;
+        }
+        totalAcked = 0;
+        for (std::size_t i = 0; i < workers.size(); ++i) {
+            totalAcked += workers[i]->acked.load(std::memory_order_acquire);
+        }
+    }
+
+    for (std::size_t i = 0; i < threads.size(); ++i) {
+        if (threads[i].joinable()) {
+            threads[i].join();
+        }
+    }
+
+    event_del(watchdog.timer);
+    event_free(watchdog.timer);
+
+    if (watchdog.timedOut || totalAcked < total) {
+        // 先销毁 EventAsync, 再释放 event_base; 反过来会触发 event_del/event_free 的 use-after-free。
+        workers.clear();
+        event_base_free(base);
+        return -1.0;
+    }
+
+    const auto end = Clock::now();
+    const std::chrono::duration<double, std::nano> elapsed = end - start;
+
+    const std::size_t totalNotifies =
+        static_cast<std::size_t>(cfg.threadCount) * cfg.iterationsPerThread;
+    const double avgNs = elapsed.count() / static_cast<double>(totalNotifies);
+    const double totalSeconds = elapsed.count() / 1e9;
+    const double tps = static_cast<double>(totalNotifies) / totalSeconds;
+
+    std::printf("| %6d | %14zu | %14.3f | %16.3f | %14.3f |\n",
+                cfg.threadCount,
+                cfg.iterationsPerThread,
+                totalSeconds * 1000.0,
+                avgNs / 1000.0,
+                tps / 1000.0);
+
+    // 先销毁 EventAsync, 再释放 event_base; 反过来会触发 event_del/event_free 的 use-after-free。
+    workers.clear();
+    event_base_free(base);
+    return avgNs;
 }
 
 } // namespace
 
 int main(int argc, char** argv)
 {
-    const Options opt = ParseArgs(argc, argv);
+    const Configuration args = ParseArgs(argc, argv);
 
-    ev::EventLoop::SP loop = std::make_shared<ev::EventLoop>();
-    event_base* base = loop->loop();
-    ev::EventAsync::SP async = std::make_shared<ev::EventAsync>(base);
-    std::atomic<uint64_t> callbackCount(0);
-    std::atomic<uint64_t> notifySuccess(0);
-    std::atomic<uint32_t> readyThreads(0);
-    std::atomic<bool> startFlag(false);
-    std::atomic<bool> loopStop(false);
+    std::printf("EventAsync single-notification latency benchmark\n");
+    std::printf("Compiler: %s\n",
+#if defined(__VERSION__)
+                __VERSION__
+#else
+                "unknown"
+#endif
+                );
+    std::printf("Iterations per thread: %zu\n\n", args.iterationsPerThread);
 
-    for (uint32_t i = 1; i <= opt.idPoolSize; ++i) {
-        async->addAsync(i, [&callbackCount](ev::EventAsync::AsyncId) {
-            callbackCount.fetch_add(1, std::memory_order_relaxed);
-        });
-    }
+    std::printf("+--------+----------------+----------------+------------------+----------------+\n");
+    std::printf("| %6s | %14s | %14s | %16s | %14s |\n",
+                "threads", "iters/thread", "total(ms)", "avg(us)/notify", "k_notifies/s");
+    std::printf("+--------+----------------+----------------+------------------+----------------+\n");
 
-    if (!async->start()) {
-        std::cerr << "start async failed\n";
-        return 2;
-    }
+    const int threadCounts[] = {1, 2, 4, 8, 16, 24, 32};
+    double bestAvg = 1e18;
+    int bestThreads = 0;
 
-    std::thread loopThread([base, &loopStop]() {
-        while (!loopStop.load(std::memory_order_acquire)) {
-            event_base_loop(base, EVLOOP_ONCE | EVLOOP_NONBLOCK);
-            usleep(50);
+    for (std::size_t i = 0; i < sizeof(threadCounts) / sizeof(threadCounts[0]); ++i) {
+        Configuration cfg;
+        cfg.threadCount = threadCounts[i];
+        cfg.iterationsPerThread = args.iterationsPerThread;
+        const double avg = RunBenchmark(cfg);
+        if (avg > 0.0 && avg < bestAvg) {
+            bestAvg = avg;
+            bestThreads = cfg.threadCount;
         }
-    });
-
-    const uint64_t perThread = opt.totalNotify / opt.producerThreads;
-    const uint64_t remainder = opt.totalNotify % opt.producerThreads;
-
-    std::vector<std::thread> producers;
-    producers.reserve(opt.producerThreads);
-
-    for (uint32_t t = 0; t < opt.producerThreads; ++t) {
-        producers.emplace_back([&, t]() {
-            readyThreads.fetch_add(1, std::memory_order_release);
-            while (!startFlag.load(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-
-            const uint64_t localCount = perThread + (t < remainder ? 1 : 0);
-            for (uint64_t i = 0; i < localCount; ++i) {
-                const ev::EventAsync::AsyncId id = opt.sharedId ? 1 :
-                    static_cast<ev::EventAsync::AsyncId>((i + t) % opt.idPoolSize + 1);
-                if (async->notify(id)) {
-                    notifySuccess.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    while (readyThreads.load(std::memory_order_acquire) != opt.producerThreads) {
-        std::this_thread::yield();
+    std::printf("+--------+----------------+----------------+------------------+----------------+\n");
+    if (bestThreads > 0) {
+        std::printf("\nBest avg latency: %.3f us/notify @ %d threads\n",
+                    bestAvg / 1000.0,
+                    bestThreads);
     }
-
-    if (opt.warmupMs > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(opt.warmupMs));
-    }
-
-    const auto t0 = std::chrono::steady_clock::now();
-    startFlag.store(true, std::memory_order_release);
-
-    for (size_t i = 0; i < producers.size(); ++i) {
-        producers[i].join();
-    }
-
-    const auto t1 = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(std::chrono::milliseconds(opt.drainMs));
-    const auto t2 = std::chrono::steady_clock::now();
-
-    loopStop.store(true, std::memory_order_release);
-    loopThread.join();
-
-    const double sendSec = std::chrono::duration_cast<std::chrono::duration<double> >(t1 - t0).count();
-    const double totalSec = std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t0).count();
-
-    const uint64_t ok = notifySuccess.load(std::memory_order_relaxed);
-    const uint64_t cb = callbackCount.load(std::memory_order_relaxed);
-    const uint64_t coalesced = (ok >= cb) ? (ok - cb) : 0;
-    const double coalescedRate = (ok == 0) ? 0.0 : (100.0 * static_cast<double>(coalesced) / static_cast<double>(ok));
-
-    std::cout << "==== EventAsync Perf ====" << std::endl;
-    std::cout << "total_notify_attempts=" << opt.totalNotify << std::endl;
-    std::cout << "producer_threads=" << opt.producerThreads << std::endl;
-    std::cout << "id_pool_size=" << opt.idPoolSize << std::endl;
-        std::cout << "shared_id_mode=" << (opt.sharedId ? 1 : 0) << std::endl;
-    std::cout << "drain_ms=" << opt.drainMs << std::endl;
-        std::cout << "warmup_ms=" << opt.warmupMs << std::endl;
-    std::cout << "notify_success=" << ok << std::endl;
-    std::cout << "callback_count=" << cb << std::endl;
-    std::cout << "coalesced=" << coalesced << std::endl;
-    std::cout << "coalesced_rate_pct=" << coalescedRate << std::endl;
-    std::cout << "send_elapsed_sec=" << sendSec << std::endl;
-    std::cout << "total_elapsed_sec=" << totalSec << std::endl;
-    std::cout << "notify_qps=" << (sendSec > 0.0 ? static_cast<double>(ok) / sendSec : 0.0) << std::endl;
-        std::cout << "avg_notify_ns="
-              << (ok > 0 ? (sendSec * 1000000000.0) / static_cast<double>(ok) : 0.0)
-              << std::endl;
-        std::cout << "notify_qps_per_thread="
-              << (sendSec > 0.0 && opt.producerThreads > 0
-                  ? (static_cast<double>(ok) / sendSec) / static_cast<double>(opt.producerThreads)
-                  : 0.0)
-              << std::endl;
-    std::cout << "callback_qps=" << (totalSec > 0.0 ? static_cast<double>(cb) / totalSec : 0.0) << std::endl;
-
     return 0;
 }

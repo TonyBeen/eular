@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include <event/base.h>
 #include <event/loop.h>
@@ -91,6 +92,7 @@ private:
     std::mutex      m_mapMtx;
     uint32_t        m_nextGeneration = 1;
     std::shared_ptr<const AsyncMap> m_asyncSnapshot;
+    std::vector<uint8_t> m_recvBuffer;
 };
 } // namespace ev
 
