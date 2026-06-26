@@ -40,6 +40,7 @@ set(SOURCES
     src/event_base.cpp
     src/event_loop.cpp
     src/event_poll.cpp
+    src/single_async.cpp
     src/event_timer.cpp)
 
 set(HEADERS
@@ -48,6 +49,7 @@ set(HEADERS
     include/event/base.h
     include/event/loop.h
     include/event/poll.h
+    include/event/single_async.h
     include/event/timer.h)
 
 # libevent
