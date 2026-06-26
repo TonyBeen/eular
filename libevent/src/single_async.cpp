@@ -116,8 +116,19 @@ void SingleAsync::reset(event_base *loop)
             return;
         }
 
-        assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_RECV]));
-        assert(0 == evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_SEND]));
+        // 必须真实执行非阻塞设置, 不能只放在 assert() 中。
+        // Release/NDEBUG 构建会移除 assert 参数求值, 导致 notify()/recv 在高并发下阻塞卡死。
+        int32_t recvNonblock = evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_RECV]);
+        int32_t sendNonblock = evutil_make_socket_nonblocking(m_sockPair[SOCK_PAIR_SEND]);
+        assert(0 == recvNonblock);
+        assert(0 == sendNonblock);
+        if (recvNonblock != 0 || sendNonblock != 0) {
+            evutil_closesocket(m_sockPair[SOCK_PAIR_RECV]);
+            evutil_closesocket(m_sockPair[SOCK_PAIR_SEND]);
+            m_sockPair[SOCK_PAIR_RECV] = -1;
+            m_sockPair[SOCK_PAIR_SEND] = -1;
+            return;
+        }
 
         m_event = event_new(loop, m_sockPair[SOCK_PAIR_RECV], EV_READ | EV_PERSIST, [](evutil_socket_t, short, void *data) {
             auto self = static_cast<SingleAsync *>(data);

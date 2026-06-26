@@ -53,6 +53,15 @@ Options ParseArgs(int argc, char** argv)
             opt.drainMs = static_cast<uint32_t>(ParseU64(argv[++i], opt.drainMs));
         } else if (std::strcmp(arg, "--warmup-ms") == 0 && i + 1 < argc) {
             opt.warmupMs = static_cast<uint32_t>(ParseU64(argv[++i], opt.warmupMs));
+        } else if (std::strcmp(arg, "--help") == 0) {
+            std::cout
+                << "Usage: test_single_async_perf [--total N] [--producers N] "
+                   "[--drain-ms N] [--warmup-ms N]\n"
+                << "  --total      total notify attempts, default 1000000\n"
+                << "  --producers  producer thread count, default 1\n"
+                << "  --drain-ms   wait time after producers finish, only for callback drain stats\n"
+                << "  --warmup-ms  wait after all producer threads are ready, default 200\n";
+            std::exit(0);
         }
     }
 
@@ -85,6 +94,8 @@ int main(int argc, char** argv)
     std::atomic<uint64_t> notifySuccess(0);
     std::atomic<bool> loopStop(false);
 
+    // loop 线程只负责消费通知, 不参与 notify 热路径计时。
+    // 使用 NONBLOCK 保证测试结束时不会卡在 event_base_loop。
     std::thread loopThread([base, &loopStop]() {
         while (!loopStop.load(std::memory_order_acquire)) {
             event_base_loop(base, EVLOOP_ONCE | EVLOOP_NONBLOCK);
@@ -121,6 +132,8 @@ int main(int argc, char** argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(opt.warmupMs));
     }
 
+    // 计时区间只覆盖生产线程执行 notify() 的时间。
+    // callback 可能被聚合或延后消费, 不影响 avg_notify_ns。
     const auto t0 = std::chrono::steady_clock::now();
     startFlag.store(true, std::memory_order_release);
 
@@ -135,21 +148,34 @@ int main(int argc, char** argv)
     async->stop();
     loopStop.store(true, std::memory_order_release);
     loopThread.join();
+    async.reset();
+    loop.reset();
 
     const uint64_t ok = notifySuccess.load(std::memory_order_relaxed);
     const uint64_t cb = callbackCount.load(std::memory_order_relaxed);
+    const uint64_t coalesced = (ok >= cb) ? (ok - cb) : 0;
+    const double coalescedRate = (ok == 0) ? 0.0 :
+        (100.0 * static_cast<double>(coalesced) / static_cast<double>(ok));
     const double sendSec = std::chrono::duration_cast<std::chrono::duration<double> >(t1 - t0).count();
     const double totalSec = std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t0).count();
 
-    std::cout << "==== SingleAsync Perf ====" << std::endl;
+    std::cout << "==== SingleAsync Notify Hotpath Perf ====" << std::endl;
     std::cout << "total_notify_attempts=" << opt.totalNotify << std::endl;
     std::cout << "producer_threads=" << opt.producerThreads << std::endl;
+    std::cout << "drain_ms=" << opt.drainMs << std::endl;
+    std::cout << "warmup_ms=" << opt.warmupMs << std::endl;
     std::cout << "notify_success=" << ok << std::endl;
     std::cout << "callback_count=" << cb << std::endl;
-    std::cout << "coalesced=" << (ok >= cb ? ok - cb : 0) << std::endl;
+    std::cout << "coalesced=" << coalesced << std::endl;
+    std::cout << "coalesced_rate_pct=" << coalescedRate << std::endl;
     std::cout << "send_elapsed_sec=" << sendSec << std::endl;
     std::cout << "total_elapsed_sec=" << totalSec << std::endl;
     std::cout << "notify_qps=" << (sendSec > 0.0 ? static_cast<double>(ok) / sendSec : 0.0) << std::endl;
+    std::cout << "notify_qps_per_thread="
+              << (sendSec > 0.0 && opt.producerThreads > 0
+                  ? (static_cast<double>(ok) / sendSec) / static_cast<double>(opt.producerThreads)
+                  : 0.0)
+              << std::endl;
     std::cout << "avg_notify_ns="
               << (ok > 0 ? (sendSec * 1000000000.0) / static_cast<double>(ok) : 0.0)
               << std::endl;

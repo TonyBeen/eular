@@ -1,76 +1,94 @@
-# Notify Hotpath Perf
+# Notify Hotpath Perf Report
 
-本文档记录 `test_notify_hotpath_perf` 的测试结果，关注点是多线程并发 `notify()` 时的单次平均耗时。
+测试时间：2026-06-26 18:04:51 CST
 
-## 测试目标
+## 测试设备
 
-- 对比 `EventAsync` 与 `SingleAsync` 在多线程竞争下的 `notify()` 热路径开销。
-- 统计口径仅包含生产者线程从开始并发到全部 `notify()` 返回的总时间。
-- 回调执行耗时、业务逻辑耗时不计入结果。
+| 项目 | 值 |
+|---|---|
+| 设备 | Mac mini |
+| 型号 | Mac16,10 |
+| 芯片 | Apple M4 |
+| CPU 核心 | 10 核，4 性能核 + 6 能效核 |
+| 内存 | 16 GB |
+| 系统 | macOS 26.5.1，Build 25F80 |
+| Kernel | Darwin 25.5.0 arm64 |
+| 编译器 | Apple clang 17.0.0 (clang-1700.6.3.2) |
+| 构建目录 | `/Users/eular/VSCode/eular/libevent/build` |
 
-## 测试程序
+## 测试命令
 
-- 可执行文件：`build-review/test/test_notify_hotpath_perf`
-- 源文件：[test_notify_hotpath_perf.cc](/Users/eular/VSCode/eular/libevent/test/test_notify_hotpath_perf.cc)
+构建：
+
+```bash
+cmake --build build --target test_event_async_perf test_single_async_perf -j4
+```
+
+测试并发线程数：
+
+```text
+1 / 2 / 4 / 8 / 16 / 24 / 32
+```
+
+EventAsync：
+
+```bash
+./test/test_event_async_perf --producers <N> --total 4096 --ids 64 --drain-ms 500 --warmup-ms 10
+```
+
+SingleAsync：
+
+```bash
+./test/test_single_async_perf --producers <N> --total 4096 --drain-ms 500 --warmup-ms 10
+```
 
 ## 测试参数
 
-- `rounds=200`
-- `per-round=512`
-- `ids=64`
-- 线程数：`1 / 2 / 4 / 8 / 16 / 24 / 32`
-- 每个线程数重复运行 `5` 次
-- 文档结果采用 `5` 次中的中位数
+| 参数 | 值 |
+|---|---:|
+| 每组总 notify 次数 | 4096 |
+| EventAsync ID 数量 | 64 |
+| warmup | 10 ms |
+| drain | 500 ms |
+| 每个线程数轮次 | 1 |
+| 统计指标 | `avg_notify_ns = send_elapsed_sec * 1e9 / notify_success` |
 
-## 统计口径
+## 测试结果
 
-程序输出中的 `event_async_avg_notify_ns` / `single_async_avg_notify_ns` 定义如下：
+| 并发线程 | EventAsync notify_success | EventAsync callback_count | EventAsync avg_notify_ns | SingleAsync notify_success | SingleAsync callback_count | SingleAsync coalesced_rate_pct | SingleAsync avg_notify_ns |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 4096 | 4096 | 297.292 | 4096 | 13 | 99.6826 | 276.937 |
+| 2 | 4096 | 4096 | 355.560 | 4096 | 20 | 99.5117 | 421.427 |
+| 4 | 4096 | 4096 | 796.488 | 4096 | 46 | 98.8770 | 1036.600 |
+| 8 | 4096 | 4096 | 4432.760 | 4096 | 235 | 94.2627 | 5550.060 |
+| 16 | 4096 | 4096 | 6252.230 | 4096 | 356 | 91.3086 | 8735.110 |
+| 24 | 4096 | 4096 | 6742.270 | 4096 | 316 | 92.2852 | 8964.110 |
+| 32 | 4096 | 4096 | 7236.630 | 4096 | 294 | 92.8223 | 9282.090 |
 
-```text
-avg_notify_ns = 生产者并发阶段总耗时 / notify 成功次数
-```
+## 吞吐数据
 
-因此它表示：
+| 并发线程 | EventAsync notify_qps | EventAsync qps/thread | SingleAsync notify_qps | SingleAsync qps/thread |
+|---:|---:|---:|---:|---:|
+| 1 | 3363700 | 3363700 | 3610930 | 3610930 |
+| 2 | 2812460 | 1406230 | 2372890 | 1186440 |
+| 4 | 1255510 | 313878 | 964691 | 241173 |
+| 8 | 225593 | 28199.1 | 180178 | 22522.3 |
+| 16 | 159943 | 9996.44 | 114481 | 7155.04 |
+| 24 | 148318 | 6179.92 | 111556 | 4648.16 |
+| 32 | 138186 | 4318.31 | 107734 | 3366.7 |
 
-- 多线程竞争下
-- 单次 `notify()` 的平均返回耗时
+## 原始命令输出摘要
 
-不表示：
+EventAsync 在本轮中所有并发下 `callback_count == notify_success == 4096`。
 
-- 回调完成的端到端延迟
-- `recv()` / event loop drain 完成时间
-- 业务回调执行时间
+SingleAsync 是单回调聚合模型，本轮 callback 数如下：
 
-## 中位数结果
-
-| 线程数 | EventAsync(ns) | SingleAsync(ns) | Single / Event |
-|---|---:|---:|---:|
-| 1 | 256.892 | 255.622 | 0.995 |
-| 2 | 313.051 | 310.122 | 0.991 |
-| 4 | 521.614 | 540.698 | 1.037 |
-| 8 | 3181.520 | 3309.720 | 1.040 |
-| 16 | 8867.970 | 8941.820 | 1.008 |
-| 24 | 10310.500 | 10424.300 | 1.011 |
-| 32 | 10855.600 | 10852.800 | 1.000 |
-
-## 结果说明
-
-- `1` 到 `2` 线程时两者几乎没有差异，`SingleAsync` 略快。
-- `4` 到 `24` 线程时，`SingleAsync` 略慢，但差异通常在几个百分点内。
-- `32` 线程时两者几乎重合。
-- 当前实现下，真正的热点主要还是多个线程同时向同一个发送 fd 做 `send()`，而不是 ID 管理逻辑。
-
-## 关于 `per-round=4096`
-
-已尝试补充更大负载的 `per-round=4096` 结果，但当前热路径测试框架在该参数下仍存在收敛问题：
-
-- 该基准虽然只统计 `notify()` 热路径，但底层仍需要后台 drain 通道，避免写端缓冲区打满。
-- 在 `per-round=4096` 下，当前测试框架仍会出现运行时间过长、结果不稳定的问题。
-
-因此本轮文档只记录 `per-round=512` 的稳定数据，不写入未经稳定复现的 `4096` 结果。
-
-后续若需要补充 `4096` 结果，建议：
-
-- 将测试改成固定线程池，避免每轮频繁创建/销毁线程。
-- 将后台 drain 线程与生产者生命周期进一步解耦。
-- 对每个线程数重复多次，仍以中位数汇总。
+| 并发线程 | callback_count | coalesced | coalesced_rate_pct |
+|---:|---:|---:|---:|
+| 1 | 13 | 4083 | 99.6826 |
+| 2 | 20 | 4076 | 99.5117 |
+| 4 | 46 | 4050 | 98.8770 |
+| 8 | 235 | 3861 | 94.2627 |
+| 16 | 356 | 3740 | 91.3086 |
+| 24 | 316 | 3780 | 92.2852 |
+| 32 | 294 | 3802 | 92.8223 |
