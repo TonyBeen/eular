@@ -6,8 +6,10 @@
  ************************************************************************/
 
 #include <assert.h>
+#include <atomic>
 #include <iostream>
 #include <thread>
+#include <chrono>
 
 #include <unistd.h>
 
@@ -21,25 +23,29 @@ int main(int argc, char **argv)
     ev::EventLoop::SP eventLoop = std::make_shared<ev::EventLoop>();
     ev::EventAsync::SP eventAsync = std::make_shared<ev::EventAsync>(eventLoop);
 
-    uint32_t times = 100;
-    uint32_t helloTimes = 0;
-    uint32_t worldTimes = 0;
+    const uint32_t times = 100;
+    std::atomic<uint32_t> helloTimes(0);
+    std::atomic<uint32_t> worldTimes(0);
+    std::atomic<uint32_t> strictTimes(0);
+    std::atomic<uint32_t> strictNewTimes(0);
 
-    const std::string helloKey = "Hello";
-    const std::string worldKey = "World";
+    const ev::EventAsync::AsyncId helloId = 1;
+    const ev::EventAsync::AsyncId worldId = 2;
+    const ev::EventAsync::AsyncId strictId = 3;
 
-    auto cb = [&helloTimes, &worldTimes, &helloKey] (const std::string &key) {
-        if (key == helloKey) {
+    auto cb = [&helloTimes, &worldTimes, helloId] (ev::EventAsync::AsyncId id) {
+        if (id == helloId) {
             ++helloTimes;
         } else {
             ++worldTimes;
         }
-
-        // printf("event async: %s\n", key.c_str());
     };
 
-    eventAsync->addAsync(helloKey, cb);
-    eventAsync->addAsync(worldKey, cb);
+    eventAsync->addAsync(helloId, cb);
+    eventAsync->addAsync(worldId, cb);
+    eventAsync->addAsync(strictId, [&strictTimes](ev::EventAsync::AsyncId) {
+        ++strictTimes;
+    }, ev::EventAsync::AsyncMode::StrictIsolation);
 
     eventAsync->start();
 
@@ -48,9 +54,16 @@ int main(int argc, char **argv)
     });
 
     for (int32_t i = 0; i < times; ++i) {
-        eventAsync->notify(helloKey);
-        eventAsync->notify(worldKey);
+        eventAsync->notify(helloId);
+        eventAsync->notify(worldId);
     }
+
+    // 先投递严格模式通知，再删除旧回调并重新注册。
+    eventAsync->notify(strictId);
+    eventAsync->delAsync(strictId);
+    eventAsync->addAsync(strictId, [&strictNewTimes](ev::EventAsync::AsyncId) {
+        ++strictNewTimes;
+    }, ev::EventAsync::AsyncMode::StrictIsolation);
 
     // 等待回调执行完毕
     sleep(2);
@@ -60,10 +73,14 @@ int main(int argc, char **argv)
     eventLoop->breakLoop();
     th.join();
 
-    printf("hello: %u, world: %u, times = %u\n", helloTimes, worldTimes, times);
+    printf("hello: %u, world: %u, notify_times = %u\n", helloTimes.load(), worldTimes.load(), times);
 
-    assert(helloTimes == times);
-    assert(worldTimes == times);
+    // 同一ID在消费前重复notify会被合并，只回调一次。
+    assert(helloTimes == 1);
+    assert(worldTimes == 1);
+    // 严格隔离模式下，旧通知不能被新注册回调消费。
+    assert(strictTimes == 0);
+    assert(strictNewTimes == 0);
     printf("\033[32m" "SUCCESS" "\033[0m" "\n");
     return 0;
 }

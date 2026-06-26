@@ -7,6 +7,8 @@
 
 #include <thread>
 
+#include <unistd.h>
+
 #include <event/loop.h>
 #include <event/async.h>
 
@@ -17,12 +19,12 @@ int main(int argc, char **argv)
     ev::EventLoop::SP eventLoop = std::make_shared<ev::EventLoop>();
     ev::EventAsync::SP eventAsync = std::make_shared<ev::EventAsync>(eventLoop);
 
-    auto cb = [](const std::string &key) {
-        printf("event async: %s\n", key.c_str());
+    auto cb = [](ev::EventAsync::AsyncId id) {
+        printf("event async id: %u\n", id);
     };
 
-    eventAsync->addAsync("Hello", cb);
-    eventAsync->addAsync("World", cb);
+    eventAsync->addAsync(1, cb);
+    eventAsync->addAsync(2, cb);
 
     eventAsync->start();
 
@@ -30,8 +32,11 @@ int main(int argc, char **argv)
         eventLoop->dispatch();
     });
 
-    eventAsync->notify("Hello");
-    eventAsync->notify("World");
+    eventAsync->notify(1);
+    eventAsync->notify(2);
+
+    sleep(1);
+    eventLoop->breakLoop();
 
     th.join();
     return 0;
