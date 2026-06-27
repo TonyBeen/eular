@@ -13,7 +13,8 @@ set(CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY ON CACHE BOOL "Avoid package registry
 enable_testing()
 
 option(NTRS_BUILD_EXAMPLES "Build NTRS examples" ON)
-option(BUILD_SHARED_LIBS "Build shared library" OFF)
+option(NTRS_BUILD_STATIC "Build static NTRS library" ON)
+option(NTRS_BUILD_SHARED "Build shared NTRS library" ON)
 option(NTRS_STATIC_EXECUTABLES "Link ntrs_hub/ntrs_node as static executables when possible." OFF)
 set(NTRS_EVENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libevent" CACHE PATH "Path to the sibling libevent wrapper project.")
 set(NTRS_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to the sibling utils project.")
@@ -21,6 +22,8 @@ set(NTRS_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to t
 set(CMAKE_CXX_STANDARD 11)
 
 find_package(Threads REQUIRED)
+
+option(NTRS_BUILD_TESTS "Build NTRS tests" ON)
 
 if(NOT EXISTS "${NTRS_EVENT_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "libevent wrapper project not found: ${NTRS_EVENT_ROOT}")
@@ -55,19 +58,9 @@ set(NTRS_SOURCES
     src/socket_address.cpp
 )
 
-if(BUILD_SHARED_LIBS)
-    add_library(${PROJECT_NAME} SHARED ${NTRS_SOURCES})
-else()
-    add_library(${PROJECT_NAME} STATIC ${NTRS_SOURCES})
+if(NOT NTRS_BUILD_STATIC AND NOT NTRS_BUILD_SHARED)
+    message(FATAL_ERROR "At least one of NTRS_BUILD_STATIC or NTRS_BUILD_SHARED must be ON.")
 endif()
-add_library(eular::ntrs ALIAS ${PROJECT_NAME})
-target_compile_options(${PROJECT_NAME} PRIVATE ${NTRS_PRIVATE_COMPILE_OPTIONS})
-
-target_include_directories(${PROJECT_NAME} PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${NTRS_UTILS_ROOT}/include>
-    $<INSTALL_INTERFACE:include>
-)
 
 set(EVENT_SUBMODULE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(EVENT_STATIC_LIB ON CACHE BOOL "" FORCE)
@@ -84,18 +77,51 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NTRS_MUSL_STATIC)
 endif()
 add_subdirectory("${NTRS_EVENT_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent")
 
-target_link_libraries(${PROJECT_NAME} PUBLIC
-    event_wrapper_static
-    Threads::Threads
-)
-if(BUILD_SHARED_LIBS)
-    target_link_libraries(${PROJECT_NAME} PRIVATE utils)
-else()
-    target_link_libraries(${PROJECT_NAME} PRIVATE)
+function(ntrs_configure_library target)
+    target_compile_options(${target} PRIVATE ${NTRS_PRIVATE_COMPILE_OPTIONS})
+    set_target_properties(${target} PROPERTIES
+        OUTPUT_NAME ntrs
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    target_include_directories(${target} PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${NTRS_UTILS_ROOT}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(${target} PUBLIC
+        event_wrapper_static
+        Threads::Threads
+    )
+endfunction()
+
+if(NTRS_BUILD_STATIC)
+    add_library(ntrs_static STATIC ${NTRS_SOURCES})
+    ntrs_configure_library(ntrs_static)
+endif()
+
+if(NTRS_BUILD_SHARED)
+    add_library(ntrs_shared SHARED ${NTRS_SOURCES})
+    ntrs_configure_library(ntrs_shared)
+    target_compile_definitions(ntrs_shared PRIVATE NTRS_BUILD_SHARED NTRS_EXPORTS)
+    target_compile_definitions(ntrs_shared INTERFACE NTRS_BUILD_SHARED)
+    target_link_libraries(ntrs_shared PRIVATE utils)
+endif()
+
+if(NTRS_BUILD_STATIC)
+    add_library(eular::ntrs ALIAS ntrs_static)
+elseif(NTRS_BUILD_SHARED)
+    add_library(eular::ntrs ALIAS ntrs_shared)
 endif()
 
 if(NTRS_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-add_subdirectory(test)
+if(NTRS_BUILD_TESTS)
+    add_subdirectory(test)
+endif()

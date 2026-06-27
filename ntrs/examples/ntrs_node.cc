@@ -1,12 +1,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
-#include <ntrs_auth.h>
-#include <ntrs_binary_protocol.h>
-#include <ntrs_client.h>
-#include <ntrs_codec.h>
-#include <ntrs_io.h>
-#include <socket_address.h>
+#include <ntrs/auth.h>
+#include <ntrs/binary_protocol.h>
+#include <ntrs/ntrs.h>
+#include <ntrs/codec.h>
+#include <ntrs/io.h>
+#include <ntrs/probe_types.h>
+#include <ntrs/socket_address.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -75,10 +76,6 @@ struct PeerSession {
     std::string               srflx_ip_2;
     uint16_t                  srflx_port_2;
     ntrs_nat_class_t          nat_class;
-    ntrs_nat_flags_t          nat_flags;
-    ntrs_mapping_behavior_t   mapping_behavior;
-    ntrs_filtering_behavior_t filtering_behavior;
-    std::string               nat_type;
     int                       fd;
     time_t                    expire_at;
 };
@@ -139,6 +136,10 @@ static uint32_t NatStrictnessScore(ntrs_nat_class_t nat_class)
         return 4;
     case NTRS_NAT_CLASS_SYMMETRIC:
         return 5;
+    case NTRS_NAT_CLASS_SYMMETRIC_MULTI_LINE:
+        return 6;
+    case NTRS_NAT_CLASS_UDP_BLOCKED:
+        return 7;
     default:
         return 0;
     }
@@ -2655,22 +2656,15 @@ int main(int argc, char** argv)
                     s.srflx_ip_2 = MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2);
                     s.srflx_port_2 = MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2);
                     s.nat_class = MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN);
-                    s.nat_flags = MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE);
-                    s.mapping_behavior =
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN);
-                    s.filtering_behavior =
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN);
-                    s.nat_type = MsgStrTag(msg, eular::ntrs::FieldTag::NAT_TYPE);
                     s.fd = fd;
                     s.expire_at = time(NULL) + kLeaseSec;
                     peer_key = MakePeerKey(peer_id, device_id);
                     peers[peer_key] = s;
 
                     printf(
-                        "REGISTER peer=%s device=%s local=%s srflx=%s srflx2=%s stable=%s risk=%s class=%u "
-                        "flags=0x%04x mapping=%u filtering=%u type=%s "
+                        "REGISTER peer=%s device=%s local=%s srflx=%s srflx2=%s class=%u "
                         "probe1_ok=%s probe2_ok=%s probe1_rtt_ms=%d probe2_rtt_ms=%d rounds=%u p1succ=%u p2succ=%u "
-                        "p1distinct=%u p2distinct=%u f_same_ip_port=%s f_diff_ip=%s\n",
+                        "p1distinct=%u p2distinct=%u\n",
                         peer_id.c_str(), device_id.c_str(),
                         FormatEndpoint(MsgStrTag(msg, eular::ntrs::FieldTag::LOCAL_IP),
                                        MsgU16Tag(msg, eular::ntrs::FieldTag::LOCAL_PORT)).c_str(),
@@ -2678,13 +2672,7 @@ int main(int argc, char** argv)
                                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT)).c_str(),
                         FormatEndpoint(MsgStrTag(msg, eular::ntrs::FieldTag::SRFLX_IP_2),
                                        MsgU16Tag(msg, eular::ntrs::FieldTag::SRFLX_PORT_2)).c_str(),
-                        MsgBoolTag(msg, eular::ntrs::FieldTag::MAPPING_STABLE) ? "true" : "false",
-                        MsgStrTag(msg, eular::ntrs::FieldTag::NAT_RISK),
                         MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::NAT_FLAGS, NTRS_NAT_FLAG_NONE),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN),
-                        MsgU16Tag(msg, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN),
-                        MsgStrTag(msg, eular::ntrs::FieldTag::NAT_TYPE),
                         MsgBoolTag(msg, eular::ntrs::FieldTag::PROBE1_OK) ? "true" : "false",
                         MsgBoolTag(msg, eular::ntrs::FieldTag::PROBE2_OK) ? "true" : "false",
                         MsgI32Tag(msg, eular::ntrs::FieldTag::PROBE1_RTT_MS),
@@ -2693,9 +2681,7 @@ int main(int argc, char** argv)
                         MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE1_SUCCESS_COUNT),
                         MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE2_SUCCESS_COUNT),
                         MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE1_DISTINCT_MAPPINGS),
-                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS),
-                        MsgBoolTag(msg, eular::ntrs::FieldTag::FILTER_SAME_IP_DIFF_PORT_RX) ? "true" : "false",
-                        MsgBoolTag(msg, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX) ? "true" : "false");
+                        MsgU32Tag(msg, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS));
 
                     eular::ntrs::Message rsp;
                     eular::ntrs::MessageInit(&rsp, eular::ntrs::MessageType::REGISTER_RSP, msg.request_id);
@@ -2833,14 +2819,6 @@ int main(int argc, char** argv)
                                                     dst_it->second.srflx_port_2);
                     eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_CLASS,
                                                     dst_it->second.nat_class);
-                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
-                                                    dst_it->second.nat_flags);
-                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
-                                                    dst_it->second.mapping_behavior);
-                    eular::ntrs::MessageAddU16ByTag(&rsp, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
-                                                    dst_it->second.filtering_behavior);
-                    eular::ntrs::MessageAddStringByTag(&rsp, eular::ntrs::FieldTag::PEER_NAT_TYPE,
-                                                       dst_it->second.nat_type.c_str());
                     SendMessage(fd, rsp);
 
                     eular::ntrs::Message notify;
@@ -2876,14 +2854,6 @@ int main(int argc, char** argv)
                                                     src_it->second.srflx_port_2);
                     eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_CLASS,
                                                     src_it->second.nat_class);
-                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_FLAGS,
-                                                    src_it->second.nat_flags);
-                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR,
-                                                    src_it->second.mapping_behavior);
-                    eular::ntrs::MessageAddU16ByTag(&notify, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR,
-                                                    src_it->second.filtering_behavior);
-                    eular::ntrs::MessageAddStringByTag(&notify, eular::ntrs::FieldTag::PEER_NAT_TYPE,
-                                                       src_it->second.nat_type.c_str());
                     SendMessage(dst_it->second.fd, notify);
                     break;
                 }

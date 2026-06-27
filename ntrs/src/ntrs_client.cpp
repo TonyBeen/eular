@@ -1,9 +1,10 @@
 #include <netdb.h>
-#include <ntrs_binary_protocol.h>
-#include <ntrs_client.h>
-#include <ntrs_codec.h>
-#include <ntrs_io.h>
-#include <socket_address.h>
+#include <ntrs/binary_protocol.h>
+#include <ntrs/ntrs.h>
+#include <ntrs/codec.h>
+#include <ntrs/io.h>
+#include <ntrs/probe_types.h>
+#include <ntrs/socket_address.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +84,22 @@ static bool SocketErrConnectRetriable(int err)
 #endif
 }
 
+enum NatMappingBehavior {
+    NAT_MAPPING_UNKNOWN = 0,
+    NAT_MAPPING_ENDPOINT_INDEPENDENT = 1,
+    NAT_MAPPING_ADDRESS_DEPENDENT = 2,
+    NAT_MAPPING_ADDRESS_AND_PORT_DEPENDENT = 3,
+    NAT_MAPPING_UNSTABLE = 4,
+};
+
+enum NatFilteringBehavior {
+    NAT_FILTERING_UNKNOWN = 0,
+    NAT_FILTERING_ENDPOINT_INDEPENDENT = 1,
+    NAT_FILTERING_ADDRESS_DEPENDENT = 2,
+    NAT_FILTERING_ADDRESS_AND_PORT_DEPENDENT = 3,
+    NAT_FILTERING_BLOCKED = 4,
+};
+
 struct NatSample {
     std::string               local_ip;
     uint16_t                  local_port;
@@ -102,10 +119,8 @@ struct NatSample {
     int32_t                   probe1_distinct_mappings;
     int32_t                   probe2_distinct_mappings;
     ntrs_nat_class_t          nat_class;
-    ntrs_nat_flags_t          nat_flags;
-    ntrs_mapping_behavior_t   mapping_behavior;
-    ntrs_filtering_behavior_t filtering_behavior;
-    std::string               nat_type;
+    NatMappingBehavior        mapping_behavior;
+    NatFilteringBehavior      filtering_behavior;
     bool                      filter_probe_executed;
     bool                      filter_same_ip_diff_port_rx;
     bool                      filter_diff_ip_rx;
@@ -202,26 +217,6 @@ static bool IsPublicIpv4(const std::string& ip)
         return false;
     }
     return true;
-}
-
-static const char* NatClassName(ntrs_nat_class_t nat_class)
-{
-    switch (nat_class) {
-    case NTRS_NAT_CLASS_OPEN_PUBLIC:
-        return "open_public";
-    case NTRS_NAT_CLASS_FULL_CONE:
-        return "full_cone_nat";
-    case NTRS_NAT_CLASS_IP_RESTRICTED:
-        return "ip_restricted_nat";
-    case NTRS_NAT_CLASS_PORT_RESTRICTED:
-        return "port_restricted_nat";
-    case NTRS_NAT_CLASS_SYMMETRIC:
-        return "symmetric_nat";
-    case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
-        return "open_public_with_firewall";
-    default:
-        return "unknown";
-    }
 }
 
 static void CopyText(char* dst, size_t dst_len, const std::string& src)
@@ -331,37 +326,28 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
     }
 
     nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
-    nat->nat_flags = NTRS_NAT_FLAG_NONE;
-    nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
-    nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+    nat->mapping_behavior = NAT_MAPPING_UNKNOWN;
+    nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
 
     ipv6_sample = IsIpv6Text(nat->local_ip) || IsIpv6Text(nat->srflx_ip) || IsIpv6Text(nat->srflx_ip_2);
     if (ipv6_sample) {
         if (!nat->probe1_ok) {
             nat->mapping_stable = false;
             nat->nat_risk = "high";
-            nat->nat_flags |= NTRS_NAT_FLAG_UDP_BLOCKED | NTRS_NAT_FLAG_PROBE_DEGRADED;
-            nat->filtering_behavior = NTRS_FILTERING_BLOCKED;
-            nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
-            nat->nat_type = NatClassName(nat->nat_class);
+            nat->filtering_behavior = NAT_FILTERING_BLOCKED;
+            nat->nat_class = NTRS_NAT_CLASS_UDP_BLOCKED;
             return;
         }
 
         nat->mapping_stable = true;
-        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
-        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->mapping_behavior = NAT_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
         nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC;
         nat->nat_risk = "medium";
-        nat->nat_type = NatClassName(nat->nat_class);
         if (nat->filter_probe_executed && !nat->filter_same_ip_diff_port_rx && !nat->filter_diff_ip_rx) {
-            nat->filtering_behavior = NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
+            nat->filtering_behavior = NAT_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
             nat->nat_risk = "high";
             nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL;
-            nat->nat_type = NatClassName(nat->nat_class);
-        }
-        if (nat->probe1_success_count < nat->probe_rounds ||
-            (has_probe2 && nat->probe2_success_count < nat->probe_rounds)) {
-            nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
         }
         return;
     }
@@ -371,102 +357,81 @@ static void EvaluateNatResult(NatSample* nat, bool has_probe2)
     unstable_mapping = nat->probe1_distinct_mappings > 1 || nat->probe2_distinct_mappings > 1;
     filter_probe_has_evidence = nat->filter_same_ip_diff_port_rx || nat->filter_diff_ip_rx;
 
-    if (local_public && nat->local_ip == nat->srflx_ip && nat->local_port == nat->srflx_port) {
-        nat->nat_flags |= NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC;
-    }
-    if (nat->probe2_ok && nat->srflx_ip != nat->srflx_ip_2 && IsIpv4Text(nat->srflx_ip) &&
-        IsIpv4Text(nat->srflx_ip_2)) {
-        nat->nat_flags |= NTRS_NAT_FLAG_MULTI_EXTERNAL_IP;
-    }
-
     if (!nat->probe1_ok) {
         nat->mapping_stable = false;
         nat->nat_risk = "high";
-        nat->nat_flags |= NTRS_NAT_FLAG_UDP_BLOCKED | NTRS_NAT_FLAG_PROBE_DEGRADED;
-        nat->filtering_behavior = NTRS_FILTERING_BLOCKED;
-        nat->nat_type = NatClassName(nat->nat_class);
+        nat->filtering_behavior = NAT_FILTERING_BLOCKED;
+        nat->nat_class = NTRS_NAT_CLASS_UDP_BLOCKED;
         return;
     }
 
     if (!has_probe2) {
         nat->mapping_stable = true;
-        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
-        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
-        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->mapping_behavior = NAT_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
         nat->nat_class = local_public ? NTRS_NAT_CLASS_OPEN_PUBLIC : NTRS_NAT_CLASS_UNKNOWN;
         nat->nat_risk = local_public ? "medium" : "high";
-        nat->nat_type = NatClassName(nat->nat_class);
         return;
     }
 
     if (!nat->probe2_ok) {
         nat->mapping_stable = false;
-        nat->nat_flags |= NTRS_NAT_FLAG_MAPPING_UNSTABLE;
-        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
-        nat->mapping_behavior = NTRS_MAPPING_UNKNOWN;
-        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->mapping_behavior = NAT_MAPPING_UNKNOWN;
+        nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
         nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
         nat->nat_risk = "high";
-        nat->nat_type = NatClassName(nat->nat_class);
         return;
     }
 
     nat->mapping_stable = same_mapping;
-    if (!nat->mapping_stable || unstable_mapping) {
-        nat->nat_flags |= NTRS_NAT_FLAG_MAPPING_UNSTABLE;
-    }
 
     if (unstable_mapping) {
-        nat->mapping_behavior = NTRS_MAPPING_UNSTABLE;
+        nat->mapping_behavior = NAT_MAPPING_UNSTABLE;
     } else if (same_mapping) {
-        nat->mapping_behavior = NTRS_MAPPING_ENDPOINT_INDEPENDENT;
+        nat->mapping_behavior = NAT_MAPPING_ENDPOINT_INDEPENDENT;
     } else {
-        nat->mapping_behavior = NTRS_MAPPING_ADDRESS_DEPENDENT;
+        nat->mapping_behavior = NAT_MAPPING_ADDRESS_DEPENDENT;
     }
 
     if (!same_mapping || unstable_mapping) {
-        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
+        nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
     } else if (nat->filter_same_ip_diff_port_rx && nat->filter_diff_ip_rx) {
-        nat->filtering_behavior = NTRS_FILTERING_ENDPOINT_INDEPENDENT;
+        nat->filtering_behavior = NAT_FILTERING_ENDPOINT_INDEPENDENT;
     } else if (nat->filter_same_ip_diff_port_rx && !nat->filter_diff_ip_rx) {
-        nat->filtering_behavior = NTRS_FILTERING_ADDRESS_DEPENDENT;
+        nat->filtering_behavior = NAT_FILTERING_ADDRESS_DEPENDENT;
     } else if (nat->filter_probe_executed && !filter_probe_has_evidence) {
-        nat->filtering_behavior = NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
+        nat->filtering_behavior = NAT_FILTERING_ADDRESS_AND_PORT_DEPENDENT;
     } else {
-        nat->filtering_behavior = NTRS_FILTERING_UNKNOWN;
-        if (nat->filter_probe_executed) {
-            nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
-        }
+        nat->filtering_behavior = NAT_FILTERING_UNKNOWN;
     }
 
-    if (local_public && nat->local_ip == nat->srflx_ip && nat->local_port == nat->srflx_port &&
-        nat->mapping_behavior == NTRS_MAPPING_ENDPOINT_INDEPENDENT && !unstable_mapping) {
+    if ((nat->probe2_ok && nat->srflx_ip != nat->srflx_ip_2 && IsIpv4Text(nat->srflx_ip) &&
+         IsIpv4Text(nat->srflx_ip_2)) ||
+        unstable_mapping) {
+        nat->nat_risk = "high";
+        nat->nat_class = NTRS_NAT_CLASS_SYMMETRIC_MULTI_LINE;
+    } else if (local_public && nat->local_ip == nat->srflx_ip && nat->local_port == nat->srflx_port &&
+        nat->mapping_behavior == NAT_MAPPING_ENDPOINT_INDEPENDENT && !unstable_mapping) {
         nat->nat_risk = "low";
         nat->nat_class = NTRS_NAT_CLASS_OPEN_PUBLIC;
-    } else if (nat->mapping_behavior == NTRS_MAPPING_UNSTABLE ||
-               nat->mapping_behavior == NTRS_MAPPING_ADDRESS_DEPENDENT ||
-               nat->mapping_behavior == NTRS_MAPPING_ADDRESS_AND_PORT_DEPENDENT) {
+    } else if (nat->mapping_behavior == NAT_MAPPING_UNSTABLE ||
+               nat->mapping_behavior == NAT_MAPPING_ADDRESS_DEPENDENT ||
+               nat->mapping_behavior == NAT_MAPPING_ADDRESS_AND_PORT_DEPENDENT) {
         nat->nat_risk = "high";
         nat->nat_class = NTRS_NAT_CLASS_SYMMETRIC;
-    } else if (nat->filtering_behavior == NTRS_FILTERING_ENDPOINT_INDEPENDENT) {
+    } else if (nat->filtering_behavior == NAT_FILTERING_ENDPOINT_INDEPENDENT) {
         nat->nat_risk = "low";
         nat->nat_class = NTRS_NAT_CLASS_FULL_CONE;
-    } else if (nat->filtering_behavior == NTRS_FILTERING_ADDRESS_DEPENDENT) {
+    } else if (nat->filtering_behavior == NAT_FILTERING_ADDRESS_DEPENDENT) {
         nat->nat_risk = "medium";
         nat->nat_class = NTRS_NAT_CLASS_IP_RESTRICTED;
-    } else if (nat->filtering_behavior == NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT) {
+    } else if (nat->filtering_behavior == NAT_FILTERING_ADDRESS_AND_PORT_DEPENDENT) {
         nat->nat_risk = "high";
         nat->nat_class = NTRS_NAT_CLASS_PORT_RESTRICTED;
     } else {
         nat->nat_risk = "high";
         nat->nat_class = NTRS_NAT_CLASS_UNKNOWN;
     }
-
-    if (nat->probe1_success_count < nat->probe_rounds || (has_probe2 && nat->probe2_success_count < nat->probe_rounds)) {
-        nat->nat_flags |= NTRS_NAT_FLAG_PROBE_DEGRADED;
-    }
-
-    nat->nat_type = NatClassName(nat->nat_class);
 }
 
 static void FillNatInfo(ntrs_nat_info_t* out, const NatSample& sample)
@@ -481,8 +446,6 @@ static void FillNatInfo(ntrs_nat_info_t* out, const NatSample& sample)
     out->srflx_port = sample.srflx_port;
     CopyText(out->srflx_ip_2, sizeof(out->srflx_ip_2), sample.srflx_ip_2);
     out->srflx_port_2 = sample.srflx_port_2;
-    out->mapping_stable = sample.mapping_stable;
-    CopyText(out->nat_risk, sizeof(out->nat_risk), sample.nat_risk);
     out->probe1_ok = sample.probe1_ok;
     out->probe2_ok = sample.probe2_ok;
     out->probe1_rtt_ms = sample.probe1_rtt_ms;
@@ -493,12 +456,6 @@ static void FillNatInfo(ntrs_nat_info_t* out, const NatSample& sample)
     out->probe1_distinct_mappings = sample.probe1_distinct_mappings;
     out->probe2_distinct_mappings = sample.probe2_distinct_mappings;
     out->nat_class = sample.nat_class;
-    out->nat_flags = sample.nat_flags;
-    out->mapping_behavior = sample.mapping_behavior;
-    out->filtering_behavior = sample.filtering_behavior;
-    CopyText(out->nat_type, sizeof(out->nat_type), sample.nat_type);
-    out->filter_same_ip_diff_port_rx = sample.filter_same_ip_diff_port_rx;
-    out->filter_diff_ip_rx = sample.filter_diff_ip_rx;
 }
 
 static bool ParseSessionSignalImpl(const eular::ntrs::Message& msg, ntrs_session_signal_t* out)
@@ -521,14 +478,6 @@ static bool ParseSessionSignalImpl(const eular::ntrs::Message& msg, ntrs_session
               eular::ntrs::MessageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_DEVICE_ID));
     out->peer_nat_class =
         MsgU16Tag(msg, eular::ntrs::FieldTag::PEER_NAT_CLASS, NTRS_NAT_CLASS_UNKNOWN);
-    out->peer_nat_flags =
-        MsgU16Tag(msg, eular::ntrs::FieldTag::PEER_NAT_FLAGS, NTRS_NAT_FLAG_NONE);
-    out->peer_mapping_behavior =
-        MsgU16Tag(msg, eular::ntrs::FieldTag::PEER_MAPPING_BEHAVIOR, NTRS_MAPPING_UNKNOWN);
-    out->peer_filtering_behavior =
-        MsgU16Tag(msg, eular::ntrs::FieldTag::PEER_FILTERING_BEHAVIOR, NTRS_FILTERING_UNKNOWN);
-    CopyText(out->peer_nat_type, sizeof(out->peer_nat_type),
-              eular::ntrs::MessageGetStringByTag(&msg, eular::ntrs::FieldTag::PEER_NAT_TYPE));
     CopyText(out->session_id, sizeof(out->session_id),
               eular::ntrs::MessageGetStringByTag(&msg, eular::ntrs::FieldTag::SESSION_ID));
     CopyText(out->peer_session_token, sizeof(out->peer_session_token),
@@ -1249,10 +1198,8 @@ static void InitAsyncNatSample(AsyncRequest* request)
     request->nat_sample.srflx_ip_2 = "0.0.0.0";
     request->nat_sample.nat_risk = "high";
     request->nat_sample.nat_class = NTRS_NAT_CLASS_UNKNOWN;
-    request->nat_sample.nat_flags = NTRS_NAT_FLAG_NONE;
-    request->nat_sample.mapping_behavior = NTRS_MAPPING_UNKNOWN;
-    request->nat_sample.filtering_behavior = NTRS_FILTERING_UNKNOWN;
-    request->nat_sample.nat_type = "unknown";
+    request->nat_sample.mapping_behavior = NAT_MAPPING_UNKNOWN;
+    request->nat_sample.filtering_behavior = NAT_FILTERING_UNKNOWN;
     request->nat_sample.probe1_rtt_ms = -1;
     request->nat_sample.probe2_rtt_ms = -1;
     request->nat_sample.probe_rounds = request->probe_success_target;
@@ -1405,14 +1352,13 @@ static void FinishAsyncNatDetection(AsyncRequest* request)
 
     NatProbeLog(
         request,
-        "nat probe finish local=%s srflx1=%s srflx2=%s mapping=%u filter=%u flags=0x%04x class=%u "
+        "nat probe finish local=%s srflx1=%s srflx2=%s mapping=%u filter=%u class=%u "
         "rounds=%d p1=%d p2=%d p1_map=%d p2_map=%d\n",
         FormatEndpointText(request->nat_sample.local_ip, request->nat_sample.local_port).c_str(),
         FormatEndpointText(request->nat_sample.srflx_ip, request->nat_sample.srflx_port).c_str(),
         FormatEndpointText(request->nat_sample.srflx_ip_2, request->nat_sample.srflx_port_2).c_str(),
         (unsigned)request->nat_sample.mapping_behavior, (unsigned)request->nat_sample.filtering_behavior,
-        (unsigned)request->nat_sample.nat_flags, (unsigned)request->nat_sample.nat_class,
-        request->nat_sample.probe_rounds, request->nat_sample.probe1_success_count,
+        (unsigned)request->nat_sample.nat_class, request->nat_sample.probe_rounds, request->nat_sample.probe1_success_count,
         request->nat_sample.probe2_success_count, request->nat_sample.probe1_distinct_mappings,
         request->nat_sample.probe2_distinct_mappings);
 
@@ -2388,11 +2334,6 @@ void ntrs_nat_info_init(ntrs_nat_info_t* info)
     CopyText(info->srflx_ip, sizeof(info->srflx_ip), "0.0.0.0");
     CopyText(info->srflx_ip_2, sizeof(info->srflx_ip_2), "0.0.0.0");
     info->nat_class = NTRS_NAT_CLASS_UNKNOWN;
-    info->nat_flags = NTRS_NAT_FLAG_NONE;
-    info->mapping_behavior = NTRS_MAPPING_UNKNOWN;
-    info->filtering_behavior = NTRS_FILTERING_UNKNOWN;
-    CopyText(info->nat_risk, sizeof(info->nat_risk), "high");
-    CopyText(info->nat_type, sizeof(info->nat_type), "unknown");
     info->probe1_rtt_ms = -1;
     info->probe2_rtt_ms = -1;
     info->probe_rounds = 3;
@@ -2516,8 +2457,6 @@ bool ntrs_register_peer(int32_t control_fd, const char* peer_id, const char* dev
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::SRFLX_PORT, nat->srflx_port);
     eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::SRFLX_IP_2, nat->srflx_ip_2);
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::SRFLX_PORT_2, nat->srflx_port_2);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::MAPPING_STABLE, nat->mapping_stable);
-    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::NAT_RISK, nat->nat_risk);
     eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::PROBE1_OK, nat->probe1_ok);
     eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::PROBE2_OK, nat->probe2_ok);
     eular::ntrs::MessageAddI32ByTag(&req, eular::ntrs::FieldTag::PROBE1_RTT_MS, nat->probe1_rtt_ms);
@@ -2532,13 +2471,6 @@ bool ntrs_register_peer(int32_t control_fd, const char* peer_id, const char* dev
     eular::ntrs::MessageAddU32ByTag(&req, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS,
                                     (uint32_t)nat->probe2_distinct_mappings);
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::NAT_CLASS, nat->nat_class);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::NAT_FLAGS, nat->nat_flags);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::MAPPING_BEHAVIOR, nat->mapping_behavior);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::FILTERING_BEHAVIOR, nat->filtering_behavior);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::FILTER_SAME_IP_DIFF_PORT_RX,
-                                     nat->filter_same_ip_diff_port_rx);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX, nat->filter_diff_ip_rx);
-    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::NAT_TYPE, nat->nat_type);
 
     if (!SendMessage(control_fd, req) || !RecvMessage(control_fd, &rsp)) {
         return false;
@@ -2810,8 +2742,6 @@ bool ntrs_async_register_peer(ntrs_async_client_t* client, uint64_t* request_id,
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::SRFLX_PORT, effective_nat->srflx_port);
     eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::SRFLX_IP_2, effective_nat->srflx_ip_2);
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::SRFLX_PORT_2, effective_nat->srflx_port_2);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::MAPPING_STABLE, effective_nat->mapping_stable);
-    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::NAT_RISK, effective_nat->nat_risk);
     eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::PROBE1_OK, effective_nat->probe1_ok);
     eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::PROBE2_OK, effective_nat->probe2_ok);
     eular::ntrs::MessageAddI32ByTag(&req, eular::ntrs::FieldTag::PROBE1_RTT_MS, effective_nat->probe1_rtt_ms);
@@ -2827,16 +2757,6 @@ bool ntrs_async_register_peer(ntrs_async_client_t* client, uint64_t* request_id,
     eular::ntrs::MessageAddU32ByTag(&req, eular::ntrs::FieldTag::PROBE2_DISTINCT_MAPPINGS,
                                     (uint32_t)effective_nat->probe2_distinct_mappings);
     eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::NAT_CLASS, effective_nat->nat_class);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::NAT_FLAGS, effective_nat->nat_flags);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::MAPPING_BEHAVIOR,
-                                    effective_nat->mapping_behavior);
-    eular::ntrs::MessageAddU16ByTag(&req, eular::ntrs::FieldTag::FILTERING_BEHAVIOR,
-                                    effective_nat->filtering_behavior);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::FILTER_SAME_IP_DIFF_PORT_RX,
-                                     effective_nat->filter_same_ip_diff_port_rx);
-    eular::ntrs::MessageAddBoolByTag(&req, eular::ntrs::FieldTag::FILTER_DIFF_IP_RX,
-                                     effective_nat->filter_diff_ip_rx);
-    eular::ntrs::MessageAddStringByTag(&req, eular::ntrs::FieldTag::NAT_TYPE, effective_nat->nat_type);
     return SubmitAsyncMessageRequest(impl, control_fd, NTRS_ASYNC_REGISTER_PEER, &req, true, kControlIoTimeoutMs,
                                         callback, user_data, request_id);
 }

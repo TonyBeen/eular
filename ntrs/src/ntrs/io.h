@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include <ntrs_codec.h>
+#include <ntrs/codec.h>
 
 namespace eular {
 namespace ntrs {

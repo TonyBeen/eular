@@ -1,9 +1,9 @@
 #define CATCH_CONFIG_MAIN
-#include <ntrs_auth.h>
-#include <ntrs_binary_protocol.h>
-#include <ntrs_client.h>
-#include <ntrs_codec.h>
-#include <ntrs_hub_state.h>
+#include <ntrs/auth.h>
+#include <ntrs/binary_protocol.h>
+#include <ntrs/ntrs.h>
+#include <ntrs/codec.h>
+#include <ntrs/hub_state.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>

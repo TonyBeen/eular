@@ -1,5 +1,5 @@
-#include <ntrs_client.h>
-#include <ntrs_binary_protocol.h>
+#include <ntrs/ntrs.h>
+#include <ntrs/binary_protocol.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1034,10 +1034,9 @@ static void TryHolePunchFromAsyncSignal(ntrs_async_client_t* client, event_base*
         return;
     }
 
-    printf("Session signal(%s): peer=%s device=%s class=%u flags=0x%04x mapping=%u filtering=%u nat=%s candidates=%u\n",
+    printf("Session signal(%s): peer=%s device=%s class=%u candidates=%u\n",
            from, signal->peer_id, signal->peer_device_id[0] == '\0' ? "-" : signal->peer_device_id,
-           signal->peer_nat_class, signal->peer_nat_flags, signal->peer_mapping_behavior,
-           signal->peer_filtering_behavior, signal->peer_nat_type, signal->candidate_count);
+           signal->peer_nat_class, signal->candidate_count);
     if (verbose) {
         for (uint32_t i = 0; i < signal->candidate_count; ++i) {
             printf("  candidate[%u]: type=%s endpoint=%s\n", i,
@@ -1159,13 +1158,11 @@ int main(int argc, char** argv)
     probe2 = probe.probe2;
     printf("NTRS probe endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     nat = &probe.nat_info;
-    printf("NAT summary: local=%s srflx=%s srflx2=%s class=%u flags=0x%04x mapping=%u filtering=%u type=%s "
-           "risk=%s\n",
+    printf("NAT summary: local=%s srflx=%s srflx2=%s class=%u\n",
            FormatEndpointText(nat->local_ip, nat->local_port).c_str(),
            FormatEndpointText(nat->srflx_ip, nat->srflx_port).c_str(),
            FormatEndpointText(nat->srflx_ip_2, nat->srflx_port_2).c_str(),
-           nat->nat_class, nat->nat_flags, nat->mapping_behavior, nat->filtering_behavior, nat->nat_type,
-           nat->nat_risk);
+           nat->nat_class);
 
     if (probe_only) {
         close(probe_sock);

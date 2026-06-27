@@ -1,4 +1,4 @@
-#include "ntrs_codec.h"
+#include <ntrs/codec.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -36,9 +36,6 @@ static const FieldDef kFieldDefs[] = {
     {"event", FieldTag::EVENT, FieldType::U8},
     {"expire_at", FieldTag::EXPIRE_AT, FieldType::U32},
     {"federation", FieldTag::FEDERATION, FieldType::BYTES},
-    {"filter_diff_ip_rx", FieldTag::FILTER_DIFF_IP_RX, FieldType::BOOL},
-    {"filter_same_ip_diff_port_rx", FieldTag::FILTER_SAME_IP_DIFF_PORT_RX, FieldType::BOOL},
-    {"filtering_behavior", FieldTag::FILTERING_BEHAVIOR, FieldType::U16},
     {"heartbeat_interval_sec", FieldTag::HEARTBEAT_INTERVAL_SEC, FieldType::U32},
     {"lease_default_sec", FieldTag::LEASE_DEFAULT_SEC, FieldType::U32},
     {"lease_sec", FieldTag::LEASE_SEC, FieldType::U32},
@@ -46,12 +43,8 @@ static const FieldDef kFieldDefs[] = {
     {"load", FieldTag::LOAD, FieldType::U32},
     {"local_ip", FieldTag::LOCAL_IP, FieldType::BYTES},
     {"local_port", FieldTag::LOCAL_PORT, FieldType::U16},
-    {"mapping_stable", FieldTag::MAPPING_STABLE, FieldType::BOOL},
-    {"mapping_behavior", FieldTag::MAPPING_BEHAVIOR, FieldType::U16},
     {"message", FieldTag::MESSAGE, FieldType::BYTES},
     {"nat_class", FieldTag::NAT_CLASS, FieldType::U16},
-    {"nat_flags", FieldTag::NAT_FLAGS, FieldType::U16},
-    {"nat_risk", FieldTag::NAT_RISK, FieldType::BYTES},
     {"nat_type", FieldTag::NAT_TYPE, FieldType::BYTES},
     {"node_count", FieldTag::NODE_COUNT, FieldType::U32},
     {"node_id", FieldTag::NODE_ID, FieldType::BYTES},
@@ -59,12 +52,8 @@ static const FieldDef kFieldDefs[] = {
     {"peer_id", FieldTag::PEER_ID, FieldType::BYTES},
     {"peer_device_id", FieldTag::PEER_DEVICE_ID, FieldType::BYTES},
     {"peer_nat_class", FieldTag::PEER_NAT_CLASS, FieldType::U16},
-    {"peer_nat_flags", FieldTag::PEER_NAT_FLAGS, FieldType::U16},
-    {"peer_nat_type", FieldTag::PEER_NAT_TYPE, FieldType::BYTES},
-    {"peer_filtering_behavior", FieldTag::PEER_FILTERING_BEHAVIOR, FieldType::U16},
     {"peer_local_ip", FieldTag::PEER_LOCAL_IP, FieldType::BYTES},
     {"peer_local_port", FieldTag::PEER_LOCAL_PORT, FieldType::U16},
-    {"peer_mapping_behavior", FieldTag::PEER_MAPPING_BEHAVIOR, FieldType::U16},
     {"peer_srflx_ip", FieldTag::PEER_SRFLX_IP, FieldType::BYTES},
     {"peer_srflx_ip_2", FieldTag::PEER_SRFLX_IP_2, FieldType::BYTES},
     {"peer_srflx_port", FieldTag::PEER_SRFLX_PORT, FieldType::U16},

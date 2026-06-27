@@ -1,4 +1,4 @@
-#include <ntrs_hub_state.h>
+#include <ntrs/hub_state.h>
 
 #include <stdlib.h>
 #include <string.h>

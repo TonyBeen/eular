@@ -1,5 +1,5 @@
 #include <errno.h>
-#include <ntrs_client.h>
+#include <ntrs/ntrs.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -57,6 +57,10 @@ static const char* NatTypeTitle(ntrs_nat_class_t nat_class)
         return "Port Restricted NAT";
     case NTRS_NAT_CLASS_SYMMETRIC:
         return "Symmetric NAT";
+    case NTRS_NAT_CLASS_SYMMETRIC_MULTI_LINE:
+        return "Symmetric Multi-Line NAT";
+    case NTRS_NAT_CLASS_UDP_BLOCKED:
+        return "UDP Blocked";
     default:
         return "Unknown";
     }
@@ -70,9 +74,6 @@ static const char* NatTypeHint(const ntrs_nat_info_t* nat)
 
     switch (nat->nat_class) {
     case NTRS_NAT_CLASS_OPEN_PUBLIC:
-        if ((nat->nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0) {
-            return "The host has a public address, but UDP probes indicate transport blocking.";
-        }
         return "The host appears to be directly reachable on a public address.";
     case NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL:
         return "The host has a public address, but changed-source UDP replies are filtered.";
@@ -84,81 +85,13 @@ static const char* NatTypeHint(const ntrs_nat_info_t* nat)
         return "Mapping is stable, but return traffic usually requires a prior packet to the peer IP and port.";
     case NTRS_NAT_CLASS_SYMMETRIC:
         return "Different destinations produce different public mappings; UDP hole punching is difficult.";
+    case NTRS_NAT_CLASS_SYMMETRIC_MULTI_LINE:
+        return "Multiple external mappings were observed; UDP hole punching is difficult.";
+    case NTRS_NAT_CLASS_UDP_BLOCKED:
+        return "Basic UDP probes failed; verify that UDP is allowed on this network.";
     default:
-        if ((nat->nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0) {
-            return "Basic UDP probes failed; verify that UDP is allowed on this network.";
-        }
         return "The current sample is insufficient for a stronger conclusion.";
     }
-}
-
-static const char* MappingBehaviorTitle(ntrs_mapping_behavior_t behavior)
-{
-    switch (behavior) {
-    case NTRS_MAPPING_ENDPOINT_INDEPENDENT:
-        return "Endpoint Independent";
-    case NTRS_MAPPING_ADDRESS_DEPENDENT:
-        return "Changes Across Destinations";
-    case NTRS_MAPPING_ADDRESS_AND_PORT_DEPENDENT:
-        return "Changes Across Destination Ports";
-    case NTRS_MAPPING_UNSTABLE:
-        return "Unstable";
-    default:
-        return "Unknown";
-    }
-}
-
-static const char* FilteringBehaviorTitle(ntrs_filtering_behavior_t behavior)
-{
-    switch (behavior) {
-    case NTRS_FILTERING_ENDPOINT_INDEPENDENT:
-        return "Endpoint Independent";
-    case NTRS_FILTERING_ADDRESS_DEPENDENT:
-        return "Address Dependent";
-    case NTRS_FILTERING_ADDRESS_AND_PORT_DEPENDENT:
-        return "Address and Port Dependent";
-    case NTRS_FILTERING_BLOCKED:
-        return "Blocked";
-    default:
-        return "Unknown";
-    }
-}
-
-static void AppendFlagText(std::vector<std::string>* flags, bool enabled, const char* text)
-{
-    if (flags != NULL && enabled && text != NULL && text[0] != '\0') {
-        flags->push_back(text);
-    }
-}
-
-static std::string JoinFlags(const std::vector<std::string>& flags)
-{
-    std::string out;
-    for (size_t i = 0; i < flags.size(); ++i) {
-        if (i > 0) {
-            out += ", ";
-        }
-        out += flags[i];
-    }
-    return out;
-}
-
-static std::string FormatFlags(ntrs_nat_flags_t nat_flags)
-{
-    std::vector<std::string> flags;
-
-    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_UDP_BLOCKED) != 0, "udp_blocked");
-    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_PROBE_DEGRADED) != 0, "degraded_probe_coverage");
-    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_MAPPING_UNSTABLE) != 0,
-                     "observed_mapping_instability");
-    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_MULTI_EXTERNAL_IP) != 0,
-                     "multiple_external_ips_observed");
-    AppendFlagText(&flags, (nat_flags & NTRS_NAT_FLAG_LOCAL_ADDR_PUBLIC) != 0, "local_public_address");
-
-    if (flags.empty()) {
-        return "none";
-    }
-    return JoinFlags(flags);
 }
 
 static std::string FormatEndpointText(const char* ip, uint16_t port)
@@ -175,10 +108,6 @@ static void PrintResult(const ntrs_nat_info_t* nat, const std::string& probe1, c
 {
     printf("Detection Result: %s\n", NatTypeTitle(nat->nat_class));
     printf("Summary: %s\n", NatTypeHint(nat));
-    printf("Risk: %s\n", nat->nat_risk);
-    printf("Signals: %s\n", FormatFlags(nat->nat_flags).c_str());
-    printf("Mapping Behavior: %s\n", MappingBehaviorTitle(nat->mapping_behavior));
-    printf("Filtering Behavior: %s\n", FilteringBehaviorTitle(nat->filtering_behavior));
     printf("Probe Endpoints: probe1=%s probe2=%s\n", probe1.c_str(), probe2.empty() ? "-" : probe2.c_str());
     printf("Local Address: %s\n", FormatEndpointText(nat->local_ip, nat->local_port).c_str());
     printf("Public Mapping #1: %s\n", FormatEndpointText(nat->srflx_ip, nat->srflx_port).c_str());

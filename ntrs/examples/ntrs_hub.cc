@@ -1,8 +1,8 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <ntrs_auth.h>
-#include <ntrs_codec.h>
-#include <ntrs_hub_state.h>
+#include <ntrs/auth.h>
+#include <ntrs/codec.h>
+#include <ntrs/hub_state.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>

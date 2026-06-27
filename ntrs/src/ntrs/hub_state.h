@@ -1,7 +1,7 @@
 #ifndef __NTRS_HUB_STATE_H__
 #define __NTRS_HUB_STATE_H__
 
-#include <ntrs_codec.h>
+#include <ntrs/codec.h>
 #include <stdint.h>
 
 #include <map>

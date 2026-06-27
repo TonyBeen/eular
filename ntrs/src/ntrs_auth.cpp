@@ -1,4 +1,4 @@
-#include <ntrs_auth.h>
+#include <ntrs/auth.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

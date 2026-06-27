@@ -1,5 +1,5 @@
-#include "ntrs_binary_protocol.h"
-#include "ntrs_probe_types.h"
+#include <ntrs/binary_protocol.h>
+#include <ntrs/probe_types.h>
 
 #include <arpa/inet.h>
 #include <string.h>
