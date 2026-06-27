@@ -92,3 +92,100 @@ SingleAsync 是单回调聚合模型，本轮 callback 数如下：
 | 16 | 356 | 3740 | 91.3086 |
 | 24 | 316 | 3780 | 92.2852 |
 | 32 | 294 | 3802 | 92.8223 |
+
+## Linux 测试结果
+
+测试时间：2026-06-26 18:12:05 CST
+
+### 测试设备
+
+| 项目 | 值 |
+|---|---|
+| 设备 | UM480XT |
+| CPU | AMD Ryzen 7 4800H with Radeon Graphics |
+| CPU 核心 | 8 核 / 16 线程 |
+| 内存 | 15 GiB |
+| 系统 | Ubuntu 20.04.6 LTS |
+| Kernel | Linux 5.15.0-139-generic x86_64 |
+| 编译器 | GNU g++ 11.2.1 (`/opt/musl-toolchain/bin/x86_64-linux-musl-g++`) |
+| 构建类型 | RelWithDebInfo (`-O2 -g -DNDEBUG`) |
+| 构建目录 | `/home/eular/VSCode/eular/libevent/build-musl` |
+
+### 测试命令
+
+构建：
+
+```bash
+cmake --build build-musl --target test_event_async_perf test_single_async_perf -j4
+```
+
+测试并发线程数：
+
+```text
+1 / 2 / 4 / 8 / 16 / 24 / 32
+```
+
+EventAsync：
+
+```bash
+./build-musl/test/test_event_async_perf --producers <N> --total 4096 --ids 64 --drain-ms 500 --warmup-ms 10
+```
+
+SingleAsync：
+
+```bash
+./build-musl/test/test_single_async_perf --producers <N> --total 4096 --drain-ms 500 --warmup-ms 10
+```
+
+### 测试参数
+
+| 参数 | 值 |
+|---|---:|
+| 每组总 notify 次数 | 4096 |
+| EventAsync ID 数量 | 64 |
+| warmup | 10 ms |
+| drain | 500 ms |
+| 每个线程数轮次 | 1 |
+| 统计指标 | `avg_notify_ns = send_elapsed_sec * 1e9 / notify_success` |
+
+### 测试结果
+
+Linux 本轮按测试程序输出记录成功通知数，多线程下部分 `notify()` 调用未成功，吞吐与平均耗时均基于 `notify_success`。
+
+| 并发线程 | EventAsync notify_success | EventAsync callback_count | EventAsync avg_notify_ns | SingleAsync notify_success | SingleAsync callback_count | SingleAsync coalesced_rate_pct | SingleAsync avg_notify_ns |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 4096 | 4096 | 1345.860 | 4096 | 24 | 99.4141 | 1924.870 |
+| 2 | 3977 | 3977 | 1660.990 | 2149 | 1 | 99.9535 | 1106.100 |
+| 4 | 1522 | 1522 | 1634.920 | 1398 | 2 | 99.8569 | 1380.630 |
+| 8 | 1233 | 1233 | 1460.640 | 919 | 1 | 99.8912 | 1388.610 |
+| 16 | 1430 | 1430 | 884.777 | 813 | 2 | 99.7540 | 1000.900 |
+| 24 | 1404 | 1404 | 851.363 | 842 | 1 | 99.8812 | 944.776 |
+| 32 | 1435 | 1435 | 871.277 | 794 | 1 | 99.8741 | 862.107 |
+
+### 吞吐数据
+
+| 并发线程 | EventAsync notify_qps | EventAsync qps/thread | SingleAsync notify_qps | SingleAsync qps/thread |
+|---:|---:|---:|---:|---:|
+| 1 | 743020 | 743020 | 519516 | 519516 |
+| 2 | 602050 | 301025 | 904078 | 452039 |
+| 4 | 611652 | 152913 | 724308 | 181077 |
+| 8 | 684632 | 85579 | 720147 | 90018.4 |
+| 16 | 1130230 | 70639.3 | 999099 | 62443.7 |
+| 24 | 1174590 | 48941.2 | 1058450 | 44102.2 |
+| 32 | 1147740 | 35866.9 | 1159950 | 36248.4 |
+
+### 原始命令输出摘要
+
+EventAsync 在本轮中所有并发下 `callback_count == notify_success`，但从 2 线程开始 `notify_success < total_notify_attempts`。
+
+SingleAsync 是单回调聚合模型，本轮 callback 数如下：
+
+| 并发线程 | callback_count | coalesced | coalesced_rate_pct |
+|---:|---:|---:|---:|
+| 1 | 24 | 4072 | 99.4141 |
+| 2 | 1 | 2148 | 99.9535 |
+| 4 | 2 | 1396 | 99.8569 |
+| 8 | 1 | 918 | 99.8912 |
+| 16 | 2 | 811 | 99.7540 |
+| 24 | 1 | 841 | 99.8812 |
+| 32 | 1 | 793 | 99.8741 |
