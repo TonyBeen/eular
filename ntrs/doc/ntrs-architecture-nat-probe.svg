@@ -228,7 +228,7 @@ text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsof
 <path d="M 770 898 L 440 1040" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
 <path d="M 555 898 L 180 1040" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
 <rect x="60" y="922" width="1450" height="38" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
-<text x="785.0" y="950" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">代码模块映射：ntrs_auth.cpp 鉴权；ntrs_codec.cpp / ntrs_binary_protocol.cpp 编解码；ntrs_natc.cc 客户端探测；ntrs_node.cc 节点响应；KCP 侧只承接最终可用候选</text>
+<text x="785.0" y="950" text-anchor="middle" font-size="16" fill="#111827" font-weight="700" class="">代码模块映射：include/ntrs/ntrs.h 公开 API；src/ntrs/*.h 内部协议/鉴权/编解码；ntrs_natc.cc 客户端探测；ntrs_node.cc 节点响应；KCP 侧只承接最终可用候选</text>
 <g transform="translate(70 1130)">
 <rect x="-10" y="-4" width="1125" height="30" rx="8" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
 <line x1="10" y1="12" x2="48" y2="12" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>

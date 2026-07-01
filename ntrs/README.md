@@ -6,10 +6,11 @@ NTRS is the private NAT traversal sibling project that coexists with the standar
 Current state:
 
 - `ntrs` is the formal project root and documentation home.
-- `ntrs` now carries its own copied implementation under `ntrs/include`, `ntrs/src`,
-  `ntrs/examples`, and `ntrs/test`.
+- Public API is exposed only through `include/ntrs/ntrs.h`.
+- Internal protocol/auth/codec/io headers live under `src/ntrs` and are not public API.
+- The default build produces both `libntrs.a` and the platform shared library.
 - `stun` and `ntrs` intentionally coexist as two separate code trees.
-- The target exposed to sibling projects is `ntrs`.
+- The CMake target exposed to sibling projects is `eular::ntrs`.
 - New integration work should point at `../ntrs`, not `../stun`.
 
 Scope for the current development track:

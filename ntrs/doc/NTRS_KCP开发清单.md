@@ -11,7 +11,7 @@
 - `kcp_peer.out` 已验证“同一 UDP socket 复用 + NAT 探测 + UDP 打洞 + KCP 建连”的示例链路可行。
 - 现有 `stun` 仍以标准 STUN/RFC5780 语义和 `3478/3479` 默认端口为主，需要迁移为私有 NTRS 协议。
 
-私有探测协议、控制面鉴权、`probe_token` 与 `probe_auth` 的当前实现见 `NTRS_私有探测协议说明.md`。
+私有探测协议、控制面鉴权、`probe_token` 与 `probe_auth` 的当前实现见 `NTRS_私有探测协议说明.md`。当前 `ntrs` 对外只承诺单一公开头 `include/ntrs/ntrs.h`，内部协议、codec、auth、io 等头文件位于 `src/ntrs/`，不作为外部 API 暴露。
 
 ## 阶段 1：建立 `ntrs` 项目骨架
 
@@ -23,6 +23,10 @@
 
 - 新建基础目录：`include/`、`src/`、`examples/`、`doc/`。
 - 新建独立 `CMakeLists.txt`，支持作为同级库被 `kcp` 引入。
+- 默认同时构建静态库和动态库：
+  - `NTRS_BUILD_STATIC=ON`
+  - `NTRS_BUILD_SHARED=ON`
+  - 输出 `libntrs.a` 与平台动态库，例如 macOS `libntrs.dylib`、Linux `libntrs.so`
 - 明确过渡期关系：
   - 旧 `../stun` 短期可作为实现来源。
   - 新增与长期维护一律以 `ntrs` 为主，不再继续扩展 `stun` 语义。
@@ -33,7 +37,9 @@
 - `ntrs/` 可单独作为 sibling project 被发现。
 - 文档、源码、示例目录结构固定。
 - 旧 `stun` 不再被视为长期主项目根。
-- `ntrs/include` 已作为公共头入口建立，后续对外接口优先从 `ntrs` 暴露。
+- `include/ntrs/ntrs.h` 是唯一公共头入口，用户代码使用 `#include <ntrs/ntrs.h>`。
+- `src/ntrs/*.h` 只供库、示例和测试内部使用，不安装、不作为 API 承诺。
+- 动态库默认隐藏内部符号，只导出 `NTRS_API` 标注的公开 `ntrs_*` 函数。
 
 ## 阶段 2：固定 `ntrs` 与 `kcp` 的边界
 
@@ -67,7 +73,10 @@
 
 - 文档中不再要求 `ntrs` 修改 socket 绑定、关闭或 socket 策略。
 - `kcp_ntrs_*` 的责任边界明确且稳定。
-- 结构化探测结果、`probe_token` 匹配语义和 `probe_auth` 授权语义已在 `ntrs/include` 建立稳定入口。
+- 对外 NAT 探测结果、`probe_token` 匹配语义和 `probe_auth` 授权语义已建立稳定边界：
+  - 对外结果只暴露 endpoint、探测辅助统计和 `ntrs_nat_class_t`
+  - mapping/filtering 推断保留为内部实现细节
+  - 控制面和回调不再暴露 `nat_flags`、`mapping_behavior`、`filtering_behavior`、`nat_type`
 
 ## 阶段 3：私有 NAT 探测协议替代公开 STUN
 
@@ -103,7 +112,17 @@
 
 - 探测端口对标准 STUN `Binding Request` 无响应。
 - 抓包中不再出现标准 STUN magic cookie、Binding type 和标准 attribute 作为主探测协议。
-- 双节点 NAT 分类链路仍可表达现有 mapping/filtering 推断需求。
+- 双节点 NAT 分类链路仍可在内部表达 mapping/filtering 推断需求，但对外只收敛为 `NTRS_NAT_CLASS_*`。
+- 当前对外 NAT 分类包含：
+  - `NTRS_NAT_CLASS_UNKNOWN`
+  - `NTRS_NAT_CLASS_OPEN_PUBLIC`
+  - `NTRS_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL`
+  - `NTRS_NAT_CLASS_FULL_CONE`
+  - `NTRS_NAT_CLASS_IP_RESTRICTED`
+  - `NTRS_NAT_CLASS_PORT_RESTRICTED`
+  - `NTRS_NAT_CLASS_SYMMETRIC`
+  - `NTRS_NAT_CLASS_SYMMETRIC_MULTI_LINE`
+  - `NTRS_NAT_CLASS_UDP_BLOCKED`
 - IPv6 模式下可以完成二进制 probe/filter 收发，并输出 IPv6 专属可达性结果。
 
 ## 阶段 4：KCP 薄适配落地
@@ -140,22 +159,16 @@
 
 ### 必做项
 
-- 为 NAT 探测与打洞定义结构化结果：
-  - `SUCCESS`
-  - `PROBABLE_LOSS`
-  - `NO_RESPONSE`
-  - `BLOCKED`
-  - `LOCAL_SEND_FAILED`
-  - `ICMP_UNREACHABLE`
-  - `TIMED_OUT`
-- 结果结构至少包含：
-  - 发送次数
-  - 接收次数
-  - ack 次数
-  - timeout 次数
-  - 本地 socket error
-  - phase
-  - selected candidate
+- 对外 NAT 探测结果保持简洁，当前 `ntrs_nat_info_t` 只包含：
+  - 本地 endpoint
+  - 主/辅探测端点观察到的公网映射 endpoint
+  - `probe1_ok` / `probe2_ok`
+  - `probe1_rtt_ms` / `probe2_rtt_ms`
+  - `probe_rounds`
+  - `probe1_success_count` / `probe2_success_count`
+  - `probe1_distinct_mappings` / `probe2_distinct_mappings`
+  - `nat_class`
+- 更细的 `SUCCESS`、`PROBABLE_LOSS`、`NO_RESPONSE`、`BLOCKED`、`LOCAL_SEND_FAILED`、`ICMP_UNREACHABLE`、`TIMED_OUT` 等语义可保留在内部日志、示例诊断或后续扩展接口中，不再强制进入当前公开 NAT 结果结构。
 - 判定规则采用多信号综合和保守策略：
   - 本地明确发送失败，直接归类本地错误。
   - 明确 ICMP 不可达，归类不可达。
@@ -170,7 +183,7 @@
   - 明确被拒绝
   - 仅疑似丢包
   - 完全无响应
-- 上层 KCP adapter 可以获得结构化失败原因，而不需要再猜测。
+- 上层 KCP adapter 当前应以 `nat_class`、endpoint 和探测辅助统计做保守决策；如需更细失败原因，应另行设计扩展结果结构，避免重新膨胀基础公开 API。
 
 ## 当前已验证能力
 

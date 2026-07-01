@@ -109,7 +109,6 @@ if(NTRS_BUILD_SHARED)
     ntrs_configure_library(ntrs_shared)
     target_compile_definitions(ntrs_shared PRIVATE NTRS_BUILD_SHARED NTRS_EXPORTS)
     target_compile_definitions(ntrs_shared INTERFACE NTRS_BUILD_SHARED)
-    target_link_libraries(ntrs_shared PRIVATE utils)
 endif()
 
 if(NTRS_BUILD_STATIC)
