@@ -15,6 +15,9 @@ enable_testing()
 option(NTRS_BUILD_EXAMPLES "Build NTRS examples" ON)
 option(NTRS_BUILD_STATIC "Build static NTRS library" ON)
 option(NTRS_BUILD_SHARED "Build shared NTRS library" ON)
+set(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS "" CACHE STRING
+    "Strip local symbols from the NTRS shared library on ELF platforms: ON, OFF, or empty for Release/MinSizeRel only.")
+set_property(CACHE NTRS_STRIP_SHARED_INTERNAL_SYMBOLS PROPERTY STRINGS "" ON OFF)
 option(NTRS_STATIC_EXECUTABLES "Link ntrs_hub/ntrs_node as static executables when possible." OFF)
 set(NTRS_EVENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libevent" CACHE PATH "Path to the sibling libevent wrapper project.")
 set(NTRS_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to the sibling utils project.")
@@ -58,8 +61,53 @@ set(NTRS_SOURCES
     src/socket_address.cpp
 )
 
+set(NTRS_PUBLIC_API_SYMBOLS
+    ntrs_nat_info_init
+    ntrs_detect_nat_options_init
+    ntrs_connect_control
+    ntrs_request_probe_endpoints
+    ntrs_auth
+    ntrs_register_peer
+    ntrs_unregister_peer
+    ntrs_create_session
+    ntrs_wait_for_signal
+    ntrs_try_udp_hole_punch
+    ntrs_async_client_create
+    ntrs_async_client_destroy
+    ntrs_async_client_cancel
+    ntrs_async_auth
+    ntrs_async_connect_control
+    ntrs_async_request_probe_endpoints
+    ntrs_async_detect_nat
+    ntrs_async_register_peer
+    ntrs_async_unregister_peer
+    ntrs_async_heartbeat
+    ntrs_async_create_session
+    ntrs_async_wait_for_signal
+    ntrs_async_try_udp_hole_punch
+)
+
+function(ntrs_generate_export_files elf_file macos_file)
+    file(WRITE "${elf_file}" "{\n    global:\n")
+    file(WRITE "${macos_file}" "")
+    foreach(symbol IN LISTS NTRS_PUBLIC_API_SYMBOLS)
+        file(APPEND "${elf_file}" "        ${symbol};\n")
+        file(APPEND "${macos_file}" "_${symbol}\n")
+    endforeach()
+    file(APPEND "${elf_file}" "    local:\n        *;\n};\n")
+endfunction()
+
 if(NOT NTRS_BUILD_STATIC AND NOT NTRS_BUILD_SHARED)
     message(FATAL_ERROR "At least one of NTRS_BUILD_STATIC or NTRS_BUILD_SHARED must be ON.")
+endif()
+
+if(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS STREQUAL "")
+    set(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS_EFFECTIVE OFF)
+    if(NOT CMAKE_CONFIGURATION_TYPES AND CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
+        set(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS_EFFECTIVE ON)
+    endif()
+else()
+    set(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS_EFFECTIVE ${NTRS_STRIP_SHARED_INTERNAL_SYMBOLS})
 endif()
 
 set(EVENT_SUBMODULE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
@@ -87,13 +135,23 @@ function(ntrs_configure_library target)
     )
     target_include_directories(${target} PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${NTRS_UTILS_ROOT}/include>
         $<INSTALL_INTERFACE:include>
     )
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${NTRS_UTILS_ROOT}/include
     )
+endfunction()
+
+function(ntrs_link_static_dependencies target)
     target_link_libraries(${target} PUBLIC
+        event_wrapper_static
+        Threads::Threads
+    )
+endfunction()
+
+function(ntrs_link_shared_dependencies target)
+    target_link_libraries(${target} PRIVATE
         event_wrapper_static
         Threads::Threads
     )
@@ -102,13 +160,33 @@ endfunction()
 if(NTRS_BUILD_STATIC)
     add_library(ntrs_static STATIC ${NTRS_SOURCES})
     ntrs_configure_library(ntrs_static)
+    ntrs_link_static_dependencies(ntrs_static)
 endif()
 
 if(NTRS_BUILD_SHARED)
     add_library(ntrs_shared SHARED ${NTRS_SOURCES})
     ntrs_configure_library(ntrs_shared)
+    ntrs_link_shared_dependencies(ntrs_shared)
     target_compile_definitions(ntrs_shared PRIVATE NTRS_BUILD_SHARED NTRS_EXPORTS)
     target_compile_definitions(ntrs_shared INTERFACE NTRS_BUILD_SHARED)
+    set(NTRS_ELF_EXPORTS_FILE "${CMAKE_CURRENT_BINARY_DIR}/ntrs.exports")
+    set(NTRS_MACOS_EXPORTS_FILE "${CMAKE_CURRENT_BINARY_DIR}/ntrs.macos.exports")
+    ntrs_generate_export_files("${NTRS_ELF_EXPORTS_FILE}" "${NTRS_MACOS_EXPORTS_FILE}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_link_options(ntrs_shared PRIVATE
+            "LINKER:--version-script=${NTRS_ELF_EXPORTS_FILE}"
+        )
+        if(NTRS_STRIP_SHARED_INTERNAL_SYMBOLS_EFFECTIVE AND CMAKE_STRIP)
+            add_custom_command(TARGET ntrs_shared POST_BUILD
+                COMMAND "${CMAKE_STRIP}" --strip-unneeded "$<TARGET_FILE:ntrs_shared>"
+                COMMENT "Stripping local symbols from $<TARGET_FILE_NAME:ntrs_shared>"
+            )
+        endif()
+    elseif(APPLE)
+        target_link_options(ntrs_shared PRIVATE
+            "LINKER:-exported_symbols_list,${NTRS_MACOS_EXPORTS_FILE}"
+        )
+    endif()
 endif()
 
 if(NTRS_BUILD_STATIC)
