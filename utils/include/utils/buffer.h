@@ -31,6 +31,7 @@ public:
     ByteBuffer& operator=(const ByteBuffer& other);
     ByteBuffer& operator=(ByteBuffer&& other);
     uint8_t&    operator[](size_t index);
+    const uint8_t& operator[](size_t index) const;
 
     // 在offset之后设为data
     size_t      set(const uint8_t *data, size_t dataSize, size_t offset = 0);
@@ -40,13 +41,13 @@ public:
     // 在offset之后插入数据而不覆盖之后的数据
     size_t      insert(const uint8_t *data, size_t dataSize, size_t offset = 0);
 
-    uint8_t *   data() { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *const_data() const { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *begin() const { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *end() const { return mBuffer ? (mBuffer + mDataSize) : nullptr; }
+    uint8_t *   data() noexcept { return mBuffer; }
+    const uint8_t *const_data() const noexcept { return mBuffer; }
+    const uint8_t *begin() const noexcept { return mBuffer; }
+    const uint8_t *end() const noexcept { return mBuffer ? (mBuffer + mDataSize) : nullptr; }
     void        reserve(size_t newSize);
-    size_t      capacity() const { return mCapacity; }
-    size_t      size() const { return mDataSize; }
+    size_t      capacity() const noexcept { return mCapacity; }
+    size_t      size() const noexcept { return mDataSize; }
     void        clear();
     void        resize(size_t sz);
 

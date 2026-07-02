@@ -11,6 +11,8 @@
 #include "utils/sysdef.h"
 
 #include <assert.h>
+#include <limits>
+#include <vector>
 
 #define DEFAULT_BUFFER_SIZE (256)
 
@@ -29,6 +31,40 @@ static inline uint8_t *GetEmptyBuffer()
 }
 
 namespace eular {
+namespace {
+
+bool AddOverflow(size_t lhs, size_t rhs, size_t *result)
+{
+#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
+    return __builtin_add_overflow(lhs, rhs, result);
+#else
+    if (lhs > std::numeric_limits<size_t>::max() - rhs) {
+        return true;
+    }
+    *result = lhs + rhs;
+    return false;
+#endif
+}
+
+bool RangeOverlaps(const uint8_t *begin, size_t size, const uint8_t *data, size_t dataSize)
+{
+    if (begin == nullptr || data == nullptr || size == 0 || dataSize == 0) {
+        return false;
+    }
+
+    const uintptr_t beginAddr = reinterpret_cast<uintptr_t>(begin);
+    const uintptr_t dataAddr = reinterpret_cast<uintptr_t>(data);
+    size_t endAddr = 0;
+    size_t dataEndAddr = 0;
+    if (AddOverflow(beginAddr, size, &endAddr) || AddOverflow(dataAddr, dataSize, &dataEndAddr)) {
+        return false;
+    }
+
+    return dataAddr < endAddr && dataEndAddr > beginAddr;
+}
+
+} // namespace
+
 ByteBuffer::ByteBuffer():
     mBuffer(GetEmptyBuffer()),
     mDataSize(0),
@@ -66,11 +102,14 @@ ByteBuffer::ByteBuffer(const char *data, size_t dataLength) :
 }
 
 ByteBuffer::ByteBuffer(const uint8_t *data, size_t dataLength) :
-    mBuffer(nullptr),
+    mBuffer(GetEmptyBuffer()),
     mDataSize(0),
     mCapacity(0)
 {
-    mCapacity = allocBuffer(dataLength);
+    if (data == nullptr || dataLength == 0) {
+        return;
+    }
+
     set(data, dataLength);
 }
 
@@ -126,7 +165,16 @@ ByteBuffer& ByteBuffer::operator=(ByteBuffer&& other)
 
 uint8_t& ByteBuffer::operator[](size_t index)
 {
-    if (index >= mCapacity) {
+    if (index >= mDataSize) {
+        throw Exception("Index out of range");
+    }
+
+    return mBuffer[index];
+}
+
+const uint8_t& ByteBuffer::operator[](size_t index) const
+{
+    if (index >= mDataSize) {
         throw Exception("Index out of range");
     }
 
@@ -135,24 +183,32 @@ uint8_t& ByteBuffer::operator[](size_t index)
 
 size_t ByteBuffer::set(const uint8_t *data, size_t dataSize, size_t offset)
 {
-    if (data == nullptr || dataSize == 0) {
+    if (data == nullptr || dataSize == 0 || offset > mDataSize) {
         return 0;
     }
 
-    size_t real_offset = mDataSize >= offset ? offset : 0;
     size_t newSize = 0;
-
-#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
-    if (__builtin_add_overflow(dataSize, real_offset, &newSize)) {
+    if (AddOverflow(dataSize, offset, &newSize)) {
         return 0;
     }
-#else
-    newSize = real_offset + dataSize;
-#endif
+
+    std::vector<uint8_t> temp;
+    if (RangeOverlaps(mBuffer, mDataSize, data, dataSize)) {
+        try {
+            temp.assign(data, data + dataSize);
+        } catch (...) {
+            return 0;
+        }
+        data = temp.data();
+    }
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) { // capacity exceeded
-        buf = SharedBuffer::bufferFromData(mBuffer)->editResize(calculate(newSize));
+        const size_t newCapacity = calculate(newSize);
+        if (newCapacity < newSize) {
+            return 0;
+        }
+        buf = SharedBuffer::bufferFromData(mBuffer)->editResize(newCapacity);
     } else {
         buf = SharedBuffer::bufferFromData(mBuffer)->edit();
     }
@@ -163,7 +219,7 @@ size_t ByteBuffer::set(const uint8_t *data, size_t dataSize, size_t offset)
     mBuffer = static_cast<uint8_t *>(buf->data());
     mCapacity = buf->size();
     mDataSize = newSize;
-    memmove(mBuffer + real_offset, data, dataSize);
+    memmove(mBuffer + offset, data, dataSize);
 
     return dataSize;
 }
@@ -193,24 +249,33 @@ void ByteBuffer::append(const ByteBuffer &other)
 
 size_t ByteBuffer::insert(const uint8_t *data, size_t dataSize, size_t offset)
 {
-    if (data == nullptr || offset > mDataSize) { // offset范围必须在0-mDataSize，等于mDataSize相当于尾插，offset=0相当于头插
+    if (data == nullptr || dataSize == 0 || offset > mDataSize) { // offset范围必须在0-mDataSize，等于mDataSize相当于尾插，offset=0相当于头插
         return 0;
     }
 
     size_t newSize = 0;
     size_t copySize = mDataSize - offset;
-    size_t oldDataSize = mDataSize;
-#if COMPILER_TYPE == COMPILER_GNUC || COMPILER_TYPE == COMPILER_CLANG
-    if (__builtin_add_overflow(dataSize, mDataSize, &newSize)) {
+    if (AddOverflow(dataSize, mDataSize, &newSize)) {
         return 0;
     }
-#else
-    newSize = dataSize + mDataSize;
-#endif
+
+    std::vector<uint8_t> temp;
+    if (RangeOverlaps(mBuffer, mDataSize, data, dataSize)) {
+        try {
+            temp.assign(data, data + dataSize);
+        } catch (...) {
+            return 0;
+        }
+        data = temp.data();
+    }
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) {
-        buf = SharedBuffer::bufferFromData(mBuffer)->editResize(calculate(newSize));
+        const size_t newCapacity = calculate(newSize);
+        if (newCapacity < newSize) {
+            return 0;
+        }
+        buf = SharedBuffer::bufferFromData(mBuffer)->editResize(newCapacity);
     } else {
         buf = SharedBuffer::bufferFromData(mBuffer)->edit();
     }
@@ -221,20 +286,11 @@ size_t ByteBuffer::insert(const uint8_t *data, size_t dataSize, size_t offset)
 
     mBuffer = static_cast<uint8_t *>(buf->data());
     mCapacity = buf->size();
-    mDataSize = newSize;
-
-    if (copySize == 0) {
-        memmove(mBuffer + oldDataSize, data, dataSize);
-    } else {
-        uint8_t *temp = (uint8_t *)malloc(copySize);
-        if (temp == nullptr) {
-            return 0;
-        }
-        memmove(temp, mBuffer + offset, copySize);
-        memmove(mBuffer + offset, data, dataSize);
-        memmove(mBuffer + offset + dataSize, temp, copySize);
-        free(temp);
+    if (copySize > 0) {
+        memmove(mBuffer + offset + dataSize, mBuffer + offset, copySize);
     }
+    memmove(mBuffer + offset, data, dataSize);
+    mDataSize = newSize;
 
     return dataSize;
 }
@@ -291,15 +347,19 @@ std::string ByteBuffer::dump() const
     }
 
     char buf[64] = {0};
-    int cycle = mDataSize / 4;
-    for (int i = 0; i < cycle; ++i) {
+    if (mDataSize > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
+        return ret;
+    }
+
+    int64_t cycle = static_cast<int64_t>(mDataSize / 4);
+    for (int64_t i = 0; i < cycle; ++i) {
         snprintf(buf, sizeof(buf), "0x%02x 0x%02x 0x%02x 0x%02x ",
             mBuffer[i * 4], mBuffer[i * 4 + 1], mBuffer[i * 4 + 2], mBuffer[i * 4 + 3]);
         ret.append(buf);
     }
 
-    int remainder = mDataSize % 4;
-    for (int i = mDataSize - remainder; i < (int)mDataSize; ++i) {
+    int64_t remainder = static_cast<int64_t>(mDataSize % 4);
+    for (int64_t i = static_cast<int64_t>(mDataSize) - remainder; i < static_cast<int64_t>(mDataSize); ++i) {
         snprintf(buf, sizeof(buf), "0x%02x ", mBuffer[i]);
         ret.append(buf);
     }
@@ -353,7 +413,11 @@ bool ByteBuffer::operator==(const ByteBuffer &other) const
 size_t ByteBuffer::calculate(size_t dataSize)
 {
     if (dataSize >= DEFAULT_BUFFER_SIZE) {
-        dataSize *= 1.5;
+        const size_t extra = dataSize / 2;
+        if (dataSize > std::numeric_limits<size_t>::max() - extra) {
+            return 0;
+        }
+        dataSize += extra;
     } else {
         dataSize = DEFAULT_BUFFER_SIZE;
     }
