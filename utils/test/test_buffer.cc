@@ -99,6 +99,21 @@ TEST_CASE("operator_index_checks_logical_size", "[ByteBuffer]") {
     CHECK_THROWS(constBuffer[5]);
 }
 
+TEST_CASE("data_detaches_shared_buffer_before_write", "[ByteBuffer]") {
+    ByteBuffer buffer;
+    buffer.append("Hello");
+    ByteBuffer shared = buffer;
+
+    REQUIRE(shared.const_data() == buffer.const_data());
+
+    uint8_t *writable = buffer.data();
+    writable[0] = 'Y';
+
+    REQUIRE(shared.const_data() != buffer.const_data());
+    CHECK(std::string((const char *)buffer.const_data(), buffer.size()) == "Yello");
+    CHECK(std::string((const char *)shared.const_data(), shared.size()) == "Hello");
+}
+
 TEST_CASE("set_rejects_offset_past_size", "[ByteBuffer]") {
     ByteBuffer buffer;
     buffer.append("Hello");
