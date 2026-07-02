@@ -38,9 +38,9 @@ public:
                         String8(const char* other, size_t numChars);
                         String8(const std::string& other);
                         String8(String8 &&other) noexcept;
-                        ~String8();
+                        ~String8() noexcept;
 
-    const char*         c_str() const;
+    const char*         c_str() const noexcept;
     char *              data();
     String8             left(uint32_t n) const;
     String8             right(uint32_t n) const;
@@ -56,9 +56,9 @@ public:
     const char&         back() const;
     std::string         toStdString() const;
 
-    bool                empty() const;
-    size_t              length() const;
-    size_t              capacity() const { return mCapacity; }
+    bool                empty() const noexcept;
+    size_t              length() const noexcept;
+    size_t              capacity() const noexcept { return mCapacity; }
     void                clear();
 
     int32_t             append(char ch);
@@ -78,39 +78,39 @@ public:
     String8&            operator+=(const char* other);
     String8             operator+(const char* other) const;
 
-    int32_t             compare(const String8& other) const;
-    int32_t             compare(const char* other) const;
-    int32_t             ncompare(const String8& other, size_t n) const;
-    int32_t             ncompare(const char* other, size_t n) const;
+    int32_t             compare(const String8& other) const noexcept;
+    int32_t             compare(const char* other) const noexcept;
+    int32_t             ncompare(const String8& other, size_t n) const noexcept;
+    int32_t             ncompare(const char* other, size_t n) const noexcept;
 
-    int32_t             casecmp(const String8& other) const;
-    int32_t             casecmp(const char* other) const;
+    int32_t             casecmp(const String8& other) const noexcept;
+    int32_t             casecmp(const char* other) const noexcept;
 
-    bool                operator<(const String8& other) const;
-    bool                operator<=(const String8& other) const;
-    bool                operator==(const String8& other) const;
-    bool                operator!=(const String8& other) const;
-    bool                operator>=(const String8& other) const;
-    bool                operator>(const String8& other) const;
+    bool                operator<(const String8& other) const noexcept;
+    bool                operator<=(const String8& other) const noexcept;
+    bool                operator==(const String8& other) const noexcept;
+    bool                operator!=(const String8& other) const noexcept;
+    bool                operator>=(const String8& other) const noexcept;
+    bool                operator>(const String8& other) const noexcept;
 
-    bool                operator<(const char* other) const;
-    bool                operator<=(const char* other) const;
-    bool                operator==(const char* other) const;
-    bool                operator!=(const char* other) const;
-    bool                operator>=(const char* other) const;
-    bool                operator>(const char* other) const;
+    bool                operator<(const char* other) const noexcept;
+    bool                operator<=(const char* other) const noexcept;
+    bool                operator==(const char* other) const noexcept;
+    bool                operator!=(const char* other) const noexcept;
+    bool                operator>=(const char* other) const noexcept;
+    bool                operator>(const char* other) const noexcept;
     char&               operator[](size_t index);
-    const char&         operator[](size_t index) const;
+    const char&         operator[](size_t index) const noexcept;
 
     // return the index of the first byte of other in this at or after
     // start, or -1 if not found
-    int32_t             find(const String8 &other, size_t start = 0) const;
-    int32_t             find(const char* other, size_t start = 0) const;
-    int32_t             find(char c, size_t start = 0) const;
-    void                findChar(int32_t &begin, int32_t &end, char c = ' ') const;
-    void                findNotChar(int32_t &begin, int32_t &end, char c = ' ') const;
-    int32_t             find_last_of(const char *str) const;
-    int32_t             find_last_of(const String8 &str) const;
+    int32_t             find(const String8 &other, size_t start = 0) const noexcept;
+    int32_t             find(const char* other, size_t start = 0) const noexcept;
+    int32_t             find(char c, size_t start = 0) const noexcept;
+    void                findChar(int32_t &begin, int32_t &end, char c = ' ') const noexcept;
+    void                findNotChar(int32_t &begin, int32_t &end, char c = ' ') const noexcept;
+    int32_t             find_last_of(const char *str) const noexcept;
+    int32_t             find_last_of(const String8 &str) const noexcept;
 
     String8             substr(size_t start, size_t end) const;
     bool                contains(const char* other) const;
@@ -121,22 +121,19 @@ public:
     void                toLower(size_t start, size_t numChars);
     void                toUpper();
     void                toUpper(size_t start, size_t numChars);
-    static int32_t      KMP_strstr(const char *val, const char *key);
-    static size_t       Hash(const String8 &obj);
-
-    bool                isLocal() const { return mString == mStack; }
+    static size_t       Hash(const String8 &obj) noexcept;
+    bool                isLocal() const noexcept { return mString == mStack; }
 
 private:
     friend std::ostream&operator<<(std::ostream &out, const String8& in);
     char*               allocHeap(size_t numChars);
-    void                release();
+    void                release() noexcept;
     static String8      FormatV(const char* fmt, va_list args);
     int32_t             appendFormatV(const char* fmt, va_list args);
     void                setTo(const String8& other);
     int32_t             setTo(const char* other);
     int32_t             setTo(const char* other, size_t numChars);
-    int32_t             stringcompare(const char *other) const;
-    static int32_t      GetNext(const String8& key, int32_t n);
+    int32_t             stringcompare(const char *other) const noexcept;
     void                ensureUnique();
     bool                removeOne(const char *str);
     void                initFromChars(const char* str, size_t len);
@@ -162,7 +159,7 @@ std::ostream& operator<<(std::ostream &out, const String8& in);
 namespace std {
     template<>
     struct hash<eular::String8> {
-        size_t operator()(const eular::String8 &obj) const {
+        size_t operator()(const eular::String8 &obj) const noexcept {
             return eular::String8::Hash(obj);
         }
     };

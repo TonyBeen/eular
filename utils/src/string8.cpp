@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <algorithm>
+#include <stdint.h>
 
 #include "utils/platform.h"
 #include "utils/utils.h"
@@ -113,7 +114,7 @@ String8::String8(String8 &&other) noexcept
     }
 }
 
-String8::~String8()
+String8::~String8() noexcept
 {
     release();
 }
@@ -169,7 +170,7 @@ char* String8::allocHeap(size_t numChars)
     return buf;
 }
 
-void String8::release()
+void String8::release() noexcept
 {
     if (!isLocal() && mHeap != nullptr) {
         SharedBuffer::bufferFromData(mHeap)->release();
@@ -201,7 +202,7 @@ void String8::ensureUnique()
 
 // ============== 基本访问方法 ==============
 
-const char* String8::c_str() const
+const char* String8::c_str() const noexcept
 {
     return mString;
 }
@@ -212,12 +213,12 @@ char* String8::data()
     return mString;
 }
 
-bool String8::empty() const
+bool String8::empty() const noexcept
 {
     return mLength == 0;
 }
 
-size_t String8::length() const
+size_t String8::length() const noexcept
 {
     return mLength;
 }
@@ -349,14 +350,15 @@ int32_t String8::append(const char* other, size_t numChars)
     }
 
     size_t otherLen = numChars;
-    size_t newLen = mLength + otherLen;
-    if (newLen >= MAX_STRING_SIZE) { // 新字符串超过最大长度, 不拷贝任何字符
+    if (otherLen >= MAX_STRING_SIZE || mLength > MAX_STRING_SIZE - otherLen) {
         return 0;
     }
 
+    size_t newLen = mLength + otherLen;
+
     if (newLen < LOCAL_STRING_SIZE && isLocal()) {
         // 仍可使用栈存储
-        memcpy(mStack + mLength, other, otherLen);
+        memmove(mStack + mLength, other, otherLen);
         mStack[newLen] = '\0';
         mLength = static_cast<uint32_t>(newLen);
         return static_cast<int32_t>(otherLen);
@@ -365,7 +367,7 @@ int32_t String8::append(const char* other, size_t numChars)
     if (newLen <= mCapacity) {
         // 容量足够
         ensureUnique();
-        memcpy(mString + mLength, other, otherLen);
+        memmove(mString + mLength, other, otherLen);
         mString[newLen] = '\0';
         mLength = static_cast<uint32_t>(newLen);
         return static_cast<int32_t>(otherLen);
@@ -409,13 +411,22 @@ int32_t String8::setTo(const char* other, size_t numChars)
         return 0;
     }
 
-    size_t actualLen = strnlen(other, numChars);
+    size_t actualLen = numChars;
     if (actualLen >= MAX_STRING_SIZE) {
         return -1;
     }
 
-    // 检查是否自赋值
-    if (other >= mString && other < mString + mLength) {
+    uintptr_t source = reinterpret_cast<uintptr_t>(other);
+    uintptr_t selfBegin = reinterpret_cast<uintptr_t>(mString);
+    uintptr_t selfEnd = selfBegin + mLength;
+
+    // 检查源数据是否指向当前对象内部，避免释放或覆写当前 buffer 后再读取。
+    if (source >= selfBegin && source < selfEnd) {
+        size_t offset = static_cast<size_t>(source - selfBegin);
+        if (actualLen > mLength - offset) {
+            actualLen = mLength - offset;
+        }
+
         // 自赋值情况，需要特殊处理
         String8 temp(other, actualLen);
         *this = std::move(temp);
@@ -614,7 +625,7 @@ bool String8::contains(const char* other) const
         return false;
     }
 
-    return strstr(mString, other) != nullptr;
+    return find(other) >= 0;
 }
 
 bool String8::removeAll(const char* other)
@@ -669,32 +680,63 @@ int64_t String8::replaceAll(char o, char n)
 
 // ============== 查找操作 ==============
 
-int32_t String8::find(const String8& other, size_t start) const
+int32_t String8::find(const String8& other, size_t start) const noexcept
 {
-    return find(other.mString, start);
-}
-
-int32_t String8::find(const char* other, size_t start) const
-{
-    if (other == nullptr || start >= mLength) {
+    if (other.mLength == 0) {
+        return start <= mLength ? static_cast<int32_t>(start) : -1;
+    }
+    if (start >= mLength || other.mLength > mLength - start) {
         return -1;
     }
 
-    const char* result = strstr(mString + start, other);
-    return result ? static_cast<int32_t>(result - mString) : -1;
+    for (size_t i = start; i <= mLength - other.mLength; ++i) {
+        if (memcmp(mString + i, other.mString, other.mLength) == 0) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
 }
 
-int32_t String8::find(char c, size_t start) const
+int32_t String8::find(const char* other, size_t start) const noexcept
+{
+    if (other == nullptr) {
+        return -1;
+    }
+
+    size_t otherLen = strlen(other);
+    if (otherLen == 0) {
+        return start <= mLength ? static_cast<int32_t>(start) : -1;
+    }
+    if (start >= mLength) {
+        return -1;
+    }
+    if (otherLen > mLength - start) {
+        return -1;
+    }
+
+    for (size_t i = start; i <= mLength - otherLen; ++i) {
+        if (memcmp(mString + i, other, otherLen) == 0) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
+}
+
+int32_t String8::find(char c, size_t start) const noexcept
 {
     if (start >= mLength) {
         return -1;
     }
 
-    const char* result = strchr(mString + start, c);
-    return result ? static_cast<int32_t>(result - mString) : -1;
+    for (size_t i = start; i < mLength; ++i) {
+        if (mString[i] == c) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
 }
 
-void String8::findChar(int32_t& begin, int32_t& end, char c) const
+void String8::findChar(int32_t& begin, int32_t& end, char c) const noexcept
 {
     begin = -1;
     end = -1;
@@ -707,7 +749,7 @@ void String8::findChar(int32_t& begin, int32_t& end, char c) const
     }
 }
 
-void String8::findNotChar(int32_t& begin, int32_t& end, char c) const
+void String8::findNotChar(int32_t& begin, int32_t& end, char c) const noexcept
 {
     begin = -1;
     end = -1;
@@ -720,19 +762,19 @@ void String8::findNotChar(int32_t& begin, int32_t& end, char c) const
     }
 }
 
-int32_t String8::find_last_of(const char* key) const
+int32_t String8::find_last_of(const char* key) const noexcept
 {
-    if (key == nullptr || *key == '\0' || empty()) {
+    if (key == nullptr || empty()) {
         return -1;
     }
 
     size_t keyLen = strlen(key);
-    if (keyLen > mLength) {
+    if (keyLen == 0 || keyLen > mLength) {
         return -1;
     }
 
     for (size_t i = mLength - keyLen; ; --i) {
-        if (strncmp(mString + i, key, keyLen) == 0) {
+        if (memcmp(mString + i, key, keyLen) == 0) {
             return static_cast<int32_t>(i);
         }
         if (i == 0) break;
@@ -741,79 +783,136 @@ int32_t String8::find_last_of(const char* key) const
     return -1;
 }
 
-int32_t String8::find_last_of(const String8& str) const
+int32_t String8::find_last_of(const String8& str) const noexcept
 {
-    return find_last_of(str.c_str());
+    if (str.mLength == 0 || str.mLength > mLength) {
+        return -1;
+    }
+
+    for (size_t i = mLength - str.mLength; ; --i) {
+        if (memcmp(mString + i, str.mString, str.mLength) == 0) {
+            return static_cast<int32_t>(i);
+        }
+        if (i == 0) break;
+    }
+
+    return -1;
 }
 
 // ============== 比较操作 ==============
 
-int32_t String8::stringcompare(const char* other) const
+int32_t String8::stringcompare(const char* other) const noexcept
 {
-    if (mString == nullptr && other == nullptr) return 0;
-    if (mString == nullptr) return -1;
     if (other == nullptr) return 1;
-    return strcmp(mString, other);
+
+    size_t otherLen = strlen(other);
+    size_t minLen = (std::min)(static_cast<size_t>(mLength), otherLen);
+    int ret = minLen > 0 ? memcmp(mString, other, minLen) : 0;
+    if (ret != 0) {
+        return ret;
+    }
+    if (mLength == otherLen) {
+        return 0;
+    }
+    return mLength < otherLen ? -1 : 1;
 }
 
-int32_t String8::compare(const String8& other) const
+int32_t String8::compare(const String8& other) const noexcept
 {
-    return stringcompare(other.mString);
+    size_t minLen = (std::min)(static_cast<size_t>(mLength), static_cast<size_t>(other.mLength));
+    int ret = minLen > 0 ? memcmp(mString, other.mString, minLen) : 0;
+    if (ret != 0) {
+        return ret;
+    }
+    if (mLength == other.mLength) {
+        return 0;
+    }
+    return mLength < other.mLength ? -1 : 1;
 }
 
-int32_t String8::compare(const char* other) const
+int32_t String8::compare(const char* other) const noexcept
 {
     return stringcompare(other);
 }
 
-int32_t String8::ncompare(const String8& other, size_t n) const
+int32_t String8::ncompare(const String8& other, size_t n) const noexcept
 {
-    return strncmp(mString, other.mString, n);
+    size_t lhsLen = (std::min)(static_cast<size_t>(mLength), n);
+    size_t rhsLen = (std::min)(static_cast<size_t>(other.mLength), n);
+    size_t minLen = (std::min)(lhsLen, rhsLen);
+    int ret = minLen > 0 ? memcmp(mString, other.mString, minLen) : 0;
+    if (ret != 0 || lhsLen == rhsLen) {
+        return ret;
+    }
+    return lhsLen < rhsLen ? -1 : 1;
 }
 
-int32_t String8::ncompare(const char* other, size_t n) const
+int32_t String8::ncompare(const char* other, size_t n) const noexcept
 {
     if (other == nullptr) return 1;
-    return strncmp(mString, other, n);
+    size_t otherLen = strnlen(other, n);
+    size_t lhsLen = (std::min)(static_cast<size_t>(mLength), n);
+    size_t minLen = (std::min)(lhsLen, otherLen);
+    int ret = minLen > 0 ? memcmp(mString, other, minLen) : 0;
+    if (ret != 0 || lhsLen == otherLen) {
+        return ret;
+    }
+    return lhsLen < otherLen ? -1 : 1;
 }
 
-int32_t String8::casecmp(const String8& other) const
+int32_t String8::casecmp(const String8& other) const noexcept
 {
-    return ::strcasecmp(mString, other.mString);
+    size_t minLen = (std::min)(static_cast<size_t>(mLength), static_cast<size_t>(other.mLength));
+    for (size_t i = 0; i < minLen; ++i) {
+        unsigned char lhs = static_cast<unsigned char>(mString[i]);
+        unsigned char rhs = static_cast<unsigned char>(other.mString[i]);
+        int diff = ::tolower(lhs) - ::tolower(rhs);
+        if (diff != 0) {
+            return diff;
+        }
+    }
+    if (mLength == other.mLength) {
+        return 0;
+    }
+    return mLength < other.mLength ? -1 : 1;
 }
 
-int32_t String8::casecmp(const char* other) const
+int32_t String8::casecmp(const char* other) const noexcept
 {
     if (other == nullptr) return 1;
+#if defined(OS_WINDOWS)
+    return ::_stricmp(mString, other);
+#else
     return ::strcasecmp(mString, other);
+#endif
 }
 
 // ============== 比较运算符 ==============
 
-bool String8::operator<(const String8& other) const { return compare(other) < 0; }
-bool String8::operator<=(const String8& other) const { return compare(other) <= 0; }
-bool String8::operator==(const String8& other) const { return compare(other) == 0; }
-bool String8::operator!=(const String8& other) const { return compare(other) != 0; }
-bool String8::operator>=(const String8& other) const { return compare(other) >= 0; }
-bool String8::operator>(const String8& other) const { return compare(other) > 0; }
+bool String8::operator<(const String8& other) const noexcept { return compare(other) < 0; }
+bool String8::operator<=(const String8& other) const noexcept { return compare(other) <= 0; }
+bool String8::operator==(const String8& other) const noexcept { return compare(other) == 0; }
+bool String8::operator!=(const String8& other) const noexcept { return compare(other) != 0; }
+bool String8::operator>=(const String8& other) const noexcept { return compare(other) >= 0; }
+bool String8::operator>(const String8& other) const noexcept { return compare(other) > 0; }
 
-bool String8::operator<(const char* other) const { return compare(other) < 0; }
-bool String8::operator<=(const char* other) const { return compare(other) <= 0; }
-bool String8::operator==(const char* other) const { return compare(other) == 0; }
-bool String8::operator!=(const char* other) const { return compare(other) != 0; }
-bool String8::operator>=(const char* other) const { return compare(other) >= 0; }
-bool String8::operator>(const char* other) const { return compare(other) > 0; }
+bool String8::operator<(const char* other) const noexcept { return compare(other) < 0; }
+bool String8::operator<=(const char* other) const noexcept { return compare(other) <= 0; }
+bool String8::operator==(const char* other) const noexcept { return compare(other) == 0; }
+bool String8::operator!=(const char* other) const noexcept { return compare(other) != 0; }
+bool String8::operator>=(const char* other) const noexcept { return compare(other) >= 0; }
+bool String8::operator>(const char* other) const noexcept { return compare(other) > 0; }
 
 char& String8::operator[](size_t index)
 {
     ensureUnique();
-    if (index >= mCapacity) {
-        return mString[mCapacity];
+    if (index >= mLength) {
+        throw Exception("String8::operator[] index out of range");
     }
     return mString[index];
 }
 
-const char& String8::operator[](size_t index) const
+const char& String8::operator[](size_t index) const noexcept
 {
     if (index >= mLength) {
         return mString[mLength]; // 返回 '\0'
@@ -862,7 +961,8 @@ void String8::toLower(size_t start, size_t numChars)
     
     ensureUnique();
     
-    size_t end = (std::min)(start + numChars, static_cast<size_t>(mLength));
+    size_t count = (std::min)(numChars, static_cast<size_t>(mLength) - start);
+    size_t end = start + count;
     for (size_t i = start; i < end; ++i) {
         mString[i] = static_cast<char>(::tolower(static_cast<unsigned char>(mString[i])));
     }
@@ -879,7 +979,8 @@ void String8::toUpper(size_t start, size_t numChars)
     
     ensureUnique();
     
-    size_t end = (std::min)(start + numChars, static_cast<size_t>(mLength));
+    size_t count = (std::min)(numChars, static_cast<size_t>(mLength) - start);
+    size_t end = start + count;
     for (size_t i = start; i < end; ++i) {
         mString[i] = static_cast<char>(::toupper(static_cast<unsigned char>(mString[i])));
     }
@@ -934,10 +1035,12 @@ int32_t String8::appendFormatV(const char* fmt, va_list args)
         return n;
     }
 
-    size_t newLen = mLength + n;
-    if (newLen >= MAX_STRING_SIZE) {
+    size_t appendLen = static_cast<size_t>(n);
+    if (appendLen >= MAX_STRING_SIZE || mLength > MAX_STRING_SIZE - appendLen) {
         return -1;
     }
+
+    size_t newLen = mLength + appendLen;
 
     reserve(newLen);
     vsnprintf_(mString + mLength, n + 1, fmt, args);
@@ -948,54 +1051,7 @@ int32_t String8::appendFormatV(const char* fmt, va_list args)
 
 // ============== 静态方法 ==============
 
-int32_t String8::GetNext(const String8& key, int32_t n)
-{
-    if (n < 2) return 0;
-    if (n == 2) {
-        return (key.mString[0] == key. mString[1]) ? 1 :  0;
-    }
-
-    int32_t max = 0;
-    for (int32_t k = 1; k < n; ++k) {
-        if (strncmp(key. c_str() + n - k, key. c_str(), k) == 0) {
-            max = (std::max)(max, k);
-        }
-    }
-    return max;
-}
-
-int32_t String8::KMP_strstr(const char* val, const char* key)
-{
-    if (val == nullptr || key == nullptr) {
-        return -1;
-    }
-
-    int32_t valLen = static_cast<int32_t>(strlen(val));
-    int32_t keyLen = static_cast<int32_t>(strlen(key));
-
-    if (keyLen == 0) return 0;
-    if (keyLen > valLen) return -1;
-
-    for (int32_t i = 0; i <= valLen - keyLen; ) {
-        int32_t j = 0;
-        for (; j < keyLen; ++j) {
-            if (val[i + j] != key[j]) {
-                if (j > 0) {
-                    i += (j - GetNext(String8(key, j), j));
-                } else {
-                    ++i;
-                }
-                break;
-            }
-        }
-        if (j == keyLen) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-size_t String8::Hash(const String8& obj)
+size_t String8::Hash(const String8& obj) noexcept
 {
 #if defined(OS_WINDOWS)
     return std::_Hash_array_representation(obj.c_str(), obj.length());

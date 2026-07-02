@@ -270,12 +270,41 @@ TEST_CASE("operator_subscript", "[string8][access]") {
     CHECK(std::string("Jello") == s.c_str());
 
     // 边界访问
-    CHECK(s[s.length()] == '\0');
+    CHECK_THROWS(s[s.length()] = 'x');
+    CHECK_THROWS(s[s.length() + 1] = 'x');
 
     // const 版本
     const String8& cs = s;
     CHECK(cs[0] == 'J');
     CHECK(cs[s.length()] == '\0');
+}
+
+TEST_CASE("embedded_null_preserves_length_and_content", "[string8][binary]") {
+    std::string raw("ab\0cd", 5);
+    String8 s(raw);
+
+    REQUIRE(s.length() == raw.length());
+    CHECK(s.toStdString() == raw);
+    CHECK(s.find("cd") == 3);
+    CHECK(s.find('\0') == 2);
+    CHECK(s.contains("cd"));
+    CHECK(s.find(String8(std::string("b\0c", 3))) == 1);
+    CHECK(s.find_last_of(String8(std::string("b\0c", 3))) == 1);
+
+    String8 copied(s);
+    CHECK(copied.length() == raw.length());
+    CHECK(copied.toStdString() == raw);
+    CHECK(copied == s);
+
+    String8 assigned;
+    assigned = s;
+    CHECK(assigned.length() == raw.length());
+    CHECK(assigned.toStdString() == raw);
+    CHECK(assigned == s);
+
+    CHECK(s.compare(String8(std::string("ab\0ce", 5))) < 0);
+    CHECK(s.compare("ab") > 0);
+    CHECK(s.casecmp(String8(std::string("AB\0CD", 5))) == 0);
 }
 
 TEST_CASE("empty_length_capacity", "[string8][access]") {
@@ -838,6 +867,12 @@ TEST_CASE("toLower", "[string8][operation]") {
         s.toLower(100, 5);
         CHECK(std::string("HELLO") == s.c_str());
     }
+
+    {
+        String8 s("HELLO");
+        s.toLower(1, std::numeric_limits<size_t>::max());
+        CHECK(std::string("Hello") == s.c_str());
+    }
 }
 
 TEST_CASE("toUpper", "[string8][operation]") {
@@ -877,6 +912,12 @@ TEST_CASE("toUpper", "[string8][operation]") {
         s.toUpper(0, 5);
         CHECK(std::string("HELLO world") == s.c_str());
     }
+
+    {
+        String8 s("hello");
+        s.toUpper(1, std::numeric_limits<size_t>::max());
+        CHECK(std::string("hELLO") == s.c_str());
+    }
 }
 
 // ==================== 查找方法测试 ====================
@@ -894,6 +935,7 @@ TEST_CASE("find_String8", "[string8][find]") {
 
     String8 empty;
     CHECK(empty.find(String8("test")) == -1);
+    CHECK(empty.find(String8("")) == 0);
 }
 
 TEST_CASE("find_cstring", "[string8][find]") {
@@ -904,10 +946,13 @@ TEST_CASE("find_cstring", "[string8][find]") {
     CHECK(s.find("Hello", 1) == 14);
     CHECK(s.find("NotFound") == -1);
     CHECK(s.find("!") == 12);
+    CHECK(s.find("") == 0);
 
     // 边界情况
     CHECK(s.find("Hello", 14) == 14);
     CHECK(s.find("Hello", 15) == -1);
+    CHECK(s.find("", s.length()) == static_cast<int32_t>(s.length()));
+    CHECK(s.find("", s.length() + 1) == -1);
 }
 
 TEST_CASE("find_char", "[string8][find]") {
@@ -1070,6 +1115,13 @@ TEST_CASE("operator_assignment", "[string8][operator]") {
         CHECK(s.empty());
     }
 
+    // 内部指针赋值
+    {
+        String8 s("HelloWorld");
+        s = s.c_str() + 5;
+        CHECK(std::string("World") == s.c_str());
+    }
+
     // 移动赋值
     {
         String8 s1("Hello");
@@ -1204,61 +1256,6 @@ TEST_CASE("appendFormat", "[string8][format]") {
             hex.appendFormat("0x%02x ", buffer[i]);
         }
         CHECK(std::string("0x01 0x02 0x03 0x04 ") == hex.c_str());
-    }
-}
-
-// ==================== 静态方法测试 ====================
-
-TEST_CASE("KMP_strstr", "[string8][static]") {
-    // 正常匹配
-    {
-        const char* val = "BBC ABCDAB ABCDABCDABDE";
-        const char* key = "ABCDABD";
-        int result = String8::KMP_strstr(val, key);
-        CHECK(result == static_cast<int>(strstr(val, key) - val));
-    }
-
-    // 开头匹配
-    {
-        const char* val = "Hello, World!";
-        const char* key = "Hello";
-        CHECK(String8::KMP_strstr(val, key) == 0);
-    }
-
-    // 结尾匹配
-    {
-        const char* val = "Hello, World!";
-        const char* key = "World!";
-        CHECK(String8::KMP_strstr(val, key) == 7);
-    }
-
-    // 不匹配
-    {
-        const char* val = "Hello, World!";
-        const char* key = "Goodbye";
-        CHECK(String8::KMP_strstr(val, key) == -1);
-    }
-
-    // 空字符串
-    {
-        CHECK(String8::KMP_strstr("Hello", "") == 0);
-    }
-
-    // nullptr
-    {
-        CHECK(String8::KMP_strstr(nullptr, "test") == -1);
-        CHECK(String8::KMP_strstr("test", nullptr) == -1);
-        CHECK(String8::KMP_strstr(nullptr, nullptr) == -1);
-    }
-
-    // 子串比母串长
-    {
-        CHECK(String8::KMP_strstr("Hi", "Hello") == -1);
-    }
-
-    // 单字符匹配
-    {
-        CHECK(String8::KMP_strstr("Hello", "e") == 1);
     }
 }
 
