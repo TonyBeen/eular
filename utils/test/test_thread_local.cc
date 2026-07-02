@@ -38,6 +38,28 @@ TEST_CASE("test_get_set", "[ThreadLocalStorage]") {
     CHECK(slot->value()._name == name);
 }
 
+TEST_CASE("test_set_lvalue", "[ThreadLocalStorage]") {
+    const char *key = "lvalue";
+    std::string name = "alice";
+    Foo foo(16, name);
+
+    auto slot = eular::ThreadLocalStorage::Current()->set<Foo>(key, foo);
+    REQUIRE(slot != nullptr);
+    CHECK(slot->value()._id == foo._id);
+    CHECK(slot->value()._name == foo._name);
+}
+
+TEST_CASE("test_set_type_mismatch", "[ThreadLocalStorage]") {
+    const char *key = "type_mismatch";
+
+    auto intSlot = eular::ThreadLocalStorage::Current()->set<int>(key, 16);
+    REQUIRE(intSlot != nullptr);
+
+    auto stringSlot = eular::ThreadLocalStorage::Current()->set<std::string>(key, "alice");
+    CHECK(stringSlot == nullptr);
+    CHECK(eular::ThreadLocalStorage::Current()->get<int>(key)->value() == 16);
+}
+
 TEST_CASE("test_tls", "[TLS]") {
     Foo foo(16, "alice");
     g_tls.set(&foo);

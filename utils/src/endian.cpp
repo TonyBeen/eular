@@ -16,8 +16,8 @@ static eular::once_flag g_endianOnceFlag;
 
 static inline void __IsLittleEngine()
 {
-    const uint16_t NUMBER = 0x1122;
-    const uint8_t  FIRST_BYTE = 0x22;
+    const uint16_t NUMBER       = 0x1122;
+    const uint8_t  FIRST_BYTE   = 0x22;
     union {
         uint8_t     oneByte;
         uint16_t    twoByte;
