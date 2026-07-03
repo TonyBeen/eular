@@ -32,7 +32,7 @@ check_valgrind:
 execute_with_valgrind:
 	@for executable in $(EXE_LIST); do \
 		echo "Execute Valgrind command for memory check: $$executable"; \
-		valgrind --xml=yes --xml-file=./xml/$$(basename $$executable)_mem_check.xml --leak-check=full $$executable; \
+		valgrind --xml=yes --xml-file=./xml/$$(basename $$executable)_mem_check.xml --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose $$executable; \
 		echo "$$executable over..."; \
 		echo ""; \
 	done

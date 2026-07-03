@@ -200,7 +200,8 @@ bool RingBuffer::getWritableRegion(uint8_t*& ptr, size_t& len)
 void RingBuffer::commitWrite(size_t len)
 {
     size_t writable = writableSize();
-    len = std::min(len, writable);
+    size_t contiguous = std::min(writable, m_capacity - m_writePos);
+    len = std::min(len, contiguous);
 
     m_writePos = (m_writePos + len) % m_capacity;
     m_usedSize += len;
@@ -208,7 +209,9 @@ void RingBuffer::commitWrite(size_t len)
 }
 
 void RingBuffer::commitRead(size_t len) {
-    len = std::min(len, m_usedSize);
+    size_t readable = readableSize();
+    size_t contiguous = std::min(readable, m_capacity - m_readPos);
+    len = std::min(len, contiguous);
 
     m_readPos = (m_readPos + len) % m_capacity;
     m_usedSize -= len;

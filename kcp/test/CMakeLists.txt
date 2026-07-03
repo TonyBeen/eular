@@ -1,0 +1,2 @@
+add_executable(kcp_echo_test_client.out kcp_echo_test_client.c)
+target_link_libraries(kcp_echo_test_client.out kcpp_static ${LIBEVENT_STATIC_LIBRARIES} pthread)

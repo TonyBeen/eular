@@ -11,6 +11,9 @@
 #include <utils/sysdef.h>
 
 #if defined(OS_WINDOWS)
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
     #ifndef _WIN32_WINNT
     #define _WIN32_WINNT 0x0600
     #elif _WIN32_WINNT < 0x0600

@@ -128,7 +128,7 @@ uint32_t popcount(uint32_t n)
     n = (n & 0x00FF00FF) + ((n >> 8) & 0x00FF00FF);
     n = (n & 0x0000FFFF) + ((n >> 16) & 0x0000FFFF);
     return n;
-#elif defined(OS_LINUX)
+#elif defined(OS_LINUX) || defined(OS_APPLE)
     return __builtin_popcount(n);
 #endif
 }
@@ -196,7 +196,9 @@ bool BitMap::resize(uint32_t bitSize)
     mSize = bitSize;
 
     uint32_t bytes = (oldCap > mCapacity) ? (mCapacity / BITS_PEER_BYTE) : (oldCap / BITS_PEER_BYTE);
-    memcpy(newBitMap, mBitMap, bytes);
+    if (bytes > 0 && mBitMap != nullptr) {
+        memcpy(newBitMap, mBitMap, bytes);
+    }
 
     release();
     mBitMap = newBitMap;

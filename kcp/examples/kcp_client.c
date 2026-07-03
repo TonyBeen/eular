@@ -57,10 +57,13 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 
     kcp_statistic_t stat;
     kcp_connection_get_statistic(kcp_connection, &stat);
-    printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
-           "srtt: %d us, rttvar: %d us, rto: %d us\n",
-           stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, stat.rtx_bytes / (double)stat.tx_bytes,
-           stat.srtt, stat.rttvar, stat.rto);
+        double rrate = (stat.tx_bytes > 0) ? (stat.rtx_bytes / (double)stat.tx_bytes) : 0.0;
+        printf("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
+            "srtt: %d us, rttvar: %d us, rto: %d us, bbr_mode: %d, cwnd: %d, "
+            "target_cwnd: %u, min_rtt: %u us, btlbw: %lu Bps, pacing: %lu Bps\n",
+            stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, rrate,
+            stat.srtt, stat.rttvar, stat.rto, stat.bbr_mode, stat.cwnd,
+            stat.target_cwnd, stat.min_rtt_us, stat.btlbw_bytes_ps, stat.pacing_rate_bps);
 
     event_base_loopbreak(g_ev_base);
 }
@@ -153,7 +156,9 @@ int main(int argc, char **argv)
     int32_t command = 0;
     const char *remote_host = "127.0.0.1";
     const char *nic = NULL;
-    while ((command = getopt(argc, argv, "s:n:h")) != -1) {
+    int local_port = 0;
+    int remote_port = 54321;
+    while ((command = getopt(argc, argv, "s:n:l:p:h")) != -1) {
         switch (command) {
             case 's':
                 remote_host = optarg;
@@ -161,22 +166,33 @@ int main(int argc, char **argv)
             case 'n':
                 nic = optarg;
                 break;
+            case 'l':
+                local_port = atoi(optarg);
+                break;
+            case 'p':
+                remote_port = atoi(optarg);
+                break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-s command]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-s remote_ip_or_host] [-p remote_port] [-l local_port] [-n nic]\n", argv[0]);
                 return 0;
             case '?':
                 fprintf(stderr, "Unknown option: %d\n", optopt);
                 return -1;
             default:
-                fprintf(stderr, "Usage: %s [-s command] %d\n", argv[0], command);
+                fprintf(stderr, "Usage: %s [-s remote_ip_or_host] [-p remote_port] [-l local_port] [-n nic] %d\n", argv[0], command);
                 return -1;
         }
+    }
+
+    if (remote_port <= 0 || remote_port > 65535 || local_port < 0 || local_port > 65535) {
+        fprintf(stderr, "Invalid port setting: remote=%d local=%d\n", remote_port, local_port);
+        return -1;
     }
 
     sockaddr_t remote_addr;
     memset(&remote_addr, 0, sizeof(remote_addr));
     remote_addr.sin.sin_family = AF_INET;
-    remote_addr.sin.sin_port = htons(54321);
+    remote_addr.sin.sin_port = htons((uint16_t)remote_port);
 
     // 解析域名
     struct addrinfo hints, *result, *rp;
@@ -225,7 +241,7 @@ int main(int argc, char **argv)
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
     local_addr.sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    local_addr.sin.sin_port = htons(0);
+    local_addr.sin.sin_port = htons((uint16_t)local_port);
 
     int32_t status = kcp_bind(ctx, &local_addr, nic);
     if (NO_ERROR != status) {
@@ -242,7 +258,10 @@ int main(int argc, char **argv)
 
     kcp_set_close_cb(ctx, on_kcp_closed);
 
-    printf("KCP client started, connecting to %s:%d\n", remote_host, ntohs(remote_addr.sin.sin_port));
+        printf("KCP client started, local_port=%d, connecting to %s:%d\n",
+            local_port,
+            remote_host,
+            ntohs(remote_addr.sin.sin_port));
     if (event_base_dispatch(g_ev_base) < 0) {
         fprintf(stderr, "Failed to start event loop\n");
         kcp_context_destroy(ctx);

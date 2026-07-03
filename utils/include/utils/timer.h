@@ -16,6 +16,7 @@
 
 #include <utils/sysdef.h>
 #include <utils/mutex.h>
+#include <utils/semaphore.h>
 #include <utils/thread.h>
 #include <utils/singleton.h>
 
@@ -113,7 +114,10 @@ public:
     int startTimer(bool useCallerThread = false);
     void stopTimer();
 
-    const Timer *getNearTimer() { return *(mTimers.begin()); }
+    const Timer *getNearTimer() {
+        RDAutoLock<RWMutex> lock(mRWMutex);
+        return mTimers.empty() ? nullptr : *(mTimers.begin());
+    }
     uint64_t addTimer(uint64_t ms, Timer::CallBack cb, uint32_t recycle = 0);
     bool delTimer(uint64_t uniqueId);
 
@@ -124,7 +128,7 @@ protected:
     void onNotify();
 
 private:
-    Sem     mSignal;
+    Semaphore mSignal;
     RWMutex mRWMutex;
     int32_t mSockPair[2];
 

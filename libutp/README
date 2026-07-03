@@ -1,0 +1,125 @@
+# libutp
+
+一个基于 UDP 的可靠传输协议库，提供连接管理、多流复用、拥塞控制、MTU 探测、会话恢复与 0-RTT 等能力。
+
+## 当前仓库概览（已扫描）
+
+- 核心代码：`src/`
+- 对外头文件：`include/utp/`
+- 测试：`test/`
+- 示例程序：`examples/`
+- 协议与设计文档：`doc/`、`openspec/`
+- 第三方依赖：`3rd/`（含 BoringSSL 子模块）
+- CMake 配置：根目录 `CMakeLists.txt`、`cmake/`
+
+## 目录说明
+
+- `include/utp/`
+	- `utp.h`：`Context` 入口（bind/connect/accept/0-RTT、回调注册等）
+	- `connection.h`：`Connection` 抽象（建流、关闭、统计、会话票据导出）
+	- `stream.h`：`Stream` 抽象（读写、状态、优先级、重置）
+	- `config.h`：协议与调度参数（MTU、keepalive、拥塞控制、ACK、调度器等）
+	- `errno.h`、`logger.h`、`platform.h`、`types.h`：错误码、日志、平台与基础类型
+- `src/`
+	- `context/`：连接生命周期、握手、收发控制
+	- `proto/`：包与帧编码解码
+	- `congestion/`：BBR/CUBIC 与 pacing
+	- `mtu/`：DPLPMTUD 探测
+	- `crypto/`：会话票据、恢复态、加密相关
+	- `socket/`：UDP、地址与批量收发
+	- `util/`、`logger/`、`fmt/`：通用工具与日志
+- `test/`
+	- 覆盖 ACK、帧编解码、上下文集成、0-RTT、拥塞控制、MTU、收发路径等
+- `examples/`
+	- 回显：`utp_echo_server` / `utp_echo_client`
+	- 会话恢复：`utp_session_resume_server` / `utp_session_resume_client`
+	- MTU+保活：`utp_mtu_keepalive_server` / `utp_mtu_keepalive_client`
+
+## 依赖要求
+
+本项目依赖以下兄弟仓库（默认相对路径）：
+
+- `../utils`（要求存在 `CMakeLists.txt`）
+- `../libevent`（要求存在 `CMakeLists.txt`）
+
+此外，默认使用仓库内子模块：
+
+- `3rd/boringssl`（`UTP_USE_BUNDLED_BORINGSSL=ON` 时必须存在）
+
+如果以上路径不一致，可在配置时覆盖：
+
+- `UTP_UTILS_ROOT`
+- `UTP_EVENT_ROOT`
+
+## 构建
+
+最低 CMake 版本：3.22
+
+```bash
+cmake -S . -B build \
+	-DUTP_UTILS_ROOT=/path/to/utils \
+	-DUTP_EVENT_ROOT=/path/to/libevent
+
+cmake --build build -j
+```
+
+常用选项：
+
+- `-DUTP_BUILD_TESTS=ON`：构建测试
+- `-DUTP_USE_BUNDLED_BORINGSSL=ON|OFF`：是否使用仓库内 BoringSSL（默认 ON）
+
+安装：
+
+```bash
+cmake --install build
+```
+
+## 运行测试
+
+```bash
+cmake -S . -B build \
+	-DUTP_BUILD_TESTS=ON \
+	-DUTP_UTILS_ROOT=/path/to/utils \
+	-DUTP_EVENT_ROOT=/path/to/libevent
+
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+## 运行示例
+
+先启动服务端，再启动客户端：
+
+```bash
+# Echo
+./build/examples/utp_echo_server
+./build/examples/utp_echo_client
+
+# Session resume
+./build/examples/utp_session_resume_server
+./build/examples/utp_session_resume_client
+
+# MTU keepalive
+./build/examples/utp_mtu_keepalive_server
+./build/examples/utp_mtu_keepalive_client
+```
+
+## 对外 API 入口
+
+最小使用路径：
+
+1. 创建 `eular::utp::Config`
+2. 创建 `eular::utp::Context(event_base*, Config*)`
+3. 设置连接与错误回调（如 `setOnConnected`、`setOnConnectError`）
+4. 调用 `bind` 与 `connect`（或服务端 `accept`）
+5. 在 `Connection` 上创建/获取 `Stream`，进行读写
+
+## 文档
+
+- 设计与协议文档见 `doc/`
+- 规范草案见 `openspec/`
+- NAT 说明见 `nat.md`
+
+## 版本
+
+当前 CMake 工程版本：`1.2.0`

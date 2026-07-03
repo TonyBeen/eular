@@ -21,52 +21,53 @@ class UTILS_API ByteBuffer final
 {
 public:
     ByteBuffer();
-    ByteBuffer(size_t size);
-    ByteBuffer(const char *data, size_t dataLength = SIZE_MAX);
-    ByteBuffer(const uint8_t *data, size_t dataLength);
+    ByteBuffer(uint32_t size);
+    ByteBuffer(const char *data, uint32_t dataLength = UINT32_MAX);
+    ByteBuffer(const uint8_t *data, uint32_t dataLength);
     ByteBuffer(const ByteBuffer& other);
     ByteBuffer(ByteBuffer&& other);
     ~ByteBuffer();
 
-    ByteBuffer& operator=(const ByteBuffer& other);
-    ByteBuffer& operator=(ByteBuffer&& other);
-    uint8_t&    operator[](size_t index);
+    ByteBuffer&     operator=(const ByteBuffer& other);
+    ByteBuffer&     operator=(ByteBuffer&& other);
+    uint8_t&        operator[](uint32_t index);
+    const uint8_t&  operator[](uint32_t index) const;
 
     // 在offset之后设为data
-    size_t      set(const uint8_t *data, size_t dataSize, size_t offset = 0);
-    void        append(const char *data, size_t dataSize = SIZE_MAX);
-    void        append(const uint8_t *data, size_t dataSize);
-    void        append(const ByteBuffer &other);
+    uint32_t        set(const uint8_t *data, uint32_t dataSize, uint32_t offset = 0);
+    void            append(const char *data, uint32_t dataSize = UINT32_MAX);
+    void            append(const uint8_t *data, uint32_t dataSize);
+    void            append(const ByteBuffer &other);
     // 在offset之后插入数据而不覆盖之后的数据
-    size_t      insert(const uint8_t *data, size_t dataSize, size_t offset = 0);
+    uint32_t        insert(const uint8_t *data, uint32_t dataSize, uint32_t offset = 0);
 
-    uint8_t *   data() { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *const_data() const { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *begin() const { return mBuffer ? mBuffer : nullptr; }
-    const uint8_t *end() const { return mBuffer ? (mBuffer + mDataSize) : nullptr; }
-    void        reserve(size_t newSize);
-    size_t      capacity() const { return mCapacity; }
-    size_t      size() const { return mDataSize; }
-    void        clear();
-    void        resize(size_t sz);
+    uint8_t*        data();
+    const uint8_t*  const_data() const noexcept { return mBuffer; }
+    const uint8_t*  begin() const noexcept { return mBuffer; }
+    const uint8_t*  end() const noexcept { return mBuffer ? (mBuffer + mDataSize) : nullptr; }
+    void            reserve(uint32_t newSize);
+    uint32_t        capacity() const noexcept { return mCapacity; }
+    uint32_t        size() const noexcept { return mDataSize; }
+    void            clear();
+    void            resize(uint32_t sz);
 
-    std::string dump()  const;
-    static size_t Hash(const ByteBuffer &buf);
-    bool        operator==(const ByteBuffer &other) const;
-
-    static void *GLIBC_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len);
+    std::string     dump()  const;
+    bool            operator==(const ByteBuffer &other) const;
+    
+    static size_t   Hash(const ByteBuffer &buf);
+    static void*    GLIBC_memmem(const void *haystack, size_t hs_len, const void *needle, size_t ne_len);
 
 private:
-    size_t      calculate(size_t);
-    size_t      allocBuffer(size_t size);
-    void        freeBuffer();
-    void        moveAssign(ByteBuffer &other);
-    void        detach();
+    uint32_t        calculate(uint32_t);
+    uint32_t        allocBuffer(uint32_t size);
+    void            freeBuffer();
+    void            moveAssign(ByteBuffer &other);
+    bool            detach();
 
 private:
     uint8_t*    mBuffer;
-    size_t      mDataSize;
-    size_t      mCapacity;
+    uint32_t    mDataSize;
+    uint32_t    mCapacity;
 };
 
 } // namespace eular

@@ -11,8 +11,14 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include <algorithm>
+#include <functional>
+#include <stdexcept>
+#include <utility>
 #include <vector>
+#include <limits>
 #include <initializer_list>
+#include <type_traits>
 
 #include <utils/refcount.h>
 #include <utils/utils.h>
@@ -22,17 +28,17 @@ namespace eular {
 struct HashData
 {
     struct Node {
-        Node *next;
-        uint32_t hash;
+        Node *m_next;
+        uint32_t m_hash;
     };
 
-    Node *fakeNode;     // 永为null
-    std::vector<Node *> buckets;
-    RefCount ref;
-    int size;           // 当前有多少元素
-    int nodeSize;       // 每个node节点的大小
-    short numBits;      // prime_deltas数组元素的位置(小于素数的最大2的幂次方)
-    int numBuckets;     // 容量(为素数)
+    Node *m_fakeNode;     // 永为null
+    std::vector<Node *> m_buckets;
+    RefCount m_ref;
+    int m_size;           // 当前有多少元素
+    int m_nodeSize;       // 每个node节点的大小
+    short m_numBits;      // prime_deltas数组元素的位置(小于素数的最大2的幂次方)
+    int m_numBuckets;     // 容量(为素数)
 
     void *allocateNode(int align);
     void freeNode(void *node);
@@ -40,7 +46,7 @@ struct HashData
                             int nodeSize, int nodeAlign);
     void free_helper(void (*node_delete)(Node *));
     void rehash(int hint);
-    bool grow();
+    bool grow(float maxLoadFactor);
 
     Node *firstNode();
     static Node *nextNode(Node *node);
@@ -52,69 +58,64 @@ struct HashData
 template <typename Key, typename Val>
 struct HashNode
 {
-    HashNode *next;
-    const uint32_t hash;    // key计算后的hash值
-    const Key key;
-    Val value;
+    HashNode *m_next;
+    const uint32_t m_hash;    // key计算后的hash值
+    const Key m_key;
+    Val m_value;
 
     HashNode(const Key &k, const Val &v, uint32_t h, HashNode *n) :
-        next(n), hash(h), key(k), value(v) { }
-    inline bool sameKeyWith(const Key &k, uint32_t h) { return (k == key && h == hash); }
-
+        m_next(n), m_hash(h), m_key(k), m_value(v) { }
 private:
     HashNode(const HashNode &) = delete;
     HashNode &operator=(const HashNode &) = delete;
 };
 
-// HashComputeBase
-class HashCmptBase
-{
-public:
-    virtual ~HashCmptBase() { }
-    virtual uint32_t hash() const { return 0; }
-
-protected:
-    static uint32_t compute(const uint8_t *key, uint32_t size);
-    static uint32_t compute2(const void *key, uint32_t size);
-};
-
-template <typename Key, typename Val>
+template <typename Key, typename Val, typename Hash = std::hash<Key>, typename KeyEqual = std::equal_to<Key> >
 class HashMap
 {
     typedef HashNode<Key, Val> Node;
-    static_assert(std::is_base_of<eular::HashCmptBase, Key>::value, "must inherit from HashCmptBase!");
+    typedef Hash Hasher;
+    typedef KeyEqual KeyEqualer;
+    static constexpr bool kAtNoexcept =
+        noexcept(std::declval<const Hasher &>()(std::declval<const Key &>())) &&
+        noexcept(std::declval<const KeyEqualer &>()(std::declval<const Key &>(), std::declval<const Key &>()));
 
 public:
-    HashMap() noexcept : data(const_cast<HashData *>(&HashData::shared_null)) {}
+    HashMap() noexcept : m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual(), m_maxLoadFactor(1.0f) {}
     HashMap(std::initializer_list<std::pair<Key, Val>> list) :
-        data(const_cast<HashData *>(&HashData::shared_null))
+        m_data(const_cast<HashData *>(&HashData::shared_null)), m_hasher(), m_keyEqual(), m_maxLoadFactor(1.0f)
     {
-        data->rehash(-std::max<int>(list.size(), 1));
+        m_data->rehash(-std::max<int>(list.size(), 1));
         for (typename std::initializer_list<std::pair<Key, Val>>::const_iterator it = list.begin();
             it != list.end(); ++it) {
             insert(it->first, it->second);
         }
     }
     HashMap(const HashMap &other) noexcept :
-        data(other.data)
+        m_data(other.m_data), m_hasher(other.m_hasher), m_keyEqual(other.m_keyEqual), m_maxLoadFactor(other.m_maxLoadFactor)
     {
-        data->ref.ref();
+        m_data->m_ref.ref();
     }
     HashMap &operator=(const HashMap &other)
     {
-        if (data != other.data) {
-            HashData *o = other.data;
-            o->ref.ref();
-            if (!data->ref.deref())
-                freeData(data);
-            data = o;
+        if (m_data != other.m_data) {
+            HashData *otherData = other.m_data;
+            otherData->m_ref.ref();
+            if (!m_data->m_ref.deref())
+                freeData(m_data);
+            m_data = otherData;
+            m_hasher = other.m_hasher;
+            m_keyEqual = other.m_keyEqual;
+            m_maxLoadFactor = other.m_maxLoadFactor;
         }
         return *this;
     }
     HashMap(HashMap &&other) noexcept :
-        data(other.data)
+        m_data(other.m_data), m_hasher(std::move(other.m_hasher)), m_keyEqual(std::move(other.m_keyEqual)),
+        m_maxLoadFactor(other.m_maxLoadFactor)
     {
-        other.data = const_cast<HashData *>(&HashData::shared_null);
+        other.m_data = const_cast<HashData *>(&HashData::shared_null);
+        other.m_maxLoadFactor = 1.0f;
     }
     HashMap &operator=(HashMap &&other) noexcept
     {
@@ -124,32 +125,49 @@ public:
 
         return *this;
     }
-    ~HashMap()
+    ~HashMap() noexcept
     {
-        if (!data->ref.deref()) {
-            freeData(data);
+        if (!m_data->m_ref.deref()) {
+            freeData(m_data);
         }
     }
 
-    void swap(HashMap &other) { std::swap(data, other.data); }
+    void swap(HashMap &other) noexcept(noexcept(std::swap(m_data, other.m_data)) &&
+                                       noexcept(std::swap(m_hasher, other.m_hasher)) &&
+                                       noexcept(std::swap(m_keyEqual, other.m_keyEqual)) &&
+                                       noexcept(std::swap(m_maxLoadFactor, other.m_maxLoadFactor)))
+    {
+        std::swap(m_data, other.m_data);
+        std::swap(m_hasher, other.m_hasher);
+        std::swap(m_keyEqual, other.m_keyEqual);
+        std::swap(m_maxLoadFactor, other.m_maxLoadFactor);
+    }
 
-    inline int size() const { return data->size; }
-    inline bool empty() const { return data->size == 0; }
-    inline int capacity() const { return data->numBuckets; }
+    inline int size() const noexcept { return m_data->m_size; }
+    inline bool empty() const noexcept { return m_data->m_size == 0; }
+    inline int capacity() const noexcept { return m_data->m_numBuckets; }
+    inline float max_load_factor() const noexcept { return m_maxLoadFactor; }
+    void max_load_factor(float factor)
+    {
+        if (factor <= 0.0f || factor > static_cast<float>((std::numeric_limits<int>::max)())) {
+            throw std::invalid_argument("HashMap::max_load_factor expects factor > 0");
+        }
+        m_maxLoadFactor = factor;
+    }
     void reserve(size_t size);
     void clear();
 
-    Val &at(const Key &key);
-    const Val &at(const Key &key, const Val &v = Val()) const;
-    Val &operator[](const Key &key) { detach(); return at(key); }
-    const Val operator[](const Key &key) const { return at(key); }
+    Val *at(const Key &key) noexcept(kAtNoexcept);
+    const Val *at(const Key &key) const noexcept(kAtNoexcept);
+    Val &operator[](const Key &key);
+    const Val &operator[](const Key &key) const;
 
     class const_iterator;
     class iterator
     {
         friend class const_iterator;
-        friend class HashMap<Key, Val>;
-        HashData::Node *n;
+        friend class HashMap<Key, Val, Hash, KeyEqual>;
+        HashData::Node *m_node;
 
     public:
         typedef std::bidirectional_iterator_tag iterator_category;
@@ -158,46 +176,46 @@ public:
         typedef Val *pointer;
         typedef Val &reference;
 
-        inline iterator() : n(nullptr) { }
-        explicit inline iterator(void *node) : n(reinterpret_cast<HashData::Node *>(node)) { }
-    
-        inline const Key &key() const { return concrete(n)->key; }
-        inline Val &value() const { return concrete(n)->value; }
-        inline Val &operator*() const { return concrete(n)->value; }
-        inline Val *operator->() const { return &concrete(n)->value; }
-        inline bool operator==(const iterator &o) const { return n == o.n; }
-        inline bool operator!=(const iterator &o) const { return n != o.n; }
+        inline iterator() noexcept : m_node(nullptr) { }
+        explicit inline iterator(void *node) noexcept : m_node(reinterpret_cast<HashData::Node *>(node)) { }
 
-        inline iterator &operator++() {     // 前置++
-            n = HashData::nextNode(n);
+        inline const Key &key() const noexcept { return concrete(m_node)->m_key; }
+        inline Val &value() const noexcept { return concrete(m_node)->m_value; }
+        inline Val &operator*() const noexcept { return concrete(m_node)->m_value; }
+        inline Val *operator->() const noexcept { return &concrete(m_node)->m_value; }
+        inline bool operator==(const iterator &o) const noexcept { return m_node == o.m_node; }
+        inline bool operator!=(const iterator &o) const noexcept { return m_node != o.m_node; }
+
+        inline iterator &operator++() noexcept {     // 前置++
+            m_node = HashData::nextNode(m_node);
             return *this;
         }
-        inline iterator operator++(int) {   // 后置++
+        inline iterator operator++(int) noexcept {   // 后置++
             iterator it = *this;
-            n = HashData::nextNode(n);
+            m_node = HashData::nextNode(m_node);
             return it;
         }
-        inline iterator &operator--() {
-            n = HashData::previousNode(n);
+        inline iterator &operator--() noexcept {
+            m_node = HashData::previousNode(m_node);
             return *this;
         }
-        inline iterator operator--(int) {
+        inline iterator operator--(int) noexcept {
             iterator it = *this;
-            n = HashData::previousNode(n);
+            m_node = HashData::previousNode(m_node);
             return it;
         }
 
-        inline bool operator==(const const_iterator &o) const { return n == o.n; }
-        inline bool operator!=(const const_iterator &o) const { return n != o.n; }
+        inline bool operator==(const const_iterator &o) const noexcept { return m_node == o.m_node; }
+        inline bool operator!=(const const_iterator &o) const noexcept { return m_node != o.m_node; }
     };
     friend class iterator;
 
     class const_iterator
     {
         friend class iterator;
-        friend class HashMap<Key, Val>;
-        HashData::Node *n;
-    
+        friend class HashMap<Key, Val, Hash, KeyEqual>;
+        HashData::Node *m_node;
+
     public:
         typedef std::bidirectional_iterator_tag iterator_category;
         typedef uint64_t difference_type;
@@ -205,77 +223,88 @@ public:
         typedef const Val *pointer;
         typedef const Val &reference;
 
-        inline const_iterator() : n(nullptr) { }
+        inline const_iterator() noexcept : m_node(nullptr) { }
         explicit inline const_iterator(void *node) :
-            n(reinterpret_cast<HashData::Node *>(node)) { }
-        inline const_iterator(const iterator &o) :
-            n(o.n) { }
-        
-        inline const Key &key() const { return concrete(n)->key; }
-        inline const Val &value() const { return concrete(n)->value; }
-        inline const Val &operator*() const { return concrete(n)->value; }
-        inline const Val *operator->() const { return &concrete(n)->value; }
-        inline bool operator==(const const_iterator &o) { return o.n == n; }
-        inline bool operator!=(const const_iterator &o) { return o.n != n; }
+            m_node(reinterpret_cast<HashData::Node *>(node)) { }
+        inline const_iterator(const iterator &o) noexcept :
+            m_node(o.m_node) { }
 
-        inline const_iterator &operator++() {
-            n = HashData::nextNode(n);
+        inline const Key &key() const noexcept { return concrete(m_node)->m_key; }
+        inline const Val &value() const noexcept { return concrete(m_node)->m_value; }
+        inline const Val &operator*() const noexcept { return concrete(m_node)->m_value; }
+        inline const Val *operator->() const noexcept { return &concrete(m_node)->m_value; }
+        inline bool operator==(const const_iterator &o) const noexcept { return o.m_node == m_node; }
+        inline bool operator!=(const const_iterator &o) const noexcept { return o.m_node != m_node; }
+
+        inline const_iterator &operator++() noexcept {
+            m_node = HashData::nextNode(m_node);
             return *this;
         }
-        inline const_iterator operator++(int) {
+        inline const_iterator operator++(int) noexcept {
             const_iterator cit = *this;
-            n = HashData::nextNode(n);
+            m_node = HashData::nextNode(m_node);
             return cit;
         }
-        inline const_iterator &operator--() {
-            n = HashData::previousNode(n);
+        inline const_iterator &operator--() noexcept {
+            m_node = HashData::previousNode(m_node);
             return *this;
         }
-        inline const_iterator operator--(int) {
+        inline const_iterator operator--(int) noexcept {
             const_iterator cit = *this;
-            n = HashData::previousNode(n);
+            m_node = HashData::previousNode(m_node);
             return cit;
         }
     };
 
-    inline iterator begin() { detach(); return iterator(data->firstNode()); }
-    inline const_iterator begin() const { return const_iterator(data->firstNode()); }
-    inline iterator end() { detach(); return iterator(nodeEnd); }
-    inline const_iterator end() const { return const_iterator(nodeEnd); }
+    inline iterator begin() { detach(); return iterator(m_data->firstNode()); }
+    inline const_iterator begin() const noexcept { return const_iterator(m_data->firstNode()); }
+    inline iterator end() { detach(); return iterator(m_nodeEnd); }
+    inline const_iterator end() const noexcept { return const_iterator(m_nodeEnd); }
 
-    iterator erase(iterator it) { return erase(const_iterator(it.n)); }
+    iterator erase(iterator it) { return erase(const_iterator(it.m_node)); }
     iterator erase(const_iterator it);
     iterator find(const Key &key);
     const_iterator find(const Key &key) const;
     iterator insert(const Key &key, const Val &value);
 
 protected:
-    inline void detach() { if (data->ref.load() > 1) { detach_helper(); } }
+    inline void detach() { if (m_data->m_ref.load() > 1) { detach_helper(); } }
     void detach_helper();
     void freeData(HashData *d);
-    Node **findNode(const Key &k, uint32_t hash) const;
+    Node **findNode(const Key &k, uint32_t hashValue) const;
     Node *createNode(uint32_t h, const Key &key, const Val &value, Node **nextNode);
     void deleteNode(Node *node);
     static void deleteNode2(HashData::Node *node);
     static void duplicateNode(HashData::Node *originalNode, void *newNode);
+    uint32_t hashKey(const Key &key) const noexcept(noexcept(m_hasher(key)))
+    {
+        return static_cast<uint32_t>(m_hasher(key));
+    }
+    bool keysEqual(const Key &lhs, const Key &rhs) const noexcept(noexcept(m_keyEqual(lhs, rhs)))
+    {
+        return m_keyEqual(lhs, rhs);
+    }
 
     bool isValidIterator(const iterator &it) const noexcept
     {
-        return isValidNode(it.n);
+        return isValidNode(it.m_node);
     }
 
-    bool isVaildIterator(const const_iterator &it) const noexcept
+    bool isValidIterator(const const_iterator &it) const noexcept
     {
-        return isValidNode(it.n);
+        return isValidNode(it.m_node);
     }
 
-    inline bool isValidNode(const Node *node) const noexcept
+    inline bool isValidNode(const HashData::Node *node) const noexcept
     {
 #if !defined(NDEBUG)
-        while (node->next) {
-            node = node->next;
+        if (node == nullptr) {
+            return false;
         }
-        return (static_cast<void *>(node) == data);
+        while (node->m_next) {
+            node = node->m_next;
+        }
+        return static_cast<const void *>(node) == static_cast<const void *>(m_data);
 #else
         UNUSED(node);
         return true;
@@ -283,186 +312,200 @@ protected:
     }
 
     // 将HashData::Node转为HashNode类型
-    static inline Node *concrete(HashData::Node *node) {
+    static inline Node *concrete(HashData::Node *node) noexcept {
         return reinterpret_cast<Node *>(node);
     }
 
-    static inline int alignOfNode() { return std::max<int>(sizeof(void*), alignof(Node)); }
+    static inline int alignOfNode() noexcept { return std::max<int>(sizeof(void*), alignof(Node)); }
 
 private:
     union {
-        HashData *data;
-        HashNode<Key, Val> *nodeEnd;
+        HashData*           m_data;
+        HashNode<Key, Val>* m_nodeEnd;
     };
+    Hasher      m_hasher;
+    KeyEqualer  m_keyEqual;
+    float       m_maxLoadFactor;
 };
 
-template <class Key, class Val>
-void HashMap<Key, Val>::detach_helper()
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::detach_helper()
 {
-    HashData *x = data->detach_helper(duplicateNode, deleteNode2, sizeof(Node), alignOfNode());
-    if (data != &HashData::shared_null && !data->ref.deref())
-        freeData(data);
-    data = x;
+    HashData *newData = m_data->detach_helper(duplicateNode, deleteNode2, sizeof(Node), alignOfNode());
+    if (m_data != &HashData::shared_null && !m_data->m_ref.deref())
+        freeData(m_data);
+    m_data = newData;
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::freeData(HashData *d)
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::freeData(HashData *d)
 {
     d->free_helper(deleteNode2);
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::Node **HashMap<Key, Val>::findNode(const Key &k, uint32_t hash) const
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::Node **HashMap<Key, Val, Hash, KeyEqual>::findNode(const Key &k, uint32_t hashValue) const
 {
-    Node **node = const_cast<Node **>(&nodeEnd);
-    if (data->numBuckets) {
-        node = reinterpret_cast<Node **>(&data->buckets[hash % data->numBuckets]);
-        assert(*node == nodeEnd || (*node)->next); // node != nodeEnd 时 node->next必不为空
-        while (*node != nodeEnd && !((*node)->sameKeyWith(k, hash))) {
-            node = &(*node)->next;
+    Node **node = const_cast<Node **>(&m_nodeEnd);
+    if (m_data->m_numBuckets) {
+        node = reinterpret_cast<Node **>(&m_data->m_buckets[hashValue % m_data->m_numBuckets]);
+        assert(*node == m_nodeEnd || (*node)->m_next); // node != nodeEnd 时 node->next必不为空
+        while (*node != m_nodeEnd && !((*node)->m_hash == hashValue && keysEqual((*node)->m_key, k))) {
+            node = &(*node)->m_next;
         }
     }
 
     return node;
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::Node *HashMap<Key, Val>::createNode(uint32_t h, const Key &key, const Val &value, Node **nextNode)
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::Node *HashMap<Key, Val, Hash, KeyEqual>::createNode(uint32_t h, const Key &key, const Val &value, Node **nextNode)
 {
-    Node *node = new (data->allocateNode(alignOfNode())) Node(key, value, h, *nextNode);
+    Node *node = new (m_data->allocateNode(alignOfNode())) Node(key, value, h, *nextNode);
     *nextNode = node;
-    ++data->size;
+    ++m_data->m_size;
     return node;
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::deleteNode(Node *node)
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::deleteNode(Node *node)
 {
     deleteNode2(reinterpret_cast<HashData::Node *>(node));
-    data->freeNode(node);
+    m_data->freeNode(node);
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::deleteNode2(HashData::Node *node)
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::deleteNode2(HashData::Node *node)
 {
     concrete(node)->~Node();
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::duplicateNode(HashData::Node *originalNode, void *newNode)
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::duplicateNode(HashData::Node *originalNode, void *newNode)
 {
     Node *concreteNode = concrete(originalNode);
-    new (newNode) Node(concreteNode->key, concreteNode->value, concreteNode->hash, nullptr);
+    new (newNode) Node(concreteNode->m_key, concreteNode->m_value, concreteNode->m_hash, nullptr);
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::reserve(size_t size)
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::reserve(size_t size)
 {
     if (size > 0) {
         detach();
         int n = static_cast<int>(size);
-        data->rehash(-n);
+        m_data->rehash(-n);
     }
 }
 
-template <class Key, class Val>
-void HashMap<Key, Val>::clear()
+template <class Key, class Val, class Hash, class KeyEqual>
+void HashMap<Key, Val, Hash, KeyEqual>::clear()
 {
     *this = HashMap();
 }
 
-template <class Key, class Val>
-Val &HashMap<Key, Val>::at(const Key &key)
+template <class Key, class Val, class Hash, class KeyEqual>
+Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) noexcept(kAtNoexcept)
 {
     detach();
-    Node **node = findNode(key, key.hash());
-    if (*node == nodeEnd) {
-        iterator it = insert(key, Val());
-        if (it == end()) {
-            throw std::exception();
-        }
-        return *it;
-    }
-
-    return (*node)->value;
+    uint32_t hashValue = hashKey(key);
+    Node **node = findNode(key, hashValue);
+    return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
 }
 
-template <class Key, class Val>
-const Val &HashMap<Key, Val>::at(const Key &key, const Val &v) const
+template <class Key, class Val, class Hash, class KeyEqual>
+const Val *HashMap<Key, Val, Hash, KeyEqual>::at(const Key &key) const noexcept(kAtNoexcept)
 {
-    Node **node = findNode(key, key.hash());
-    if (*node == nodeEnd) {
-        return v;
-    }
-
-    return (*node)->value;
+    Node **node = findNode(key, hashKey(key));
+    return (*node == m_nodeEnd) ? nullptr : &(*node)->m_value;
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::iterator HashMap<Key, Val>::erase(const_iterator it)
+template <class Key, class Val, class Hash, class KeyEqual>
+Val &HashMap<Key, Val, Hash, KeyEqual>::operator[](const Key &key)
+{
+    detach();
+    uint32_t hashValue = hashKey(key);
+    Node **node = findNode(key, hashValue);
+    if (*node == m_nodeEnd) {
+        if (m_data->grow(m_maxLoadFactor)) {
+            node = findNode(key, hashValue);
+        }
+
+        Node *inserted = createNode(hashValue, key, Val(), node);
+        return inserted->m_value;
+    }
+
+    return (*node)->m_value;
+}
+
+template <class Key, class Val, class Hash, class KeyEqual>
+const Val &HashMap<Key, Val, Hash, KeyEqual>::operator[](const Key &key) const
+{
+    const Val *value = at(key);
+    if (value) {
+        return *value;
+    }
+
+    throw std::out_of_range("HashMap::operator[] const key not found");
+}
+
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::iterator HashMap<Key, Val, Hash, KeyEqual>::erase(const_iterator it)
 {
     assert(isValidIterator(it));
-    if (it == const_iterator(nodeEnd)) {
-        return iterator(it.n);
+    if (it == const_iterator(m_nodeEnd)) {
+        return iterator(it.m_node);
     }
 
-    if (data->ref.load() > 1) { // 当存在共享时需分离并找到it在新HashMap的位置
-        int bucketNum = (it.n->hash % data->numBuckets);
-        const_iterator bucketIterator(data->buckets[bucketNum]);
-        int stepsFromBucketStartToIte = 0;
-        while (bucketIterator != it) {
-            ++stepsFromBucketStartToIte;
-            ++bucketIterator;
-        }
+    if (m_data->m_ref.load() > 1) { // 当存在共享时需分离并找到it在新HashMap的位置
+        Key key = concrete(it.m_node)->m_key;
         detach();
-        it = const_iterator(data->buckets[bucketNum]);
-        while (stepsFromBucketStartToIte > 0) {
-            --stepsFromBucketStartToIte;
-            ++it;
+        it = const_iterator(*findNode(key, hashKey(key)));
+        if (it == const_iterator(m_nodeEnd)) {
+            return end();
         }
     }
 
-    iterator ret(it.n);
+    iterator ret(it.m_node);
     ++ret;
 
-    Node *node = concrete(it.n);
-    Node **ptr = reinterpret_cast<Node *>(&data->buckets[node->hash % data->numBuckets]);
+    Node *node = concrete(it.m_node);
+    Node **ptr = reinterpret_cast<Node **>(&m_data->m_buckets[node->m_hash % m_data->m_numBuckets]);
     while (*ptr != node) {
-        *ptr = (*ptr)->next;
+        ptr = &(*ptr)->m_next;
     }
 
-    *ptr = node->next;
+    *ptr = node->m_next;
     deleteNode(node);
-    --data->size;
+    --m_data->m_size;
     return ret;
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::iterator HashMap<Key, Val>::find(const Key &key)
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::iterator HashMap<Key, Val, Hash, KeyEqual>::find(const Key &key)
 {
     detach();
-    return iterator(*findNode(key, key.hash()));
+    return iterator(*findNode(key, hashKey(key)));
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::const_iterator HashMap<Key, Val>::find(const Key &key) const
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::const_iterator HashMap<Key, Val, Hash, KeyEqual>::find(const Key &key) const
 {
-    return const_iterator(*findNode(key, key.hash()));
+    return const_iterator(*findNode(key, hashKey(key)));
 }
 
-template <class Key, class Val>
-typename HashMap<Key, Val>::iterator HashMap<Key, Val>::insert(const Key &key, const Val &value)
+template <class Key, class Val, class Hash, class KeyEqual>
+typename HashMap<Key, Val, Hash, KeyEqual>::iterator HashMap<Key, Val, Hash, KeyEqual>::insert(const Key &key, const Val &value)
 {
     detach();
 
-    uint32_t hash = key.hash();
-    Node **node = findNode(key, hash);
-    if (*node == nodeEnd) {
-        if (data->grow()) {
-            node = findNode(key, hash);
+    uint32_t hashValue = hashKey(key);
+    Node **node = findNode(key, hashValue);
+    if (*node == m_nodeEnd) {
+        if (m_data->grow(m_maxLoadFactor)) {
+            node = findNode(key, hashValue);
         }
 
-        return iterator(createNode(hash, key, value, node));
+        return iterator(createNode(hashValue, key, value, node));
     }
 
     return iterator(*node);

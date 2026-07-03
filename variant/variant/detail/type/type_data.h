@@ -228,6 +228,7 @@ RTTR_INLINE void create_wrapper(const argument& arg, variant& var)
 
 template<typename Wrapper, typename Tp = wrapper_mapper_t<Wrapper>>
 enable_if_t<is_wrapper<Wrapper>::value &&
+            !is_owning_wrapper<Wrapper>::value &&
             ::rttr::detail::is_copy_constructible<Wrapper>::value &&
             std::is_default_constructible<Wrapper>::value &&
             has_create_wrapper_func<Wrapper>::value, impl::create_wrapper_func>
@@ -239,6 +240,7 @@ RTTR_INLINE get_create_wrapper_func()
 
 template<typename Wrapper, typename Tp = wrapper_mapper_t<Wrapper>>
 enable_if_t<!is_wrapper<Wrapper>::value ||
+            is_owning_wrapper<Wrapper>::value ||
             !::rttr::detail::is_copy_constructible<Wrapper>::value ||
             !std::is_default_constructible<Wrapper>::value ||
             !has_create_wrapper_func<Wrapper>::value, impl::create_wrapper_func>

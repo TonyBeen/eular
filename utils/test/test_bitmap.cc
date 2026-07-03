@@ -5,10 +5,6 @@
     > Created Time: 2022-05-23 11:52:14 Monday
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include "catch/catch.hpp"
 #include "utils/bitmap.h"
 
@@ -62,7 +58,7 @@ TEST_CASE("test_resize_size", "[bitmap]") {
     REQUIRE(size <= bitMapObj.capacity());
 }
 
-TEST_CASE("test_clear", "[bitmap]") {
+TEST_CASE("bitmap_clear", "[bitmap]") {
     eular::BitMap bitMapObj(16);
 
     const uint32_t count = 2;

@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: bw_sampler.cpp
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Mon 08 Dec 2025 04:23:17 PM CST
  ************************************************************************/
@@ -9,7 +9,7 @@
 
 #include <inttypes.h>
 
-#include "logger/utp_log.h"
+#include "logger/logger.h"
 #include "bw_sampler.h"
 
 namespace eular {
@@ -30,7 +30,7 @@ void BandwidthSampler::onPacketSent(PacketInfo *packetInfo, uint64_t inFlight)
     uint16_t sentSize = 0;
 
     if (packetInfo->packetState) {
-        UTP_LOGW("packet %"PRIu64" already has associated packet state", packetInfo->packetNo);
+        UTP_LOGW("packet %" PRIu64 " already has associated packet state", packetInfo->packetNo);
         return;
     }
 
@@ -49,7 +49,7 @@ void BandwidthSampler::onPacketSent(PacketInfo *packetInfo, uint64_t inFlight)
 
     packetState = m_samplePool.get();
     if (!packetState) {
-        UTP_LOGE("failed to allocate packet state for packet %"PRIu64, packetInfo->packetNo);
+        UTP_LOGE("failed to allocate packet state for packet %" PRIu64, packetInfo->packetNo);
         return;
     }
     packetState->sendState.totalBytesSent = m_totalSent;
@@ -63,7 +63,7 @@ void BandwidthSampler::onPacketSent(PacketInfo *packetInfo, uint64_t inFlight)
     packetState->packetSize = sentSize;
 
     packetInfo->packetState = packetState;
-    UTP_LOGD("add info for packet %"PRIu64, packetInfo->packetNo);
+    UTP_LOGD("add info for packet %" PRIu64, packetInfo->packetNo);
 }
 
 BWSample BandwidthSampler::onPacketAcked(PacketInfo *packetInfo, uint64_t ackTime)
@@ -90,7 +90,7 @@ BWSample BandwidthSampler::onPacketAcked(PacketInfo *packetInfo, uint64_t ackTim
     // 一旦确认连接不受应用程序限制, 就退出应用程序限制阶段
     if (m_flags & BWS_APP_LIMITED && packetInfo->packetNo > m_endOfAppLimitedPhase) {
         m_flags &= ~BWS_APP_LIMITED;
-        UTP_LOGD("exit app-limited phase due to packet %"PRIu64" being acked", packetInfo->packetNo);
+        UTP_LOGD("exit app-limited phase due to packet %" PRIu64 " being acked", packetInfo->packetNo);
     }
 
     do {
@@ -110,18 +110,19 @@ BWSample BandwidthSampler::onPacketAcked(PacketInfo *packetInfo, uint64_t ackTim
 
         // 在斜率计算过程中，确保当前数据包的ack时间始终大于前一个数据包的时间，否则可能会发生除零或整数下溢
         if (ackTime <= packetState->lastAckAckTime) {
-            UTP_LOGD("Time of the previously acked packet (%"PRIu64") is larger than the ack time of the current packet (%"PRIu64")",
+            UTP_LOGD("Time of the previously acked packet (%" PRIu64 ") is larger than the ack time of the current packet (%" PRIu64 ")",
                 packetState->lastAckAckTime, ackTime);
             break;
         }
 
         ackRate = BW_FROM_BYTES_AND_DELTA(m_totalAcked - packetState->sendState.totalBytesAcked, ackTime - packetState->lastAckAckTime);
-        UTP_LOGD("send rate: %"PRIu64"; ack rate: %"PRIu64, sendRate.value, ackRate.value);
+        UTP_LOGD("send rate: %" PRIu64 "; ack rate: %" PRIu64, sendRate.value, ackRate.value);
 
         rtt = ackTime - packetInfo->sendTimeUs;
         isAppLimited = packetState->sendState.isAppLimited;
 
         m_samplePool.put(packetState);
+        packetInfo->packetState = nullptr;
 
         if (BW_VALUE(&sendRate) < BW_VALUE(&ackRate)) {
             sample.bandwidth = sendRate;
@@ -131,7 +132,7 @@ BWSample BandwidthSampler::onPacketAcked(PacketInfo *packetInfo, uint64_t ackTim
         sample.rtt = rtt;
         sample.isAppLimited = isAppLimited;
 
-        UTP_LOGD("packet %"PRIu64" acked, bandwidth: %"PRIu64" bps", packetInfo->packetNo, BW_VALUE(&sample.bandwidth));
+        UTP_LOGD("packet %" PRIu64 " acked, bandwidth: %" PRIu64 " bps", packetInfo->packetNo, BW_VALUE(&sample.bandwidth));
         return sample;
     } while (0);
 
@@ -150,14 +151,14 @@ void BandwidthSampler::onPacketLost(PacketInfo *packetInfo)
     m_totalLost += packetInfo->packetSize;
     m_samplePool.put(packetState);
     packetInfo->packetState = nullptr;
-    UTP_LOGD("packet %"PRIu64" lost, total_lost goes to %"PRIu64, packetInfo->packetNo, m_totalLost);
+    UTP_LOGD("packet %" PRIu64 " lost, total_lost goes to %" PRIu64, packetInfo->packetNo, m_totalLost);
 }
 
 void BandwidthSampler::appLimited()
 {
     m_flags |= BWS_APP_LIMITED;
     m_endOfAppLimitedPhase = m_lastSentPackNo;
-    UTP_LOGD("app limited, end of limited phase is %"PRIu64, m_endOfAppLimitedPhase);
+    UTP_LOGD("app limited, end of limited phase is %" PRIu64, m_endOfAppLimitedPhase);
 }
 } // namespace utp
 } // namespace eular

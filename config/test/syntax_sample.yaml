@@ -1,0 +1,50 @@
+# 基本标量：string / int / bool / double
+app:
+  name: downloader
+  enabled: true
+  port: 8080
+  ratio: 0.7
+  log_file: "download.log"     # 双引号字符串 (含特殊字符更安全)
+  empty_str: ""                # 空字符串
+  null_value: null             # null
+
+# 列表 (sequence)
+dns:
+  enable: true
+  nameserver:
+    - 223.5.5.5
+    - https://dns.alidns.com/dns-query
+  fallback: []                 # 空列表
+
+# 对象 (mapping)
+limits:
+  max_file_size: 104857600
+  retry:
+    max: 20
+    interval_sec: 10
+
+# 对象数组 (sequence of mapping)
+proxies:
+  - name: hk-iplc
+    type: trojan
+    server: example.hk.com
+    port: 5001
+    skip_cert_verify: true
+    alpn:
+      - h2
+      - http/1.1
+  - name: us-1
+    type: trojan
+    server: example.us.com
+    port: 443
+    skip_cert_verify: true
+    alpn: []                   # 空列表
+
+# 字符串数组 (rules 这类很常见)
+rules:
+  - DOMAIN-SUFFIX,local,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - MATCH,Proxy
+
+# 空 map (常见占位)
+features: {}

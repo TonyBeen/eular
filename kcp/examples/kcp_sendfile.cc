@@ -77,10 +77,13 @@ void on_kcp_closed(struct KcpConnection *kcp_connection, int32_t code)
 
     kcp_statistic_t stat;
     kcp_connection_get_statistic(kcp_connection, &stat);
+        double rrate = (stat.tx_bytes > 0) ? (stat.rtx_bytes / (double)stat.tx_bytes) : 0.0;
     KCP_LOGI("Statistics: ping: %u, pong: %u, tx: %lu, rtx: %lu, rrate: %.3f, "
-           "srtt: %d us, rttvar: %d us, rto: %d us\n",
-           stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, stat.rtx_bytes / (double)stat.tx_bytes,
-           stat.srtt, stat.rttvar, stat.rto);
+            "srtt: %d us, rttvar: %d us, rto: %d us, bbr_mode: %d, cwnd: %d, "
+            "target_cwnd: %u, min_rtt: %u us, btlbw: %lu Bps, pacing: %lu Bps\n",
+            stat.ping_count, stat.pong_count, stat.tx_bytes, stat.rtx_bytes, rrate,
+            stat.srtt, stat.rttvar, stat.rto, stat.bbr_mode, stat.cwnd,
+            stat.target_cwnd, stat.min_rtt_us, stat.btlbw_bytes_ps, stat.pacing_rate_bps);
 
     event_base_loopbreak(g_ev_base);
 }

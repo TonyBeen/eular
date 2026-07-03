@@ -14,4 +14,7 @@ test/xml/*
 .vscode/
 *.out
 
-build
+build*
+.claude
+.crossnote
+.codex

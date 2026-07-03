@@ -19,8 +19,8 @@ namespace dir {
  * @brief 判断路径或文件是否存在
  *
  * @param path 路径
- * @return true 
- * @return false 
+ * @return true
+ * @return false
  */
 UTILS_API bool exists(const std::string &path);
 
@@ -29,22 +29,22 @@ UTILS_API bool exists(const std::string &path);
  * 如
  * ~/path/../A/./B/ => /home/user/A/B/
  * /home/user/../other/./../third => /home/third/
- * 
+ *
  * 由于没有给定基路径, 故无法计算相对路径, 如 ../A/B/./C
- * 
+ *
  * @param path 路径
  * @param absPath 输出绝对路径
- * @return true 
- * @return false 
+ * @return true
+ * @return false
  */
 UTILS_API bool absolute(const std::string &path, std::string &absPath);
 
 /**
  * @brief 创建路径, 类似 mkdir -p /path/to/non-existent
- * 
+ *
  * @param path 路径
- * @return true 
- * @return false 
+ * @return true
+ * @return false
  */
 UTILS_API bool mkdir(const std::string &path);
 

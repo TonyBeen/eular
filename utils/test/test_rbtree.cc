@@ -5,11 +5,13 @@
     > Created Time: Fri 17 Dec 2021 10:56:23 AM CST
  ************************************************************************/
 
-#include <string>
-#include <utils/rbtree_base.h>
-#include <iostream>
+#include <vector>
 
-using namespace std;
+#include "catch/catch.hpp"
+
+#include <utils/rbtree_base.h>
+
+namespace {
 
 struct rbtree_node {
     rb_node rbnode;
@@ -23,10 +25,10 @@ rb_node *insert(rb_root *root, int d)
     rbtree_node *new_rbtree_node = new rbtree_node;
     new_rbtree_node->data = d;
     rb_node *newNode = &new_rbtree_node->rbnode;
-    struct rb_node **node = &(root->rb_node);
-    struct rb_node *parent = nullptr;
+    rb_node **node = &(root->rb_node);
+    rb_node *parent = nullptr;
     bool exists = false;
-    while (nullptr != (*node)) {
+    while (*node != nullptr) {
         parent = *node;
         rbtree_node *curr = rbtree_node_entry(parent);
         if (curr->data < d) {
@@ -44,52 +46,59 @@ rb_node *insert(rb_root *root, int d)
         rb_insert_color(newNode, root);
     }
 
-    return exists ? nullptr : newNode;
+    if (exists) {
+        delete new_rbtree_node;
+        return nullptr;
+    }
+    return newNode;
 }
 
-void rbtree_foreach(rb_root *root)
+std::vector<int> inorder_values(rb_root *root)
 {
-    if (root == nullptr) {
-        return;
+    std::vector<int> values;
+    for (rb_node *node = rb_first(root); node != nullptr; node = rb_next(node)) {
+        values.push_back(rbtree_node_entry(node)->data);
     }
-
-    struct rb_node *begin = rb_first(root);
-    struct rb_node *next = begin;
-    struct rb_node *end = rb_last(root);
-
-    if (begin == nullptr) { // no nodes
-        return;
-    }
-
-    rbtree_node *rbnode = nullptr;
-    while (begin != end) {
-        next = rb_next(next);
-        rbnode = rbtree_node_entry(begin);
-        printf("%s() data = %d\n", __func__, rbnode->data);
-        begin = next;
-    }
-
-    rbnode = rbtree_node_entry(begin);
-    printf("%s() data = %d\n", __func__, rbnode->data);
+    return values;
 }
 
-int main(int argc, char **argv)
+void clear_tree(rb_root *root)
 {
-    rb_root root;
-    root.rb_node = nullptr;
+    while (root->rb_node != nullptr) {
+        rb_node *node = rb_first(root);
+        rb_erase(node, root);
+        delete rbtree_node_entry(node);
+    }
+}
 
-    rb_node *ret = insert(&root, 10);
-    printf("%p\n", ret);
-    ret = rb_next(rb_last(&root));
-    printf("%p\n", ret);
+} // namespace
 
-    ret = rb_prev(rb_first(&root));
-    printf("%p\n", ret);
+TEST_CASE("rbtree_insert_and_navigation", "[rbtree]")
+{
+    rb_root root{};
 
-    rbtree_foreach(&root);
+    rb_node *inserted = insert(&root, 10);
+    REQUIRE(inserted != nullptr);
+    CHECK(rb_next(rb_last(&root)) == nullptr);
+    CHECK(rb_prev(rb_first(&root)) == nullptr);
+    CHECK(insert(&root, 10) == nullptr);
 
-    printf("%p\n", root.rb_node);
-    printf("%p\n", root.rb_node->rb_parent);
+    clear_tree(&root);
+}
 
-    return 0;
+TEST_CASE("rbtree_inorder_traversal_is_sorted", "[rbtree]")
+{
+    rb_root root{};
+    const int values[] = {10, 4, 15, 12, 1, 7};
+    for (int value : values) {
+        REQUIRE(insert(&root, value) != nullptr);
+    }
+
+    const std::vector<int> ordered = inorder_values(&root);
+    const std::vector<int> expected{1, 4, 7, 10, 12, 15};
+    CHECK(ordered == expected);
+    REQUIRE(root.rb_node != nullptr);
+    CHECK(root.rb_node->rb_parent == nullptr);
+
+    clear_tree(&root);
 }

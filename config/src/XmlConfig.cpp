@@ -5,14 +5,8 @@
     > Created Time: Thu 12 Jan 2023 10:18:34 AM CST
  ************************************************************************/
 
-#include "XmlConfig.h"
-#include "rwmutex.h"
-#include "tinyxml2.h"
-
-static inline RWMutex *toMutex(void *mtx)
-{
-    return static_cast<RWMutex *>(mtx);
-}
+#include "config/xml.h"
+#include "internal/tinyxml2.h"
 
 bool trim(std::string &str, const char *c = " \t\r\n")
 {
@@ -32,15 +26,13 @@ bool trim(std::string &str, const char *c = " \t\r\n")
 }
 
 namespace eular {
-XmlConfig::XmlConfig() :
-    m_mutex(new RWMutex())
+XmlConfig::XmlConfig()
 {
 
 }
 
 XmlConfig::~XmlConfig()
 {
-    delete toMutex(m_mutex);
 }
 
 bool XmlConfig::loadFile(const std::string &xmlFile)
@@ -51,14 +43,13 @@ bool XmlConfig::loadFile(const std::string &xmlFile)
         return false;
     }
 
-    toMutex(m_mutex)->wlock();
+    m_xmlMap.clear();
 
     tinyxml2::XMLElement *curr = doc.RootElement();
     for (; curr; curr = curr->NextSiblingElement()) {
         loadXml(curr->Name(), curr);
     }
 
-    toMutex(m_mutex)->wunlock();
     return true;
 }
 
@@ -70,26 +61,21 @@ bool XmlConfig::parse(const std::string &xmlText)
         return false;
     }
 
-    toMutex(m_mutex)->wlock();
+    m_xmlMap.clear();
 
     tinyxml2::XMLElement *curr = doc.RootElement();
     for (; curr; curr = curr->NextSiblingElement()) {
         loadXml(curr->Name(), curr);
     }
 
-    toMutex(m_mutex)->wunlock();
     return true;
 }
 
 void XmlConfig::foreach()
 {
-    toMutex(m_mutex)->rlock();
-
     for (auto it = m_xmlMap.begin(); it != m_xmlMap.end(); ++it) {
         printf("[%s, '%s']\n", it->first.c_str(), it->second.c_str());
     }
-
-    toMutex(m_mutex)->runlock();
 }
 
 void XmlConfig::loadXml(std::string prefix, void *e)
@@ -104,7 +90,7 @@ void XmlConfig::loadXml(std::string prefix, void *e)
         std::string key = prefix.empty() ? curr->Name() : prefix + "." + curr->Name();
         std::string value = curr->GetText() ? curr->GetText() : "";
         trim(value);
-        m_xmlMap.insert(std::make_pair(key, value));
+        m_xmlMap[key] = value;
         if (curr->NoChildren() == false) {
             loadXml(key, curr);
         }
@@ -114,13 +100,10 @@ void XmlConfig::loadXml(std::string prefix, void *e)
 std::string XmlConfig::lookup(const std::string &key)
 {
     std::string ret;
-    toMutex(m_mutex)->rlock();
     auto it = m_xmlMap.find(key);
     if (it != m_xmlMap.end()) {
-        ret = it->second.c_str();
+        ret = it->second;
     }
-
-    toMutex(m_mutex)->runlock();
     return ret;
 }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
     > File Name: platform.h
-    > Author: hsz
-    > Brief:
+    > Author: eular
+    > Brief: libutp 平台兼容性定义、宏开关与跨平台导出声明。
     > Created Time: Mon 08 Dec 2025 04:59:48 PM CST
  ************************************************************************/
 
@@ -20,11 +20,15 @@
 #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #if defined(TARGET_OS_MAC) && TARGET_OS_MAC
-        #define OS_MAC
-    #elif defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-        #define OS_IOS
+        #define OS_APPLE
     #endif
-    #define OS_DARWIN
+    #if defined(TARGET_OS_OSX) && TARGET_OS_OSX
+        #define OS_MAC
+    #elif defined(TARGET_OS_IOS) && TARGET_OS_IOS
+        #define OS_IOS
+    #else
+        #error "unsupported Apple platform!"
+    #endif
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
     #define OS_FREEBSD
     #define OS_BSD
@@ -40,6 +44,22 @@
     #error "unsupported system platform!"
 #endif
 
+#if defined(_MSC_VER)
+    #define UTP_COMPILER_MSVC 1
+#endif
+
+#if defined(__clang__)
+    #define UTP_COMPILER_CLANG 1
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+    #define UTP_COMPILER_GCC 1
+#endif
+
+#if defined(UTP_COMPILER_GCC) || defined(UTP_COMPILER_CLANG)
+    #define UTP_COMPILER_GNU_LIKE 1
+#endif
+
 #ifdef __cplusplus
     #define EXTERN_C_BEGIN extern "C" {
     #define EXTERN_C_END }
@@ -49,6 +69,7 @@
     #define EXTERN_C_END
     #define DEFAULT(x)
 #endif
+
 
 #ifdef OS_WINDOWS
     #if defined(UTP_STATIC)
@@ -64,19 +85,26 @@
     #define UTP_API __attribute__((visibility("default")))
 #endif
 
+
 #if defined(__cplusplus) && __cplusplus >= 201103L
-    #define THREAD_LOCAL thread_local
+    #define UTP_THREAD_LOCAL thread_local
 #else
     #ifdef _MSC_VER
-        #define THREAD_LOCAL __declspec(thread)
+        #define UTP_THREAD_LOCAL __declspec(thread)
     #else
-        #define THREAD_LOCAL __thread
+        #define UTP_THREAD_LOCAL __thread
     #endif
 #endif
 
-// 让x介于min和max之间, x ∈ [min, max]
+
+/**
+ * @brief 让 x 介于 min 和 max 之间，即 x ∈ [min, max]
+ */
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
+/**
+ * @brief 标记变量未使用，消除编译器告警
+ */
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
 #endif

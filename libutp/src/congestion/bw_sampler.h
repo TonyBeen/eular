@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: bw_sampler.h
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Mon 08 Dec 2025 04:23:14 PM CST
  ************************************************************************/
@@ -11,7 +11,7 @@
 #include <list>
 
 #include "congestion/congestion.h"
-#include "malo.hpp"
+#include "util/malo.hpp"
 
 /* This struct provides a type for bits per second units.  It's made into
  * a struct so that it is a little harder to make a mistake.  The Chromium
@@ -21,14 +21,14 @@ struct BandWidth {
     uint64_t    value; // bits per second
 };
 
-#define BW_INFINITE() ((struct BandWidth) { .value = UINT64_MAX, })
-#define BW_ZERO() ((struct BandWidth) { .value = 0, })
-#define BW_FROM_BYTES_AND_DELTA(bytes_, usecs_) ((struct BandWidth) { .value = (bytes_) * 8 * 1000000 / (usecs_), })
 #define BW_IS_ZERO(bw_) ((bw_)->value == 0)
 #define BW_TO_BYTES_PER_SEC(bw_) ((bw_)->value / 8)
 #define BW_VALUE(bw_) (+(bw_)->value)
-#define BW_TIMES(bw_, factor_) ((struct BandWidth) { .value = BW_VALUE(bw_) * (factor_), })
-#define BW(initial_value_) ((struct BandWidth) { .value = (initial_value_) })
+#define BW_INFINITE() BandWidth{ UINT64_MAX }
+#define BW_ZERO() BandWidth{ 0 }
+#define BW_FROM_BYTES_AND_DELTA(bytes_, usecs_) BandWidth{ (bytes_) * 8 * 1000000 / (usecs_) }
+#define BW_TIMES(bw_, factor_) BandWidth{ static_cast<uint64_t>(BW_VALUE(bw_) * static_cast<double>(factor_)) }
+#define BW(initial_value_) BandWidth{ (initial_value_) }
 
 namespace eular {
 namespace utp {

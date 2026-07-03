@@ -1,6 +1,6 @@
 /*************************************************************************
     > File Name: bbr.cpp
-    > Author: hsz
+    > Author: eular
     > Brief:
     > Created Time: Mon 08 Dec 2025 04:22:33 PM CST
  ************************************************************************/
@@ -12,7 +12,7 @@
 #include <random>
 
 #include "proto/packet_common.h"
-#include "logger/utp_log.h"
+#include "logger/logger.h"
 #include "bbr_v1.h"
 
 #define ms(val_)    ((val_) * 1000)
@@ -108,17 +108,55 @@ namespace eular {
 namespace utp {
 
 static const char *mode2str[] = {
-    [BbrV1::Mode::StartUp]  = "StartUp",
-    [BbrV1::Mode::Drain]    = "Drain",
-    [BbrV1::Mode::ProbeBW]  = "ProbeBW",
-    [BbrV1::Mode::ProbeRTT] = "ProbeRTT",
+    "StartUp",
+    "Drain",
+    "ProbeBW",
+    "ProbeRTT",
 };
+
+BbrV1::BbrV1(const Config *cfg)
+{
+    if (cfg == nullptr) {
+        return;
+    }
+
+    m_configInitCwnd = (std::max<uint64_t>)(1, cfg->bbr_init_cwnd_mss) * kDefaultTCPMSS;
+    m_configMinCwnd = (std::max<uint64_t>)(1, cfg->bbr_min_cwnd_mss) * kDefaultTCPMSS;
+    if (m_configInitCwnd < m_configMinCwnd) {
+        m_configInitCwnd = m_configMinCwnd;
+    }
+
+    if (cfg->bbr_startup_high_gain > 1.0f && cfg->bbr_startup_high_gain <= 4.0f) {
+        m_configHighGain = cfg->bbr_startup_high_gain;
+    }
+    if (cfg->bbr_cwnd_gain >= 1.0f && cfg->bbr_cwnd_gain <= 4.0f) {
+        m_configCwndGain = cfg->bbr_cwnd_gain;
+    }
+    if (cfg->bbr_startup_growth_target > 1.0f && cfg->bbr_startup_growth_target <= 2.0f) {
+        m_startupGrowthTarget = cfg->bbr_startup_growth_target;
+    }
+    m_configStartupRounds = (std::max<uint32_t>)(1, cfg->bbr_startup_full_bw_rounds);
+    m_probeRttTimeUs = static_cast<uint64_t>((std::max<uint32_t>)(50, cfg->bbr_probe_rtt_ms)) * 1000ULL;
+    m_minRttExpiryUs = static_cast<uint64_t>((std::max<uint32_t>)(1000, cfg->bbr_min_rtt_expiry_ms)) * 1000ULL;
+
+    if (cfg->bbr_probe_rtt_multiplier > 0.0f && cfg->bbr_probe_rtt_multiplier <= 1.0f) {
+        m_probeRttMultiplier = cfg->bbr_probe_rtt_multiplier;
+    }
+    if (cfg->bbr_similar_min_rtt_threshold >= 1.0f && cfg->bbr_similar_min_rtt_threshold <= 2.0f) {
+        m_similarMinRttThreshold = cfg->bbr_similar_min_rtt_threshold;
+    }
+    if (!cfg->bbr_pacing_gains.empty()) {
+        m_pacingGains = cfg->bbr_pacing_gains;
+    }
+}
 
 void BbrV1::onInit(RttStats *stats)
 {
     if (stats) {
         m_rttStats = stats;
     }
+
+    m_flags = 0;
 
     m_mode = Mode::StartUp;
     m_roundCount = 0;
@@ -129,16 +167,16 @@ void BbrV1::onInit(RttStats *stats)
     m_aggregationEpochStartTime = 0;
     m_minRtt = 0;
     m_minRttTimestamp = 0;
-    m_initCwnd = kInitialCongestionWindow * kDefaultTCPMSS;
-    m_cwnd = kInitialCongestionWindow * kDefaultTCPMSS;
+    m_initCwnd = m_configInitCwnd;
+    m_cwnd = m_configInitCwnd;
     m_maxCwnd = kDefaultMaxCongestionWindowPackets * kDefaultTCPMSS;
-    m_minCwnd = kDefaultMinimumCongestionWindow;
-    m_highGain = kDefaultHighGain;
-    m_highCwndGain = kDefaultHighGain;
-    m_drainGain = 1.0f / kDefaultHighGain;
+    m_minCwnd = m_configMinCwnd;
+    m_highGain = m_configHighGain;
+    m_highCwndGain = m_configHighGain;
+    m_drainGain = 1.0f / m_configHighGain;
     m_pacingRate = BW_ZERO();
     m_pacingGain = 1.0f;
-    m_nStartupRtts = kRoundTripsWithoutGrowthBeforeExitingStartup;
+    m_nStartupRtts = m_configStartupRounds;
     m_flags &= ~BBR_FLAG_EXIT_STARTUP_ON_LOSS;
     m_cycleCurrentOffset = 0;
     m_lastCycleStart = 0;
@@ -245,7 +283,7 @@ void BbrV1::onEndAck(uint64_t inflight)
     assert(m_flags & BBR_FLAG_IN_ACK);
     m_flags &= ~BBR_FLAG_IN_ACK;
 
-    UTP_LOGD("end_ack; mode: %s; in_flight: %"PRIu64, mode2str[m_mode], inflight);
+    UTP_LOGD("end_ack; mode: %s; in_flight: %" PRIu64, mode2str[m_mode], inflight);
 
     bytesAcked = m_bwSampler.totalAcked() - m_ackState.totalBytesAckedBefore;
     if (m_ackState.ackedBytes) {
@@ -253,7 +291,7 @@ void BbrV1::onEndAck(uint64_t inflight)
         if (isRoundStart) {
             ++m_roundCount;
             m_currentRoundTripEnd = m_lastSentPackNo;
-            UTP_LOGD("up round count to %"PRIu64"; new rt end: %"PRIu64, m_roundCount, m_currentRoundTripEnd);
+            UTP_LOGD("up round count to %" PRIu64 "; new rt end: %" PRIu64, m_roundCount, m_currentRoundTripEnd);
         }
 
         minRttExpired = updateBandwidthAndMinRtt();
@@ -305,10 +343,9 @@ uint64_t BbrV1::getMinRtt()
 uint64_t BbrV1::getProbeRttCwnd()
 {
     if (m_flags & BBR_FLAG_PROBE_RTT_BASED_ON_BDP) {
-        return getTargetCwnd(kModerateProbeRttMultiplier);
-    } else {
-        return m_minCwnd;
+        return getTargetCwnd(m_probeRttMultiplier);
     }
+    return m_configMinCwnd;
 }
 
 uint64_t BbrV1::getTargetCwnd(float_t gain)
@@ -324,7 +361,7 @@ uint64_t BbrV1::getTargetCwnd(float_t gain)
         cwnd = gain * m_initCwnd;
     }
 
-    return std::max(cwnd, m_minCwnd);
+    return (std::max)(cwnd, m_minCwnd);
 }
 
 bool BbrV1::inRecovery()
@@ -345,7 +382,7 @@ void BbrV1::appLimited(uint64_t inflight)
 
     m_flags |= BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT;
     m_bwSampler.appLimited();
-    UTP_LOGD("becoming application-limited.  Last sent packet: %"PRIu64"; CWND: %"PRIu64, m_lastSentPackNo, cwnd);
+    UTP_LOGD("becoming application-limited.  Last sent packet: %" PRIu64 "; CWND: %" PRIu64, m_lastSentPackNo, cwnd);
 }
 
 bool BbrV1::isPipeSufficientlyFull(uint64_t inflight)
@@ -391,13 +428,13 @@ bool BbrV1::updateBandwidthAndMinRtt()
     }
 
     m_minRttSinceLastProbe = std::min(m_minRttSinceLastProbe, sampleMinRtt);
-    minRttExpired = m_minRtt != 0 && (m_ackState.ackTime > m_minRttTimestamp + kMinRttExpiry);
+    minRttExpired = m_minRtt != 0 && (m_ackState.ackTime > m_minRttTimestamp + m_minRttExpiryUs);
     if (minRttExpired || sampleMinRtt < m_minRtt || m_minRtt == 0) {
         if (minRttExpired && shouldExtendMinRttExpiry()) {
-            UTP_LOGD("min rtt expiration extended, stay at: %"PRIu64, m_minRtt);
+            UTP_LOGD("min rtt expiration extended, stay at: %" PRIu64, m_minRtt);
             minRttExpired = false;
         } else {
-            UTP_LOGD("min rtt updated: %"PRIu64" -> %"PRIu64, m_minRtt, sampleMinRtt);
+            UTP_LOGD("min rtt updated: %" PRIu64 " -> %" PRIu64, m_minRtt, sampleMinRtt);
             m_minRtt = sampleMinRtt;
         }
 
@@ -446,7 +483,7 @@ void BbrV1::calculatePacingRate()
         return;
     }
 
-    UTP_LOGD("BW estimate: %"PRIu64, BW_VALUE(&bw));
+    UTP_LOGD("BW estimate: %" PRIu64, BW_VALUE(&bw));
     BandWidth targetRate = BW_TIMES(&bw, m_pacingGain);
     if (m_flags & BBR_FLAG_IS_AT_FULL_BANDWIDTH) {
         m_pacingRate = targetRate;
@@ -470,8 +507,8 @@ void BbrV1::calculatePacingRate()
     if (startup_rate_reduction_multiplier_ != 0 && hasEverDetectedLoss && (m_flags & BBR_FLAG_HAS_NON_APP_LIMITED)) {
         m_pacingRate = BW_TIMES(&targetRate, (1 - (m_startupBytesLost * startup_rate_reduction_multiplier_ * 1.0f / m_cwndGain)));
         // 确保pacing rate不会低于启动增长目标乘以带宽估计值。
-        if (BW_VALUE(&m_pacingRate) < BW_VALUE(&bw) * kStartupGrowthTarget) {
-            m_pacingRate = BW_TIMES(&bw, kStartupGrowthTarget);
+        if (BW_VALUE(&m_pacingRate) < BW_VALUE(&bw) * m_startupGrowthTarget) {
+            m_pacingRate = BW_TIMES(&bw, m_startupGrowthTarget);
         }
         return;
     }
@@ -517,7 +554,7 @@ void BbrV1::calculateRecoveryWindow(uint64_t bytesAcked, uint64_t bytestLost, ui
     // 初始化恢复窗口
     if (m_recoveryWindow == 0) {
         m_recoveryWindow = bytestInflight + bytesAcked;
-        m_recoveryWindow = std::max(m_minCwnd, m_recoveryWindow);
+        m_recoveryWindow = (std::max)(m_minCwnd, m_recoveryWindow);
         return;
     }
 
@@ -534,12 +571,12 @@ void BbrV1::calculateRecoveryWindow(uint64_t bytesAcked, uint64_t bytestLost, ui
     }
 
     // 最低限检查
-    m_recoveryWindow = std::max(bytestInflight + bytesAcked, m_recoveryWindow);
+    m_recoveryWindow = (std::max)(bytestInflight + bytesAcked, m_recoveryWindow);
     if (FLAG_quic_bbr_one_mss_conservation) {
-        m_recoveryWindow = std::max(m_recoveryWindow, bytestInflight + kMaxSegmentSize);
+        m_recoveryWindow = (std::max)(m_recoveryWindow, bytestInflight + kMaxSegmentSize);
     }
 
-    m_recoveryWindow = std::max(m_minCwnd, m_recoveryWindow);
+    m_recoveryWindow = (std::max)(m_minCwnd, m_recoveryWindow);
 }
 
 uint64_t BbrV1::updateAckAggregationBytes(uint64_t bytesAcked)
@@ -578,15 +615,15 @@ void BbrV1::updateGainCyclePhase(uint64_t bytestInflight)
     }
 
     if (shouldAdvanceGainCycling) {
-        m_cycleCurrentOffset = (m_cycleCurrentOffset + 1) % kGainCycleLength;
+        m_cycleCurrentOffset = (m_cycleCurrentOffset + 1) % m_pacingGains.size();
         m_lastCycleStart = now;
 
         if ((m_flags & BBR_FLAG_DRAIN_TO_TARGET) && m_pacingGain < 1.0f &&
-             kPacingGain[m_cycleCurrentOffset] == 1.0f && bytestInflight > getTargetCwnd(1.0f)) {
+             m_pacingGains[m_cycleCurrentOffset] == 1.0f && bytestInflight > getTargetCwnd(1.0f)) {
             return;
         }
 
-        m_pacingGain = kPacingGain[m_cycleCurrentOffset];
+        m_pacingGain = m_pacingGains[m_cycleCurrentOffset];
         UTP_LOGD("advanced gain cycle, pacing gain set to %.2f", m_pacingGain);
     }
 }
@@ -601,7 +638,7 @@ void BbrV1::checkIsFullBwReached()
     }
 
     // 此次带宽希望较上次增加1.25倍
-    target = BW_TIMES(&m_bwAtLastRound, kStartupGrowthTarget);
+    target = BW_TIMES(&m_bwAtLastRound, m_startupGrowthTarget);
     // 获取当前观测到最大的带宽
     bw = BW(m_maxBandwidth.get());
     if (BW_VALUE(&bw) >= BW_VALUE(&target)) { // 带宽存在提升
@@ -611,17 +648,17 @@ void BbrV1::checkIsFullBwReached()
             m_maxAckHeight.reset(MinMaxSample{m_roundCount, 0});
         }
 
-        UTP_LOGD("bandwidth increased to %"PRIu64"bytes/sec: full BW not reached", BW_TO_BYTES_PER_SEC(&bw));
+        UTP_LOGD("bandwidth increased to %" PRIu64 "bytes/sec: full BW not reached", BW_TO_BYTES_PER_SEC(&bw));
         return;
     }
 
     // 带宽未增长
     ++m_roundWoBwGain;
-    UTP_LOGD("no bandwidth growth this round (%"PRIu32"/%"PRIu32")", m_roundWoBwGain, m_nStartupRtts);
+    UTP_LOGD("no bandwidth growth this round (%" PRIu32 "/%" PRIu32 ")", m_roundWoBwGain, m_nStartupRtts);
     if (m_roundWoBwGain >= m_nStartupRtts || ((m_flags & BBR_FLAG_EXIT_STARTUP_ON_LOSS) && inRecovery())) {
         assert(m_flags & BBR_FLAG_HAS_NON_APP_LIMITED);
         m_flags |= BBR_FLAG_IS_AT_FULL_BANDWIDTH;
-        UTP_LOGD("no bandwidth growth for %"PRIu32" rounds: full BW reached", m_nStartupRtts);
+        UTP_LOGD("no bandwidth growth for %" PRIu32 " rounds: full BW reached", m_nStartupRtts);
     } else {
         UTP_LOGD("rounds w/o gain: %u, full BW not reached", m_roundWoBwGain);
     }
@@ -639,7 +676,7 @@ void BbrV1::maybeExitStartupOrDrain(uint64_t now, uint64_t bytestInflight)
 
     if (m_mode == Mode::Drain) {
         targetCwnd = getTargetCwnd(1.0f);
-        UTP_LOGD("bytes in flight: %"PRIu64"; target cwnd: %"PRIu64, bytestInflight, targetCwnd);
+        UTP_LOGD("bytes in flight: %" PRIu64 "; target cwnd: %" PRIu64, bytestInflight, targetCwnd);
         if (bytestInflight <= targetCwnd) {
             enterProbeBWMode(now);
         }
@@ -660,15 +697,15 @@ void BbrV1::maybeEnterOrExitProbeRtt(uint64_t now, bool isRoundStart, bool minRt
 
     if (m_mode == Mode::ProbeRTT) {
         m_bwSampler.appLimited();
-        UTP_LOGD("exit probe at: %"PRIu64"; now: %"PRIu64"; round start: %d; round passed: %d; rtt: %"PRIu64" usec",
+        UTP_LOGD("exit probe at: %" PRIu64 "; now: %" PRIu64 "; round start: %d; round passed: %d; rtt: %" PRIu64 " usec",
             m_exitProbeRttAt, now, isRoundStart, !!(m_flags & BBR_FLAG_PROBE_RTT_ROUND_PASSED), m_rttStats->minRTT());
         
         if (m_exitProbeRttAt == 0) {
             // 途中未确认字节数已小于目标值, 计划退出ProbeRTT
             if (bytestInflight < getProbeRttCwnd() + kMaxOutgoingPacketSize) {
                 m_flags &= ~BBR_FLAG_PROBE_RTT_ROUND_PASSED;
-                m_exitProbeRttAt = now + kProbeRttTime;
-                UTP_LOGD("exit time set to %"PRIu64, m_exitProbeRttAt);
+                m_exitProbeRttAt = now + m_probeRttTimeUs;
+                UTP_LOGD("exit time set to %" PRIu64, m_exitProbeRttAt);
             }
         } else {
             if (isRoundStart) {
@@ -698,7 +735,7 @@ bool BbrV1::shouldExtendMinRttExpiry()
         return true;
     }
 
-    increasedSinceLastProbe = m_minRttSinceLastProbe > m_minRtt * kSimilarMinRttThreshold;
+    increasedSinceLastProbe = m_minRttSinceLastProbe > m_minRtt * m_similarMinRttThreshold;
     if ((m_flags & (BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT | BBR_FLAG_PROBE_RTT_SKIPPED_IF_SIMILAR_RTT)) == 
         (BBR_FLAG_APP_LIMITED_SINCE_LAST_PROBE_RTT | BBR_FLAG_PROBE_RTT_SKIPPED_IF_SIMILAR_RTT) &&
         !increasedSinceLastProbe) {
@@ -731,21 +768,21 @@ void BbrV1::setMode(Mode newMode)
 void BbrV1::enterProbeBWMode(uint64_t now)
 {
     setMode(Mode::ProbeBW);
-    m_cwndGain = kCwndGain;
+    m_cwndGain = m_configCwndGain;
 
     // 使用当前时间作为随机种子
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint8_t> dist(0, std::numeric_limits<uint8_t>::max());
-    uint8_t randomValue = dist(gen);
+    std::uniform_int_distribution<unsigned int> dist(0, (std::numeric_limits<uint8_t>::max)());
+    uint8_t randomValue = static_cast<uint8_t>(dist(gen));
 
-    m_cycleCurrentOffset = randomValue % (kGainCycleLength - 1);
+    m_cycleCurrentOffset = randomValue % (m_pacingGains.size() - 1);
     // 跳过1是因为0.75是减小, 当前轮次无法做到后续在增大
     if (m_cycleCurrentOffset >= 1) {
         ++m_cycleCurrentOffset;
     }
     m_lastCycleStart = now;
-    m_pacingGain = kPacingGain[m_cycleCurrentOffset];
+    m_pacingGain = m_pacingGains[m_cycleCurrentOffset];
 }
 
 void BbrV1::enterStartupMode(uint64_t now)

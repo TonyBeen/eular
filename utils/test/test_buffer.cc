@@ -1,8 +1,5 @@
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <unordered_map>
+#include <limits>
 
 #include "catch/catch.hpp"
 #include "utils/buffer.h"
@@ -35,6 +32,11 @@ TEST_CASE("test_Constructer", "[ByteBuffer]") {
         const uint8_t *data = (const uint8_t *)"Hello";
         ByteBuffer buffer(data, 5);
         CHECK(buffer.size() == 5);
+
+        ByteBuffer emptyBuffer(static_cast<const uint8_t *>(nullptr), 0);
+        CHECK(emptyBuffer.size() == 0);
+        CHECK(emptyBuffer.capacity() == 0);
+        CHECK(emptyBuffer.const_data() != nullptr);
     }
 
     {
@@ -84,6 +86,91 @@ TEST_CASE("set_", "[ByteBuffer]") {
     CHECK(buffer[2] == '*');
 }
 
+TEST_CASE("operator_index_checks_logical_size", "[ByteBuffer]") {
+    ByteBuffer buffer(128);
+    buffer.append("Hello");
+
+    CHECK(buffer[0] == 'H');
+    CHECK(buffer[4] == 'o');
+    CHECK_THROWS(buffer[5]);
+    CHECK_THROWS(buffer[100]);
+
+    const ByteBuffer constBuffer(buffer);
+    CHECK(constBuffer[1] == 'e');
+    CHECK_THROWS(constBuffer[5]);
+}
+
+TEST_CASE("data_detaches_shared_buffer_before_write", "[ByteBuffer]") {
+    ByteBuffer buffer;
+    buffer.append("Hello");
+    ByteBuffer shared = buffer;
+
+    REQUIRE(shared.const_data() == buffer.const_data());
+
+    uint8_t *writable = buffer.data();
+    writable[0] = 'Y';
+
+    REQUIRE(shared.const_data() != buffer.const_data());
+    CHECK(std::string((const char *)buffer.const_data(), buffer.size()) == "Yello");
+    CHECK(std::string((const char *)shared.const_data(), shared.size()) == "Hello");
+}
+
+TEST_CASE("set_rejects_offset_past_size", "[ByteBuffer]") {
+    ByteBuffer buffer;
+    buffer.append("Hello");
+
+    CHECK(buffer.set((const uint8_t *)"***", 3, 6) == 0);
+    REQUIRE(buffer.size() == 5);
+    CHECK(std::string((char *)buffer.data(), buffer.size()) == "Hello");
+}
+
+TEST_CASE("append_handles_self_and_shared_source", "[ByteBuffer]") {
+    {
+        ByteBuffer buffer;
+        buffer.append("Hello");
+        buffer.append(buffer);
+
+        REQUIRE(buffer.size() == 10);
+        CHECK(std::string((char *)buffer.data(), buffer.size()) == "HelloHello");
+    }
+
+    {
+        ByteBuffer source;
+        source.append("Hello");
+        ByteBuffer shared = source;
+        source.append(shared);
+
+        REQUIRE(source.size() == 10);
+        CHECK(std::string((char *)source.data(), source.size()) == "HelloHello");
+        REQUIRE(shared.size() == 5);
+        CHECK(std::string((char *)shared.data(), shared.size()) == "Hello");
+    }
+}
+
+TEST_CASE("set_and_insert_handle_internal_source_pointers", "[ByteBuffer]") {
+    {
+        ByteBuffer buffer;
+        buffer.append("Hello***");
+
+        const uint8_t *stars = buffer.const_data() + 5;
+        CHECK(buffer.set(stars, 3) == 3);
+
+        REQUIRE(buffer.size() == 3);
+        CHECK(std::string((char *)buffer.data(), buffer.size()) == "***");
+    }
+
+    {
+        ByteBuffer buffer;
+        buffer.append("abcdef");
+
+        const uint8_t *slice = buffer.const_data() + 2;
+        CHECK(buffer.insert(slice, 3, 1) == 3);
+
+        REQUIRE(buffer.size() == 9);
+        CHECK(std::string((char *)buffer.data(), buffer.size()) == "acdebcdef");
+    }
+}
+
 TEST_CASE("begin_end", "[ByteBuffer]") {
     ByteBuffer buffer(128);
     buffer.append("Hello");
@@ -129,4 +216,32 @@ TEST_CASE("reserve_resize", "[ByteBuffer]") {
 
         memset(buffer.data(), 0, buffer.size());
     }
+}
+
+TEST_CASE("resize_detaches_shared_buffer_and_preserves_equality_contract", "[ByteBuffer]") {
+    ByteBuffer original("Hello");
+    ByteBuffer resized = original;
+
+    REQUIRE(original.const_data() == resized.const_data());
+    resized.resize(3);
+
+    CHECK(original.size() == 5);
+    CHECK(resized.size() == 3);
+    CHECK(original.const_data() != resized.const_data());
+    CHECK_FALSE(original == resized);
+
+    std::unordered_map<ByteBuffer, size_t> hashMap;
+    hashMap.insert(std::make_pair(original, 1));
+    hashMap.insert(std::make_pair(resized, 2));
+    CHECK(hashMap.size() == 2);
+}
+
+TEST_CASE("byte_buffer_rejects_uint32_size_overflow", "[ByteBuffer]") {
+    ByteBuffer buffer;
+    buffer.append("x", 1);
+
+    CHECK(buffer.set((const uint8_t *)"x", std::numeric_limits<uint32_t>::max(), 1) == 0);
+    CHECK(buffer.insert((const uint8_t *)"x", std::numeric_limits<uint32_t>::max()) == 0);
+    buffer.append((const uint8_t *)"x", std::numeric_limits<uint32_t>::max());
+    CHECK(buffer.size() == 1);
 }

@@ -10,7 +10,7 @@
 
 #include <type_traits>
 
-#include "detail/std_type_traits.h"
+#include "std_type_traits.h"
 
 namespace eular {
 namespace detail {
@@ -23,7 +23,7 @@ struct variable_type
     using type = remove_cv_t<remove_reference_t<T>>;
     static constexpr bool is_pointer = std::is_pointer<T>::value;
     static constexpr bool is_reference = std::is_reference<T>::value;
-    static constexpr bool is_const = std::is_const<remove_cv_t<remove_reference_t<T>>>::value;
+    static constexpr bool is_const = std::is_const<remove_reference_t<T>>::value;
     static constexpr bool is_member = false;
 };
 
@@ -35,7 +35,7 @@ struct variable_type<T Class::*>
     using type = remove_cv_t<remove_reference_t<T>>;
     static constexpr bool is_pointer = std::is_pointer<T>::value;
     static constexpr bool is_reference = std::is_reference<T>::value;
-    static constexpr bool is_const = std::is_const<remove_cv_t<remove_reference_t<T>>>::value;
+    static constexpr bool is_const = std::is_const<remove_reference_t<T>>::value;
     static constexpr bool is_member = true;
 };
 
@@ -49,7 +49,7 @@ namespace internal {
 template <typename T>
 struct basic_variable_traits {
     using type = variable_type_t<T>;
-    static constexpr bool is_member = variable_type_t<T>::is_member;
+    static constexpr bool is_member = detail::variable_type<T>::is_member;
 };
 
 }  // namespace internal

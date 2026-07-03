@@ -13,13 +13,20 @@
 #if defined(OS_LINUX) || defined(OS_APPLE)
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <pthread.h>
 #else
 #include <windows.h>
 #endif
 
 #ifndef gettid
-    #if defined(OS_LINUX) || defined(OS_APPLE)
+    #if defined(OS_LINUX)
         #define gettid() (int32_t)syscall(__NR_gettid)
+    #elif defined(OS_APPLE)
+        static inline int32_t gettid() {
+            uint64_t tid;
+            pthread_threadid_np(NULL, &tid);
+            return (int32_t)tid;
+        }
     #elif defined(OS_WINDOWS)
         #define gettid() (int32_t)GetCurrentThreadId()
     #endif

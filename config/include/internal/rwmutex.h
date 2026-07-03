@@ -10,7 +10,7 @@
 
 #include <mutex>
 #include <condition_variable>
-#include <atomic>
+#include <cstdint>
 
 class RWMutex
 {
@@ -24,8 +24,9 @@ public:
     void wunlock();
 
 private:
-    std::atomic<uint32_t>   m_readCount;
-    std::atomic<bool>       m_writeCount;
+    uint32_t                m_readCount;
+    uint32_t                m_waitingWriters;
+    bool                    m_writeCount;
     std::mutex              m_mutex;
     std::condition_variable m_cond;
 };

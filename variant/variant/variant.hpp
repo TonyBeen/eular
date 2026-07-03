@@ -225,7 +225,8 @@ RTTR_INLINE bool variant::convert(const type& target_type, variant& target_var) 
         return true; // the current variant is already the target type, we don't need to do anything
     }
     else if (!source_type.is_wrapper() && target_type.is_wrapper() &&
-             target_type.get_wrapped_type() == source_type)
+             target_type.get_wrapped_type() == source_type &&
+             target_type.m_type_data->create_wrapper)
     {
         target_var = create_wrapped_value(target_type);
         ok = target_var.is_valid();

@@ -5,10 +5,6 @@
     > Created Time: 2024年04月27日 星期六 11时39分05秒
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <stdio.h>
 #include <iostream>
 
@@ -154,4 +150,17 @@ TEST_CASE("buffer_stream_char_array_char_pointer_write_read", "[buffer_stream]")
         REQUIRE(str == temp);
         REQUIRE(str.size() == temp.size());
     }
+}
+
+TEST_CASE("buffer_stream_empty_string_roundtrip", "[buffer_stream]") {
+    eular::ByteBuffer buffer;
+    eular::BufferStream stream(buffer);
+
+    std::string input;
+    stream << input;
+
+    std::string output = "old value";
+    stream >> output;
+
+    REQUIRE(output.empty());
 }

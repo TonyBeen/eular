@@ -20,20 +20,60 @@ endif()
 option(KCPP_DYNAMIC_LIB "Build dynamic library" ON)
 option(KCPP_STATIC_LIB "Build static library" ON)
 option(BUILD_EXAMPLES "Compile sample program" ON)
+option(BUILD_TEST_TOOLS "Compile test helper programs" ON)
 option(USE_SENDMMSG "Use sendmmsg" ON)
 option(ENABLE_DEBUG "Enable debug symbol" OFF)
+option(KCPP_ENABLE_NTRS "Build optional NTRS bridge" OFF)
+set(KCPP_EVENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libevent" CACHE PATH "Path to the sibling libevent wrapper project.")
+set(KCPP_UTILS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../utils" CACHE PATH "Path to the sibling utils project.")
+set(KCPP_NTRS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../ntrs" CACHE PATH "Path to the sibling ntrs project.")
 
 if(ENABLE_DEBUG MATCHES "ON")
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-find_package(Libevent REQUIRED)
-# message(STATUS "libevent found: ${Libevent_FOUND}")
-# message(STATUS "libevent:")
-# message(STATUS "  version: ${Libevent_VERSION}")
-# message(STATUS "  include path: ${LIBEVENT_INCLUDE_DIRS}")
-# message(STATUS "  static libraries : ${LIBEVENT_STATIC_LIBRARIES}")
-# message(STATUS "  shared libraries : ${LIBEVENT_SHARED_LIBRARIES}")
+set(_kcpp_build_examples "${BUILD_EXAMPLES}")
+set(_kcpp_build_test_tools "${BUILD_TEST_TOOLS}")
+if(KCPP_ENABLE_NTRS)
+    if(EXISTS "${KCPP_NTRS_ROOT}/CMakeLists.txt")
+        set(_kcpp_ntrs_root "${KCPP_NTRS_ROOT}")
+    else()
+        message(FATAL_ERROR "ntrs project not found: ${KCPP_NTRS_ROOT}")
+    endif()
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(NTRS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(NTRS_MQTT_WITH_TLS OFF CACHE BOOL "" FORCE)
+    set(NTRS_EVENT_ROOT "${KCPP_EVENT_ROOT}" CACHE PATH "" FORCE)
+    set(NTRS_UTILS_ROOT "${KCPP_UTILS_ROOT}" CACHE PATH "" FORCE)
+    set(NTRS_THIRD_PARTY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../stun/3rd_party" CACHE PATH "" FORCE)
+    add_subdirectory("${_kcpp_ntrs_root}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/ntrs")
+    unset(_kcpp_ntrs_root)
+else()
+    if(NOT EXISTS "${KCPP_EVENT_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR "libevent wrapper project not found: ${KCPP_EVENT_ROOT}")
+    endif()
+    set(EVENT_SUBMODULE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(EVENT_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(EVENT_DYNAMIC_LIB OFF CACHE BOOL "" FORCE)
+    set(EVENT_USE_CARES OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_TEST OFF CACHE BOOL "" FORCE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER MATCHES "musl")
+        set(EVENT__HAVE_KQUEUE OFF CACHE INTERNAL "" FORCE)
+        set(EVENT__HAVE_SYS_EVENT_H OFF CACHE INTERNAL "" FORCE)
+        set(EVENT__HAVE_ARC4RANDOM OFF CACHE INTERNAL "" FORCE)
+        set(EVENT__HAVE_ARC4RANDOM_BUF OFF CACHE INTERNAL "" FORCE)
+        set(EVENT__HAVE_ARC4RANDOM_ADDRANDOM OFF CACHE INTERNAL "" FORCE)
+    endif()
+    add_subdirectory("${KCPP_EVENT_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent")
+endif()
+set(BUILD_EXAMPLES "${_kcpp_build_examples}" CACHE BOOL "Compile sample program" FORCE)
+set(BUILD_TEST_TOOLS "${_kcpp_build_test_tools}" CACHE BOOL "Compile test helper programs" FORCE)
+unset(_kcpp_build_examples)
+unset(_kcpp_build_test_tools)
+
+set(LIBEVENT_STATIC_LIBRARIES eular::event_wrapper_static)
+set(LIBEVENT_SHARED_LIBRARIES "")
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/kcp_version.h.in
@@ -53,6 +93,8 @@ list(APPEND HEADER_LIST         ${3RD_HEADER_LIST})
 
 file(GLOB SRC_LIST              "src/*.c")
 file(GLOB 3RD_SRC_LIST          "3rd_party/*.c")
+list(APPEND SRC_LIST            "${CMAKE_CURRENT_SOURCE_DIR}/src/kcp_ntrs_stub.c")
+list(REMOVE_DUPLICATES SRC_LIST)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_definitions(-D_GNU_SOURCE -DXXH_INLINE_ALL -D__USE_FILE_OFFSET64 -D_LARGEFILE64_SOURCE)
@@ -62,6 +104,10 @@ endif()
 
 if(BUILD_EXAMPLES MATCHES "ON")
     add_subdirectory(examples)
+endif()
+
+if(BUILD_TEST_TOOLS MATCHES "ON")
+    add_subdirectory(test)
 endif()
 
 # 生成静态库
@@ -88,7 +134,7 @@ if(KCPP_STATIC_LIB MATCHES "ON")
     set_target_properties(
         kcpp_static
         PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
     set_property(TARGET kcpp_static PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
@@ -126,7 +172,9 @@ if(KCPP_DYNAMIC_LIB MATCHES "ON")
     set_target_properties(
         kcpp
         PROPERTIES
-        LINK_FLAGS "-Wl,-z,now,-z,relro -pie"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+        LINK_FLAGS "-Wl,-z,now,-z,relro"
     )
     set_property(TARGET kcpp PROPERTY ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 

@@ -1,0 +1,38 @@
+schema: spec-driven
+
+context: |
+	Project: libutp transport protocol.
+	Design principle: for features that have not yet shipped, proposals and designs should prefer a first-release final design.
+	Do not introduce placeholder evolution paths, reserved alternative strategies, or forward-compatibility scaffolding unless the user explicitly requires them.
+	Favor one shippable v1 design with clear defaults, constraints, and rollback behavior.
+
+rules:
+	proposal:
+		- For unshipped features, describe one concrete first-release design rather than multiple reserved future variants unless explicitly requested.
+	design:
+		- For unshipped features, freeze a single v1 design with explicit defaults and constraints.
+		- Do not reserve alternative strategies or future extension points unless they are part of the approved first release scope.
+		- For implementation artifacts, every newly introduced state variable/member must include an inline comment describing purpose and unit/semantics (follow send_ctl style).
+		- Any protocol behavior code change MUST have an approved design-review record and corresponding user-facing documentation update before implementation.
+	tasks:
+		- Include a documentation/design freeze step before implementation for protocol-affecting features.
+		- For protocol-affecting code changes, add explicit tasks for design review sign-off and documentation record before coding tasks.
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

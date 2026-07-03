@@ -67,7 +67,7 @@ int32_t MD5::finalize(std::array<uint8_t, MD5_DIGEST_LENGTH> &digest)
     }
 
     uint8_t md[MD5_DIGEST_LENGTH];
-    if (!mbedtls_md5_finish(&m_context->ctx, md)) {
+    if (mbedtls_md5_finish(&m_context->ctx, md) != 0) {
         return -1;
     }
 
@@ -82,7 +82,7 @@ int32_t MD5::finalize(std::vector<uint8_t> &digest)
     }
 
     uint8_t md[MD5_DIGEST_LENGTH];
-    if (!mbedtls_md5_finish(&m_context->ctx, md)) {
+    if (mbedtls_md5_finish(&m_context->ctx, md) != 0) {
         return -1;
     }
 
@@ -98,7 +98,7 @@ std::string MD5::finalize()
     }
 
     uint8_t md[MD5_DIGEST_LENGTH];
-    if (!mbedtls_md5_finish(&m_context->ctx, md)) {
+    if (mbedtls_md5_finish(&m_context->ctx, md) != 0) {
         return std::string();
     }
 

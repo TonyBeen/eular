@@ -17,14 +17,6 @@
 #include <functional>
 
 #include <utils/sysdef.h>
-
-#if defined(OS_LINUX)
-#include <semaphore.h>
-#include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/sem.h>
-#endif
-
 #include <utils/utils.h>
 #include <utils/string8.h>
 
@@ -164,26 +156,6 @@ private:
     std::atomic<bool> mReadLocked;
     std::atomic<bool> mWritLocked;
 #endif
-};
-
-class Sem final : public NonCopyAble {
-public:
-    Sem(const char *semPath, uint8_t val);      // 此种走有名信号量
-    Sem(uint8_t valBase);                       // 此种走无名信号量
-    Sem(const Sem &) = delete;
-    ~Sem();
-
-    bool post();
-    bool wait();
-    bool trywait();
-    bool timedwait(uint32_t ms);
-
-private:
-    struct SemImpl;
-    std::unique_ptr<SemImpl> mImpl;
-
-    String8 mFilePath;  // 有名信号量使用
-    bool    isNamedSemaphore;
 };
 
 struct once_flag_impl;

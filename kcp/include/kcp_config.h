@@ -5,6 +5,7 @@
 
 
 #define KCP_BITMAP_SIZE     65535
+#define KCP_BBR_BW_FILTER_LEN   10
 
 #define KCP_HEADER_SIZE     32
 #define KCP_PACKET_COUNT    32
@@ -58,8 +59,6 @@ static const uint32_t   KCP_ASK_TELL    = 0b0010;   // need to send KCP_CMD_WINS
 static const uint32_t   KCP_PING_RECV   = 0b0100;   // ping receive flag
 
 static const uint32_t   KCP_RTO_NDL     = 30;       // no delay min rto(ms)
-static const uint32_t   KCP_THRESH_INIT = 2;        // ssthresh
-static const uint32_t   KCP_THRESH_MIN  = 2;        // min ssthresh
 static const uint32_t   KCP_RTO_DEF     = 200;      // default rto, 200ms
 static const uint32_t   KCP_RTO_MIN     = 100;      // normal min rto, 100ms
 static const uint32_t   KCP_WND_SND     = 128;      // 发送窗口大小
@@ -75,5 +74,13 @@ static const uint32_t   KCP_KEEPALIVE_INTERVAL  = 10000;// 心跳间隔时间
 static const uint32_t   KCP_KEEPALIVE_TIMES     = 5;    // 心跳超时最大次数
 static const uint32_t   KCP_PROBE_INIT          = 7000; // 探测窗口大小的初始时间
 static const uint32_t   KCP_PROBE_LIMIT         = 120000; // 探测窗口大小的最大时间
+
+// BBRv1 parameters
+static const uint32_t   KCP_BBR_STARTUP_GAIN_NUM    = 2885; // 2.885x
+static const uint32_t   KCP_BBR_GAIN_DEN            = 1000;
+static const uint32_t   KCP_BBR_CWND_GAIN_NUM       = 2000; // 2.0x
+static const uint32_t   KCP_BBR_MIN_CWND_PKTS       = 4;
+static const uint32_t   KCP_BBR_MIN_RTT_WIN_US      = 10000000; // 10s
+static const uint32_t   KCP_BBR_PROBE_RTT_US        = 200000;   // 200ms
 
 #endif // __KCP_CONFIG_H__

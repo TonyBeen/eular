@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1080" viewBox="0 0 1500 1080" role="img" aria-labelledby="title desc">
+  <title id="title">NTRS NAT 探测状态机</title>
+  <desc id="desc">展示 NTRS 当前实现中的 NAT 探测阶段、过滤探测分支、映射探测分支和最终分类规则。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { fill: #111827; font: 700 28px sans-serif; }
+      .subtitle { fill: #475569; font: 400 14px sans-serif; }
+      .band { fill: #ffffff; stroke: #d1d5db; stroke-width: 1.5; rx: 10; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.6; rx: 8; }
+      .blue { fill: #eff6ff; stroke: #60a5fa; }
+      .green { fill: #ecfdf5; stroke: #34d399; }
+      .yellow { fill: #fffbeb; stroke: #f59e0b; }
+      .red { fill: #fef2f2; stroke: #f87171; }
+      .purple { fill: #f5f3ff; stroke: #a78bfa; }
+      .gray { fill: #f8fafc; stroke: #94a3b8; }
+      .diamond { fill: #ffffff; stroke: #64748b; stroke-width: 1.6; }
+      .h1 { fill: #111827; font: 700 16px sans-serif; }
+      .h2 { fill: #111827; font: 700 14px sans-serif; }
+      .txt { fill: #334155; font: 400 12px sans-serif; }
+      .tiny { fill: #64748b; font: 400 11px sans-serif; }
+      .code { fill: #1f2937; font: 600 12px monospace; }
+      .label { fill: #334155; font: 700 12px sans-serif; }
+      .arrow { stroke: #475569; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1500" height="1080"/>
+  <text class="title" x="750" y="42" text-anchor="middle">NTRS NAT 探测状态机</text>
+  <text class="subtitle" x="750" y="68" text-anchor="middle">PROBE1 成功后不一定直接 PROBE2；启用过滤探测且存在 probe2 时，先执行 change-port / change-ip 过滤判断</text>
+
+  <rect class="band" x="40" y="95" width="1420" height="125"/>
+  <text class="h1" x="64" y="125">控制面准备</text>
+
+  <rect class="box blue" x="90" y="148" width="190" height="48"/>
+  <text class="h2" x="185" y="168" text-anchor="middle">AUTH</text>
+  <text class="txt" x="185" y="186" text-anchor="middle">获取 session_token</text>
+
+  <rect class="box blue" x="345" y="148" width="210" height="48"/>
+  <text class="h2" x="450" y="168" text-anchor="middle">NAT_PROBE_REQ</text>
+  <text class="txt" x="450" y="186" text-anchor="middle">向 node 请求探测端点</text>
+
+  <rect class="box green" x="620" y="148" width="260" height="48"/>
+  <text class="h2" x="750" y="168" text-anchor="middle">probe1 / probe2</text>
+  <text class="txt" x="750" y="186" text-anchor="middle">主端点、辅端点、备用端口信息</text>
+
+  <rect class="box green" x="960" y="148" width="330" height="48"/>
+  <text class="h2" x="1125" y="168" text-anchor="middle">StartAsyncNatIo()</text>
+  <text class="txt" x="1125" y="186" text-anchor="middle">复用 UDP socket，初始化 token/轮数/重试</text>
+
+  <path class="arrow" d="M280 172 L345 172"/>
+  <path class="arrow" d="M555 172 L620 172"/>
+  <path class="arrow" d="M880 172 L960 172"/>
+
+  <rect class="band" x="40" y="245" width="1420" height="520"/>
+  <text class="h1" x="64" y="275">UDP 探测阶段</text>
+
+  <rect class="box blue" x="80" y="315" width="250" height="78"/>
+  <text class="h2" x="205" y="338" text-anchor="middle">PROBE1: 映射探测</text>
+  <text class="txt" x="205" y="358" text-anchor="middle">发 PROBE_REQ 到 probe1 主端口</text>
+  <text class="code" x="205" y="377" text-anchor="middle">记录 srflx1 / rtt / distinct_mappings</text>
+
+  <polygon class="diamond" points="460,308 560,354 460,400 360,354"/>
+  <text class="h2" x="460" y="350" text-anchor="middle">probe1_ok?</text>
+  <text class="tiny" x="460" y="368" text-anchor="middle">多轮重试后判断</text>
+
+  <rect class="box red" x="385" y="455" width="210" height="58"/>
+  <text class="h2" x="490" y="480" text-anchor="middle">首端点无响应</text>
+  <text class="code" x="490" y="500" text-anchor="middle">UDP_BLOCKED</text>
+
+  <polygon class="diamond" points="720,308 850,354 720,400 590,354"/>
+  <text class="h2" x="720" y="343" text-anchor="middle">has_probe2</text>
+  <text class="h2" x="720" y="362" text-anchor="middle">and filter_probe?</text>
+
+  <rect class="box yellow" x="900" y="300" width="300" height="92"/>
+  <text class="h2" x="1050" y="326" text-anchor="middle">FILTER_CHANGE_PORT</text>
+  <text class="txt" x="1050" y="348" text-anchor="middle">仍向 probe1 发 FILTER_REQ</text>
+  <text class="txt" x="1050" y="367" text-anchor="middle">要求同 IP 的备用端口回包</text>
+  <text class="code" x="1050" y="386" text-anchor="middle">same_ip_diff_port_rx = true/false</text>
+
+  <rect class="box yellow" x="900" y="475" width="300" height="92"/>
+  <text class="h2" x="1050" y="501" text-anchor="middle">FILTER_CHANGE_IP</text>
+  <text class="txt" x="1050" y="523" text-anchor="middle">仍由 probe1 触发协同探测</text>
+  <text class="txt" x="1050" y="542" text-anchor="middle">期望 probe2 / 不同 IP 回包</text>
+  <text class="code" x="1050" y="561" text-anchor="middle">diff_ip_rx = true/false</text>
+
+  <rect class="box blue" x="620" y="610" width="250" height="78"/>
+  <text class="h2" x="745" y="633" text-anchor="middle">PROBE2: 映射对比</text>
+  <text class="txt" x="745" y="653" text-anchor="middle">发 PROBE_REQ 到 probe2</text>
+  <text class="code" x="745" y="672" text-anchor="middle">记录 srflx2，和 srflx1 对比</text>
+
+  <rect class="box gray" x="80" y="610" width="250" height="78"/>
+  <text class="h2" x="205" y="633" text-anchor="middle">无 probe2 或未启用过滤</text>
+  <text class="txt" x="205" y="653" text-anchor="middle">跳过过滤探测</text>
+  <text class="code" x="205" y="672" text-anchor="middle">证据不足时 UNKNOWN</text>
+
+  <rect class="box green" x="1065" y="610" width="260" height="78"/>
+  <text class="h2" x="1195" y="633" text-anchor="middle">FinishAsyncNatDetection()</text>
+  <text class="txt" x="1195" y="653" text-anchor="middle">汇总 probe*_ok、RTT、count</text>
+  <text class="code" x="1195" y="672" text-anchor="middle">EvaluateNatResult()</text>
+
+  <path class="arrow" d="M330 354 L360 354"/>
+  <path class="arrow" d="M560 354 L590 354"/>
+  <path class="arrow" d="M460 400 L460 455"/>
+  <path class="arrow" d="M850 354 L900 354"/>
+  <path class="arrow" d="M1050 392 L1050 475"/>
+  <path class="arrow" d="M1050 567 C1050 620 930 650 870 650"/>
+  <path class="arrow" d="M720 400 C720 490 745 545 745 610"/>
+  <path class="dash" d="M590 354 C420 415 250 500 205 610"/>
+  <path class="arrow" d="M330 650 L1065 650"/>
+  <path class="arrow" d="M870 650 L1065 650"/>
+
+  <text class="label" x="568" y="340">是</text>
+  <text class="label" x="478" y="432">否</text>
+  <text class="label" x="862" y="340">是：先探测过滤行为</text>
+  <text class="label" x="615" y="425">否：直接走 PROBE2 或结束</text>
+
+  <rect class="band" x="40" y="790" width="1420" height="215"/>
+  <text class="h1" x="64" y="820">分类规则</text>
+
+  <rect class="box red" x="80" y="850" width="170" height="90"/>
+  <text class="h2" x="165" y="875" text-anchor="middle">UDP 不可达</text>
+  <text class="code" x="165" y="897" text-anchor="middle">UDP_BLOCKED</text>
+  <text class="tiny" x="165" y="920" text-anchor="middle">probe1_ok == false</text>
+
+  <rect class="box purple" x="285" y="850" width="205" height="90"/>
+  <text class="h2" x="387.5" y="875" text-anchor="middle">映射随目标变化</text>
+  <text class="code" x="387.5" y="897" text-anchor="middle">SYMMETRIC</text>
+  <text class="tiny" x="387.5" y="920" text-anchor="middle">srflx1 != srflx2，同公网 IP</text>
+
+  <rect class="box purple" x="525" y="850" width="225" height="90"/>
+  <text class="h2" x="637.5" y="875" text-anchor="middle">多线路或多映射</text>
+  <text class="code" x="637.5" y="897" text-anchor="middle">SYMMETRIC_MULTI_LINE</text>
+  <text class="tiny" x="637.5" y="920" text-anchor="middle">公网 IP 变化或 distinct_mappings &gt; 1</text>
+
+  <rect class="box green" x="785" y="850" width="170" height="90"/>
+  <text class="h2" x="870" y="875" text-anchor="middle">公网直连</text>
+  <text class="code" x="870" y="897" text-anchor="middle">OPEN_PUBLIC</text>
+  <text class="tiny" x="870" y="920" text-anchor="middle">local == srflx 且稳定</text>
+
+  <rect class="box green" x="990" y="850" width="155" height="90"/>
+  <text class="h2" x="1067.5" y="875" text-anchor="middle">Full Cone</text>
+  <text class="code" x="1067.5" y="897" text-anchor="middle">FULL_CONE</text>
+  <text class="tiny" x="1067.5" y="920" text-anchor="middle">port_rx &amp;&amp; ip_rx</text>
+
+  <rect class="box yellow" x="1180" y="850" width="130" height="90"/>
+  <text class="h2" x="1245" y="875" text-anchor="middle">IP R Cone</text>
+  <text class="code" x="1245" y="897" text-anchor="middle">IP_RESTRICTED</text>
+  <text class="tiny" x="1245" y="920" text-anchor="middle">port_rx &amp;&amp; !ip_rx</text>
+
+  <rect class="box yellow" x="1335" y="850" width="95" height="90"/>
+  <text class="h2" x="1382.5" y="875" text-anchor="middle">Port R</text>
+  <text class="code" x="1382.5" y="897" text-anchor="middle">PORT</text>
+  <text class="tiny" x="1382.5" y="920" text-anchor="middle">!port_rx</text>
+
+  <rect class="band" x="40" y="1030" width="1420" height="32"/>
+  <text class="tiny" x="64" y="1050">代码锚点：AdvanceAsyncNatPhase() 决定阶段顺序；AsyncFilterResponseValid() 校验 change-port/change-ip 回包来源；EvaluateNatResult() 将内部 mapping/filtering 收敛为 ntrs_nat_class_t。</text>
+</svg>

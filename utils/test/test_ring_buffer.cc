@@ -5,10 +5,6 @@
     > Created Time: Wed 24 Dec 2025 04:01:06 PM CST
  ************************************************************************/
 
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #ifndef CATCH_CONFIG_ENABLE_BENCHMARKING
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
 #endif
@@ -189,7 +185,7 @@ TEST_CASE("eular::RingBuffer read()", "[read]") {
         size_t read_bytes = rb.read(buf, 5);
         
         REQUIRE(read_bytes == 5);
-        REQUIRE(std::string(buf) == "01234");
+        REQUIRE(std::string(buf, read_bytes) == "01234");
         REQUIRE(rb. readableSize() == 5);
     }
     
@@ -239,7 +235,7 @@ TEST_CASE("eular::RingBuffer peek()", "[peek]") {
         char buf[5] = {0};
         rb.peek(buf, 5);
         
-        REQUIRE(std::string(buf) == "01234");
+        REQUIRE(std::string(buf, 5) == "01234");
         REQUIRE(rb.readableSize() == 10);
     }
     
@@ -273,7 +269,7 @@ TEST_CASE("eular::RingBuffer peekAt()", "[peekAt]") {
         size_t peeked = rb. peekAt(buf, 5, 3);  // 从偏移3开始
         
         REQUIRE(peeked == 5);
-        REQUIRE(std::string(buf) == "34567");
+        REQUIRE(std::string(buf, peeked) == "34567");
     }
     
     SECTION("peekAt偏移超出范围") {
@@ -605,6 +601,55 @@ TEST_CASE("eular::RingBuffer 零拷贝操作", "[zerocopy]") {
 
         REQUIRE(has_more == true); // 有更多数据在开头
         REQUIRE(len == 6); // 第一段：位置 10 - 15
+    }
+
+    SECTION("commitWrite限制在当前连续可写区域") {
+        eular::RingBuffer rb(8);
+
+        rb.write("012345", 6);
+        char consumed[4];
+        rb.read(consumed, sizeof(consumed));
+
+        uint8_t* ptr;
+        size_t len;
+        bool has_more = rb.getWritableRegion(ptr, len);
+        REQUIRE(has_more == true);
+        REQUIRE(len == 2);
+
+        memcpy(ptr, "AB", 2);
+        rb.commitWrite(6);
+
+        REQUIRE(rb.readableSize() == 4);
+        REQUIRE(rb.totalBytesWritten() == 8);
+
+        char out[4];
+        REQUIRE(rb.read(out, sizeof(out)) == sizeof(out));
+        REQUIRE(std::string(out, sizeof(out)) == "45AB");
+    }
+
+    SECTION("commitRead限制在当前连续可读区域") {
+        eular::RingBuffer rb(8);
+
+        rb.write("012345", 6);
+        char consumed[4];
+        rb.read(consumed, sizeof(consumed));
+        rb.write("ABCD", 4);
+
+        const uint8_t* ptr;
+        size_t len;
+        bool has_more = rb.getReadableRegion(ptr, len);
+        REQUIRE(has_more == true);
+        REQUIRE(len == 4);
+        REQUIRE(std::string(reinterpret_cast<const char *>(ptr), len) == "45AB");
+
+        rb.commitRead(6);
+
+        REQUIRE(rb.readableSize() == 2);
+        REQUIRE(rb.totalBytesRead() == 8);
+
+        char out[2];
+        REQUIRE(rb.read(out, sizeof(out)) == sizeof(out));
+        REQUIRE(std::string(out, sizeof(out)) == "CD");
     }
 }
 

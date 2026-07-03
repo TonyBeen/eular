@@ -12,8 +12,8 @@
 #include <functional>
 #include <tuple>
 
-#include "detail/std_type_traits.h"
-#include "detail/type_list.h"
+#include "std_type_traits.h"
+#include "type_list.h"
 
 #if !defined(__cpp_noexcept_function_type) || (__cpp_noexcept_function_type < 201510)
     #define NO_CXX17_NOEXCEPT_FUNC_TYPE
@@ -25,7 +25,7 @@ namespace detail {
 template<typename T>
 struct is_function_ptr : std::integral_constant<bool,
                                                 std::is_pointer<T>::value &&
-                                                std::is_function<remove_reference_t<T>>::value>
+                                                std::is_function<remove_pointer_t<remove_reference_t<T>>>::value>
 {
 };
 
@@ -134,7 +134,7 @@ struct function_traits<std::function<T>> : function_traits<T> {};
 template<typename F, size_t Index>
 struct param_types
 {
-    using type = typename std::tuple_element<Index, typename function_traits<F>::arg_types>::type;
+    using type = typename list_element<typename function_traits<F>::arg_types, Index>::type;
 };
 
 template<typename F, size_t Index>

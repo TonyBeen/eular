@@ -22,10 +22,11 @@ public:
     Exception(const String8 &msg) : mExceptMsg(msg) {}
     ~Exception() override= default;
 
-    virtual const char *what() const noexcept
+    virtual const char *what() const noexcept override
     {
         return mExceptMsg.c_str();
     }
+
 private:
     String8     mExceptMsg;
 };
@@ -37,7 +38,7 @@ public:
     bad_type_cast_exception(const String8& msg) : mMessage(msg) {}
     ~bad_type_cast_exception() override = default;
 
-    virtual const char *what() const noexcept
+    virtual const char *what() const noexcept override
     {
         return mMessage.c_str();
     }

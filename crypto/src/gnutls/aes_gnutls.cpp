@@ -81,7 +81,7 @@ std::vector<uint8_t> AES::Decrypt(const std::string &data, const std::string &ke
 
 void AES::setKey(const std::string &key, int32_t keySize)
 {
-    if (keySize != KeySize::AES_128 || keySize != KeySize::AES_256) {
+    if (keySize != KeySize::AES_128 && keySize != KeySize::AES_256) {
         return; // Invalid key size
     }
 
@@ -150,7 +150,6 @@ std::vector<uint8_t> AES::encrypt(const void *data, size_t len)
             outputOffset += blockSize;
 
             // Handle padding
-            memcpy(temporaryIV, m_context->_iv, CBC_IV_SIZE);
             uint8_t temporaryBuffer[AES_BLOCK_SIZE] = {0};
             int64_t remaining = (int64_t)len - (int64_t)offset;
             blockSize = AES_BLOCK_SIZE;
@@ -158,7 +157,7 @@ std::vector<uint8_t> AES::encrypt(const void *data, size_t len)
             memset(temporaryBuffer + remaining, (uint8_t)paddingSize, paddingSize);
 
             nettle_cbc_encrypt(&m_context->_ctx._aes128, (nettle_cipher_func*)nettle_aes128_encrypt, 
-                CBC_IV_SIZE, temporaryIV, blockSize, encryptedData.data() + outputOffset, ptr);
+                CBC_IV_SIZE, temporaryIV, blockSize, encryptedData.data() + outputOffset, temporaryBuffer);
         }
     } else if (m_context->_key_size == KeySize::AES_256) {
         aes256_set_encrypt_key(&m_context->_ctx._aes256, m_context->_user_key);
@@ -186,7 +185,6 @@ std::vector<uint8_t> AES::encrypt(const void *data, size_t len)
             outputOffset += blockSize;
 
             // Handle padding
-            memcpy(temporaryIV, m_context->_iv, CBC_IV_SIZE);
             uint8_t temporaryBuffer[AES_BLOCK_SIZE] = {0};
             int64_t remaining = (int64_t)len - (int64_t)offset;
             blockSize = AES_BLOCK_SIZE;
@@ -194,7 +192,7 @@ std::vector<uint8_t> AES::encrypt(const void *data, size_t len)
             memset(temporaryBuffer + remaining, (uint8_t)paddingSize, paddingSize);
 
             nettle_cbc_encrypt(&m_context->_ctx._aes256, (nettle_cipher_func*)nettle_aes256_encrypt, 
-                CBC_IV_SIZE, temporaryIV, blockSize, encryptedData.data() + outputOffset, ptr);
+                CBC_IV_SIZE, temporaryIV, blockSize, encryptedData.data() + outputOffset, temporaryBuffer);
         }
     }
 
@@ -208,11 +206,16 @@ std::vector<uint8_t> AES::decrypt(const void *data, size_t len)
         return decryptedData;
     }
 
+    assert(len % AES_BLOCK_SIZE == 0); // Ensure length is a multiple of AES block size
+    if (len % AES_BLOCK_SIZE != 0) {
+        return decryptedData;
+    }
+
     const uint8_t *ptr = static_cast<const uint8_t *>(data);
     decryptedData.resize(len);
 
     if (m_context->_key_size == KeySize::AES_128) {
-        aes128_set_encrypt_key(&m_context->_ctx._aes128, m_context->_user_key);
+        aes128_set_decrypt_key(&m_context->_ctx._aes128, m_context->_user_key);
         if (m_context->_encrypt_mode == EncryptMode::ECB) {
             size_t offset = 0;
             size_t outputOffset = 0;
@@ -226,11 +229,11 @@ std::vector<uint8_t> AES::decrypt(const void *data, size_t len)
             memcpy(temporaryIV, m_context->_iv, CBC_IV_SIZE);
 
             size_t blockSize = len;
-            nettle_cbc_encrypt(&m_context->_ctx._aes128, (nettle_cipher_func*)nettle_aes128_encrypt, 
+            nettle_cbc_decrypt(&m_context->_ctx._aes128, (nettle_cipher_func*)nettle_aes128_decrypt,
                 CBC_IV_SIZE, temporaryIV, blockSize, decryptedData.data(), ptr);
         }
     } else if (m_context->_key_size == KeySize::AES_256) {
-        aes256_set_encrypt_key(&m_context->_ctx._aes256, m_context->_user_key);
+        aes256_set_decrypt_key(&m_context->_ctx._aes256, m_context->_user_key);
         if (m_context->_encrypt_mode == EncryptMode::ECB) {
             size_t offset = 0;
             size_t outputOffset = 0;
@@ -244,7 +247,7 @@ std::vector<uint8_t> AES::decrypt(const void *data, size_t len)
             memcpy(temporaryIV, m_context->_iv, CBC_IV_SIZE);
 
             size_t blockSize = len;
-            nettle_cbc_encrypt(&m_context->_ctx._aes256, (nettle_cipher_func*)nettle_aes256_decrypt, 
+            nettle_cbc_decrypt(&m_context->_ctx._aes256, (nettle_cipher_func*)nettle_aes256_decrypt,
                 CBC_IV_SIZE, temporaryIV, blockSize, decryptedData.data(), ptr);
         }
     }

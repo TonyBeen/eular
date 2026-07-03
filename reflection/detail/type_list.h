@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <type_traits>
 
-#include "detail/std_version.h"
+#include "std_version.h"
 
 namespace eular {
 namespace detail {
@@ -26,12 +26,12 @@ struct type_list
 template <typename, size_t>
 struct list_element;
 
-template <template <typename...> typename ListType, typename T, typename... Ts, size_t N>
+template <template <typename...> class ListType, typename T, typename... Ts, size_t N>
 struct list_element<ListType<T, Ts...>, N> : list_element<ListType<Ts...>, N - 1>
 {
 };
 
-template <template <typename...> typename ListType, typename T, typename... Ts>
+template <template <typename...> class ListType, typename T, typename... Ts>
 struct list_element<ListType<T, Ts...>, 0>
 {
     using type = T;
@@ -40,7 +40,7 @@ struct list_element<ListType<T, Ts...>, 0>
 template <typename>
 struct list_size;
 
-template <template <typename...> typename ListType, typename... Ts>
+template <template <typename...> class ListType, typename... Ts>
 struct list_size<ListType<Ts...>>
 {
     static constexpr size_t value = sizeof...(Ts);
@@ -49,7 +49,7 @@ struct list_size<ListType<Ts...>>
 template <typename>
 struct list_is_empty;
 
-template <template <typename...> typename ListType, typename... Ts>
+template <template <typename...> class ListType, typename... Ts>
 struct list_is_empty<ListType<Ts...>>
 {
     static constexpr bool value = sizeof...(Ts) == 0;
@@ -58,7 +58,7 @@ struct list_is_empty<ListType<Ts...>>
 template <typename>
 struct list_head;
 
-template <template <typename...> typename ListType, typename T, typename... Ts>
+template <template <typename...> class ListType, typename T, typename... Ts>
 struct list_head<ListType<T, Ts...>> {
     using type = T;
 };
@@ -66,7 +66,7 @@ struct list_head<ListType<T, Ts...>> {
 template <typename>
 struct list_tail;
 
-template <template <typename...> typename ListType, typename T, typename... Ts>
+template <template <typename...> class ListType, typename T, typename... Ts>
 struct list_tail<ListType<T, Ts...>> {
     using type = ListType<Ts...>;
 };
@@ -74,7 +74,7 @@ struct list_tail<ListType<T, Ts...>> {
 template <typename List, typename T>
 struct list_add_to_first;
 
-template <template <typename...> typename ListType, typename... Ts, typename T>
+template <template <typename...> class ListType, typename... Ts, typename T>
 struct list_add_to_first<ListType<Ts...>, T> {
     using type = ListType<T, Ts...>;
 };
@@ -86,7 +86,7 @@ struct is_type_list_same {
 };
 
 // 非空的 type_list
-template <template <typename...> typename ListType, typename T, typename... Ts, typename T2, typename... Ts2>
+template <template <typename...> class ListType, typename T, typename... Ts, typename T2, typename... Ts2>
 struct is_type_list_same<ListType<T, Ts...>, ListType<T2, Ts2...>> {
     static constexpr bool value = std::is_same<T, T2>::value && is_type_list_same<ListType<Ts...>, ListType<Ts2...>>::value;
 };

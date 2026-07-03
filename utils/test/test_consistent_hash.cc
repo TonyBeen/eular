@@ -4,10 +4,6 @@
     > Brief:
     > Created Time: 2024年10月11日 星期五 20时24分41秒
  ************************************************************************/
-#ifndef CATCH_CONFIG_MAIN
-#define CATCH_CONFIG_MAIN
-#endif
-
 #include <vector>
 #include <map>
 

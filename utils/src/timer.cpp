@@ -20,8 +20,13 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#elif defined(OS_MACOS)
+#elif defined(OS_APPLE)
 #include <sys/event.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #elif defined(OS_WINDOWS)
 #include <winsock2.h>
 typedef int     socklen_t;
@@ -31,7 +36,7 @@ typedef int     socklen_t;
 #include "utils/errors.h"
 #include "utils/time.h"
 
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
 inline int closesocket(int fd) {
     return close(fd);
 }
@@ -44,7 +49,7 @@ namespace eular {
 static std::atomic<uint64_t> gTimerCount = {0};
 
 int SocketPair(int32_t family, int32_t type, int32_t protocol, int sv[2]) {
-#if defined(OS_LINUX) || defined(OS_MACOS)
+#if defined(OS_LINUX) || defined(OS_APPLE)
     return socketpair(AF_LOCAL, type, protocol, sv);
 #endif
     if (family != AF_INET || type != SOCK_STREAM) {
@@ -311,7 +316,9 @@ bool TimerManager::delTimer(uint64_t uniqueId)
     bool flag = false;
     for (auto it = mTimers.begin(); it != mTimers.end();) {
         if ((*it)->mUniqueId == uniqueId) {
+            Timer *timer = *it;
             mTimers.erase(it);
+            delete timer;
             flag = true;
             break;
         }
@@ -340,27 +347,34 @@ int TimerManager::threadWorkFunction(void *arg)
     UNUSED(this_);
 
     fd_set readfds;
-    TimerManager::TimerIterator it;
     int32_t n = 0;
     while (mShouldExit == false) {
+        uint64_t nextTime = 0;
+        bool hasTimer = false;
         {
             RDAutoLock<RWMutex> lock(mRWMutex);
-            if (mTimers.size() == 0) {
-                mRWMutex.unlock();
-                mSignal.wait();
-                mRWMutex.rlock();
+            if (!mTimers.empty()) {
+                auto it = mTimers.begin();
+                if (it != mTimers.end()) {
+                    hasTimer = true;
+                    uint64_t now = Time::AbsTime();
+                    if ((*it)->mTime > now) {
+                        nextTime = (*it)->mTime - now;
+                    }
+                }
             }
-            it = mTimers.begin();
-            if (it == mTimers.end()) { // 当不存在定时器且调用stopTimer后需要校验
-                continue;
-            }
+        }
+
+        if (!hasTimer) {
+            mSignal.wait();
+            continue;
         }
 
         FD_ZERO(&readfds);
         FD_SET(mSockPair[RD_SOCK_IDX], &readfds); // 监听新连接
-        uint64_t nextTime = (*it)->mTime - Time::AbsTime();
+        n = 0;
         if (nextTime > 0) {
-            struct timeval tv = {(long)nextTime / 1000, (long)nextTime % 1000 * 1000};
+            struct timeval tv = {(int32_t)nextTime / 1000, (int32_t)nextTime % 1000 * 1000};
             n = select(mSockPair[RD_SOCK_IDX] + 1, &readfds, nullptr, nullptr, &tv);
         }
 

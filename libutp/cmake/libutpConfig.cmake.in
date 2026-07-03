@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Threads REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/libutpTargets.cmake")
+
+set(_libutp_static_deps
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libutils_static.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libiconv.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libcharset.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libevent_wrapper_static.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libevent.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libcares_static.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libssl.a"
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libcrypto.a"
+    Threads::Threads
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND _libutp_static_deps dl)
+endif()
+
+set_property(TARGET eular::utp APPEND PROPERTY INTERFACE_LINK_LIBRARIES "${_libutp_static_deps}")
+
+set(libutp_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@")
+set(libutp_LIBRARIES eular::utp)
+set(libutp_STATIC_LIBRARIES eular::utp)
+set(libutp_FOUND TRUE)
+
+check_required_components(libutp)

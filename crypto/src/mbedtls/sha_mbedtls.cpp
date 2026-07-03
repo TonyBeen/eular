@@ -76,7 +76,7 @@ std::string SHA::Hash(int32_t type, const void *data, int32_t bytes)
         break;
     }
 
-    if (!result) {
+    if (result != 0) {
         return std::string();
     }
 
@@ -99,6 +99,7 @@ int32_t SHA::init(int32_t type)
         status = mbedtls_sha512_starts(&m_context->ctx.sha512, 0);
         break;
     default:
+        status = -1;
         break;
     }
 

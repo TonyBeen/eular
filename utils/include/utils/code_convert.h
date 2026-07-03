@@ -29,7 +29,7 @@ public:
     };
 
     CodeConvert();
-    ~CodeConvert() = default;
+    ~CodeConvert();
 
     /**
      * @brief 编码转换开始
@@ -111,7 +111,6 @@ protected:
 
 private:
     void*       m_codeConvHandle;
-    uint32_t    m_cacheSize;
     CodeFlag    m_codeFrom;
     CodeFlag    m_codeTo;
 };

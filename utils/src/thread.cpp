@@ -11,19 +11,28 @@
 
 #include <string.h>
 
+#if defined(OS_WINDOWS)
+#include <thread>
+#else
 #include <pthread.h>
+#endif
 
 #include "utils/errors.h"
 #include "utils/exception.h"
 
-#define CAST2UINT(x) static_cast<uint32_t>(x)
+#define CAST2UINT(x)        static_cast<uint32_t>(x)
+#define THREAD_NAME_SIZE    15
 
 namespace eular {
 struct ThreadBase::ThreadImpl {
     uint32_t            _tid{};
+#if defined(OS_WINDOWS)
+    std::thread         _thread;
+#else
     pthread_t           _pthread_tid{};
-    Sem                 _sem_block; // 阻塞线程结束
-    Sem                 _sem_wait;  // 用于等待线程创建完毕
+#endif
+    Semaphore           _sem_block; // 阻塞线程结束
+    Semaphore           _sem_wait;  // 用于等待线程创建完毕
 
     std::atomic<uint32_t>   _th_status{};
     std::atomic<bool>       _exit_status{};
@@ -49,6 +58,24 @@ ThreadBase::~ThreadBase()
 {
     if (threadStatus() != CAST2UINT(ThreadStatus::THREAD_EXIT)) { // 等待线程退出，否则在析构完成之后会导致线程段错误问题
         stop();
+
+#if defined(OS_WINDOWS)
+        if (mImpl->_thread.joinable()) {
+            if (mImpl->_thread.get_id() == std::this_thread::get_id()) {
+                mImpl->_thread.detach();
+            } else {
+                mImpl->_thread.join();
+            }
+        }
+#else
+        if (pthread_equal(mImpl->_pthread_tid, pthread_self()) == 0) {
+            pthread_join(mImpl->_pthread_tid, nullptr);
+        } else {
+            pthread_detach(mImpl->_pthread_tid);
+        }
+#endif
+
+        mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_EXIT);
     }
 }
 
@@ -76,12 +103,20 @@ bool ThreadBase::forceExit()
     }
 
     mImpl->_exit_status = true;
+#if defined(OS_WINDOWS)
+    mImpl->_sem_block.post();
+    if (mImpl->_thread.joinable()) {
+        mImpl->_thread.join();
+    }
+    int status = 0;
+#else
     pthread_cancel(mImpl->_pthread_tid);
     int status = pthread_join(mImpl->_pthread_tid, nullptr);
     if (status) {
         String8 msg = String8::Format("pthread_join error. [%d,%s]", status, strerror(status));
         throw eular::Exception(msg);
     }
+#endif
 
     mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_EXIT);
     return status == 0;
@@ -94,12 +129,24 @@ int32_t ThreadBase::getTid() const
 
 void ThreadBase::detach()
 {
+#if defined(OS_WINDOWS)
+    if (mImpl->_thread.joinable()) {
+        mImpl->_thread.detach();
+    }
+#else
     pthread_detach(mImpl->_pthread_tid);
+#endif
 }
 
 void ThreadBase::join()
 {
+#if defined(OS_WINDOWS)
+    if (mImpl->_thread.joinable()) {
+        mImpl->_thread.join();
+    }
+#else
     pthread_join(mImpl->_pthread_tid, nullptr);
+#endif
 }
 
 bool ThreadBase::ShouldExit()
@@ -113,6 +160,17 @@ int ThreadBase::run(size_t stackSize)
         return STATUS(INVALID_OPERATION);
     }
 
+#if defined(OS_WINDOWS)
+    UNUSED(stackSize);
+    try {
+        mImpl->_thread = std::thread([this]() {
+            threadloop(this);
+        });
+    } catch (...) {
+        throw Exception("std::thread create error");
+    }
+    int ret = 0;
+#else
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     if (stackSize) {
@@ -124,6 +182,7 @@ int ThreadBase::run(size_t stackSize)
     if (ret != 0) {
         throw Exception(String8::Format("pthread_create error %s\n", strerror(ret)));
     }
+#endif
     mImpl->_sem_wait.timedwait(1000); // 等待线程启动完毕
 
     return ret;
@@ -132,7 +191,7 @@ int ThreadBase::run(size_t stackSize)
 int32_t ThreadBase::start(size_t stackSize)
 {
     int32_t code = 0;
-    switch (mImpl->_th_status) {
+    switch (mImpl->_th_status.load()) {
     case CAST2UINT(ThreadStatus::THREAD_WAITING):
         mImpl->_sem_block.post();
         break;
@@ -153,7 +212,9 @@ void *ThreadBase::threadloop(void *user)
     ThreadBase *threadBase = (ThreadBase *)user;
     threadBase->mImpl->_tid = gettid();
     threadBase->mImpl->_sem_wait.post();
+#if !defined(OS_WINDOWS)
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr);    // 设置任何时间点都可以取消线程
+#endif
 
     while (threadBase->ShouldExit() == false) {
         threadBase->mImpl->_th_status = CAST2UINT(ThreadStatus::THREAD_RUNNING);
@@ -176,7 +237,11 @@ static thread_local eular::String8  gThreadName;
 
 struct Thread::ThreadImpl {
     int32_t     _tid;
+#if defined(OS_WINDOWS)
+    std::thread _thread;
+#else
     pthread_t   _pthread_tid{};
+#endif
 };
 
 Thread::Thread(std::function<void()> callback, const String8 &threadName) :
@@ -186,6 +251,13 @@ Thread::Thread(std::function<void()> callback, const String8 &threadName) :
     mShouldJoin(true),
     mSemaphore(0)
 {
+#if defined(OS_WINDOWS)
+    try {
+        mImpl->_thread = std::thread(&Thread::entrance, this);
+    } catch (...) {
+        throw eular::Exception("std::thread create error");
+    }
+#else
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     int status = pthread_create(&mImpl->_pthread_tid, &attr, &Thread::entrance, this);
@@ -194,6 +266,7 @@ Thread::Thread(std::function<void()> callback, const String8 &threadName) :
         String8 msg = String8::Format("pthread_create error. [%d,%s]", status, strerror(status));
         throw eular::Exception(msg);
     }
+#endif
     mSemaphore.timedwait(1000);
 }
 
@@ -207,9 +280,21 @@ void Thread::SetName(const eular::String8 &name)
     if (name.empty()) {
         return;
     }
+
+    eular::String8 nameTemp = name;
+    if (name.length() > THREAD_NAME_SIZE) {
+        nameTemp = name.substr(0, THREAD_NAME_SIZE);
+    }
+
     if (gLocalThread) {
         gLocalThread->mThreadName = name;
+    #if defined(OS_LINUX)
         pthread_setname_np(gLocalThread->mImpl->_pthread_tid, name.c_str());
+    #elif defined(OS_WINDOWS)
+        // std::thread does not provide a portable set-name API in C++11.
+#elif defined(OS_APPLE)
+        pthread_setname_np(name.c_str());
+#endif
     }
     gThreadName = name;
 }
@@ -232,7 +317,13 @@ int32_t Thread::getTid() const
 void Thread::detach()
 {
     if (mShouldJoin) {
+#if defined(OS_WINDOWS)
+        if (mImpl->_thread.joinable()) {
+            mImpl->_thread.detach();
+        }
+#else
         pthread_detach(mImpl->_pthread_tid);
+#endif
         mShouldJoin = false;
     }
 }
@@ -240,11 +331,17 @@ void Thread::detach()
 void Thread::join()
 {
     if (mShouldJoin) {
+#if defined(OS_WINDOWS)
+        if (mImpl->_thread.joinable()) {
+            mImpl->_thread.join();
+        }
+#else
         int ret = pthread_join(mImpl->_pthread_tid, nullptr);
         if (ret) {
             String8 msg = String8::Format("pthread_join error. [%d,%s]", ret, strerror(ret));
             throw eular::Exception(msg);
         }
+#endif
     }
     mShouldJoin = false;
 }
@@ -257,7 +354,13 @@ void *Thread::entrance(void *arg)
     gLocalThread->mImpl->_tid = gettid();
     gLocalThread->mSemaphore.post();
 
-    pthread_setname_np(pthread_self(), th->mThreadName.substr(0, 15).c_str());
+#if defined(OS_LINUX) || defined(OS_WINDOWS)
+#if defined(OS_LINUX)
+    pthread_setname_np(pthread_self(), th->mThreadName.c_str());
+#endif
+#elif defined(OS_APPLE)
+        pthread_setname_np(th->mThreadName.c_str());
+#endif
 
     std::function<void()> cb;
     cb.swap(th->mCallback);

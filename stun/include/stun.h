@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <vector>
 #include <memory>
 #include <optional>

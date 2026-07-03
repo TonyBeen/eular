@@ -2,6 +2,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#if defined(OS_WINDOWS)
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#elif defined(OS_LINUX)
+#include <sys/random.h>
+#endif
 
 #include "kcp_inc.h"
 #include "kcp_error.h"
@@ -9,6 +17,17 @@
 #include "kcp_mtu.h"
 #include "kcp_log.h"
 #include "kcp_time.h"
+
+#ifndef TEMP_FAILURE_RETRY
+#define TEMP_FAILURE_RETRY(expression)           \
+    ({                                           \
+        long int _kcp_result;                    \
+        do {                                     \
+            _kcp_result = (long int)(expression);\
+        } while (_kcp_result == -1L && errno == EINTR); \
+        _kcp_result;                             \
+    })
+#endif
 
 int32_t set_socket_nonblock(socket_t fd)
 {
@@ -296,7 +315,11 @@ int32_t kcp_send_packet(struct KcpConnection *kcp_conn, const struct iovec *data
     return kcp_send_packet_raw(kcp_conn->kcp_ctx->sock, &kcp_conn->remote_host, data, size);
 }
 
-int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+static int32_t kcp_send_packet_raw_impl(int32_t sock,
+                                        const sockaddr_t *remote_addr,
+                                        const struct iovec *data,
+                                        uint32_t size,
+                                        bool log_errors)
 {
     if (size > KCP_PACKET_SIZE) {
         return INVALID_PARAM;
@@ -340,8 +363,10 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
     }
     send_packet = TEMP_FAILURE_RETRY(sendmmsg(sock, msgvec, size, 0));
     if (send_packet <= 0) {
-        int32_t code = get_last_errno();
-        KCP_LOGE("sendmmsg failed, code: %d, %s", code, errno_string(code));
+        if (log_errors) {
+            int32_t code = get_last_errno();
+            KCP_LOGE("sendmmsg failed, code: %d, %s", code, errno_string(code));
+        }
         send_packet = WRITE_ERROR;
     }
 
@@ -374,6 +399,16 @@ int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const s
     return send_packet;
 }
 
+int32_t kcp_send_packet_raw(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+{
+    return kcp_send_packet_raw_impl(sock, remote_addr, data, size, true);
+}
+
+int32_t kcp_send_packet_raw_silent(int32_t sock, const sockaddr_t *remote_addr, const struct iovec *data, uint32_t size)
+{
+    return kcp_send_packet_raw_impl(sock, remote_addr, data, size, false);
+}
+
 int32_t get_last_errno()
 {
 #ifdef OS_WINDOWS
@@ -401,22 +436,72 @@ const char *errno_string(int32_t err)
 
 int32_t kcp_add_write_event(struct KcpConnection *kcp_conn)
 {
-    if (list_empty(&kcp_conn->node_list)) {
-        kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
-        return event_add(kcp_ctx->write_event, NULL);
+    if (kcp_conn == NULL || kcp_conn->kcp_ctx == NULL || kcp_conn->kcp_ctx->write_event == NULL) {
+        return INVALID_PARAM;
     }
 
-    return NO_ERROR;
+    kcp_context_t *kcp_ctx = kcp_conn->kcp_ctx;
+    if (list_empty(&kcp_conn->node_list)) {
+        list_add_tail(&kcp_conn->node_list, &kcp_ctx->conn_write_event_queue);
+    }
+
+    return event_add(kcp_ctx->write_event, NULL);
 }
 
 uint32_t kcp_random(uint32_t min, uint32_t max)
 {
+    uint32_t value = 0;
+    bool has_random_value = false;
+
     if (min > max) {
         uint32_t temp = min;
         min = max;
         max = temp;
     }
 
-    srand((uint32_t)kcp_time_monotonic_ms());
-    return min + rand() % (max - min + 1);
+    if (min == max) {
+        return min;
+    }
+
+    do {
+#if defined(OS_WINDOWS)
+        if (BCryptGenRandom(NULL, (PUCHAR)&value, (ULONG)sizeof(value), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0) {
+            has_random_value = true;
+            break;
+        }
+    #elif defined(OS_LINUX)
+        {
+            ssize_t nread = getrandom(&value, sizeof(value), 0);
+            if (nread == (ssize_t)sizeof(value)) {
+                has_random_value = true;
+                break;
+            }
+        }
+    #elif defined(OS_MAC) || defined(OS_FREEBSD) || defined(OS_OPENBSD) || defined(OS_NETBSD)
+        arc4random_buf(&value, sizeof(value));
+        has_random_value = true;
+        break;
+#endif
+
+        uint64_t seed = kcp_time_monotonic_us();
+        seed ^= (uint64_t)time(NULL) << 21;
+#if defined(OS_WINDOWS)
+        seed ^= (uint64_t)GetCurrentProcessId() << 7;
+#else
+        seed ^= (uint64_t)getpid() << 7;
+#endif
+        seed ^= ((uint64_t)(uintptr_t)&value) << 11;
+        seed ^= seed >> 33;
+        seed *= 0xff51afd7ed558ccdULL;
+        seed ^= seed >> 33;
+        seed *= 0xc4ceb9fe1a85ec53ULL;
+        seed ^= seed >> 33;
+        value = (uint32_t)(seed ^ (seed >> 32));
+        has_random_value = true;
+    } while (false);
+
+    if (!has_random_value) {
+        return min;
+    }
+    return min + value % (max - min + 1);
 }

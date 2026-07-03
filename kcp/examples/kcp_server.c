@@ -128,21 +128,30 @@ int main(int argc, char **argv)
 
     int32_t command = 0;
     const char *nic = NULL;
-    while ((command = getopt(argc, argv, "n:h")) != -1) {
+    int listen_port = 54321;
+    while ((command = getopt(argc, argv, "n:p:h")) != -1) {
         switch (command) {
             case 'n':
                 nic = optarg;
                 break;
+            case 'p':
+                listen_port = atoi(optarg);
+                break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-n nic]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-n nic] [-p listen_port]\n", argv[0]);
                 return 0;
             case '?':
                 fprintf(stderr, "Unknown option: %d\n", optopt);
                 return -1;
             default:
-                fprintf(stderr, "Usage: %s [-n nic] %d\n", argv[0], command);
+                fprintf(stderr, "Usage: %s [-n nic] [-p listen_port] %d\n", argv[0], command);
                 return -1;
         }
+    }
+
+    if (listen_port <= 0 || listen_port > 65535) {
+        fprintf(stderr, "Invalid listen port: %d\n", listen_port);
+        return -1;
     }
 
 
@@ -159,7 +168,7 @@ int main(int argc, char **argv)
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin.sin_family = AF_INET;
     local_addr.sin.sin_addr.s_addr = inet_addr("0.0.0.0");
-    local_addr.sin.sin_port = htons(54321);
+    local_addr.sin.sin_port = htons((uint16_t)listen_port);
 
     int32_t statuc = kcp_bind(ctx, &local_addr, nic);
     if (statuc != NO_ERROR) {

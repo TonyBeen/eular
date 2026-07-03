@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <atomic>
 #include <sys/types.h>
+#include <utils/sysdef.h>
 
 namespace eular {
 class SharedBuffer

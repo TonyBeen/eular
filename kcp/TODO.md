@@ -11,3 +11,29 @@
 [[通俗易懂]深入理解TCP协议（下）：RTT、滑动窗口、拥塞处理](https://www.imooc.com/article/29368)
 
 linux/net/ipv4/tcp_input.c:tcp_rtt_estimator L820
+
+## NTRS / P2P 接入清单
+
+当前已完成：
+
+- `kcp_connect_candidates()` 支持主叫端多候选并发 SYN。
+- `kcp_connect()` 保持单地址兼容语义。
+- 首个完成握手的候选会锁定为最终 `remote_host`。
+- 新增 `kcp_ntrs_configure()` / `kcp_ntrs_start()` / `kcp_ntrs_create_session()` API 合约。
+- 默认构建提供 NTRS stub，未启用 stun bridge 时返回 `NOT_SUPPORT`，不影响核心 KCP。
+- `KCPP_ENABLE_NTRS=ON` 时可直接源码引入 `../stun`。
+- 新增 `kcp_peer.out` 示例，复用 KCP UDP socket 完成 NTRS NAT 探测、UDP punch 和 KCP 候选连接。
+- `build-musl-ntrs/examples/kcp_peer.out` 已可静态 musl 构建。
+
+下一步：
+
+- `kcp_ntrs_start()` 完成 connect/auth/request_probe/detect/register/wait_signal 状态机。
+- `kcp_ntrs_create_session()` 主叫端从 Node 获取候选后调用 `kcp_connect_candidates()`。
+- 在 `kcp_read_cb()` 增加 STUN/KCP 分流。
+- 将 `kcp_peer.out` 验证通过的流程沉淀回 `kcp_ntrs_*` 库 API。
+- 删除或重写旧 `examples/ntrs_kcp_client.cc`，移除旧文本协议和伪造候选。
+
+后续硬化：
+
+- 增加 `attempt_id`，合并被动端同一逻辑连接的多个候选 SYN。
+- 增加候选级日志和测试。

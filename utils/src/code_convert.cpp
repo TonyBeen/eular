@@ -9,7 +9,7 @@
 
 #include <string.h>
 
-#include <iconv.h>
+#include "iconv.h"
 
 #include "utils/exception.h"
 #include "utils/errors.h"
@@ -39,12 +39,20 @@
 namespace eular {
 CodeConvert::CodeConvert() :
     m_codeConvHandle(INVALID_ICONV_HANDLE),
-    m_cacheSize(0)
+    m_codeFrom(UTF8),
+    m_codeTo(UTF8)
 {
+}
+
+CodeConvert::~CodeConvert()
+{
+    convertEnd();
 }
 
 bool CodeConvert::convertBegin(CodeFlag from, CodeFlag to)
 {
+    convertEnd();
+
     iconv_t cd = iconv_open(_Flag2str(to), _Flag2str(from));
     if (cd == INVALID_ICONV_HANDLE) {
         perror("iconv_open");
@@ -74,7 +82,7 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
         char *pOutputBuf = outputBuf;
         size_t leftOutputLen = CACHE_SIZE;
 
-        size_t nRet = iconv(m_codeConvHandle, &pBegin, &fromSize, &pOutputBuf, &leftOutputLen);
+        size_t nRet = iconv((iconv_t)m_codeConvHandle, &pBegin, &fromSize, &pOutputBuf, &leftOutputLen);
         if (INVALID_ICONV_RETURN == nRet) {
             switch (errno) {
             case EINVAL:
@@ -108,7 +116,8 @@ int32_t CodeConvert::convert(const std::string &from, std::string &to)
 void CodeConvert::convertEnd()
 {
     if (m_codeConvHandle != INVALID_ICONV_HANDLE) {
-        iconv_close(m_codeConvHandle);
+        iconv_close((iconv_t)m_codeConvHandle);
+        m_codeConvHandle = INVALID_ICONV_HANDLE;
     }
 }
 
