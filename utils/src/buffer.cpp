@@ -428,10 +428,6 @@ std::string ByteBuffer::dump() const
     }
 
     char buf[64] = {0};
-    if (mDataSize > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-        return ret;
-    }
-
     int64_t cycle = static_cast<int64_t>(mDataSize / 4);
     for (int64_t i = 0; i < cycle; ++i) {
         snprintf(buf, sizeof(buf), "0x%02x 0x%02x 0x%02x 0x%02x ",
