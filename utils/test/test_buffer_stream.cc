@@ -151,3 +151,16 @@ TEST_CASE("buffer_stream_char_array_char_pointer_write_read", "[buffer_stream]")
         REQUIRE(str.size() == temp.size());
     }
 }
+
+TEST_CASE("buffer_stream_empty_string_roundtrip", "[buffer_stream]") {
+    eular::ByteBuffer buffer;
+    eular::BufferStream stream(buffer);
+
+    std::string input;
+    stream << input;
+
+    std::string output = "old value";
+    stream >> output;
+
+    REQUIRE(output.empty());
+}

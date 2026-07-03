@@ -13,8 +13,7 @@
 #include <assert.h>
 #include <limits>
 
-#define DEFAULT_BUFFER_SIZE (256)
-#define MAX_BUFFER_SIZE (static_cast<uint64_t>(128ULL * 1024ULL * 1024ULL * 1024ULL))
+#define DEFAULT_BUFFER_SIZE (256U)
 
 // 此函数会导致valgrind报错: in use at exit: 25 bytes in 1 blocks
 static inline uint8_t *GetEmptyBuffer()
@@ -46,23 +45,21 @@ bool AddOverflow(size_t lhs, size_t rhs, size_t *result)
 #endif
 }
 
-bool AddBufferSize(uint64_t lhs, uint64_t rhs, uint64_t *result)
+bool AddBufferSize(uint32_t lhs, uint32_t rhs, uint32_t *result)
 {
-    if (lhs > MAX_BUFFER_SIZE || rhs > MAX_BUFFER_SIZE) {
+    const uint64_t sum = static_cast<uint64_t>(lhs) + static_cast<uint64_t>(rhs);
+    if (sum > UINT32_MAX) {
         return false;
     }
 
-    *result = lhs + rhs;
-    if (*result > MAX_BUFFER_SIZE) {
-        return false;
-    }
-
+    *result = static_cast<uint32_t>(sum);
     return true;
 }
 
-bool ToAllocSize(uint64_t size, size_t *out)
+bool ToAllocSize(uint32_t size, size_t *out)
 {
-    if (size > MAX_BUFFER_SIZE || size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    if (static_cast<uint64_t>(size) >
+        static_cast<uint64_t>(std::numeric_limits<size_t>::max() - sizeof(SharedBuffer))) {
         return false;
     }
 
@@ -70,7 +67,7 @@ bool ToAllocSize(uint64_t size, size_t *out)
     return true;
 }
 
-bool RangeOverlaps(const uint8_t *begin, uint64_t size, const uint8_t *data, uint64_t dataSize)
+bool RangeOverlaps(const uint8_t *begin, uint32_t size, const uint8_t *data, uint32_t dataSize)
 {
     if (begin == nullptr || data == nullptr || size == 0 || dataSize == 0) {
         return false;
@@ -80,9 +77,7 @@ bool RangeOverlaps(const uint8_t *begin, uint64_t size, const uint8_t *data, uin
     const uintptr_t dataAddr = reinterpret_cast<uintptr_t>(data);
     size_t endAddr = 0;
     size_t dataEndAddr = 0;
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
-        dataSize > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
-        AddOverflow(beginAddr, static_cast<size_t>(size), &endAddr) ||
+    if (AddOverflow(beginAddr, static_cast<size_t>(size), &endAddr) ||
         AddOverflow(dataAddr, static_cast<size_t>(dataSize), &dataEndAddr)) {
         return false;
     }
@@ -99,7 +94,7 @@ ByteBuffer::ByteBuffer():
 {
 }
 
-ByteBuffer::ByteBuffer(uint64_t size) :
+ByteBuffer::ByteBuffer(uint32_t size) :
     mBuffer(GetEmptyBuffer()),
     mDataSize(0),
     mCapacity(0)
@@ -109,12 +104,12 @@ ByteBuffer::ByteBuffer(uint64_t size) :
         SharedBuffer *newBuf = SharedBuffer::bufferFromData(mBuffer)->reset(allocSize);
         if (newBuf != nullptr) {
             mBuffer = static_cast<uint8_t *>(newBuf->data());
-            mCapacity = newBuf->size();
+            mCapacity = static_cast<uint32_t>(newBuf->size());
         }
     }
 }
 
-ByteBuffer::ByteBuffer(const char *data, uint64_t dataLength) :
+ByteBuffer::ByteBuffer(const char *data, uint32_t dataLength) :
     mBuffer(GetEmptyBuffer()),
     mDataSize(0),
     mCapacity(0)
@@ -123,23 +118,22 @@ ByteBuffer::ByteBuffer(const char *data, uint64_t dataLength) :
         return;
     }
 
-    if (dataLength == UINT64_MAX) {
-        dataLength = strlen(data);
+    if (dataLength == UINT32_MAX) {
+        const size_t length = strlen(data);
+        if (length >= static_cast<size_t>(UINT32_MAX)) {
+            return;
+        }
+        dataLength = static_cast<uint32_t>(length);
     }
     set((const uint8_t *)data, dataLength);
 }
 
-ByteBuffer::ByteBuffer(const uint8_t *data, uint64_t dataLength) :
+ByteBuffer::ByteBuffer(const uint8_t *data, uint32_t dataLength) :
     mBuffer(nullptr),
     mDataSize(0),
     mCapacity(0)
 {
     if (data == nullptr || dataLength == 0) {
-        mBuffer = GetEmptyBuffer();
-        return;
-    }
-
-    if (dataLength > MAX_BUFFER_SIZE) {
         mBuffer = GetEmptyBuffer();
         return;
     }
@@ -209,7 +203,7 @@ uint8_t* ByteBuffer::data()
     return mBuffer;
 }
 
-uint8_t& ByteBuffer::operator[](uint64_t index)
+uint8_t& ByteBuffer::operator[](uint32_t index)
 {
     if (index >= mDataSize) {
         throw Exception("Index out of range");
@@ -218,7 +212,7 @@ uint8_t& ByteBuffer::operator[](uint64_t index)
     return mBuffer[index];
 }
 
-const uint8_t& ByteBuffer::operator[](uint64_t index) const
+const uint8_t& ByteBuffer::operator[](uint32_t index) const
 {
     if (index >= mDataSize) {
         throw Exception("Index out of range");
@@ -227,13 +221,13 @@ const uint8_t& ByteBuffer::operator[](uint64_t index) const
     return mBuffer[index];
 }
 
-uint64_t ByteBuffer::set(const uint8_t *data, uint64_t dataSize, uint64_t offset)
+uint32_t ByteBuffer::set(const uint8_t *data, uint32_t dataSize, uint32_t offset)
 {
     if (data == nullptr || dataSize == 0 || offset > mDataSize) {
         return 0;
     }
 
-    uint64_t newSize = 0;
+    uint32_t newSize = 0;
     if (!AddBufferSize(dataSize, offset, &newSize)) {
         return 0;
     }
@@ -254,7 +248,7 @@ uint64_t ByteBuffer::set(const uint8_t *data, uint64_t dataSize, uint64_t offset
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) { // capacity exceeded
-        const uint64_t newCapacity = calculate(newSize);
+        const uint32_t newCapacity = calculate(newSize);
         if (newCapacity < newSize) {
             free(temp);
             return 0;
@@ -274,28 +268,32 @@ uint64_t ByteBuffer::set(const uint8_t *data, uint64_t dataSize, uint64_t offset
     }
 
     mBuffer = static_cast<uint8_t *>(buf->data());
-    mCapacity = buf->size();
+    mCapacity = static_cast<uint32_t>(buf->size());
     mDataSize = newSize;
     memmove(mBuffer + static_cast<size_t>(offset), data, static_cast<size_t>(dataSize));
     free(temp);
 
-    return dataSize;
+    return static_cast<uint32_t>(dataSize);
 }
 
-void ByteBuffer::append(const char *data, uint64_t dataSize)
+void ByteBuffer::append(const char *data, uint32_t dataSize)
 {
     if (data == nullptr || dataSize == 0) {
         return;
     }
 
-    if (dataSize == UINT64_MAX) {
-        dataSize = strlen(data);
+    if (dataSize == UINT32_MAX) {
+        const size_t length = strlen(data);
+        if (length >= static_cast<size_t>(UINT32_MAX)) {
+            return;
+        }
+        dataSize = static_cast<uint32_t>(length);
     }
 
     set((const uint8_t *)data, dataSize, size());
 }
 
-void ByteBuffer::append(const uint8_t *data, uint64_t dataSize)
+void ByteBuffer::append(const uint8_t *data, uint32_t dataSize)
 {
     set(data, dataSize, size());
 }
@@ -305,14 +303,14 @@ void ByteBuffer::append(const ByteBuffer &other)
     set(other.const_data(), other.size(), size());
 }
 
-uint64_t ByteBuffer::insert(const uint8_t *data, uint64_t dataSize, uint64_t offset)
+uint32_t ByteBuffer::insert(const uint8_t *data, uint32_t dataSize, uint32_t offset)
 {
     if (data == nullptr || dataSize == 0 || offset > mDataSize) { // offset范围必须在0-mDataSize，等于mDataSize相当于尾插，offset=0相当于头插
         return 0;
     }
 
-    uint64_t newSize = 0;
-    uint64_t copySize = mDataSize - offset;
+    uint32_t newSize = 0;
+    uint32_t copySize = mDataSize - offset;
     if (!AddBufferSize(dataSize, mDataSize, &newSize)) {
         return 0;
     }
@@ -333,7 +331,7 @@ uint64_t ByteBuffer::insert(const uint8_t *data, uint64_t dataSize, uint64_t off
 
     SharedBuffer *buf = nullptr;
     if (mCapacity < newSize) {
-        const uint64_t newCapacity = calculate(newSize);
+        const uint32_t newCapacity = calculate(newSize);
         if (newCapacity < newSize) {
             free(temp);
             return 0;
@@ -354,7 +352,7 @@ uint64_t ByteBuffer::insert(const uint8_t *data, uint64_t dataSize, uint64_t off
     }
 
     mBuffer = static_cast<uint8_t *>(buf->data());
-    mCapacity = buf->size();
+    mCapacity = static_cast<uint32_t>(buf->size());
     if (copySize > 0) {
         memmove(mBuffer + static_cast<size_t>(offset + dataSize), mBuffer + static_cast<size_t>(offset), static_cast<size_t>(copySize));
     }
@@ -362,12 +360,12 @@ uint64_t ByteBuffer::insert(const uint8_t *data, uint64_t dataSize, uint64_t off
     mDataSize = newSize;
     free(temp);
 
-    return dataSize;
+    return static_cast<uint32_t>(dataSize);
 }
 
-void ByteBuffer::reserve(uint64_t newSize)
+void ByteBuffer::reserve(uint32_t newSize)
 {
-    if (newSize == 0 || newSize > MAX_BUFFER_SIZE) {
+    if (newSize == 0) {
         return;
     }
 
@@ -390,7 +388,7 @@ void ByteBuffer::reserve(uint64_t newSize)
     SharedBuffer *buf = SharedBuffer::bufferFromData(mBuffer)->editResize(allocSize);
     if (buf) {
         mBuffer = static_cast<uint8_t *>(buf->data());
-        mCapacity = buf->size();
+        mCapacity = static_cast<uint32_t>(buf->size());
     }
 }
 
@@ -411,15 +409,14 @@ void ByteBuffer::clear()
     mDataSize = 0;
 }
 
-void ByteBuffer::resize(uint64_t sz)
+void ByteBuffer::resize(uint32_t sz)
 {
-    if (sz > MAX_BUFFER_SIZE) {
-        throw Exception("ByteBuffer::resize() size too large");
-    }
-
     reserve(sz);
     if (mBuffer && mCapacity >= sz) {
-        mDataSize = sz;
+        if (!detach()) {
+            throw Exception("ByteBuffer::resize() detach failed");
+        }
+        mDataSize = static_cast<uint32_t>(sz);
     }
 }
 
@@ -490,39 +487,32 @@ size_t ByteBuffer::Hash(const ByteBuffer &buf)
 
 bool ByteBuffer::operator==(const ByteBuffer &other) const
 {
-    // 共享状态下一定是同一份数据
-    if (mBuffer == other.mBuffer) {
-        return true;
-    }
-
     if (mDataSize != other.mDataSize) {
         return false;
+    }
+
+    if (mDataSize == 0 || mBuffer == other.mBuffer) {
+        return true;
     }
 
     return 0 == memcmp(mBuffer, other.mBuffer, static_cast<size_t>(mDataSize));
 }
 
-uint64_t ByteBuffer::calculate(uint64_t dataSize)
+uint32_t ByteBuffer::calculate(uint32_t dataSize)
 {
-    if (dataSize > MAX_BUFFER_SIZE) {
-        return 0;
-    }
-
     if (dataSize >= DEFAULT_BUFFER_SIZE) {
-        const uint64_t extra = dataSize / 2;
-        dataSize = dataSize > MAX_BUFFER_SIZE - extra ? MAX_BUFFER_SIZE : dataSize + extra;
+        const uint32_t extra = dataSize / 2;
+        dataSize = dataSize > UINT32_MAX - extra
+            ? UINT32_MAX
+            : dataSize + extra;
     } else {
         dataSize = DEFAULT_BUFFER_SIZE;
     }
     return dataSize;
 }
 
-uint64_t ByteBuffer::allocBuffer(uint64_t size)
+uint32_t ByteBuffer::allocBuffer(uint32_t size)
 {
-    if (size > MAX_BUFFER_SIZE) {
-        return 0;
-    }
-
     if (size == 0) {
         size = DEFAULT_BUFFER_SIZE;
     }
@@ -539,7 +529,7 @@ uint64_t ByteBuffer::allocBuffer(uint64_t size)
 #ifdef _DEBUG
             memset(mBuffer, 0, allocSize);
 #endif
-            return sb->size();
+            return static_cast<uint32_t>(sb->size());
         }
     }
 
@@ -576,7 +566,7 @@ bool ByteBuffer::detach()
         SharedBuffer *newSb = psb->edit();
         if (newSb) {
             mBuffer = static_cast<uint8_t *>(newSb->data());
-            mCapacity = newSb->size();
+            mCapacity = static_cast<uint32_t>(newSb->size());
         } else {
             return false;
         }

@@ -8,6 +8,8 @@
 #include "utils/buffer_stream.h"
 #include "utils/utils.h"
 
+#include <limits>
+
 namespace eular {
 BufferStream::BufferStream() :
     m_buffer(nullptr),
@@ -122,11 +124,12 @@ BufferStream &BufferStream::operator<<(uint64_t item)
 
 BufferStream &BufferStream::operator<<(const std::string &item)
 {
-    if (!item.empty()) {
-        // 将\0保存到缓存中
-        write(item.c_str(), item.length() + 1);
+    if (item.length() >= std::numeric_limits<uint32_t>::max()) {
+        throw Exception(String8::Format("String too large. [%s:%d]", __FILE__, __LINE__));
     }
 
+    // 将\0保存到缓存中
+    write(item.c_str(), static_cast<uint32_t>(item.length() + 1));
     return *this;
 }
 
@@ -241,17 +244,18 @@ BufferStream &BufferStream::operator>>(uint64_t &item)
 BufferStream &BufferStream::operator>>(std::string &item)
 {
     checkBuffer();
-    std::string temp = item;
+    std::string temp;
     char ch = 1;
     do {
         if (!read(&ch, sizeof(ch))) {
             throw Exception(String8::Format("Read error, maybe insufficient data. [%s:%d]", __FILE__, __LINE__));
         }
-        temp.push_back(ch);
+        if (ch != '\0') {
+            temp.push_back(ch);
+        }
     } while (ch != '\0');
 
-    // 去掉结尾\0
-    item.assign(temp.c_str(), temp.size() - 1);
+    item.assign(temp);
 
     return *this;
 }
@@ -259,14 +263,24 @@ BufferStream &BufferStream::operator>>(std::string &item)
 void BufferStream::write(const void *data, uint32_t size)
 {
     checkBuffer();
-    uint32_t cap = static_cast<uint32_t>(m_buffer->capacity());
-    uint32_t wpos = m_wpos + size;
-    if (m_rpos != 0 && wpos > cap) {
+    if (size == 0) {
+        return;
+    }
+    if (data == nullptr) {
+        throw Exception(String8::Format("Invalid write data. [%s:%d]", __FILE__, __LINE__));
+    }
+
+    uint32_t cap = m_buffer->capacity();
+    if (m_rpos > m_wpos || m_wpos > m_buffer->size() || m_buffer->size() > cap) {
+        throw Exception(String8::Format("Invalid stream state. [%s:%d]", __FILE__, __LINE__));
+    }
+
+    if (m_rpos != 0 && size > cap - m_wpos) {
         // 当前读位置不在起点, 且已无法写入这么多字节数, 移除旧的数据
         uint8_t *pBegin = m_buffer->data() + m_rpos;
         uint32_t copySize = m_wpos - m_rpos;
 
-        size_t realCopySize = m_buffer->set(pBegin, copySize);
+        uint32_t realCopySize = m_buffer->set(pBegin, copySize);
         if (eular_unlikely(realCopySize != copySize)) {
             throw Exception(String8::Format("Not enough memory. [%s:%d]", __FILE__, __LINE__));
         }
@@ -275,22 +289,36 @@ void BufferStream::write(const void *data, uint32_t size)
         m_wpos = copySize;
     }
 
+    if (size > std::numeric_limits<uint32_t>::max() - m_wpos) {
+        throw Exception(String8::Format("BufferStream size overflow. [%s:%d]", __FILE__, __LINE__));
+    }
+
+    uint32_t expectedSize = m_wpos + size;
     m_buffer->append(static_cast<const uint8_t *>(data), size);
-    m_wpos += size;
+    if (m_buffer->size() != expectedSize) {
+        throw Exception(String8::Format("Not enough memory. [%s:%d]", __FILE__, __LINE__));
+    }
+    m_wpos = expectedSize;
 }
 
 bool BufferStream::read(void *data, uint32_t size)
 {
     checkBuffer();
-    uint32_t rpos = m_rpos + size;
-    if (rpos <= m_wpos) {
-        // 有足够多的数据可读
-        memcpy(data, m_buffer->data() + m_rpos, size);
-        m_rpos += size;
+    if (size == 0) {
         return true;
     }
+    if (data == nullptr || m_rpos > m_wpos) {
+        return false;
+    }
 
-    return false;
+    if (size > m_wpos - m_rpos) {
+        return false;
+    }
+
+    // 有足够多的数据可读
+    memcpy(data, m_buffer->const_data() + m_rpos, size);
+    m_rpos += size;
+    return true;
 }
 
 void BufferStream::checkBuffer() const

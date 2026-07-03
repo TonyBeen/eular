@@ -1,4 +1,5 @@
 #include <unordered_map>
+#include <limits>
 
 #include "catch/catch.hpp"
 #include "utils/buffer.h"
@@ -215,4 +216,32 @@ TEST_CASE("reserve_resize", "[ByteBuffer]") {
 
         memset(buffer.data(), 0, buffer.size());
     }
+}
+
+TEST_CASE("resize_detaches_shared_buffer_and_preserves_equality_contract", "[ByteBuffer]") {
+    ByteBuffer original("Hello");
+    ByteBuffer resized = original;
+
+    REQUIRE(original.const_data() == resized.const_data());
+    resized.resize(3);
+
+    CHECK(original.size() == 5);
+    CHECK(resized.size() == 3);
+    CHECK(original.const_data() != resized.const_data());
+    CHECK_FALSE(original == resized);
+
+    std::unordered_map<ByteBuffer, size_t> hashMap;
+    hashMap.insert(std::make_pair(original, 1));
+    hashMap.insert(std::make_pair(resized, 2));
+    CHECK(hashMap.size() == 2);
+}
+
+TEST_CASE("byte_buffer_rejects_uint32_size_overflow", "[ByteBuffer]") {
+    ByteBuffer buffer;
+    buffer.append("x", 1);
+
+    CHECK(buffer.set((const uint8_t *)"x", std::numeric_limits<uint32_t>::max(), 1) == 0);
+    CHECK(buffer.insert((const uint8_t *)"x", std::numeric_limits<uint32_t>::max()) == 0);
+    buffer.append((const uint8_t *)"x", std::numeric_limits<uint32_t>::max());
+    CHECK(buffer.size() == 1);
 }
