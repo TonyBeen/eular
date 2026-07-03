@@ -234,6 +234,63 @@ TEST_CASE("test_assign", "[map]")
     CHECK(mapNew.value("world") == 200);
 }
 
+TEST_CASE("test_empty_map_lazy_paths", "[map]")
+{
+    eular::Map<eular::String8, int> empty;
+    const auto&                     constEmpty = empty;
+
+    CHECK(empty.size() == 0);
+    CHECK(constEmpty.begin() == constEmpty.end());
+    CHECK(constEmpty.rbegin() == constEmpty.rend());
+    CHECK(constEmpty.find("missing") == constEmpty.end());
+    CHECK(constEmpty.value("missing", 42) == 42);
+
+    eular::Map<eular::String8, int> copied(empty);
+    CHECK(copied.size() == 0);
+    copied.insert("copied", 1);
+    CHECK(copied.size() == 1);
+    CHECK(empty.size() == 0);
+
+    eular::Map<eular::String8, int> assigned;
+    assigned = empty;
+    CHECK(assigned.size() == 0);
+    assigned.insert("assigned", 2);
+    CHECK(assigned.size() == 1);
+    CHECK(empty.size() == 0);
+
+    eular::Map<eular::String8, int> moved(std::move(empty));
+    CHECK(moved.size() == 0);
+    CHECK(empty.size() == 0);
+
+    eular::Map<eular::String8, int> initListEmpty({});
+    CHECK(initListEmpty.size() == 0);
+}
+
+TEST_CASE("test_empty_map_mutable_iteration_and_erase", "[map]")
+{
+    eular::Map<eular::String8, int> mapObj;
+
+    for (auto it = mapObj.begin(); it != mapObj.end(); ++it) {
+        REQUIRE(false);
+    }
+    CHECK(mapObj.size() == 0);
+
+    auto eraseMissing = mapObj.erase("missing");
+    CHECK(eraseMissing == mapObj.end());
+    CHECK(mapObj.size() == 0);
+
+    auto eraseEnd = mapObj.erase(mapObj.end());
+    CHECK(eraseEnd == mapObj.end());
+    CHECK(mapObj.size() == 0);
+
+    mapObj.clear();
+    CHECK(mapObj.size() == 0);
+
+    mapObj.insert("after_empty_ops", 7);
+    CHECK(mapObj.size() == 1);
+    CHECK(mapObj.value("after_empty_ops") == 7);
+}
+
 TEST_CASE("test_move_assign_releases_old_data", "[map]")
 {
     LifetimeTrackedValue::liveCount = 0;
@@ -440,7 +497,7 @@ TEST_CASE("test_custom_compare_orders_map", "[map]")
     CHECK(it.key() == "alpha");
 }
 
-TEST_CASE("test_nonconst_find_does_not_detach", "[map]")
+TEST_CASE("test_nonconst_find_detaches_shared_data", "[map]")
 {
     eular::Map<eular::String8, MergeTrackedValue> mapObj;
     mapObj.insert("alpha", MergeTrackedValue(1));
@@ -454,11 +511,37 @@ TEST_CASE("test_nonconst_find_does_not_detach", "[map]")
     auto it = mapObj.find("alpha");
     REQUIRE(it != constMapObj.end());
     CHECK(it.value().value == 1);
-    CHECK(MergeTrackedValue::copyCount == 0);
+    CHECK(MergeTrackedValue::copyCount == 2);
+
+    it.value().value = 10;
+    CHECK(mapObj.value("alpha").value == 10);
+    CHECK(shared.value("alpha").value == 1);
 
     auto sharedIt = shared.find("alpha");
     REQUIRE(sharedIt != constShared.end());
     CHECK(sharedIt.value().value == 1);
+}
+
+TEST_CASE("test_clear_shared_map_keeps_lazy_empty_state", "[map]")
+{
+    eular::Map<eular::String8, int> mapObj;
+    mapObj.insert("alpha", 1);
+    mapObj.insert("bravo", 2);
+
+    eular::Map<eular::String8, int> shared(mapObj);
+    mapObj.clear();
+
+    CHECK(mapObj.size() == 0);
+    CHECK(shared.size() == 2);
+    CHECK(shared.value("alpha") == 1);
+
+    const auto& constMapObj = mapObj;
+    CHECK(constMapObj.begin() == constMapObj.end());
+
+    mapObj.insert("charlie", 3);
+    CHECK(mapObj.size() == 1);
+    CHECK(mapObj.value("charlie") == 3);
+    CHECK(shared.find("charlie") == shared.end());
 }
 
 TEST_CASE("test_clear", "[map]")

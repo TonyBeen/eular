@@ -27,12 +27,12 @@ class Map
     using Node = detail::MapNode<KeyType, ValType>;
 
 public:
-    Map() : mRBtree(Data::create()) {}
-    Map(std::initializer_list<std::pair<KeyType, ValType>> initList) : mRBtree(Data::create())
+    Map() noexcept : mRBtree(nullptr) {}
+    Map(std::initializer_list<std::pair<KeyType, ValType>> initList) : mRBtree(nullptr)
     {
         typename std::initializer_list<std::pair<KeyType, ValType>>::const_iterator it;
         for (it = initList.begin(); it != initList.end(); ++it) {
-            mRBtree->insert(it->first, it->second);
+            insert(it->first, it->second);
         }
     }
 
@@ -40,21 +40,20 @@ public:
     {
         mRBtree = other.mRBtree;
         assert(this != &other);
-        if (this != &other) {
+        if (this != &other && mRBtree != nullptr) {
             mRBtree->reference.ref();
         }
     }
 
-    Map(Map<KeyType, ValType, CompareType>&& other) : mRBtree(nullptr)
+    Map(Map<KeyType, ValType, CompareType>&& other) noexcept : mRBtree(nullptr)
     {
         if (this != std::addressof(other)) {
-            Data* empty = Data::create();
             mRBtree = other.mRBtree;
-            other.mRBtree = empty;
+            other.mRBtree = nullptr;
         }
     }
 
-    ~Map() { destroy(); }
+    ~Map() noexcept { destroy(); }
 
     Map& operator=(const Map<KeyType, ValType, CompareType>& other)
     {
@@ -62,24 +61,23 @@ public:
             return *this;
         }
 
-        // TODO:
-        // 当声明一个map时会先在堆上创建MapData，此时在赋值一个其他的map，会导致之前的MapData释放内存，存在性能问题
         destroy();
         mRBtree = other.mRBtree;
-        mRBtree->reference.ref();
+        if (mRBtree != nullptr) {
+            mRBtree->reference.ref();
+        }
         return *this;
     }
 
-    Map& operator=(Map<KeyType, ValType, CompareType>&& other)
+    Map& operator=(Map<KeyType, ValType, CompareType>&& other) noexcept
     {
         if (this == std::addressof(other)) {
             return *this;
         }
 
-        Data* empty = Data::create();
         destroy();
         mRBtree = other.mRBtree;
-        other.mRBtree = empty;
+        other.mRBtree = nullptr;
         return *this;
     }
 
@@ -187,20 +185,26 @@ public:
         detach();
         return iterator(mRBtree->begin(), mRBtree);
     }
-    inline const_iterator begin() const noexcept { return const_iterator(mRBtree->begin(), mRBtree); }
+    inline const_iterator begin() const noexcept
+    {
+        return const_iterator(mRBtree ? mRBtree->begin() : nullptr, mRBtree);
+    }
     // inline iterator rbegin() { detach(); return iterator(mRBtree->rbegin()); }
-    inline const_iterator rbegin() const noexcept { return const_iterator(mRBtree->rbegin(), mRBtree); }
-    inline iterator       end()
+    inline const_iterator rbegin() const noexcept
+    {
+        return const_iterator(mRBtree ? mRBtree->rbegin() : nullptr, mRBtree);
+    }
+    inline iterator end()
     {
         detach();
         return iterator(mRBtree->end(), mRBtree);
     }
-    inline const_iterator end() const noexcept { return const_iterator(mRBtree->end(), mRBtree); }
+    inline const_iterator end() const noexcept { return const_iterator(mRBtree ? mRBtree->end() : nullptr, mRBtree); }
     // inline iterator rend() { detach(); return iterator(mRBtree->rend()); }
-    inline const_iterator rend() const noexcept { return const_iterator(mRBtree->rend(), mRBtree); }
+    inline const_iterator rend() const noexcept { return const_iterator(mRBtree ? mRBtree->rend() : nullptr, mRBtree); }
 
     iterator insert(const KeyType& k, const ValType& v);
-    // FIXME: 对于rbegin反向循环中使用erase会出现问题, 目前做法是禁用反向循环中的擦除行为
+    // NOTE: 不提供可变 rbegin/rend, 避免反向遍历中 erase(iterator) 的返回方向语义不一致
     iterator       erase(const KeyType& k);
     iterator       erase(const iterator& it);
     iterator       find(const KeyType& key);
@@ -210,13 +214,13 @@ public:
     ValType        operator[](const KeyType& key) const;
     void           clear();
     void           merge(Map<KeyType, ValType, CompareType>& other);
-    size_t         size() const noexcept { return mRBtree->size(); }
+    size_t         size() const noexcept { return mRBtree ? mRBtree->size() : 0; }
 
 protected:
     void detach();
-    bool isDetached() const noexcept { return mRBtree->reference.load() == 0; }
+    bool isDetached() const noexcept { return mRBtree == nullptr || mRBtree->reference.load() == 0; }
     void detach_helper();
-    void destroy();
+    void destroy() noexcept;
 
 private:
     detail::MapData<KeyType, ValType, CompareType>* mRBtree;
@@ -255,7 +259,7 @@ void Map<Key, Val, Compare>::detach_helper()
 }
 
 template <typename Key, typename Val, typename Compare>
-void Map<Key, Val, Compare>::destroy()
+void Map<Key, Val, Compare>::destroy() noexcept
 {
     if (mRBtree) {
         if (mRBtree->reference.load() > 0) {
@@ -319,6 +323,8 @@ typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const it
 template <typename Key, typename Val, typename Compare>
 typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::find(const KeyType& key)
 {
+    detach();
+
     Node* node = mRBtree->find(key);
     return iterator(node, mRBtree);
 }
@@ -326,14 +332,24 @@ typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::find(const Key
 template <typename Key, typename Val, typename Compare>
 typename Map<Key, Val, Compare>::const_iterator Map<Key, Val, Compare>::find(const KeyType& key) const
 {
-    Node* node = mRBtree->find(key);
+    if (mRBtree == nullptr) {
+        return const_iterator(nullptr, nullptr);
+    }
+
+    const Data* data = mRBtree;
+    const Node* node = data->find(key);
     return const_iterator(node, mRBtree);
 }
 
 template <typename Key, typename Val, typename Compare>
 Val Map<Key, Val, Compare>::value(const KeyType& key, const ValType& defaultValue) const
 {
-    Node* n = mRBtree->find(key);
+    if (mRBtree == nullptr) {
+        return defaultValue;
+    }
+
+    const Data* data = mRBtree;
+    const Node* n = data->find(key);
     return n ? n->value : defaultValue;
 }
 
@@ -362,14 +378,12 @@ template <typename Key, typename Val, typename Compare>
 void Map<Key, Val, Compare>::clear()
 {
     if (mRBtree == nullptr) {
-        mRBtree = detail::MapData<Key, Val, Compare>::create();
         return;
     }
 
     if (mRBtree->reference.load() > 0) {
-        Data* data = detail::MapData<Key, Val, Compare>::create();
         mRBtree->reference.deref();
-        mRBtree = data;
+        mRBtree = nullptr;
     } else {
         mRBtree->clear();
     }
@@ -382,18 +396,20 @@ void Map<Key, Val, Compare>::merge(Map<KeyType, ValType, Compare>& other)
         return;
     }
 
+    other.detach();
+
     if (mRBtree == nullptr) {
-        mRBtree = Data::create();
+        mRBtree = other.mRBtree;
+        other.mRBtree = nullptr;
+        return;
     }
 
     detach();
-    other.detach();
 
     if (mRBtree->size() == 0) {
-        Data* empty = Data::create();
         Data::destroy(mRBtree);
         mRBtree = other.mRBtree;
-        other.mRBtree = empty;
+        other.mRBtree = nullptr;
         return;
     }
 

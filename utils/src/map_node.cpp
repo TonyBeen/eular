@@ -14,14 +14,14 @@
 
 namespace detail {
 
-static inline int AlignmentThreshold() { return 2 * sizeof(void*); }
+static inline int AlignmentThreshold() noexcept { return 2 * sizeof(void*); }
 
 static inline void* map_allocate(int size, int alignment)
 {
     return alignment > AlignmentThreshold() ? AlignedAlloc(size, alignment) : ::malloc(size);
 }
 
-static inline void map_deallocate(void* node, int alignment)
+static inline void map_deallocate(void* node, int alignment) noexcept
 {
     if (alignment > AlignmentThreshold()) {
         AlignedFree(node);
@@ -30,7 +30,7 @@ static inline void map_deallocate(void* node, int alignment)
     }
 }
 
-bool MapNodeBase::isValidNode(rb_root* root, rb_node* node)
+bool MapNodeBase::isValidNode(rb_root* root, rb_node* node) noexcept
 {
     assert(root && node);
     rb_node* parent = node;
@@ -60,6 +60,6 @@ void* mapNodeAllocate(int size, int alignment)
     return node;
 }
 
-void mapNodeDeallocate(void* node, int alignment) { map_deallocate(node, alignment); }
+void mapNodeDeallocate(void* node, int alignment) noexcept { map_deallocate(node, alignment); }
 
 }  // namespace detail

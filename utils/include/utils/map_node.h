@@ -18,11 +18,11 @@
 namespace detail {
 struct MapNodeBase {
     struct rb_node __rb_node;
-    static bool    isValidNode(rb_root* root, rb_node* node);
+    static bool    isValidNode(rb_root* root, rb_node* node) noexcept;
 };
 
 void* mapNodeAllocate(int size, int alignment);
-void  mapNodeDeallocate(void* node, int alignment);
+void  mapNodeDeallocate(void* node, int alignment) noexcept;
 
 template <typename Key, typename Val>
 struct MapNode : public MapNodeBase {
@@ -30,24 +30,24 @@ struct MapNode : public MapNodeBase {
     Key key;
     Val value;
 
-    const MapNode* nextNode() const
+    const MapNode* nextNode() const noexcept
     {
         rb_node* currentNode = const_cast<rb_node*>(&__rb_node);
         return map_node_entry(rb_next(currentNode));
     }
 
     // NOTE this转化为const MapNode *表示明确调用const修饰的nextNode
-    MapNode* nextNode() { return const_cast<MapNode*>(const_cast<const MapNode*>(this)->nextNode()); }
+    MapNode* nextNode() noexcept { return const_cast<MapNode*>(const_cast<const MapNode*>(this)->nextNode()); }
 
-    const MapNode* previousNode() const
+    const MapNode* previousNode() const noexcept
     {
         rb_node* currentNode = const_cast<rb_node*>(&__rb_node);
         return map_node_entry(rb_prev(currentNode));
     }
 
-    MapNode* previousNode() { return const_cast<MapNode*>(const_cast<const MapNode*>(this)->previousNode()); }
+    MapNode* previousNode() noexcept { return const_cast<MapNode*>(const_cast<const MapNode*>(this)->previousNode()); }
 
-    static MapNode* map_node_entry(rb_node* node)
+    static MapNode* map_node_entry(rb_node* node) noexcept
     {
         if (node == NULL) {
             return NULL;
@@ -63,7 +63,8 @@ struct MapNode : public MapNodeBase {
     }
 
     template <typename T>
-    static typename std::enable_if<std::is_integral<T>::value || std::is_enum<T>::value>::type callDestructor(T&)
+    static typename std::enable_if<std::is_integral<T>::value || std::is_enum<T>::value>::type callDestructor(
+        T&) noexcept
     {
     }
 };
@@ -79,30 +80,30 @@ struct MapData {
 
     ~MapData() { clear(); }
 
-    Node* begin()
+    Node* begin() noexcept
     {
         // NOTE 当为空时rb_first返回nullptr, 故等于end()
         return MapNode<Key, Val>::map_node_entry(rb_first(&__rb_root));
     }
 
-    const Node* begin() const
+    const Node* begin() const noexcept
     {
         rb_root* root = &(const_cast<MapData*>(this)->__rb_root);
         return const_cast<const Node*>(Node::map_node_entry(rb_first(root)));
     }
 
-    Node*       end() { return nullNode; }
-    const Node* end() const { return nullNode; }
+    Node*       end() noexcept { return nullNode; }
+    const Node* end() const noexcept { return nullNode; }
 
-    Node*       rbegin() { return MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root)); }
-    const Node* rbegin() const { return const_cast<const Node*>(Node::map_node_entry(rb_last(&__rb_root))); }
-    Node*       rend() { return nullNode; }
-    const Node* rend() const { return nullNode; }
+    Node*       rbegin() noexcept { return MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root)); }
+    const Node* rbegin() const noexcept { return const_cast<const Node*>(Node::map_node_entry(rb_last(&__rb_root))); }
+    Node*       rend() noexcept { return nullNode; }
+    const Node* rend() const noexcept { return nullNode; }
 
-    Node* nextNode(const Node*);
-    Node* prevNode(const Node*);
+    Node* nextNode(const Node*) noexcept;
+    Node* prevNode(const Node*) noexcept;
 
-    size_t size() const { return node_count; }
+    size_t size() const noexcept { return node_count; }
 
     /**
      * @brief 向红黑树插入节点
@@ -110,9 +111,10 @@ struct MapData {
      * @param val 值
      * @return 创建内存失败时返回null，如果键不存在则返回新节点地址，如果存在，返回存在的节点地址
      */
-    Node* insert(const Key& key, const Val& val);
-    Node* insertNode(Node* node);
-    Node* find(const Key& key);
+    Node*       insert(const Key& key, const Val& val);
+    Node*       insertNode(Node* node);
+    Node*       find(const Key& key);
+    const Node* find(const Key& key) const;
 
     /**
      * @brief 删除节点
@@ -163,11 +165,11 @@ private:
 
     static bool isEqual(const Key& lhs, const Key& rhs) { return !isLess(lhs, rhs) && !isLess(rhs, lhs); }
 
-    MapData() : nullNode(nullptr), node_count(0) { __rb_root.rb_node = nullptr; }
+    MapData() noexcept : nullNode(nullptr), node_count(0) { __rb_root.rb_node = nullptr; }
 };
 
 template <typename Key, typename Val, typename Compare>
-MapNode<Key, Val>* MapData<Key, Val, Compare>::nextNode(const Node* curr)
+MapNode<Key, Val>* MapData<Key, Val, Compare>::nextNode(const Node* curr) noexcept
 {
     Node* lastNode = MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root));
     if (curr == lastNode || curr == end()) {
@@ -178,7 +180,7 @@ MapNode<Key, Val>* MapData<Key, Val, Compare>::nextNode(const Node* curr)
 }
 
 template <typename Key, typename Val, typename Compare>
-MapNode<Key, Val>* MapData<Key, Val, Compare>::prevNode(const Node* curr)
+MapNode<Key, Val>* MapData<Key, Val, Compare>::prevNode(const Node* curr) noexcept
 {
     Node* lastNode = MapNode<Key, Val>::map_node_entry(rb_last(&__rb_root));
     if (begin() == curr) {
@@ -230,6 +232,28 @@ MapNode<Key, Val>* MapData<Key, Val, Compare>::find(const Key& key)
     struct rb_node*    curr = root->rb_node;
     MapNode<Key, Val>* currNode = nullptr;
     bool               exist = false;
+    while (curr) {
+        currNode = MapNode<Key, Val>::map_node_entry(curr);
+        if (isLess(key, currNode->key)) {
+            curr = curr->rb_left;
+        } else if (isLess(currNode->key, key)) {
+            curr = curr->rb_right;
+        } else {
+            exist = true;
+            break;
+        }
+    }
+
+    return exist ? currNode : nullptr;
+}
+
+template <typename Key, typename Val, typename Compare>
+const MapNode<Key, Val>* MapData<Key, Val, Compare>::find(const Key& key) const
+{
+    rb_root*                 root = &(const_cast<MapData*>(this)->__rb_root);
+    struct rb_node*          curr = root->rb_node;
+    const MapNode<Key, Val>* currNode = nullptr;
+    bool                     exist = false;
     while (curr) {
         currNode = MapNode<Key, Val>::map_node_entry(curr);
         if (isLess(key, currNode->key)) {

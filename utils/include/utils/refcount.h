@@ -11,20 +11,20 @@
 #include <atomic>
 
 namespace eular {
-class RefCount {
+class RefCount
+{
 public:
-    RefCount() {}
-    RefCount(uint32_t init) : atomic_ref_count(init) {}
-    ~RefCount() { }
+    RefCount() noexcept {}
+    RefCount(uint32_t init) noexcept : atomic_ref_count(init) {}
+    ~RefCount() noexcept {}
 
-    RefCount(const RefCount &other) = delete;
-    RefCount &operator=(const RefCount &other) = delete;
+    RefCount(const RefCount& other) = delete;
+    RefCount& operator=(const RefCount& other) = delete;
 
-    inline void ref() {
-        ++atomic_ref_count;
-    }
+    inline void ref() noexcept { ++atomic_ref_count; }
 
-    inline uint32_t deref() {
+    inline uint32_t deref() noexcept
+    {
         if (atomic_ref_count.load() == 0) {
             return 0;
         }
@@ -32,13 +32,11 @@ public:
         return --atomic_ref_count;
     }
 
-    inline uint32_t load() const {
-        return atomic_ref_count;
-    }
+    inline uint32_t load() const noexcept { return atomic_ref_count; }
 
     std::atomic<uint32_t> atomic_ref_count{0};
 };
 
-} // namespace eular
+}  // namespace eular
 
-#endif // __UTILS_REF_COUNT_H__
+#endif  // __UTILS_REF_COUNT_H__
