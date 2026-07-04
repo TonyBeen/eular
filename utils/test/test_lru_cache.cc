@@ -194,6 +194,71 @@ public:
     int callbackCount{0};
 };
 
+class ClearCacheOnEntryRemoved : public eular::OnEntryRemoved<int, int>
+{
+public:
+    explicit ClearCacheOnEntryRemoved(eular::LruCache<int, int>& cache) : cache(cache) {}
+
+    void operator()(int&, int&) override
+    {
+        ++callbackCount;
+        if (!cleared) {
+            cleared = true;
+            cache.clear();
+        }
+    }
+
+    eular::LruCache<int, int>& cache;
+    int                        callbackCount{0};
+    bool                       cleared{false};
+};
+
+class RemoveKeyOnEntryRemoved : public eular::OnEntryRemoved<int, int>
+{
+public:
+    RemoveKeyOnEntryRemoved(eular::LruCache<int, int>& cache, int keyToRemove) : cache(cache), keyToRemove(keyToRemove)
+    {
+    }
+
+    void operator()(int&, int&) override
+    {
+        ++callbackCount;
+        if (!removed) {
+            removed = true;
+            cache.remove(keyToRemove);
+        }
+    }
+
+    eular::LruCache<int, int>& cache;
+    int                        keyToRemove;
+    int                        callbackCount{0};
+    bool                       removed{false};
+};
+
+class PutKeyOnEntryRemoved : public eular::OnEntryRemoved<int, int>
+{
+public:
+    PutKeyOnEntryRemoved(eular::LruCache<int, int>& cache, int keyToPut, int valueToPut)
+        : cache(cache), keyToPut(keyToPut), valueToPut(valueToPut)
+    {
+    }
+
+    void operator()(int&, int&) override
+    {
+        ++callbackCount;
+        if (!inserted) {
+            inserted = true;
+            cache.put(keyToPut, valueToPut);
+        }
+    }
+
+    eular::LruCache<int, int>& cache;
+    int                        keyToPut;
+    int                        valueToPut;
+    int                        callbackCount{0};
+    bool                       inserted{false};
+};
+
 struct LruCacheFixture {
     LruCacheFixture()
     {
@@ -486,6 +551,64 @@ TEST_CASE_METHOD(LruCacheFixture, "CallbackExceptionDoesNotBreakClear", "[LruCac
     CHECK(cache.get(1) == nullptr);
     CHECK(cache.get(2) == nullptr);
     CHECK(cache.get(3) == nullptr);
+}
+
+TEST_CASE_METHOD(LruCacheFixture, "CallbackCanClearCacheDuringRemove", "[LruCache]")
+{
+    eular::LruCache<int, int> cache(3);
+    ClearCacheOnEntryRemoved  callback(cache);
+    cache.setOnEntryRemovedListener(&callback);
+
+    CHECK(cache.put(1, 10));
+    CHECK(cache.put(2, 20));
+    CHECK(cache.put(3, 30));
+
+    CHECK(cache.remove(1));
+
+    CHECK(callback.callbackCount == 3);
+    CHECK(cache.size() == 0u);
+    CHECK(cache.get(1) == nullptr);
+    CHECK(cache.get(2) == nullptr);
+    CHECK(cache.get(3) == nullptr);
+}
+
+TEST_CASE_METHOD(LruCacheFixture, "CallbackCanRemoveAnotherKeyDuringEviction", "[LruCache]")
+{
+    eular::LruCache<int, int> cache(2);
+    RemoveKeyOnEntryRemoved   callback(cache, 2);
+    cache.setOnEntryRemovedListener(&callback);
+
+    CHECK(cache.put(1, 10));
+    CHECK(cache.put(2, 20));
+    CHECK(cache.put(3, 30));
+
+    CHECK(callback.callbackCount == 2);
+    CHECK(cache.size() == 1u);
+    CHECK(cache.get(1) == nullptr);
+    CHECK(cache.get(2) == nullptr);
+    REQUIRE(cache.get(3) != nullptr);
+    CHECK(*cache.get(3) == 30);
+}
+
+TEST_CASE_METHOD(LruCacheFixture, "CallbackCanPutDuringClear", "[LruCache]")
+{
+    eular::LruCache<int, int> cache(3);
+    PutKeyOnEntryRemoved      callback(cache, 9, 90);
+    cache.setOnEntryRemovedListener(&callback);
+
+    CHECK(cache.put(1, 10));
+    CHECK(cache.put(2, 20));
+    CHECK(cache.put(3, 30));
+
+    cache.clear();
+
+    CHECK(callback.callbackCount == 3);
+    CHECK(cache.size() == 1u);
+    CHECK(cache.get(1) == nullptr);
+    CHECK(cache.get(2) == nullptr);
+    CHECK(cache.get(3) == nullptr);
+    REQUIRE(cache.get(9) != nullptr);
+    CHECK(*cache.get(9) == 90);
 }
 
 TEST_CASE_METHOD(LruCacheFixture, "CallbackRemovesKeyWorksOK", "[LruCache]")

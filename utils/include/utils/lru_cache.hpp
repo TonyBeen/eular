@@ -207,8 +207,8 @@ bool LruCache<TKey, TValue, Hash, KeyEqual>::remove(const TKey& key)
     }
     auto* entry = static_cast<Entry*>(*it);
     mSet->erase(entry);
-    notifyEntryRemoved(*entry);
     detachFromCache(*entry);
+    notifyEntryRemoved(*entry);
     delete entry;
     return true;
 }
@@ -231,20 +231,20 @@ const TValue* LruCache<TKey, TValue, Hash, KeyEqual>::peekOldestValue() const no
 template <typename TKey, typename TValue, typename Hash, typename KeyEqual>
 void LruCache<TKey, TValue, Hash, KeyEqual>::clear()
 {
-    // 先回调（按照 LRU 链表顺序），再释放 Entry
-    if (mListener) {
-        for (Entry* p = mOldest; p != nullptr; p = p->child) {
-            notifyEntryRemoved(*p);
-        }
-    }
+    Entry* entry = mOldest;
 
     mYoungest = nullptr;
     mOldest = nullptr;
-
-    for (auto* entry : *mSet) {
-        delete entry;
-    }
     mSet->clear();
+
+    while (entry != nullptr) {
+        Entry* next = entry->child;
+        entry->parent = nullptr;
+        entry->child = nullptr;
+        notifyEntryRemoved(*entry);
+        delete entry;
+        entry = next;
+    }
 }
 
 template <typename TKey, typename TValue, typename Hash, typename KeyEqual>
