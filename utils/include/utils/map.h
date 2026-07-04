@@ -12,6 +12,7 @@
 
 #include <initializer_list>
 #include <memory>
+#include <utility>
 
 #include <utils/exception.h>
 #include <utils/map_node.h>
@@ -189,31 +190,41 @@ public:
     {
         return const_iterator(mRBtree ? mRBtree->begin() : nullptr, mRBtree);
     }
+    inline const_iterator cbegin() const noexcept { return begin(); }
     // inline iterator rbegin() { detach(); return iterator(mRBtree->rbegin()); }
     inline const_iterator rbegin() const noexcept
     {
         return const_iterator(mRBtree ? mRBtree->rbegin() : nullptr, mRBtree);
     }
-    inline iterator end()
+    inline const_iterator crbegin() const noexcept { return rbegin(); }
+    inline iterator       end()
     {
         detach();
         return iterator(mRBtree->end(), mRBtree);
     }
     inline const_iterator end() const noexcept { return const_iterator(mRBtree ? mRBtree->end() : nullptr, mRBtree); }
+    inline const_iterator cend() const noexcept { return end(); }
     // inline iterator rend() { detach(); return iterator(mRBtree->rend()); }
     inline const_iterator rend() const noexcept { return const_iterator(mRBtree ? mRBtree->rend() : nullptr, mRBtree); }
+    inline const_iterator crend() const noexcept { return rend(); }
 
-    iterator insert(const KeyType& k, const ValType& v);
     // NOTE: 不提供可变 rbegin/rend, 避免反向遍历中 erase(iterator) 的返回方向语义不一致
+    iterator insert(const KeyType& k, const ValType& v);
+    template <typename K, typename V>
+    iterator       emplace(K&& k, V&& v);
     iterator       erase(const KeyType& k);
     iterator       erase(const iterator& it);
+    iterator       erase(const iterator& first, const iterator& last);
     iterator       find(const KeyType& key);
     const_iterator find(const KeyType& key) const;
+    bool           contains(const KeyType& key) const;
     ValType        value(const KeyType& key, const ValType& defaultValue = ValType()) const;
     ValType&       operator[](const KeyType& key);
     ValType        operator[](const KeyType& key) const;
     void           clear();
     void           merge(Map<KeyType, ValType, CompareType>& other);
+    void           swap(Map<KeyType, ValType, CompareType>& other) noexcept;
+    bool           empty() const noexcept { return size() == 0; }
     size_t         size() const noexcept { return mRBtree ? mRBtree->size() : 0; }
 
 protected:
@@ -280,8 +291,15 @@ void Map<Key, Val, Compare>::destroy() noexcept
 template <typename Key, typename Val, typename Compare>
 typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::insert(const KeyType& k, const ValType& v)
 {
+    return emplace(k, v);
+}
+
+template <typename Key, typename Val, typename Compare>
+template <typename K, typename V>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::emplace(K&& k, V&& v)
+{
     detach();
-    Node* newNode = mRBtree->insert(k, v);
+    Node* newNode = mRBtree->emplace(std::forward<K>(k), std::forward<V>(v));
     return iterator(newNode, mRBtree);
 }
 
@@ -312,11 +330,45 @@ typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const it
         if (node == nullptr) {
             return iterator(mRBtree->end(), mRBtree);
         }
-        Node* next = mRBtree->erase(node, true);
+        Node* next = mRBtree->erase(node);
         return iterator(next, mRBtree);
     }
 
-    Node* next = mRBtree->erase(it.currentNode, true);
+    Node* next = mRBtree->erase(it.currentNode);
+    return iterator(next, mRBtree);
+}
+
+template <typename Key, typename Val, typename Compare>
+typename Map<Key, Val, Compare>::iterator Map<Key, Val, Compare>::erase(const iterator& first, const iterator& last)
+{
+    if (first == last) {
+        return iterator(last.currentNode, last.owner);
+    }
+
+    if (mRBtree == nullptr) {
+        return iterator(nullptr, nullptr);
+    }
+
+    if (mRBtree->reference.load() > 0) {
+        KeyType firstKey = first.key();
+        if (last.currentNode == mRBtree->end()) {
+            detach();
+            Node* node = mRBtree->find(firstKey);
+            Node* next = mRBtree->eraseRange(node, mRBtree->end());
+            return iterator(next, mRBtree);
+        }
+
+        KeyType lastKey = last.key();
+        detach();
+        Node* node = mRBtree->find(firstKey);
+        Node* stop = mRBtree->find(lastKey);
+        Node* next = mRBtree->eraseRange(node, stop ? stop : mRBtree->end());
+        return iterator(next, mRBtree);
+    }
+
+    Node* node = first.currentNode;
+    Node* stop = last.currentNode;
+    Node* next = mRBtree->eraseRange(node, stop ? stop : mRBtree->end());
     return iterator(next, mRBtree);
 }
 
@@ -339,6 +391,12 @@ typename Map<Key, Val, Compare>::const_iterator Map<Key, Val, Compare>::find(con
     const Data* data = mRBtree;
     const Node* node = data->find(key);
     return const_iterator(node, mRBtree);
+}
+
+template <typename Key, typename Val, typename Compare>
+bool Map<Key, Val, Compare>::contains(const KeyType& key) const
+{
+    return mRBtree != nullptr && mRBtree->find(key) != nullptr;
 }
 
 template <typename Key, typename Val, typename Compare>
@@ -390,6 +448,12 @@ void Map<Key, Val, Compare>::clear()
 }
 
 template <typename Key, typename Val, typename Compare>
+void Map<Key, Val, Compare>::swap(Map<KeyType, ValType, CompareType>& other) noexcept
+{
+    std::swap(mRBtree, other.mRBtree);
+}
+
+template <typename Key, typename Val, typename Compare>
 void Map<Key, Val, Compare>::merge(Map<KeyType, ValType, Compare>& other)
 {
     if (this == std::addressof(other) || other.mRBtree == nullptr || other.mRBtree->size() == 0) {
@@ -416,7 +480,7 @@ void Map<Key, Val, Compare>::merge(Map<KeyType, ValType, Compare>& other)
     for (Node* node = other.mRBtree->begin(); node != other.mRBtree->end();) {
         Node* next = other.mRBtree->nextNode(node);
         if (mRBtree->find(node->key) == nullptr) {
-            Node* moved = other.mRBtree->extract(node, false);
+            Node* moved = other.mRBtree->extract(node);
             if (mRBtree->insertNode(moved) == nullptr) {
                 other.mRBtree->insertNode(moved);
             }

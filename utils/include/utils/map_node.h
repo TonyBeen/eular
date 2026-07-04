@@ -8,8 +8,12 @@
 #ifndef __UTILS_MAP_NODE_HPP__
 #define __UTILS_MAP_NODE_HPP__
 
+#include <cstdlib>
 #include <functional>
+#include <new>
+#include <utility>
 
+#include <utils/alloc.h>
 #include <utils/exception.h>
 #include <utils/rbtree_base.h>
 #include <utils/refcount.h>
@@ -21,8 +25,26 @@ struct MapNodeBase {
     static bool    isValidNode(rb_root* root, rb_node* node) noexcept;
 };
 
-void* mapNodeAllocate(int size, int alignment);
-void  mapNodeDeallocate(void* node, int alignment) noexcept;
+inline size_t mapNodeAlignmentThreshold() noexcept { return 2 * sizeof(void*); }
+
+inline void* mapNodeAllocate(size_t size, size_t alignment)
+{
+    void* node = alignment > mapNodeAlignmentThreshold() ? AlignedAlloc(size, alignment) : std::malloc(size);
+    if (node == nullptr) {
+        throw std::bad_alloc();
+    }
+
+    return node;
+}
+
+inline void mapNodeDeallocate(void* node, size_t alignment) noexcept
+{
+    if (alignment > mapNodeAlignmentThreshold()) {
+        AlignedFree(node);
+    } else {
+        std::free(node);
+    }
+}
 
 template <typename Key, typename Val>
 struct MapNode : public MapNodeBase {
@@ -109,9 +131,11 @@ struct MapData {
      * @brief 向红黑树插入节点
      * @param key 键
      * @param val 值
-     * @return 创建内存失败时返回null，如果键不存在则返回新节点地址，如果存在，返回存在的节点地址
+     * @return 创建内存失败时返回null，如果键不存在则返回新节点地址，如果存在，返回null
      */
-    Node*       insert(const Key& key, const Val& val);
+    Node* insert(const Key& key, const Val& val);
+    template <typename K, typename V>
+    Node*       emplace(K&& key, V&& val);
     Node*       insertNode(Node* node);
     Node*       find(const Key& key);
     const Node* find(const Key& key) const;
@@ -122,19 +146,21 @@ struct MapData {
      * @return 删除键为key的节点，并返回下一节点位置
      */
     Node* erase(const Key& key);
-    Node* erase(const Node*, bool check = true);
-    Node* extract(const Node*, bool check = true);
+    Node* erase(const Node*);
+    Node* eraseRange(const Node* first, const Node* last);
+    Node* extract(const Node*);
 
     void clear();
 
-    Node* createNode(const Key& k, const Val& v)
+    template <typename K, typename V>
+    Node* createNode(K&& k, V&& v)
     {
         Node* n = nullptr;
         try {
             n = static_cast<Node*>(mapNodeAllocate(sizeof(Node), alignof(Node)));
-            new (&n->key) Key(k);  // placement new. already aligned
+            new (&n->key) Key(std::forward<K>(k));  // placement new. already aligned
             try {
-                new (&n->value) Val(v);
+                new (&n->value) Val(std::forward<V>(v));
             } catch (...) {
                 n->key.~Key();
                 throw;
@@ -197,22 +223,30 @@ MapNode<Key, Val>* MapData<Key, Val, Compare>::prevNode(const Node* curr) noexce
 template <typename Key, typename Val, typename Compare>
 MapNode<Key, Val>* MapData<Key, Val, Compare>::insert(const Key& key, const Val& val)
 {
+    return emplace(key, val);
+}
+
+template <typename Key, typename Val, typename Compare>
+template <typename K, typename V>
+MapNode<Key, Val>* MapData<Key, Val, Compare>::emplace(K&& key, V&& val)
+{
     rb_root*         root = &__rb_root;
     struct rb_node** node = &(root->rb_node);
     struct rb_node*  parent = nullptr;
+    Key              mapKey(std::forward<K>(key));
     while (nullptr != (*node)) {
         parent = *node;
         MapNode<Key, Val>* p = MapNode<Key, Val>::map_node_entry(parent);
-        if (isLess(key, p->key)) {
+        if (isLess(mapKey, p->key)) {
             node = &(*node)->rb_left;
-        } else if (isLess(p->key, key)) {
+        } else if (isLess(p->key, mapKey)) {
             node = &(*node)->rb_right;
         } else {
             return nullptr;
         }
     }
 
-    MapNode<Key, Val>* newMapNode = createNode(key, val);
+    MapNode<Key, Val>* newMapNode = createNode(std::move(mapKey), std::forward<V>(val));
     if (newMapNode == nullptr) {
         return nullptr;
     }
@@ -306,20 +340,22 @@ MapNode<Key, Val>* MapData<Key, Val, Compare>::erase(const Key& key)
         return nullptr;
     }
 
-    return erase(ret, false);
+    return erase(ret);
 }
 
 template <typename Key, typename Val, typename Compare>
-MapNode<Key, Val>* MapData<Key, Val, Compare>::erase(const Node* currNode, bool check)
+MapNode<Key, Val>* MapData<Key, Val, Compare>::erase(const Node* currNode)
 {
     if (currNode == end()) {
         return end();
     }
 
     Node* curr = const_cast<Node*>(currNode);
-    if (check && MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
+#ifndef NDEBUG
+    if (MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
         throw eular::Exception("node is not in this rbtree");
     }
+#endif
 
     MapNode<Key, Val>* next = this->nextNode(currNode);
     rb_erase(&curr->__rb_node, &__rb_root);
@@ -330,16 +366,44 @@ MapNode<Key, Val>* MapData<Key, Val, Compare>::erase(const Node* currNode, bool 
 }
 
 template <typename Key, typename Val, typename Compare>
-MapNode<Key, Val>* MapData<Key, Val, Compare>::extract(const Node* currNode, bool check)
+MapNode<Key, Val>* MapData<Key, Val, Compare>::eraseRange(const Node* first, const Node* last)
+{
+    Node* curr = const_cast<Node*>(first);
+    Node* stop = const_cast<Node*>(last);
+
+#ifndef NDEBUG
+    if (curr != nullptr && curr != end() && MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
+        throw eular::Exception("first node is not in this rbtree");
+    }
+    if (stop != nullptr && stop != end() && MapNodeBase::isValidNode(&__rb_root, &stop->__rb_node) == false) {
+        throw eular::Exception("last node is not in this rbtree");
+    }
+#endif
+
+    while (curr != nullptr && curr != stop && curr != end()) {
+        rb_node* next = rb_next(&curr->__rb_node);
+        rb_erase(&curr->__rb_node, &__rb_root);
+        freeNode(curr);
+        --node_count;
+        curr = Node::map_node_entry(next);
+    }
+
+    return stop ? stop : end();
+}
+
+template <typename Key, typename Val, typename Compare>
+MapNode<Key, Val>* MapData<Key, Val, Compare>::extract(const Node* currNode)
 {
     if (currNode == end()) {
         return nullptr;
     }
 
     Node* curr = const_cast<Node*>(currNode);
-    if (check && MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
+#ifndef NDEBUG
+    if (MapNodeBase::isValidNode(&__rb_root, &curr->__rb_node) == false) {
         throw eular::Exception("node is not in this rbtree");
     }
+#endif
 
     rb_erase(&curr->__rb_node, &__rb_root);
     curr->__rb_node.rb_parent = nullptr;

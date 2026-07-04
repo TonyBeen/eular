@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <utils/map.h>
 #include <utils/platform.h>
@@ -40,6 +41,43 @@ struct MergeTrackedValue {
 };
 
 int MergeTrackedValue::copyCount = 0;
+
+struct EmplaceTrackedValue {
+    explicit EmplaceTrackedValue(int v) : value(v) { ++directCount; }
+    EmplaceTrackedValue(const EmplaceTrackedValue& other) : value(other.value) { ++copyCount; }
+    EmplaceTrackedValue(EmplaceTrackedValue&& other) noexcept : value(other.value)
+    {
+        other.value = -1;
+        ++moveCount;
+    }
+
+    int        value;
+    static int directCount;
+    static int copyCount;
+    static int moveCount;
+};
+
+int EmplaceTrackedValue::directCount = 0;
+int EmplaceTrackedValue::copyCount = 0;
+int EmplaceTrackedValue::moveCount = 0;
+
+struct RangeEraseTrackedKey {
+    RangeEraseTrackedKey(int v = 0) : value(v) {}
+    RangeEraseTrackedKey(const RangeEraseTrackedKey& other) : value(other.value) { ++copyCount; }
+    RangeEraseTrackedKey& operator=(const RangeEraseTrackedKey& other)
+    {
+        value = other.value;
+        ++copyCount;
+        return *this;
+    }
+
+    bool operator<(const RangeEraseTrackedKey& other) const { return value < other.value; }
+
+    int        value;
+    static int copyCount;
+};
+
+int RangeEraseTrackedKey::copyCount = 0;
 
 struct LifetimeTrackedValue {
     LifetimeTrackedValue(int v = 0) : value(v) { ++liveCount; }
@@ -85,6 +123,16 @@ struct DescendingString8Compare {
 };
 
 static constexpr int kMapBenchmarkDataSize = 100000;
+static constexpr int kMapRangeEraseBenchmarkDataSize = 50000;
+
+static void stdMapTryEmplace(std::map<int, int>& mapObj, int key, int value)
+{
+#if __cplusplus >= 201703L
+    mapObj.try_emplace(key, value);
+#else
+    mapObj.emplace(key, value);
+#endif
+}
 
 TEST_CASE("test_insert", "[map]")
 {
@@ -289,6 +337,153 @@ TEST_CASE("test_empty_map_mutable_iteration_and_erase", "[map]")
     mapObj.insert("after_empty_ops", 7);
     CHECK(mapObj.size() == 1);
     CHECK(mapObj.value("after_empty_ops") == 7);
+}
+
+TEST_CASE("test_contains_and_const_iterators_do_not_detach", "[map]")
+{
+    eular::Map<eular::String8, MergeTrackedValue> mapObj;
+    mapObj.insert("alpha", MergeTrackedValue(1));
+    mapObj.insert("bravo", MergeTrackedValue(2));
+
+    eular::Map<eular::String8, MergeTrackedValue> shared(mapObj);
+    MergeTrackedValue::copyCount = 0;
+
+    CHECK(mapObj.contains("alpha"));
+    CHECK_FALSE(mapObj.contains("charlie"));
+    CHECK(MergeTrackedValue::copyCount == 0);
+
+    const auto& constMapObj = mapObj;
+    CHECK(constMapObj.cbegin() == constMapObj.begin());
+    CHECK(constMapObj.cend() == constMapObj.end());
+    CHECK(constMapObj.crbegin() == constMapObj.rbegin());
+    CHECK(constMapObj.crend() == constMapObj.rend());
+    CHECK_FALSE(constMapObj.empty());
+
+    CHECK(shared.contains("bravo"));
+    CHECK(MergeTrackedValue::copyCount == 0);
+}
+
+TEST_CASE("test_emplace_constructs_value_in_place", "[map]")
+{
+    EmplaceTrackedValue::directCount = 0;
+    EmplaceTrackedValue::copyCount = 0;
+    EmplaceTrackedValue::moveCount = 0;
+
+    eular::Map<eular::String8, EmplaceTrackedValue> mapObj;
+    auto                                            inserted = mapObj.emplace("alpha", 7);
+
+    REQUIRE(inserted != mapObj.end());
+    CHECK(inserted.value().value == 7);
+    CHECK(EmplaceTrackedValue::directCount == 1);
+    CHECK(EmplaceTrackedValue::copyCount == 0);
+    CHECK(EmplaceTrackedValue::moveCount == 0);
+
+    EmplaceTrackedValue::directCount = 0;
+    auto duplicate = mapObj.emplace("alpha", 9);
+    CHECK(duplicate == mapObj.end());
+    CHECK(EmplaceTrackedValue::directCount == 0);
+    CHECK(mapObj.find("alpha").value().value == 7);
+
+    EmplaceTrackedValue movable(42);
+    EmplaceTrackedValue::directCount = 0;
+    EmplaceTrackedValue::copyCount = 0;
+    EmplaceTrackedValue::moveCount = 0;
+
+    auto moved = mapObj.emplace(eular::String8("bravo"), std::move(movable));
+    REQUIRE(moved != mapObj.end());
+    CHECK(moved.value().value == 42);
+    CHECK(EmplaceTrackedValue::directCount == 0);
+    CHECK(EmplaceTrackedValue::copyCount == 0);
+    CHECK(EmplaceTrackedValue::moveCount == 1);
+}
+
+TEST_CASE("test_swap_maps", "[map]")
+{
+    eular::Map<eular::String8, int> left;
+    eular::Map<eular::String8, int> right;
+    left.insert("left", 1);
+    right.insert("right", 2);
+
+    left.swap(right);
+
+    CHECK(left.size() == 1);
+    CHECK(right.size() == 1);
+    CHECK(left.contains("right"));
+    CHECK(right.contains("left"));
+    CHECK(left.value("right") == 2);
+    CHECK(right.value("left") == 1);
+
+    eular::Map<eular::String8, int> empty;
+    left.swap(empty);
+    CHECK(left.empty());
+    CHECK(empty.contains("right"));
+}
+
+TEST_CASE("test_erase_range", "[map]")
+{
+    eular::Map<eular::String8, int> mapObj;
+    mapObj.insert("alpha", 1);
+    mapObj.insert("bravo", 2);
+    mapObj.insert("charlie", 3);
+    mapObj.insert("delta", 4);
+
+    auto first = mapObj.find("bravo");
+    auto last = mapObj.find("delta");
+    auto next = mapObj.erase(first, last);
+
+    CHECK(next != mapObj.end());
+    CHECK(next.key() == "delta");
+    CHECK(mapObj.size() == 2);
+    CHECK(mapObj.contains("alpha"));
+    CHECK_FALSE(mapObj.contains("bravo"));
+    CHECK_FALSE(mapObj.contains("charlie"));
+    CHECK(mapObj.contains("delta"));
+
+    next = mapObj.erase(mapObj.begin(), mapObj.end());
+    CHECK(next == mapObj.end());
+    CHECK(mapObj.empty());
+}
+
+TEST_CASE("test_erase_range_does_not_copy_keys_when_detached", "[map]")
+{
+    eular::Map<RangeEraseTrackedKey, int> mapObj;
+    for (int i = 0; i < 8; ++i) {
+        mapObj.emplace(RangeEraseTrackedKey(i), i);
+    }
+
+    auto first = mapObj.find(RangeEraseTrackedKey(2));
+    auto last = mapObj.find(RangeEraseTrackedKey(6));
+    RangeEraseTrackedKey::copyCount = 0;
+
+    auto next = mapObj.erase(first, last);
+
+    REQUIRE(next != mapObj.end());
+    CHECK(next.key().value == 6);
+    CHECK(RangeEraseTrackedKey::copyCount == 0);
+    CHECK(mapObj.size() == 4);
+    CHECK_FALSE(mapObj.contains(RangeEraseTrackedKey(2)));
+    CHECK_FALSE(mapObj.contains(RangeEraseTrackedKey(5)));
+    CHECK(mapObj.contains(RangeEraseTrackedKey(6)));
+}
+
+TEST_CASE("test_erase_range_from_shared_copy_detaches", "[map]")
+{
+    eular::Map<eular::String8, int> mapObj;
+    mapObj.insert("alpha", 1);
+    mapObj.insert("bravo", 2);
+    mapObj.insert("charlie", 3);
+
+    eular::Map<eular::String8, int> shared(mapObj);
+    auto                            first = mapObj.find("alpha");
+    auto                            last = mapObj.find("charlie");
+    mapObj.erase(first, last);
+
+    CHECK(mapObj.size() == 1);
+    CHECK(mapObj.contains("charlie"));
+    CHECK(shared.size() == 3);
+    CHECK(shared.contains("alpha"));
+    CHECK(shared.contains("bravo"));
+    CHECK(shared.contains("charlie"));
 }
 
 TEST_CASE("test_move_assign_releases_old_data", "[map]")
@@ -579,6 +774,30 @@ TEST_CASE("benchmark_std_map_insert", "[map][benchmark]")
     };
 }
 
+TEST_CASE("benchmark_map_emplace", "[map][benchmark]")
+{
+    BENCHMARK("Map emplace performance")
+    {
+        eular::Map<int, int> mapObj;
+        for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+            mapObj.emplace(i, i);
+        }
+        return mapObj.size();
+    };
+}
+
+TEST_CASE("benchmark_std_map_try_emplace", "[map][benchmark]")
+{
+    BENCHMARK("std::map try_emplace performance")
+    {
+        std::map<int, int> mapObj;
+        for (int i = 0; i < kMapBenchmarkDataSize; ++i) {
+            stdMapTryEmplace(mapObj, i, i);
+        }
+        return mapObj.size();
+    };
+}
+
 TEST_CASE("benchmark_map_find", "[map][benchmark]")
 {
     eular::Map<int, int> mapObj;
@@ -606,5 +825,67 @@ TEST_CASE("benchmark_std_map_find", "[map][benchmark]")
         int  index = kMapBenchmarkDataSize / 2;
         auto it = mapObj.find(index);
         return it != mapObj.end() ? it->second : -1;
+    };
+}
+
+TEST_CASE("benchmark_map_erase_range", "[map][benchmark]")
+{
+    static constexpr int kEraseBegin = kMapRangeEraseBenchmarkDataSize / 4;
+    static constexpr int kEraseEnd = kMapRangeEraseBenchmarkDataSize * 3 / 4;
+
+    BENCHMARK_ADVANCED("Map erase range performance")(Catch::Benchmark::Chronometer meter)
+    {
+        std::vector<eular::Map<int, int>>           maps;
+        std::vector<eular::Map<int, int>::iterator> firstIters;
+        std::vector<eular::Map<int, int>::iterator> lastIters;
+        maps.reserve(static_cast<size_t>(meter.runs()));
+        firstIters.reserve(static_cast<size_t>(meter.runs()));
+        lastIters.reserve(static_cast<size_t>(meter.runs()));
+
+        for (int run = 0; run < meter.runs(); ++run) {
+            maps.emplace_back();
+            for (int i = 0; i < kMapRangeEraseBenchmarkDataSize; ++i) {
+                maps.back().emplace(i, i);
+            }
+            firstIters.push_back(maps.back().find(kEraseBegin));
+            lastIters.push_back(maps.back().find(kEraseEnd));
+        }
+
+        meter.measure([&](int run) {
+            size_t index = static_cast<size_t>(run);
+            maps[index].erase(firstIters[index], lastIters[index]);
+            return maps[index].size();
+        });
+    };
+}
+
+TEST_CASE("benchmark_std_map_erase_range", "[map][benchmark]")
+{
+    static constexpr int kEraseBegin = kMapRangeEraseBenchmarkDataSize / 4;
+    static constexpr int kEraseEnd = kMapRangeEraseBenchmarkDataSize * 3 / 4;
+
+    BENCHMARK_ADVANCED("std::map erase range performance")(Catch::Benchmark::Chronometer meter)
+    {
+        std::vector<std::map<int, int>>           maps;
+        std::vector<std::map<int, int>::iterator> firstIters;
+        std::vector<std::map<int, int>::iterator> lastIters;
+        maps.reserve(static_cast<size_t>(meter.runs()));
+        firstIters.reserve(static_cast<size_t>(meter.runs()));
+        lastIters.reserve(static_cast<size_t>(meter.runs()));
+
+        for (int run = 0; run < meter.runs(); ++run) {
+            maps.emplace_back();
+            for (int i = 0; i < kMapRangeEraseBenchmarkDataSize; ++i) {
+                maps.back().emplace(i, i);
+            }
+            firstIters.push_back(maps.back().find(kEraseBegin));
+            lastIters.push_back(maps.back().find(kEraseEnd));
+        }
+
+        meter.measure([&](int run) {
+            size_t index = static_cast<size_t>(run);
+            maps[index].erase(firstIters[index], lastIters[index]);
+            return maps[index].size();
+        });
     };
 }

@@ -9,26 +9,7 @@
 
 #include <assert.h>
 
-#include "utils/alloc.h"
-#include "utils/sysdef.h"
-
 namespace detail {
-
-static inline int AlignmentThreshold() noexcept { return 2 * sizeof(void*); }
-
-static inline void* map_allocate(int size, int alignment)
-{
-    return alignment > AlignmentThreshold() ? AlignedAlloc(size, alignment) : ::malloc(size);
-}
-
-static inline void map_deallocate(void* node, int alignment) noexcept
-{
-    if (alignment > AlignmentThreshold()) {
-        AlignedFree(node);
-    } else {
-        ::free(node);
-    }
-}
 
 bool MapNodeBase::isValidNode(rb_root* root, rb_node* node) noexcept
 {
@@ -48,18 +29,5 @@ bool MapNodeBase::isValidNode(rb_root* root, rb_node* node) noexcept
 
     return valid;
 }
-
-void* mapNodeAllocate(int size, int alignment)
-{
-    void* node = map_allocate(size, alignment);
-    if (node == NULL) {
-        throw std::bad_alloc();
-    }
-
-    memset(node, 0, size);
-    return node;
-}
-
-void mapNodeDeallocate(void* node, int alignment) noexcept { map_deallocate(node, alignment); }
 
 }  // namespace detail
