@@ -13,6 +13,7 @@ test/xml/*
 
 .vscode/
 *.out
+*.plist
 
 build*
 .claude

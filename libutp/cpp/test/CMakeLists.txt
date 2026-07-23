@@ -1,0 +1,50 @@
+set(UTP_TEST_SOURCES
+    test_connection_stream_layer.cc
+    test_ack_behavior.cc
+    test_context_cid_alloc.cc
+    test_context_integration.cc
+    test_context_zero_rtt.cc
+    test_frame_ack_decode.cc
+    test_frame_reset_stream.cc
+    test_frame_ack_frequency.cc
+    test_frame_handshake_aux.cc
+    test_frame_crypto.cc
+    test_traffic_key_schedule.cc
+    test_frame_path.cc
+    test_frame_session_token.cc
+    test_frame_transport_params.cc
+    test_bbr_config.cc
+    test_bbr_new_params.cc
+    test_cubic.cc
+    test_mtu.cc
+    test_network_path.cc
+    test_packet_in.cc
+    test_packet_out.cc
+    test_mm.cc
+    test_receive_history.cc
+    test_stream_impl.cc
+    test_stream_zero_copy_views.cc
+    test_public_api_errno.cc
+    test_status.cc
+    test_fault_injection_mmsg.cc
+    test_fault_injection_new.cc
+)
+
+add_executable(utp_tests ${UTP_TEST_SOURCES})
+
+target_include_directories(utp_tests
+    PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../src"
+        "${CMAKE_CURRENT_LIST_DIR}/../../3rd"
+        "${CMAKE_CURRENT_LIST_DIR}"
+        "${UTP_UTILS_ROOT}/include"
+        "${UTP_EVENT_ROOT}/include"
+)
+
+target_link_libraries(utp_tests PRIVATE utp_static)
+
+if(UTP_ENABLE_FAULT_INJECTION)
+    target_compile_definitions(utp_tests PRIVATE UTP_ENABLE_FAULT_INJECTION)
+endif()
+
+add_test(NAME utp_tests COMMAND utp_tests)

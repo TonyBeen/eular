@@ -110,76 +110,77 @@ configure_file(
 )
 
 set(UTP_PUBLIC_HEADERS
-    include/utp/config.h
-    include/utp/connection.h
-    include/utp/errno.h
-    include/utp/logger.h
-    include/utp/platform.h
-    include/utp/stream.h
-    include/utp/types.h
-    include/utp/context.h
-    include/utp/utp.h
+    cpp/include/utp/config.h
+    cpp/include/utp/connection.h
+    cpp/include/utp/errno.h
+    cpp/include/utp/logger.h
+    cpp/include/utp/platform.h
+    cpp/include/utp/stream.h
+    cpp/include/utp/types.h
+    cpp/include/utp/context.h
+    cpp/include/utp/utp.h
 )
 
 set(UTP_SOURCES
     3rd/rbtree.c
-    src/congestion/bbr_v1.cpp
-    src/congestion/bw_sampler.cpp
-    src/congestion/cubic.cpp
-    src/congestion/minmax.cpp
-    src/congestion/pacer.cpp
-    src/context/connection_impl.cpp
-    src/context/context_impl.cpp
-    src/context/detail/frame_meta_policy.cpp
-    src/context/detail/packet_editor.cpp
-    src/context/packet_decode_helper.cpp
-    src/context/send_ctl.cpp
-    src/context/stream_impl.cpp
-    src/crypto/aes_gcm_context.cpp
-    src/crypto/base64.cpp
-    src/crypto/resumption_state_codec.cpp
-    src/crypto/token.cpp
-    src/crypto/x25519_wrapper.cpp
-    src/logger/logger.cpp
-    src/mtu/mtu.cpp
-    src/proto/frame/ack.cpp
-    src/proto/frame/ack_frequency.cpp
-    src/proto/frame/connection_close.cpp
-    src/proto/frame/crypto.cpp
-    src/proto/frame/handshake_delay.cpp
-    src/proto/frame/handshake_done.cpp
-    src/proto/frame/handshake_helper.cpp
-    src/proto/frame/max_data.cpp
-    src/proto/frame/max_stream_data.cpp
-    src/proto/frame/data_blocked.cpp
-    src/proto/frame/stream_data_blocked.cpp
-    src/proto/frame/padding.cpp
-    src/proto/frame/path.cpp
-    src/proto/frame/reset_stream.cpp
-    src/proto/frame/session_token.cpp
-    src/proto/frame/stream.cpp
-    src/proto/frame/transport_params.cpp
-    src/proto/frame/version.cpp
-    src/proto/frame.cpp
-    src/proto/packet_in.cpp
-    src/proto/packet_out.cpp
-    src/socket/address.cpp
-    src/socket/mmsg.cpp
-    src/socket/packet.cpp
-    src/socket/udp.cpp
-    src/socket/util.cpp
-    src/util/ack_info.cpp
-    src/util/errno.cpp
-    src/util/error.cpp
-    src/util/mm.cpp
-    src/util/network_path.cpp
-    src/util/ring_buffer.cpp
-    src/util/receive_history.cpp
-    src/util/send_history.cpp
-    src/util/time.cpp
-    src/util/transport_param.cpp
-    src/util/util.cpp
-    src/context.cpp
+    cpp/src/congestion/bbr_v1.cpp
+    cpp/src/congestion/bw_sampler.cpp
+    cpp/src/congestion/cubic.cpp
+    cpp/src/congestion/minmax.cpp
+    cpp/src/congestion/pacer.cpp
+    cpp/src/context/connection_impl.cpp
+    cpp/src/context/context_impl.cpp
+    cpp/src/context/detail/frame_meta_policy.cpp
+    cpp/src/context/detail/packet_editor.cpp
+    cpp/src/context/packet_decode_helper.cpp
+    cpp/src/context/send_ctl.cpp
+    cpp/src/context/stream_impl.cpp
+    cpp/src/crypto/aes_gcm_context.cpp
+    cpp/src/crypto/base64.cpp
+    cpp/src/crypto/resumption_state_codec.cpp
+    cpp/src/crypto/traffic_key_schedule.cpp
+    cpp/src/crypto/token.cpp
+    cpp/src/crypto/x25519_wrapper.cpp
+    cpp/src/logger/logger.cpp
+    cpp/src/mtu/mtu.cpp
+    cpp/src/proto/frame/ack.cpp
+    cpp/src/proto/frame/ack_frequency.cpp
+    cpp/src/proto/frame/connection_close.cpp
+    cpp/src/proto/frame/crypto.cpp
+    cpp/src/proto/frame/handshake_delay.cpp
+    cpp/src/proto/frame/handshake_done.cpp
+    cpp/src/proto/frame/handshake_helper.cpp
+    cpp/src/proto/frame/max_data.cpp
+    cpp/src/proto/frame/max_stream_data.cpp
+    cpp/src/proto/frame/data_blocked.cpp
+    cpp/src/proto/frame/stream_data_blocked.cpp
+    cpp/src/proto/frame/padding.cpp
+    cpp/src/proto/frame/path.cpp
+    cpp/src/proto/frame/reset_stream.cpp
+    cpp/src/proto/frame/session_token.cpp
+    cpp/src/proto/frame/stream.cpp
+    cpp/src/proto/frame/transport_params.cpp
+    cpp/src/proto/frame/version.cpp
+    cpp/src/proto/frame.cpp
+    cpp/src/proto/packet_in.cpp
+    cpp/src/proto/packet_out.cpp
+    cpp/src/socket/address.cpp
+    cpp/src/socket/mmsg.cpp
+    cpp/src/socket/packet.cpp
+    cpp/src/socket/udp.cpp
+    cpp/src/socket/util.cpp
+    cpp/src/util/ack_info.cpp
+    cpp/src/util/errno.cpp
+    cpp/src/util/error.cpp
+    cpp/src/util/mm.cpp
+    cpp/src/util/network_path.cpp
+    cpp/src/util/ring_buffer.cpp
+    cpp/src/util/receive_history.cpp
+    cpp/src/util/send_history.cpp
+    cpp/src/util/time.cpp
+    cpp/src/util/transport_param.cpp
+    cpp/src/util/util.cpp
+    cpp/src/context.cpp
 )
 
 add_library(utp_static STATIC ${UTP_SOURCES} ${UTP_PUBLIC_HEADERS})
@@ -201,11 +202,11 @@ endif()
 
 target_include_directories(utp_static
     PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp/include>"
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cpp/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/3rd"
         $<$<BOOL:${UTP_ENABLE_FAULT_INJECTION}>:${FIU_INCLUDE_DIR}>
 )
@@ -228,7 +229,7 @@ endif()
 
 set_target_properties(utp_static PROPERTIES OUTPUT_NAME utp EXPORT_NAME utp)
 
-add_subdirectory(examples)
+add_subdirectory(cpp/examples)
 
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/libutpConfigVersion.cmake"
@@ -279,45 +280,45 @@ if(UTP_BUILD_TESTS)
     enable_testing()
 
     set(UTP_TEST_SOURCES
-        test/test_connection_stream_layer.cc
-        test/test_ack_behavior.cc
-        test/test_context_cid_alloc.cc
-        test/test_context_integration.cc
-        test/test_context_zero_rtt.cc
-        test/test_frame_ack_decode.cc
-        test/test_frame_ack_frequency.cc
-        test/test_frame_reset_stream.cc
-        test/test_frame_crypto.cc
-        test/test_frame_handshake_aux.cc
-        test/test_frame_path.cc
-        test/test_frame_session_token.cc
-        test/test_frame_transport_params.cc
-        test/test_frame_flow_control.cc
-        test/test_bbr_config.cc
-        test/test_bbr_new_params.cc
-        test/test_cubic.cc
-        test/test_mtu.cc
-        test/test_network_path.cc
-        test/test_packet_in.cc
-        test/test_packet_out.cc
-        test/test_mm.cc
-        test/test_retrans_repack.cc
-        test/test_receive_history.cc
-        test/test_ring_buffer.cc
-        test/test_stream_impl.cc
-        test/test_stream_zero_copy_views.cc
-        test/test_public_api_errno.cc
-        test/test_status.cc
-        test/test_fault_injection_mmsg.cc
-        test/test_fault_injection_new.cc
+        cpp/test/test_connection_stream_layer.cc
+        cpp/test/test_ack_behavior.cc
+        cpp/test/test_context_cid_alloc.cc
+        cpp/test/test_context_integration.cc
+        cpp/test/test_context_zero_rtt.cc
+        cpp/test/test_frame_ack_decode.cc
+        cpp/test/test_frame_ack_frequency.cc
+        cpp/test/test_frame_reset_stream.cc
+        cpp/test/test_frame_crypto.cc
+        cpp/test/test_frame_handshake_aux.cc
+        cpp/test/test_frame_path.cc
+        cpp/test/test_frame_session_token.cc
+        cpp/test/test_frame_transport_params.cc
+        cpp/test/test_frame_flow_control.cc
+        cpp/test/test_bbr_config.cc
+        cpp/test/test_bbr_new_params.cc
+        cpp/test/test_cubic.cc
+        cpp/test/test_mtu.cc
+        cpp/test/test_network_path.cc
+        cpp/test/test_packet_in.cc
+        cpp/test/test_packet_out.cc
+        cpp/test/test_mm.cc
+        cpp/test/test_retrans_repack.cc
+        cpp/test/test_receive_history.cc
+        cpp/test/test_ring_buffer.cc
+        cpp/test/test_stream_impl.cc
+        cpp/test/test_stream_zero_copy_views.cc
+        cpp/test/test_public_api_errno.cc
+        cpp/test/test_status.cc
+        cpp/test/test_fault_injection_mmsg.cc
+        cpp/test/test_fault_injection_new.cc
     )
 
     add_executable(utp_tests ${UTP_TEST_SOURCES})
     target_include_directories(utp_tests
         PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cpp/src"
             "${CMAKE_CURRENT_SOURCE_DIR}/3rd"
-            "${CMAKE_CURRENT_SOURCE_DIR}/test"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cpp/test"
             "${UTP_UTILS_ROOT}/include"
             "${UTP_EVENT_ROOT}/include"
     )
