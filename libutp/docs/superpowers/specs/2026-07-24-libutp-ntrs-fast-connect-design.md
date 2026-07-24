@@ -104,13 +104,14 @@
 ```
 
 **角色与开洞包**
-- **ACTIVE / PASSIVE 只决定握手角色**(谁发 Initial=ClientHello / 谁回 Handshake=ServerHello),由 NtrsB 按 NAT 封闭度判定(见 §6.3)。
-- **PASSIVE 一律先发 PATH_CHALLENGE 开洞**,不分 NAT 类型(FullCone 多发一包无害),**不用 need_active_mapping 条件字段**。开洞包 = PATH_CHALLENGE + 最小 `FrameConnect{cid=A_cid, dst_pid}`,不带握手/数据。
-- 对端**无法区分"映射包"还是"真探测",一律回 PATH_RESPONSE**;**半连接态收到 PATH_CHALLENGE 即进入连接态,这是正确行为**(收到有效回包 = 路径双向可用)。
+- **ACTIVE / PASSIVE 只决定握手角色**:ACTIVE=client(发 Initial=ClientHello),PASSIVE=server(回 Handshake=ServerHello),由 NtrsB 按 NAT 封闭度判定(见 §6.3)。
+- **开洞**:PASSIVE 先发一个 **PATH_CHALLENGE** 开自己过滤(带最小 `FrameConnect{cid=A_cid, dst_pid}`,不带握手/数据);**ACTIVE 的 Initial 本身就是它的开洞包**,不另发 PATH_CHALLENGE。不分 NAT 类型统一如此,**不用 need_active_mapping 条件字段**。
+- **ACTIVE 收到 PASSIVE 的 PATH_CHALLENGE 时仍在 InitialSent、未连接** → 只回 PATH_RESPONSE,**不当作建连进度**(client 要收到 Handshake 才进入连接态)。对端分不清映射包/真探测,一律回 PATH_RESPONSE,这没问题。
 
 **半连接→连接 与 split-brain**
-- 握手丢包由**现有可靠层收敛**,不额外"解耦 PATH":Handshake 有包号、要 ACK,未确认就重传。
-- 某端因收到 PATH_CHALLENGE 提前进入连接态**无害**——**唯一要守的不变量:`connected` 不得清空未确认 Handshake 的重传队列**;它会持续重传直到对端 ACK,对端补齐后两端一致。反之始终无 ACK/无进展,半连接超时干净失败。
+- **PASSIVE 发出 Handshake 后进入半连接**,收到对端有效回包(Handshake 的 ACK / 数据 / 也可能是 PATH_RESPONSE)→ 进入连接态。
+- 握手丢包由**现有可靠层收敛**:Handshake 有包号、要 ACK,未确认就重传;Initial 丢则 ACTIVE 重传。
+- **唯一要守的不变量:`connected` 不得清空未确认 Handshake 的重传队列**。这样即使 PASSIVE 因收到 PATH_RESPONSE 提前 connected 而其 Handshake 恰好丢了,也会持续重传直到 ACTIVE 补齐,两端一致,不 split-brain;始终无 ACK/无进展则半连接超时干净失败。
 
 **融合带来的规划要点**
 1. **重试合并**:旧的"先打通再握手"两段变一段;Initial/Handshake 的重传同时充当打洞重试。
