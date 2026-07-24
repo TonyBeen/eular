@@ -139,7 +139,7 @@ UTP_TYPE_CONNECT          0x06  // rendezvous 信令(A→NtrsB、NtrsB→B 转�
 
 - 握手仍复用 `INITIAL/HANDSHAKE/0RTT`。
 - 打洞探测 / 路径验证复用现有 `PATH_CHALLENGE / PATH_RESPONSE` 帧(等价于 STUN 连通性检查),不新增探测包类型。
-- `UTP_PROTOCOL_VERSION` 由 2 升至 3;对端不识别新类型时优雅降级(直连路径不受影响)。
+- **不升 `UTP_PROTOCOL_VERSION`**(线上尚无部署的 libutp,无向后兼容负担;新类型/帧直接并入当前版本,所有节点/NtrsB 同版本构建)。仍保留**未知 `types`/帧的优雅处理**(丢弃、不崩溃)作为基本健壮性;真正的版本协商留到有部署基线需兼容时再做(见 §14 #11)。
 
 ### 5.2 FrameConnect(新增帧)
 
@@ -357,7 +357,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 ## 11. 对现有代码的改动清单
 
 **改(仅 rendezvous 模式生效,直连路径不动)**
-- `src/proto/proto.h`:新增 `UTP_TYPE_CONNECT 0x06`;`UTP_PROTOCOL_VERSION` 2→3。
+- `src/proto/proto.h`:新增 `UTP_TYPE_CONNECT 0x06`;**`UTP_PROTOCOL_VERSION` 不升**(greenfield 无兼容负担)。
 - 新增 `FrameConnect` 帧编解码。
 - `connection_impl` 入站分派:在 `isPassiveInitial` 之外,新增"包内含 `FrameConnect` → 按 `A_cid` 匹配 attempt/被动表"的分支;命中→提升,未命中→被动,无帧→现状。
 - `initPassive`:新增"由转发的 CONNECT 触发、预置对端 cid + 观测源、并分配本端 cid"的入口(受限 NAT 主动开洞的唯一状态机改动)。
@@ -417,7 +417,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 ## 14. 未决问题(按"连不上优先"逐条解决)
 
-已定稿:**#1(方向/cid 归并/反向提升)、#2(对称/回观测源)、#3(单 cid 去重)、#12(host-local/hairpinning,见 §6.6)、#4/#5(反射/放大缓解,见 §12)、#8(MTU/候选上限,见 §6.7)、#7(取消/半开清理/资源上限,见 §6.8)、#9(HandshakeDone 传输行为,见 §10.1)、#10(保活/映射维持,见 §6.9)、#6(0-RTT 重放契约,见 §9.1)**。
+已定稿:**#1(方向/cid 归并/反向提升)、#2(对称/回观测源)、#3(单 cid 去重)、#12(host-local/hairpinning,见 §6.6)、#4/#5(反射/放大缓解,见 §12)、#8(MTU/候选上限,见 §6.7)、#7(取消/半开清理/资源上限,见 §6.8)、#9(HandshakeDone 传输行为,见 §10.1)、#10(保活/映射维持,见 §6.9)、#6(0-RTT 重放契约,见 §9.1)、#11(版本协商,见 §5.1)**。全部 12 条已定稿。
 
 待解决:
 
@@ -430,6 +430,6 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 | 8 | 握手包 MTU + 候选表大小上限:opener ≤ 保守 MTU,预测端口数设限 | 健壮性(可致连不上) | ✅ 定稿 §6.7 |
 | 9 | 加密握手 HandshakeDone 在打洞丢包下的重传;绑提交路由;密钥清零 | 健壮性 | ✅ 定稿 §10.1 |
 | 10 | keepalive 间隔 < NAT 映射超时(默认可配) | 运维(连上后掉线) | ✅ 定稿 §6.9 |
-| 11 | 版本协商:新类型/帧不识别时优雅降级 | 兼容 | 待解 |
+| 11 | 版本协商:greenfield 不升版本;仅保留未知类型/帧优雅丢弃;真正协商延后 | 兼容 | ✅ 定稿 §5.1 |
 
-下一步:**#11(版本协商)** —— 最后一条。
+**12 条全部定稿。** 后续 crypto spec 负责:显式 Finished/双向 key confirmation、Ed25519 身份目录、抗主动 MITM、加密 0-RTT 放行。relay/TURN(双对称、UDP 阻断)另立 spec。
