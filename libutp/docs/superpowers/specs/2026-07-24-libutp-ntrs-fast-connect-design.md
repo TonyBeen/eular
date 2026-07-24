@@ -417,4 +417,4 @@ libutp 已有 keepalive:`kFramePing` + 计时器 + `keepalive_probes=3`/`keepali
 | 10 | keepalive 间隔 < NAT 映射超时(默认可配) | 运维(连上后掉线) | ✅ 定稿 §6.9 |
 | 11 | 版本协商:新类型/帧不识别时优雅降级 | 兼容 | 待解 |
 
-下一步:**#11(版本协商)** —— 最后一条。
+下一步:**#6(0-RTT early_data 可重放契约)、#11(版本协商)** —— 最后两条。
