@@ -134,11 +134,12 @@ UTP_TYPE_CONNECT          0x06  // rendezvous 信令(A→NtrsB、NtrsB→B 转�
 
 ### 5.2 FrameConnect(新增帧)
 
-承载一个节点的 rendezvous 信息;既用于 A→NtrsB 的 CONNECT,也用于 NtrsB→B 的转发,也搭在打洞 Initial/0RTT 里做 demux 键。
+承载一个节点的 rendezvous 信息。**一份定义、三处复用**:A→NtrsB 的 CONNECT、NtrsB→B 的转发、以及搭在打洞 Initial/0RTT 里做 demux 键与身份提示。
 
 ```
 FrameConnect {
-  src_pid, dst_pid
+  src_pid              // 发起方 pid;A 自报,未认证提示(真身份见 crypto spec)
+  dst_pid              // 目标方 pid;NtrsB 的转发路由键;打洞包里兼作"发给我的吗"合法性检查
   cid                  // 该节点为这次连接生成的 client cid(转发后靠它对号、去重)
   nat_type             // 供 NtrsB 判方向
   candidates[]         // host-local + srflx(对称 NAT 追加预测端口)
@@ -146,6 +147,18 @@ FrameConnect {
   [eph_pubkey, nonce]  // 仅加密模式
 }
 ```
+
+各字段用在哪条腿:
+
+| 字段 | A→NtrsB CONNECT | NtrsB→B 转发 | 打洞 Initial/0RTT | 备注 |
+|---|---|---|---|---|
+| `src_pid` | A 自报 | 透传给 B(应用层"谁在连") | 带(0-RTT 直连先到时供 B 识别) | **未认证提示**,不做安全判断 |
+| `dst_pid` | =B,路由用 | =B | =本端 pid,合法性检查 | 不能省(NtrsB 路由靠它) |
+| `cid` | =A_cid | 透传(转发后靠它存活) | header `scid`=A_cid,帧内一致 | rendezvous 匹配/去重键 |
+| `nat_type` | A 的类型 | 透传 | 可省 | 判方向 |
+| `candidates` | A 的候选 | 透传 | 可省 | host-local+srflx(+预测端口) |
+| `direction` | 请求/未定 | 已定值 | 已定值 | ACTIVE/PASSIVE |
+| `eph_pubkey,nonce` | 仅加密 | 透传(B 可靠拿到公钥) | 直连份用于交叉校验 | 仅加密模式 |
 
 ### 5.3 demux 规则(区分直连与打洞,零冲突)
 
