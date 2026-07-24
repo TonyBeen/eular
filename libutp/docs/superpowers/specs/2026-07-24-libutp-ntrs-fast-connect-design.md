@@ -239,7 +239,7 @@ A(逻辑发起方)`Connect()` 登记 A_cid。收到入站包:
 候选一多(多网卡 host-local + 对称的 predicted 端口)握手包超 MTU → 分片/丢弃 → 连不上。
 
 1. **保守 MTU floor = 1200 字节(可配)**:握手/打洞/CONNECT 全部 ≤ 1200,**置 DF 不分片**(取 IPv6 min 1280 的安全值,IPv4 亦安全,同 QUIC)。连接建立后由**现有 PLPMTUD(`src/mtu/`)向上探测**;握手阶段不探、固定用 floor。
-2. **候选数上限,按优先级保留**:host-local(主网卡优先,去重、排除 loopback/link-local)> srflx(v4/v6 各留)> predicted 端口(对称,固定上限如 ≤16)。总量受 MTU 预算约束,**不足时从低优先(predicted)先砍**,保住 host-local + srflx。
+2. **候选数上限,按优先级保留**(高→低):① **与 Ntrs 通信/NAT 探测所用的本地 IP**(连接 socket 绑定、srflx 已确认——多宿主机发往不同目的可能走不同出口,但只有它确认可用、映射已知,**最可信**);② 其余 host-local(去重、排除 loopback/link-local);③ srflx(v4/v6 各留);④ predicted 端口(对称,≤16)。**host-local 合计 ≤8**;总量受 MTU 预算约束,**不足时从低优先(predicted)先砍**,保住高优先 host-local + srflx。
 3. **截断不静默**:超限按优先级丢弃并 **log 丢了哪些**(no silent caps),诊断可见。
 4. **并发扇出 = 候选数**:候选已 capped(一二十个),首轮全并发即受控,无需额外 stagger。
 5. **early_data 分包**:punch 0RTT 包 = FrameConnect + 票据 + 填到 MTU 的 early_data;**超出部分作后续普通流数据**发,不硬塞一个包。
