@@ -168,6 +168,7 @@ FrameConnect {
 | `candidates` | A 的候选 | 透传 | 可省 | host-local+srflx(+预测端口) |
 | `direction` | 请求/未定 | 已定值 | 已定值 | ACTIVE/PASSIVE |
 | `eph_pubkey,nonce` | 仅加密 | 透传(B 可靠拿到公钥) | 直连份用于交叉校验 | 仅加密模式 |
+| `same_public_ip` | —— | NtrsB 置位 | —— | NtrsB 判 A/B srflx IP 相同时提示优先 host-local(§6.6) |
 
 ### 5.3 demux 规则(区分直连与打洞,零冲突)
 
@@ -220,6 +221,21 @@ A(逻辑发起方)`Connect()` 登记 A_cid。收到入站包:
 
 - 两端各建连接对象但都引用同一 A_cid;交叉包按 A_cid 归一条,不新建。
 - 提交路由后,同 A_cid 的迟到包 → 当迁移探测(PATH 验证,不更优不切),**绝不新建连接**;attempt 已终态则丢弃。
+
+### 6.6 #12 定稿:host-local 候选与 hairpinning
+
+同一 NAT 后的两节点(同 LAN / 同 CGNAT)打对方 srflx 常因 NAT 不支持 hairpin 失败,必须靠 host-local 内网直连。
+
+1. **候选采集**(进 `candidates[]`):host-local(枚举本机接口地址,排除 loopback;含 **IPv4 私网** + **IPv6 GUA**)、srflx(NTRS 观测)、对称时加 predicted 端口(§7)。
+2. **默认包含 host-local(含私网),不默认过滤**——hairpinning 靠它;并发竞速下不可达私网路径快速失败、不阻塞 srflx。
+3. **同 NAT 检测 + 优先级**:NtrsB 比较 A/B 的 srflx IP,相同则在转发/回复里置 **`same_public_ip` 提示**;收到提示的一端**优先、更积极试 host-local**,但**仍并发试 srflx 兜底**。⚠️ `same_public_ip` **不等于可达**(同 CGNAT 不同住户共享公网 IP 但内网不互通)→ 提示只是优先级启发,双路都不通则该连接失败(需 relay,非本期)。
+4. **并发竞速**(复用 §6.5):host-local + srflx(+predicted)同一轮并发,首个完成握手的路由胜出、其余取消。**附带救回同 LAN 的双对称**——内网两端间无 NAT,公网判"双对称连不通",内网 host-local 照样通。
+5. **误投安全**:私网地址可能撞本地别的设备;`FrameConnect{cid, dst_pid}` 绑定让错设备拒收(`kDCIDMiss`/无匹配),**不建假连接**,仅少量杂散包。
+6. **上限(接 #8)**:候选数设上限(主网卡 host-local > srflx > 有限 predicted),保证 CONNECT/握手包 ≤ 保守 MTU、并发扇出受控。
+7. **IPv6 直连**:双方均有 GUA 时,IPv6 常是无 NAT、最快路径,作高优先候选;**同协议族配对**。
+8. **隐私**:交换 host-local 泄露内网地址;可选抑制(类 WebRTC mDNS),**本期不做,标注**。
+
+`same_public_ip` 是 NtrsB 写入转发/回复 FrameConnect 的提示字段(见 §5.2,仅 rendezvous 判定后出现)。
 
 ---
 
@@ -312,7 +328,7 @@ A(逻辑发起方)`Connect()` 登记 A_cid。收到入站包:
 
 ## 13. 未决问题(按"连不上优先"逐条解决)
 
-已定稿:**#1(方向/cid 归并/反向提升)、#2(对称/回观测源)、#3(单 cid 去重)**。
+已定稿:**#1(方向/cid 归并/反向提升)、#2(对称/回观测源)、#3(单 cid 去重)、#12(host-local/hairpinning,见 §6.6)**。
 
 待解决:
 
@@ -326,6 +342,5 @@ A(逻辑发起方)`Connect()` 登记 A_cid。收到入站包:
 | 9 | 加密 Finished 在打洞丢包下的重传;双方都发时绑提交路由 | 健壮性 | 待解 |
 | 10 | keepalive 间隔 < NAT 映射超时(默认可配) | 运维(连上后掉线) | 待解 |
 | 11 | 版本协商:新类型/帧不识别时优雅降级 | 兼容 | 待解 |
-| 12 | 同 NAT / hairpinning:host-local 候选必须也在集合里并被尝试 | 健壮性(可致连不上) | 待解 |
 
-下一步优先:**#12(hairpinning,连不上)**,随后 #8、再安全组 #4/#5。
+下一步优先:**#8(候选表/MTU 上限,与 #12 候选并发直接相关)**,随后安全组 #4/#5,再 #6/#7/#9/#10/#11。
