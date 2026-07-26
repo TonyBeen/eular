@@ -163,6 +163,7 @@ FrameConnect {
   direction            // ACTIVE / PASSIVE;A→Ntrs 时为请求,Ntrs 转发时写入已定值
   expiry               // rendezvous 有效期
   [eph_pubkey, nonce]  // 仅加密模式
+  [token]              // 可选,首期不用(§12);crypto spec 认证 hook,present 才验
 }
 ```
 
@@ -448,7 +449,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 **新增模块**
 - `RendezvousClient`(对 NtrsB 发单 datagram CONNECT + 短 PTO 重发 + 解析回复)。
-- NTRS 服务端:keepalive/注册、srflx 观测、token 验签、按 pid 转发(rendezvous_id 幂等、对 B 激活去重)、方向判定、集群 NAT 探测协同。
+- NTRS 服务端:keepalive/注册、srflx 观测、转发(rendezvous_id 幂等、对 B 激活去重)、方向判定、限速(源IP/目标pid/全局,§12 M3)、集群 NAT 探测协同。**首期不验 token**(§12);CONNECT 的可选 token 字段 present 才验,留给 crypto spec。
 - `CandidateCache`(happy-eyeballs + 0-RTT 缓存)。
 
 **统一 0-RTT API**:见 §9(破坏性变更)。
@@ -464,32 +465,31 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 **反射向量**:A→NtrsB 是单包、源地址可伪造。攻击者伪造源=受害者发 CONNECT(dst_pid=真实节点 B),可使 ① NtrsB 回复打向受害者、② NtrsB 转发后 **B 朝受害者打洞**(新向量)、③ 打洞天生要"验证地址前先发包"违反反放大。
 
-**核心机制:按地址的有界发送(M2)对所有请求始终在线,只由"来自该候选地址的可验证回包"解除——绝不由 token/pid 有效性解除;token 只提升限速/追责信任。**
+**首期不用 token**:反射已被 M1+M2+M3 兜住,token 边际价值小(不做地址验证、可被盗重放),身份/认证统一归 crypto spec(逐请求签名)。**NtrsB 首期为开放 rendezvous**,只靠下面三道 + B 端 accept/上限防护。
 
-- **握手很小 → 数据量限制不伤连接**:一次打洞握手只需几个小包(Initial + 少量重传 + PATH_CHALLENGE)。给"未验证地址"设一个**够握手用的发送预算**,合法连接(含 CGNAT/多线)照样完成,却把伪造反射封在几 KB。
-- **永不因 token 拒绝**:签名无效、IP 不匹配一律**不拒**,只保持有界发送。
+**M1 — 消除 off-NtrsB 放大**
+CONNECT 填充到 **≥ NtrsB 回复大小** → 反射 off NtrsB 放大 **≤1**,反射无收益。
 
-**分级(都不拒绝;M2 对两档都适用)**
+**M2 — 按地址有界发送(复用现有 3× 反放大)**
+未验证路径上 **`已发字节 ≤ 3 × 已收字节 + credit`**(现有 `connection_impl.cpp:2942` 的 `m_bytesOut ≤ m_bytesIn*3 + kPathValidationSendCredit`,`needPathValidation()` 门控,超限 `UTP_ERR_PATH_VALIDATION_BLOCKED`)。
+- **credit 统一 `3 × MTU`(~3600)**,直连/打洞 ACTIVE/PASSIVE 一个常量(把现有 `kPathValidationSendCredit` 从 256 改为 3×MTU)。够打洞 ACTIVE 发 1 Initial + 2 次重传;直连侧 3× 项主导、几乎不触发 credit floor,近似 no-op。
+- **只由"来自该候选地址的可验证回包"(PATH_RESPONSE / 可解密握手)解除**;解除后放开激进重传。off-B 反射上限 ≈ 3×MTU/每 CONNECT(攻击者每次先付 ~1200 填充 CONNECT → 放大 ≈3×)。
 
-| 请求 | NtrsB 处理 | B 发送预算 | 限速键 |
-|---|---|---|---|
-| **有效 token** | 转发,附"pid 已验证" | **仍受 M2**:验证地址前只发够握手的有界预算,**收到该地址可验证回包后才解锁**激进重传 | 按 **pid** |
-| 无 token / 签名无效 | 不拒,转发但标"未验证" | 同上 M2 有界 | 按**源 IP** |
+**M3 — 限速 + 上限(去 token 后的追责层)**
+NtrsB 按三键限速 + B 端 pending 上限:
+- **按源 IP**:反射攻击**天生要把源伪造成受害者**,所有攻击 CONNECT 落进"源=受害者"同一桶 → **天然按受害者封顶**(叠 M2 → 到受害者总反射有界)。
+- **按目标 pid(dst_pid)**:封顶针对某个 B 的总量,无视源怎么变。
+- **全局**:兜底海量随机源伪造的 NtrsB 资源耗尽,超额丢弃、NtrsB 不倒。
+- **B 端**:每源并发 pending + 全局 pending 上限 + TTL(联动 #7)。
 
-> **修正(原 P0):token 有效 ≠ 地址已验证。** 攻击者可用自己合法 pid/token、伪造 UDP 源为受害者、填受害者候选;若"pid 已验证 → 正常发"就把 B 变成反射器。因此**无论 token 是否有效,B 对某候选地址的发送都受 M2 约束,直到收到来自该地址的可验证回包**(PATH_RESPONSE / 能解密的握手)。token 只决定限速键与"B 知道是谁在连",不解除按地址预算。
+**残余局限(诚实标注,去 token 的代价)**
+- 追责只能**按 IP**(可伪造),弱于 pid;但反射按 IP=受害者天然封顶、资源耗尽有全局兜底,够用。
+- **NtrsB 开放**:知道 NtrsB 地址 + B 的 pid 者都能触发 B——**不比"B 本身可达、谁都能发 Initial"更糟**,由 M2/M3/上限 + B 的 `OnNewConnection` accept/reject 兜。
+- 要"不可伪造身份封禁 / 只服务注册节点 / 抗重放" → 归 **crypto spec 的逐请求签名**。
 
-- **token 绑定(收紧)**:至少绑定 `{src_pid, dst_pid, rendezvous_id, expiry, CONNECT 内容摘要, 签名}`——防止重放到别的目标/会话。A 的 home NtrsA 在注册/NAT 探测(§4.1)时签发,集群共享信任根。**不硬绑 IP**(避免 CGNAT/多线误判)。NtrsB 验签,把结论随转发告诉 B(走可信 keepalive)。
+**前向兼容 hook**:CONNECT 保留一个**可选 token 字段**(present 才验);crypto spec 加认证时不破坏线格式、不需版本变更。
 
-**三道叠加**
-- **M1**:CONNECT 填充到 ≥ NtrsB 回复大小 → off-NtrsB 放大 **≤1**。
-- **M2(具体量级,复用现有 3× 反放大)**:未验证路径上 **`已发字节 ≤ 3 × 已收字节 + credit`**(现有 `connection_impl.cpp:2942` 的 `m_bytesOut ≤ m_bytesIn*3 + kPathValidationSendCredit`,`needPathValidation()` 门控,超限 `UTP_ERR_PATH_VALIDATION_BLOCKED`)。
-  - **credit 统一为 `3 × MTU`(~3600 字节)**,直连 / 打洞 ACTIVE / 打洞 PASSIVE **一个常量、不分场景**(把现有 `kPathValidationSendCredit` 从 256 改为 3×MTU)。3×MTU 够打洞 ACTIVE 侧发 1 个 Initial + 2 次 sub-RTO 重传;直连侧因 server 已先收到 client Initial(`bytesIn>0`),3× 项主导、credit floor 几乎不触发,改动无实际副作用。
-  - **解除**:对端从该地址回一个可验证包(PATH_RESPONSE / 可解密 Handshake)→ 路径 validated → 3× 限制解除,激进重传放开。**与 token 无关**。off-B 反射上限 ≈ 3×MTU / 每 CONNECT(攻击者每次先付 ~1200 填充 CONNECT → 放大 ≈3×)。
-- **M3**:限速——有 token 按 pid、无 token 按源 IP;B 入站打洞并发上限 + 半开 TTL(联动 #7)。
-
-**残余风险**:注册节点用自己有效 token + 伪造源仍能触发 M2 有界(几 KB)反射,但 pid 认证可追责/封禁、M1 让其先付 CONNECT 成本,非好用放大器。
-
-**边界(非本期)**:跨运营商 NtrsA/NtrsB 不共享信任根 → 无法验签 → 该请求走"未验证"档(仍可连、更严限速,M2 照常)。token 字段/签名算法随 crypto 细节最终定。
+**边界(非本期)**:跨运营商信任、身份认证、逐请求抗重放 → crypto spec / 后续。
 
 ---
 
@@ -527,10 +527,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 ---
 
-## 15. 待讨论(未定稿,评审 H3/H4)
+## 15. 评审 H3/H4 处置(均已定稿)
 
-以下评审发现**尚未定论,需讨论后回填**,当前不作为实现输入:
-
-- **H3 — token 绑定内容**:§12 现写 token 绑 `{src_pid, dst_pid, rendezvous_id, expiry, CONNECT 摘要, 签名}`,但 token 由 NtrsA **在注册/探测时签发、可复用**,那时**尚无具体 CONNECT**,无法绑 CONNECT 摘要 → 自相矛盾。候选方向:(a) token 只绑 `{pid, expiry}` 可复用,per-CONNECT 新鲜性靠 rendezvous_id + NtrsB nonce;(b) token per-CONNECT 签发(则放弃"注册时可复用")。**待定。**
-
-> H4(M2 预算量级)已定稿:统一 `credit = 3×MTU`,见 §12。
+- **H3 — token**:讨论后决定**首期直接去掉 token**(反射已由 M1+M2+M3 兜住,token 边际价值小且不做地址验证/可被盗重放)。身份/认证/抗重放统一归 crypto spec 的逐请求签名;CONNECT 保留可选 token 字段作前向兼容 hook。见 §12。
+- **H4 — M2 预算量级**:统一 `credit = 3×MTU`,复用现有 3× 反放大。见 §12。
