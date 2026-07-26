@@ -206,7 +206,7 @@ FrameConnect {
 
 **为什么不能用 32 位 CID 做归并键**:CID 32 位、可被对端选择;约 1 万并发 attempt 时随机碰撞概率已约 1%,攻击者还能主动构造碰撞 → 错误归并会导致错误提升/取消,严重时跨连接数据混淆。所以**传输 CID 与 rendezvous 身份必须分离**。
 
-- A 在 `Connect()` 时生成 **128 位随机 `rendezvous_id`**,放进 `FrameConnect`。**归并/去重/提升/pending 键 = `{rendezvous_id, target_pid, expiry}`**。
+- A 在 `Connect()` 时生成 **128 位随机 `rendezvous_id`**,放进 `FrameConnect`。**归并/去重/提升/pending 的相等键 = `rendezvous_id`(唯一)**;`dst_pid` 作一致性校验(对不上即拒)、`expiry` 作有效性边界(过期即拒)——**二者都不进相等键**(时间戳进相等键会导致逐字节比对失败)。
 - 传输 CID 各自按 libutp 现有规则(§6.1):A 的 `scid=A_cid` 在 header;B 作为 server 分配 `B_cid`;A 从 B 的包 `scid` 学到 B_cid。**CID 只用于 transport demux,不承担会话身份**。
 - B 侧维护 `RendezvousPending` 表,**键 = rendezvous_id**;先查表,已存在就复用,不重复激活(见 §11 RendezvousPending)。
 
@@ -224,7 +224,7 @@ NAT 探测输出对齐 **NTRS 的 9 个类型常量**(`NTRS_NAT_CLASS_*`,值 0�
 | `UNKNOWN`(0) | **按对称,best-effort** | 方向当 ACTIVE,永不早失败 |
 | `UDP_BLOCKED`(8) | **不可达** | 任一侧=8 → NtrsB 立即回失败 |
 
-**方向规则**:封闭度 `Open < IP限制 < 端口限制 < 对称 < 对称多线`;**更封闭一侧 = ACTIVE(先发 Initial)**,开放侧 PASSIVE。理由:对称对每个目标用不可预测端口,只有它先发才暴露该端口;开放侧从**收到包的源地址**回(§7),多数无需预测。
+**方向规则**:封闭度 `Open < IP限制 < 端口限制 < 对称 < 对称多线`;**更封闭一侧 = ACTIVE(先发 Initial)**,开放侧 PASSIVE。**平级(同封闭度,如 Open×Open、端口×端口)时:主叫方(调 `Connect` 的 A)= ACTIVE**,被叫 = PASSIVE——按连接发起方裁决,确定且无歧义。理由:对称对每个目标用不可预测端口,只有它先发才暴露该端口;开放侧从**收到包的源地址**回(§7),多数无需预测。
 
 **可达性矩阵(行为类)**
 
@@ -247,14 +247,44 @@ NAT 探测输出对齐 **NTRS 的 9 个类型常量**(`NTRS_NAT_CLASS_*`,值 0�
 - **双方均确诊为对称(6/7)** → 若**公网 IP 不同** → 立即回失败(`kDoubleSymmetric`);若**公网 IP 相同** → 仍转发(可能同 LAN,靠 host-local §6.6 救)。
 - 含 `UNKNOWN` 的组合**一律不早失败**,best-effort 照打(两个 Unknown 很可能其实是锥型)。
 
-### 6.4 匹配/提升规则(按 rendezvous_id,不按 CID)
+### 6.4 角色定义 + 两种建连流程 + 匹配/提升
 
-A(逻辑发起方)`Connect()` 登记 `rendezvous_id`。收到入站包:
-- 带 `FrameConnect` 且 **`FrameConnect.rendezvous_id` == 自己登记的 rendezvous_id**(且 target_pid、expiry 匹配)→ **提升为本次 Connect 的结果**;从包 `scid` 学到对端 transport CID。**CID 值不参与匹配**。
-- 带 `FrameConnect` 但无对应 attempt → 被动/accept(RendezvousPending)路径。
-- 无 `FrameConnect` → 现有直连逻辑。
+**三套角色必须分清(全文以此为准,不再用"B"代指 PASSIVE)**
+- **主叫 A / 被叫 B**(应用语义):A 调 `Connect(B)`;B 是目标 pid,经其 home NtrsB 收到转发 CONNECT。
+- **ACTIVE / PASSIVE**(传输/握手角色,NtrsB 按 §6.3 判定):**ACTIVE 发 Initial(=client/ClientHello);PASSIVE 发开洞包 + 回 Handshake(=server/ServerHello)。与主叫/被叫无关**——反向打洞时被叫 B 是 ACTIVE。
+- **pending 归属**:**被叫 B 收到转发 CONNECT 即建 `RendezvousPending`**(存 rid、A_cid、候选、M2 预算、TTL),**不论 B 是 ACTIVE 还是 PASSIVE**;**主叫 A 的 `ConnectAttempt` 就是 A 侧 pending**。
+- **应用回调**:**主叫 A 得 `Connected`(promote,仅一次);被叫 B 得 `OnNewConnection`**。都与 ACTIVE/PASSIVE 无关。
+- **CID 学习**:**被叫 B 从转发 CONNECT 的 `src_transport_cid` 就拿到 A_cid**,发包可直接填 `dcid=A_cid`;**主叫 A 从对端首包的 `scid` 学到对端 cid**。每方分配自己的 scid(§6.1)。
 
-**反向提升**:方向判定把 ACTIVE 给了非逻辑发起方(如 A 调 `Connect(B)` 但 B 是对称 → B 先发)时,**B 的 Initial 用 `scid=B_cid`(遵守 §6.1 CID 语义)**,携带 `FrameConnect{rendezvous_id}`;A **按 rendezvous_id 认出**并提升为自己那次 Connect、从 scid 学到 B_cid,**只触发一次 `Connected`**,不走 `OnNewConnection`。(这解决了旧稿"scid 必须 == A_cid"与"scid 由发包方控制"的自相矛盾。)
+**Case 1 — 正常(A=ACTIVE, B=PASSIVE)**
+```
+A:  Connect(B) → 生成 rid + A_cid → 发 CONNECT 给 NtrsB
+NtrsB: 定 A=ACTIVE / B=PASSIVE → 转发给 B(附 A 候选+A_cid) + 回 A(role=ACTIVE, 附 B 候选)
+B:  收转发 CONNECT → 建 RendezvousPending;因 PASSIVE → 发开洞包(scid=dcid=0)开自己过滤
+A:  发 Initial(scid=A_cid, dcid=0, FrameConnect{rid}) → B 各候选
+B:  收 Initial → rid 命中 pending → 建真正 passive Connection、分配 B_cid → 回 Handshake(scid=B_cid, dcid=A_cid)
+     → B 应用得 OnNewConnection
+A:  收 Handshake → 从 scid 学到 B_cid → Connect 成功(Connected 回调,一次)
+```
+
+**Case 2 — 反向(A=PASSIVE, B=ACTIVE;如 B 对称、A FullCone)**
+```
+A:  Connect(B) → 生成 rid + A_cid → 发 CONNECT 给 NtrsB
+NtrsB: 定 B=ACTIVE / A=PASSIVE → 转发给 B(role=ACTIVE, 附 A 候选+A_cid) + 回 A(role=PASSIVE, 附 B 候选)
+A:  ConnectAttempt 即 A 侧 pending;因 PASSIVE → 发开洞包(scid=dcid=0),等 B 的 Initial
+B:  收转发 CONNECT → 因 ACTIVE → 作 client 建连、分配 B_cid → 发 Initial(scid=B_cid, dcid=A_cid〔已从转发得〕, FrameConnect{rid}) → A 各候选
+A:  收 B 的 Initial → rid 命中自己的 ConnectAttempt → promote 为 Connect 结果;从 scid 学到 B_cid
+     → 作 server 回 Handshake(scid=A_cid, dcid=B_cid) → A 得 Connected(一次)
+B:  收 Handshake → 确认/学到 A_cid → 握手完成 → B 应用得 OnNewConnection
+```
+> 两 case 的差别只在"谁 ACTIVE、谁先发 Initial、谁 promote";**建 pending / 回调归属 / CID 分配规则完全一致**。这解决了旧稿把"B"当"PASSIVE"、以及"scid 必须==A_cid"与"scid 由发包方控制"的自相矛盾。
+
+**匹配/提升规则(按 rendezvous_id)**
+- 入站包带 `FrameConnect` 且 **`rendezvous_id` 等于本端登记值** → 命中;并校验 `dst_pid` 一致、未过期(`expiry` 仅有效性边界)。**CID 值不参与匹配**,从对端 `scid` 学到其 transport cid。
+  - 命中方是**主叫**(其 ConnectAttempt 登记了该 rid)→ **promote 为 Connect 结果**,不走 `OnNewConnection`。
+  - 命中方是**被叫**(其 RendezvousPending 登记了该 rid)→ 归入该 pending。
+- 带 `FrameConnect` 但无登记匹配 → 被叫首次收到 → **新建 RendezvousPending**。
+- 无 `FrameConnect` → 现有直连逻辑;`scid=dcid=0`(开洞包)→ 静默丢(§4.3)。
 
 ### 6.5 同时开不重复 / 迟到去重
 
@@ -408,7 +438,10 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 - `src/proto/proto.h`:新增 `UTP_TYPE_CONNECT 0x06`;**`UTP_PROTOCOL_VERSION` 不升**(greenfield 无兼容负担)。
 - 新增 `FrameConnect` 帧编解码(含 128 位 `rendezvous_id`)。
 - `connection_impl`/`context_impl` 入站分派:在 `isPassiveInitial` 之外,新增"包内含 `FrameConnect` → 按 **`rendezvous_id`** 匹配 attempt/RendezvousPending"的分支;命中→提升,未命中→新建 RendezvousPending,无帧→现状。**另加规则:`scid==0 && dcid==0` 的包(开洞包)静默丢弃,绝不回 Reset**(§4.3)。**注意**:现有被动 Initial 按 `(dcid==scid, peer ip:port)` 匹配(`context_impl.cpp:1819`),打洞 Initial 不走该匹配,靠 rendezvous_id。
-- **`RendezvousPending`(新,独立状态,不复用 `initPassive`)**:现有 `ConnectionImpl::initPassive()` 直接置 `kStateConnected`(`connection_impl.cpp:617`),不是半连接,**不可复用**。RendezvousPending 保存 `{rendezvous_id, A 的 transport CID, 候选, M2 预算, TTL}`,收到转发 CONNECT 即可发 PATH_CHALLENGE;**收到匹配 Initial 后才创建真正的 passive `Connection` 并分配/公布 B_cid**。
+- **`RendezvousPending`(新,独立状态,不复用 `initPassive`)**:现有 `ConnectionImpl::initPassive()` 直接置 `kStateConnected`(`connection_impl.cpp:617`),不是半连接,**不可复用**。被叫 B 收转发 CONNECT 即建 pending,存 `{rendezvous_id, A_cid, 候选, M2 预算, TTL, 本端 ACTIVE/PASSIVE}`,并发开洞包(若 PASSIVE)。pending → 真连接的转换**按 §6.4 两 case 分**:
+  - **B=PASSIVE(Case 1)**:发开洞包,**收到匹配 rid 的 Initial 后**才建真正 passive `Connection`、分配/公布 B_cid、回 Handshake。
+  - **B=ACTIVE(Case 2,反向)**:**立即作 client 建连、分配 B_cid、发 Initial**(dcid=A_cid 已从转发得),等 A 回 Handshake。
+  - 两 case 都在握手完成后向 B 应用抛 `OnNewConnection`。
 - `ConnectAttempt`(新):管理多目标子路径、rendezvous_id、A_cid、send state 共享、路由提交与迁移、去重、竞速取消、CONNECT 重发/幂等(§4.2)。
 - 打洞/握手定时器:首包 sub-RTO 小突发 + 退避,重传兼作打洞重试。
 
@@ -488,3 +521,12 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 | 12 | 同 NAT / hairpinning:host-local 候选进集合并并发尝试 | 健壮性(可致连不上) | ✅ 定稿 §6.6 |
 
 **12 条全部定稿。** 后续 crypto spec 负责:显式 Finished/双向 key confirmation、Ed25519 身份目录、抗主动 MITM、加密 0-RTT 放行。relay/TURN(双对称、UDP 阻断)另立 spec。
+
+---
+
+## 15. 待讨论(未定稿,评审 H3/H4)
+
+以下两项评审发现**尚未定论,需讨论后回填**,当前不作为实现输入:
+
+- **H3 — token 绑定内容**:§12 现写 token 绑 `{src_pid, dst_pid, rendezvous_id, expiry, CONNECT 摘要, 签名}`,但 token 由 NtrsA **在注册/探测时签发、可复用**,那时**尚无具体 CONNECT**,无法绑 CONNECT 摘要 → 自相矛盾。候选方向:(a) token 只绑 `{pid, expiry}` 可复用,per-CONNECT 新鲜性靠 rendezvous_id + NtrsB nonce;(b) token per-CONNECT 签发(则放弃"注册时可复用")。**待定。**
+- **H4 — M2 发送预算的具体量级**:§12 只写"够握手用 / 几 KB",无具体包数/字节公式,不同实现松紧不一、影响反射防护强度。需定**具体默认**(如 ≤N 包 或 ≤3× 收到字节、下限若干包)。**待定。**
