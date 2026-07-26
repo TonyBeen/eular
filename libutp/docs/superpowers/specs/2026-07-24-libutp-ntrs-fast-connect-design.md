@@ -1,8 +1,8 @@
 # libutp + NTRS 快可达打洞建连设计
 
 - 日期:2026-07-24
-- 状态:进行中(#1/#2/#3 已定稿;#4–#12 见文末未决清单)
-- 范围:libutp(现有传输,cpp/)+ NTRS(rendezvous/中继服务)的**明文快可达核心**
+- 状态:主体定稿(12 条边界 + 评审 H1–H5 处理完;见 §14/§15)
+- 范围:libutp(现有传输,cpp/)+ NTRS(rendezvous/中继服务)的**明文 + 无身份加密**快可达核心(身份/抗主动 MITM 归 crypto spec)
 
 ---
 
@@ -25,7 +25,7 @@
 
 **RTT 目标**(`RTT_AR`=到 NTRS 一个往返,`RTT_AB`=peer 直连一个往返)
 - 冷启动:`RTT_AR + RTT_AB`
-- **热路径(0 信令)= 仅限"持有对端签发的 resumption 票据的重连"**:B 能**无状态验票**接受一个未经 NtrsB 转发的直连 Initial,无需 pending 状态 → `0 信令 + RTT_AB`。**无票据时不存在 0 信令**——B 没有 pending 状态就无法接受无中继的入站 Initial,必须经 NtrsB(见 §9.2)。
+- **热路径(0 信令)= 仅限"持有对端签发的 resumption 票据的重连"**:B 能**无状态验票**接受一个未经 NtrsB 转发的直连 Initial,无需 pending 状态 → `0 信令 + RTT_AB`。**无票据时不存在 0 信令**——B 没有 pending 状态就无法接受无中继的入站 Initial,必须经 NtrsB(见 §9)。
 - 0-RTT 重连命中:early_data 在第 0 个包交付
 
 ---
@@ -52,7 +52,7 @@
 - **每个节点有常驻 home Ntrs**,以 utp keepalive 保活:A↔NtrsA、B↔NtrsB。**NtrsA 与 NtrsB 可能不是同一台服务**。
 - **NTRS 是集群,机器之间通信仅为 NAT 探测协同**(线上无双网卡,必须多机多 IP 观测才能分类 NAT)。**不做 rendezvous 转发联邦**。
 - **A 连 B:直接给 NtrsB 发一个单独的 CONNECT 包**(A 从应用拿到 NtrsB 地址 + B 的 pid;A↔NtrsB 无 keepalive)。NtrsA 不在这条路径上。
-- NTRS 只做 **rendezvous 中转 + 方向调度**,**不参与 cid 分配,也不参与密钥派生**,只转发。
+- NTRS 做 **rendezvous 中转 + 方向判定 + 限速/资源保护**;**不参与 cid 分配,也不参与密钥派生**。
 
 ```
         NAT 探测协同
@@ -179,8 +179,8 @@ FrameConnect {
 | `src_pid` | A 自报 | 透传给 B(应用层"谁在连") | 带(0-RTT 直连先到时供 B 识别) | **未认证提示**,不做安全判断 |
 | `dst_pid` | =B,路由用 | =B | =本端 pid,合法性检查 | 不能省(NtrsB 路由靠它) |
 | `src_transport_cid` | =A 的 scid | 透传(转发后靠帧存活) | 与 header `scid` 一致 | 供对端填 dcid;**非归并键** |
-| `nat_type` | A 的类型 | 透传 | 可省 | 判方向 |
-| `candidates` | A 的候选 | 透传 | 可省 | host-local+srflx(+预测端口) |
+| `nat_type` | A 的类型 | 透传 | 省略 | 判方向(打洞包不带,对端已从转发 CONNECT 得到) |
+| `candidates` | A 的候选 | 透传 | 省略 | 同上 |
 | `direction` | 请求/未定 | 已定值 | 已定值 | ACTIVE/PASSIVE |
 | `expiry` | A 定 | 透传 | 带 | 归并键的一部分 + pending TTL |
 | `eph_pubkey,nonce` | 仅加密 | 透传(B 可靠拿到公钥) | 直连份用于交叉校验 | 仅加密模式 |
@@ -503,7 +503,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 
 ## 13. 测试与验收
 
-- **NAT 组合矩阵**:FullCone / 地址限制 / 端口限制 / 对称 全组合;双对称走失败路径。
+- **NAT 组合矩阵(行为类,§6.3)**:Open / IP限制 / 端口限制 / 对称(同IP) / 对称多线 全组合。重点用例:对称×端口限制走**端口预测(P)**、对称多线×端口限制走 **best-effort(P弱)**、`UDP_BLOCKED` 任一侧走 **NtrsB 早失败(kUdpBlocked)**、双对称走**早失败(同公网IP留 host-local)**、`Unknown` 走 **best-effort 不早失败**。
 - **成功率 + P99**:netem(丢包/时延/重排)下打洞成功率与 P99 建连时间作回归门槛(复用 `cpp/test/scripts/netem_*`)。
 - **对称可达**:回观测源、提交 prflx 路由;预测外地址被正确归并。
 - **cid 归并/去重**:转发 CONNECT 与直连 Initial 归一条;0-RTT 直连+打洞双份不双交付;反向提升只回调一次。
@@ -539,3 +539,23 @@ NtrsB 按三键限速 + B 端 pending 上限:
 
 - **H3 — token**:讨论后决定**首期直接去掉 token**(反射已由 M1+M2+M3 兜住,token 边际价值小且不做地址验证/可被盗重放)。身份/认证/抗重放统一归 crypto spec 的逐请求签名;CONNECT 保留可选 token 字段作前向兼容 hook。见 §12。
 - **H4 — M2 预算量级**:统一 `credit = 3×MTU`,复用现有 3× 反放大。见 §12。
+
+---
+
+## 16. 参数默认值(建议,可调)
+
+散落在各节的计时/上限集中于此;正文数值以本表为准。**除标 TBD 外均为建议默认,实现可调**。
+
+| 参数 | 建议默认 | 出处 |
+|---|---|---|
+| 握手/打洞包 MTU floor | 1200(置 DF) | §6.7 |
+| M2 反放大 credit(`kPathValidationSendCredit`) | 3×MTU(~3600) | §12 |
+| host-local 候选上限 / predicted 端口上限 | 8 / 16 | §6.7 |
+| keepalive 间隔 / probes / timeout | ~15s / 3 / 1500ms | §6.9 |
+| CONNECT 重发 PTO | ~200ms 起,指数退避,至 attempt 总超时 | §4.2 |
+| 首包 sub-RTO 突发 | 2–3 发 @ ~50ms,后指数退避 | §4.3 |
+| RendezvousPending TTL | ~5s | §6.8 |
+| ConnectAttempt 总超时 | ~3s(现有 `ConnectInfo.timeout`) | §6.8 |
+| rendezvous_id 长度 | 128 位 | §6.2 |
+| 端口预测:采样数 / 预测数 / 置信阈值 | ~8 / ≤16 / **TBD-调参** | §7 |
+| 0-RTT 抗重放窗口 / token 时效 | 10s / 600s(现有) | §9.1 |
