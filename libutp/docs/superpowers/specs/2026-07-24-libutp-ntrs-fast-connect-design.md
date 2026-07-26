@@ -444,6 +444,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
   - 两 case 都在握手完成后向 B 应用抛 `OnNewConnection`。
 - `ConnectAttempt`(新):管理多目标子路径、rendezvous_id、A_cid、send state 共享、路由提交与迁移、去重、竞速取消、CONNECT 重发/幂等(§4.2)。
 - 打洞/握手定时器:首包 sub-RTO 小突发 + 退避,重传兼作打洞重试。
+- **反放大 credit 常量(全局,非 rendezvous-only)**:`kPathValidationSendCredit` 由 **256 改为 `3×MTU`(~3600)**(§12 M2)。影响直连也影响打洞,但直连侧 3× 项主导、几乎不触发 credit floor,行为近似 no-op。
 
 **新增模块**
 - `RendezvousClient`(对 NtrsB 发单 datagram CONNECT + 短 PTO 重发 + 解析回复)。
@@ -481,7 +482,9 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 **三道叠加**
 - **M1**:CONNECT 填充到 ≥ NtrsB 回复大小 → off-NtrsB 放大 **≤1**。
-- **M2**:向未验证地址**有界发送**(预算够握手、对端不响应即停;**仅由该地址可验证回包解锁**,与 token 无关) → off-B 反射封顶几 KB。
+- **M2(具体量级,复用现有 3× 反放大)**:未验证路径上 **`已发字节 ≤ 3 × 已收字节 + credit`**(现有 `connection_impl.cpp:2942` 的 `m_bytesOut ≤ m_bytesIn*3 + kPathValidationSendCredit`,`needPathValidation()` 门控,超限 `UTP_ERR_PATH_VALIDATION_BLOCKED`)。
+  - **credit 统一为 `3 × MTU`(~3600 字节)**,直连 / 打洞 ACTIVE / 打洞 PASSIVE **一个常量、不分场景**(把现有 `kPathValidationSendCredit` 从 256 改为 3×MTU)。3×MTU 够打洞 ACTIVE 侧发 1 个 Initial + 2 次 sub-RTO 重传;直连侧因 server 已先收到 client Initial(`bytesIn>0`),3× 项主导、credit floor 几乎不触发,改动无实际副作用。
+  - **解除**:对端从该地址回一个可验证包(PATH_RESPONSE / 可解密 Handshake)→ 路径 validated → 3× 限制解除,激进重传放开。**与 token 无关**。off-B 反射上限 ≈ 3×MTU / 每 CONNECT(攻击者每次先付 ~1200 填充 CONNECT → 放大 ≈3×)。
 - **M3**:限速——有 token 按 pid、无 token 按源 IP;B 入站打洞并发上限 + 半开 TTL(联动 #7)。
 
 **残余风险**:注册节点用自己有效 token + 伪造源仍能触发 M2 有界(几 KB)反射,但 pid 认证可追责/封禁、M1 让其先付 CONNECT 成本,非好用放大器。
@@ -526,7 +529,8 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 ## 15. 待讨论(未定稿,评审 H3/H4)
 
-以下两项评审发现**尚未定论,需讨论后回填**,当前不作为实现输入:
+以下评审发现**尚未定论,需讨论后回填**,当前不作为实现输入:
 
 - **H3 — token 绑定内容**:§12 现写 token 绑 `{src_pid, dst_pid, rendezvous_id, expiry, CONNECT 摘要, 签名}`,但 token 由 NtrsA **在注册/探测时签发、可复用**,那时**尚无具体 CONNECT**,无法绑 CONNECT 摘要 → 自相矛盾。候选方向:(a) token 只绑 `{pid, expiry}` 可复用,per-CONNECT 新鲜性靠 rendezvous_id + NtrsB nonce;(b) token per-CONNECT 签发(则放弃"注册时可复用")。**待定。**
-- **H4 — M2 发送预算的具体量级**:§12 只写"够握手用 / 几 KB",无具体包数/字节公式,不同实现松紧不一、影响反射防护强度。需定**具体默认**(如 ≤N 包 或 ≤3× 收到字节、下限若干包)。**待定。**
+
+> H4(M2 预算量级)已定稿:统一 `credit = 3×MTU`,见 §12。
