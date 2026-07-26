@@ -200,6 +200,8 @@ FrameConnect {
 
 因此:**B 为 A↔B 连接新分配的 cid,NtrsB 事先拿不到,A 只能从 B 的应答里学到,dcid=0 引导期保留。**
 
+**CID 分配规则**:`cid==0` 是唯一保留值(`dcid=0`=未知引导态;`scid=dcid=0`=开洞包,§4.3)。分配时**重生成直到 `cid != 0` 且不在本地连接表**;其余 `1..2³²-1` 全部可用。**不额外保留低段**——一对多分发在 overlay 层做(gossip/mesh over unicast),transport 无广播原语、无 well-known CID 需求,故无需预留。
+
 ### 6.2 归并键 = `rendezvous_id`(128 位),CID 只做 transport demux
 
 **为什么不能用 32 位 CID 做归并键**:CID 32 位、可被对端选择;约 1 万并发 attempt 时随机碰撞概率已约 1%,攻击者还能主动构造碰撞 → 错误归并会导致错误提升/取消,严重时跨连接数据混淆。所以**传输 CID 与 rendezvous 身份必须分离**。
