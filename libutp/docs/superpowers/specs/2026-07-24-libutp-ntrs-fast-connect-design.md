@@ -103,21 +103,22 @@
 ### 4.3 子系统三:融合的打洞 + 握手
 
 ```
-③ ACTIVE 方发 Initial(= 打洞包);PASSIVE 方发 PATH_CHALLENGE 开洞,收到 Initial 后回 Handshake
+③ ACTIVE 方发 Initial(= 打洞包);PASSIVE 方先发开洞包(scid=dcid=0,静默丢),收到 Initial 后回 Handshake
    B 按 rendezvous_id 去重(转发 CONNECT 与直连 Initial 归一条 RendezvousPending)
    Initial/Handshake 的重传 = 打洞重试(同一套定时器,首包 sub-RTO 小突发再退避)
-   收到任一有效回包(含 PATH_CHALLENGE)→ 由半连接进入连接态;起 keepalive 维持映射
+   收到有效握手包(带真实 CID 的 Handshake/数据)→ 由半连接进入连接态;起 keepalive 维持映射
 ```
 
 **角色与开洞包**
 - **ACTIVE / PASSIVE 只决定握手角色**:ACTIVE=client(发 Initial=ClientHello),PASSIVE=server(回 Handshake=ServerHello),由 NtrsB 按 NAT 封闭度判定(见 §6.3)。
-- **开洞**:PASSIVE 先发一个 **PATH_CHALLENGE** 开自己过滤(带最小 `FrameConnect{rendezvous_id, dst_pid}`,不带握手/数据);**ACTIVE 的 Initial 本身就是它的开洞包**,不另发 PATH_CHALLENGE。不分 NAT 类型统一如此。
-- **ACTIVE 收到 PASSIVE 的 PATH_CHALLENGE 时仍在 InitialSent、未连接** → 只回 PATH_RESPONSE,**不当作建连进度**(client 要收到 Handshake 才进入连接态)。对端分不清映射包/真探测,一律回 PATH_RESPONSE,这没问题。
+- **开洞包 = 纯 hole-opener**:PASSIVE 先发一个 **`PATH_CHALLENGE` 类型、header `scid=dcid=0`、不带 FrameConnect/握手/数据**的包,唯一作用是打开自己的 NAT 出向过滤(NAT 在发送瞬间建映射,与是否到达对端无关)。**ACTIVE 的 Initial 本身就是它的开洞包**,不另发。不分 NAT 类型统一如此。
+- **接收方对 `scid=dcid=0` 的包:静默丢弃,绝不回 Reset/PATH_RESPONSE/任何错误。**(类型可区分:`INITIAL+dcid=0` 是被动建连;`scid=dcid=0` 是开洞包→丢。)这样开洞包**不成为反射向量**,也天然处理 hairpinning 误投(打到本地别的设备→那台设备静默丢)。
+- **它不做路径验证**:无响应=无连通性反馈;真正的路径确认靠后续握手(带真实 CID 的 Initial/Handshake/HandshakeDone)。开洞包仍计入 M2 预算(§12)。
 
 **半连接→连接 与 split-brain**
-- **PASSIVE 发出 Handshake 后进入半连接**,收到对端有效回包(Handshake 的 ACK / 数据 / 也可能是 PATH_RESPONSE)→ 进入连接态。
+- **PASSIVE 发出 Handshake 后进入半连接**,收到对端有效握手回包(Handshake 的 ACK / 1-RTT 数据)→ 进入连接态。开洞包不参与此判定(它不 elicit 响应)。
 - 握手丢包由**现有可靠层收敛**:Handshake 有包号、要 ACK,未确认就重传;Initial 丢则 ACTIVE 重传。
-- **唯一要守的不变量:`connected` 不得清空未确认 Handshake 的重传队列**。这样即使 PASSIVE 因收到 PATH_RESPONSE 提前 connected 而其 Handshake 恰好丢了,也会持续重传直到 ACTIVE 补齐,两端一致,不 split-brain;始终无 ACK/无进展则半连接超时干净失败。
+- **唯一要守的不变量:`connected` 不得清空未确认 Handshake 的重传队列**。始终无 ACK/无进展则半连接超时干净失败,两端不 split-brain。
 
 **融合带来的规划要点**
 1. **重试合并**:旧的"先打通再握手"两段变一段;Initial/Handshake 的重传同时充当打洞重试。
@@ -242,7 +243,7 @@ A(逻辑发起方)`Connect()` 登记 `rendezvous_id`。收到入站包:
 2. **默认包含 host-local(含私网),不默认过滤**——hairpinning 靠它;并发竞速下不可达私网路径快速失败、不阻塞 srflx。
 3. **无需同 NAT 检测**:host-local + srflx(+predicted)**全部并发竞速**,正确路径自然胜出——同 LAN 下 host-local 更快且 srflx-hairpin 失败,host-local 赢;非同 LAN 则 srflx 赢。不引入 `same_public_ip` 之类提示(它只改试的顺序不改结果,且同 CGNAT 不同住户会误导)。两路都不通(如同 CGNAT 不同住户)→ 该连接失败(需 relay,非本期)。
 4. **并发竞速**(复用 §6.5):首个完成握手的路由胜出、其余取消。**附带救回同 LAN 的双对称**——内网两端间无 NAT,公网判"双对称连不通",内网 host-local 照样通。
-5. **误投安全**:私网地址可能撞本地别的设备;`FrameConnect{rendezvous_id, dst_pid}` 绑定让错设备拒收(无匹配 rendezvous_id / `dst_pid≠本端` → 丢弃),**不建假连接**,仅少量杂散包。
+5. **误投安全**:私网地址可能撞本地别的设备;打洞探测用 `scid=dcid=0` 开洞包(§4.3),错设备收到**静默丢弃**、不回错误 → **不建假连接**,仅少量杂散包。携带 rendezvous 绑定的握手 Initial 若误投,也因 rendezvous_id/dst_pid 不匹配而被拒。
 6. **上限(接 #8)**:候选数设上限(主网卡 host-local > srflx > 有限 predicted),保证 CONNECT/握手包 ≤ 保守 MTU、并发扇出受控。
 7. **IPv6 直连**:双方均有 GUA 时,IPv6 常是无 NAT、最快路径,作高优先候选;**同协议族配对**。
 8. **隐私**:交换 host-local 泄露内网地址;可选抑制(类 WebRTC mDNS),**本期不做,标注**。
@@ -375,7 +376,7 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 **改(仅 rendezvous 模式生效,直连路径不动)**
 - `src/proto/proto.h`:新增 `UTP_TYPE_CONNECT 0x06`;**`UTP_PROTOCOL_VERSION` 不升**(greenfield 无兼容负担)。
 - 新增 `FrameConnect` 帧编解码(含 128 位 `rendezvous_id`)。
-- `connection_impl`/`context_impl` 入站分派:在 `isPassiveInitial` 之外,新增"包内含 `FrameConnect` → 按 **`rendezvous_id`** 匹配 attempt/RendezvousPending"的分支;命中→提升,未命中→新建 RendezvousPending,无帧→现状。**注意**:现有被动 Initial 按 `(dcid==scid, peer ip:port)` 匹配(`context_impl.cpp:1819`),打洞 Initial 不走该匹配,靠 rendezvous_id。
+- `connection_impl`/`context_impl` 入站分派:在 `isPassiveInitial` 之外,新增"包内含 `FrameConnect` → 按 **`rendezvous_id`** 匹配 attempt/RendezvousPending"的分支;命中→提升,未命中→新建 RendezvousPending,无帧→现状。**另加规则:`scid==0 && dcid==0` 的包(开洞包)静默丢弃,绝不回 Reset**(§4.3)。**注意**:现有被动 Initial 按 `(dcid==scid, peer ip:port)` 匹配(`context_impl.cpp:1819`),打洞 Initial 不走该匹配,靠 rendezvous_id。
 - **`RendezvousPending`(新,独立状态,不复用 `initPassive`)**:现有 `ConnectionImpl::initPassive()` 直接置 `kStateConnected`(`connection_impl.cpp:617`),不是半连接,**不可复用**。RendezvousPending 保存 `{rendezvous_id, A 的 transport CID, 候选, M2 预算, TTL}`,收到转发 CONNECT 即可发 PATH_CHALLENGE;**收到匹配 Initial 后才创建真正的 passive `Connection` 并分配/公布 B_cid**。
 - `ConnectAttempt`(新):管理多目标子路径、rendezvous_id、A_cid、send state 共享、路由提交与迁移、去重、竞速取消、CONNECT 重发/幂等(§4.2)。
 - 打洞/握手定时器:首包 sub-RTO 小突发 + 退避,重传兼作打洞重试。
