@@ -205,7 +205,11 @@ FrameConnect {
 
 **CID 分配规则**:`cid==0` 是唯一保留值(`dcid=0`=未知引导态;`scid=dcid=0`=开洞包,§4.3)。分配时**重生成直到 `cid != 0` 且不在本地连接表**;其余 `1..2³²-1` 全部可用。**不额外保留低段**——一对多分发在 overlay 层做(gossip/mesh over unicast),transport 无广播原语、无 well-known CID 需求,故无需预留。
 
-**scid 碰撞与解复用**:不同节点可能各自生成相同 scid。**直连 Initial(dcid=0)按 `(对端地址 + 对端 scid)` 解复用**(`context_impl.cpp:1819`),不同主机地址不同 → 天然区分,同 scid 无碍;握手后按**本端分配的 cid**(本地去重唯一)解复用。**唯一要防的是同一主机对同一对端复用 scid**——上面"重生成直到不在本地连接表"必须覆盖"对同一对端的多条连接",避免第二条被误当第一条的重传。
+**scid 碰撞与解复用(三层保证)**:
+- **不同主机**各自生成相同 scid → 直连 Initial(dcid=0)按 **`(对端 IP+端口 + scid)`** 解复用(`context_impl.cpp:1819` 含 ip 与 port),地址不同天然区分;握手后按**本端分配的 cid** 解复用。
+- **同一主机的多个 Context** → 各绑**不同 UDP 端口**,`(IP+端口)` 不同 → 即便 scid 相同也不冲突。
+- **同一 Context 内**对同一对端的多条连接 → 由 scid 本地去重("重生成直到 `cid!=0` 且不在本地连接表")保证唯一。
+- **实现约束**:连接态 socket **不用 `SO_REUSEPORT`**——端口复用会把一个 Context 的包投递到另一个 Context/线程,破坏 `(IP+端口)` 解复用。
 
 ### 6.2 归并键 = `rendezvous_id`(128 位),CID 只做 transport demux
 
