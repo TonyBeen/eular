@@ -104,7 +104,7 @@
 
 ```
 ③ ACTIVE 方发 Initial(= 打洞包);PASSIVE 方先发开洞包(scid=dcid=0,静默丢),收到 Initial 后回 Handshake
-   client 收 Handshake→connected 并发数据/HandshakeDone;server 收到"第一个非 Initial 包"→connected
+   client 收 Handshake→connected 并发数据/HandshakeDone;server 收到 client 的 HandshakeDone 帧(ack 匹配)→ promote 建真连接+connected
    B 按 rendezvous_id 去重(转发 CONNECT 与直连 Initial 归一条 RendezvousPending)
    Initial/Handshake 的重传 = 打洞重试(同一套定时器,首包 sub-RTO 小突发再退避);起 keepalive 维持映射
 ```
@@ -115,12 +115,13 @@
 - **接收方对 `scid=dcid=0` 的包:静默丢弃,绝不回 Reset/PATH_RESPONSE/任何错误。**(类型可区分:`INITIAL+dcid=0` 是被动建连;`scid=dcid=0` 是开洞包→丢。)这样开洞包**不成为反射向量**,也天然处理 hairpinning 误投(打到本地别的设备→那台设备静默丢)。
 - **它不做路径验证**:无响应=无连通性反馈;真正的路径确认靠后续握手(带真实 CID 的 Initial/Handshake/HandshakeDone)。开洞包仍计入 M2 预算(§12)。
 
-**connected 判定(唯一、无歧义)**
-- client(ACTIVE)发 Initial;**收到 `HANDSHAKE` → connected**(可发 1-RTT 数据)。
-- server(PASSIVE)发 Handshake 后半连接;**收到"第一个非 Initial 包"→ connected**。判据是**除 Initial 外的任何有效包**(HandshakeDone 帧 / 1-RTT 数据 / ACK)——因为 client 只在没收到 Handshake 前发 Initial,一旦发非 Initial 包即证明它已收到 Handshake。
+**connected 判定(对齐现有代码,唯一、无歧义)**
+- client(ACTIVE)发 Initial;**收到 `HANDSHAKE` → connected**(可发 1-RTT 数据),随后发 HandshakeDone(可 piggyback 在首个数据包上)。
+- server(PASSIVE)发 Handshake 后处于 **pending**(`PendingIncomingConnection`);**收到 client 的 `HandshakeDone` 帧且 `ack_handshake_pn == 本端 Handshake 包号` → promote 建真连接 + connected**(`context_impl.cpp:1544-1642` 现有逻辑)。HandshakeDone 之前到的数据被 **buffer**、promote 时按序回放(现有机制,流层保证按序)。
   - 排除:`scid=dcid=0` 开洞包(§4.3 已静默丢,不进此判定)。
-  - 加密下:该"第一个非 Initial 包"**能 AEAD 解密**才算 connected(隐式密钥确认)。
-- **可靠 + 收敛**:client 收 Handshake 即 connected(乐观 1-RTT);其后续包(含 HandshakeDone/数据)可靠重传,server 收到任一即 connected。Handshake 丢则 client 持续重传 Initial,server 补发 Handshake;始终无进展则半连接超时干净失败。**无 split-brain**。
+  - 加密下:promote 那个包**能 AEAD 解密**才算(隐式密钥确认)。
+- **为什么只认 HandshakeDone 而不是"任一非 Initial 包"**(评审 C2 结论):HandshakeDone 常 piggyback 在首个数据包上,常见即"数据+HandshakeDone 同包"→ 直接 promote+交付、不 buffer;只有该包丢时才 buffer 后续、靠 **HandshakeDone 可靠重传**补齐(数据不丢、流层按序、还带回 HandshakeDelay)。"任一非 Initial 包即 promote"依赖流重组 + HandshakeDone 重传两层隐含正确性、且漏 HandshakeDelay,收益边际,不采用。
+- **可靠 + 收敛**:client 收 Handshake 即 connected(乐观 1-RTT);Handshake 丢则 client 重传 Initial、server 补发 Handshake;HandshakeDone 丢则 client 重传;始终无进展则 pending TTL 超时干净失败。**无 split-brain**。
 
 **融合带来的规划要点**
 1. **重试合并**:旧的"先打通再握手"两段变一段;Initial/Handshake 的重传同时充当打洞重试。
@@ -430,10 +431,10 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
 
 ### 10.1 #9 定稿:HandshakeDone 在打洞下的传输行为
 
-HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acked/重传定时器)**,不提升为包类型。它是 client 收到 Handshake 后的确认之一,但 **server 的 connected 判据是"第一个非 Initial 包"(§4.3),不限于 HandshakeDone**。libutp 无独立 "Finished";加密的密钥确认是隐式的(能 AEAD 解密即密钥一致)。nat.md 的显式 Finished / 双向 key confirmation / 抗主动 MITM 属 crypto spec,不在本 spec。
+HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acked/重传定时器)**,不提升为包类型。**server 的 connected 判据 = 收到 client 的 HandshakeDone 帧(ack 匹配)→ promote**(§4.3,对齐现有代码,评审 C2 定 A)。libutp 无独立 "Finished";加密的密钥确认是隐式的(能 AEAD 解密即密钥一致)。nat.md 的显式 Finished / 双向 key confirmation / 抗主动 MITM 属 crypto spec,不在本 spec。
 
 1. **可靠送达**:HandshakeDone 及 client 的后续包有 pn、要 ACK、丢了重传;`connected` 不清空未确认包的重传队列(§4.3 不变量)。重传耗尽 → 该路径失败。
-2. **connected 判据**:client 收 `HANDSHAKE` → connected;server 收"第一个非 Initial 包"→ connected(加密下须能 AEAD 解密)。开洞包不参与(§4.3)。
+2. **connected 判据**:client 收 `HANDSHAKE` → connected;server 收 client 的 HandshakeDone 帧(ack 匹配)→ promote(加密下须能 AEAD 解密)。开洞包不参与(§4.3)。
 3. **只在胜出/已提交 route 上发,不 spray**:握手在多候选竞速,**首个走完握手的路径提交为 route**,其余候选取消(§6.8)。
 4. **committed route 完不成 → 迁移**:握手包重传耗尽,若仍在竞速窗口内 fail over 到次优候选;都失败则连接失败。
 5. **按 rendezvous_id 归并**:所属连接按 rendezvous_id 归并;数据去重按 transport CID + 包号/offset(§8),不新建连接。
@@ -448,7 +449,7 @@ HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acke
 - 新增 `FrameConnect` 帧编解码(含 128 位 `rendezvous_id`)。
 - `connection_impl`/`context_impl` 入站分派:在 `isPassiveInitial` 之外,新增"包内含 `FrameConnect` → 按 **`rendezvous_id`** 匹配 attempt/RendezvousPending"的分支;命中→提升,未命中→新建 RendezvousPending,无帧→现状。**另加规则:`scid==0 && dcid==0` 的包(开洞包)静默丢弃,绝不回 Reset**(§4.3)。**注意**:现有被动 Initial 按 `(dcid==scid, peer ip:port)` 匹配(`context_impl.cpp:1819`),打洞 Initial 不走该匹配,靠 rendezvous_id。
 - **`RendezvousPending`(新,独立状态,不复用 `initPassive`)**:现有 `ConnectionImpl::initPassive()` 直接置 `kStateConnected`(`connection_impl.cpp:617`),不是半连接,**不可复用**。被叫 B 收转发 CONNECT 即建 pending,存 `{rendezvous_id, A_cid, 候选, M2 预算, TTL, 本端 ACTIVE/PASSIVE}`,并发开洞包(若 PASSIVE)。pending → 真连接的转换**按 §6.4 两 case 分**:
-  - **B=PASSIVE(Case 1)**:发开洞包,**收到匹配 rid 的 Initial 后**才建真正 passive `Connection`、分配/公布 B_cid、回 Handshake。
+  - **B=PASSIVE(Case 1)**:发开洞包;**收到匹配 rid 的 Initial → 分配 B_cid、回 Handshake、转入 pending;收到 client 的 HandshakeDone(ack 匹配)才 promote 建真 `Connection`+connected**(对齐现有 `PendingIncomingConnection`,C2=A)。HandshakeDone 前的数据 buffer、promote 时回放。
   - **B=ACTIVE(Case 2,反向)**:**立即作 client 建连、分配 B_cid、发 Initial**(dcid=A_cid 已从转发得),等 A 回 Handshake。
   - 两 case 都在握手完成后向 B 应用抛 `OnNewConnection`。
 - `ConnectAttempt`(新):管理多目标子路径、rendezvous_id、A_cid、send state 共享、路由提交与迁移、去重、竞速取消、CONNECT 重发/幂等(§4.2)。
@@ -544,7 +545,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 - **H4 — M2 预算量级**:统一 `credit = 3×MTU`,复用现有 3× 反放大。见 §12。
 
 **反推 utp 现有实现后新增的待定项(见 `requirements/utp-00-index.md` §4):**
-- **C2 [待讨论] connected 触发 / HandshakeDone 方向**:代码实际是 **HandshakeDone(client→server)驱动惰性建被动连接**(`context_impl.cpp:1608`),非 §4.3 现写的"第一个非 Initial 包"。二选一:punch 对齐 HandshakeDone,或把代码泛化为"任一非 Initial 包";并厘清 `initPassive` 立即置 Connected 与半连接语义。**待定。**
+- **C2 [已定 = A] connected 触发 / HandshakeDone**:对齐现有代码——**server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote+connected**,HandshakeDone 前的数据 buffer+回放(§4.3/§10.1)。放弃"任一非 Initial 包即 promote"(依赖流重组+HandshakeDone 重传两层隐含正确、且漏 HandshakeDelay,收益边际)。`RendezvousPending` 复用现有 `PendingIncomingConnection` 模式,几乎不改现有 promote 代码。
 - **C5 [待定] 公共 API 返回值语义**:现状 `成功0/失败-1 + utp_get_last_error()`(POSIX 式)。建议改**直接返错误码 + 出参**(对齐 c/ 迁移 ERRORS.md);属全公共 API 范围改动,非仅 punch。**待定。**
 - 已定并已回写:C1(去 SO_REUSEPORT,§6.1/§11)、C3(3×MTU + 按候选地址额度,§12/§11)、C4(MTU floor 1280,§6.7/§12/§16)。
 
