@@ -54,6 +54,10 @@
 - **A 连 B:直接给 NtrsB 发一个单独的 CONNECT 包**(A 从应用拿到 NtrsB 地址 + B 的 pid;A↔NtrsB 无 keepalive)。NtrsA 不在这条路径上。
 - NTRS 做 **rendezvous 中转 + 方向判定 + 限速/资源保护**;**不参与 cid 分配,也不参与密钥派生**。
 
+**NTRS 认证边界(重要)**:
+- **A ↔ home NtrsA(有 keepalive)= 认证**:自签 **Ed25519 根**——A 预置 root pin,NtrsA 出示 root 签发的 NodeCertificate + 签名握手,A 验证;支持根证书轮换(泄漏可换)。详见独立的 **NTRS 认证 spec**(nat.md §8.3.2)。
+- **A → NtrsB(跨服务,单包 CONNECT)= 不认证**:单包做不了握手,**不靠认证、靠 `rendezvous_id`(关联)+ M1/M2/M3(§12 DoS)替代**。这也是这两者存在的根本原因。跨 NtrsB 这条腿的网络 MITM 不设防(与首期 peer 无身份/不抗 MITM 一致)。
+
 ```
         NAT 探测协同
    NtrsA  ⇄⇄⇄⇄⇄  NtrsB
@@ -476,7 +480,7 @@ HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acke
 
 **反射向量**:A→NtrsB 是单包、源地址可伪造。攻击者伪造源=受害者发 CONNECT(dst_pid=真实节点 B),可使 ① NtrsB 回复打向受害者、② NtrsB 转发后 **B 朝受害者打洞**(新向量)、③ 打洞天生要"验证地址前先发包"违反反放大。
 
-**首期不用 token**:反射已被 M1+M2+M3 兜住,token 边际价值小(不做地址验证、可被盗重放),身份/认证统一归 crypto spec(逐请求签名)。**NtrsB 首期为开放 rendezvous**,只靠下面三道 + B 端 accept/上限防护。
+**首期不用 DoS token**:反射已被 M1+M2+M3 兜住,DoS token(NTRS 认证节点)边际价值小(不做地址验证、可被盗重放)。**注意区分两种"认证"**:① **home NtrsA 是认证的**(A 验 NtrsA,自签 Ed25519 根,§3 + NTRS 认证 spec);② **跨服务 A→NtrsB 单包不认证**——这条腿 rendezvous_id + 下面 M1/M2/M3 就是它的替代,NtrsB 对 A 呈**开放 rendezvous**。peer 身份/逐请求签名归 crypto spec。
 
 **M1 — 消除 off-NtrsB 放大**
 CONNECT 填充到 **≥ NtrsB 回复大小** → 反射 off NtrsB 放大 **≤1**,反射无收益。

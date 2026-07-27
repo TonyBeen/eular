@@ -50,7 +50,8 @@
 |---|---|---|
 | **utp-core**(现有传输基线) | 01/02/03/04/05/06/09/11/12 | 已实现,本次反推为需求 |
 | **punch / fast-connect**(`2026-07-24-libutp-ntrs-fast-connect-design.md`) | 在 core 之上新增 CONNECT/FrameConnect/rendezvous/打洞/方向/NAT;**依赖并修改** 02/07/08/09/10/11 | 设计定稿,待与 core 对齐(见 §4 冲突) |
-| **crypto**(后续) | 扩展 10:身份/Ed25519/显式 Finished/加密 0-RTT 放行/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现) | 未开始 |
+| **NTRS 认证**(新,= nat.md §8.3.2) | **home NtrsA↔节点**的自签 Ed25519 根认证 + NodeCertificate + 根证书轮换;跨 NtrsB 单包不认证(靠 rendezvous_id + DoS)。扩展 10 的身份原语 | 待起草 |
+| **crypto**(后续) | 扩展 10:**peer 身份**/Ed25519/显式 Finished/加密 0-RTT 放行/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现) | 未开始 |
 | **relay**(后续) | 双对称 / UDP 阻断兜底转发 | 未开始 |
 
 **punch spec 里"复用现有 X"→ 对齐到 core 需求条目**:
