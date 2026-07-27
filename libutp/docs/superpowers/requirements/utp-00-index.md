@@ -2,6 +2,8 @@
 
 - 日期:2026-07-27
 - 来源:反推自 `cpp/`(**代码为唯一 ground truth**),`doc/` 仅交叉参考。
+- **目标已定:用 C11 在 `c/` 重写传输核心**(不再改 `cpp/`),再 C++ 薄封装。本 12 份需求 = **C 要复刻的行为蓝图**,非 cpp 补丁清单。
+- **单一入口见 [`../00-C-IMPLEMENTATION-ROADMAP.md`](../00-C-IMPLEMENTATION-ROADMAP.md)**(总纲 + 决策汇总 + 迁移顺序 + P0–P3 分期)。
 - 目的:把现有 utp 实现落成需求基线,消除 punch spec 里"复用现有 X"的二义性,并给出统一 spec 拆分。
 
 ---
@@ -69,11 +71,11 @@
 
 ---
 
-## 4. 跨模块冲突 / punch↔code 必须收口项(← 二义性来源,实现前解决)
+## 4. C 实现内建决策(原 punch↔cpp 冲突,现为 C 重写的设计约束)
 
-> 这些是反推的核心价值:把 punch spec 里"想当然复用"与"代码现状"的分歧显式化。
+> 这些原是"反推后发现 punch spec 想当然复用 与 cpp 现状的分歧"。**方向改为 C 重写后,它们不再是"改 cpp"任务,而是 C 实现从一开始就要内建的设计决策**。汇总权威表见 [总纲 §5.1](../00-C-IMPLEMENTATION-ROADMAP.md)。
 
-**处置状态(2026-07-27)**:C1 ✅ 去 SO_REUSEPORT / C2 ✅ 定 A(HandshakeDone 驱动 promote)/ C3 ✅ 3×MTU+按候选地址 / C4 ✅ floor 1280 / C5 ✅ 直接返码(0=成功、错误码<0、断连/拒绝也负值)。**5 个冲突全部收口**,已回写 punch spec。
+**决策状态(2026-07-27,全部定稿)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ HandshakeDone 帧驱动 promote+connected / C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**,"须"改为 **C 实现要内建的目标**。
 
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
@@ -118,8 +120,9 @@
 
 ---
 
-## 6. 下一步
+## 6. 下一步(C 迁移,详见 [总纲 §4/§7](../00-C-IMPLEMENTATION-ROADMAP.md))
 
-1. **收口 C1–C5**(punch↔code 冲突),更新 punch spec 使其引用与 core 需求一致。
-2. 将 utp-core 的 9 份需求按需再收敛(或直接作为 core 基线 spec)。
-3. crypto / relay 各自另立 spec(依赖 utp-10 / 07)。
+1. **C1–C5 已定稿并内建进总纲 §5.1**,实现时照做,无需再"收口 cpp"。
+2. **立即下一步 = 迁移第 2 步 proto 模块**(包头 + 帧编解码,总纲 §7 的 task #13–#19):纯值模块、零分配、可单测。
+3. 之后按迁移顺序:地址/时间 → crypto 封装 → socket/事件循环/拥塞/MTU → stream/connection/context。
+4. crypto / relay 各自另立 spec(依赖 utp-10 / 07);punch(P1)在 connection/context 就绪后叠加。
