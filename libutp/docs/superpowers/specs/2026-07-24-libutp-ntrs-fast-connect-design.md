@@ -546,7 +546,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 
 **反推 utp 现有实现后新增的待定项(见 `requirements/utp-00-index.md` §4):**
 - **C2 [已定 = A] connected 触发 / HandshakeDone**:对齐现有代码——**server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote+connected**,HandshakeDone 前的数据 buffer+回放(§4.3/§10.1)。放弃"任一非 Initial 包即 promote"(依赖流重组+HandshakeDone 重传两层隐含正确、且漏 HandshakeDelay,收益边际)。`RendezvousPending` 复用现有 `PendingIncomingConnection` 模式,几乎不改现有 promote 代码。
-- **C5 [待定] 公共 API 返回值语义**:现状 `成功0/失败-1 + utp_get_last_error()`(POSIX 式)。建议改**直接返错误码 + 出参**(对齐 c/ 迁移 ERRORS.md);属全公共 API 范围改动,非仅 punch。**待定。**
+- **C5 [已定 = A] 公共 API 返回值语义**:改**直接返错误码 + 出参**(对齐 c/ 迁移 `ERRORS.md`),废弃 `NormalizePublicStatus` 的 0/-1 归一。**约定:`0` = 成功;所有错误码 **< 0(负值)**;`> 0` 仅用于返值接口(如 `createStream` 返流 ID)。**断连/拒绝等经回调抛出的错误(`OnConnectError` code、`OnClosed`/ConnectionClose reason、`OnNewConnection` 拒绝)也统一为负值**。`errno.h` 全部 `UTP_ERR_*` 需从当前正值(如 `0x0010`)改为负值;连接关闭 reason 的**线上表示可仍为无符号,在抛给应用时映射为负错误码**。属全公共 API 范围改动(utp-12),非仅 punch;punch 的 `connect0Rtt` 等按此返负码 + 出参。
 - 已定并已回写:C1(去 SO_REUSEPORT,§6.1/§11)、C3(3×MTU + 按候选地址额度,§12/§11)、C4(MTU floor 1280,§6.7/§12/§16)。
 
 ---

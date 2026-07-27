@@ -72,7 +72,7 @@
 
 > 这些是反推的核心价值:把 punch spec 里"想当然复用"与"代码现状"的分歧显式化。
 
-**处置状态(2026-07-27)**:C1 ✅ 去 SO_REUSEPORT / C2 ✅ 定 A(HandshakeDone 驱动 promote)/ C3 ✅ 3×MTU+按候选地址 / C4 ✅ floor 1280 / C5 ⏸ 待定(直接返码 vs POSIX)。已定项已回写 punch spec。
+**处置状态(2026-07-27)**:C1 ✅ 去 SO_REUSEPORT / C2 ✅ 定 A(HandshakeDone 驱动 promote)/ C3 ✅ 3×MTU+按候选地址 / C4 ✅ floor 1280 / C5 ✅ 直接返码(0=成功、错误码<0、断连/拒绝也负值)。**5 个冲突全部收口**,已回写 punch spec。
 
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
