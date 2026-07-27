@@ -20,7 +20,9 @@
 - **peer↔peer 身份 / 抗主动 MITM** → crypto spec。
 - **客户端认证**(NtrsA 认证节点):首期只单向;NtrsA 认证节点靠已认证信道内的 access 凭据,或后补 mTLS/客户端签名(§8)。
 
-**为什么单向优先**:NTRS 是固定已知服务,节点验它成本低(一个 root pin)、收益高;双向要设备密钥管理,首期不必。
+**为什么单向优先**:NTRS 是固定已知服务,节点验它成本低(一个 root pin)、收益高;双向要设备密钥管理,**节点数量大,双向浪费资源和时间**,首期不必。
+
+**安全定位(重要)**:**P2P 只需弱安全**——不追求 TLS/X.509 级别的强保证。故:只做自签 Ed25519 profile(**不支持 TLS**,生态过重、不适合 P2P);只单向;跨 NtrsB / peer 身份等更强的保证按需下沉到各自 spec。本 spec 的目标是"以最小代价挡住冒充 home NTRS"。
 
 ---
 
@@ -101,7 +103,7 @@ h_server_finished  = SHA256("libutp-ntrs-server-finished-v1"  ‖ CH ‖ SH ‖ 
 1. **节点验签必须用本地保存的 `CH` 原始字节重建 `h_server_signature`**;NtrsA **不得回显** ClientHello,节点**不得**接受任何回显副本作为验签输入。——这是"服务端签名绑定客户端临时公钥/随机数/CID/profile/cipher/服务身份"的必要条件,防 MITM 替换。
 2. 节点先验 **NodeCertificate**:`service_id == 本地期望`、有效期(`not_before/not_after`)、`root_signature` 由预置 root pin 验过;再用 `node_ed25519_public_key` 验 ServerHello 的 `server_signature`。
 3. 节点要求 ServerHello 的 `profile`、`selected_cipher_suite` == 本地预期值。
-4. **profile 由受保护配置在发包前固定选定,对端无协商/切换权**;收到非预期 profile/TLS 版本/cipher → 关闭,**绝不尝试另一 profile 或明文回退**。
+4. **profile 由受保护配置在发包前固定选定(当前只有 Ed25519 一种),对端无协商/切换权**;收到非预期 profile/cipher → 关闭,**绝不明文回退**。
 
 ### 3.4 密钥派生(channel-binding)
 ```text
@@ -128,7 +130,7 @@ Ed25519 私钥只用于签名;X25519 临时私钥每连接新建、结束清零;
 
 - node↔NtrsA 是一条 **utp 连接,MUST 用 ENCRYPTED 模式**(复用现有 X25519+HKDF+AES-GCM 数据面,utp-10),NTRS 认证是**叠加在其握手上的服务端认证层**。
 - 消息映射:ClientHello=Initial、ServerHello=Handshake、FinishedC 随 HandshakeDone、FinishedS 为 NtrsA→node 的一个控制帧。
-- **新增帧**(承载认证材料;首期只在 NTRS 连接使用):
+- **新增帧(定案)**:X25519 继续走现有 `kFrameCrypto`(不动),**NodeCertificate/签名/Finished 走新增专用帧**。理由:`kFrameCrypto` 在**直连/打洞/NTRS 所有加密连接共用**,改其格式波及全局;而 NTRS 认证材料**只在直连 NTRS 连接出现**(打洞路径没有),新增帧最干净、隔离。
   - `kFrameNtrsClientHello`(service_id/profile/nonce_c/cipher;client_eph 复用现有 `kFrameCrypto` 的 32B X25519)
   - `kFrameNtrsServerAuth`(NodeCertificate + server_signature + nonce_s)
   - `kFrameNtrsFinished`(FinishedC / FinishedS,方向区分)
@@ -151,7 +153,7 @@ Ed25519 私钥只用于签名;X25519 临时私钥每连接新建、结束清零;
 - **peer↔peer 身份/抗 MITM**:crypto spec。
 - **DNS/IP 不是信任根**:名字只用于拿 endpoint;信任只来自预置 root pin + `service_id` 期望。
 - **客户端认证首期不做**:节点验 NtrsA 是单向;NtrsA 认证节点靠已认证信道内 access 凭据(见 §8)。
-- **TLS 1.3 profile(nat.md §8.3.1)= 二选一的另一套**:配了任一 profile 后验证失败必须关闭,绝不退回明文或另一 profile。本 spec 选自签 Ed25519 profile。
+- **不支持 TLS 1.3 profile**:TLS/X.509 生态过重,不适合 P2P;**P2P 只需弱安全**——本 spec 只做自签 Ed25519 profile。验证失败必须关闭,**绝不退回明文**。
 
 ---
 
@@ -180,7 +182,7 @@ Ed25519 私钥只用于签名;X25519 临时私钥每连接新建、结束清零;
 - **信任根**:未预置 root / root 不匹配 / 过期 NodeCertificate / 错 `service_id` → 全部失败关闭。
 - **MITM**:篡改 ClientHello 字段后验签(节点用本地 CH 验)必须失败;NodeCertificate 被换、签名按不同 ClientHello 生成 → 拒。
 - **Finished**:FinishedC 篡改/重放/抢先/与另一连接交换,FinishedS 未覆盖已验 FinishedC → 拒。
-- **降级**:profile/cipher/TLS 版本被替换/剥离/降明文 → 关闭,不自动重试到另一模式。
+- **降级**:profile/cipher 被替换/剥离/降明文 → 关闭,不自动重试到另一模式。
 - **轮换**:`{old,new}` 并存期新旧节点密钥都能连;紧急切 `{new}` 后 old 认证连接被关。
 - **DNS 投毒**:DNS 指向攻击者 IP,攻击者无 root 签发 NodeCertificate → 握手失败。
 - **不泄露**:日志/抓包/指标不含 root/node private key、shared secret、Finished key。
