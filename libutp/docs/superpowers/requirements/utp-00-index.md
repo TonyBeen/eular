@@ -72,6 +72,8 @@
 
 > 这些是反推的核心价值:把 punch spec 里"想当然复用"与"代码现状"的分歧显式化。
 
+**处置状态(2026-07-27)**:C1 ✅ 去 SO_REUSEPORT / C2 ⏸ 待讨论 / C3 ✅ 3×MTU+按候选地址 / C4 ✅ floor 1280 / C5 ⏸ 待定(直接返码 vs POSIX)。已定项已回写 punch spec。
+
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
 - punch §6.1 假设"连接态不用 SO_REUSEPORT、同 Context 不同端口"以保证 `(IP+端口+scid)` 解复用不被内核负载均衡打乱。

@@ -209,7 +209,7 @@ FrameConnect {
 - **不同主机**各自生成相同 scid → 直连 Initial(dcid=0)按 **`(对端 IP+端口 + scid)`** 解复用(`context_impl.cpp:1819` 含 ip 与 port),地址不同天然区分;握手后按**本端分配的 cid** 解复用。
 - **同一主机的多个 Context** → 各绑**不同 UDP 端口**,`(IP+端口)` 不同 → 即便 scid 相同也不冲突。
 - **同一 Context 内**对同一对端的多条连接 → 由 scid 本地去重("重生成直到 `cid!=0` 且不在本地连接表")保证唯一。
-- **实现约束**:连接态 socket **不用 `SO_REUSEPORT`**——端口复用会把一个 Context 的包投递到另一个 Context/线程,破坏 `(IP+端口)` 解复用。
+- **实现约束**:**去掉 `socket/udp.cpp:225` 无条件 `SO_REUSEPORT`**——它启用多 socket 同端口 + 内核负载均衡,会把一个 Context 的包投递到另一个 Context/线程,破坏 `(IP+端口)` 解复用。UDP 端口 `close()` 后立即释放,顺序 rebind 同端口无需该选项;若需应对"旧 socket 未关就 rebind"的竞态,用 `SO_REUSEADDR`(不带负载均衡),不用 REUSEPORT。
 
 ### 6.2 归并键 = `rendezvous_id`(128 位),CID 只做 transport demux
 
@@ -317,7 +317,7 @@ B:  收 Handshake → 确认/学到 A_cid → 握手完成 → B 应用得 OnNew
 
 候选一多(多网卡 host-local + 对称的 predicted 端口)握手包超 MTU → 分片/丢弃 → 连不上。
 
-1. **保守 MTU floor = 1200 字节(可配)**:握手/打洞/CONNECT 全部 ≤ 1200,**置 DF 不分片**(取 IPv6 min 1280 的安全值,IPv4 亦安全,同 QUIC)。连接建立后由**现有 PLPMTUD(`src/mtu/`)向上探测**;握手阶段不探、固定用 floor。
+1. **保守 MTU floor = 1280 字节(可配)**:握手/打洞/CONNECT 全部 ≤ 1280(IPv6 min,与现有 `connect0Rtt` 单包上限 1280 一致),**置 DF 不分片**。连接建立后由**现有 PLPMTUD(`src/mtu/`)向上探测**(1280→1400→1500);握手阶段不探、固定用 floor。
 2. **候选数上限,按优先级保留**(高→低):① **与 Ntrs 通信/NAT 探测所用的本地 IP**(连接 socket 绑定、srflx 已确认——多宿主机发往不同目的可能走不同出口,但只有它确认可用、映射已知,**最可信**);② 其余 host-local(去重、排除 loopback/link-local);③ srflx(v4/v6 各留);④ predicted 端口(对称,≤16)。**host-local 合计 ≤8**;总量受 MTU 预算约束,**不足时从低优先(predicted)先砍**,保住高优先 host-local + srflx。
 3. **截断不静默**:超限按优先级丢弃并 **log 丢了哪些**(no silent caps),诊断可见。
 4. **并发扇出 = 候选数**:候选已 capped(一二十个),首轮全并发即受控,无需额外 stagger。
@@ -453,7 +453,9 @@ HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acke
   - 两 case 都在握手完成后向 B 应用抛 `OnNewConnection`。
 - `ConnectAttempt`(新):管理多目标子路径、rendezvous_id、A_cid、send state 共享、路由提交与迁移、去重、竞速取消、CONNECT 重发/幂等(§4.2)。
 - 打洞/握手定时器:首包 sub-RTO 小突发 + 退避,重传兼作打洞重试。
-- **反放大 credit 常量(全局,非 rendezvous-only)**:`kPathValidationSendCredit` 由 **256 改为 `3×MTU`(~3600)**(§12 M2)。影响直连也影响打洞,但直连侧 3× 项主导、几乎不触发 credit floor,行为近似 no-op。
+- **反放大 credit 常量(全局,非 rendezvous-only)**:`kPathValidationSendCredit` 由 **256 改为 `3×MTU`**(§12 M2)。影响直连也影响打洞,但直连侧 3× 项主导、几乎不触发 credit floor,行为近似 no-op。
+- **反放大按候选地址跟踪(punch 新增)**:现有 `m_bytesIn/m_bytesOut` 是整连接累计;punch 多候选须**按候选地址分别记收/发字节**、各自独立额度(§12 M2)。直连保持整连接模型。
+- **去掉无条件 `SO_REUSEPORT`(`socket/udp.cpp:225`)**:它启用多 socket 同端口负载均衡,破坏 `(IP+端口)` 解复用(C1)。UDP 顺序 rebind 无需该选项;竞态用 `SO_REUSEADDR` 替代。
 
 **新增模块**
 - `RendezvousClient`(对 NtrsB 发单 datagram CONNECT + 短 PTO 重发 + 解析回复)。
@@ -480,8 +482,9 @@ CONNECT 填充到 **≥ NtrsB 回复大小** → 反射 off NtrsB 放大 **≤1*
 
 **M2 — 按地址有界发送(复用现有 3× 反放大)**
 未验证路径上 **`已发字节 ≤ 3 × 已收字节 + credit`**(现有 `connection_impl.cpp:2942` 的 `m_bytesOut ≤ m_bytesIn*3 + kPathValidationSendCredit`,`needPathValidation()` 门控,超限 `UTP_ERR_PATH_VALIDATION_BLOCKED`)。
-- **credit 统一 `3 × MTU`(~3600)**,直连/打洞 ACTIVE/PASSIVE 一个常量(把现有 `kPathValidationSendCredit` 从 256 改为 3×MTU)。够打洞 ACTIVE 发 1 Initial + 2 次重传;直连侧 3× 项主导、几乎不触发 credit floor,近似 no-op。
-- **只由"来自该候选地址的可验证回包"(PATH_RESPONSE / 可解密握手)解除**;解除后放开激进重传。off-B 反射上限 ≈ 3×MTU/每 CONNECT(攻击者每次先付 ~1200 填充 CONNECT → 放大 ≈3×)。
+- **credit 统一 `3 × MTU`(~3840,MTU=1280)**,直连/打洞 ACTIVE/PASSIVE 一个常量(把现有 `kPathValidationSendCredit` 从 256 改为 3×MTU)。够打洞 ACTIVE 发 1 Initial + 2 次重传;直连侧 3× 项主导、几乎不触发 credit floor,近似 no-op。
+- **按候选地址独立额度(punch 新增)**:现有 `m_bytesIn/m_bytesOut` 是**整连接累计**(旧版直连单路径,够用);**punch 多候选必须按候选地址分别跟踪收/发字节**,每个未验证候选地址各有独立 `3×收+credit` 额度,避免一个候选的收发额度被用到打向另一个(可能是受害者)候选。直连保持整连接模型。
+- **只由"来自该候选地址的可验证回包"(PATH_RESPONSE / 可解密握手)解除**该地址额度;解除后放开激进重传。off-B 反射上限 ≈ 3×MTU/每 CONNECT(攻击者每次先付 ~1280 填充 CONNECT → 放大 ≈3×)。
 
 **M3 — 限速 + 上限(去 token 后的追责层)**
 NtrsB 按三键限速 + B 端 pending 上限:
@@ -540,6 +543,11 @@ NtrsB 按三键限速 + B 端 pending 上限:
 - **H3 — token**:讨论后决定**首期直接去掉 token**(反射已由 M1+M2+M3 兜住,token 边际价值小且不做地址验证/可被盗重放)。身份/认证/抗重放统一归 crypto spec 的逐请求签名;CONNECT 保留可选 token 字段作前向兼容 hook。见 §12。
 - **H4 — M2 预算量级**:统一 `credit = 3×MTU`,复用现有 3× 反放大。见 §12。
 
+**反推 utp 现有实现后新增的待定项(见 `requirements/utp-00-index.md` §4):**
+- **C2 [待讨论] connected 触发 / HandshakeDone 方向**:代码实际是 **HandshakeDone(client→server)驱动惰性建被动连接**(`context_impl.cpp:1608`),非 §4.3 现写的"第一个非 Initial 包"。二选一:punch 对齐 HandshakeDone,或把代码泛化为"任一非 Initial 包";并厘清 `initPassive` 立即置 Connected 与半连接语义。**待定。**
+- **C5 [待定] 公共 API 返回值语义**:现状 `成功0/失败-1 + utp_get_last_error()`(POSIX 式)。建议改**直接返错误码 + 出参**(对齐 c/ 迁移 ERRORS.md);属全公共 API 范围改动,非仅 punch。**待定。**
+- 已定并已回写:C1(去 SO_REUSEPORT,§6.1/§11)、C3(3×MTU + 按候选地址额度,§12/§11)、C4(MTU floor 1280,§6.7/§12/§16)。
+
 ---
 
 ## 16. 参数默认值(建议,可调)
@@ -548,7 +556,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 
 | 参数 | 建议默认 | 出处 |
 |---|---|---|
-| 握手/打洞包 MTU floor | 1200(置 DF) | §6.7 |
+| 握手/打洞包 MTU floor | 1280(置 DF,IPv6 min) | §6.7 |
 | M2 反放大 credit(`kPathValidationSendCredit`) | 3×MTU(~3600) | §12 |
 | host-local 候选上限 / predicted 端口上限 | 8 / 16 | §6.7 |
 | keepalive 间隔 / probes / timeout | ~15s / 3 / 1500ms | §6.9 |
