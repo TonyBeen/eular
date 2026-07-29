@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(libutp_c VERSION 1.0.0 LANGUAGES C)
+project(libutp_c VERSION 1.0.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -8,33 +8,75 @@ option(UTP_C_BUILD_TESTS "Build libutp C migration tests" ON)
 option(UTP_C_BUILD_BENCHMARKS "Build libutp C migration benchmarks" OFF)
 option(UTP_C_ENABLE_FORMAT_CHECK "Run the clang-format gate during the default build" OFF)
 
+set(UTP_C_LIBEVENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../libevent/libevent_V2_1_10" CACHE PATH
+    "Path to the C libevent source tree")
+if(NOT EXISTS "${UTP_C_LIBEVENT_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "C libevent source tree not found: ${UTP_C_LIBEVENT_ROOT}")
+endif()
+set(EVENT__DISABLE_TESTS ON CACHE BOOL "Disable libevent tests for the libutp C build")
+set(EVENT__LIBRARY_TYPE STATIC CACHE STRING "Build libevent as a static library")
+add_subdirectory("${UTP_C_LIBEVENT_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/libevent-core" EXCLUDE_FROM_ALL)
+
+set(UTP_C_BORINGSSL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../3rd/boringssl" CACHE PATH
+    "Path to the bundled BoringSSL source tree")
+if(NOT EXISTS "${UTP_C_BORINGSSL_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "BoringSSL source tree not found: ${UTP_C_BORINGSSL_ROOT}")
+endif()
+set(_utp_c_build_testing "${BUILD_TESTING}")
+set(BUILD_TESTING OFF CACHE BOOL "Disable BoringSSL tests for the libutp C build" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build BoringSSL statically for the libutp C build" FORCE)
+set(INSTALL_ENABLED OFF CACHE BOOL "Disable BoringSSL installation for the libutp C build" FORCE)
+add_subdirectory("${UTP_C_BORINGSSL_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/boringssl" EXCLUDE_FROM_ALL)
+set(BUILD_TESTING "${_utp_c_build_testing}" CACHE BOOL "Build CTest targets" FORCE)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(utp_c STATIC
     src/allocator.c
+    src/ack.c
+    src/address.c
     src/buffer.c
+    src/crypto.c
     src/error.c
+    src/event_loop.c
+    src/frame.c
     src/hash.c
     src/log.c
     src/range_set.c
     src/ring.c
     src/status.c
+    src/time.c
+    src/udp.c
+    src/proto.c
     src/utp.c
     include/utp/log.h
     include/utp/status.h
     include/utp/utp.h
     src/internal/allocator.h
+    src/internal/ack.h
+    src/internal/address.h
     src/internal/buffer.h
+    src/internal/crypto.h
     src/internal/error.h
+    src/internal/event_loop.h
+    src/internal/frame.h
     src/internal/hash.h
     src/internal/log.h
     src/internal/range_set.h
     src/internal/ring.h
+    src/internal/time.h
+    src/internal/udp.h
+    src/internal/proto.h
+    src/internal/wire.h
 )
 
 add_library(eular::utp_c ALIAS utp_c)
+target_link_libraries(utp_c PRIVATE event_core crypto)
 
 target_compile_features(utp_c PUBLIC c_std_11)
 
@@ -79,6 +121,34 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
         target_compile_options(utp_c_public_api_test PRIVATE /W4 /WX)
     endif()
     add_test(NAME utp_c_public_api_test COMMAND utp_c_public_api_test)
+    add_executable(utp_c_proto_test test/test_proto.cc)
+    target_link_libraries(utp_c_proto_test PRIVATE utp_c)
+    target_include_directories(utp_c_proto_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(utp_c_proto_test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2
+        )
+    elseif(MSVC)
+        target_compile_options(utp_c_proto_test PRIVATE /W4 /WX)
+    endif()
+    add_test(NAME utp_c_proto_test COMMAND utp_c_proto_test)
+    add_executable(utp_c_crypto_test test/test_crypto.cc)
+    target_link_libraries(utp_c_crypto_test PRIVATE utp_c)
+    target_include_directories(utp_c_crypto_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(utp_c_crypto_test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2
+        )
+    elseif(MSVC)
+        target_compile_options(utp_c_crypto_test PRIVATE /W4 /WX)
+    endif()
+    add_test(NAME utp_c_crypto_test COMMAND utp_c_crypto_test)
 endif()
 
 if(UTP_C_BUILD_BENCHMARKS)
@@ -101,23 +171,42 @@ set(UTP_C_FORMAT_SOURCES
     include/utp/status.h
     include/utp/utp.h
     src/allocator.c
+    src/ack.c
+    src/address.c
     src/buffer.c
+    src/crypto.c
     src/error.c
+    src/event_loop.c
+    src/frame.c
     src/hash.c
     src/log.c
     src/range_set.c
     src/ring.c
     src/status.c
+    src/time.c
+    src/udp.c
+    src/proto.c
     src/utp.c
     src/internal/allocator.h
+    src/internal/ack.h
+    src/internal/address.h
     src/internal/buffer.h
+    src/internal/crypto.h
     src/internal/error.h
+    src/internal/event_loop.h
+    src/internal/frame.h
     src/internal/hash.h
     src/internal/log.h
     src/internal/range_set.h
     src/internal/ring.h
+    src/internal/time.h
+    src/internal/udp.h
+    src/internal/proto.h
+    src/internal/wire.h
     test/test_core.c
     test/test_public_api.c
+    test/test_crypto.cc
+    test/test_proto.cc
 )
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format

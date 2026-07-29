@@ -7,7 +7,8 @@ adaptation explicit and is normative for `c/` production code and tests.
 ## Mechanical Rules
 
 - Source must be formatted with the local `.clang-format`, whose base style is
-  Google. The column limit is 80 and indentation is two spaces.
+  Google. The column limit is 120 and indentation is four spaces (tabs never
+  used); these override the Google defaults of 80 columns and two spaces.
 - All production code must compile as C11 with extensions disabled and the
   warning set configured in `CMakeLists.txt`; warnings are errors.
 - Use `snake_case` for functions and variables, `_t` only for public types,
@@ -24,7 +25,15 @@ adaptation explicit and is normative for `c/` production code and tests.
   idempotent cleanup path. Initialization failure leaves its output object
   cleared and safe to clean up.
 - Production code obtains memory only through `utp_allocator_t`. Benchmarks
-  and test fixtures may use libc allocation directly.
+  and test fixtures may use libc allocation directly. Libevent and BoringSSL
+  are narrow third-party exceptions: libevent owns allocations behind a
+  process-global allocator hook with no per-Context user data; BoringSSL may
+  own opaque provider state during crypto initialization. `crypto.c` must
+  allocate the `EVP_AEAD_CTX` object itself through `utp_allocator_t`, and
+  neither dependency may allocate in packet send/receive paths. Do not emulate
+  Context-specific routing with mutable global state. A future Context may
+  instead accept an externally owned `event_base`, or establish one documented
+  process-wide allocator before any libevent initialization.
 - Every externally supplied buffer is `(pointer, length)`; every output buffer
   has an explicit capacity. Never rely on NUL termination for network data.
 - Recoverable public errors return `utp_status_t`; private code returns the
@@ -51,7 +60,9 @@ adaptation explicit and is normative for `c/` production code and tests.
 
 - Prefer small interfaces with one responsibility. Do not add a general
   container, abstraction, or callback layer without at least two concrete
-  protocol consumers.
+  protocol consumers. The `event_loop` adapter is the selected libevent C API
+  integration point for the forthcoming Context and is an explicit foundation
+  exception while that consumer is being implemented.
 - Keep policy in Context/Connection and mechanism in small testable modules.
   Protocol state changes must be explicit enums with checked transitions.
 - Changes to parsing, allocation, crypto, retransmission, or indexing require
