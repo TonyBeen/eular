@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "internal/error.h"
+#include "internal/receive_history.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,8 @@ typedef struct utp_ack_info {
     size_t           range_capacity;
 } utp_ack_info_t;
 
+utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t *ack, const utp_receive_history_t *history,
+                                                  uint64_t now, size_t max_ranges);
 utp_internal_error_t utp_ack_encode(uint8_t *buffer, size_t capacity, const utp_ack_info_t *ack,
                                     uint8_t ack_delay_exponent, size_t *encoded_length);
 utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, size_t frame_length,

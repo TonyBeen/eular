@@ -6,6 +6,48 @@
 #include "internal/proto.h"
 #include "internal/wire.h"
 
+utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t *ack, const utp_receive_history_t *history,
+                                                  uint64_t now, size_t max_ranges) {
+    uint64_t largest_received_at;
+    size_t   range_count;
+    size_t   index;
+
+    if (ack == NULL || history == NULL || max_ranges == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (max_ranges > UTP_ACK_MAX_RANGES) {
+        max_ranges = UTP_ACK_MAX_RANGES;
+    }
+    range_count = utp_receive_history_range_count(history);
+    if (range_count > max_ranges) {
+        range_count = max_ranges;
+    }
+    if (range_count != 0u && (ack->ranges == NULL || ack->range_capacity < range_count)) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+
+    if (range_count == 0u) {
+        ack->largest_acked = 0u;
+        ack->ack_delay     = 0u;
+        ack->range_count   = 0u;
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    for (index = 0u; index < range_count; ++index) {
+        const utp_receive_range_t *range = utp_receive_history_range_at(history, index);
+
+        if (range == NULL) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        ack->ranges[index].low  = range->low;
+        ack->ranges[index].high = range->high;
+    }
+    largest_received_at = utp_receive_history_largest_received_at(history);
+    ack->largest_acked  = utp_receive_history_largest(history);
+    ack->ack_delay      = now >= largest_received_at ? now - largest_received_at : 0u;
+    ack->range_count    = range_count;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static utp_internal_error_t utp_ack_range_length(const utp_ack_range_t *range, uint32_t *length) {
     uint64_t difference;
 

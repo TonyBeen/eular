@@ -37,194 +37,90 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(utp_c STATIC
-    src/allocator.c
-    src/ack.c
-    src/address.c
-    src/buffer.c
-    src/crypto.c
-    src/error.c
-    src/event_loop.c
-    src/frame.c
-    src/hash.c
-    src/log.c
-    src/range_set.c
-    src/ring.c
-    src/status.c
-    src/time.c
-    src/udp.c
-    src/proto.c
-    src/utp.c
-    include/utp/log.h
-    include/utp/status.h
-    include/utp/utp.h
-    src/internal/allocator.h
-    src/internal/ack.h
-    src/internal/address.h
-    src/internal/buffer.h
-    src/internal/crypto.h
-    src/internal/error.h
-    src/internal/event_loop.h
-    src/internal/frame.h
-    src/internal/hash.h
-    src/internal/log.h
-    src/internal/range_set.h
-    src/internal/ring.h
-    src/internal/time.h
-    src/internal/udp.h
-    src/internal/proto.h
-    src/internal/wire.h
+    src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
+    src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
+    src/receive_history.c src/utp.c
+    include/utp/log.h include/utp/status.h include/utp/utp.h
+    src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
+    src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
+    src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
+    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/wire.h
 )
 
 add_library(eular::utp_c ALIAS utp_c)
 target_link_libraries(utp_c PRIVATE event_core crypto)
-
 target_compile_features(utp_c PUBLIC c_std_11)
-
-target_include_directories(utp_c
-    PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-        "$<INSTALL_INTERFACE:include>"
-    PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
+target_include_directories(utp_c PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(utp_c PRIVATE
-        -Wall -Wextra -Wpedantic -Werror
-        -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2
-    )
+    target_compile_options(utp_c PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
+        -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
 elseif(MSVC)
     target_compile_options(utp_c PRIVATE /W4 /WX)
 endif()
 
+function(utp_c_configure_c_test target)
+    target_link_libraries(${target} PRIVATE utp_c)
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
+            -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -UNDEBUG)
+    elseif(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX /UNDEBUG)
+    endif()
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+function(utp_c_configure_cpp_test target)
+    target_link_libraries(${target} PRIVATE utp_c)
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2 -UNDEBUG)
+    elseif(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX /UNDEBUG)
+    endif()
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
 if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     add_executable(utp_c_api_test test/test_core.c)
-    target_link_libraries(utp_c_api_test PRIVATE utp_c)
-    target_include_directories(utp_c_api_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(utp_c_api_test PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2
-        )
-    elseif(MSVC)
-        target_compile_options(utp_c_api_test PRIVATE /W4 /WX)
-    endif()
-    add_test(NAME utp_c_api_test COMMAND utp_c_api_test)
+    utp_c_configure_c_test(utp_c_api_test)
     add_executable(utp_c_public_api_test test/test_public_api.c)
-    target_link_libraries(utp_c_public_api_test PRIVATE utp_c)
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(utp_c_public_api_test PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2
-        )
-    elseif(MSVC)
-        target_compile_options(utp_c_public_api_test PRIVATE /W4 /WX)
-    endif()
-    add_test(NAME utp_c_public_api_test COMMAND utp_c_public_api_test)
+    utp_c_configure_c_test(utp_c_public_api_test)
     add_executable(utp_c_proto_test test/test_proto.cc)
-    target_link_libraries(utp_c_proto_test PRIVATE utp_c)
-    target_include_directories(utp_c_proto_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
-    )
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(utp_c_proto_test PRIVATE
-            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2
-        )
-    elseif(MSVC)
-        target_compile_options(utp_c_proto_test PRIVATE /W4 /WX)
-    endif()
-    add_test(NAME utp_c_proto_test COMMAND utp_c_proto_test)
+    utp_c_configure_cpp_test(utp_c_proto_test)
     add_executable(utp_c_crypto_test test/test_crypto.cc)
-    target_link_libraries(utp_c_crypto_test PRIVATE utp_c)
-    target_include_directories(utp_c_crypto_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
-    )
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(utp_c_crypto_test PRIVATE
-            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2
-        )
-    elseif(MSVC)
-        target_compile_options(utp_c_crypto_test PRIVATE /W4 /WX)
-    endif()
-    add_test(NAME utp_c_crypto_test COMMAND utp_c_crypto_test)
+    utp_c_configure_cpp_test(utp_c_crypto_test)
+    add_executable(utp_c_receive_history_test test/test_receive_history.cc)
+    utp_c_configure_cpp_test(utp_c_receive_history_test)
 endif()
 
 if(UTP_C_BUILD_BENCHMARKS)
     add_executable(utp_c_container_benchmark benchmark/bench_containers.c)
-    target_link_libraries(utp_c_container_benchmark PRIVATE utp_c)
-    target_include_directories(utp_c_container_benchmark PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(utp_c_container_benchmark PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2
-        )
-    elseif(MSVC)
-        target_compile_options(utp_c_container_benchmark PRIVATE /W4 /WX)
-    endif()
+    utp_c_configure_c_test(utp_c_container_benchmark)
 endif()
 
 set(UTP_C_FORMAT_SOURCES
-    benchmark/bench_containers.c
-    include/utp/log.h
-    include/utp/status.h
-    include/utp/utp.h
-    src/allocator.c
-    src/ack.c
-    src/address.c
-    src/buffer.c
-    src/crypto.c
-    src/error.c
-    src/event_loop.c
-    src/frame.c
-    src/hash.c
-    src/log.c
-    src/range_set.c
-    src/ring.c
-    src/status.c
-    src/time.c
-    src/udp.c
-    src/proto.c
-    src/utp.c
-    src/internal/allocator.h
-    src/internal/ack.h
-    src/internal/address.h
-    src/internal/buffer.h
-    src/internal/crypto.h
-    src/internal/error.h
-    src/internal/event_loop.h
-    src/internal/frame.h
-    src/internal/hash.h
-    src/internal/log.h
-    src/internal/range_set.h
-    src/internal/ring.h
-    src/internal/time.h
-    src/internal/udp.h
-    src/internal/proto.h
-    src/internal/wire.h
-    test/test_core.c
-    test/test_public_api.c
-    test/test_crypto.cc
-    test/test_proto.cc
+    benchmark/bench_containers.c include/utp/log.h include/utp/status.h include/utp/utp.h
+    src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
+    src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
+    src/receive_history.c src/utp.c
+    src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
+    src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
+    src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
+    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/wire.h
+    test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
 )
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
-    HINTS
-        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
-        "/Library/Developer/CommandLineTools/usr/bin"
-)
+    HINTS "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+    "/Library/Developer/CommandLineTools/usr/bin")
 if(CLANG_FORMAT_EXECUTABLE)
-    add_custom_target(utp_c_format
-        COMMAND "${CLANG_FORMAT_EXECUTABLE}" -i --style=file ${UTP_C_FORMAT_SOURCES}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "Formatting libutp C sources"
-    )
-    add_custom_target(utp_c_format_check
-        COMMAND "${CLANG_FORMAT_EXECUTABLE}" --dry-run --Werror --style=file ${UTP_C_FORMAT_SOURCES}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "Checking libutp C source formatting"
-    )
+    add_custom_target(utp_c_format COMMAND "${CLANG_FORMAT_EXECUTABLE}" -i --style=file ${UTP_C_FORMAT_SOURCES}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" COMMENT "Formatting libutp C sources")
+    add_custom_target(utp_c_format_check COMMAND "${CLANG_FORMAT_EXECUTABLE}" --dry-run --Werror --style=file
+        ${UTP_C_FORMAT_SOURCES} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" COMMENT "Checking libutp C source formatting")
     if(UTP_C_ENABLE_FORMAT_CHECK)
         add_custom_target(utp_c_format_gate ALL DEPENDS utp_c_format_check)
     endif()
