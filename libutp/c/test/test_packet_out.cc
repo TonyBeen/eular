@@ -80,3 +80,13 @@ TEST_CASE("packet_out pool accepts a bucket sized at the uint16_t ceiling", "[pa
     REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
     utp_packet_out_pool_cleanup(&pool);
 }
+
+TEST_CASE("packet_out pool rejects malformed custom allocator with NULL function pointer", "[packet_out][pool]") {
+    allocation_tracker             tracker  = {};
+    utp_packet_out_pool_t          pool     = {};
+    utp_packet_out_bucket_config_t buckets[] = {{128u, 1u}};
+    utp_allocator_t                malformed_allocator = {nullptr, tracked_realloc, tracked_free, &tracker};
+
+    REQUIRE(utp_packet_out_pool_init(&pool, &malformed_allocator, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+}
+

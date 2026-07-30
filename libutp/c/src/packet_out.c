@@ -90,6 +90,9 @@ utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t *pool, const
     }
 
     pool->allocator = utp_allocator_resolve(allocator);
+    if (pool->allocator == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
     pool->structs   = utp_allocator_alloc(pool->allocator, struct_capacity * sizeof(utp_packet_out_t));
     if (pool->structs == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
