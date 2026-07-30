@@ -39,19 +39,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(utp_c STATIC
     src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
     src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
-    src/receive_history.c src/utp.c
+    src/receive_history.c src/packet_out.c src/utp.c
     include/utp/log.h include/utp/status.h include/utp/utp.h
     src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
     src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
     src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
-    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/wire.h
+    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/packet_out.h src/internal/wire.h
 )
 
 add_library(eular::utp_c ALIAS utp_c)
 target_link_libraries(utp_c PRIVATE event_core crypto)
 target_compile_features(utp_c PUBLIC c_std_11)
 target_include_directories(utp_c PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-    "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(utp_c PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
@@ -74,7 +74,8 @@ endfunction()
 
 function(utp_c_configure_cpp_test target)
     target_link_libraries(${target} PRIVATE utp_c)
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2 -UNDEBUG)
     elseif(MSVC)
@@ -94,6 +95,8 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     utp_c_configure_cpp_test(utp_c_crypto_test)
     add_executable(utp_c_receive_history_test test/test_receive_history.cc)
     utp_c_configure_cpp_test(utp_c_receive_history_test)
+    add_executable(utp_c_packet_out_test test/test_packet_out.cc)
+    utp_c_configure_cpp_test(utp_c_packet_out_test)
 endif()
 
 if(UTP_C_BUILD_BENCHMARKS)
@@ -105,12 +108,12 @@ set(UTP_C_FORMAT_SOURCES
     benchmark/bench_containers.c include/utp/log.h include/utp/status.h include/utp/utp.h
     src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
     src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
-    src/receive_history.c src/utp.c
+    src/receive_history.c src/packet_out.c src/utp.c
     src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
     src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
     src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
-    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/wire.h
-    test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
+    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/packet_out.h src/internal/wire.h
+    test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc test/test_packet_out.cc
 )
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
