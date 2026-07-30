@@ -117,3 +117,80 @@ utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t *pool, const
     pool->bucket_count = bucket_count;
     return UTP_INTERNAL_ERROR_OK;
 }
+
+static size_t choose_bucket(const utp_packet_out_pool_t *pool, uint16_t requested_size) {
+    size_t i;
+
+    for (i = 0u; i < pool->bucket_count; ++i) {
+        if (pool->buckets[i].size >= requested_size) {
+            return i;
+        }
+    }
+    return pool->bucket_count;
+}
+
+utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t *pool, uint16_t requested_size,
+                                                 utp_packet_out_t **out) {
+    size_t                         bucket_index;
+    utp_packet_out_bucket_t       *bucket;
+    utp_packet_out_buffer_node_t  *node;
+    utp_packet_out_t              *pkt;
+
+    if (pool == NULL || out == NULL || requested_size == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    bucket_index = choose_bucket(pool, requested_size);
+    if (bucket_index == pool->bucket_count) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    bucket = &pool->buckets[bucket_index];
+    if (TAILQ_EMPTY(&bucket->free_buffers) || TAILQ_EMPTY(&pool->free_structs)) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+
+    node = TAILQ_FIRST(&bucket->free_buffers);
+    TAILQ_REMOVE(&bucket->free_buffers, node, link);
+
+    pkt = TAILQ_FIRST(&pool->free_structs);
+    TAILQ_REMOVE(&pool->free_structs, pkt, po_next);
+
+    memset(pkt, 0, sizeof(*pkt));
+    pkt->loss_chain   = pkt;
+    pkt->raw_data     = node->data;
+    pkt->encrypt_data = node->data;
+    pkt->alloc_size   = bucket->size;
+    pkt->bucket_index = bucket_index;
+
+    *out = pkt;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+void utp_packet_out_pool_release(utp_packet_out_pool_t *pool, utp_packet_out_t *pkt) {
+    utp_packet_out_bucket_t *bucket;
+    uint8_t                 *raw_data;
+    uint8_t                 *encrypt_data;
+    uint16_t                 alloc_size;
+    size_t                   bucket_index;
+    size_t                   node_index;
+
+    if (pool == NULL || pkt == NULL) {
+        return;
+    }
+
+    raw_data     = pkt->raw_data;
+    encrypt_data = pkt->encrypt_data;
+    alloc_size   = pkt->alloc_size;
+    bucket_index = pkt->bucket_index;
+    bucket       = &pool->buckets[bucket_index];
+
+    memset(pkt, 0, sizeof(*pkt));
+    pkt->loss_chain   = pkt;
+    pkt->raw_data     = raw_data;
+    pkt->encrypt_data = encrypt_data;
+    pkt->alloc_size   = alloc_size;
+    pkt->bucket_index = bucket_index;
+    TAILQ_INSERT_TAIL(&pool->free_structs, pkt, po_next);
+
+    node_index = (size_t)(raw_data - bucket->storage) / bucket->size;
+    TAILQ_INSERT_TAIL(&bucket->free_buffers, &bucket->nodes[node_index], link);
+}

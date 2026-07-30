@@ -90,3 +90,95 @@ TEST_CASE("packet_out pool rejects malformed custom allocator with NULL function
     REQUIRE(utp_packet_out_pool_init(&pool, &malformed_allocator, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 }
 
+TEST_CASE("packet_out pool acquire selects the smallest bucket regardless of configuration order",
+          "[packet_out][acquire]") {
+    utp_packet_out_pool_t          pool      = {};
+    utp_packet_out_bucket_config_t buckets[] = {{512u, 1u}, {128u, 2u}};  // 故意乱序
+    utp_packet_out_t               *pkt_small = nullptr;
+    utp_packet_out_t               *pkt_large = nullptr;
+
+    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 4u, buckets, 2u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pkt_small->alloc_size == 128u);
+    REQUIRE(pkt_small->raw_data == pkt_small->encrypt_data);
+    REQUIRE(pkt_small->loss_chain == pkt_small);
+
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 200u, &pkt_large) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pkt_large->alloc_size == 512u);
+
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 9000u, &pkt_large) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    utp_packet_out_pool_cleanup(&pool);
+}
+
+TEST_CASE("packet_out pool acquire reports LIMIT when a bucket is exhausted without touching other buckets",
+          "[packet_out][acquire]") {
+    utp_packet_out_pool_t          pool        = {};
+    utp_packet_out_bucket_config_t buckets[]   = {{128u, 1u}, {512u, 1u}};
+    utp_packet_out_t               *pkt_small  = nullptr;
+    utp_packet_out_t               *pkt_small2 = nullptr;
+    utp_packet_out_t               *pkt_large  = nullptr;
+
+    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 4u, buckets, 2u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small2) == UTP_INTERNAL_ERROR_LIMIT);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 500u, &pkt_large) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pkt_large->alloc_size == 512u);
+
+    utp_packet_out_pool_cleanup(&pool);
+}
+
+TEST_CASE("packet_out pool acquire reports LIMIT when the struct pool is exhausted", "[packet_out][acquire]") {
+    utp_packet_out_pool_t          pool      = {};
+    utp_packet_out_bucket_config_t buckets[] = {{128u, 4u}};
+    utp_packet_out_t               *pkt1     = nullptr;
+    utp_packet_out_t               *pkt2     = nullptr;
+
+    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt1) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_LIMIT);
+
+    // 结构体池耗尽时不消耗缓冲区名额:release 后应能再次成功 acquire。
+    utp_packet_out_pool_release(&pool, pkt1);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_OK);
+
+    utp_packet_out_pool_cleanup(&pool);
+}
+
+TEST_CASE("packet_out pool release resets state but preserves the buffer for reuse", "[packet_out][release]") {
+    utp_packet_out_pool_t          pool      = {};
+    utp_packet_out_bucket_config_t buckets[] = {{128u, 1u}};
+    utp_packet_out_t               *pkt      = nullptr;
+    utp_packet_out_t               *pkt2     = nullptr;
+    uint8_t                        *original_raw_data;
+    uint16_t                        original_alloc_size;
+
+    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 2u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt) == UTP_INTERNAL_ERROR_OK);
+
+    pkt->po_flags         = UTP_PO_ENCRYPTED;
+    pkt->local_flags      = UTP_POL_LOSS;
+    pkt->frame_types      = 0xffu;
+    pkt->slice_count      = 3u;
+    pkt->frame_meta_count = 2u;
+    pkt->attempt_count    = 1u;
+    original_raw_data     = pkt->raw_data;
+    original_alloc_size   = pkt->alloc_size;
+
+    utp_packet_out_pool_release(&pool, pkt);
+    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(pkt2->raw_data == original_raw_data);
+    REQUIRE(pkt2->alloc_size == original_alloc_size);
+    REQUIRE(pkt2->po_flags == 0u);
+    REQUIRE(pkt2->local_flags == 0u);
+    REQUIRE(pkt2->frame_types == 0u);
+    REQUIRE(pkt2->slice_count == 0u);
+    REQUIRE(pkt2->frame_meta_count == 0u);
+    REQUIRE(pkt2->attempt_count == 0u);
+    REQUIRE(pkt2->loss_chain == pkt2);
+
+    utp_packet_out_pool_cleanup(&pool);
+}
+
