@@ -16,3 +16,6 @@
 [submodule "log/3rd_party/zlog"]
 	path = log/3rd_party/zlog
 	url = https://github.com/HardySimpson/zlog.git
+[submodule "libutp/3rd/libfiu"]
+	path = libutp/3rd/libfiu
+	url = https://github.com/albertito/libfiu.git
