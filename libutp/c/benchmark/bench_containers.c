@@ -7,8 +7,8 @@
 #include <time.h>
 #include <utp/utp.h>
 
-#include "internal/hash.h"
-#include "internal/range_set.h"
+#include "util/hash.h"
+#include "util/range_set.h"
 
 typedef struct benchmark_item {
     utp_hash_node_t node;

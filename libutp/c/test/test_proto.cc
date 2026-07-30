@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #endif
 
+#include <event2/event.h>
+
 #include <array>
 #include <catch2/catch.hpp>
 #include <cstdint>
@@ -16,15 +18,15 @@
 #include <vector>
 
 extern "C" {
-#include "internal/ack.h"
-#include "internal/address.h"
-#include "internal/error.h"
-#include "internal/event_loop.h"
-#include "internal/frame.h"
-#include "internal/proto.h"
-#include "internal/time.h"
-#include "internal/udp.h"
-#include "internal/wire.h"
+#include "context/event_loop.h"
+#include "proto/ack.h"
+#include "proto/frame.h"
+#include "proto/proto.h"
+#include "proto/wire.h"
+#include "socket/address.h"
+#include "socket/udp.h"
+#include "util/error.h"
+#include "util/time.h"
 }
 
 TEST_CASE("wire cursors encode and decode big endian integers", "[wire]") {
@@ -209,12 +211,14 @@ TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]") {
     utp_address_t                receiver_local = {};
     utp_event_loop_t             loop           = {};
     utp_event_t                  event          = {};
+    event_base                  *native_base    = event_base_new();
     utp_udp_socket_t             sender         = {};
     utp_udp_socket_t             receiver       = {};
     test_event_probe             probe          = {};
     size_t                       sent_length    = 0u;
 
-    REQUIRE(utp_event_loop_init(&loop) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(native_base != nullptr);
+    REQUIRE(utp_event_loop_init(&loop, native_base, nullptr, nullptr) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_address_parse(&loopback, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
     utp_udp_socket_init(&sender);
     utp_udp_socket_init(&receiver);
@@ -240,14 +244,17 @@ TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]") {
     utp_udp_socket_close(&receiver);
     utp_udp_socket_close(&sender);
     utp_event_loop_close(&loop);
+    event_base_free(native_base);
 }
 
 TEST_CASE("event loop dispatches a zero-delay one-shot timer", "[event]") {
-    utp_event_loop_t loop  = {};
-    utp_event_t      event = {};
-    test_event_probe probe = {};
+    utp_event_loop_t loop        = {};
+    utp_event_t      event       = {};
+    test_event_probe probe       = {};
+    event_base      *native_base = event_base_new();
 
-    REQUIRE(utp_event_loop_init(&loop) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(native_base != nullptr);
+    REQUIRE(utp_event_loop_init(&loop, native_base, nullptr, nullptr) == UTP_INTERNAL_ERROR_OK);
     utp_event_init(&event);
     REQUIRE(utp_event_add_timer(&loop, &event, 0u, false, test_event_probe_callback, &probe) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_event_loop_run_once(&loop, false) == UTP_INTERNAL_ERROR_OK);
@@ -255,14 +262,17 @@ TEST_CASE("event loop dispatches a zero-delay one-shot timer", "[event]") {
     REQUIRE((probe.events & UTP_EVENT_TIMEOUT) != 0u);
     utp_event_remove(&event);
     utp_event_loop_close(&loop);
+    event_base_free(native_base);
 }
 
 TEST_CASE("event loop rearms a pending timer without replacing its callback", "[event]") {
-    utp_event_loop_t loop  = {};
-    utp_event_t      event = {};
-    test_event_probe probe = {};
+    utp_event_loop_t loop        = {};
+    utp_event_t      event       = {};
+    test_event_probe probe       = {};
+    event_base      *native_base = event_base_new();
 
-    REQUIRE(utp_event_loop_init(&loop) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(native_base != nullptr);
+    REQUIRE(utp_event_loop_init(&loop, native_base, nullptr, nullptr) == UTP_INTERNAL_ERROR_OK);
     utp_event_init(&event);
     REQUIRE(utp_event_add_timer(&loop, &event, UINT64_C(1000000), false, test_event_probe_callback, &probe) ==
             UTP_INTERNAL_ERROR_OK);
@@ -272,6 +282,7 @@ TEST_CASE("event loop rearms a pending timer without replacing its callback", "[
     REQUIRE((probe.events & UTP_EVENT_TIMEOUT) != 0u);
     utp_event_remove(&event);
     utp_event_loop_close(&loop);
+    event_base_free(native_base);
 }
 
 TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]") {

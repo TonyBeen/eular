@@ -4,11 +4,11 @@
 #include <cstdlib>
 
 extern "C" {
-#include "internal/ack.h"
-#include "internal/ack_scheduler.h"
-#include "internal/receive_history.h"
-#include "internal/rtt.h"
-#include "internal/send_history.h"
+#include "context/ack_scheduler.h"
+#include "proto/ack.h"
+#include "util/receive_history.h"
+#include "util/rtt.h"
+#include "util/send_history.h"
 }
 
 namespace {
@@ -209,4 +209,19 @@ TEST_CASE("RTT statistics use RFC 6298 smoothing", "[rtt]") {
     REQUIRE(utp_rtt_stats_srtt(&stats) == 112u);
     REQUIRE(utp_rtt_stats_variance(&stats) == 63u);
     REQUIRE(utp_rtt_stats_minimum(&stats) == 100u);
+}
+
+TEST_CASE("RTT statistics cap and subtract peer ACK delay", "[rtt]") {
+    utp_rtt_stats_t stats  = {};
+    uint64_t        sample = 0u;
+
+    REQUIRE(utp_rtt_stats_update_from_ack(&stats, 1000u, 100u, 1200u, 200u, &sample) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sample == 700u);
+    REQUIRE(utp_rtt_stats_srtt(&stats) == 700u);
+
+    REQUIRE(utp_rtt_stats_update_from_ack(&stats, 150u, 100u, 50u, 50u, &sample) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sample == 50u);
+    REQUIRE(utp_rtt_stats_minimum(&stats) == 50u);
+
+    REQUIRE(utp_rtt_stats_update_from_ack(&stats, 100u, 100u, 0u, 0u, &sample) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 }

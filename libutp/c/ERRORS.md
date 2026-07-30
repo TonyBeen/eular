@@ -15,7 +15,7 @@ Callers can inspect a value directly or compare against named codes such as
 `UTP_STATUS_SOCKET_READ` and `UTP_STATUS_CONNECTION_HANDSHAKE`. Status values
 are portable and must not expose platform-specific `errno` values.
 
-Private code returns `utp_internal_error_t` from `src/internal/error.h`. It is
+Private code returns `utp_internal_error_t` from `src/util/error.h`. It is
 a value that can cross internal function boundaries without allocation. It has
 separate internal and POSIX facilities. `utp_internal_error_from_errno()`
 captures `errno` immediately at the system-call boundary.

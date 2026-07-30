@@ -12,7 +12,7 @@ The public/private error, POSIX mapping, and hierarchical logging contract is
 defined in [ERRORS.md](ERRORS.md).
 
 Only `include/utp/` is public and installed. Bounded containers, allocators,
-internal error values, and log-scope helpers live under `src/internal/`; they
+internal error values, and log-scope helpers live under `src/util/`; they
 are implementation details and are not ABI contracts.
 
 ## Rules

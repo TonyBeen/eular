@@ -36,19 +36,28 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(utp_c STATIC
-    src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
-    src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
-    src/receive_history.c src/packet_out.c src/utp.c
-    include/utp/log.h include/utp/status.h include/utp/utp.h
-    src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
-    src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
-    src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
-    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/packet_out.h src/internal/wire.h
-)
-
+set(UTP_C_SOURCES
+    src/util/allocator.c src/proto/ack.c src/socket/address.c src/util/buffer.c src/crypto/crypto.c src/util/error.c
+    src/context/event_loop.c src/proto/frame.c src/util/hash.c src/util/log.c src/util/range_set.c src/util/ring.c
+    src/status.c src/util/time.c src/socket/udp.c src/proto/proto.c src/context/ack_scheduler.c src/util/send_history.c
+    src/util/rtt.c src/util/receive_history.c src/proto/packet_out.c src/context/send_ledger.c
+    src/context/send_control.c src/context/pending_incoming.c src/congestion/bbr.c src/congestion/bw_sampler.c src/congestion/congestion.c src/congestion/cubic.c
+    src/congestion/minmax.c src/congestion/pacer.c
+    src/connection/connection.c src/context/context.c src/utp.c)
+set(UTP_C_HEADERS
+    include/utp/log.h include/utp/status.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
+    src/util/buffer.h src/crypto/crypto.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
+    src/util/log.h src/util/range_set.h src/util/ring.h src/util/time.h src/socket/udp.h src/proto/proto.h
+    src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h
+    src/proto/wire.h src/context/send_ledger.h src/context/send_control.h src/context/pending_incoming.h src/congestion/congestion.h
+    src/congestion/bbr.h src/congestion/bw_sampler.h src/congestion/cubic.h src/congestion/minmax.h src/congestion/pacer.h src/context/context.h)
+list(APPEND UTP_C_HEADERS src/connection/connection.h)
+add_library(utp_c STATIC ${UTP_C_SOURCES} ${UTP_C_HEADERS})
 add_library(eular::utp_c ALIAS utp_c)
 target_link_libraries(utp_c PRIVATE event_core crypto)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(utp_c PRIVATE m)
+endif()
 target_compile_features(utp_c PUBLIC c_std_11)
 target_include_directories(utp_c PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
@@ -89,14 +98,10 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     utp_c_configure_c_test(utp_c_api_test)
     add_executable(utp_c_public_api_test test/test_public_api.c)
     utp_c_configure_c_test(utp_c_public_api_test)
-    add_executable(utp_c_proto_test test/test_proto.cc)
-    utp_c_configure_cpp_test(utp_c_proto_test)
-    add_executable(utp_c_crypto_test test/test_crypto.cc)
-    utp_c_configure_cpp_test(utp_c_crypto_test)
-    add_executable(utp_c_receive_history_test test/test_receive_history.cc)
-    utp_c_configure_cpp_test(utp_c_receive_history_test)
-    add_executable(utp_c_packet_out_test test/test_packet_out.cc)
-    utp_c_configure_cpp_test(utp_c_packet_out_test)
+    foreach(test_name IN ITEMS proto crypto receive_history packet_out send_ledger send_control pending_incoming connection congestion minmax bw_sampler bbr)
+        add_executable(utp_c_${test_name}_test test/test_${test_name}.cc)
+        utp_c_configure_cpp_test(utp_c_${test_name}_test)
+    endforeach()
 endif()
 
 if(UTP_C_BUILD_BENCHMARKS)
@@ -104,17 +109,10 @@ if(UTP_C_BUILD_BENCHMARKS)
     utp_c_configure_c_test(utp_c_container_benchmark)
 endif()
 
-set(UTP_C_FORMAT_SOURCES
-    benchmark/bench_containers.c include/utp/log.h include/utp/status.h include/utp/utp.h
-    src/allocator.c src/ack.c src/address.c src/buffer.c src/crypto.c src/error.c src/event_loop.c src/frame.c
-    src/hash.c src/log.c src/range_set.c src/ring.c src/status.c src/time.c src/udp.c src/proto.c src/ack_scheduler.c src/send_history.c src/rtt.c
-    src/receive_history.c src/packet_out.c src/utp.c
-    src/internal/allocator.h src/internal/ack.h src/internal/address.h src/internal/buffer.h src/internal/crypto.h
-    src/internal/error.h src/internal/event_loop.h src/internal/frame.h src/internal/hash.h src/internal/log.h
-    src/internal/range_set.h src/internal/ring.h src/internal/time.h src/internal/udp.h src/internal/proto.h
-    src/internal/receive_history.h src/internal/ack_scheduler.h src/internal/send_history.h src/internal/rtt.h src/internal/packet_out.h src/internal/wire.h
-    test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc test/test_packet_out.cc
-)
+set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c ${UTP_C_HEADERS} ${UTP_C_SOURCES}
+    test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
+    test/test_packet_out.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc
+    test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc)
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
     HINTS "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"

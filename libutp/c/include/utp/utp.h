@@ -1,6 +1,7 @@
 #ifndef EULAR_UTP_C_UTP_H
 #define EULAR_UTP_C_UTP_H
 
+#include <stdint.h>
 #include <utp/log.h>
 #include <utp/status.h>
 
@@ -17,9 +18,18 @@ extern "C" {
 typedef struct utp_context    utp_context_t;
 typedef struct utp_connection utp_connection_t;
 typedef struct utp_stream     utp_stream_t;
+struct event_base;
+
+typedef struct utp_context_options {
+    struct event_base *event_base;
+    utp_log_sink_fn    log_sink;
+    uint64_t           context_id;
+} utp_context_options_t;
 
 // Returns the semantic version of the linked C library.
-const char* utp_version(void);
+const char  *utp_version(void);
+utp_status_t utp_context_create(const utp_context_options_t *options, utp_context_t **out_context);
+void         utp_context_destroy(utp_context_t *context);
 
 #ifdef __cplusplus
 }

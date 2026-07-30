@@ -7,13 +7,13 @@
 #include <string.h>
 #include <utp/utp.h>
 
-#include "internal/allocator.h"
-#include "internal/buffer.h"
-#include "internal/error.h"
-#include "internal/hash.h"
-#include "internal/log.h"
-#include "internal/range_set.h"
-#include "internal/ring.h"
+#include "util/allocator.h"
+#include "util/buffer.h"
+#include "util/error.h"
+#include "util/hash.h"
+#include "util/log.h"
+#include "util/range_set.h"
+#include "util/ring.h"
 
 typedef struct fail_allocator {
     size_t calls;

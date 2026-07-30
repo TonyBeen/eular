@@ -7,7 +7,7 @@
 #include <cstring>
 
 extern "C" {
-#include "internal/crypto.h"
+#include "crypto/crypto.h"
 }
 
 namespace {
