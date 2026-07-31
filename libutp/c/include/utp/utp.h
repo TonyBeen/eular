@@ -42,9 +42,10 @@ typedef struct utp_endpoint {
 } utp_endpoint_t;
 
 typedef struct utp_context_options {
-    struct event_base* event_base;
-    utp_log_sink_fn    log_sink;
-    uint64_t           context_id;
+    struct event_base*  event_base;
+    utp_log_sink_fn     log_sink;
+    uint64_t            context_id;
+    utp_log_level_t     log_level;
 } utp_context_options_t;
 
 typedef struct utp_connect_options {

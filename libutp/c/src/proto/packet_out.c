@@ -3,6 +3,9 @@
 #include <limits.h>
 #include <string.h>
 
+#include "proto/proto.h"
+#include "proto/frame.h"
+
 static void bucket_cleanup(utp_packet_out_bucket_t *bucket, const utp_allocator_t *allocator) {
     if (bucket->nodes != NULL) {
         utp_allocator_free(allocator, bucket->nodes);
@@ -162,6 +165,7 @@ static void reset_packet_out_for_acquire(utp_packet_out_t *pkt, utp_packet_out_b
     pkt->frame_meta_count      = 0u;
     pkt->stream_data_size      = 0u;
     pkt->transient_ack_size    = 0u;
+    pkt->control_prefix_size   = 0u;
     pkt->stream_id             = 0u;
     pkt->stream_offset         = 0u;
     pkt->attempt_count         = 0u;
@@ -240,6 +244,7 @@ void utp_packet_out_pool_release(utp_packet_out_pool_t *pool, utp_packet_out_t *
     pkt->frame_meta_count      = 0u;
     pkt->stream_data_size      = 0u;
     pkt->transient_ack_size    = 0u;
+    pkt->control_prefix_size   = 0u;
     pkt->stream_id             = 0u;
     pkt->stream_offset         = 0u;
     pkt->attempt_count         = 0u;
@@ -274,6 +279,105 @@ void utp_packet_out_clear_send_attempts(utp_packet_out_t *pkt) {
         }
         pkt->attempt_count = 0u;
     }
+}
+
+utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t prefix_length) {
+    utp_packet_out_slice_t slices[UTP_PACKET_OUT_MAX_SLICES];
+    utp_packet_header_t    header;
+    uint32_t               frame_types = 0u;
+    size_t                 input_offset = 0u;
+    size_t                 output_count = 0u;
+    size_t                 index;
+    uint8_t                meta_count = 0u;
+
+    if (pkt == NULL || pkt->raw_data == NULL || prefix_length == 0u || pkt->data_size < UTP_PACKET_HEADER_SIZE ||
+        prefix_length > pkt->data_size - UTP_PACKET_HEADER_SIZE) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (utp_proto_decode_header(&header, pkt->raw_data, UTP_PACKET_HEADER_SIZE) != UTP_INTERNAL_ERROR_OK ||
+        header.payload_length < prefix_length) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (pkt->slice_count == 0u) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    for (index = 0u; index < pkt->slice_count; ++index) {
+        const utp_packet_out_slice_t *slice = &pkt->slices[index];
+        size_t                        slice_start = input_offset;
+        size_t                        slice_end;
+        size_t                        keep_start;
+        size_t                        keep_end;
+
+        if (slice->length == 0u || slice->length > SIZE_MAX - slice_start) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        slice_end  = slice_start + slice->length;
+        input_offset = slice_end;
+        keep_start = slice_start;
+        keep_end   = slice_end;
+        if (keep_start < UTP_PACKET_HEADER_SIZE) {
+            keep_end = keep_end < UTP_PACKET_HEADER_SIZE ? keep_end : UTP_PACKET_HEADER_SIZE;
+        } else if (keep_start < (size_t)UTP_PACKET_HEADER_SIZE + prefix_length) {
+            keep_start = (size_t)UTP_PACKET_HEADER_SIZE + prefix_length;
+        }
+        if (keep_start >= keep_end) {
+            continue;
+        }
+        if (output_count >= UTP_PACKET_OUT_MAX_SLICES) {
+            return UTP_INTERNAL_ERROR_LIMIT;
+        }
+        slices[output_count]        = *slice;
+        slices[output_count].length = (uint16_t)(keep_end - keep_start);
+        if (slice->source == UTP_PACKET_OUT_SLICE_RAW_OFFSET) {
+            slices[output_count].offset = (uint16_t)(slice->offset + (keep_start - slice_start));
+        } else if (slice->source == UTP_PACKET_OUT_SLICE_EXTERNAL) {
+            slices[output_count].data = (const uint8_t *)slice->data + (keep_start - slice_start);
+        } else {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        ++output_count;
+        if (slice_start < UTP_PACKET_HEADER_SIZE && slice_end > (size_t)UTP_PACKET_HEADER_SIZE + prefix_length) {
+            keep_start = (size_t)UTP_PACKET_HEADER_SIZE + prefix_length;
+            keep_end   = slice_end;
+            if (output_count >= UTP_PACKET_OUT_MAX_SLICES) {
+                return UTP_INTERNAL_ERROR_LIMIT;
+            }
+            slices[output_count]        = *slice;
+            slices[output_count].length = (uint16_t)(keep_end - keep_start);
+            if (slice->source == UTP_PACKET_OUT_SLICE_RAW_OFFSET) {
+                slices[output_count].offset = (uint16_t)(slice->offset + (keep_start - slice_start));
+            } else {
+                slices[output_count].data = (const uint8_t *)slice->data + (keep_start - slice_start);
+            }
+            ++output_count;
+        }
+    }
+    if (input_offset != pkt->data_size) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    for (index = 0u; index < pkt->frame_meta_count; ++index) {
+        utp_frame_meta_info_t meta = pkt->frame_meta[index];
+
+        if ((meta.frame_flags & (UTP_FRAME_META_TRANSIENT_ON_RETRANSMIT | UTP_FRAME_META_SEMANTIC_CONTROL)) != 0u) {
+            continue;
+        }
+        pkt->frame_meta[meta_count++] = meta;
+        frame_types |= UTP_FRAME_BIT(meta.frame_type);
+    }
+    header.payload_length = (uint16_t)(header.payload_length - prefix_length);
+    if (utp_proto_encode_header(pkt->raw_data, pkt->alloc_size, &header) != UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    pkt->data_size = (uint16_t)(pkt->data_size - prefix_length);
+    pkt->slice_count = (uint8_t)output_count;
+    for (index = 0u; index < output_count; ++index) {
+        pkt->slices[index] = slices[index];
+    }
+    pkt->frame_meta_count    = meta_count;
+    pkt->frame_types         = frame_types;
+    pkt->transient_ack_size  = 0u;
+    pkt->control_prefix_size = 0u;
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 static utp_internal_error_t utp_packet_out_resolve_slice(const utp_packet_out_t       *pkt,

@@ -1,6 +1,7 @@
 #include <assert.h>
-#include <event2/event.h>
 #include <string.h>
+
+#include <event2/event.h>
 #include <utp/utp.h>
 
 #if defined(__APPLE__)
@@ -14,8 +15,9 @@ typedef struct public_api_probe {
     uint32_t last_peer_cid;
 } public_api_probe_t;
 
-static bool test_on_new_connection(const utp_new_connection_info_t *info, void *user_data) {
-    public_api_probe_t *probe = user_data;
+static bool test_on_new_connection(const utp_new_connection_info_t* info, void* user_data)
+{
+    public_api_probe_t* probe = user_data;
 
     assert(info != NULL);
     assert(info->remote.family == 4u);
@@ -29,14 +31,16 @@ static bool test_on_new_connection(const utp_new_connection_info_t *info, void *
     return true;
 }
 
-static void test_on_connected(utp_connection_t *connection, void *user_data) {
-    public_api_probe_t *probe = user_data;
+static void test_on_connected(utp_connection_t* connection, void* user_data)
+{
+    public_api_probe_t* probe = user_data;
 
     assert(connection != NULL);
     ++probe->connected_count;
 }
 
-static void pump_event_loop(struct event_base *event_base, int32_t iterations) {
+static void pump_event_loop(struct event_base* event_base, int32_t iterations)
+{
     int32_t index;
 
     for (index = 0; index < iterations; ++index) {
@@ -44,10 +48,11 @@ static void pump_event_loop(struct event_base *event_base, int32_t iterations) {
     }
 }
 
-int main(void) {
-    struct event_base    *event_base = event_base_new();
-    utp_context_options_t options    = {event_base, NULL, 7u};
-    utp_context_t        *context    = NULL;
+int main(void)
+{
+    struct event_base*    event_base = event_base_new();
+    utp_context_options_t options    = {.event_base = event_base, .context_id = 7u};
+    utp_context_t*        context    = NULL;
 
     assert(event_base != NULL);
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
@@ -62,8 +67,8 @@ int main(void) {
     utp_context_destroy(context);
 #if defined(__APPLE__)
     if (if_nametoindex("lo0") != 0u) {
-        utp_context_options_t interface_options = {event_base, NULL, 8u};
-        utp_context_t        *interface_context = NULL;
+        utp_context_options_t interface_options = {.event_base = event_base, .context_id = 8u};
+        utp_context_t*        interface_context = NULL;
         uint16_t              interface_port    = 0u;
 
         assert(utp_context_create(&interface_options, &interface_context) == UTP_STATUS_OK);
@@ -73,10 +78,10 @@ int main(void) {
     }
 #endif
     {
-        utp_context_options_t client_options = {event_base, NULL, 11u};
-        utp_context_options_t server_options = {event_base, NULL, 22u};
-        utp_context_t        *client         = NULL;
-        utp_context_t        *server         = NULL;
+        utp_context_options_t client_options = {.event_base = event_base, .context_id = 11u};
+        utp_context_options_t server_options = {.event_base = event_base, .context_id = 22u};
+        utp_context_t*        client         = NULL;
+        utp_context_t*        server         = NULL;
         uint16_t              client_port    = 0u;
         uint16_t              server_port    = 0u;
         public_api_probe_t    client_probe   = {0, 0, 0u, 0u};

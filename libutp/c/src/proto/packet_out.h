@@ -36,7 +36,9 @@ extern "C" {
 #define UTP_POL_TRACK_ON_SEND    0x0008u
 #define UTP_POL_NO_TRACK_ON_SEND 0x0010u
 
-#define UTP_FRAME_META_FIN 0x01u
+#define UTP_FRAME_META_FIN                  0x01u
+#define UTP_FRAME_META_TRANSIENT_ON_RETRANSMIT 0x02u
+#define UTP_FRAME_META_SEMANTIC_CONTROL     0x04u
 
 #define UTP_PACKET_OUT_SLICE_RAW_OFFSET 0u
 #define UTP_PACKET_OUT_SLICE_EXTERNAL   1u
@@ -48,8 +50,10 @@ typedef struct utp_packet_out_attempt {
 
 typedef struct utp_frame_meta_info {
     void    *owner;
+    uint64_t value;
     uint16_t offset;
     uint16_t length;
+    uint32_t generation;
     uint8_t  frame_type;
     uint8_t  frame_flags;
 } utp_frame_meta_info_t;
@@ -84,6 +88,7 @@ typedef struct utp_packet_out {
     uint8_t  frame_meta_count;
     uint32_t stream_data_size;
     uint16_t transient_ack_size;
+    uint16_t control_prefix_size;
     uint32_t stream_id;
     uint64_t stream_offset;
 
@@ -141,6 +146,7 @@ void                 utp_packet_out_pool_release(utp_packet_out_pool_t *pool, ut
 
 bool utp_packet_out_add_send_attempt(utp_packet_out_t *pkt, uint64_t packet_number, uint64_t sent_time_us);
 void utp_packet_out_clear_send_attempts(utp_packet_out_t *pkt);
+utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t prefix_length);
 utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t *pkt, uint8_t *buffer, size_t capacity,
                                             size_t *out_length);
 

@@ -266,7 +266,10 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
         error = utp_context_send_packet(context, &connection->peer, packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_connection_on_packet_sent(connection, packet, utp_context_now_us());
+        } else if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            error = utp_send_control_reschedule_packet(&connection->send_control, packet);
         } else {
+            utp_connection_on_packet_abandoned(connection, packet);
             utp_packet_out_pool_release(&connection->packet_pool, packet);
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -368,7 +371,8 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
 
 static void utp_context_report_closed(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
-    if (!slot->closed_reported && utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING) {
+    if (!slot->closed_reported && (utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
+                                   utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING)) {
         slot->closed_reported = true;
         if (context->on_connection_closed != NULL) {
             context->on_connection_closed(&slot->connection, context->on_connection_closed_user_data);
@@ -422,7 +426,8 @@ static utp_internal_error_t utp_context_queue_ack_if_due(utp_connection_t* conne
     if (utp_connection_ack_pending_count(connection) == 0u || (deadline != 0u && deadline > now_us)) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    return utp_connection_queue_ack(connection, now_us);
+    /* Keep the ACK pending until flush chooses whether it can share a STREAM packet. */
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 static void utp_context_timer_callback(uint32_t events, void* user_data);
@@ -451,6 +456,7 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
             utp_context_take_deadline(&deadline, ack_deadline == 0u ? now_us : ack_deadline);
         }
         utp_context_take_deadline(&deadline, utp_connection_retransmission_deadline(connection));
+        utp_context_take_deadline(&deadline, utp_connection_close_deadline(connection));
     }
     for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
         if (context->pending_incoming[index].used) {
@@ -734,6 +740,12 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         utp_internal_error_t           error;
 
         if (!slot->used) {
+            continue;
+        }
+        if (utp_connection_close_deadline(&slot->connection) != 0u &&
+            utp_connection_close_deadline(&slot->connection) <= now_us) {
+            utp_context_report_closed(context, slot);
+            utp_context_release_connection_slot(slot);
             continue;
         }
         error = utp_context_queue_ack_if_due(&slot->connection, now_us);

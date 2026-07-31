@@ -321,6 +321,7 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->local_max_stream_data_advertised = UTP_STREAM_DEFAULT_FLOW_WINDOW;
         stream->last_max_stream_data_sent_us     = 0u;
         stream->last_stream_data_blocked_sent_us = 0u;
+        stream->reset_error_code                 = 0u;
         stream->send_buffer_length               = 0u;
         stream->send_buffer_start                = 0u;
         stream->send_in_flight_bytes             = 0u;
@@ -334,25 +335,44 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->local_fin_sent                   = false;
         stream->peer_fin                         = false;
         stream->reset                            = false;
+        stream->reset_by_peer                    = false;
     }
 }
 
-void utp_stream_reset(utp_stream_t* stream)
+utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer)
 {
-    if (stream != NULL) {
-        stream->send_buffer_length   = 0u;
-        stream->send_buffer_start    = 0u;
-        stream->send_in_flight_bytes = 0u;
-        stream->send_ack_range_count = 0u;
-        utp_stream_clear_recv_fragments(stream);
-        stream->recv_buffered_bytes           = 0u;
-        stream->recv_pinned_memory_bytes      = 0u;
-        stream->recv_accounted_fragment_count = 0u;
-        stream->local_fin_queued              = true;
-        stream->local_fin_sent                = true;
-        stream->peer_fin                      = true;
-        stream->reset                         = true;
+    if (stream == NULL || !stream->used) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    stream->reset_error_code     = error_code;
+    stream->reset_by_peer        = from_peer;
+    stream->send_buffer_length   = 0u;
+    stream->send_buffer_start    = 0u;
+    stream->send_in_flight_bytes = 0u;
+    stream->send_ack_range_count = 0u;
+    utp_stream_clear_recv_fragments(stream);
+    stream->recv_buffered_bytes           = 0u;
+    stream->recv_pinned_memory_bytes      = 0u;
+    stream->recv_accounted_fragment_count = 0u;
+    stream->local_fin_queued              = true;
+    stream->local_fin_sent                = true;
+    stream->peer_fin                      = true;
+    stream->reset                         = true;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+void utp_stream_reset(utp_stream_t* stream) { (void)utp_stream_on_reset(stream, 0u, false); }
+
+utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset)
+{
+    if (stream == NULL || out_offset == NULL || !stream->used) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if ((uint64_t)stream->send_buffer_length > UINT64_MAX - stream->send_buffer_offset) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    *out_offset = stream->send_buffer_offset + (uint64_t)stream->send_buffer_length;
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 utp_internal_error_t utp_stream_write(utp_stream_t* stream, const uint8_t* data, size_t length, bool fin)
@@ -562,13 +582,31 @@ utp_internal_error_t utp_stream_commit_built_frame(utp_stream_t* stream, uint32_
     size_t data_size = (size_t)stream_data_size;
 
     if (stream == NULL || !stream->used || data_size > stream->send_buffer_length - stream->send_in_flight_bytes ||
-        (fin && !stream->local_fin_queued)) {
+        (uint64_t)data_size > UINT64_MAX - stream->next_send_offset || (fin && !stream->local_fin_queued)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     stream->next_send_offset     += data_size;
     stream->send_in_flight_bytes += data_size;
     if (fin) {
         stream->local_fin_sent = true;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_stream_abandon_built_frame(utp_stream_t* stream, uint64_t stream_offset,
+                                                    uint32_t stream_data_size, bool fin)
+{
+    const size_t data_size = (size_t)stream_data_size;
+
+    if (stream == NULL || !stream->used || data_size > stream->send_in_flight_bytes ||
+        (uint64_t)data_size > UINT64_MAX - stream_offset || stream->next_send_offset != stream_offset + data_size ||
+        (fin && !stream->local_fin_sent)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    stream->next_send_offset     -= data_size;
+    stream->send_in_flight_bytes -= data_size;
+    if (fin) {
+        stream->local_fin_sent = false;
     }
     return UTP_INTERNAL_ERROR_OK;
 }

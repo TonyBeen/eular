@@ -75,6 +75,7 @@ struct utp_stream {
     uint64_t                    local_max_stream_data_advertised;
     uint64_t                    last_max_stream_data_sent_us;
     uint64_t                    last_stream_data_blocked_sent_us;
+    uint16_t                    reset_error_code;
     size_t                      send_buffer_length;
     size_t                      send_buffer_start;
     size_t                      send_in_flight_bytes;
@@ -91,10 +92,13 @@ struct utp_stream {
     bool                        local_fin_sent;
     bool                        peer_fin;
     bool                        reset;
+    bool                        reset_by_peer;
 };
 
 void                 utp_stream_init(utp_stream_t* stream, uint32_t stream_id);
 void                 utp_stream_reset(utp_stream_t* stream);
+utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer);
+utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
 utp_internal_error_t utp_stream_write(utp_stream_t* stream, const uint8_t* data, size_t length, bool fin);
 utp_internal_error_t utp_stream_acquire_write_views(utp_stream_t* stream, utp_stream_write_view_t* views,
                                                     size_t view_capacity, size_t* out_view_count, size_t* out_capacity);
@@ -112,6 +116,8 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
                                                          const uint8_t** out_data, uint32_t* out_stream_data_size,
                                                          uint64_t* out_stream_offset, bool* out_fin);
 utp_internal_error_t utp_stream_commit_built_frame(utp_stream_t* stream, uint32_t stream_data_size, bool fin);
+utp_internal_error_t utp_stream_abandon_built_frame(utp_stream_t* stream, uint64_t stream_offset,
+                                                    uint32_t stream_data_size, bool fin);
 utp_internal_error_t utp_stream_on_packet_acked(utp_stream_t* stream, uint32_t stream_data_size);
 utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint64_t stream_offset,
                                                       uint32_t stream_data_size);
