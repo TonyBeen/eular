@@ -322,6 +322,7 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->last_max_stream_data_sent_us     = 0u;
         stream->last_stream_data_blocked_sent_us = 0u;
         stream->reset_error_code                 = 0u;
+        stream->drr_deficit                      = 0u;
         stream->send_buffer_length               = 0u;
         stream->send_buffer_start                = 0u;
         stream->send_in_flight_bytes             = 0u;
@@ -330,6 +331,8 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->recv_fragment_count              = 0u;
         stream->recv_accounted_fragment_count    = 0u;
         stream->send_ack_range_count             = 0u;
+        stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
+        stream->strict_wait_rounds               = 0u;
         stream->used                             = true;
         stream->local_fin_queued                 = false;
         stream->local_fin_sent                   = false;

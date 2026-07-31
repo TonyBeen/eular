@@ -7,6 +7,8 @@
 #include <catch2/catch.hpp>
 
 extern "C" {
+#include <utp/utp.h>
+
 #include "connection/connection.h"
 }
 
@@ -596,6 +598,89 @@ TEST_CASE("connection restores an unsent STREAM frame after a UDP write failure"
     utp_connection_on_packet_abandoned(&active, retry);
     utp_packet_out_pool_release(&active.packet_pool, retry);
     utp_connection_cleanup(&active);
+}
+
+TEST_CASE("strict stream scheduler honors priority and round-robins equal priorities", "[stream][scheduler]")
+{
+    const utp_address_t passive_address = loopback_address(13037u);
+    utp_connection_t    connection      = {};
+    uint32_t            first_id;
+    uint32_t            second_id;
+    utp_packet_out_t*   packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 37u, 38u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_create_stream(&connection, true, &first_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream(&connection, true, &second_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_stream_write(&connection, first_id, reinterpret_cast<const uint8_t*>("first"), 5u, false) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_stream_write(&connection, second_id, reinterpret_cast<const uint8_t*>("second"), 6u,
+                                        false) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_priority(utp_connection_find_stream(&connection, first_id)) == UTP_STREAM_PRIORITY_DEFAULT);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, first_id), 6u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 1u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 8u) ==
+            UTP_STATUS_INVALID_ARGUMENT);
+
+    packet = utp_connection_next_packet_to_send_at(&connection, 100u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == second_id);
+    utp_connection_on_packet_abandoned(&connection, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, packet);
+
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, first_id), 4u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 4u) == UTP_STATUS_OK);
+    connection.stream_scheduler_cursor = 0u;
+    packet                             = utp_connection_next_packet_to_send_at(&connection, 101u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == first_id);
+    utp_connection_on_packet_abandoned(&connection, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    packet = utp_connection_next_packet_to_send_at(&connection, 102u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == second_id);
+    utp_connection_on_packet_abandoned(&connection, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("drr scheduler limits each STREAM fragment by its weighted deficit", "[stream][scheduler]")
+{
+    const utp_address_t        passive_address = loopback_address(13038u);
+    std::array<uint8_t, 2048u> data            = {};
+    utp_connection_t           connection      = {};
+    uint32_t                   high_id;
+    uint32_t                   low_id;
+    utp_packet_out_t*          packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 38u, 39u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_set_stream_scheduler_mode(&connection, UTP_STREAM_SCHEDULER_DRR) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream(&connection, true, &high_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream(&connection, true, &low_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, high_id), 0u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, low_id), 7u) == UTP_STATUS_OK);
+    REQUIRE(utp_connection_stream_write(&connection, high_id, data.data(), data.size(), false) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_stream_write(&connection, low_id, data.data(), data.size(), false) == UTP_INTERNAL_ERROR_OK);
+
+    packet = utp_connection_next_packet_to_send_at(&connection, 100u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == high_id);
+    REQUIRE(packet->stream_data_size == 1244u);
+    utp_connection_on_packet_abandoned(&connection, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    packet = utp_connection_next_packet_to_send_at(&connection, 101u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == low_id);
+    REQUIRE(packet->stream_data_size == 1200u);
+    utp_connection_on_packet_abandoned(&connection, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "[stream][reset]")

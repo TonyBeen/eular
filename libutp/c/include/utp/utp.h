@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
 #include <utp/log.h>
 #include <utp/status.h>
 
@@ -12,8 +13,8 @@ extern "C" {
 
 #define UTP_VERSION_MAJOR  1u
 #define UTP_VERSION_MINOR  0u
-#define UTP_VERSION_PATCH  0u
-#define UTP_VERSION_STRING "1.0.0"
+#define UTP_VERSION_PATCH  1u
+#define UTP_VERSION_STRING "1.0.1"
 
 // Opaque handles reserved for the future stable C API.
 typedef struct utp_context    utp_context_t;
@@ -34,6 +35,11 @@ typedef enum utp_connect_attempt_type {
     UTP_CONNECT_ATTEMPT_PASSIVE
 } utp_connect_attempt_type_t;
 
+typedef enum utp_stream_scheduler_mode {
+    UTP_STREAM_SCHEDULER_STRICT = 0,
+    UTP_STREAM_SCHEDULER_DRR    = 1
+} utp_stream_scheduler_mode_t;
+
 typedef struct utp_endpoint {
     uint8_t  family;
     uint16_t port;
@@ -42,10 +48,11 @@ typedef struct utp_endpoint {
 } utp_endpoint_t;
 
 typedef struct utp_context_options {
-    struct event_base*  event_base;
-    utp_log_sink_fn     log_sink;
-    uint64_t            context_id;
-    utp_log_level_t     log_level;
+    struct event_base*          event_base;
+    utp_log_sink_fn             log_sink;
+    uint64_t                    context_id;
+    utp_log_level_t             log_level;
+    utp_stream_scheduler_mode_t stream_scheduler_mode;
 } utp_context_options_t;
 
 typedef struct utp_connect_options {
@@ -94,6 +101,8 @@ void utp_context_set_on_connection_closed(utp_context_t* context, utp_on_connect
                                           void* user_data);
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 utp_status_t utp_context_accept(utp_context_t* context);
+utp_status_t utp_stream_set_priority(utp_stream_t* stream, uint8_t priority);
+uint8_t      utp_stream_priority(const utp_stream_t* stream);
 
 #ifdef __cplusplus
 }

@@ -41,6 +41,7 @@ struct utp_context {
     utp_context_connection_slot_t connections[UTP_CONTEXT_MAX_CONNECTIONS];
     utp_context_pending_slot_t    pending_incoming[UTP_CONTEXT_MAX_PENDING_INCOMING];
     uint32_t                      next_cid;
+    utp_stream_scheduler_mode_t   stream_scheduler_mode;
     utp_on_connected_fn           on_connected;
     void*                         on_connected_user_data;
     utp_on_connect_error_fn       on_connect_error;

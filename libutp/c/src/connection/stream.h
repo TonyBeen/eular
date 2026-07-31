@@ -27,6 +27,9 @@ typedef struct utp_stream utp_stream_t;
 #define UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_MAX_GAP                 (2u * 1024u * 1024u)
 #define UTP_STREAM_DEFAULT_FLOW_WINDOW          (2u * 1024u * 1024u)
+#define UTP_STREAM_PRIORITY_HIGHEST             0u
+#define UTP_STREAM_PRIORITY_LOWEST              7u
+#define UTP_STREAM_PRIORITY_DEFAULT             4u
 
 typedef struct utp_stream_recv_account {
     size_t* connection_memory_bytes;
@@ -76,6 +79,7 @@ struct utp_stream {
     uint64_t                    last_max_stream_data_sent_us;
     uint64_t                    last_stream_data_blocked_sent_us;
     uint16_t                    reset_error_code;
+    uint32_t                    drr_deficit;
     size_t                      send_buffer_length;
     size_t                      send_buffer_start;
     size_t                      send_in_flight_bytes;
@@ -87,6 +91,8 @@ struct utp_stream {
     utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];
     utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];
     uint8_t                     send_buffer[UTP_STREAM_SEND_BUFFER_CAPACITY];
+    uint8_t                     priority;
+    uint8_t                     strict_wait_rounds;
     bool                        used;
     bool                        local_fin_queued;
     bool                        local_fin_sent;

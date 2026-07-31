@@ -525,6 +525,9 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
                                 pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UTP_PACKET_MTU_FLOOR);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(slot);
         return error;
@@ -833,7 +836,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     *out_context = NULL;
-    if (options == NULL || options->event_base == NULL) {
+    if (options == NULL || options->event_base == NULL || options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     context = utp_allocator_alloc(NULL, sizeof(*context));
@@ -865,6 +868,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->on_connection_closed_user_data = NULL;
     context->next_cid                       = (uint32_t)options->context_id;
     context->next_cid                       = context->next_cid == 0u ? 1u : context->next_cid;
+    context->stream_scheduler_mode          = options->stream_scheduler_mode;
     context->logger.sink                    = options->log_sink;
     fragment_length = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
@@ -1018,6 +1022,9 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_ACTIVE, local_cid, 0u, &peer,
                                     UTP_CONTEXT_PACKET_LIMIT, UTP_PACKET_MTU_FLOOR);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);

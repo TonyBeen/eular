@@ -79,6 +79,8 @@ typedef struct utp_connection {
     uint64_t                      close_last_sent_us;
     uint64_t                      close_pto_us;
     uint16_t                      close_error_code;
+    uint8_t                       stream_scheduler_mode;
+    uint8_t                       stream_scheduler_cursor;
     bool                          close_pending;
     utp_connection_role_t         role;
     size_t                        peer_max_stream_data_count;
@@ -115,6 +117,7 @@ utp_internal_error_t utp_connection_ensure_retransmission_deadline(utp_connectio
 utp_internal_error_t utp_connection_on_retransmission_timeout(utp_connection_t* connection, uint64_t now_us);
 uint64_t             utp_connection_retransmission_deadline(const utp_connection_t* connection);
 uint64_t             utp_connection_close_deadline(const utp_connection_t* connection);
+utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode);
 utp_internal_error_t utp_connection_create_stream(utp_connection_t* connection, bool bidirectional,
                                                   uint32_t* out_stream_id);
 utp_stream_t*        utp_connection_find_stream(utp_connection_t* connection, uint32_t stream_id);

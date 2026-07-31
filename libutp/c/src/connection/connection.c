@@ -765,6 +765,85 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
+static uint8_t utp_connection_stream_effective_priority(const utp_stream_t* stream)
+{
+    uint8_t boost;
+
+    if (stream == NULL || stream->priority > UTP_STREAM_PRIORITY_LOWEST) {
+        return UTP_STREAM_PRIORITY_DEFAULT;
+    }
+    boost = (uint8_t)(stream->strict_wait_rounds / 8u);
+    return boost >= stream->priority ? UTP_STREAM_PRIORITY_HIGHEST : (uint8_t)(stream->priority - boost);
+}
+
+static size_t utp_connection_select_stream(utp_connection_t* connection)
+{
+    size_t  index;
+    size_t  selected      = UTP_CONNECTION_MAX_STREAMS;
+    uint8_t best_priority = UTP_STREAM_PRIORITY_LOWEST;
+
+    if (connection == NULL) {
+        return UTP_CONNECTION_MAX_STREAMS;
+    }
+    if (connection->stream_scheduler_mode == 1u) {
+        for (index = 0u; index < UTP_CONNECTION_MAX_STREAMS; ++index) {
+            const size_t  slot   = (connection->stream_scheduler_cursor + index) % UTP_CONNECTION_MAX_STREAMS;
+            utp_stream_t* stream = &connection->streams[slot];
+            uint32_t      quantum;
+
+            if (!utp_stream_has_send_work(stream)) {
+                continue;
+            }
+            quantum = UINT32_C(1200) * (uint32_t)(UTP_STREAM_PRIORITY_LOWEST - stream->priority + 1u);
+            stream->drr_deficit =
+                stream->drr_deficit > UINT32_C(131072) - quantum ? UINT32_C(131072) : stream->drr_deficit + quantum;
+            if (stream->drr_deficit != 0u) {
+                connection->stream_scheduler_cursor = (uint8_t)((slot + 1u) % UTP_CONNECTION_MAX_STREAMS);
+                return slot;
+            }
+        }
+        return UTP_CONNECTION_MAX_STREAMS;
+    }
+    for (index = 0u; index < UTP_CONNECTION_MAX_STREAMS; ++index) {
+        utp_stream_t* stream = &connection->streams[index];
+
+        if (!utp_stream_has_send_work(stream)) {
+            stream->strict_wait_rounds = 0u;
+            continue;
+        }
+        if (selected == UTP_CONNECTION_MAX_STREAMS ||
+            utp_connection_stream_effective_priority(stream) < best_priority) {
+            selected      = index;
+            best_priority = utp_connection_stream_effective_priority(stream);
+        }
+    }
+    if (selected == UTP_CONNECTION_MAX_STREAMS) {
+        return selected;
+    }
+    for (index = 0u; index < UTP_CONNECTION_MAX_STREAMS; ++index) {
+        const size_t  slot   = (connection->stream_scheduler_cursor + index) % UTP_CONNECTION_MAX_STREAMS;
+        utp_stream_t* stream = &connection->streams[slot];
+
+        if (utp_stream_has_send_work(stream) && utp_connection_stream_effective_priority(stream) == best_priority) {
+            selected = slot;
+            break;
+        }
+    }
+    for (index = 0u; index < UTP_CONNECTION_MAX_STREAMS; ++index) {
+        utp_stream_t* stream = &connection->streams[index];
+
+        if (!utp_stream_has_send_work(stream)) {
+            stream->strict_wait_rounds = 0u;
+        } else if (index == selected) {
+            stream->strict_wait_rounds = 0u;
+        } else if (stream->strict_wait_rounds != UINT8_MAX) {
+            ++stream->strict_wait_rounds;
+        }
+    }
+    connection->stream_scheduler_cursor = (uint8_t)((selected + 1u) % UTP_CONNECTION_MAX_STREAMS);
+    return selected;
+}
+
 static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connection_t* connection, uint64_t now_us,
                                                                     bool include_ack, bool include_controls,
                                                                     bool* queued)
@@ -844,12 +923,12 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
             }
         }
     }
-    for (index = 0u; index < UTP_CONNECTION_MAX_STREAMS; ++index) {
+    index = utp_connection_select_stream(connection);
+    if (index == UTP_CONNECTION_MAX_STREAMS) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    {
         utp_stream_t* stream = &connection->streams[index];
-
-        if (!utp_stream_has_send_work(stream)) {
-            continue;
-        }
         if (connection->packet_capacity <
             UTP_PACKET_HEADER_SIZE + control_prefix_length + UTP_FRAME_STREAM_HEADER_SIZE) {
             return UTP_INTERNAL_ERROR_LIMIT;
@@ -885,12 +964,15 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
         if (max_data_length > connection->peer_max_data - connection->stream_data_sent_total) {
             max_data_length = (size_t)(connection->peer_max_data - connection->stream_data_sent_total);
         }
+        if (connection->stream_scheduler_mode == 1u && max_data_length > stream->drr_deficit) {
+            max_data_length = stream->drr_deficit;
+        }
         packet = NULL;
         error  = utp_stream_build_frame_view_limited(stream, stream_header, sizeof(stream_header), max_data_length,
                                                      &stream_header_length, &stream_data, &stream_data_size,
                                                      &stream_offset, &fin);
         if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
-            continue;
+            return UTP_INTERNAL_ERROR_OK;
         }
         if (error == UTP_INTERNAL_ERROR_OK &&
             (uint64_t)stream_data_size > UINT64_MAX - connection->stream_data_sent_total) {
@@ -999,6 +1081,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
         if (error == UTP_INTERNAL_ERROR_OK) {
             connection->stream_data_sent_total += (uint64_t)stream_data_size;
         }
+        if (error == UTP_INTERNAL_ERROR_OK && connection->stream_scheduler_mode == 1u) {
+            stream->drr_deficit -= stream_data_size > stream->drr_deficit ? stream->drr_deficit : stream_data_size;
+        }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_send_control_schedule_packet(&connection->send_control, packet, true);
         }
@@ -1086,6 +1171,8 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->close_pto_us                 = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
     connection->close_error_code             = 0u;
     connection->close_pending                = false;
+    connection->stream_scheduler_mode        = 0u;
+    connection->stream_scheduler_cursor      = 0u;
     error = utp_packet_out_pool_init(&connection->packet_pool, NULL, packet_limit, &bucket, 1u);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -1813,6 +1900,16 @@ uint64_t utp_connection_retransmission_deadline(const utp_connection_t* connecti
 uint64_t utp_connection_close_deadline(const utp_connection_t* connection)
 {
     return connection == NULL ? 0u : connection->close_deadline_us;
+}
+
+utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode)
+{
+    if (connection == NULL || mode > 1u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection->stream_scheduler_mode   = mode;
+    connection->stream_scheduler_cursor = 0u;
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 utp_internal_error_t utp_connection_create_stream(utp_connection_t* connection, bool bidirectional,
