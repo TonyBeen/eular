@@ -76,7 +76,8 @@ TEST_CASE("pending incoming promotes only for a matching accepted HandshakeDone"
     REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), &peer, &result) ==
             UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
     REQUIRE(utp_pending_incoming_accept(&pending) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 7u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 7u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_handshake_deadline(&pending) > 100u);
 
     REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), &peer, &result) ==
             UTP_INTERNAL_ERROR_OK);
@@ -104,7 +105,7 @@ TEST_CASE("pending incoming enforces bounded packet and byte storage", "[pending
     REQUIRE(utp_pending_incoming_init(&pending, 41u, 31u, &peer, storage.data(), storage.size(), 1u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_accept(&pending) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 9u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 9u, 100u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), &peer, &result) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), &peer, &result) ==

@@ -17,7 +17,7 @@ struct CongestionTrace {
     uint64_t last_inflight = 0u;
     uint64_t last_now      = 0u;
     uint64_t last_ack_now  = 0u;
-    unsigned calls         = 0u;
+    uint32_t calls         = 0u;
 };
 
 void trace_init(void* state, const utp_rtt_stats_t* rtt_stats) {
@@ -29,7 +29,7 @@ void trace_init(void* state, const utp_rtt_stats_t* rtt_stats) {
 
 uint64_t trace_get_cwnd(void* state) { return static_cast<CongestionTrace*>(state)->cwnd; }
 
-uint64_t trace_get_pacing_rate(void* state, int in_recovery) {
+uint64_t trace_get_pacing_rate(void* state, int32_t in_recovery) {
     auto* trace = static_cast<CongestionTrace*>(state);
 
     return in_recovery != 0 ? trace->pacing_rate / 2u : trace->pacing_rate;
@@ -43,7 +43,7 @@ void trace_begin_ack(void* state, uint64_t now_us, uint64_t inflight_bytes) {
     ++trace->calls;
 }
 
-void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int app_limited) {
+void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited) {
     auto* trace = static_cast<CongestionTrace*>(state);
 
     REQUIRE(packet != nullptr);
@@ -58,7 +58,8 @@ void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t no
     ++trace->calls;
 }
 
-void trace_packet_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int app_limited) {
+void trace_packet_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes,
+                       int32_t app_limited) {
     trace_packet(state, packet, 0u, app_limited);
     static_cast<CongestionTrace*>(state)->last_inflight = inflight_bytes;
 }
@@ -90,7 +91,7 @@ TEST_CASE("pacer consumes burst tokens then reports its pacing deadline", "[cong
 
     utp_pacer_init(&pacer, 100u);
     utp_pacer_tick_in(&pacer, 1000u);
-    for (unsigned index = 0u; index < UTP_PACER_BURST_TOKENS; ++index) {
+    for (uint32_t index = 0u; index < UTP_PACER_BURST_TOKENS; ++index) {
         REQUIRE(utp_pacer_can_schedule(&pacer, 1u));
         utp_pacer_packet_scheduled(&pacer, 1u, false, 200u);
     }

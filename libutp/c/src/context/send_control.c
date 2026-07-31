@@ -589,7 +589,12 @@ utp_internal_error_t utp_send_control_on_ack(utp_send_control_t *control, const 
     if (control == NULL || ack == NULL || acknowledged_packets == NULL || result == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memset(result, 0, sizeof(*result));
+    result->ledger.largest_acknowledged_packet_number = 0u;
+    result->ledger.largest_acknowledged_sent_time_us  = 0u;
+    result->ledger.acknowledged_bytes                 = 0u;
+    result->ledger.acknowledged_packet_count          = 0u;
+    result->rtt_sample_us                             = 0u;
+    result->rtt_sample_valid                          = false;
     {
         uint64_t inflight_before_ack = utp_send_ledger_bytes_in_flight(&control->ledger);
 

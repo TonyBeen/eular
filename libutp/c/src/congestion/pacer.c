@@ -1,12 +1,17 @@
 #include "congestion/pacer.h"
 
-#include <string.h>
+#include <stddef.h>
 
 void utp_pacer_init(utp_pacer_t *pacer, uint32_t clock_granularity_us) {
     if (pacer != NULL) {
-        memset(pacer, 0, sizeof(*pacer));
-        pacer->clock_granularity_us = clock_granularity_us;
-        pacer->burst_tokens         = UTP_PACER_BURST_TOKENS;
+        pacer->next_scheduled_time_us = 0u;
+        pacer->last_delayed_time_us   = 0u;
+        pacer->now_us                 = 0u;
+        pacer->clock_granularity_us   = clock_granularity_us;
+        pacer->burst_tokens           = UTP_PACER_BURST_TOKENS;
+        pacer->scheduled_count        = 0u;
+        pacer->last_schedule_delayed  = false;
+        pacer->delayed_on_tick_in     = false;
     }
 }
 

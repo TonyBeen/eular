@@ -48,6 +48,7 @@
 | **打洞设计** | `specs/2026-07-24-libutp-ntrs-fast-connect-design.md` | punch/fast-connect 16 节定稿 |
 | **NTRS 认证** | `specs/2026-07-27-libutp-ntrs-auth-design.md` | node↔home-NtrsA 自签 Ed25519 单向认证 |
 | **C 工程规范** | `c/STYLE.md` / `c/ERRORS.md` / `c/README.md` | 强制约束 + 迁移顺序 + 容器策略 |
+| **C 数据拷贝策略** | `docs/superpowers/02-C-ZERO-COPY-COPY-REDUCTION.md` | `memcpy/memset` 使用边界、零拷贝演进顺序、当前可删项 |
 | **交叉参考** | `cpp/`(冻结) / `doc/`(可能过时,以代码为准) | 行为 ground truth |
 
 12 需求模块速查:01 包/帧 · 02 连接生命周期/CID/HandshakeDone · 03 流 · 04 可靠性/ACK · 05 流控 · 06 拥塞(BBR/CUBIC) · 07 路径验证/抗放大 · 08 keepalive · 09 MTU/PLPMTUD · 10 加密/0-RTT · 11 socket · 12 公共 API/配置/错误码。

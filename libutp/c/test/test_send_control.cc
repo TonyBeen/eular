@@ -22,17 +22,17 @@ struct CongestionTrace {
     uint64_t cwnd           = 0u;
     uint64_t sent_inflight  = 0u;
     uint64_t begin_inflight = 0u;
-    unsigned sent_calls     = 0u;
-    unsigned ack_calls      = 0u;
-    unsigned begin_calls    = 0u;
-    unsigned end_calls      = 0u;
+    uint32_t sent_calls     = 0u;
+    uint32_t ack_calls      = 0u;
+    uint32_t begin_calls    = 0u;
+    uint32_t end_calls      = 0u;
 };
 
 uint64_t trace_cwnd(void* state) { return static_cast<CongestionTrace*>(state)->cwnd; }
 
-uint64_t trace_rate(void*, int) { return 1000000u; }
+uint64_t trace_rate(void*, int32_t) { return 1000000u; }
 
-void trace_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int) {
+void trace_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int32_t) {
     auto* trace = static_cast<CongestionTrace*>(state);
 
     REQUIRE(packet != nullptr);
@@ -47,7 +47,7 @@ void trace_begin(void* state, uint64_t, uint64_t inflight_bytes) {
     ++trace->begin_calls;
 }
 
-void trace_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t, int) {
+void trace_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t, int32_t) {
     REQUIRE(packet != nullptr);
     ++static_cast<CongestionTrace*>(state)->ack_calls;
 }

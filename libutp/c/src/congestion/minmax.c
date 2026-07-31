@@ -3,7 +3,6 @@
 #include "congestion/minmax.h"
 
 #include <stddef.h>
-#include <string.h>
 
 static void utp_minmax_reset(utp_minmax_t *minmax, utp_minmax_sample_t sample) {
     minmax->samples[0] = sample;
@@ -33,8 +32,13 @@ static void utp_minmax_subwindow_update(utp_minmax_t *minmax, const utp_minmax_s
 
 void utp_minmax_init(utp_minmax_t *minmax, uint64_t window) {
     if (minmax != NULL) {
-        memset(minmax, 0, sizeof(*minmax));
-        minmax->window = window;
+        minmax->window           = window;
+        minmax->samples[0].time  = 0u;
+        minmax->samples[0].value = 0u;
+        minmax->samples[1].time  = 0u;
+        minmax->samples[1].value = 0u;
+        minmax->samples[2].time  = 0u;
+        minmax->samples[2].value = 0u;
     }
 }
 

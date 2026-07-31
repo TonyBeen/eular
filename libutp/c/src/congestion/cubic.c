@@ -131,7 +131,7 @@ static uint64_t utp_cubic_reno_increment(const utp_cubic_t* cubic, uint64_t acke
 
 static uint64_t utp_cubic_get_cwnd(void* state) { return state == NULL ? 0u : ((const utp_cubic_t*)state)->cwnd; }
 
-static uint64_t utp_cubic_get_pacing_rate(void* state, int in_recovery) {
+static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery) {
     const utp_cubic_t* cubic = state;
     uint64_t           srtt;
     uint64_t           base_rate;
@@ -160,7 +160,7 @@ static void utp_cubic_on_init(void* state, const utp_rtt_stats_t* rtt_stats) {
     utp_cubic_reset_epoch(cubic);
 }
 
-static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int app_limited) {
+static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited) {
     utp_cubic_t* cubic = state;
     uint64_t     acked_bytes;
     uint64_t     cubic_increment;

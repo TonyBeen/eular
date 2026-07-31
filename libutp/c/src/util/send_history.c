@@ -1,13 +1,12 @@
 #include "util/send_history.h"
 
-#include <string.h>
-
 #include "proto/proto.h"
 
 void utp_send_history_init(utp_send_history_t *history, uint64_t gap_warning_threshold) {
     if (history != NULL) {
-        memset(history, 0, sizeof(*history));
+        history->largest               = 0u;
         history->gap_warning_threshold = gap_warning_threshold;
+        history->gap_detected          = false;
     }
 }
 

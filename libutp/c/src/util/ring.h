@@ -2,6 +2,7 @@
 #define EULAR_UTP_INTERNAL_RING_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "util/allocator.h"
 #include "util/error.h"
@@ -11,7 +12,7 @@ extern "C" {
 #endif
 
 typedef struct utp_ring {
-    unsigned char         *data;
+    uint8_t               *data;
     size_t                 element_size;
     size_t                 capacity;
     size_t                 head;

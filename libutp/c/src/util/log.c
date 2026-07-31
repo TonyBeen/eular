@@ -48,9 +48,9 @@ utp_internal_error_t utp_log_tag_append(utp_log_tag_t *tag, const utp_log_tag_t 
 
 void utp_internal_log_error(const utp_logger_t *logger, const utp_log_tag_t *tag, utp_internal_error_t error,
                             const char *message) {
-    char        formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
-    const char *status;
-    const int   system_error = utp_internal_error_to_errno(error);
+    char          formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
+    const char   *status;
+    const int32_t system_error = utp_internal_error_to_errno(error);
 
     if (logger == NULL || logger->sink == NULL || message == NULL) {
         return;

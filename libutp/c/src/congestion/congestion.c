@@ -1,8 +1,9 @@
 #include "congestion/congestion.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
-static int utp_congestion_has_ops(const utp_congestion_t *congestion) {
+static bool utp_congestion_has_ops(const utp_congestion_t *congestion) {
     return congestion != NULL && congestion->ops != NULL;
 }
 
@@ -12,7 +13,7 @@ uint64_t utp_congestion_get_cwnd(const utp_congestion_t *congestion) {
                : 0u;
 }
 
-uint64_t utp_congestion_get_pacing_rate(const utp_congestion_t *congestion, int in_recovery) {
+uint64_t utp_congestion_get_pacing_rate(const utp_congestion_t *congestion, int32_t in_recovery) {
     return utp_congestion_has_ops(congestion) && congestion->ops->get_pacing_rate != NULL
                ? congestion->ops->get_pacing_rate(congestion->state, in_recovery)
                : 0u;
@@ -31,14 +32,14 @@ void utp_congestion_on_begin_ack(utp_congestion_t *congestion, uint64_t now_us, 
 }
 
 void utp_congestion_on_packet_sent(utp_congestion_t *congestion, utp_congestion_packet_info_t *packet,
-                                   uint64_t inflight_bytes, int app_limited) {
+                                   uint64_t inflight_bytes, int32_t app_limited) {
     if (utp_congestion_has_ops(congestion) && congestion->ops->on_packet_sent != NULL) {
         congestion->ops->on_packet_sent(congestion->state, packet, inflight_bytes, app_limited);
     }
 }
 
 void utp_congestion_on_ack(utp_congestion_t *congestion, utp_congestion_packet_info_t *packet, uint64_t now_us,
-                           int app_limited) {
+                           int32_t app_limited) {
     if (utp_congestion_has_ops(congestion) && congestion->ops->on_ack != NULL) {
         congestion->ops->on_ack(congestion->state, packet, now_us, app_limited);
     }

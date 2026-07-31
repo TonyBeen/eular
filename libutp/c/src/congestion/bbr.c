@@ -15,7 +15,7 @@ static const double k_bbr_gains[8] = {1.25, .75, 1., 1., 1., 1., 1., 1.};
 static uint64_t min64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 static uint64_t max64(uint64_t a, uint64_t b) { return a > b ? a : b; }
 static uint64_t sat_add(uint64_t a, uint64_t b) { return b > UINT64_MAX - a ? UINT64_MAX : a + b; }
-static int      in_recovery(const utp_bbr_t *b) { return b->recovery_state != UTP_BBR_NOT_IN_RECOVERY; }
+static int32_t  in_recovery(const utp_bbr_t *b) { return b->recovery_state != UTP_BBR_NOT_IN_RECOVERY ? 1 : 0; }
 static uint64_t min_rtt(const utp_bbr_t *b) {
     uint64_t r = b->min_rtt_us;
     if (r == 0u && b->rtt_stats != NULL) r = utp_rtt_stats_minimum(b->rtt_stats);
@@ -51,7 +51,7 @@ static void update_pacing(utp_bbr_t *b) {
     target = (uint64_t)((double)bw * b->pacing_gain);
     if (b->full_bandwidth_reached || target > b->pacing_rate) b->pacing_rate = target;
 }
-static void update_recovery(utp_bbr_t *b, int round_start) {
+static void update_recovery(utp_bbr_t *b, int32_t round_start) {
     if (b->ack_has_losses) b->end_recovery_packet_number = b->last_sent_packet_number;
     if (b->recovery_state == UTP_BBR_NOT_IN_RECOVERY && b->ack_has_losses) {
         b->recovery_state                  = UTP_BBR_CONSERVATION;
@@ -65,7 +65,7 @@ static void update_recovery(utp_bbr_t *b, int round_start) {
 }
 static void update_gain_cycle(utp_bbr_t *b, uint64_t inflight) {
     uint64_t target  = target_cwnd(b, 1.);
-    int      advance = b->ack_time_us - b->last_cycle_start_us >= min_rtt(b);
+    int32_t  advance = b->ack_time_us - b->last_cycle_start_us >= min_rtt(b) ? 1 : 0;
     if (b->pacing_gain > 1. && !b->ack_has_losses && b->inflight_bytes < target_cwnd(b, b->pacing_gain)) advance = 0;
     if (b->pacing_gain < 1. && inflight <= target) advance = 1;
     if (advance) {
@@ -113,7 +113,7 @@ static uint64_t get_cwnd(void *s) {
     if (b->mode == UTP_BBR_PROBE_RTT) return probe_rtt_cwnd(b);
     return in_recovery(b) ? min64(b->cwnd, b->recovery_window) : b->cwnd;
 }
-static uint64_t get_rate(void *s, int r) {
+static uint64_t get_rate(void *s, int32_t r) {
     utp_bbr_t *b = s;
     (void)r;
     return b == NULL ? 0u : b->pacing_rate;
@@ -126,7 +126,7 @@ static void on_init(void *s, const utp_rtt_stats_t *rtt) {
         set_startup(b);
     }
 }
-static void on_sent(void *s, utp_congestion_packet_info_t *p, uint64_t in, int app) {
+static void on_sent(void *s, utp_congestion_packet_info_t *p, uint64_t in, int32_t app) {
     utp_bbr_t *b = s;
     if (b == NULL || p == NULL) return;
     utp_bw_sampler_on_packet_sent(&b->sampler, p->state, p->packet_number, p->packet_size, p->sent_time_us);
@@ -148,7 +148,7 @@ static void begin_ack(void *s, uint64_t now, uint64_t in) {
         b->ack_has_sample = false;
     }
 }
-static void on_ack(void *s, utp_congestion_packet_info_t *p, uint64_t now, int app) {
+static void on_ack(void *s, utp_congestion_packet_info_t *p, uint64_t now, int32_t app) {
     utp_bbr_t      *b = s;
     utp_bw_sample_t x;
     (void)app;
@@ -177,8 +177,10 @@ static void end_ack(void *s, uint64_t in) {
     if (b == NULL || !b->in_ack) return;
     b->in_ack = false;
     if (b->acked_bytes > 0u) {
-        int round =
-            b->current_round_end_packet_number == 0u || b->last_sent_packet_number > b->current_round_end_packet_number;
+        int32_t round =
+            b->current_round_end_packet_number == 0u || b->last_sent_packet_number > b->current_round_end_packet_number
+                ? 1
+                : 0;
         if (round) {
             ++b->round_count;
             b->current_round_end_packet_number = b->last_sent_packet_number;

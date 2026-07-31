@@ -12,7 +12,6 @@ utp_internal_error_t utp_receive_history_init(utp_receive_history_t *history, co
     if (history == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memset(history, 0, sizeof(*history));
     if (range_capacity == 0u || range_capacity > SIZE_MAX / sizeof(*history->ranges)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -24,8 +23,12 @@ utp_internal_error_t utp_receive_history_init(utp_receive_history_t *history, co
     if (history->ranges == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
     }
-    history->range_capacity = range_capacity;
-    history->allocator      = resolved_allocator;
+    history->range_capacity      = range_capacity;
+    history->range_count         = 0u;
+    history->largest             = 0u;
+    history->largest_received_at = 0u;
+    history->cutoff              = 0u;
+    history->allocator           = resolved_allocator;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -34,7 +37,13 @@ void utp_receive_history_cleanup(utp_receive_history_t *history) {
         return;
     }
     utp_allocator_free(history->allocator, history->ranges);
-    memset(history, 0, sizeof(*history));
+    history->ranges              = NULL;
+    history->range_capacity      = 0u;
+    history->range_count         = 0u;
+    history->largest             = 0u;
+    history->largest_received_at = 0u;
+    history->cutoff              = 0u;
+    history->allocator           = NULL;
 }
 
 utp_internal_error_t utp_receive_history_insert(utp_receive_history_t *history, uint64_t packet_number,

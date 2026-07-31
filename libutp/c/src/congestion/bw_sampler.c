@@ -2,7 +2,6 @@
 
 #include <limits.h>
 #include <stddef.h>
-#include <string.h>
 
 static uint64_t utp_bw_rate(uint64_t bytes, uint64_t interval_us) {
     return interval_us == 0u || bytes > UINT64_MAX / UINT64_C(1000000) ? 0u : bytes * UINT64_C(1000000) / interval_us;
@@ -10,7 +9,15 @@ static uint64_t utp_bw_rate(uint64_t bytes, uint64_t interval_us) {
 
 void utp_bw_sampler_init(utp_bw_sampler_t *sampler) {
     if (sampler != NULL) {
-        memset(sampler, 0, sizeof(*sampler));
+        sampler->total_bytes_sent                = 0u;
+        sampler->total_bytes_acked               = 0u;
+        sampler->total_bytes_lost                = 0u;
+        sampler->last_acked_total_sent           = 0u;
+        sampler->last_acked_sent_time_us         = 0u;
+        sampler->last_acked_time_us              = 0u;
+        sampler->last_sent_packet_number         = 0u;
+        sampler->app_limited_until_packet_number = 0u;
+        sampler->app_limited                     = false;
     }
 }
 
@@ -19,7 +26,6 @@ void utp_bw_sampler_on_packet_sent(utp_bw_sampler_t *sampler, utp_bw_packet_stat
     if (sampler == NULL || packet == NULL || packet_number == 0u || packet_size == 0u) {
         return;
     }
-    memset(packet, 0, sizeof(*packet));
     packet->total_bytes_sent  = sampler->total_bytes_sent;
     packet->total_bytes_acked = sampler->total_bytes_acked;
     packet->total_bytes_lost  = sampler->total_bytes_lost;
@@ -45,7 +51,9 @@ bool utp_bw_sampler_on_packet_acked(utp_bw_sampler_t *sampler, utp_bw_packet_sta
         packet->packet_number != packet_number || ack_time_us <= packet->last_ack_time_us) {
         return false;
     }
-    memset(sample, 0, sizeof(*sample));
+    sample->bandwidth_bytes_per_second  = 0u;
+    sample->rtt_us                      = 0u;
+    sample->is_app_limited              = false;
     sampler->total_bytes_acked         += packet->packet_size;
     delivered                           = sampler->total_bytes_acked - packet->total_bytes_acked;
     interval                            = ack_time_us - packet->last_ack_time_us;

@@ -1,7 +1,6 @@
 #include "context/send_ledger.h"
 
 #include <limits.h>
-#include <string.h>
 
 #include "proto/proto.h"
 
@@ -55,10 +54,13 @@ utp_internal_error_t utp_send_ledger_init(utp_send_ledger_t *ledger, size_t pack
     if (ledger == NULL || packet_limit == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memset(ledger, 0, sizeof(*ledger));
     TAILQ_INIT(&ledger->unacked_packets);
-    ledger->packet_limit               = packet_limit;
-    ledger->retransmittable_frame_mask = retransmittable_frame_mask;
+    ledger->bytes_in_flight                 = 0u;
+    ledger->retransmittable_bytes_in_flight = 0u;
+    ledger->packet_count                    = 0u;
+    ledger->retransmittable_packet_count    = 0u;
+    ledger->packet_limit                    = packet_limit;
+    ledger->retransmittable_frame_mask      = retransmittable_frame_mask;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -72,7 +74,13 @@ void utp_send_ledger_cleanup(utp_send_ledger_t *ledger) {
         TAILQ_REMOVE(&ledger->unacked_packets, packet, po_next);
         packet->po_flags &= (uint16_t)~UTP_PO_UNACKED;
     }
-    memset(ledger, 0, sizeof(*ledger));
+    TAILQ_INIT(&ledger->unacked_packets);
+    ledger->bytes_in_flight                 = 0u;
+    ledger->retransmittable_bytes_in_flight = 0u;
+    ledger->packet_count                    = 0u;
+    ledger->retransmittable_packet_count    = 0u;
+    ledger->packet_limit                    = 0u;
+    ledger->retransmittable_frame_mask      = 0u;
 }
 
 utp_internal_error_t utp_send_ledger_track(utp_send_ledger_t *ledger, utp_packet_out_t *packet) {
@@ -147,8 +155,11 @@ utp_internal_error_t utp_send_ledger_acknowledge(utp_send_ledger_t *ledger, cons
     if (ledger == NULL || acknowledged_packets == NULL || result == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memset(result, 0, sizeof(*result));
-    error = utp_send_ledger_validate_ack(ack, largest_sent_packet_number);
+    result->largest_acknowledged_packet_number = 0u;
+    result->largest_acknowledged_sent_time_us  = 0u;
+    result->acknowledged_bytes                 = 0u;
+    result->acknowledged_packet_count          = 0u;
+    error                                      = utp_send_ledger_validate_ack(ack, largest_sent_packet_number);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }

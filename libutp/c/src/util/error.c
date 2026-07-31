@@ -4,7 +4,7 @@
 
 bool utp_internal_error_is_ok(utp_internal_error_t error) { return error == UTP_INTERNAL_ERROR_OK; }
 
-utp_internal_error_t utp_internal_error_from_errno(int system_error) {
+utp_internal_error_t utp_internal_error_from_errno(int32_t system_error) {
     if (system_error <= 0 || (uint32_t)system_error > UTP_INTERNAL_ERROR_VALUE_MASK) {
         return UTP_INTERNAL_ERROR_IO;
     }
@@ -15,12 +15,12 @@ bool utp_internal_error_is_posix(utp_internal_error_t error) {
     return (error & ~UTP_INTERNAL_ERROR_VALUE_MASK) == UTP_INTERNAL_ERROR_FACILITY_POSIX;
 }
 
-int utp_internal_error_to_errno(utp_internal_error_t error) {
-    return utp_internal_error_is_posix(error) ? (int)(error & UTP_INTERNAL_ERROR_VALUE_MASK) : 0;
+int32_t utp_internal_error_to_errno(utp_internal_error_t error) {
+    return utp_internal_error_is_posix(error) ? (int32_t)(error & UTP_INTERNAL_ERROR_VALUE_MASK) : 0;
 }
 
 utp_status_t utp_internal_error_to_status(utp_internal_error_t error) {
-    int system_error;
+    int32_t system_error;
 
     switch (error) {
         case UTP_INTERNAL_ERROR_OK:

@@ -23,7 +23,7 @@ typedef struct fail_allocator {
 typedef struct hash_item {
     utp_hash_node_t node;
     uint32_t        key;
-    int             present;
+    int32_t         present;
 } hash_item_t;
 
 typedef struct removal_state {
@@ -193,8 +193,8 @@ static void test_buffer_allocation_failure(void) {
 
 static void test_ring(void) {
     utp_ring_t ring;
-    int        value;
-    int        output;
+    int32_t    value;
+    int32_t    output;
 
     assert(utp_ring_init(&ring, NULL, sizeof(value), 3u) == UTP_INTERNAL_ERROR_OK);
     value = 1;
@@ -220,7 +220,7 @@ static void test_ring_allocation_failure(void) {
     fail_allocator_t state     = {0u, 0u};
     utp_allocator_t  allocator = make_fail_allocator(&state);
     utp_ring_t       ring;
-    int              value = 1;
+    int32_t          value = 1;
 
     assert(utp_ring_init(&ring, &allocator, sizeof(value), 4u) == UTP_INTERNAL_ERROR_NOMEM);
     assert(ring.data == NULL && ring.capacity == 0u && ring.count == 0u && ring.allocator == NULL);
@@ -260,7 +260,7 @@ static void test_range_set(void) {
 static void test_range_set_random(void) {
     enum { RANGE_LIMIT = 128, VALUE_LIMIT = 256, OPERATIONS = 100000 };
     utp_range_set_t set;
-    unsigned char   expected[VALUE_LIMIT] = {0};
+    uint8_t         expected[VALUE_LIMIT] = {0};
     uint32_t        state                 = UINT32_C(0x21ab47d3);
     size_t          operation;
 

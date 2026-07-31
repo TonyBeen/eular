@@ -43,7 +43,7 @@ set(UTP_C_SOURCES
     src/util/rtt.c src/util/receive_history.c src/proto/packet_out.c src/context/send_ledger.c
     src/context/send_control.c src/context/pending_incoming.c src/congestion/bbr.c src/congestion/bw_sampler.c src/congestion/congestion.c src/congestion/cubic.c
     src/congestion/minmax.c src/congestion/pacer.c
-    src/connection/connection.c src/context/context.c src/utp.c)
+    src/connection/stream.c src/connection/connection.c src/context/context.c src/utp.c)
 set(UTP_C_HEADERS
     include/utp/log.h include/utp/status.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
     src/util/buffer.h src/crypto/crypto.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
@@ -51,7 +51,7 @@ set(UTP_C_HEADERS
     src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h
     src/proto/wire.h src/context/send_ledger.h src/context/send_control.h src/context/pending_incoming.h src/congestion/congestion.h
     src/congestion/bbr.h src/congestion/bw_sampler.h src/congestion/cubic.h src/congestion/minmax.h src/congestion/pacer.h src/context/context.h)
-list(APPEND UTP_C_HEADERS src/connection/connection.h)
+list(APPEND UTP_C_HEADERS src/connection/stream.h src/connection/connection.h)
 add_library(utp_c STATIC ${UTP_C_SOURCES} ${UTP_C_HEADERS})
 add_library(eular::utp_c ALIAS utp_c)
 target_link_libraries(utp_c PRIVATE event_core crypto)
@@ -98,7 +98,7 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     utp_c_configure_c_test(utp_c_api_test)
     add_executable(utp_c_public_api_test test/test_public_api.c)
     utp_c_configure_c_test(utp_c_public_api_test)
-    foreach(test_name IN ITEMS proto crypto receive_history packet_out send_ledger send_control pending_incoming connection congestion minmax bw_sampler bbr)
+    foreach(test_name IN ITEMS proto crypto receive_history packet_out send_ledger send_control pending_incoming stream connection congestion minmax bw_sampler bbr)
         add_executable(utp_c_${test_name}_test test/test_${test_name}.cc)
         utp_c_configure_cpp_test(utp_c_${test_name}_test)
     endforeach()
@@ -112,7 +112,7 @@ endif()
 set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c ${UTP_C_HEADERS} ${UTP_C_SOURCES}
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc
-    test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc)
+    test/test_stream.cc test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc)
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
     HINTS "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"

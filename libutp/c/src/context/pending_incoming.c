@@ -4,6 +4,9 @@
 
 #include "proto/wire.h"
 
+#define UTP_PENDING_HANDSHAKE_BASE_DELAY_US UINT64_C(150000)
+#define UTP_PENDING_HANDSHAKE_MAX_DELAY_US  UINT64_C(60000000)
+
 static utp_internal_error_t utp_pending_incoming_find_handshake_done(const utp_packet_view_t *view,
                                                                      uint64_t *ack_packet_number, bool *found) {
     size_t offset = 0u;
@@ -40,19 +43,36 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t *pending, 
         storage_capacity < UTP_PACKET_HEADER_SIZE + sizeof(uint16_t) || packet_limit == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memset(pending, 0, sizeof(*pending));
-    pending->peer             = *peer;
-    pending->storage          = storage;
-    pending->storage_capacity = storage_capacity;
-    pending->packet_limit     = packet_limit;
-    pending->local_cid        = local_cid;
-    pending->peer_cid         = peer_cid;
+    pending->peer                                 = *peer;
+    pending->storage                              = storage;
+    pending->storage_capacity                     = storage_capacity;
+    pending->storage_length                       = 0u;
+    pending->packet_limit                         = packet_limit;
+    pending->packet_count                         = 0u;
+    pending->local_cid                            = local_cid;
+    pending->peer_cid                             = peer_cid;
+    pending->last_handshake_packet_number         = 0u;
+    pending->handshake_retransmission_deadline_us = 0u;
+    pending->handshake_retransmission_count       = 0u;
+    pending->accepted                             = false;
+    pending->handshake_sent                       = false;
     return UTP_INTERNAL_ERROR_OK;
 }
 
 void utp_pending_incoming_reset(utp_pending_incoming_t *pending) {
     if (pending != NULL) {
-        memset(pending, 0, sizeof(*pending));
+        pending->storage                              = NULL;
+        pending->storage_capacity                     = 0u;
+        pending->storage_length                       = 0u;
+        pending->packet_limit                         = 0u;
+        pending->packet_count                         = 0u;
+        pending->local_cid                            = 0u;
+        pending->peer_cid                             = 0u;
+        pending->last_handshake_packet_number         = 0u;
+        pending->handshake_retransmission_deadline_us = 0u;
+        pending->handshake_retransmission_count       = 0u;
+        pending->accepted                             = false;
+        pending->handshake_sent                       = false;
     }
 }
 
@@ -64,14 +84,44 @@ utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t *pending
     return UTP_INTERNAL_ERROR_OK;
 }
 
+static uint64_t utp_pending_incoming_next_handshake_delay(const utp_pending_incoming_t *pending) {
+    uint64_t delay = UTP_PENDING_HANDSHAKE_BASE_DELAY_US;
+    uint32_t exponent;
+
+    exponent = pending->handshake_retransmission_count > 8u ? 8u : pending->handshake_retransmission_count;
+    while (exponent-- != 0u) {
+        if (delay > UTP_PENDING_HANDSHAKE_MAX_DELAY_US / 2u) {
+            return UTP_PENDING_HANDSHAKE_MAX_DELAY_US;
+        }
+        delay *= 2u;
+    }
+    return delay;
+}
+
 utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incoming_t *pending,
-                                                              uint64_t                handshake_packet_number) {
-    if (pending == NULL || !pending->accepted || handshake_packet_number == 0u) {
+                                                              uint64_t handshake_packet_number, uint64_t now_us) {
+    uint64_t delay_us;
+
+    if (pending == NULL || !pending->accepted || handshake_packet_number == 0u || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    pending->handshake_sent               = true;
-    pending->last_handshake_packet_number = handshake_packet_number;
+    delay_us = utp_pending_incoming_next_handshake_delay(pending);
+    if (delay_us > UINT64_MAX - now_us) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    pending->handshake_sent                       = true;
+    pending->last_handshake_packet_number         = handshake_packet_number;
+    pending->handshake_retransmission_deadline_us = now_us + delay_us;
+    if (pending->handshake_retransmission_count != UINT32_MAX) {
+        ++pending->handshake_retransmission_count;
+    }
     return UTP_INTERNAL_ERROR_OK;
+}
+
+uint64_t utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t *pending) {
+    return pending == NULL || !pending->accepted || !pending->handshake_sent
+               ? 0u
+               : pending->handshake_retransmission_deadline_us;
 }
 
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t *pending, const uint8_t *packet,

@@ -33,6 +33,8 @@ typedef struct utp_pending_incoming {
     uint32_t      local_cid;
     uint32_t      peer_cid;
     uint64_t      last_handshake_packet_number;
+    uint64_t      handshake_retransmission_deadline_us;
+    uint32_t      handshake_retransmission_count;
     bool          accepted;
     bool          handshake_sent;
 } utp_pending_incoming_t;
@@ -43,7 +45,8 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t *pending, 
 void                 utp_pending_incoming_reset(utp_pending_incoming_t *pending);
 utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t *pending);
 utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incoming_t *pending,
-                                                              uint64_t                handshake_packet_number);
+                                                              uint64_t handshake_packet_number, uint64_t now_us);
+uint64_t             utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t *pending);
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t *pending, const uint8_t *packet,
                                                     size_t packet_length, const utp_address_t *peer,
                                                     utp_pending_incoming_result_t *result);

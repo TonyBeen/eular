@@ -1,7 +1,9 @@
 #define CATCH_CONFIG_MAIN
 
+#include <array>
 #include <catch2/catch.hpp>
 #include <cstdlib>
+#include <cstring>
 
 extern "C" {
 #include "proto/packet_out.h"
@@ -200,4 +202,23 @@ TEST_CASE("packet_out pool release resets state but preserves the buffer for reu
     REQUIRE(pkt2->loss_chain == pkt2);
 
     utp_packet_out_pool_cleanup(&pool);
+}
+
+TEST_CASE("packet_out flatten joins raw and external slices", "[packet_out][slice]") {
+    utp_packet_out_t        packet   = {};
+    std::array<uint8_t, 8>  raw      = {'h', 'e', 'a', 'd', 'e', 'r', 0, 0};
+    std::array<uint8_t, 4>  external = {'d', 'a', 't', 'a'};
+    std::array<uint8_t, 16> wire     = {};
+    size_t                  length   = 0u;
+
+    packet.raw_data    = raw.data();
+    packet.alloc_size  = static_cast<uint16_t>(raw.size());
+    packet.data_size   = 10u;
+    packet.slice_count = 2u;
+    packet.slices[0]   = {0u, 6u, nullptr, UTP_PACKET_OUT_SLICE_RAW_OFFSET};
+    packet.slices[1]   = {0u, 4u, external.data(), UTP_PACKET_OUT_SLICE_EXTERNAL};
+
+    REQUIRE(utp_packet_out_flatten(&packet, wire.data(), wire.size(), &length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(length == 10u);
+    REQUIRE(std::memcmp(wire.data(), "headerdata", 10u) == 0);
 }

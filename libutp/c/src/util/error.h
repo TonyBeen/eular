@@ -29,9 +29,9 @@ typedef uint32_t utp_internal_error_t;
 #define UTP_INTERNAL_ERROR_IO               (UTP_INTERNAL_ERROR_FACILITY_INTERNAL | UINT32_C(15))
 
 bool                 utp_internal_error_is_ok(utp_internal_error_t error);
-utp_internal_error_t utp_internal_error_from_errno(int system_error);
+utp_internal_error_t utp_internal_error_from_errno(int32_t system_error);
 bool                 utp_internal_error_is_posix(utp_internal_error_t error);
-int                  utp_internal_error_to_errno(utp_internal_error_t error);
+int32_t              utp_internal_error_to_errno(utp_internal_error_t error);
 utp_status_t         utp_internal_error_to_status(utp_internal_error_t error);
 
 #endif  // EULAR_UTP_INTERNAL_ERROR_H

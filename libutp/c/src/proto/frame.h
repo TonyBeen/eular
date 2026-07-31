@@ -87,6 +87,24 @@ typedef struct utp_frame_reset_stream {
     uint64_t final_size;
 } utp_frame_reset_stream_t;
 
+typedef struct utp_frame_max_data {
+    uint64_t maximum_data;
+} utp_frame_max_data_t;
+
+typedef struct utp_frame_max_stream_data {
+    uint32_t stream_id;
+    uint64_t maximum_stream_data;
+} utp_frame_max_stream_data_t;
+
+typedef struct utp_frame_data_blocked {
+    uint64_t data_limit;
+} utp_frame_data_blocked_t;
+
+typedef struct utp_frame_stream_data_blocked {
+    uint32_t stream_id;
+    uint64_t stream_data_limit;
+} utp_frame_stream_data_blocked_t;
+
 utp_internal_error_t utp_frame_measure(const uint8_t *frame, size_t available, uint8_t *frame_type,
                                        size_t *frame_length);
 utp_internal_error_t utp_frame_scan(const uint8_t *payload, size_t payload_length, uint32_t *frame_types);
@@ -104,6 +122,8 @@ utp_internal_error_t utp_frame_handshake_done_encode(uint8_t *buffer, size_t cap
 utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t *done, const uint8_t *buffer,
                                                      size_t length);
 utp_internal_error_t utp_frame_stream_encode(uint8_t *buffer, size_t capacity, const utp_frame_stream_t *stream);
+utp_internal_error_t utp_frame_stream_header_encode(uint8_t *buffer, size_t capacity, uint8_t flags, uint32_t stream_id,
+                                                    uint64_t offset, uint16_t data_length);
 utp_internal_error_t utp_frame_stream_decode(utp_frame_stream_t *stream, const uint8_t *buffer, size_t length);
 utp_internal_error_t utp_frame_padding_encode(uint8_t *buffer, size_t capacity, uint16_t padding_length);
 utp_internal_error_t utp_frame_padding_decode(uint16_t *padding_length, const uint8_t *buffer, size_t length);
@@ -115,6 +135,20 @@ utp_internal_error_t utp_frame_reset_stream_encode(uint8_t *buffer, size_t capac
                                                    const utp_frame_reset_stream_t *reset);
 utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t *reset, const uint8_t *buffer,
                                                    size_t length);
+utp_internal_error_t utp_frame_max_data_encode(uint8_t *buffer, size_t capacity, const utp_frame_max_data_t *max_data);
+utp_internal_error_t utp_frame_max_data_decode(utp_frame_max_data_t *max_data, const uint8_t *buffer, size_t length);
+utp_internal_error_t utp_frame_max_stream_data_encode(uint8_t *buffer, size_t capacity,
+                                                      const utp_frame_max_stream_data_t *max_stream_data);
+utp_internal_error_t utp_frame_max_stream_data_decode(utp_frame_max_stream_data_t *max_stream_data,
+                                                      const uint8_t *buffer, size_t length);
+utp_internal_error_t utp_frame_data_blocked_encode(uint8_t *buffer, size_t capacity,
+                                                   const utp_frame_data_blocked_t *blocked);
+utp_internal_error_t utp_frame_data_blocked_decode(utp_frame_data_blocked_t *blocked, const uint8_t *buffer,
+                                                   size_t length);
+utp_internal_error_t utp_frame_stream_data_blocked_encode(uint8_t *buffer, size_t capacity,
+                                                          const utp_frame_stream_data_blocked_t *blocked);
+utp_internal_error_t utp_frame_stream_data_blocked_decode(utp_frame_stream_data_blocked_t *blocked,
+                                                          const uint8_t *buffer, size_t length);
 
 #ifdef __cplusplus
 }

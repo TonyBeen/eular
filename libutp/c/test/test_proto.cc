@@ -144,7 +144,7 @@ TEST_CASE("udp socket binds a nonblocking IPv4 loopback port", "[udp]") {
     REQUIRE_FALSE(utp_udp_socket_is_open(&socket));
     REQUIRE(utp_udp_socket_open(&socket, requested.family) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_is_open(&socket));
-    REQUIRE(utp_udp_socket_bind(&socket, &requested, &local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&socket, &requested, nullptr, &local) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(local.family == UTP_ADDRESS_FAMILY_IPV4);
     REQUIRE(local.port != 0u);
     utp_udp_socket_close(&socket);
@@ -185,7 +185,7 @@ TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]")
     REQUIRE(utp_address_parse(&requested, "::1", 0u) == UTP_INTERNAL_ERROR_OK);
     utp_udp_socket_init(&socket);
     REQUIRE(utp_udp_socket_open(&socket, UTP_ADDRESS_FAMILY_IPV6) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&socket, &requested, &local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&socket, &requested, nullptr, &local) == UTP_INTERNAL_ERROR_OK);
 #if defined(_WIN32)
     {
         int option_length = (int)sizeof(ipv6_only);
@@ -225,8 +225,8 @@ TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]") {
     utp_event_init(&event);
     REQUIRE(utp_udp_socket_open(&sender, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_open(&receiver, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&sender, &loopback, &sender_local) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_event_add_udp(&loop, &event, &receiver, UTP_EVENT_READABLE, true, test_event_probe_callback, &probe) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_event_loop_run_once(&loop, true) == UTP_INTERNAL_ERROR_OK);
@@ -303,8 +303,8 @@ TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]") {
     utp_udp_socket_init(&receiver);
     REQUIRE(utp_udp_socket_open(&sender, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_open(&receiver, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&sender, &loopback, &sender_local) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
 
     REQUIRE(utp_udp_socket_recv_from(&receiver, received.data(), received.size(), &received_length, &peer) ==
             UTP_INTERNAL_ERROR_WOULD_BLOCK);
@@ -322,6 +322,51 @@ TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]") {
     REQUIRE(receive_error == UTP_INTERNAL_ERROR_OK);
     REQUIRE(received_length == payload.size());
     REQUIRE(std::memcmp(received.data(), payload.data(), payload.size()) == 0);
+    REQUIRE(utp_address_equal(&peer, &sender_local));
+
+    utp_udp_socket_close(&receiver);
+    utp_udp_socket_close(&sender);
+}
+
+TEST_CASE("udp socket sends a datagram from slices", "[udp]") {
+    const std::array<uint8_t, 2> first           = {UINT8_C(0xaa), UINT8_C(0xbb)};
+    const std::array<uint8_t, 3> second          = {UINT8_C(0xcc), UINT8_C(0xdd), UINT8_C(0xee)};
+    std::array<uint8_t, 8>       received        = {};
+    utp_address_t                loopback        = {};
+    utp_address_t                sender_local    = {};
+    utp_address_t                receiver_local  = {};
+    utp_address_t                peer            = {};
+    utp_udp_socket_t             sender          = {};
+    utp_udp_socket_t             receiver        = {};
+    utp_internal_error_t         receive_error   = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    size_t                       sent_length     = 0u;
+    size_t                       received_length = 0u;
+    const utp_udp_send_slice_t   slices[]        = {{first.data(), first.size()}, {second.data(), second.size()}};
+
+    REQUIRE(utp_address_parse(&loopback, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
+    utp_udp_socket_init(&sender);
+    utp_udp_socket_init(&receiver);
+    REQUIRE(utp_udp_socket_open(&sender, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_open(&receiver, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_udp_socket_send_to_slices(&sender, slices, 2u, &receiver_local, &sent_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sent_length == first.size() + second.size());
+    for (size_t attempt = 0u; attempt < 1000u; ++attempt) {
+        receive_error = utp_udp_socket_recv_from(&receiver, received.data(), received.size(), &received_length, &peer);
+        if (receive_error == UTP_INTERNAL_ERROR_OK) {
+            break;
+        }
+        REQUIRE(receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    }
+    REQUIRE(receive_error == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(received_length == first.size() + second.size());
+    REQUIRE(received[0] == first[0]);
+    REQUIRE(received[1] == first[1]);
+    REQUIRE(received[2] == second[0]);
+    REQUIRE(received[3] == second[1]);
+    REQUIRE(received[4] == second[2]);
     REQUIRE(utp_address_equal(&peer, &sender_local));
 
     utp_udp_socket_close(&receiver);
@@ -349,8 +394,8 @@ TEST_CASE("udp socket rejects a datagram that exceeds receive capacity", "[udp]"
     utp_udp_socket_init(&receiver);
     REQUIRE(utp_udp_socket_open(&sender, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_open(&receiver, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&sender, &loopback, &sender_local) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_send_to(&sender, payload.data(), payload.size(), &receiver_local, &sent_length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(sent_length == payload.size());
@@ -765,4 +810,38 @@ TEST_CASE("reset stream frame round trips its terminal state", "[frame]") {
     REQUIRE(decoded.final_size == reset.final_size);
     REQUIRE(utp_frame_reset_stream_decode(&decoded, encoded.data(), encoded.size() - 1u) ==
             UTP_INTERNAL_ERROR_OVERFLOW);
+}
+
+TEST_CASE("flow-control frames round trip their limits", "[frame]") {
+    std::array<uint8_t, 13>         encoded                 = {};
+    utp_frame_max_data_t            max_data                = {UINT64_C(0x0102030405060708)};
+    utp_frame_max_data_t            decoded_max_data        = {};
+    utp_frame_data_blocked_t        data_blocked            = {UINT64_C(0x1112131415161718)};
+    utp_frame_data_blocked_t        decoded_data_blocked    = {};
+    utp_frame_max_stream_data_t     max_stream_data         = {UINT32_C(0x21222324), UINT64_C(0x25262728292a2b2c)};
+    utp_frame_max_stream_data_t     decoded_max_stream_data = {};
+    utp_frame_stream_data_blocked_t stream_blocked          = {UINT32_C(0x31323334), UINT64_C(0x35363738393a3b3c)};
+    utp_frame_stream_data_blocked_t decoded_stream_blocked  = {};
+
+    REQUIRE(utp_frame_max_data_encode(encoded.data(), encoded.size(), &max_data) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_max_data_decode(&decoded_max_data, encoded.data(), 9u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_max_data.maximum_data == max_data.maximum_data);
+
+    REQUIRE(utp_frame_data_blocked_encode(encoded.data(), encoded.size(), &data_blocked) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_data_blocked_decode(&decoded_data_blocked, encoded.data(), 9u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_data_blocked.data_limit == data_blocked.data_limit);
+
+    REQUIRE(utp_frame_max_stream_data_encode(encoded.data(), encoded.size(), &max_stream_data) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_max_stream_data_decode(&decoded_max_stream_data, encoded.data(), encoded.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_max_stream_data.stream_id == max_stream_data.stream_id);
+    REQUIRE(decoded_max_stream_data.maximum_stream_data == max_stream_data.maximum_stream_data);
+
+    REQUIRE(utp_frame_stream_data_blocked_encode(encoded.data(), encoded.size(), &stream_blocked) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_stream_data_blocked_decode(&decoded_stream_blocked, encoded.data(), encoded.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_stream_blocked.stream_id == stream_blocked.stream_id);
+    REQUIRE(decoded_stream_blocked.stream_data_limit == stream_blocked.stream_data_limit);
 }

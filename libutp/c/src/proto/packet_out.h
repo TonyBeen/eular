@@ -79,6 +79,7 @@ typedef struct utp_packet_out {
     uint16_t data_size;
     uint16_t encrypt_data_size;
     uint16_t alloc_size;
+    uint8_t  packet_type;
     uint8_t  slice_count;
     uint8_t  frame_meta_count;
     uint32_t stream_data_size;
@@ -140,6 +141,8 @@ void                 utp_packet_out_pool_release(utp_packet_out_pool_t *pool, ut
 
 bool utp_packet_out_add_send_attempt(utp_packet_out_t *pkt, uint64_t packet_number, uint64_t sent_time_us);
 void utp_packet_out_clear_send_attempts(utp_packet_out_t *pkt);
+utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t *pkt, uint8_t *buffer, size_t capacity,
+                                            size_t *out_length);
 
 #ifdef __cplusplus
 }
