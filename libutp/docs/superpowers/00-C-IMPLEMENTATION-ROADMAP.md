@@ -150,6 +150,8 @@
 
 **下一步 = 迁移第 2 步的"包头 + 帧编解码"**(纯值模块、解析零分配、可单测,最适合独立推进)。已冻结的子任务(task #13–#19):
 
+> 2026-07-31 状态补丁：`c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。当前已具备 PacketIn 池化接收、PacketOut scatter/gather STREAM 发送、connection/context 基础建连、ACK/retransmission 基线、stream ring send buffer、PacketIn-backed recv fragment、连接级/流级 MAX_DATA 更新接收，以及 C 侧连接级/流级字节流控校验与应用消费后的 MAX_DATA / MAX_STREAM_DATA 排包。后续继续按 `docs/superpowers/requirements/` 的 03/04/05/06/09/11/12 补齐，不以 `doc/` 旧文档为准。
+
 1. **wire 底座**:`src/internal/wire.h` 有界大端 read/write u8/u16/u32/u64(游标 + capacity 检查,溢出返 `INTERNAL_ERROR_OVERFLOW`)。
 2. **包头 + 常量**:`src/internal/proto.h` + `src/proto.c`:头 encode/decode、包类型(含 CONNECT)、版本、packno 上限、MTU floor 1280。
 3. **帧类型 + 包布局解析**:`src/internal/frame.h` + `src/frame.c`:帧枚举/位图/重传掩码;布局校验(frameLength 等价)+ 逐帧游标 + 位图;零分配。

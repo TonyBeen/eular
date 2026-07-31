@@ -14,11 +14,11 @@
 
 | 位置 | 原因 | 后续替代 |
 |---|---|---|
-| `utp_stream_write()` 将应用数据写入 stream send buffer | 传统 write API 必须解耦应用缓冲生命周期，并保留明文用于 ACK 前重传 | 增加 acquire/commit write view，允许应用直接写入 ring buffer |
-| `utp_stream_on_frame()` 将 STREAM 数据存入 recv fragment | 当前收包缓冲属于 context 临时 buffer，下一次 recv 会覆盖 | 引入 `PacketIn` 池 + refcnt，fragment 保存 packet 引用和 offset/len |
-| `utp_stream_read()` 拷贝到应用 buffer | 传统 read API 的语义就是复制到调用方 buffer | 增加 acquire/commit read views，应用直接消费协议栈 buffer |
+| `utp_stream_write()` 将应用数据写入 stream send buffer | 传统 write API 必须解耦应用缓冲生命周期，并保留明文用于 ACK 前重传 | 内部已增加 acquire/commit write view，允许后续 API 层直接写入 ring buffer |
+| `utp_stream_on_frame()` raw 数据帧 | raw packet 没有可借用生命周期，不能被 recv fragment 持有 | 有数据的 STREAM frame 必须走 `PacketIn`；无数据 FIN 可保留 raw 兼容 |
+| `utp_stream_read()` 拷贝到应用 buffer | 传统 read API 的语义就是复制到调用方 buffer | 内部已增加 acquire/commit read view，后续 public/API 层可映射到该模型 |
 | 控制帧 payload 复制到 `PacketOut` | 控制帧很小，当前收益低，且重传依赖完整 packet | 后续 frame builder 直接写 packet 或小帧固定内联 |
-| pending incoming 缓存完整 wire packet | pending 阶段尚未有正式 connection/PacketIn 生命周期 | pending 阶段接入 PacketIn 引用池后再移除 |
+| pending incoming 缓存完整 wire packet | HandshakeDone 前没有正式 connection，暂按有界 storage 缓存 | promote replay 时用 context PacketIn 池包装回放包，避免 stream fragment 指向 raw storage |
 | crypto key/nonce/transcript 小块复制 | 加密材料构造需要独立存储，且非数据面大块 payload | 保留；敏感材料后续按 crypto 规范显式清理 |
 | socket/address/system struct 清零或小块复制 | 平台 ABI 或地址表示转换要求明确布局 | 保留，除非有等价且更清晰的字段初始化 |
 
@@ -46,7 +46,13 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 - ACK 按 stream offset/length 记录并释放连续已 ACK 前缀。
 - 发送后的 `memmove` 已删除。
 
-后续仍需补充更完整的乱序 ACK / 重传压力回归，以及应用写入 acquire/commit view。
+内部 write view 已完成：
+
+- `utp_stream_acquire_write_views()` 借出 stream send ring 的可写片段，wrap 时最多返回两个 view。
+- `utp_stream_commit_write_views()` 提交调用方已写入的数据和可选 FIN。
+- 传统 `utp_stream_write()` 继续保留拷贝语义，作为兼容路径。
+
+后续仍需补充更完整的乱序 ACK / 重传压力回归。
 
 ### 3. 接收侧 PacketIn + refcnt
 
@@ -62,7 +68,13 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 - fragment 插入时处理重叠裁剪，只保留未接收区间。
 - `commitReadViews` 释放 fragment 引用，PacketIn refcnt 到 0 后回池。
 
-完成后删除 STREAM 接收缓存的 payload copy。
+当前状态：正式 UDP 收包路径已接入 PacketIn 池和 refcnt；`utp_connection_on_packet_in_received()` 将 PacketIn 传入 STREAM 解码路径，recv fragment 只保存 packet 引用、data pointer 和 length，数据消费或 stream/connection cleanup 时释放。有数据的 raw STREAM frame 会被拒绝，避免保存无生命周期指针；pending replay 会先从 context PacketIn 池借包包装完整 wire image，再交给 connection。
+
+内部 read view 已完成：
+
+- `utp_stream_acquire_read_view()` 借出当前连续首片的只读视图。
+- `utp_stream_commit_read_view()` 按 offset/length 提交消费并释放 fragment / PacketIn 引用。
+- FIN 在数据消费完后通过零长度 view 单独暴露，保持与传统 `read()` 一致的“先数据后 FIN”语义。
 
 ### 4. Public/API 层零拷贝视图
 
@@ -79,7 +91,8 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 - stream send buffer 已改为 ring/offset 生命周期，去掉发送后的 `memmove`。
 - 去掉 stream 初始化时对整个 `utp_stream_t` 的清零，避免清 `send_buffer` 和 recv fragment payload 区。
 - 去掉 stream recv fragment 插入时对整个 fragment 的清零，只初始化元数据。
-- 去掉 context 创建和 slot 分配/释放中的大对象清零，避免清 `udp_read_buffer`、pending storage、connection/stream payload 区。
+- 去掉 stream recv fragment 的内嵌 payload storage，接收侧 payload 生命周期由 PacketIn 管理。
+- 去掉 context 创建和 slot 分配/释放中的大对象清零，避免清 pending storage、connection/stream payload 区。
 - 去掉部分 packet out 池 acquire/release 的整结构清零，改为显式重置有效元数据。
 - 去掉 ACK/send history/send ledger/bw sampler/minmax/pacer 等小结构中可明确替代的 `memset`。
 

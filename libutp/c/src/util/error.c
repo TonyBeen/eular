@@ -4,57 +4,63 @@
 
 bool utp_internal_error_is_ok(utp_internal_error_t error) { return error == UTP_INTERNAL_ERROR_OK; }
 
-utp_internal_error_t utp_internal_error_from_errno(int32_t system_error) {
+utp_internal_error_t utp_internal_error_from_errno(int32_t system_error)
+{
     if (system_error <= 0 || (uint32_t)system_error > UTP_INTERNAL_ERROR_VALUE_MASK) {
         return UTP_INTERNAL_ERROR_IO;
     }
     return UTP_INTERNAL_ERROR_FACILITY_POSIX | (uint32_t)system_error;
 }
 
-bool utp_internal_error_is_posix(utp_internal_error_t error) {
+bool utp_internal_error_is_posix(utp_internal_error_t error)
+{
     return (error & ~UTP_INTERNAL_ERROR_VALUE_MASK) == UTP_INTERNAL_ERROR_FACILITY_POSIX;
 }
 
-int32_t utp_internal_error_to_errno(utp_internal_error_t error) {
+int32_t utp_internal_error_to_errno(utp_internal_error_t error)
+{
     return utp_internal_error_is_posix(error) ? (int32_t)(error & UTP_INTERNAL_ERROR_VALUE_MASK) : 0;
 }
 
-utp_status_t utp_internal_error_to_status(utp_internal_error_t error) {
+utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
+{
     int32_t system_error;
 
     switch (error) {
-        case UTP_INTERNAL_ERROR_OK:
-            return UTP_STATUS_OK;
-        case UTP_INTERNAL_ERROR_INVALID_ARGUMENT:
-            return UTP_STATUS_INVALID_ARGUMENT;
-        case UTP_INTERNAL_ERROR_NOMEM:
-            return UTP_STATUS_NOMEM;
-        case UTP_INTERNAL_ERROR_LIMIT:
-            return UTP_STATUS_LIMIT;
-        case UTP_INTERNAL_ERROR_EXISTS:
-            return UTP_STATUS_EXISTS;
-        case UTP_INTERNAL_ERROR_NOT_FOUND:
-            return UTP_STATUS_NOT_FOUND;
-        case UTP_INTERNAL_ERROR_OVERFLOW:
-            return UTP_STATUS_OVERFLOW;
-        case UTP_INTERNAL_ERROR_STATE:
-            return UTP_STATUS_STATE;
-        case UTP_INTERNAL_ERROR_PROTOCOL:
-            return UTP_STATUS_PROTOCOL;
-        case UTP_INTERNAL_ERROR_CRYPTO:
-            return UTP_STATUS_CRYPTO;
-        case UTP_INTERNAL_ERROR_AUTH:
-            return UTP_STATUS_AUTH;
-        case UTP_INTERNAL_ERROR_UNSUPPORTED:
-            return UTP_STATUS_UNSUPPORTED;
-        case UTP_INTERNAL_ERROR_TIMEOUT:
-            return UTP_STATUS_TIMEOUT;
-        case UTP_INTERNAL_ERROR_CLOSED:
-            return UTP_STATUS_CLOSED;
-        case UTP_INTERNAL_ERROR_WOULD_BLOCK:
-            return UTP_STATUS_WOULD_BLOCK;
-        default:
-            break;
+    case UTP_INTERNAL_ERROR_OK:
+        return UTP_STATUS_OK;
+    case UTP_INTERNAL_ERROR_INVALID_ARGUMENT:
+        return UTP_STATUS_INVALID_ARGUMENT;
+    case UTP_INTERNAL_ERROR_NOMEM:
+        return UTP_STATUS_NOMEM;
+    case UTP_INTERNAL_ERROR_LIMIT:
+        return UTP_STATUS_LIMIT;
+    case UTP_INTERNAL_ERROR_EXISTS:
+        return UTP_STATUS_EXISTS;
+    case UTP_INTERNAL_ERROR_NOT_FOUND:
+        return UTP_STATUS_NOT_FOUND;
+    case UTP_INTERNAL_ERROR_OVERFLOW:
+        return UTP_STATUS_OVERFLOW;
+    case UTP_INTERNAL_ERROR_STATE:
+        return UTP_STATUS_STATE;
+    case UTP_INTERNAL_ERROR_PROTOCOL:
+        return UTP_STATUS_PROTOCOL;
+    case UTP_INTERNAL_ERROR_CRYPTO:
+        return UTP_STATUS_CRYPTO;
+    case UTP_INTERNAL_ERROR_AUTH:
+        return UTP_STATUS_AUTH;
+    case UTP_INTERNAL_ERROR_UNSUPPORTED:
+        return UTP_STATUS_UNSUPPORTED;
+    case UTP_INTERNAL_ERROR_TIMEOUT:
+        return UTP_STATUS_TIMEOUT;
+    case UTP_INTERNAL_ERROR_CLOSED:
+        return UTP_STATUS_CLOSED;
+    case UTP_INTERNAL_ERROR_WOULD_BLOCK:
+        return UTP_STATUS_WOULD_BLOCK;
+    case UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL:
+        return UTP_STATUS_STREAM_FLOW_CONTROL;
+    default:
+        break;
     }
     system_error = utp_internal_error_to_errno(error);
     if (system_error == 0) {

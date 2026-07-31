@@ -9,6 +9,7 @@
 #include "context/ack_scheduler.h"
 #include "context/send_control.h"
 #include "proto/frame.h"
+#include "proto/packet_in.h"
 #include "socket/address.h"
 #include "util/receive_history.h"
 
@@ -16,8 +17,10 @@
 extern "C" {
 #endif
 
-#define UTP_CONNECTION_MAX_RECEIVE_RANGES 32u
-#define UTP_CONNECTION_MAX_STREAMS        8u
+#define UTP_CONNECTION_MAX_RECEIVE_RANGES             32u
+#define UTP_CONNECTION_MAX_STREAMS                    8u
+#define UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT   (16u * 1024u * 1024u)
+#define UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT 4096u
 
 typedef enum utp_connection_role { UTP_CONNECTION_ROLE_ACTIVE = 0, UTP_CONNECTION_ROLE_PASSIVE } utp_connection_role_t;
 
@@ -40,14 +43,24 @@ typedef struct utp_connection {
     uint32_t               local_cid;
     uint32_t               peer_cid;
     uint32_t               next_stream_id[UTP_STREAM_TYPES];
+    uint32_t               peer_max_stream_data_ids[UTP_CONNECTION_MAX_STREAMS];
+    uint64_t               peer_max_stream_data_values[UTP_CONNECTION_MAX_STREAMS];
     uint64_t               peer_max_data;
     uint64_t               local_max_data_advertised;
+    uint64_t               stream_data_sent_total;
+    uint64_t               local_stream_data_received_total;
+    uint64_t               local_stream_data_consumed_total;
+    uint64_t               last_max_data_sent_us;
+    uint64_t               last_data_blocked_sent_us;
     uint16_t               packet_capacity;
+    size_t                 recv_reassembly_memory_bytes;
+    size_t                 recv_reassembly_fragment_count;
     uint64_t               rx_bytes;
     uint64_t               tx_bytes;
     uint64_t               peer_handshake_packet_number;
     uint64_t               retransmission_deadline_us;
     utp_connection_role_t  role;
+    size_t                 peer_max_stream_data_count;
     utp_connection_state_t state;
 } utp_connection_t;
 
@@ -61,6 +74,7 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
                                                  const uint8_t* payload, size_t payload_length, bool track_on_send);
 // Returns a scheduled packet or a retransmission with a fresh packet number.
 utp_packet_out_t* utp_connection_next_packet_to_send(utp_connection_t* connection);
+utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us);
 // Marks a packet as successfully written. Non-tracked packets are returned to the pool here.
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
@@ -68,6 +82,8 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
 utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, const uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer,
                                                        uint64_t now_us);
+utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* connection, utp_packet_in_t* packet,
+                                                          const utp_address_t* peer, uint64_t now_us);
 utp_internal_error_t utp_connection_queue_ack(utp_connection_t* connection, uint64_t now_us);
 uint32_t             utp_connection_ack_pending_count(const utp_connection_t* connection);
 uint64_t             utp_connection_ack_deadline(const utp_connection_t* connection);
@@ -81,6 +97,10 @@ utp_internal_error_t utp_connection_stream_write(utp_connection_t* connection, u
                                                  size_t length, bool fin);
 utp_internal_error_t utp_connection_stream_read(utp_connection_t* connection, uint32_t stream_id, uint8_t* buffer,
                                                 size_t capacity, size_t* out_length, bool* out_fin);
+utp_internal_error_t utp_connection_stream_acquire_read_view(utp_connection_t* connection, uint32_t stream_id,
+                                                             utp_stream_read_view_t* out_view);
+utp_internal_error_t utp_connection_stream_commit_read_view(utp_connection_t* connection, uint32_t stream_id,
+                                                            uint64_t offset, size_t length);
 
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);
 bool                   utp_connection_is_connected(const utp_connection_t* connection);
