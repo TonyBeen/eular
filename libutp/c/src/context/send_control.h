@@ -68,25 +68,36 @@ utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t*
 // Schedules packet for one eventual send. Packets remain caller-owned until sent or explicitly released.
 utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* control, utp_packet_out_t* packet,
                                                       bool track_on_send);
+// Schedules a newly built packet at the front of the send queue.
+utp_internal_error_t utp_send_control_schedule_packet_front(utp_send_control_t* control, utp_packet_out_t* packet,
+                                                            bool track_on_send);
 // Restores an unsent packet to the head of the scheduled queue without changing its tracking policy.
 utp_internal_error_t utp_send_control_reschedule_packet(utp_send_control_t* control, utp_packet_out_t* packet);
 // Removes and returns the oldest scheduled packet, or NULL when no packet is ready.
 utp_packet_out_t* utp_send_control_next_scheduled(utp_send_control_t* control);
+// Returns the oldest scheduled packet without changing queue ownership.
+utp_packet_out_t* utp_send_control_peek_scheduled(const utp_send_control_t* control);
 // Scans tracked packets using the current ACK state and prepares each detected loss for retransmission or release.
 utp_internal_error_t utp_send_control_detect_losses(utp_send_control_t* control);
 // Returns the oldest detected retransmission candidate. The packet remains marked lost until a successful resend.
 utp_packet_out_t* utp_send_control_next_lost(utp_send_control_t* control);
+// Restores a retransmission candidate to the head of the loss queue when admission is unavailable.
+utp_internal_error_t utp_send_control_reschedule_lost(utp_send_control_t* control, utp_packet_out_t* packet);
 // Returns a packet that the connection must release to its packet pool. No release occurs in send-control.
 utp_packet_out_t* utp_send_control_next_discarded(utp_send_control_t* control);
-void              utp_send_control_set_connected(utp_send_control_t* control, bool connected);
-void              utp_send_control_set_loss_pending(utp_send_control_t* control, bool pending);
-void              utp_send_control_set_congestion(utp_send_control_t* control, utp_congestion_t* congestion);
-void              utp_send_control_set_pacing_enabled(utp_send_control_t* control, bool enabled);
-void              utp_send_control_set_app_limited(utp_send_control_t* control, bool app_limited);
-void              utp_send_control_pacer_tick_in(utp_send_control_t* control, uint64_t now_us);
-void              utp_send_control_pacer_tick_out(utp_send_control_t* control);
-bool              utp_send_control_can_schedule_packet(const utp_send_control_t* control, uint64_t packet_size);
-bool              utp_send_control_can_transmit_packet(utp_send_control_t* control, uint64_t packet_size);
+// Removes an in-flight MTU probe without placing it on any retransmission queue.
+utp_internal_error_t utp_send_control_take_mtu_probe(utp_send_control_t* control, uint64_t packet_number,
+                                                     utp_packet_out_t** out_packet);
+void                 utp_send_control_set_connected(utp_send_control_t* control, bool connected);
+void                 utp_send_control_set_loss_pending(utp_send_control_t* control, bool pending);
+void                 utp_send_control_set_congestion(utp_send_control_t* control, utp_congestion_t* congestion);
+void                 utp_send_control_set_pacing_enabled(utp_send_control_t* control, bool enabled);
+void                 utp_send_control_set_app_limited(utp_send_control_t* control, bool app_limited);
+void                 utp_send_control_pacer_tick_in(utp_send_control_t* control, uint64_t now_us);
+void                 utp_send_control_pacer_tick_out(utp_send_control_t* control);
+bool                 utp_send_control_can_schedule_packet(const utp_send_control_t* control, uint64_t packet_size);
+bool                 utp_send_control_can_transmit_packet(utp_send_control_t* control, uint64_t packet_size);
+uint64_t             utp_send_control_pacing_deadline(const utp_send_control_t* control);
 utp_send_control_retransmission_mode_t utp_send_control_retransmission_mode(const utp_send_control_t* control);
 uint64_t                               utp_send_control_calculate_handshake_delay(utp_send_control_t* control);
 uint64_t                               utp_send_control_calculate_tlp_delay(const utp_send_control_t* control);

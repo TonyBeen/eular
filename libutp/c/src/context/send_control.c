@@ -136,7 +136,7 @@ utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control
         control->current_packet_number = packet->packet_number;
     }
     packet->po_flags    &= (uint16_t)~(UTP_PO_LOST | UTP_PO_LOSS_RECORDED | UTP_PO_RESET_PACKNO);
-    packet->local_flags &= (uint16_t)~UTP_POL_FACKED;
+    packet->local_flags &= (uint16_t)~(UTP_POL_FACKED | UTP_POL_LOSS);
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -153,8 +153,8 @@ utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t*
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* control, utp_packet_out_t* packet,
-                                                      bool track_on_send)
+static utp_internal_error_t utp_send_control_schedule_packet_at(utp_send_control_t* control, utp_packet_out_t* packet,
+                                                                bool track_on_send, bool front)
 {
     uint64_t packet_size;
 
@@ -172,7 +172,11 @@ utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* contro
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
 
-    TAILQ_INSERT_TAIL(&control->scheduled_packets, packet, po_next);
+    if (front) {
+        TAILQ_INSERT_HEAD(&control->scheduled_packets, packet, po_next);
+    } else {
+        TAILQ_INSERT_TAIL(&control->scheduled_packets, packet, po_next);
+    }
     packet->po_flags |= UTP_PO_SCHED;
     if (track_on_send) {
         packet->local_flags |= UTP_POL_TRACK_ON_SEND;
@@ -184,6 +188,18 @@ utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* contro
     control->scheduled_byte_count += packet_size;
     ++control->scheduled_packet_count;
     return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* control, utp_packet_out_t* packet,
+                                                      bool track_on_send)
+{
+    return utp_send_control_schedule_packet_at(control, packet, track_on_send, false);
+}
+
+utp_internal_error_t utp_send_control_schedule_packet_front(utp_send_control_t* control, utp_packet_out_t* packet,
+                                                            bool track_on_send)
+{
+    return utp_send_control_schedule_packet_at(control, packet, track_on_send, true);
 }
 
 utp_internal_error_t utp_send_control_reschedule_packet(utp_send_control_t* control, utp_packet_out_t* packet)
@@ -223,6 +239,11 @@ utp_packet_out_t* utp_send_control_next_scheduled(utp_send_control_t* control)
     --control->scheduled_packet_count;
     control->scheduled_byte_count -= packet_size;
     return packet;
+}
+
+utp_packet_out_t* utp_send_control_peek_scheduled(const utp_send_control_t* control)
+{
+    return control == NULL ? NULL : TAILQ_FIRST(&control->scheduled_packets);
 }
 
 static bool utp_send_control_packet_is_retransmittable(const utp_send_control_t* control,
@@ -335,6 +356,17 @@ utp_packet_out_t* utp_send_control_next_lost(utp_send_control_t* control)
     return packet;
 }
 
+utp_internal_error_t utp_send_control_reschedule_lost(utp_send_control_t* control, utp_packet_out_t* packet)
+{
+    if (control == NULL || packet == NULL || (packet->po_flags & (UTP_PO_SCHED | UTP_PO_UNACKED | UTP_PO_LOST)) != 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    TAILQ_INSERT_HEAD(&control->lost_packets, packet, po_next);
+    packet->po_flags |= UTP_PO_LOST;
+    ++control->lost_packet_count;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 utp_packet_out_t* utp_send_control_next_discarded(utp_send_control_t* control)
 {
     utp_packet_out_t* packet;
@@ -345,6 +377,29 @@ utp_packet_out_t* utp_send_control_next_discarded(utp_send_control_t* control)
     TAILQ_REMOVE(&control->discarded_packets, packet, po_next);
     --control->discarded_packet_count;
     return packet;
+}
+
+utp_internal_error_t utp_send_control_take_mtu_probe(utp_send_control_t* control, uint64_t packet_number,
+                                                     utp_packet_out_t** out_packet)
+{
+    utp_packet_out_t* packet;
+
+    if (control == NULL || out_packet == NULL || packet_number == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    *out_packet = NULL;
+    TAILQ_FOREACH(packet, &control->ledger.unacked_packets, po_next)
+    {
+        if (packet->packet_number != packet_number || (packet->po_flags & UTP_PO_MTU_PROBE) == 0u) {
+            continue;
+        }
+        if (utp_send_ledger_remove(&control->ledger, packet) != UTP_INTERNAL_ERROR_OK) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        *out_packet = packet;
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    return UTP_INTERNAL_ERROR_NOT_FOUND;
 }
 
 void utp_send_control_set_connected(utp_send_control_t* control, bool connected)
@@ -433,6 +488,14 @@ bool utp_send_control_can_transmit_packet(utp_send_control_t* control, uint64_t 
     }
     return !control->pacing_enabled ||
            utp_pacer_can_schedule(&control->pacer, utp_send_ledger_packet_count(&control->ledger));
+}
+
+uint64_t utp_send_control_pacing_deadline(const utp_send_control_t* control)
+{
+    if (control == NULL || !control->pacing_enabled || !utp_pacer_delayed(&control->pacer)) {
+        return 0u;
+    }
+    return utp_pacer_next_scheduled_time(&control->pacer);
 }
 
 static bool utp_send_control_has_unacked_handshake_packet(const utp_send_control_t* control)
@@ -695,7 +758,7 @@ utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const 
     if (utp_send_ledger_retransmittable_packet_count(&control->ledger) == 0u) {
         control->was_quiet = true;
     }
-    return UTP_INTERNAL_ERROR_OK;
+    return utp_send_control_detect_losses(control);
 }
 
 uint64_t utp_send_control_largest_sent(const utp_send_control_t* control)

@@ -18,6 +18,12 @@ typedef struct utp_context_replay {
     uint64_t             now_us;
 } utp_context_replay_t;
 
+static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
+                                                size_t reason_length, bool peer_initiated);
+static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
+                                             const utp_connect_attempt_info_t* attempt);
+
 static uint64_t utp_context_now_us(void)
 {
     uint64_t now_us = utp_clock_now_us(NULL);
@@ -114,11 +120,14 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
 
     for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
         if (!context->connections[index].used) {
-            context->connections[index].connection.local_cid = 0u;
-            context->connections[index].connection.peer_cid  = 0u;
-            context->connections[index].used                 = true;
-            context->connections[index].connected_reported   = false;
-            context->connections[index].closed_reported      = false;
+            context->connections[index].connection.local_cid      = 0u;
+            context->connections[index].connection.peer_cid       = 0u;
+            context->connections[index].connect_deadline_us       = 0u;
+            context->connections[index].connect_retries_remaining = 0;
+            context->connections[index].used                      = true;
+            context->connections[index].connected_reported        = false;
+            context->connections[index].connection_error_reported = false;
+            context->connections[index].connect_pending           = false;
             return &context->connections[index];
         }
     }
@@ -131,9 +140,12 @@ static void utp_context_release_connection_slot(utp_context_connection_slot_t* s
         if (slot->connection.local_cid != 0u) {
             utp_connection_cleanup(&slot->connection);
         }
-        slot->connected_reported = false;
-        slot->closed_reported    = false;
-        slot->used               = false;
+        slot->connected_reported        = false;
+        slot->connection_error_reported = false;
+        slot->connect_deadline_us       = 0u;
+        slot->connect_retries_remaining = 0;
+        slot->connect_pending           = false;
+        slot->used                      = false;
     }
 }
 
@@ -254,25 +266,55 @@ static utp_internal_error_t utp_context_send_packet(utp_context_t* context, cons
     return utp_udp_socket_send_to_slices(&context->udp_socket, slices, packet->slice_count, peer, &sent_length);
 }
 
-static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_connection_t* connection)
+static void utp_context_report_permanent_send_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                    utp_internal_error_t error)
 {
+    static const uint8_t reason[] = "udp send ENOBUFS";
+    const utp_status_t   status   = utp_internal_error_to_status(error);
+
+    if (slot->connect_pending && !utp_connection_is_connected(&slot->connection)) {
+        utp_context_report_connect_error(context, status, (const char*)reason, &slot->connect_attempt);
+    } else {
+        utp_context_report_connection_error(context, slot, status, 0u, reason, sizeof(reason) - 1u, false);
+    }
+    utp_context_release_connection_slot(slot);
+}
+
+static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    utp_connection_t* connection;
+
+    if (context == NULL || slot == NULL || !slot->used) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection = &slot->connection;
+    utp_send_control_pacer_tick_in(&connection->send_control, utp_context_now_us());
     for (;;) {
         utp_packet_out_t*    packet = utp_connection_next_packet_to_send_at(connection, utp_context_now_us());
         utp_internal_error_t error;
 
         if (packet == NULL) {
+            utp_send_control_pacer_tick_out(&connection->send_control);
             return UTP_INTERNAL_ERROR_OK;
         }
-        error = utp_context_send_packet(context, &connection->peer, packet);
+        error = utp_context_send_packet(context, packet->has_destination ? &packet->destination : &connection->peer,
+                                        packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_connection_on_packet_sent(connection, packet, utp_context_now_us());
         } else if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
             error = utp_send_control_reschedule_packet(&connection->send_control, packet);
         } else {
+            utp_connection_on_packet_send_error(connection, packet, error, utp_context_now_us());
             utp_connection_on_packet_abandoned(connection, packet);
             utp_packet_out_pool_release(&connection->packet_pool, packet);
+            if (error == UTP_INTERNAL_ERROR_NOBUFS) {
+                utp_send_control_pacer_tick_out(&connection->send_control);
+                utp_context_report_permanent_send_error(context, slot, error);
+                return error;
+            }
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_send_control_pacer_tick_out(&connection->send_control);
             return error;
         }
     }
@@ -362,59 +404,115 @@ static void utp_context_send_pending_close(utp_context_t* context, utp_pending_i
 static void utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
     if (!slot->connected_reported && utp_connection_is_connected(&slot->connection)) {
-        slot->connected_reported = true;
+        slot->connect_pending     = false;
+        slot->connect_deadline_us = 0u;
+        slot->connected_reported  = true;
         if (context->on_connected != NULL) {
             context->on_connected(&slot->connection, context->on_connected_user_data);
         }
     }
 }
 
-static void utp_context_report_closed(utp_context_t* context, utp_context_connection_slot_t* slot)
+static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
+                                                size_t reason_length, bool peer_initiated)
 {
-    if (!slot->closed_reported && (utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
-                                   utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING)) {
-        slot->closed_reported = true;
-        if (context->on_connection_closed != NULL) {
-            context->on_connection_closed(&slot->connection, context->on_connection_closed_user_data);
+    if (!slot->connection_error_reported) {
+        const utp_connection_error_info_t info = {
+            status, peer_error_code, reason, reason_length, peer_initiated,
+        };
+
+        slot->connection_error_reported = true;
+        if (context->on_connection_error != NULL) {
+            context->on_connection_error(&slot->connection, &info, context->on_connection_error_user_data);
         }
     }
 }
 
 static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
-                                             const utp_address_t* peer, const utp_connect_options_t* options,
-                                             utp_connect_attempt_type_t type)
+                                             const utp_connect_attempt_info_t* attempt)
 {
-    utp_connect_attempt_info_t attempt;
-
     if (context->on_connect_error == NULL) {
         return;
     }
-    memset(&attempt, 0, sizeof(attempt));
-    if (peer != NULL) {
-        utp_context_endpoint_from_address(&attempt.remote, peer);
-    }
-    if (options != NULL) {
-        attempt.timeout_ms = options->timeout_ms == 0u ? 3000u : options->timeout_ms;
-        attempt.retries    = options->retries;
-        attempt.encryption = options->encryption;
-    }
-    attempt.type = type;
-    context->on_connect_error(status, message == NULL ? utp_status_string(status) : message, &attempt,
+    context->on_connect_error(status, message == NULL ? utp_status_string(status) : message, attempt,
                               context->on_connect_error_user_data);
 }
 
-static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* context, utp_connection_t* connection)
+static uint64_t utp_context_connect_deadline(uint64_t now_us, uint32_t timeout_ms)
 {
-    uint8_t                          payload[UTP_FRAME_HANDSHAKE_DONE_SIZE];
-    const utp_frame_handshake_done_t done = {connection->peer_handshake_packet_number};
-    utp_internal_error_t             error;
+    const uint64_t timeout_us = (uint64_t)timeout_ms * UINT64_C(1000);
+
+    return timeout_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + timeout_us;
+}
+
+static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*                 context,
+                                                              utp_context_connection_slot_t* slot,
+                                                              const utp_address_t* peer, uint64_t now_us)
+{
+    uint8_t              payload[UTP_FRAME_VERSION_SIZE];
+    size_t               payload_length;
+    uint32_t             local_cid;
+    utp_internal_error_t error;
+
+    if (context == NULL || slot == NULL || peer == NULL || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_context_alloc_cid(context, &local_cid);
+    if (error == UTP_INTERNAL_ERROR_OK && slot->connection.local_cid != 0u) {
+        utp_connection_cleanup(&slot->connection);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_ACTIVE, local_cid, 0u, peer,
+                                    UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_queue_packet(&slot->connection, UTP_PACKET_TYPE_INITIAL, payload, payload_length, true);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_flush_connection(context, slot);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        slot->connect_deadline_us = utp_context_connect_deadline(now_us, slot->connect_attempt.timeout_ms);
+    }
+    return error;
+}
+
+static void utp_context_fail_pending_connect(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                             utp_status_t status, const char* message)
+{
+    utp_context_report_connect_error(context, status, message, &slot->connect_attempt);
+    utp_context_release_connection_slot(slot);
+}
+
+static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    uint8_t                    payload[UTP_FRAME_HANDSHAKE_DONE_SIZE];
+    utp_connection_t*          connection;
+    utp_frame_handshake_done_t done;
+    utp_internal_error_t       error;
+
+    if (context == NULL || slot == NULL || !slot->used) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection                       = &slot->connection;
+    done.ack_handshake_packet_number = connection->peer_handshake_packet_number;
 
     error = utp_frame_handshake_done_encode(payload, sizeof(payload), &done);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_queue_packet(connection, UTP_PACKET_TYPE_CTRL, payload, sizeof(payload), false);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_flush_connection(context, connection);
+        error = utp_context_flush_connection(context, slot);
     }
     return error;
 }
@@ -457,6 +555,20 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         }
         utp_context_take_deadline(&deadline, utp_connection_retransmission_deadline(connection));
         utp_context_take_deadline(&deadline, utp_connection_close_deadline(connection));
+        utp_context_take_deadline(&deadline, utp_connection_keepalive_deadline(connection));
+        utp_context_take_deadline(&deadline, utp_connection_mtu_deadline(connection, now_us));
+        utp_context_take_deadline(&deadline, utp_connection_pacing_deadline(connection));
+        utp_context_take_deadline(&deadline, utp_connection_path_validation_deadline(connection));
+        if (context->connections[index].connect_pending) {
+            const utp_connection_state_t state = utp_connection_state(connection);
+
+            if (!utp_connection_is_connected(connection) &&
+                (state == UTP_CONNECTION_STATE_CLOSING || state == UTP_CONNECTION_STATE_DRAINING)) {
+                utp_context_take_deadline(&deadline, now_us);
+            } else {
+                utp_context_take_deadline(&deadline, context->connections[index].connect_deadline_us);
+            }
+        }
     }
     for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
         if (context->pending_incoming[index].used) {
@@ -524,7 +636,10 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
-                                pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UTP_PACKET_MTU_FLOOR);
+                                pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
     }
@@ -554,7 +669,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     }
     utp_context_release_pending_slot(pending_slot);
     utp_context_report_connected(context, slot);
-    return utp_context_flush_connection(context, &slot->connection);
+    return utp_context_flush_connection(context, slot);
 }
 
 static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*                 context,
@@ -575,8 +690,9 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    if (slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && view->header.type == UTP_PACKET_TYPE_HANDSHAKE) {
-        error = utp_context_send_handshake_done(context, &slot->connection);
+    if (slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && view->header.type == UTP_PACKET_TYPE_HANDSHAKE &&
+        slot->connection.peer_handshake_packet_number == view->header.packet_number) {
+        error = utp_context_send_handshake_done(context, slot);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -586,8 +702,16 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         return error;
     }
     utp_context_report_connected(context, slot);
-    utp_context_report_closed(context, slot);
-    return utp_context_flush_connection(context, &slot->connection);
+    if (!slot->connect_pending && slot->connection.peer_close_received && !slot->connection.local_close_started) {
+        const utp_status_t status = slot->connection.peer_close_error_code == 0u ? UTP_STATUS_OK : UTP_STATUS_CLOSED;
+
+        utp_context_report_connection_error(context, slot, status, slot->connection.peer_close_error_code,
+                                            slot->connection.peer_close_reason,
+                                            slot->connection.peer_close_reason_length, true);
+        slot->connection.peer_close_reason        = NULL;
+        slot->connection.peer_close_reason_length = 0u;
+    }
+    return utp_context_flush_connection(context, slot);
 }
 
 static utp_internal_error_t utp_context_on_pending_packet(utp_context_t* context, utp_context_pending_slot_t* slot,
@@ -745,15 +869,55 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         if (!slot->used) {
             continue;
         }
+        if (slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
+            ((utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
+              utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING) ||
+             (slot->connect_deadline_us != 0u && slot->connect_deadline_us <= now_us))) {
+            const bool closed_during_handshake =
+                utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
+                utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING;
+
+            if (slot->connect_retries_remaining > 0) {
+                const utp_address_t peer = slot->connection.peer;
+
+                --slot->connect_retries_remaining;
+                error = utp_context_start_connect_attempt(context, slot, &peer, now_us);
+                if (error != UTP_INTERNAL_ERROR_OK && slot->used) {
+                    utp_context_fail_pending_connect(context, slot, utp_internal_error_to_status(error),
+                                                     "connect retry failed");
+                }
+            } else {
+                utp_context_fail_pending_connect(
+                    context, slot, closed_during_handshake ? UTP_STATUS_CANCELLED : UTP_STATUS_TIMEOUT,
+                    closed_during_handshake ? "connection closed during handshake" : "connect timeout");
+            }
+            continue;
+        }
         if (utp_connection_close_deadline(&slot->connection) != 0u &&
             utp_connection_close_deadline(&slot->connection) <= now_us) {
-            utp_context_report_closed(context, slot);
             utp_context_release_connection_slot(slot);
             continue;
         }
-        error = utp_context_queue_ack_if_due(&slot->connection, now_us);
+        error = utp_connection_on_keepalive_timeout(&slot->connection, now_us);
+        if (error == UTP_INTERNAL_ERROR_TIMEOUT) {
+            static const uint8_t timeout_reason[] = "keepalive timeout";
+
+            utp_context_report_connection_error(context, slot, UTP_STATUS_TIMEOUT, 0u, timeout_reason,
+                                                sizeof(timeout_reason) - 1u, false);
+            utp_context_release_connection_slot(slot);
+            continue;
+        }
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_context_flush_connection(context, &slot->connection);
+            error = utp_connection_on_mtu_timeout(&slot->connection, now_us);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_connection_on_path_validation_timeout(&slot->connection, now_us);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_context_queue_ack_if_due(&slot->connection, now_us);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_context_flush_connection(context, slot);
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
@@ -762,7 +926,7 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         if (deadline != 0u && deadline <= now_us) {
             error = utp_connection_on_retransmission_timeout(&slot->connection, now_us);
             if (error == UTP_INTERNAL_ERROR_OK) {
-                error = utp_context_flush_connection(context, &slot->connection);
+                error = utp_context_flush_connection(context, slot);
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = utp_connection_ensure_retransmission_deadline(&slot->connection, now_us);
@@ -853,23 +1017,34 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_event_init(&context->udp_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
-    context->packet_in_pool.allocator       = NULL;
-    context->packet_in_pool.packets         = NULL;
-    context->packet_in_pool.storage         = NULL;
-    context->packet_in_pool.packet_capacity = 0u;
-    context->packet_in_pool.buffer_capacity = 0u;
-    context->on_connected                   = NULL;
-    context->on_connected_user_data         = NULL;
-    context->on_connect_error               = NULL;
-    context->on_connect_error_user_data     = NULL;
-    context->on_new_connection              = NULL;
-    context->on_new_connection_user_data    = NULL;
-    context->on_connection_closed           = NULL;
-    context->on_connection_closed_user_data = NULL;
-    context->next_cid                       = (uint32_t)options->context_id;
-    context->next_cid                       = context->next_cid == 0u ? 1u : context->next_cid;
-    context->stream_scheduler_mode          = options->stream_scheduler_mode;
-    context->logger.sink                    = options->log_sink;
+    context->packet_in_pool.allocator            = NULL;
+    context->packet_in_pool.packets              = NULL;
+    context->packet_in_pool.storage              = NULL;
+    context->packet_in_pool.packet_capacity      = 0u;
+    context->packet_in_pool.buffer_capacity      = 0u;
+    context->on_connected                        = NULL;
+    context->on_connected_user_data              = NULL;
+    context->on_connect_error                    = NULL;
+    context->on_connect_error_user_data          = NULL;
+    context->on_new_connection                   = NULL;
+    context->on_new_connection_user_data         = NULL;
+    context->on_connection_error                 = NULL;
+    context->on_connection_error_user_data       = NULL;
+    context->next_cid                            = (uint32_t)options->context_id;
+    context->next_cid                            = context->next_cid == 0u ? 1u : context->next_cid;
+    context->stream_scheduler_mode               = options->stream_scheduler_mode;
+    context->mtu_config.enabled                  = options->enable_dplpmtud;
+    context->mtu_config.mtu_min                  = options->mtu_min;
+    context->mtu_config.mtu_max                  = options->mtu_max;
+    context->mtu_config.mtu_base                 = options->mtu_base;
+    context->mtu_config.probe_interval_seconds   = options->mtu_probe_interval;
+    context->mtu_config.probe_step               = options->mtu_probe_step;
+    context->mtu_config.probe_timeout_ms         = options->mtu_probe_timeout;
+    context->mtu_config.probe_retries            = options->mtu_probe_retries;
+    context->mtu_config.blackhole_loss_threshold = options->mtu_blackhole_loss_threshold;
+    context->mtu_config.blackhole_loss_window_ms = options->mtu_blackhole_loss_window_ms;
+    context->mtu_config.blackhole_cooldown_ms    = options->mtu_blackhole_cooldown_ms;
+    context->logger.sink                         = options->log_sink;
     fragment_length = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
         utp_allocator_free(NULL, context);
@@ -976,11 +1151,11 @@ void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connec
     }
 }
 
-void utp_context_set_on_connection_closed(utp_context_t* context, utp_on_connection_closed_fn callback, void* user_data)
+void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data)
 {
     if (context != NULL) {
-        context->on_connection_closed           = callback;
-        context->on_connection_closed_user_data = user_data;
+        context->on_connection_error           = callback;
+        context->on_connection_error_user_data = user_data;
     }
 }
 
@@ -989,11 +1164,9 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     utp_address_t                  peer;
     utp_context_connection_slot_t* slot;
     utp_context_connection_slot_t* existing;
-    uint8_t                        payload[UTP_FRAME_VERSION_SIZE];
-    size_t                         payload_length;
-    uint32_t                       local_cid;
     utp_internal_error_t           error;
     utp_status_t                   status;
+    uint64_t                       now_us;
 
     if (context == NULL || options == NULL || options->address == NULL || options->port == 0u ||
         !utp_context_encryption_mode_is_valid(options->encryption)) {
@@ -1018,31 +1191,27 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     if (slot == NULL) {
         return UTP_STATUS_LIMIT;
     }
-    error = utp_context_alloc_cid(context, &local_cid);
+    utp_context_endpoint_from_address(&slot->connect_attempt.remote, &peer);
+    slot->connect_attempt.timeout_ms            = options->timeout_ms == 0u ? 3000u : options->timeout_ms;
+    slot->connect_attempt.retries               = options->retries;
+    slot->connect_attempt.encryption            = options->encryption;
+    slot->connect_attempt.type                  = UTP_CONNECT_ATTEMPT_NORMAL;
+    slot->connect_attempt.session_token_size    = 0u;
+    slot->connect_attempt.resumption_state_size = 0u;
+    slot->connect_attempt.early_data_size       = 0u;
+    slot->connect_attempt.early_fin             = false;
+    slot->connect_retries_remaining             = options->retries < 0 ? 0 : options->retries;
+    slot->connect_pending                       = true;
+    now_us                                      = utp_context_now_us();
+    error                                       = utp_context_start_connect_attempt(context, slot, &peer, now_us);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_ACTIVE, local_cid, 0u, &peer,
-                                    UTP_CONTEXT_PACKET_LIMIT, UTP_PACKET_MTU_FLOOR);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_queue_packet(&slot->connection, UTP_PACKET_TYPE_INITIAL, payload, payload_length, true);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_flush_connection(context, &slot->connection);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_refresh_timer(context, utp_context_now_us());
+        error = utp_context_refresh_timer(context, now_us);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         status = utp_internal_error_to_status(error);
-        utp_context_report_connect_error(context, status, "active connect failed", &peer, options,
-                                         UTP_CONNECT_ATTEMPT_NORMAL);
-        utp_context_release_connection_slot(slot);
+        if (slot->used) {
+            utp_context_fail_pending_connect(context, slot, status, "active connect failed");
+        }
         return status;
     }
     return UTP_STATUS_OK;
@@ -1080,9 +1249,14 @@ utp_status_t utp_context_accept(utp_context_t* context)
             error = utp_context_refresh_timer(context, now_us);
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_connect_attempt_info_t attempt = {0};
+
             utp_context_send_pending_close(context, &slot->pending, (uint16_t)(-UTP_STATUS_IO));
+            utp_context_endpoint_from_address(&attempt.remote, &slot->pending.peer);
+            attempt.encryption = UTP_ENCRYPTION_NONE;
+            attempt.type       = UTP_CONNECT_ATTEMPT_PASSIVE;
             utp_context_report_connect_error(context, utp_internal_error_to_status(error), "passive accept failed",
-                                             &slot->pending.peer, NULL, UTP_CONNECT_ATTEMPT_PASSIVE);
+                                             &attempt);
             utp_context_release_pending_slot(slot);
             return utp_internal_error_to_status(error);
         }

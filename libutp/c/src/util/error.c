@@ -59,6 +59,10 @@ utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
         return UTP_STATUS_WOULD_BLOCK;
     case UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL:
         return UTP_STATUS_STREAM_FLOW_CONTROL;
+    case UTP_INTERNAL_ERROR_PATH_VALIDATION_BLOCKED:
+        return UTP_STATUS_CONNECTION_PATH_VALIDATION_BLOCKED;
+    case UTP_INTERNAL_ERROR_NOBUFS:
+        return UTP_STATUS_LIMIT;
     default:
         break;
     }

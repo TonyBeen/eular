@@ -2,6 +2,7 @@
 #define EULAR_UTP_C_UTP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <utp/log.h>
@@ -53,7 +54,37 @@ typedef struct utp_context_options {
     uint64_t                    context_id;
     utp_log_level_t             log_level;
     utp_stream_scheduler_mode_t stream_scheduler_mode;
+    bool                        enable_dplpmtud;
+    uint16_t                    mtu_min;
+    uint16_t                    mtu_max;
+    uint16_t                    mtu_base;
+    uint32_t                    mtu_probe_interval;
+    uint16_t                    mtu_probe_step;
+    uint16_t                    mtu_probe_timeout;
+    uint8_t                     mtu_probe_retries;
+    uint8_t                     mtu_blackhole_loss_threshold;
+    uint16_t                    mtu_blackhole_loss_window_ms;
+    uint16_t                    mtu_blackhole_cooldown_ms;
 } utp_context_options_t;
+
+// Full initializer for utp_context_options_t. Set event_base before creating the Context.
+#define UTP_CONTEXT_OPTIONS_INIT  \
+    {NULL,                        \
+     NULL,                        \
+     0u,                          \
+     UTP_LOG_LEVEL_INFO,          \
+     UTP_STREAM_SCHEDULER_STRICT, \
+     true,                        \
+     1280u,                       \
+     1500u,                       \
+     1400u,                       \
+     300u,                        \
+     16u,                         \
+     2000u,                       \
+     1u,                          \
+     3u,                          \
+     3000u,                       \
+     5000u}
 
 typedef struct utp_connect_options {
     const char*           address;
@@ -62,6 +93,9 @@ typedef struct utp_connect_options {
     int8_t                retries;
     utp_encryption_mode_t encryption;
 } utp_connect_options_t;
+
+// Full initializer for utp_connect_options_t.
+#define UTP_CONNECT_OPTIONS_INIT {NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
 
 typedef struct utp_new_connection_info {
     utp_endpoint_t        remote;
@@ -86,7 +120,19 @@ typedef void (*utp_on_connected_fn)(utp_connection_t* connection, void* user_dat
 typedef void (*utp_on_connect_error_fn)(utp_status_t status, const char* message,
                                         const utp_connect_attempt_info_t* attempt, void* user_data);
 typedef bool (*utp_on_new_connection_fn)(const utp_new_connection_info_t* info, void* user_data);
-typedef void (*utp_on_connection_closed_fn)(utp_connection_t* connection, void* user_data);
+typedef struct utp_connection_error_info {
+    // UTP_STATUS_OK denotes a normal peer close. Local fatal errors use their terminal status.
+    utp_status_t status;
+    // The raw CONNECTION_CLOSE code from the peer, or zero for a local failure.
+    uint16_t peer_error_code;
+    // A zero-copy reason view that is valid only for the duration of the callback.
+    const uint8_t* reason;
+    size_t         reason_length;
+    bool           peer_initiated;
+} utp_connection_error_info_t;
+
+typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const utp_connection_error_info_t* info,
+                                           void* user_data);
 
 // Returns the semantic version of the linked C library.
 const char*  utp_version(void);
@@ -97,8 +143,7 @@ utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint1
 void         utp_context_set_on_connected(utp_context_t* context, utp_on_connected_fn callback, void* user_data);
 void utp_context_set_on_connect_error(utp_context_t* context, utp_on_connect_error_fn callback, void* user_data);
 void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connection_fn callback, void* user_data);
-void utp_context_set_on_connection_closed(utp_context_t* context, utp_on_connection_closed_fn callback,
-                                          void* user_data);
+void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 utp_status_t utp_context_accept(utp_context_t* context);
 utp_status_t utp_stream_set_priority(utp_stream_t* stream, uint8_t priority);

@@ -3,10 +3,11 @@
 #include <limits.h>
 #include <string.h>
 
-#include "proto/proto.h"
 #include "proto/frame.h"
+#include "proto/proto.h"
 
-static void bucket_cleanup(utp_packet_out_bucket_t *bucket, const utp_allocator_t *allocator) {
+static void bucket_cleanup(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator)
+{
     if (bucket->nodes != NULL) {
         utp_allocator_free(allocator, bucket->nodes);
     }
@@ -20,8 +21,9 @@ static void bucket_cleanup(utp_packet_out_bucket_t *bucket, const utp_allocator_
     TAILQ_INIT(&bucket->free_buffers);
 }
 
-static utp_internal_error_t bucket_init(utp_packet_out_bucket_t *bucket, const utp_allocator_t *allocator,
-                                        uint16_t size, size_t count) {
+static utp_internal_error_t bucket_init(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator,
+                                        uint16_t size, size_t count)
+{
     size_t i;
 
     TAILQ_INIT(&bucket->free_buffers);
@@ -50,7 +52,8 @@ static utp_internal_error_t bucket_init(utp_packet_out_bucket_t *bucket, const u
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_packet_out_pool_cleanup(utp_packet_out_pool_t *pool) {
+void utp_packet_out_pool_cleanup(utp_packet_out_pool_t* pool)
+{
     size_t i;
 
     if (pool == NULL) {
@@ -69,9 +72,10 @@ void utp_packet_out_pool_cleanup(utp_packet_out_pool_t *pool) {
     TAILQ_INIT(&pool->free_structs);
 }
 
-utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t *pool, const utp_allocator_t *allocator,
-                                              size_t struct_capacity, const utp_packet_out_bucket_config_t *buckets,
-                                              size_t bucket_count) {
+utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t* pool, const utp_allocator_t* allocator,
+                                              size_t struct_capacity, const utp_packet_out_bucket_config_t* buckets,
+                                              size_t bucket_count)
+{
     utp_packet_out_bucket_config_t sorted[UTP_PACKET_OUT_MAX_BUCKETS];
     size_t                         i;
     size_t                         j;
@@ -135,7 +139,8 @@ utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t *pool, const
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static size_t choose_bucket(const utp_packet_out_pool_t *pool, uint16_t requested_size) {
+static size_t choose_bucket(const utp_packet_out_pool_t* pool, uint16_t requested_size)
+{
     size_t i;
 
     for (i = 0u; i < pool->bucket_count; ++i) {
@@ -146,46 +151,53 @@ static size_t choose_bucket(const utp_packet_out_pool_t *pool, uint16_t requeste
     return pool->bucket_count;
 }
 
-static void reset_packet_out_for_acquire(utp_packet_out_t *pkt, utp_packet_out_buffer_node_t *node,
-                                         const utp_packet_out_bucket_t *bucket, size_t bucket_index) {
+static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_buffer_node_t* node,
+                                         const utp_packet_out_bucket_t* bucket, size_t bucket_index)
+{
     uint16_t index;
 
-    pkt->sent_time_us          = 0u;
-    pkt->packet_number         = 0u;
-    pkt->ack_number            = 0u;
-    pkt->loss_chain            = pkt;
-    pkt->frame_types           = 0u;
-    pkt->po_flags              = 0u;
-    pkt->local_flags           = 0u;
-    pkt->data_size             = 0u;
-    pkt->encrypt_data_size     = 0u;
-    pkt->alloc_size            = bucket->size;
-    pkt->packet_type           = 0u;
-    pkt->slice_count           = 0u;
-    pkt->frame_meta_count      = 0u;
-    pkt->stream_data_size      = 0u;
-    pkt->transient_ack_size    = 0u;
-    pkt->control_prefix_size   = 0u;
-    pkt->stream_id             = 0u;
-    pkt->stream_offset         = 0u;
-    pkt->attempt_count         = 0u;
-    pkt->bw_packet_state.valid = false;
-    pkt->bw_state              = NULL;
-    pkt->raw_data              = node->data;
-    pkt->encrypt_data          = node->data;
-    pkt->bucket_index          = bucket_index;
+    pkt->sent_time_us               = 0u;
+    pkt->packet_number              = 0u;
+    pkt->ack_number                 = 0u;
+    pkt->loss_chain                 = pkt;
+    pkt->frame_types                = 0u;
+    pkt->po_flags                   = 0u;
+    pkt->local_flags                = 0u;
+    pkt->data_size                  = 0u;
+    pkt->encrypt_data_size          = 0u;
+    pkt->alloc_size                 = bucket->size;
+    pkt->packet_type                = 0u;
+    pkt->slice_count                = 0u;
+    pkt->frame_meta_count           = 0u;
+    pkt->stream_data_size           = 0u;
+    pkt->path_validation_generation = 0u;
+    pkt->transient_ack_size         = 0u;
+    pkt->control_prefix_size        = 0u;
+    pkt->stream_id                  = 0u;
+    pkt->stream_offset              = 0u;
+    pkt->attempt_count              = 0u;
+    pkt->bw_packet_state.valid      = false;
+    pkt->bw_state                   = NULL;
+    pkt->raw_data                   = node->data;
+    pkt->encrypt_data               = node->data;
+    pkt->destination.family         = UTP_ADDRESS_FAMILY_UNSPECIFIED;
+    pkt->destination.port           = 0u;
+    pkt->destination.scope_id       = 0u;
+    pkt->has_destination            = false;
+    pkt->bucket_index               = bucket_index;
     for (index = 0u; index < UTP_PACKET_OUT_MAX_ATTEMPTS; ++index) {
         pkt->attempts[index].packet_number = 0u;
         pkt->attempts[index].sent_time_us  = 0u;
     }
 }
 
-utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t *pool, uint16_t requested_size,
-                                                 utp_packet_out_t **out) {
+utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t* pool, uint16_t requested_size,
+                                                 utp_packet_out_t** out)
+{
     size_t                        bucket_index;
-    utp_packet_out_bucket_t      *bucket;
-    utp_packet_out_buffer_node_t *node;
-    utp_packet_out_t             *pkt;
+    utp_packet_out_bucket_t*      bucket;
+    utp_packet_out_buffer_node_t* node;
+    utp_packet_out_t*             pkt;
 
     if (pool == NULL || out == NULL || requested_size == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -211,10 +223,11 @@ utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t *pool, ui
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_packet_out_pool_release(utp_packet_out_pool_t *pool, utp_packet_out_t *pkt) {
-    utp_packet_out_bucket_t *bucket;
-    uint8_t                 *raw_data;
-    uint8_t                 *encrypt_data;
+void utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_t* pkt)
+{
+    utp_packet_out_bucket_t* bucket;
+    uint8_t*                 raw_data;
+    uint8_t*                 encrypt_data;
     uint16_t                 alloc_size;
     size_t                   bucket_index;
     size_t                   node_index;
@@ -229,37 +242,43 @@ void utp_packet_out_pool_release(utp_packet_out_pool_t *pool, utp_packet_out_t *
     bucket_index = pkt->bucket_index;
     bucket       = &pool->buckets[bucket_index];
 
-    pkt->sent_time_us          = 0u;
-    pkt->packet_number         = 0u;
-    pkt->ack_number            = 0u;
-    pkt->loss_chain            = pkt;
-    pkt->frame_types           = 0u;
-    pkt->po_flags              = 0u;
-    pkt->local_flags           = 0u;
-    pkt->data_size             = 0u;
-    pkt->encrypt_data_size     = 0u;
-    pkt->alloc_size            = alloc_size;
-    pkt->packet_type           = 0u;
-    pkt->slice_count           = 0u;
-    pkt->frame_meta_count      = 0u;
-    pkt->stream_data_size      = 0u;
-    pkt->transient_ack_size    = 0u;
-    pkt->control_prefix_size   = 0u;
-    pkt->stream_id             = 0u;
-    pkt->stream_offset         = 0u;
-    pkt->attempt_count         = 0u;
-    pkt->bw_packet_state.valid = false;
-    pkt->bw_state              = NULL;
-    pkt->raw_data              = raw_data;
-    pkt->encrypt_data          = encrypt_data;
-    pkt->bucket_index          = bucket_index;
+    pkt->sent_time_us               = 0u;
+    pkt->packet_number              = 0u;
+    pkt->ack_number                 = 0u;
+    pkt->loss_chain                 = pkt;
+    pkt->frame_types                = 0u;
+    pkt->po_flags                   = 0u;
+    pkt->local_flags                = 0u;
+    pkt->data_size                  = 0u;
+    pkt->encrypt_data_size          = 0u;
+    pkt->alloc_size                 = alloc_size;
+    pkt->packet_type                = 0u;
+    pkt->slice_count                = 0u;
+    pkt->frame_meta_count           = 0u;
+    pkt->stream_data_size           = 0u;
+    pkt->path_validation_generation = 0u;
+    pkt->transient_ack_size         = 0u;
+    pkt->control_prefix_size        = 0u;
+    pkt->stream_id                  = 0u;
+    pkt->stream_offset              = 0u;
+    pkt->attempt_count              = 0u;
+    pkt->bw_packet_state.valid      = false;
+    pkt->bw_state                   = NULL;
+    pkt->raw_data                   = raw_data;
+    pkt->encrypt_data               = encrypt_data;
+    pkt->destination.family         = UTP_ADDRESS_FAMILY_UNSPECIFIED;
+    pkt->destination.port           = 0u;
+    pkt->destination.scope_id       = 0u;
+    pkt->has_destination            = false;
+    pkt->bucket_index               = bucket_index;
     TAILQ_INSERT_TAIL(&pool->free_structs, pkt, po_next);
 
     node_index = (size_t)(raw_data - bucket->storage) / bucket->size;
     TAILQ_INSERT_TAIL(&bucket->free_buffers, &bucket->nodes[node_index], link);
 }
 
-bool utp_packet_out_add_send_attempt(utp_packet_out_t *pkt, uint64_t packet_number, uint64_t sent_time_us) {
+bool utp_packet_out_add_send_attempt(utp_packet_out_t* pkt, uint64_t packet_number, uint64_t sent_time_us)
+{
     if (pkt == NULL || packet_number == 0u || sent_time_us == 0u || pkt->attempt_count >= UTP_PACKET_OUT_MAX_ATTEMPTS) {
         return false;
     }
@@ -269,7 +288,8 @@ bool utp_packet_out_add_send_attempt(utp_packet_out_t *pkt, uint64_t packet_numb
     return true;
 }
 
-void utp_packet_out_clear_send_attempts(utp_packet_out_t *pkt) {
+void utp_packet_out_clear_send_attempts(utp_packet_out_t* pkt)
+{
     if (pkt != NULL) {
         uint16_t index;
 
@@ -281,10 +301,11 @@ void utp_packet_out_clear_send_attempts(utp_packet_out_t *pkt) {
     }
 }
 
-utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t prefix_length) {
+utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t* pkt, uint16_t prefix_length)
+{
     utp_packet_out_slice_t slices[UTP_PACKET_OUT_MAX_SLICES];
     utp_packet_header_t    header;
-    uint32_t               frame_types = 0u;
+    uint32_t               frame_types  = 0u;
     size_t                 input_offset = 0u;
     size_t                 output_count = 0u;
     size_t                 index;
@@ -302,7 +323,7 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
         return UTP_INTERNAL_ERROR_STATE;
     }
     for (index = 0u; index < pkt->slice_count; ++index) {
-        const utp_packet_out_slice_t *slice = &pkt->slices[index];
+        const utp_packet_out_slice_t* slice       = &pkt->slices[index];
         size_t                        slice_start = input_offset;
         size_t                        slice_end;
         size_t                        keep_start;
@@ -311,10 +332,10 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
         if (slice->length == 0u || slice->length > SIZE_MAX - slice_start) {
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
-        slice_end  = slice_start + slice->length;
+        slice_end    = slice_start + slice->length;
         input_offset = slice_end;
-        keep_start = slice_start;
-        keep_end   = slice_end;
+        keep_start   = slice_start;
+        keep_end     = slice_end;
         if (keep_start < UTP_PACKET_HEADER_SIZE) {
             keep_end = keep_end < UTP_PACKET_HEADER_SIZE ? keep_end : UTP_PACKET_HEADER_SIZE;
         } else if (keep_start < (size_t)UTP_PACKET_HEADER_SIZE + prefix_length) {
@@ -331,7 +352,7 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
         if (slice->source == UTP_PACKET_OUT_SLICE_RAW_OFFSET) {
             slices[output_count].offset = (uint16_t)(slice->offset + (keep_start - slice_start));
         } else if (slice->source == UTP_PACKET_OUT_SLICE_EXTERNAL) {
-            slices[output_count].data = (const uint8_t *)slice->data + (keep_start - slice_start);
+            slices[output_count].data = (const uint8_t*)slice->data + (keep_start - slice_start);
         } else {
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
@@ -347,7 +368,7 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
             if (slice->source == UTP_PACKET_OUT_SLICE_RAW_OFFSET) {
                 slices[output_count].offset = (uint16_t)(slice->offset + (keep_start - slice_start));
             } else {
-                slices[output_count].data = (const uint8_t *)slice->data + (keep_start - slice_start);
+                slices[output_count].data = (const uint8_t*)slice->data + (keep_start - slice_start);
             }
             ++output_count;
         }
@@ -361,14 +382,14 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
         if ((meta.frame_flags & (UTP_FRAME_META_TRANSIENT_ON_RETRANSMIT | UTP_FRAME_META_SEMANTIC_CONTROL)) != 0u) {
             continue;
         }
-        pkt->frame_meta[meta_count++] = meta;
-        frame_types |= UTP_FRAME_BIT(meta.frame_type);
+        pkt->frame_meta[meta_count++]  = meta;
+        frame_types                   |= UTP_FRAME_BIT(meta.frame_type);
     }
     header.payload_length = (uint16_t)(header.payload_length - prefix_length);
     if (utp_proto_encode_header(pkt->raw_data, pkt->alloc_size, &header) != UTP_INTERNAL_ERROR_OK) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    pkt->data_size = (uint16_t)(pkt->data_size - prefix_length);
+    pkt->data_size   = (uint16_t)(pkt->data_size - prefix_length);
     pkt->slice_count = (uint8_t)output_count;
     for (index = 0u; index < output_count; ++index) {
         pkt->slices[index] = slices[index];
@@ -380,8 +401,9 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t *pkt, uint16_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static utp_internal_error_t utp_packet_out_resolve_slice(const utp_packet_out_t       *pkt,
-                                                         const utp_packet_out_slice_t *slice, const uint8_t **data) {
+static utp_internal_error_t utp_packet_out_resolve_slice(const utp_packet_out_t*       pkt,
+                                                         const utp_packet_out_slice_t* slice, const uint8_t** data)
+{
     if (pkt == NULL || slice == NULL || data == NULL || slice->length == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -403,8 +425,9 @@ static utp_internal_error_t utp_packet_out_resolve_slice(const utp_packet_out_t 
     return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
 }
 
-utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t *pkt, uint8_t *buffer, size_t capacity,
-                                            size_t *out_length) {
+utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t* pkt, uint8_t* buffer, size_t capacity,
+                                            size_t* out_length)
+{
     size_t  offset = 0u;
     uint8_t index;
 
@@ -423,7 +446,7 @@ utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t *pkt, uint8_t
         return UTP_INTERNAL_ERROR_OK;
     }
     for (index = 0u; index < pkt->slice_count; ++index) {
-        const uint8_t       *data;
+        const uint8_t*       data;
         utp_internal_error_t error = utp_packet_out_resolve_slice(pkt, &pkt->slices[index], &data);
 
         if (error != UTP_INTERNAL_ERROR_OK) {

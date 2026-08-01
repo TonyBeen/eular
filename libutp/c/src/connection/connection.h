@@ -5,9 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "congestion/bbr.h"
 #include "connection/stream.h"
 #include "context/ack_scheduler.h"
 #include "context/send_control.h"
+#include "mtu/mtu.h"
 #include "proto/frame.h"
 #include "proto/packet_in.h"
 #include "socket/address.h"
@@ -22,6 +24,9 @@ extern "C" {
 #define UTP_CONNECTION_CONTROL_SLOT_COUNT             (2u + 3u * UTP_CONNECTION_MAX_STREAMS)
 #define UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT   (16u * 1024u * 1024u)
 #define UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT 4096u
+#define UTP_CONNECTION_KEEPALIVE_INTERVAL_US          UINT64_C(30000000)
+#define UTP_CONNECTION_KEEPALIVE_TIMEOUT_US           UINT64_C(1500000)
+#define UTP_CONNECTION_KEEPALIVE_MAX_PROBES           3u
 
 typedef enum utp_connection_role { UTP_CONNECTION_ROLE_ACTIVE = 0, UTP_CONNECTION_ROLE_PASSIVE } utp_connection_role_t;
 
@@ -33,6 +38,13 @@ typedef enum utp_connection_state {
     UTP_CONNECTION_STATE_DRAINING,
     UTP_CONNECTION_STATE_CLOSED
 } utp_connection_state_t;
+
+typedef enum utp_connection_path_state {
+    UTP_CONNECTION_PATH_STATE_UNKNOWN = 0,
+    UTP_CONNECTION_PATH_STATE_VALIDATED,
+    UTP_CONNECTION_PATH_STATE_VALIDATING,
+    UTP_CONNECTION_PATH_STATE_FAILED
+} utp_connection_path_state_t;
 
 typedef struct utp_connection_control_slot {
     uint64_t value;
@@ -53,9 +65,12 @@ typedef struct utp_connection {
     utp_receive_history_t         receive_history;
     utp_ack_scheduler_t           ack_scheduler;
     utp_packet_out_pool_t         packet_pool;
+    utp_mtu_discovery_t           mtu_discovery;
+    utp_bbr_t                     congestion;
     utp_stream_t                  streams[UTP_CONNECTION_MAX_STREAMS];
     utp_connection_control_slot_t control_slots[UTP_CONNECTION_CONTROL_SLOT_COUNT];
     utp_address_t                 peer;
+    utp_address_t                 candidate_peer;
     uint32_t                      local_cid;
     uint32_t                      peer_cid;
     uint32_t                      next_stream_id[UTP_STREAM_TYPES];
@@ -78,19 +93,37 @@ typedef struct utp_connection {
     uint64_t                      close_deadline_us;
     uint64_t                      close_last_sent_us;
     uint64_t                      close_pto_us;
+    uint64_t                      keepalive_deadline_us;
+    uint64_t                      last_peer_activity_us;
+    uint64_t                      path_challenge_deadline_us;
+    uint64_t                      candidate_rx_bytes;
+    uint64_t                      candidate_tx_bytes;
+    uint64_t                      candidate_queued_bytes;
+    uint32_t                      path_validation_generation;
     uint16_t                      close_error_code;
+    uint16_t                      peer_close_error_code;
+    uint16_t                      peer_close_reason_length;
+    uint8_t                       path_challenge[8];
     uint8_t                       stream_scheduler_mode;
     uint8_t                       stream_scheduler_cursor;
+    uint8_t                       path_challenge_retry_count;
+    uint16_t                      keepalive_missed_probes;
     bool                          close_pending;
+    bool                          local_close_started;
+    bool                          peer_close_received;
+    bool                          path_challenge_pending;
+    const uint8_t*                peer_close_reason;
     utp_connection_role_t         role;
     size_t                        peer_max_stream_data_count;
     utp_connection_state_t        state;
+    utp_connection_path_state_t   path_state;
 } utp_connection_t;
 
 utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_connection_role_t role, uint32_t local_cid,
                                          uint32_t peer_cid, const utp_address_t* peer, size_t packet_limit,
                                          uint16_t packet_capacity);
 void                 utp_connection_cleanup(utp_connection_t* connection);
+void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
 
 // Builds a complete plaintext packet and places it in the bounded send queue.
 utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
@@ -102,6 +135,9 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
 // Marks a packet as successfully written. Non-tracked packets are returned to the pool here.
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
+// Handles a UDP write failure before the packet was put on the wire.
+void utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
+                                         utp_internal_error_t error, uint64_t now_us);
 // Releases a packet that was never written to UDP and restores its pending transport state.
 void utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 // Validates peer/CIDs, processes ACK and lifecycle frames, and records received packet numbers.
@@ -117,6 +153,13 @@ utp_internal_error_t utp_connection_ensure_retransmission_deadline(utp_connectio
 utp_internal_error_t utp_connection_on_retransmission_timeout(utp_connection_t* connection, uint64_t now_us);
 uint64_t             utp_connection_retransmission_deadline(const utp_connection_t* connection);
 uint64_t             utp_connection_close_deadline(const utp_connection_t* connection);
+uint64_t             utp_connection_keepalive_deadline(const utp_connection_t* connection);
+utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* connection, uint64_t now_us);
+uint64_t             utp_connection_mtu_deadline(const utp_connection_t* connection, uint64_t now_us);
+uint64_t             utp_connection_pacing_deadline(const utp_connection_t* connection);
+utp_internal_error_t utp_connection_on_mtu_timeout(utp_connection_t* connection, uint64_t now_us);
+uint64_t             utp_connection_path_validation_deadline(const utp_connection_t* connection);
+utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t* connection, uint64_t now_us);
 utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode);
 utp_internal_error_t utp_connection_create_stream(utp_connection_t* connection, bool bidirectional,
                                                   uint32_t* out_stream_id);

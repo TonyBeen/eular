@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include <utp/utp.h>
 
 #include "util/allocator.h"
@@ -38,15 +39,17 @@ typedef struct log_capture {
 
 static log_capture_t g_log_capture;
 
-static void capture_log(utp_log_level_t level, const char *message) {
+static void capture_log(utp_log_level_t level, const char* message)
+{
     ++g_log_capture.calls;
     g_log_capture.level = level;
     assert(strlen(message) <= UTP_LOG_MESSAGE_MAX_LENGTH);
     memcpy(g_log_capture.message, message, strlen(message) + 1u);
 }
 
-static void *fail_alloc(void *user_data, size_t size) {
-    fail_allocator_t *state = user_data;
+static void* fail_alloc(void* user_data, size_t size)
+{
+    fail_allocator_t* state = user_data;
     ++state->calls;
     if (state->calls > state->fail_after) {
         return NULL;
@@ -54,8 +57,9 @@ static void *fail_alloc(void *user_data, size_t size) {
     return malloc(size);
 }
 
-static void *fail_realloc(void *user_data, void *ptr, size_t size) {
-    fail_allocator_t *state = user_data;
+static void* fail_realloc(void* user_data, void* ptr, size_t size)
+{
+    fail_allocator_t* state = user_data;
     ++state->calls;
     if (state->calls > state->fail_after) {
         return NULL;
@@ -63,12 +67,14 @@ static void *fail_realloc(void *user_data, void *ptr, size_t size) {
     return realloc(ptr, size);
 }
 
-static void fail_free(void *user_data, void *ptr) {
+static void fail_free(void* user_data, void* ptr)
+{
     (void)user_data;
     free(ptr);
 }
 
-static utp_allocator_t make_fail_allocator(fail_allocator_t *state) {
+static utp_allocator_t make_fail_allocator(fail_allocator_t* state)
+{
     const utp_allocator_t allocator = {
         fail_alloc,
         fail_realloc,
@@ -78,7 +84,8 @@ static utp_allocator_t make_fail_allocator(fail_allocator_t *state) {
     return allocator;
 }
 
-static uint64_t hash_key(uint32_t key) {
+static uint64_t hash_key(uint32_t key)
+{
     uint64_t value  = key;
     value          ^= value >> 16u;
     value          *= UINT64_C(0x7feb352d);
@@ -88,19 +95,22 @@ static uint64_t hash_key(uint32_t key) {
     return value;
 }
 
-static hash_item_t *item_from_node(const utp_hash_node_t *node) {
-    return (hash_item_t *)((char *)node - offsetof(hash_item_t, node));
+static hash_item_t* item_from_node(const utp_hash_node_t* node)
+{
+    return (hash_item_t*)((char*)node - offsetof(hash_item_t, node));
 }
 
-static bool hash_matches(const utp_hash_node_t *node, const void *key, void *user_data) {
-    const uint32_t    *expected = key;
-    const hash_item_t *item     = item_from_node(node);
+static bool hash_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const uint32_t*    expected = key;
+    const hash_item_t* item     = item_from_node(node);
     (void)user_data;
     return item->key == *expected;
 }
 
-static void count_removed_node(utp_hash_node_t *node, void *user_data) {
-    removal_state_t *state = user_data;
+static void count_removed_node(utp_hash_node_t* node, void* user_data)
+{
+    removal_state_t* state = user_data;
 
     assert(node->next == NULL);
     assert(node->prev_next == NULL);
@@ -108,12 +118,14 @@ static void count_removed_node(utp_hash_node_t *node, void *user_data) {
     ++state->count;
 }
 
-static uint32_t random_next(uint32_t *state) {
+static uint32_t random_next(uint32_t* state)
+{
     *state = *state * UINT32_C(1664525) + UINT32_C(1013904223);
     return *state;
 }
 
-static void test_version_and_status(void) {
+static void test_version_and_status(void)
+{
     assert(strcmp(utp_version(), "1.0.1") == 0);
     assert(strcmp(utp_version(), UTP_VERSION_STRING) == 0);
     assert(UTP_STATUS_INVALID_ARGUMENT == -1);
@@ -128,7 +140,8 @@ static void test_version_and_status(void) {
     assert(strcmp(utp_status_string((utp_status_t)100), "unknown") == 0);
 }
 
-static void test_internal_error_and_log_tag(void) {
+static void test_internal_error_and_log_tag(void)
+{
     utp_log_tag_t        context_tag;
     utp_log_tag_t        connection_tag;
     utp_log_tag_t        send_control_tag;
@@ -140,6 +153,8 @@ static void test_internal_error_and_log_tag(void) {
     assert(utp_internal_error_is_posix(error));
     assert(utp_internal_error_to_errno(error) == EAGAIN);
     assert(utp_internal_error_to_status(error) == UTP_STATUS_WOULD_BLOCK);
+
+    assert(utp_internal_error_to_status(UTP_INTERNAL_ERROR_NOBUFS) == UTP_STATUS_LIMIT);
     assert(utp_internal_error_to_status(UTP_INTERNAL_ERROR_PROTOCOL) == UTP_STATUS_PROTOCOL);
     assert(utp_log_tag_init(&context_tag, "context 1", 9u) == UTP_INTERNAL_ERROR_OK);
     assert(utp_log_tag_append(&connection_tag, &context_tag, "connection scid 21313", 21u) == UTP_INTERNAL_ERROR_OK);
@@ -156,7 +171,8 @@ static void test_internal_error_and_log_tag(void) {
     assert(strcmp(g_log_capture.message, expected_message) == 0);
 }
 
-static void test_buffer(void) {
+static void test_buffer(void)
+{
     utp_buffer_t buffer;
     const char   first[]  = "abc";
     const char   second[] = "def";
@@ -176,7 +192,8 @@ static void test_buffer(void) {
     utp_buffer_cleanup(&buffer);
 }
 
-static void test_buffer_allocation_failure(void) {
+static void test_buffer_allocation_failure(void)
+{
     fail_allocator_t state     = {0u, 0u};
     utp_allocator_t  allocator = make_fail_allocator(&state);
     utp_buffer_t     buffer;
@@ -191,7 +208,8 @@ static void test_buffer_allocation_failure(void) {
     utp_buffer_cleanup(&buffer);
 }
 
-static void test_ring(void) {
+static void test_ring(void)
+{
     utp_ring_t ring;
     int32_t    value;
     int32_t    output;
@@ -216,7 +234,8 @@ static void test_ring(void) {
     utp_ring_cleanup(&ring);
 }
 
-static void test_ring_allocation_failure(void) {
+static void test_ring_allocation_failure(void)
+{
     fail_allocator_t state     = {0u, 0u};
     utp_allocator_t  allocator = make_fail_allocator(&state);
     utp_ring_t       ring;
@@ -227,10 +246,11 @@ static void test_ring_allocation_failure(void) {
     utp_ring_cleanup(&ring);
 }
 
-static void test_range_set(void) {
+static void test_range_set(void)
+{
     utp_range_set_t    set;
     utp_range_set_t    single_range_set;
-    const utp_range_t *range;
+    const utp_range_t* range;
 
     assert(utp_range_set_init(&set, NULL, 4u) == UTP_INTERNAL_ERROR_OK);
     assert(utp_range_set_insert(&set, 10u, 20u) == UTP_INTERNAL_ERROR_OK);
@@ -257,7 +277,8 @@ static void test_range_set(void) {
     utp_range_set_cleanup(&single_range_set);
 }
 
-static void test_range_set_random(void) {
+static void test_range_set_random(void)
+{
     enum { RANGE_LIMIT = 128, VALUE_LIMIT = 256, OPERATIONS = 100000 };
     utp_range_set_t set;
     uint8_t         expected[VALUE_LIMIT] = {0};
@@ -292,11 +313,12 @@ static void test_range_set_random(void) {
     utp_range_set_cleanup(&set);
 }
 
-static void test_range_set_allocation_failure(void) {
+static void test_range_set_allocation_failure(void)
+{
     fail_allocator_t state     = {0u, 0u};
     utp_allocator_t  allocator = make_fail_allocator(&state);
     utp_range_set_t  set;
-    utp_range_t     *saved_ranges;
+    utp_range_t*     saved_ranges;
     size_t           index;
     size_t           saved_capacity;
 
@@ -325,7 +347,8 @@ static void test_range_set_allocation_failure(void) {
     utp_range_set_cleanup(&set);
 }
 
-static void test_hash(void) {
+static void test_hash(void)
+{
     enum { ITEM_COUNT = 128 };
     hash_item_t      items[ITEM_COUNT];
     hash_item_t      duplicate;
@@ -333,7 +356,7 @@ static void test_hash(void) {
     size_t           index;
     size_t           seen = 0;
     utp_hash_iter_t  iter;
-    utp_hash_node_t *node;
+    utp_hash_node_t* node;
 
     memset(items, 0, sizeof(items));
     memset(&duplicate, 0, sizeof(duplicate));
@@ -374,7 +397,8 @@ static void test_hash(void) {
     assert(utp_hash_table_count(&table) == 0u);
 }
 
-static void test_hash_capacity_and_table_ownership(void) {
+static void test_hash_capacity_and_table_ownership(void)
+{
     utp_hash_table_t first;
     utp_hash_table_t second;
     hash_item_t      items[3];
@@ -404,7 +428,8 @@ static void test_hash_capacity_and_table_ownership(void) {
     utp_hash_table_cleanup(&second, NULL, NULL);
 }
 
-static void test_hash_initial_bucket_rounding(void) {
+static void test_hash_initial_bucket_rounding(void)
+{
     fail_allocator_t failed_state     = {0u, 0u};
     utp_allocator_t  failed_allocator = make_fail_allocator(&failed_state);
     utp_hash_table_t table;
@@ -425,7 +450,8 @@ static void test_hash_initial_bucket_rounding(void) {
     utp_hash_table_cleanup(&table, NULL, NULL);
 }
 
-static void test_hash_cleanup_callback(void) {
+static void test_hash_cleanup_callback(void)
+{
     hash_item_t      items[2];
     removal_state_t  state = {0u};
     utp_hash_table_t table;
@@ -445,7 +471,8 @@ static void test_hash_cleanup_callback(void) {
     assert(state.count == 2u);
 }
 
-static void test_hash_random(void) {
+static void test_hash_random(void)
+{
     enum { ITEM_COUNT = 256, OPERATIONS = 100000 };
     hash_item_t      items[ITEM_COUNT];
     utp_hash_table_t table;
@@ -462,7 +489,7 @@ static void test_hash_random(void) {
     for (operation = 0; operation < OPERATIONS; ++operation) {
         uint32_t         key    = random_next(&state) % ITEM_COUNT;
         uint32_t         action = random_next(&state) % 3u;
-        utp_hash_node_t *found  = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
+        utp_hash_node_t* found  = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
         if (action == 0u) {
             utp_internal_error_t status =
                 utp_hash_table_insert(&table, &items[key].node, hash_key(key), &key, hash_matches, NULL);
@@ -482,13 +509,14 @@ static void test_hash_random(void) {
     }
     for (index = 0; index < ITEM_COUNT; ++index) {
         uint32_t         key   = (uint32_t)index;
-        utp_hash_node_t *found = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
+        utp_hash_node_t* found = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
         assert((found != NULL) == (items[index].present != 0));
     }
     utp_hash_table_cleanup(&table, NULL, NULL);
 }
 
-static void test_hash_allocation_failure(void) {
+static void test_hash_allocation_failure(void)
+{
     fail_allocator_t state     = {0u, 0u};
     utp_allocator_t  allocator = make_fail_allocator(&state);
     utp_hash_table_t table;
@@ -509,7 +537,8 @@ static void test_hash_allocation_failure(void) {
     utp_hash_table_cleanup(&table, NULL, NULL);
 }
 
-static void test_hash_rehash_allocation_failure(void) {
+static void test_hash_rehash_allocation_failure(void)
+{
     enum { ITEM_COUNT = 7 };
     fail_allocator_t state     = {0u, SIZE_MAX};
     utp_allocator_t  allocator = make_fail_allocator(&state);
@@ -543,7 +572,8 @@ static void test_hash_rehash_allocation_failure(void) {
     utp_hash_table_cleanup(&table, NULL, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     test_version_and_status();
     test_internal_error_and_log_tag();
     test_buffer();

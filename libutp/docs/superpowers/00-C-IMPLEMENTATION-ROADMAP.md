@@ -101,7 +101,7 @@
 | **C1** | **不设无条件 `SO_REUSEPORT`**。UDP 顺序 rebind 只需 `SO_REUSEADDR` 处理竞态。REUSEPORT 的多 socket 同端口负载均衡会破坏 `(IP+端口+scid)` 解复用。 | socket(步4) | punch §6.1/§11;index C1 |
 | **C2** | **server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected**;HandshakeDone 前数据 buffer,promote 时回放。放弃"任一非 Initial 包即 promote"。`RendezvousPending` 复用此 `PendingIncomingConnection` 模式。 | connection/context(步5) | punch §4.3/§15;index C2 |
 | **C3** | 抗放大 credit 常量 **`3×MTU`(≈3840)**;**punch 多候选按候选地址分别跟踪收/发字节**、各自独立 `3×收+credit` 额度;直连保持整连接模型;仅"来自该候选的可验证回包"解除该地址额度。 | path-validation(步4)+ punch(步5) | punch §12/§16;index C3 |
-| **C4** | **握手/打洞/CONNECT 包 MTU floor = 1280**(置 DF,IPv6 min);连接后 PLPMTUD 1280→1400→1500。统一口径,消除 1200/1260/1280/1400 四数分歧。 | proto(步2)+ mtu(步4) | punch §6.7/§16;index C4 |
+| **C4** | **握手/打洞/CONNECT 包 MTU floor = 1280**(置 DF,IPv6 min);连接后 PLPMTUD 从 `mtu_base` 经 `{1380,1450,1492,1500}` 梯队后继续二分至配置的 `mtu_max`。`1500` 是默认值和梯队节点，不是 C 端硬上限。 | proto(步2)+ mtu(步4) | punch §6.7/§16;index C4 |
 | **C5** | **公共 API 直接返错误码 + 出参**:`0`=成功;**所有错误 < 0**;`>0` 仅返值接口(如 createStream 返流 ID)。断连/拒绝经回调抛出的错误也为负。**C 里原生如此**(`utp_status_t` 已是负值),无需 cpp 的 0/-1 归一。 | 全公共 API(步1)utp-12 | punch §15;index C5;`c/ERRORS.md` |
 
 ### 5.2 H1–H5(评审高风险处置)
@@ -151,7 +151,7 @@
 
 **下一步 = 迁移第 2 步的"包头 + 帧编解码"**(纯值模块、解析零分配、可单测,最适合独立推进)。已冻结的子任务(task #13–#19):
 
-> 2026-07-31 状态补丁：`c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。当前已具备 PacketIn 池化接收、PacketOut scatter/gather STREAM 发送、connection/context 基础建连、ACK/retransmission 基线、stream ring send buffer、PacketIn-backed recv fragment、连接级/流级 MAX_DATA 更新接收，以及 C 侧连接级/流级字节流控校验与应用消费后的 MAX_DATA / MAX_STREAM_DATA 排包。发送侧已具备 Strict/DRR 多流调度，Context 固定模式，priority `0..7`，Strict 同级轮转与等待提升、DRR 权重量子/deficit 限制均已落地。后续继续按 `docs/superpowers/requirements/` 的 03/04/05/06/09/11/12 补齐，不以 `doc/` 旧文档为准。
+> 2026-08-01 状态补丁：`c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。当前已具备 PacketIn 池化接收、PacketOut scatter/gather STREAM 发送、connection/context 基础建连、ACK/retransmission 基线、stream ring send buffer、PacketIn-backed recv fragment、连接级/流级 MAX_DATA 更新接收，以及 C 侧连接级/流级字节流控校验与应用消费后的 MAX_DATA / MAX_STREAM_DATA 排包。主动建连已支持 `timeout_ms` 驱动的握手期限、`retries` 驱动的新 CID 重试及握手期 close 的失败回调。发送侧已具备 Strict/DRR 多流调度，Context 固定模式，priority `0..7`，Strict 同级轮转与等待提升、DRR 权重量子/deficit 限制均已落地。路径验证已具备保守 active/candidate 双路径、候选地址 PATH_CHALLENGE/PATH_RESPONSE、单包目的地址、候选流量隔离、1500ms 三次重试和按候选地址的 `3*received + 3*MTU` 抗放大门控。Keepalive 已按默认 C++ 参数接入：活跃路径收包重置 30 秒空闲期，单帧 Ping 经 ACK 判活，1.5 秒间隔最多 3 次探测，超限本地中止。MTU 已接入 `PING + PADDING` 阶梯/二分探测、ACK/丢失/超时回灌和 Context 定时器；`mtu_max` 在 C 端可配置至 `65535`。UDP 在 Linux、Windows 与 macOS 均强制不分片；Darwin C11 严格模式须在包含 `<netinet/in.h>` 前定义 `__APPLE_USE_RFC_3542`，以暴露并使用 `IPV6_DONTFRAG`。单次 probe 丢失会退休旧 PacketOut、由状态机重新构造相同大小的新 probe；`mtu_probe_retries` 默认 `1`，本地 `EMSGSIZE`/`WSAEMSGSIZE` 不重试而立即收窄上界。黑洞会先把业务 MTU 降至 `mtu_min`，冷却后先验证 `mtu_base`：成功即恢复 base 并向上探测，最终失败仅在 `[mtu_min, mtu_base-1]` 二分。主动 `close` 不回调；对端 close 与本地传输异常经 `on_connection_error` 仅通知一次，对端关闭码 `0` 表示正常关闭，reason 使用回调期零拷贝视图。未来 MTU/路径探测仅在判定无可用路径并终止连接时触发此回调，单次探测丢失、MTU 降级和候选路径失败不触发。后续继续按 `docs/superpowers/requirements/` 的 03/04/05/06/09/11/12 补齐，不以 `doc/` 旧文档为准。
 
 1. **wire 底座**:`src/internal/wire.h` 有界大端 read/write u8/u16/u32/u64(游标 + capacity 检查,溢出返 `INTERNAL_ERROR_OVERFLOW`)。
 2. **包头 + 常量**:`src/internal/proto.h` + `src/proto.c`:头 encode/decode、包类型(含 CONNECT)、版本、packno 上限、MTU floor 1280。

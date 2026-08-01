@@ -9,7 +9,8 @@ extern "C" {
 
 namespace {
 
-utp_packet_out_t make_packet(uint64_t packet_number, uint64_t sent_time_us) {
+utp_packet_out_t make_packet(uint64_t packet_number, uint64_t sent_time_us)
+{
     utp_packet_out_t packet = {};
 
     packet.packet_number = packet_number;
@@ -32,7 +33,8 @@ uint64_t trace_cwnd(void* state) { return static_cast<CongestionTrace*>(state)->
 
 uint64_t trace_rate(void*, int32_t) { return 1000000u; }
 
-void trace_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int32_t) {
+void trace_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int32_t)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     REQUIRE(packet != nullptr);
@@ -40,14 +42,16 @@ void trace_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t infl
     ++trace->sent_calls;
 }
 
-void trace_begin(void* state, uint64_t, uint64_t inflight_bytes) {
+void trace_begin(void* state, uint64_t, uint64_t inflight_bytes)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     trace->begin_inflight = inflight_bytes;
     ++trace->begin_calls;
 }
 
-void trace_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t, int32_t) {
+void trace_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t, int32_t)
+{
     REQUIRE(packet != nullptr);
     ++static_cast<CongestionTrace*>(state)->ack_calls;
 }
@@ -60,7 +64,8 @@ const utp_congestion_ops_t kTraceCongestionOps = {
 
 }  // namespace
 
-TEST_CASE("send control applies congestion admission and transaction callbacks", "[send_control][congestion]") {
+TEST_CASE("send control applies congestion admission and transaction callbacks", "[send_control][congestion]")
+{
     utp_send_control_t            control    = {};
     utp_packet_out_t              packet     = make_packet(1u, 100u);
     CongestionTrace               trace      = {};
@@ -90,7 +95,8 @@ TEST_CASE("send control applies congestion admission and transaction callbacks",
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control records sent packets and applies an ACK", "[send_control]") {
+TEST_CASE("send control records sent packets and applies an ACK", "[send_control]")
+{
     utp_send_control_t            control = {};
     utp_packet_out_t              first   = make_packet(1u, 100u);
     utp_packet_out_t              second  = make_packet(2u, 200u);
@@ -121,7 +127,8 @@ TEST_CASE("send control records sent packets and applies an ACK", "[send_control
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control rejects an invalid ACK without changing pending packets", "[send_control]") {
+TEST_CASE("send control rejects an invalid ACK without changing pending packets", "[send_control]")
+{
     utp_send_control_t            control = {};
     utp_packet_out_t              packet  = make_packet(1u, 100u);
     struct utp_packet_out_tailq   acknowledged;
@@ -140,7 +147,8 @@ TEST_CASE("send control rejects an invalid ACK without changing pending packets"
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control rejects a sent packet without a timestamp", "[send_control]") {
+TEST_CASE("send control rejects a sent packet without a timestamp", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   packet  = make_packet(1u, 0u);
 
@@ -151,7 +159,8 @@ TEST_CASE("send control rejects a sent packet without a timestamp", "[send_contr
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control schedules packets in FIFO order without ACK tracking", "[send_control]") {
+TEST_CASE("send control schedules packets in FIFO order without ACK tracking", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   first   = make_packet(1u, 100u);
     utp_packet_out_t   second  = make_packet(2u, 200u);
@@ -174,7 +183,8 @@ TEST_CASE("send control schedules packets in FIFO order without ACK tracking", "
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control does not mutate a packet when its scheduling queue is full", "[send_control]") {
+TEST_CASE("send control does not mutate a packet when its scheduling queue is full", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   first   = make_packet(1u, 100u);
     utp_packet_out_t   second  = make_packet(2u, 200u);
@@ -188,7 +198,8 @@ TEST_CASE("send control does not mutate a packet when its scheduling queue is fu
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control rejects a packet that is still owned by a send queue", "[send_control]") {
+TEST_CASE("send control rejects a packet that is still owned by a send queue", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   packet  = make_packet(1u, 100u);
 
@@ -200,7 +211,8 @@ TEST_CASE("send control rejects a packet that is still owned by a send queue", "
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control does not track a sent packet without TRACK_ON_SEND", "[send_control]") {
+TEST_CASE("send control does not track a sent packet without TRACK_ON_SEND", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   packet  = make_packet(1u, 100u);
 
@@ -214,7 +226,8 @@ TEST_CASE("send control does not track a sent packet without TRACK_ON_SEND", "[s
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control moves FACK-lost retransmittable packets to the loss queue", "[send_control]") {
+TEST_CASE("send control moves FACK-lost retransmittable packets to the loss queue", "[send_control]")
+{
     utp_send_control_t            control    = {};
     utp_packet_out_t              packets[5] = {};
     struct utp_packet_out_tailq   acknowledged;
@@ -231,7 +244,6 @@ TEST_CASE("send control moves FACK-lost retransmittable packets to the loss queu
     }
 
     REQUIRE(utp_send_control_on_ack(&control, &ack, 1000u, &acknowledged, &result) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_send_control_detect_losses(&control) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_lost_packet_count(&control) == 1u);
     REQUIRE(utp_send_control_next_lost(&control) == &packets[0]);
     REQUIRE((packets[0].po_flags & (UTP_PO_LOSS_RECORDED | UTP_PO_RESET_PACKNO)) ==
@@ -247,7 +259,8 @@ TEST_CASE("send control moves FACK-lost retransmittable packets to the loss queu
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control returns lost MTU probes and non-retransmittable packets for release", "[send_control]") {
+TEST_CASE("send control returns lost MTU probes and non-retransmittable packets for release", "[send_control]")
+{
     utp_send_control_t            control    = {};
     utp_packet_out_t              packets[6] = {};
     struct utp_packet_out_tailq   acknowledged;
@@ -269,7 +282,6 @@ TEST_CASE("send control returns lost MTU probes and non-retransmittable packets 
     }
 
     REQUIRE(utp_send_control_on_ack(&control, &ack, 1000u, &acknowledged, &result) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_send_control_detect_losses(&control) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_lost_packet_count(&control) == 0u);
     REQUIRE(utp_send_control_discarded_packet_count(&control) == 2u);
     REQUIRE(utp_send_control_next_discarded(&control) == &packets[0]);
@@ -279,7 +291,8 @@ TEST_CASE("send control returns lost MTU probes and non-retransmittable packets 
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control detects send-time loss once without a FACK signal", "[send_control]") {
+TEST_CASE("send control detects send-time loss once without a FACK signal", "[send_control]")
+{
     utp_send_control_t            control    = {};
     utp_packet_out_t              packets[4] = {};
     struct utp_packet_out_tailq   acknowledged;
@@ -305,7 +318,6 @@ TEST_CASE("send control detects send-time loss once without a FACK signal", "[se
     REQUIRE(utp_send_control_on_packet_sent(&control, &packets[2]) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_on_packet_sent(&control, &packets[3]) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_on_ack(&control, &second_ack, 3000u, &acknowledged, &result) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_send_control_detect_losses(&control) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_lost_packet_count(&control) == 2u);
     REQUIRE((packets[0].local_flags & UTP_POL_FACKED) == 0u);
     REQUIRE((packets[2].local_flags & UTP_POL_FACKED) == 0u);
@@ -314,7 +326,8 @@ TEST_CASE("send control detects send-time loss once without a FACK signal", "[se
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control applies bounded handshake, TLP, and RTO delays", "[send_control]") {
+TEST_CASE("send control applies bounded handshake, TLP, and RTO delays", "[send_control]")
+{
     utp_send_control_t control = {};
 
     REQUIRE(utp_send_control_init(&control, 4u, UINT32_C(0x01), 16u, 100000u) == UTP_INTERNAL_ERROR_OK);
@@ -330,7 +343,8 @@ TEST_CASE("send control applies bounded handshake, TLP, and RTO delays", "[send_
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control prioritizes handshake, loss, TLP, and RTO retransmission modes", "[send_control]") {
+TEST_CASE("send control prioritizes handshake, loss, TLP, and RTO retransmission modes", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   packet  = make_packet(1u, 100u);
 
@@ -350,7 +364,8 @@ TEST_CASE("send control prioritizes handshake, loss, TLP, and RTO retransmission
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control timeout moves every retransmittable packet to the loss queue", "[send_control]") {
+TEST_CASE("send control timeout moves every retransmittable packet to the loss queue", "[send_control]")
+{
     utp_send_control_t control = {};
     utp_packet_out_t   first   = make_packet(1u, 100u);
     utp_packet_out_t   second  = make_packet(2u, 200u);
@@ -370,7 +385,8 @@ TEST_CASE("send control timeout moves every retransmittable packet to the loss q
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control resets retransmission backoff after ACK progress", "[send_control]") {
+TEST_CASE("send control resets retransmission backoff after ACK progress", "[send_control]")
+{
     utp_send_control_t            control = {};
     utp_packet_out_t              packet  = make_packet(1u, 100u);
     struct utp_packet_out_tailq   acknowledged;
@@ -394,7 +410,8 @@ TEST_CASE("send control resets retransmission backoff after ACK progress", "[sen
     utp_send_control_cleanup(&control);
 }
 
-TEST_CASE("send control allocates packet numbers without reuse", "[send_control]") {
+TEST_CASE("send control allocates packet numbers without reuse", "[send_control]")
+{
     utp_send_control_t control = {};
     uint64_t           first   = 0u;
     uint64_t           second  = 0u;

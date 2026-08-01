@@ -195,6 +195,15 @@ frame priority 仅决定包构造时的选帧和合包顺序，**不**赋予普�
   pending，等待后续发送预算。
 - 丢失的 STREAM 优先于新 STREAM，但仍不绕过拥塞控制。
 
+### 9.1 本地 UDP 发送错误
+
+`ENOBUFS`（Windows 的 `WSAENOBUFS`）是本地永久发送错误，**MUST NOT** 按 `EAGAIN`/`EWOULDBLOCK`
+重排队或等待可写：该 PacketOut 从未发送，必须释放，连接不发送 `CONNECTION_CLOSE`，并立即终止。主动
+握手尚未完成时通过 `on_connect_error(UTP_STATUS_LIMIT)` 报告；其他连接通过
+`on_connection_error(status=UTP_STATUS_LIMIT, peer_initiated=false)` 报告。原因字符串为 `udp send ENOBUFS`。
+
+`EAGAIN`/`EWOULDBLOCK` 的语义不同：PacketOut 保持未发送并回到发送队首，等待后续可写调度。
+
 ## 10. close PTO 与回收
 
 关闭遵循 QUIC 的响应式 close 重发，而不是依赖双方完成两次挥手：
