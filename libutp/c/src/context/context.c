@@ -18,11 +18,12 @@ typedef struct utp_context_replay {
     uint64_t             now_us;
 } utp_context_replay_t;
 
-static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
-                                                utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
-                                                size_t reason_length, bool peer_initiated);
-static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
-                                             const utp_connect_attempt_info_t* attempt);
+static void     utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                    utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
+                                                    size_t reason_length, bool peer_initiated);
+static void     utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
+                                                 const utp_connect_attempt_info_t* attempt);
+static void     utp_context_on_udp_writable(uint32_t events, void* user_data);
 
 static uint64_t utp_context_now_us(void)
 {
@@ -266,18 +267,54 @@ static utp_internal_error_t utp_context_send_packet(utp_context_t* context, cons
     return utp_udp_socket_send_to_slices(&context->udp_socket, slices, packet->slice_count, peer, &sent_length);
 }
 
-static void utp_context_report_permanent_send_error(utp_context_t* context, utp_context_connection_slot_t* slot,
-                                                    utp_internal_error_t error)
+static void utp_context_report_terminal_send_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                   utp_internal_error_t error, const char* reason)
 {
-    static const uint8_t reason[] = "udp send ENOBUFS";
-    const utp_status_t   status   = utp_internal_error_to_status(error);
+    const utp_status_t status        = utp_internal_error_to_status(error);
+    const size_t       reason_length = reason == NULL ? 0u : strlen(reason);
 
     if (slot->connect_pending && !utp_connection_is_connected(&slot->connection)) {
-        utp_context_report_connect_error(context, status, (const char*)reason, &slot->connect_attempt);
+        utp_context_report_connect_error(context, status, reason, &slot->connect_attempt);
     } else {
-        utp_context_report_connection_error(context, slot, status, 0u, reason, sizeof(reason) - 1u, false);
+        utp_context_report_connection_error(context, slot, status, 0u, (const uint8_t*)reason, reason_length, false);
     }
     utp_context_release_connection_slot(slot);
+}
+
+static bool utp_context_has_pending_close(const utp_context_t* context)
+{
+    size_t index;
+
+    if (context == NULL) {
+        return false;
+    }
+    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
+        const utp_context_connection_slot_t* slot = &context->connections[index];
+
+        if (slot->used && slot->connection.state == UTP_CONNECTION_STATE_CLOSING && slot->connection.close_pending) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static utp_internal_error_t utp_context_enable_udp_write_event(utp_context_t* context)
+{
+    if (context == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (context->udp_write_event.active) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    return utp_event_add_udp(&context->event_loop, &context->udp_write_event, &context->udp_socket, UTP_EVENT_WRITABLE,
+                             true, utp_context_on_udp_writable, context);
+}
+
+static void utp_context_disable_udp_write_event_if_idle(utp_context_t* context)
+{
+    if (context != NULL && !utp_context_has_pending_close(context)) {
+        utp_event_remove(&context->udp_write_event);
+    }
 }
 
 static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
@@ -302,14 +339,31 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_connection_on_packet_sent(connection, packet, utp_context_now_us());
         } else if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            if (utp_connection_is_close_packet(connection, packet)) {
+                error = utp_context_enable_udp_write_event(context);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    utp_send_control_pacer_tick_out(&connection->send_control);
+                    return UTP_INTERNAL_ERROR_OK;
+                }
+                utp_send_control_pacer_tick_out(&connection->send_control);
+                utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
+                return error;
+            }
             error = utp_send_control_reschedule_packet(&connection->send_control, packet);
         } else {
-            utp_connection_on_packet_send_error(connection, packet, error, utp_context_now_us());
-            utp_connection_on_packet_abandoned(connection, packet);
-            utp_packet_out_pool_release(&connection->packet_pool, packet);
-            if (error == UTP_INTERNAL_ERROR_NOBUFS) {
+            const bool close_packet = utp_connection_is_close_packet(connection, packet);
+
+            if (!close_packet) {
+                utp_connection_on_packet_send_error(connection, packet, error, utp_context_now_us());
+                utp_connection_on_packet_abandoned(connection, packet);
+                utp_packet_out_pool_release(&connection->packet_pool, packet);
+            }
+            if (error == UTP_INTERNAL_ERROR_NOBUFS || close_packet) {
+                const char* reason =
+                    error == UTP_INTERNAL_ERROR_NOBUFS ? "udp send ENOBUFS" : "send connection close failed";
+
                 utp_send_control_pacer_tick_out(&connection->send_control);
-                utp_context_report_permanent_send_error(context, slot, error);
+                utp_context_report_terminal_send_error(context, slot, error, reason);
                 return error;
             }
         }
@@ -548,6 +602,13 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         if (!context->connections[index].used) {
             continue;
         }
+        if (connection->state == UTP_CONNECTION_STATE_CLOSING || connection->state == UTP_CONNECTION_STATE_DRAINING) {
+            utp_context_take_deadline(&deadline, utp_connection_close_deadline(connection));
+            if (context->connections[index].connect_pending && !utp_connection_is_connected(connection)) {
+                utp_context_take_deadline(&deadline, now_us);
+            }
+            continue;
+        }
         if (utp_connection_ack_pending_count(connection) != 0u) {
             const uint64_t ack_deadline = utp_connection_ack_deadline(connection);
 
@@ -560,14 +621,7 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         utp_context_take_deadline(&deadline, utp_connection_pacing_deadline(connection));
         utp_context_take_deadline(&deadline, utp_connection_path_validation_deadline(connection));
         if (context->connections[index].connect_pending) {
-            const utp_connection_state_t state = utp_connection_state(connection);
-
-            if (!utp_connection_is_connected(connection) &&
-                (state == UTP_CONNECTION_STATE_CLOSING || state == UTP_CONNECTION_STATE_DRAINING)) {
-                utp_context_take_deadline(&deadline, now_us);
-            } else {
-                utp_context_take_deadline(&deadline, context->connections[index].connect_deadline_us);
-            }
+            utp_context_take_deadline(&deadline, context->connections[index].connect_deadline_us);
         }
     }
     for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
@@ -857,6 +911,36 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
     }
 }
 
+static void utp_context_on_udp_writable(uint32_t events, void* user_data)
+{
+    utp_context_t* context = user_data;
+    size_t         index;
+
+    if ((events & UTP_EVENT_WRITABLE) == 0u || context == NULL) {
+        return;
+    }
+    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
+        utp_context_connection_slot_t* slot = &context->connections[index];
+        utp_internal_error_t           error;
+
+        if (!slot->used || slot->connection.state != UTP_CONNECTION_STATE_CLOSING || !slot->connection.close_pending) {
+            continue;
+        }
+        error = utp_context_flush_connection(context, slot);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_internal_log_error(&context->logger, &context->tag, error, "udp close retry failed");
+        }
+    }
+    utp_context_disable_udp_write_event_if_idle(context);
+    {
+        const utp_internal_error_t error = utp_context_refresh_timer(context, utp_context_now_us());
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_internal_log_error(&context->logger, &context->tag, error, "context timer refresh failed");
+        }
+    }
+}
+
 static utp_internal_error_t utp_context_process_connection_timers(utp_context_t* context, uint64_t now_us)
 {
     size_t index;
@@ -1015,6 +1099,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         context->pending_incoming[index].queued = false;
     }
     utp_event_init(&context->udp_event);
+    utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
     context->packet_in_pool.allocator            = NULL;
@@ -1075,6 +1160,7 @@ void utp_context_destroy(utp_context_t* context)
         size_t index;
 
         utp_event_remove(&context->timer_event);
+        utp_event_remove(&context->udp_write_event);
         utp_event_remove(&context->udp_event);
         utp_udp_socket_close(&context->udp_socket);
         for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {

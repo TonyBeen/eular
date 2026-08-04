@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 typedef struct utp_stream utp_stream_t;
+struct utp_connection;
 
 #define UTP_STREAM_TYPES                        4u
 #define UTP_STREAM_MAX_WRITE_VIEWS              2u
@@ -69,6 +70,9 @@ typedef struct utp_stream_write_view {
 } utp_stream_write_view_t;
 
 struct utp_stream {
+    // Non-NULL only for a stream allocated by utp_connection_t.
+    struct utp_connection*      connection;
+    uint64_t*                   connection_consumed_total;
     uint32_t                    stream_id;
     uint64_t                    send_buffer_offset;
     uint64_t                    next_send_offset;
@@ -102,13 +106,17 @@ struct utp_stream {
 };
 
 void                 utp_stream_init(utp_stream_t* stream, uint32_t stream_id);
-void                 utp_stream_reset(utp_stream_t* stream);
+void                 utp_stream_cleanup(utp_stream_t* stream);
 utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer);
 utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
-utp_internal_error_t utp_stream_write(utp_stream_t* stream, const uint8_t* data, size_t length, bool fin);
+utp_internal_error_t utp_stream_write(utp_stream_t* stream, const uint8_t* data, size_t length);
+// Gracefully closes the local write side. Pending data is sent before FIN; the read side remains open.
+utp_internal_error_t utp_stream_close(utp_stream_t* stream);
+// Sends RESET_STREAM with error_code. This aborts the stream and is not a graceful FIN close.
+utp_internal_error_t utp_stream_reset(utp_stream_t* stream, uint16_t error_code);
 utp_internal_error_t utp_stream_acquire_write_views(utp_stream_t* stream, utp_stream_write_view_t* views,
                                                     size_t view_capacity, size_t* out_view_count, size_t* out_capacity);
-utp_internal_error_t utp_stream_commit_write_views(utp_stream_t* stream, size_t length, bool fin);
+utp_internal_error_t utp_stream_commit_write_views(utp_stream_t* stream, size_t length);
 bool                 utp_stream_has_send_work(const utp_stream_t* stream);
 utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* payload, size_t capacity,
                                             size_t* out_payload_length, uint32_t* out_stream_data_size,

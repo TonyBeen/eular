@@ -40,6 +40,7 @@ typedef struct utp_context_pending_slot {
 struct utp_context {
     utp_event_loop_t              event_loop;
     utp_event_t                   udp_event;
+    utp_event_t                   udp_write_event;
     utp_event_t                   timer_event;
     utp_udp_socket_t              udp_socket;
     utp_packet_in_pool_t          packet_in_pool;

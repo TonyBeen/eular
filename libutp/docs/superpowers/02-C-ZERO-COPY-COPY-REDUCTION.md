@@ -49,7 +49,10 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 内部 write view 已完成：
 
 - `utp_stream_acquire_write_views()` 借出 stream send ring 的可写片段，wrap 时最多返回两个 view。
-- `utp_stream_commit_write_views()` 提交调用方已写入的数据和可选 FIN。
+- `utp_stream_commit_write_views()` 只提交调用方已写入的数据；普通写与零拷贝写都通过
+  `utp_stream_close()` 单独关闭本地写方向，不在 write/commit 接口中传递 FIN。
+- `utp_stream_close()` 将 FIN 排在已有数据之后；最后一段待发送数据可携带 FIN，无待发送数据时生成零长度
+  STREAM + FIN。关闭本地写方向后仍可继续读取对端数据。
 - 传统 `utp_stream_write()` 继续保留拷贝语义，作为兼容路径。
 
 后续仍需补充更完整的乱序 ACK / 重传压力回归。
@@ -74,7 +77,8 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 
 - `utp_stream_acquire_read_view()` 借出当前连续首片的只读视图。
 - `utp_stream_commit_read_view()` 按 offset/length 提交消费并释放 fragment / PacketIn 引用。
-- FIN 在数据消费完后通过零长度 view 单独暴露，保持与传统 `read()` 一致的“先数据后 FIN”语义。
+- FIN 在数据消费完后通过零长度 view 单独暴露。传统 `utp_stream_read()` 在暂时没有连续数据时返回
+  `UTP_INTERNAL_ERROR_WOULD_BLOCK`，在对端 FIN 已到达且数据已读尽时返回 `UTP_INTERNAL_ERROR_CLOSED`，两者不得混淆。
 
 ### 4. Public/API 层零拷贝视图
 

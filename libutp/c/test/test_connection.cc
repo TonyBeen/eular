@@ -104,6 +104,51 @@ TEST_CASE("active connection binds a peer CID and replies to a Handshake without
     utp_connection_cleanup(&active);
 }
 
+TEST_CASE("connection close bypasses the ordinary send queue and packet pool", "[connection][close]")
+{
+    const utp_address_t peer       = loopback_address(10003u);
+    const uint8_t       ping       = UTP_FRAME_TYPE_PING;
+    utp_connection_t    connection = {};
+    utp_packet_out_t*   packet;
+    uint64_t            first_packet_number;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 33u, 44u, &peer, 1u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), false) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_scheduled_packet_count(&connection.send_control) == 1u);
+
+    REQUIRE(utp_connection_queue_close(&connection, 42u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_state(&connection) == UTP_CONNECTION_STATE_CLOSING);
+    REQUIRE(connection.close_pending);
+    REQUIRE(utp_send_control_scheduled_packet_count(&connection.send_control) == 1u);
+
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet == &connection.close_packet);
+    REQUIRE(packet->raw_data == connection.close_packet_data);
+    REQUIRE(packet->slice_count == 1u);
+    REQUIRE(packet->slices[0].length == packet->data_size);
+    REQUIRE((packet->po_flags & UTP_PO_SCHED) == 0u);
+    REQUIRE((packet->local_flags & UTP_POL_NO_TRACK_ON_SEND) != 0u);
+    REQUIRE(utp_send_control_scheduled_packet_count(&connection.send_control) == 0u);
+    REQUIRE(utp_connection_next_packet_to_send(&connection) == packet);
+
+    first_packet_number = packet->packet_number;
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(!connection.close_pending);
+    REQUIRE(packet->raw_data == connection.close_packet_data);
+    REQUIRE(utp_send_control_unacked_packet_count(&connection.send_control) == 0u);
+
+    REQUIRE(utp_connection_queue_close(&connection, 42u) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet == &connection.close_packet);
+    REQUIRE(packet->packet_number > first_packet_number);
+
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("connection retransmission timeout resends a tracked handshake packet with a fresh packet number",
           "[connection][retransmission]")
 {

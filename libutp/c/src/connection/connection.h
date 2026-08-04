@@ -67,6 +67,7 @@ typedef struct utp_connection {
     utp_packet_out_pool_t         packet_pool;
     utp_mtu_discovery_t           mtu_discovery;
     utp_bbr_t                     congestion;
+    utp_packet_out_t              close_packet;
     utp_stream_t                  streams[UTP_CONNECTION_MAX_STREAMS];
     utp_connection_control_slot_t control_slots[UTP_CONNECTION_CONTROL_SLOT_COUNT];
     utp_address_t                 peer;
@@ -104,6 +105,7 @@ typedef struct utp_connection {
     uint16_t                      peer_close_error_code;
     uint16_t                      peer_close_reason_length;
     uint8_t                       path_challenge[8];
+    uint8_t                       close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];
     uint8_t                       stream_scheduler_mode;
     uint8_t                       stream_scheduler_cursor;
     uint8_t                       path_challenge_retry_count;
@@ -130,16 +132,17 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
                                                  const uint8_t* payload, size_t payload_length, bool track_on_send);
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code);
 // Returns a scheduled packet or a retransmission with a fresh packet number.
-utp_packet_out_t* utp_connection_next_packet_to_send(utp_connection_t* connection);
-utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us);
+utp_packet_out_t*    utp_connection_next_packet_to_send(utp_connection_t* connection);
+utp_packet_out_t*    utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us);
 // Marks a packet as successfully written. Non-tracked packets are returned to the pool here.
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
 // Handles a UDP write failure before the packet was put on the wire.
-void utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
-                                         utp_internal_error_t error, uint64_t now_us);
+void                 utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
+                                                         utp_internal_error_t error, uint64_t now_us);
+bool                 utp_connection_is_close_packet(const utp_connection_t* connection, const utp_packet_out_t* packet);
 // Releases a packet that was never written to UDP and restores its pending transport state.
-void utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
+void                 utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 // Validates peer/CIDs, processes ACK and lifecycle frames, and records received packet numbers.
 utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, const uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer,
@@ -164,15 +167,6 @@ utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* 
 utp_internal_error_t utp_connection_create_stream(utp_connection_t* connection, bool bidirectional,
                                                   uint32_t* out_stream_id);
 utp_stream_t*        utp_connection_find_stream(utp_connection_t* connection, uint32_t stream_id);
-utp_internal_error_t utp_connection_stream_write(utp_connection_t* connection, uint32_t stream_id, const uint8_t* data,
-                                                 size_t length, bool fin);
-utp_internal_error_t utp_connection_stream_reset(utp_connection_t* connection, uint32_t stream_id, uint16_t error_code);
-utp_internal_error_t utp_connection_stream_read(utp_connection_t* connection, uint32_t stream_id, uint8_t* buffer,
-                                                size_t capacity, size_t* out_length, bool* out_fin);
-utp_internal_error_t utp_connection_stream_acquire_read_view(utp_connection_t* connection, uint32_t stream_id,
-                                                             utp_stream_read_view_t* out_view);
-utp_internal_error_t utp_connection_stream_commit_read_view(utp_connection_t* connection, uint32_t stream_id,
-                                                            uint64_t offset, size_t length);
 
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);
 bool                   utp_connection_is_connected(const utp_connection_t* connection);

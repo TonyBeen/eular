@@ -212,6 +212,10 @@ frame priority 仅决定包构造时的选帧和合包顺序，**不**赋予普�
   `close_deadline = sent_time + 3 * close_pto`。
 - close 尚未成功写入 UDP 时 **MUST NOT** 开始上述 deadline；socket 暂时不可写时保留单独的 close packet
   并等待可写。
+- C 实现为每个连接预留一个内嵌 close packet slot，不占普通 `scheduled_packets` 配额或 PacketOut pool；仅在
+  该 slot 因 `EAGAIN`/`EWOULDBLOCK` 未写出时注册 UDP writable 事件重试。
+- close 包遇到除 `EAGAIN`/`EWOULDBLOCK` 外的本地写错误时，**MUST** 通过本地错误回调报告并立即回收连接，
+  不得无限停留在 `CLOSING`。
 - closing 期间收到任意对端包时，不处理业务 frame；仅当距上次 close 发送已过一个 `close_pto` 才限速重发
   一个单独的 `CONNECTION_CLOSE`。
 - closing 期间无入包时 **MUST NOT** 盲目按 PTO 周期重发 close。
