@@ -24,21 +24,21 @@ typedef struct utp_stream     utp_stream_t;
 struct event_base;
 
 typedef enum utp_encryption_mode {
-    UTP_ENCRYPTION_NONE = 0,
+    UTP_ENCRYPTION_NONE,
     UTP_ENCRYPTION_AES_GCM_128,
-    UTP_ENCRYPTION_AES_GCM_256
+    UTP_ENCRYPTION_AES_GCM_256,
 } utp_encryption_mode_t;
 
 typedef enum utp_connect_attempt_type {
-    UTP_CONNECT_ATTEMPT_NORMAL = 0,
+    UTP_CONNECT_ATTEMPT_NORMAL,
     UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN,
     UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE,
-    UTP_CONNECT_ATTEMPT_PASSIVE
+    UTP_CONNECT_ATTEMPT_PASSIVE,
 } utp_connect_attempt_type_t;
 
 typedef enum utp_stream_scheduler_mode {
-    UTP_STREAM_SCHEDULER_STRICT = 0,
-    UTP_STREAM_SCHEDULER_DRR    = 1
+    UTP_STREAM_SCHEDULER_STRICT,
+    UTP_STREAM_SCHEDULER_DRR,
 } utp_stream_scheduler_mode_t;
 
 typedef struct utp_endpoint {
@@ -54,6 +54,8 @@ typedef struct utp_context_options {
     uint64_t                    context_id;
     utp_log_level_t             log_level;
     utp_stream_scheduler_mode_t stream_scheduler_mode;
+
+    // mtu probing and blackhole detection options
     bool                        enable_dplpmtud;
     uint16_t                    mtu_min;
     uint16_t                    mtu_max;
@@ -122,9 +124,9 @@ typedef void (*utp_on_connect_error_fn)(utp_status_t status, const char* message
 typedef bool (*utp_on_new_connection_fn)(const utp_new_connection_info_t* info, void* user_data);
 typedef struct utp_connection_error_info {
     // UTP_STATUS_OK denotes a normal peer close. Local fatal errors use their terminal status.
-    utp_status_t status;
+    utp_status_t   status;
     // The raw CONNECTION_CLOSE code from the peer, or zero for a local failure.
-    uint16_t peer_error_code;
+    uint16_t       peer_error_code;
     // A zero-copy reason view that is valid only for the duration of the callback.
     const uint8_t* reason;
     size_t         reason_length;

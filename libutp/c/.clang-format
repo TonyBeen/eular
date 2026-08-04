@@ -12,8 +12,8 @@ AlignConsecutiveAssignments:
   PadOperators: true
 AlignConsecutiveDeclarations:
   Enabled: true
-  AcrossEmptyLines: false
-  AcrossComments: false
+  AcrossEmptyLines: true
+  AcrossComments: true
   AlignCompound: false
 AlignEscapedNewlines: Left
 AlignOperands:   true
