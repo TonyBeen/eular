@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "crypto/crypto.h"
 #include "proto/frame.h"
 #include "socket/address.h"
 #include "util/error.h"
@@ -19,24 +20,30 @@ typedef enum utp_pending_incoming_result {
 } utp_pending_incoming_result_t;
 
 typedef utp_internal_error_t (*utp_pending_incoming_replay_fn)(const uint8_t* packet, size_t packet_length,
-                                                               void* user_data);
+                                                               size_t wire_packet_length, void* user_data);
 
-// storage 由 Context 持有并在创建 pending 项时传入。每个缓存包由两字节长度前缀和完整线数据组成，
-// 因此接收热路径不需要动态分配。
+// storage 由 Context 持有并在创建 pending 项时传入。每个缓存包保存明文长度、线上长度和解密后的完整包，
+// 因此接收热路径不需要动态分配，晋升后也能按实际 UDP 字节数记账。
 typedef struct utp_pending_incoming {
-    utp_address_t peer;
-    uint8_t*      storage;
-    size_t        storage_capacity;
-    size_t        storage_length;
-    size_t        packet_limit;
-    size_t        packet_count;
-    uint32_t      local_cid;
-    uint32_t      peer_cid;
-    uint64_t      last_handshake_packet_number;
-    uint64_t      handshake_retransmission_deadline_us;
-    uint32_t      handshake_retransmission_count;
-    bool          accepted;
-    bool          handshake_sent;
+    utp_address_t         peer;
+    uint8_t*              storage;
+    size_t                storage_capacity;
+    size_t                storage_length;
+    size_t                packet_limit;
+    size_t                packet_count;
+    uint32_t              local_cid;
+    uint32_t              peer_cid;
+    uint64_t              last_handshake_packet_number;
+    uint64_t              handshake_retransmission_deadline_us;
+    uint32_t              handshake_retransmission_count;
+    utp_crypto_key_pair_t crypto_key_pair;
+    utp_crypto_aead_t     tx_aead;
+    utp_crypto_aead_t     rx_aead;
+    uint8_t               crypto_type;
+    bool                  crypto_configured;
+    bool                  crypto_ready;
+    bool                  accepted;
+    bool                  handshake_sent;
 } utp_pending_incoming_t;
 
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,
@@ -44,12 +51,18 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
                                                size_t packet_limit);
 void                 utp_pending_incoming_reset(utp_pending_incoming_t* pending);
 utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t* pending);
+utp_internal_error_t utp_pending_incoming_configure_crypto(utp_pending_incoming_t*   pending,
+                                                           const utp_frame_crypto_t* peer_crypto);
+utp_internal_error_t utp_pending_incoming_encode_crypto(const utp_pending_incoming_t* pending, uint8_t* buffer,
+                                                        size_t capacity);
+utp_internal_error_t utp_pending_incoming_decrypt_packet(const utp_pending_incoming_t* pending, uint8_t* packet,
+                                                         size_t* packet_length);
 utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incoming_t* pending,
                                                               uint64_t handshake_packet_number, uint64_t now_us);
 uint64_t             utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t* pending);
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pending, const uint8_t* packet,
-                                                    size_t packet_length, const utp_address_t* peer,
-                                                    utp_pending_incoming_result_t* result);
+                                                    size_t packet_length, size_t wire_packet_length,
+                                                    const utp_address_t* peer, utp_pending_incoming_result_t* result);
 utp_internal_error_t utp_pending_incoming_replay(const utp_pending_incoming_t*  pending,
                                                  utp_pending_incoming_replay_fn replay, void* user_data);
 

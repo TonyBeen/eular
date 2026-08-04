@@ -107,6 +107,9 @@ utp_internal_error_t                   utp_send_control_on_retransmission_timeou
 utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
                                              struct utp_packet_out_tailq*   acknowledged_packets,
                                              utp_send_control_ack_result_t* result);
+// 收到有效 Handshake 即证明 Initial 已到达，从 scheduled/unacked/lost/discarded 中退休全部握手包。
+utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_t* control, uint64_t now_us,
+                                                               struct utp_packet_out_tailq* retired_packets);
 uint64_t             utp_send_control_largest_sent(const utp_send_control_t* control);
 uint64_t             utp_send_control_largest_acked(const utp_send_control_t* control);
 size_t               utp_send_control_unacked_packet_count(const utp_send_control_t* control);

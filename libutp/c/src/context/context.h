@@ -44,6 +44,8 @@ struct utp_context {
     utp_event_t                   timer_event;
     utp_udp_socket_t              udp_socket;
     utp_packet_in_pool_t          packet_in_pool;
+    // 加密只在最终 UDP 写入前进行，单个 Context 的事件循环串行复用该缓冲。
+    uint8_t                       encrypt_send_buffer[UINT16_MAX];
     utp_context_connection_slot_t connections[UTP_CONTEXT_MAX_CONNECTIONS];
     utp_context_pending_slot_t    pending_incoming[UTP_CONTEXT_MAX_PENDING_INCOMING];
     uint32_t                      next_cid;

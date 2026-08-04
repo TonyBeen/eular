@@ -1,12 +1,13 @@
 #include "crypto/crypto.h"
 
+#include <string.h>
+
 #include <openssl/aead.h>
 #include <openssl/curve25519.h>
 #include <openssl/evp.h>
 #include <openssl/hkdf.h>
 #include <openssl/mem.h>
 #include <openssl/sha.h>
-#include <string.h>
 
 #include "proto/proto.h"
 
@@ -17,7 +18,8 @@
 static const uint8_t k_salt_label[] = "libutp-handshake-v2";
 static const uint8_t k_info_label[] = "libutp-traffic-keys-v2";
 
-static bool is_all_zero(const uint8_t *data, size_t length) {
+static bool          is_all_zero(const uint8_t* data, size_t length)
+{
     uint8_t aggregate = 0;
     size_t  index;
 
@@ -27,14 +29,16 @@ static bool is_all_zero(const uint8_t *data, size_t length) {
     return aggregate == 0;
 }
 
-static void store_be32(uint8_t output[4], uint32_t value) {
+static void store_be32(uint8_t output[4], uint32_t value)
+{
     output[0] = (uint8_t)(value >> 24u);
     output[1] = (uint8_t)(value >> 16u);
     output[2] = (uint8_t)(value >> 8u);
     output[3] = (uint8_t)value;
 }
 
-static void store_be64(uint8_t output[8], uint64_t value) {
+static void store_be64(uint8_t output[8], uint64_t value)
+{
     output[0] = (uint8_t)(value >> 56u);
     output[1] = (uint8_t)(value >> 48u);
     output[2] = (uint8_t)(value >> 40u);
@@ -45,7 +49,8 @@ static void store_be64(uint8_t output[8], uint64_t value) {
     output[7] = (uint8_t)value;
 }
 
-static const EVP_AEAD *aead_for_key_size(size_t key_size) {
+static const EVP_AEAD* aead_for_key_size(size_t key_size)
+{
     if (key_size == UTP_CRYPTO_AES_128_KEY_SIZE) {
         return EVP_aead_aes_128_gcm();
     }
@@ -56,18 +61,21 @@ static const EVP_AEAD *aead_for_key_size(size_t key_size) {
 }
 
 static void build_nonce(uint8_t nonce[UTP_CRYPTO_AEAD_NONCE_SIZE], const uint8_t prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE],
-                        uint64_t packet_number) {
+                        uint64_t packet_number)
+{
     memcpy(nonce, prefix, UTP_CRYPTO_NONCE_PREFIX_SIZE);
     store_be64(nonce + UTP_CRYPTO_NONCE_PREFIX_SIZE, packet_number);
 }
 
-void utp_crypto_key_pair_clear(utp_crypto_key_pair_t *key_pair) {
+void utp_crypto_key_pair_clear(utp_crypto_key_pair_t* key_pair)
+{
     if (key_pair != NULL) {
         OPENSSL_cleanse(key_pair, sizeof(*key_pair));
     }
 }
 
-utp_internal_error_t utp_crypto_key_pair_generate(utp_crypto_key_pair_t *key_pair) {
+utp_internal_error_t utp_crypto_key_pair_generate(utp_crypto_key_pair_t* key_pair)
+{
     if (key_pair == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -76,8 +84,9 @@ utp_internal_error_t utp_crypto_key_pair_generate(utp_crypto_key_pair_t *key_pai
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_crypto_key_pair_from_private(utp_crypto_key_pair_t *key_pair,
-                                                      const uint8_t          private_key[UTP_CRYPTO_X25519_KEY_SIZE]) {
+utp_internal_error_t utp_crypto_key_pair_from_private(utp_crypto_key_pair_t* key_pair,
+                                                      const uint8_t          private_key[UTP_CRYPTO_X25519_KEY_SIZE])
+{
     if (key_pair == NULL || private_key == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -89,7 +98,8 @@ utp_internal_error_t utp_crypto_key_pair_from_private(utp_crypto_key_pair_t *key
 
 utp_internal_error_t utp_crypto_x25519_derive(uint8_t       shared_secret[UTP_CRYPTO_X25519_KEY_SIZE],
                                               const uint8_t private_key[UTP_CRYPTO_X25519_KEY_SIZE],
-                                              const uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE]) {
+                                              const uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE])
+{
     if (shared_secret == NULL || private_key == NULL || peer_public_key == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -104,18 +114,20 @@ utp_internal_error_t utp_crypto_x25519_derive(uint8_t       shared_secret[UTP_CR
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_crypto_traffic_material_clear(utp_crypto_traffic_material_t *material) {
+void utp_crypto_traffic_material_clear(utp_crypto_traffic_material_t* material)
+{
     if (material != NULL) {
         OPENSSL_cleanse(material, sizeof(*material));
     }
 }
 
-utp_internal_error_t utp_crypto_derive_traffic_material(utp_crypto_traffic_material_t *material,
+utp_internal_error_t utp_crypto_derive_traffic_material(utp_crypto_traffic_material_t* material,
                                                         const uint8_t shared_secret[UTP_CRYPTO_X25519_KEY_SIZE],
                                                         const uint8_t client_public_key[UTP_CRYPTO_X25519_KEY_SIZE],
                                                         const uint8_t server_public_key[UTP_CRYPTO_X25519_KEY_SIZE],
                                                         uint32_t client_cid, uint32_t server_cid, uint8_t crypto_type,
-                                                        size_t key_size) {
+                                                        size_t key_size)
+{
     uint8_t transcript[UTP_CRYPTO_TRANSCRIPT_SIZE];
     uint8_t transcript_hash[UTP_CRYPTO_SHA256_SIZE];
     uint8_t salt_input[sizeof(k_salt_label) - 1u + UTP_CRYPTO_SHA256_SIZE];
@@ -181,14 +193,60 @@ utp_internal_error_t utp_crypto_derive_traffic_material(utp_crypto_traffic_mater
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_crypto_aead_cleanup(utp_crypto_aead_t *aead) {
-    EVP_AEAD_CTX          *provider_context;
-    const utp_allocator_t *allocator;
+utp_internal_error_t utp_crypto_create_directional_aead(const utp_crypto_key_pair_t* local_key_pair,
+                                                        const uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE],
+                                                        uint32_t client_cid, uint32_t server_cid, uint8_t crypto_type,
+                                                        bool local_is_client, utp_crypto_aead_t* tx,
+                                                        utp_crypto_aead_t* rx)
+{
+    uint8_t                            shared_secret[UTP_CRYPTO_X25519_KEY_SIZE];
+    utp_crypto_traffic_material_t      material;
+    const uint8_t*                     client_public_key;
+    const uint8_t*                     server_public_key;
+    const utp_crypto_traffic_secret_t* tx_secret;
+    const utp_crypto_traffic_secret_t* rx_secret;
+    size_t                             key_size;
+    utp_internal_error_t               error;
+
+    if (local_key_pair == NULL || peer_public_key == NULL || tx == NULL || rx == NULL || client_cid == 0u ||
+        server_cid == 0u || crypto_type > UTP_CRYPTO_TYPE_AES_GCM_256) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    key_size = crypto_type == UTP_CRYPTO_TYPE_AES_GCM_256 ? UTP_CRYPTO_AES_256_KEY_SIZE : UTP_CRYPTO_AES_128_KEY_SIZE;
+    client_public_key = local_is_client ? local_key_pair->public_key : peer_public_key;
+    server_public_key = local_is_client ? peer_public_key : local_key_pair->public_key;
+    error             = utp_crypto_x25519_derive(shared_secret, local_key_pair->private_key, peer_public_key);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_crypto_derive_traffic_material(&material, shared_secret, client_public_key, server_public_key,
+                                                   client_cid, server_cid, crypto_type, key_size);
+    }
+    OPENSSL_cleanse(shared_secret, sizeof(shared_secret));
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    tx_secret = local_is_client ? &material.client_to_server : &material.server_to_client;
+    rx_secret = local_is_client ? &material.server_to_client : &material.client_to_server;
+    error     = utp_crypto_aead_init(tx, NULL, tx_secret->key, key_size, tx_secret->nonce_prefix);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_crypto_aead_init(rx, NULL, rx_secret->key, key_size, rx_secret->nonce_prefix);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_crypto_aead_cleanup(tx);
+        utp_crypto_aead_cleanup(rx);
+    }
+    utp_crypto_traffic_material_clear(&material);
+    return error;
+}
+
+void utp_crypto_aead_cleanup(utp_crypto_aead_t* aead)
+{
+    EVP_AEAD_CTX*          provider_context;
+    const utp_allocator_t* allocator;
 
     if (aead == NULL) {
         return;
     }
-    provider_context = (EVP_AEAD_CTX *)aead->provider_context;
+    provider_context = (EVP_AEAD_CTX*)aead->provider_context;
     allocator        = aead->allocator;
     if (provider_context != NULL) {
         EVP_AEAD_CTX_cleanup(provider_context);
@@ -197,11 +255,12 @@ void utp_crypto_aead_cleanup(utp_crypto_aead_t *aead) {
     OPENSSL_cleanse(aead, sizeof(*aead));
 }
 
-utp_internal_error_t utp_crypto_aead_init(utp_crypto_aead_t *aead, const utp_allocator_t *allocator, const uint8_t *key,
-                                          size_t key_size, const uint8_t nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE]) {
-    const EVP_AEAD        *provider_aead;
-    EVP_AEAD_CTX          *provider_context;
-    const utp_allocator_t *resolved_allocator;
+utp_internal_error_t utp_crypto_aead_init(utp_crypto_aead_t* aead, const utp_allocator_t* allocator, const uint8_t* key,
+                                          size_t key_size, const uint8_t nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE])
+{
+    const EVP_AEAD*        provider_aead;
+    EVP_AEAD_CTX*          provider_context;
+    const utp_allocator_t* resolved_allocator;
 
     if (aead == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -234,12 +293,13 @@ utp_internal_error_t utp_crypto_aead_init(utp_crypto_aead_t *aead, const utp_all
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_crypto_aead_seal(const utp_crypto_aead_t *aead, uint64_t packet_number,
-                                          const uint8_t *plaintext, size_t plaintext_length, const uint8_t *aad,
-                                          size_t aad_length, uint8_t *ciphertext, size_t ciphertext_capacity,
-                                          size_t *ciphertext_length) {
+utp_internal_error_t utp_crypto_aead_seal(const utp_crypto_aead_t* aead, uint64_t packet_number,
+                                          const uint8_t* plaintext, size_t plaintext_length, const uint8_t* aad,
+                                          size_t aad_length, uint8_t* ciphertext, size_t ciphertext_capacity,
+                                          size_t* ciphertext_length)
+{
     uint8_t       nonce[UTP_CRYPTO_AEAD_NONCE_SIZE];
-    EVP_AEAD_CTX *provider_context;
+    EVP_AEAD_CTX* provider_context;
     size_t        required_length;
     size_t        output_length = 0;
 
@@ -259,7 +319,7 @@ utp_internal_error_t utp_crypto_aead_seal(const utp_crypto_aead_t *aead, uint64_
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
 
-    provider_context = (EVP_AEAD_CTX *)aead->provider_context;
+    provider_context = (EVP_AEAD_CTX*)aead->provider_context;
     build_nonce(nonce, aead->nonce_prefix, packet_number);
     if (EVP_AEAD_CTX_seal(provider_context, ciphertext, &output_length, ciphertext_capacity, nonce, sizeof(nonce),
                           plaintext, plaintext_length, aad, aad_length) != 1) {
@@ -271,12 +331,13 @@ utp_internal_error_t utp_crypto_aead_seal(const utp_crypto_aead_t *aead, uint64_
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_crypto_aead_open(const utp_crypto_aead_t *aead, uint64_t packet_number,
-                                          const uint8_t *ciphertext, size_t ciphertext_length, const uint8_t *aad,
-                                          size_t aad_length, uint8_t *plaintext, size_t plaintext_capacity,
-                                          size_t *plaintext_length) {
+utp_internal_error_t utp_crypto_aead_open(const utp_crypto_aead_t* aead, uint64_t packet_number,
+                                          const uint8_t* ciphertext, size_t ciphertext_length, const uint8_t* aad,
+                                          size_t aad_length, uint8_t* plaintext, size_t plaintext_capacity,
+                                          size_t* plaintext_length)
+{
     uint8_t       nonce[UTP_CRYPTO_AEAD_NONCE_SIZE];
-    EVP_AEAD_CTX *provider_context;
+    EVP_AEAD_CTX* provider_context;
     size_t        required_length;
     size_t        output_length = 0;
 
@@ -296,7 +357,7 @@ utp_internal_error_t utp_crypto_aead_open(const utp_crypto_aead_t *aead, uint64_
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
 
-    provider_context = (EVP_AEAD_CTX *)aead->provider_context;
+    provider_context = (EVP_AEAD_CTX*)aead->provider_context;
     build_nonce(nonce, aead->nonce_prefix, packet_number);
     if (EVP_AEAD_CTX_open(provider_context, plaintext, &output_length, plaintext_capacity, nonce, sizeof(nonce),
                           ciphertext, ciphertext_length, aad, aad_length) != 1) {

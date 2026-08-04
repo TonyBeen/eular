@@ -3,7 +3,6 @@
 #include "proto/ack.h"
 #include "proto/wire.h"
 
-#define UTP_FRAME_CRYPTO_SIZE               35u
 #define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE 4u
 #define UTP_FRAME_ACK_FREQUENCY_SIZE        7u
 #define UTP_FRAME_TRANSPORT_PARAMS_SIZE     38u
@@ -272,6 +271,75 @@ utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t
         }
     }
     *path = decoded;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, const utp_frame_crypto_t* crypto)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+    size_t               index;
+
+    if (buffer == NULL || crypto == NULL || crypto->crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (capacity < UTP_FRAME_CRYPTO_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_CRYPTO);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, crypto->crypto_type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, 0u);
+    }
+    for (index = 0u; index < sizeof(crypto->ephemeral_public_key) && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_write_u8(&writer, crypto->ephemeral_public_key[index]);
+    }
+    return error;
+}
+
+utp_internal_error_t utp_frame_crypto_decode(utp_frame_crypto_t* crypto, const uint8_t* buffer, size_t length)
+{
+    utp_wire_reader_t    reader;
+    utp_frame_crypto_t   decoded;
+    uint8_t              type;
+    uint8_t              reserved;
+    size_t               index;
+    utp_internal_error_t error;
+
+    if (crypto == NULL || buffer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (length < UTP_FRAME_CRYPTO_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_CRYPTO_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &decoded.crypto_type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &reserved);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (type != UTP_FRAME_TYPE_CRYPTO || decoded.crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256 || reserved != 0u) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    for (index = 0u; index < sizeof(decoded.ephemeral_public_key); ++index) {
+        error = utp_wire_read_u8(&reader, &decoded.ephemeral_public_key[index]);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    *crypto = decoded;
     return UTP_INTERNAL_ERROR_OK;
 }
 

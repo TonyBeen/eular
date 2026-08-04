@@ -9,6 +9,7 @@
 #include "connection/stream.h"
 #include "context/ack_scheduler.h"
 #include "context/send_control.h"
+#include "crypto/crypto.h"
 #include "mtu/mtu.h"
 #include "proto/frame.h"
 #include "proto/packet_in.h"
@@ -75,6 +76,9 @@ typedef struct utp_connection {
     utp_packet_out_pool_t       packet_pool;
     utp_mtu_discovery_t         mtu_discovery;
     utp_bbr_t                   congestion;
+    utp_crypto_key_pair_t       crypto_key_pair;
+    utp_crypto_aead_t           tx_aead;
+    utp_crypto_aead_t           rx_aead;
     utp_packet_out_t            close_packet;
     utp_hash_table_t            streams;
     utp_hash_table_t            control_slots;
@@ -114,8 +118,10 @@ typedef struct utp_connection {
     uint16_t                    local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
     uint16_t                    peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
     uint8_t                     path_challenge[8];
+    uint8_t                     peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];
     uint8_t                     close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];
     uint8_t                     stream_scheduler_mode;
+    uint8_t                     crypto_type;
     uint32_t                    stream_scheduler_cursor;
     uint8_t                     path_challenge_retry_count;
     uint16_t                    keepalive_missed_probes;
@@ -124,6 +130,8 @@ typedef struct utp_connection {
     bool                        local_close_started;
     bool                        peer_close_received;
     bool                        path_challenge_pending;
+    bool                        crypto_configured;
+    bool                        crypto_ready;
     const uint8_t*              peer_close_reason;
     utp_connection_role_t       role;
     utp_connection_state_t      state;
@@ -135,6 +143,13 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
                                          uint16_t packet_capacity);
 void                 utp_connection_cleanup(utp_connection_t* connection);
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
+utp_internal_error_t utp_connection_configure_crypto(utp_connection_t* connection, uint8_t crypto_type);
+utp_internal_error_t utp_connection_encode_crypto(const utp_connection_t* connection, uint8_t* buffer, size_t capacity);
+utp_internal_error_t utp_connection_adopt_crypto(utp_connection_t* connection, uint8_t crypto_type,
+                                                 utp_crypto_aead_t* tx, utp_crypto_aead_t* rx);
+utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* connection,
+                                                       const utp_packet_out_t* packet, uint8_t* buffer, size_t capacity,
+                                                       size_t* out_length);
 
 // 构造完整明文包并放入有界发送队列。
 utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
@@ -155,11 +170,14 @@ bool                 utp_connection_is_close_packet(const utp_connection_t* conn
 // 释放从未写入 UDP 的包，并恢复其可靠 control 和流发送状态。
 void                 utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 // 校验来源地址与 CID，处理 ACK 和生命周期帧，并记录收到的包号。
-utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, const uint8_t* packet,
+utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer,
                                                        uint64_t now_us);
 utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* connection, utp_packet_in_t* packet,
                                                           const utp_address_t* peer, uint64_t now_us);
+utp_internal_error_t utp_connection_on_plaintext_packet_in_received(utp_connection_t* connection,
+                                                                    utp_packet_in_t* packet, size_t wire_packet_length,
+                                                                    const utp_address_t* peer, uint64_t now_us);
 utp_internal_error_t utp_connection_queue_ack(utp_connection_t* connection, uint64_t now_us);
 uint32_t             utp_connection_ack_pending_count(const utp_connection_t* connection);
 uint64_t             utp_connection_ack_deadline(const utp_connection_t* connection);

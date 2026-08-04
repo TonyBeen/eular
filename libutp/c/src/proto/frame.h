@@ -20,10 +20,13 @@ extern "C" {
 #define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE 5u
 #define UTP_FRAME_RESET_STREAM_SIZE            15u
 #define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
+#define UTP_FRAME_CRYPTO_SIZE                  35u
 #define UTP_STREAM_FLAG_NONE                   0x00u
 #define UTP_STREAM_FLAG_FIN                    0x01u
 #define UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL    0u
 #define UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL   1u
+#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_128      0u
+#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_256      1u
 
 /*
  * 帧的线格式。所有多字节整数均使用网络字节序编码，括号内数字表示字段字节数。
@@ -91,6 +94,12 @@ typedef struct utp_packet_view {
 typedef struct utp_frame_path {
     uint8_t data[8];
 } utp_frame_path_t;
+
+/* CRYPTO：type(1), crypto_type(1), reserved(1), ephemeral_public_key(32)。 */
+typedef struct utp_frame_crypto {
+    uint8_t crypto_type;
+    uint8_t ephemeral_public_key[32];
+} utp_frame_crypto_t;
 
 /* VERSION：type(1), version(4)。 */
 typedef struct utp_frame_version {
@@ -163,6 +172,8 @@ utp_internal_error_t utp_frame_path_encode(uint8_t* buffer, size_t capacity, uin
                                            const utp_frame_path_t* path);
 utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t* buffer, size_t length,
                                            uint8_t expected_type);
+utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, const utp_frame_crypto_t* crypto);
+utp_internal_error_t utp_frame_crypto_decode(utp_frame_crypto_t* crypto, const uint8_t* buffer, size_t length);
 utp_internal_error_t utp_frame_version_encode(uint8_t* buffer, size_t capacity, const utp_frame_version_t* version);
 utp_internal_error_t utp_frame_version_decode(utp_frame_version_t* version, const uint8_t* buffer, size_t length);
 utp_internal_error_t utp_frame_handshake_done_encode(uint8_t* buffer, size_t capacity,

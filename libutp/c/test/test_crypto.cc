@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <catch2/catch.hpp>
 #include <cstdlib>
 #include <cstring>
+
+#include <catch2/catch.hpp>
 
 extern "C" {
 #include "crypto/crypto.h"
@@ -17,27 +18,31 @@ struct allocation_tracker {
     size_t frees       = 0;
 };
 
-void *tracked_alloc(void *user_data, size_t size) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void* tracked_alloc(void* user_data, size_t size)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
     ++tracker->allocations;
     return std::malloc(size);
 }
 
-void *tracked_realloc(void *user_data, void *pointer, size_t size) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void* tracked_realloc(void* user_data, void* pointer, size_t size)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
     ++tracker->allocations;
     return std::realloc(pointer, size);
 }
 
-void tracked_free(void *user_data, void *pointer) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void tracked_free(void* user_data, void* pointer)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
     ++tracker->frees;
     std::free(pointer);
 }
 
 }  // namespace
 
-TEST_CASE("crypto generates an X25519 key pair", "[crypto]") {
+TEST_CASE("crypto generates an X25519 key pair", "[crypto]")
+{
     utp_crypto_key_pair_t key_pair = {};
 
     REQUIRE(utp_crypto_key_pair_generate(&key_pair) == UTP_INTERNAL_ERROR_OK);
@@ -45,7 +50,8 @@ TEST_CASE("crypto generates an X25519 key pair", "[crypto]") {
     utp_crypto_key_pair_clear(&key_pair);
 }
 
-TEST_CASE("X25519 derives equal non-zero shared secrets", "[crypto]") {
+TEST_CASE("X25519 derives equal non-zero shared secrets", "[crypto]")
+{
     utp_crypto_key_pair_t                           client        = {};
     utp_crypto_key_pair_t                           server        = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE> client_secret = {};
@@ -64,7 +70,8 @@ TEST_CASE("X25519 derives equal non-zero shared secrets", "[crypto]") {
     utp_crypto_key_pair_clear(&server);
 }
 
-TEST_CASE("X25519 rejects an all-zero peer public key", "[crypto]") {
+TEST_CASE("X25519 rejects an all-zero peer public key", "[crypto]")
+{
     utp_crypto_key_pair_t                           client          = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE> peer_public_key = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE> shared_secret   = {};
@@ -77,7 +84,8 @@ TEST_CASE("X25519 rejects an all-zero peer public key", "[crypto]") {
     utp_crypto_key_pair_clear(&client);
 }
 
-TEST_CASE("traffic material binds the transcript and isolates directions", "[crypto]") {
+TEST_CASE("traffic material binds the transcript and isolates directions", "[crypto]")
+{
     utp_crypto_key_pair_t                           client        = {};
     utp_crypto_key_pair_t                           server        = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE> shared_secret = {};
@@ -104,7 +112,8 @@ TEST_CASE("traffic material binds the transcript and isolates directions", "[cry
     utp_crypto_key_pair_clear(&server);
 }
 
-TEST_CASE("traffic material matches the C++ key schedule vector", "[crypto]") {
+TEST_CASE("traffic material matches the C++ key schedule vector", "[crypto]")
+{
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE>        shared_secret                 = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE>        client_public_key             = {};
     std::array<uint8_t, UTP_CRYPTO_X25519_KEY_SIZE>        server_public_key             = {};
@@ -150,7 +159,8 @@ TEST_CASE("traffic material matches the C++ key schedule vector", "[crypto]") {
     utp_crypto_traffic_material_clear(&material);
 }
 
-TEST_CASE("AES-GCM authenticates ciphertext, AAD, and packet number", "[crypto]") {
+TEST_CASE("AES-GCM authenticates ciphertext, AAD, and packet number", "[crypto]")
+{
     const std::array<uint8_t, UTP_CRYPTO_AES_256_KEY_SIZE> key = {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
         0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
@@ -207,7 +217,8 @@ TEST_CASE("AES-GCM authenticates ciphertext, AAD, and packet number", "[crypto]"
     utp_crypto_aead_cleanup(&aead);
 }
 
-TEST_CASE("AES-GCM context uses the supplied allocator", "[crypto]") {
+TEST_CASE("AES-GCM context uses the supplied allocator", "[crypto]")
+{
     const std::array<uint8_t, UTP_CRYPTO_AES_128_KEY_SIZE>  key          = {};
     const std::array<uint8_t, UTP_CRYPTO_NONCE_PREFIX_SIZE> nonce_prefix = {};
     allocation_tracker                                      tracker      = {};
@@ -226,4 +237,66 @@ TEST_CASE("AES-GCM context uses the supplied allocator", "[crypto]") {
 
     utp_crypto_aead_cleanup(&aead);
     REQUIRE(tracker.frees == 1u);
+}
+
+TEST_CASE("directional AEAD contexts interoperate in both directions in place", "[crypto]")
+{
+    const std::array<uint8_t, 2> crypto_types = {
+        UTP_CRYPTO_TYPE_AES_GCM_128,
+        UTP_CRYPTO_TYPE_AES_GCM_256,
+    };
+    const std::array<uint8_t, 9>  client_message = {0x10u, 0x11u, 0x12u, 0x13u, 0x14u, 0x15u, 0x16u, 0x17u, 0x18u};
+    const std::array<uint8_t, 7>  server_message = {0x20u, 0x21u, 0x22u, 0x23u, 0x24u, 0x25u, 0x26u};
+    const std::array<uint8_t, 20> aad = {0x30u, 0x31u, 0x32u, 0x33u, 0x34u, 0x35u, 0x36u, 0x37u, 0x38u, 0x39u,
+                                         0x3au, 0x3bu, 0x3cu, 0x3du, 0x3eu, 0x3fu, 0x40u, 0x41u, 0x42u, 0x43u};
+
+    for (uint8_t crypto_type : crypto_types) {
+        utp_crypto_key_pair_t                                                 client_key_pair  = {};
+        utp_crypto_key_pair_t                                                 server_key_pair  = {};
+        utp_crypto_aead_t                                                     client_tx        = {};
+        utp_crypto_aead_t                                                     client_rx        = {};
+        utp_crypto_aead_t                                                     server_tx        = {};
+        utp_crypto_aead_t                                                     server_rx        = {};
+        std::array<uint8_t, client_message.size() + UTP_CRYPTO_AEAD_TAG_SIZE> client_buffer    = {};
+        std::array<uint8_t, server_message.size() + UTP_CRYPTO_AEAD_TAG_SIZE> server_buffer    = {};
+        size_t                                                                encrypted_length = 0u;
+        size_t                                                                decrypted_length = 0u;
+
+        REQUIRE(utp_crypto_key_pair_generate(&client_key_pair) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_crypto_key_pair_generate(&server_key_pair) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_crypto_create_directional_aead(&client_key_pair, server_key_pair.public_key, 1001u, 2001u,
+                                                   crypto_type, true, &client_tx, &client_rx) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_crypto_create_directional_aead(&server_key_pair, client_key_pair.public_key, 1001u, 2001u,
+                                                   crypto_type, false, &server_tx,
+                                                   &server_rx) == UTP_INTERNAL_ERROR_OK);
+
+        std::copy(client_message.begin(), client_message.end(), client_buffer.begin());
+        REQUIRE(utp_crypto_aead_seal(&client_tx, 17u, client_buffer.data(), client_message.size(), aad.data(),
+                                     aad.size(), client_buffer.data(), client_buffer.size(),
+                                     &encrypted_length) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(encrypted_length == client_buffer.size());
+        REQUIRE(utp_crypto_aead_open(&server_rx, 17u, client_buffer.data(), encrypted_length, aad.data(), aad.size(),
+                                     client_buffer.data(), client_buffer.size(),
+                                     &decrypted_length) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(decrypted_length == client_message.size());
+        REQUIRE(std::equal(client_message.begin(), client_message.end(), client_buffer.begin()));
+
+        std::copy(server_message.begin(), server_message.end(), server_buffer.begin());
+        REQUIRE(utp_crypto_aead_seal(&server_tx, 18u, server_buffer.data(), server_message.size(), aad.data(),
+                                     aad.size(), server_buffer.data(), server_buffer.size(),
+                                     &encrypted_length) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(encrypted_length == server_buffer.size());
+        REQUIRE(utp_crypto_aead_open(&client_rx, 18u, server_buffer.data(), encrypted_length, aad.data(), aad.size(),
+                                     server_buffer.data(), server_buffer.size(),
+                                     &decrypted_length) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(decrypted_length == server_message.size());
+        REQUIRE(std::equal(server_message.begin(), server_message.end(), server_buffer.begin()));
+
+        utp_crypto_aead_cleanup(&client_tx);
+        utp_crypto_aead_cleanup(&client_rx);
+        utp_crypto_aead_cleanup(&server_tx);
+        utp_crypto_aead_cleanup(&server_rx);
+        utp_crypto_key_pair_clear(&client_key_pair);
+        utp_crypto_key_pair_clear(&server_key_pair);
+    }
 }

@@ -102,6 +102,11 @@ utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control
         return UTP_INTERNAL_ERROR_STATE;
     }
     if ((packet->local_flags & UTP_POL_NO_TRACK_ON_SEND) != 0u) {
+        // ACK-only 等非跟踪包仍占用包号；否则对端确认它们时会被误判为 ACK 了尚未发送的包。
+        error = utp_send_history_update(&control->send_history, packet->packet_number);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
         control->last_sent_time_us = packet->sent_time_us;
         if (packet->packet_number > control->current_packet_number) {
             control->current_packet_number = packet->packet_number;
@@ -759,6 +764,90 @@ utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const 
         control->was_quiet = true;
     }
     return utp_send_control_detect_losses(control);
+}
+
+utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_t* control, uint64_t now_us,
+                                                               struct utp_packet_out_tailq* retired_packets)
+{
+    utp_packet_out_t* packet;
+    utp_packet_out_t* next;
+    uint64_t          inflight_before;
+    bool              began_ack = false;
+
+    if (control == NULL || retired_packets == NULL || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    for (packet = TAILQ_FIRST(&control->scheduled_packets); packet != NULL; packet = next) {
+        uint64_t packet_size;
+
+        next = TAILQ_NEXT(packet, po_next);
+        if ((packet->po_flags & UTP_PO_HELLO) == 0u) {
+            continue;
+        }
+        packet_size = utp_send_control_packet_size(packet);
+        if (control->scheduled_packet_count == 0u || packet_size > control->scheduled_byte_count) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        TAILQ_REMOVE(&control->scheduled_packets, packet, po_next);
+        packet->po_flags &= (uint16_t)~UTP_PO_SCHED;
+        --control->scheduled_packet_count;
+        control->scheduled_byte_count -= packet_size;
+        TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
+    }
+    inflight_before = utp_send_ledger_bytes_in_flight(&control->ledger);
+    for (packet = TAILQ_FIRST(&control->ledger.unacked_packets); packet != NULL; packet = next) {
+        utp_congestion_packet_info_t info;
+        utp_internal_error_t         error;
+
+        next = TAILQ_NEXT(packet, po_next);
+        if ((packet->po_flags & UTP_PO_HELLO) == 0u) {
+            continue;
+        }
+        if (!began_ack) {
+            utp_congestion_on_begin_ack(control->congestion, now_us, inflight_before);
+            began_ack = true;
+        }
+        error = utp_send_ledger_remove(&control->ledger, packet);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        utp_send_control_packet_info(packet, &info);
+        utp_congestion_on_ack(control->congestion, &info, now_us, control->app_limited ? 1 : 0);
+        packet->bw_state = info.state;
+        TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
+    }
+    if (began_ack) {
+        utp_congestion_on_end_ack(control->congestion, utp_send_ledger_bytes_in_flight(&control->ledger));
+    }
+    for (packet = TAILQ_FIRST(&control->lost_packets); packet != NULL; packet = next) {
+        next = TAILQ_NEXT(packet, po_next);
+        if ((packet->po_flags & UTP_PO_HELLO) == 0u) {
+            continue;
+        }
+        if (control->lost_packet_count == 0u) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        TAILQ_REMOVE(&control->lost_packets, packet, po_next);
+        packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+        --control->lost_packet_count;
+        TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
+    }
+    for (packet = TAILQ_FIRST(&control->discarded_packets); packet != NULL; packet = next) {
+        next = TAILQ_NEXT(packet, po_next);
+        if ((packet->po_flags & UTP_PO_HELLO) == 0u) {
+            continue;
+        }
+        if (control->discarded_packet_count == 0u) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        TAILQ_REMOVE(&control->discarded_packets, packet, po_next);
+        --control->discarded_packet_count;
+        TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
+    }
+    if (utp_send_ledger_retransmittable_packet_count(&control->ledger) == 0u) {
+        control->was_quiet = true;
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 uint64_t utp_send_control_largest_sent(const utp_send_control_t* control)

@@ -730,6 +730,37 @@ TEST_CASE("version frame round trips with an exact fixed layout", "[frame]")
     REQUIRE(decoded.version == expected.version);
 }
 
+TEST_CASE("crypto frame round trips and rejects invalid negotiation fields", "[frame][crypto]")
+{
+    utp_frame_crypto_t                         expected = {};
+    utp_frame_crypto_t                         decoded  = {};
+    std::array<uint8_t, UTP_FRAME_CRYPTO_SIZE> encoded  = {};
+
+    expected.crypto_type = UTP_FRAME_CRYPTO_TYPE_AES_GCM_256;
+    for (size_t index = 0u; index < sizeof(expected.ephemeral_public_key); ++index) {
+        expected.ephemeral_public_key[index] = static_cast<uint8_t>(index + 1u);
+    }
+
+    REQUIRE(utp_frame_crypto_encode(encoded.data(), encoded.size(), &expected) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(encoded[0] == UTP_FRAME_TYPE_CRYPTO);
+    REQUIRE(encoded[1] == UTP_FRAME_CRYPTO_TYPE_AES_GCM_256);
+    REQUIRE(encoded[2] == 0u);
+    REQUIRE(std::memcmp(encoded.data() + 3u, expected.ephemeral_public_key, sizeof(expected.ephemeral_public_key)) ==
+            0);
+    REQUIRE(utp_frame_crypto_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.crypto_type == expected.crypto_type);
+    REQUIRE(std::memcmp(decoded.ephemeral_public_key, expected.ephemeral_public_key,
+                        sizeof(expected.ephemeral_public_key)) == 0);
+
+    encoded[2] = 1u;
+    REQUIRE(utp_frame_crypto_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_PROTOCOL);
+    encoded[2] = 0u;
+    encoded[1] = UTP_FRAME_CRYPTO_TYPE_AES_GCM_256 + 1u;
+    REQUIRE(utp_frame_crypto_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_PROTOCOL);
+    expected.crypto_type = UTP_FRAME_CRYPTO_TYPE_AES_GCM_256 + 1u;
+    REQUIRE(utp_frame_crypto_encode(encoded.data(), encoded.size(), &expected) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("path and handshake done frames reject a mismatched type", "[frame]")
 {
     const utp_frame_path_t                             path         = {{0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}};
