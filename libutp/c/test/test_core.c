@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <utp/utp.h>
+#include <utp/context.h>
 
 #include "util/allocator.h"
 #include "util/buffer.h"
@@ -39,7 +39,7 @@ typedef struct log_capture {
 
 static log_capture_t g_log_capture;
 
-static void capture_log(utp_log_level_t level, const char* message)
+static void          capture_log(utp_log_level_t level, const char* message)
 {
     ++g_log_capture.calls;
     g_log_capture.level = level;

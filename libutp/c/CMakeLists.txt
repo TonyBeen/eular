@@ -45,7 +45,7 @@ set(UTP_C_SOURCES
     src/congestion/minmax.c src/congestion/pacer.c src/mtu/mtu.c
     src/connection/stream.c src/connection/connection.c src/context/context.c src/utp.c)
 set(UTP_C_HEADERS
-    include/utp/log.h include/utp/status.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
+    include/utp/connection.h include/utp/context.h include/utp/log.h include/utp/option.h include/utp/status.h include/utp/stream.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
     src/util/buffer.h src/crypto/crypto.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
     src/util/log.h src/util/range_set.h src/util/ring.h src/util/time.h src/socket/udp.h src/proto/proto.h
     src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h src/proto/packet_in.h

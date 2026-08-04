@@ -31,6 +31,7 @@ typedef uint32_t utp_internal_error_t;
 #define UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL     (UTP_INTERNAL_ERROR_FACILITY_INTERNAL | UINT32_C(16))
 #define UTP_INTERNAL_ERROR_PATH_VALIDATION_BLOCKED (UTP_INTERNAL_ERROR_FACILITY_INTERNAL | UINT32_C(17))
 #define UTP_INTERNAL_ERROR_NOBUFS                  (UTP_INTERNAL_ERROR_FACILITY_INTERNAL | UINT32_C(18))
+#define UTP_INTERNAL_ERROR_STREAM_LIMIT            (UTP_INTERNAL_ERROR_FACILITY_INTERNAL | UINT32_C(19))
 
 bool                 utp_internal_error_is_ok(utp_internal_error_t error);
 utp_internal_error_t utp_internal_error_from_errno(int32_t system_error);

@@ -2,12 +2,11 @@
 #include <string.h>
 
 #include <event2/event.h>
-#include <utp/utp.h>
+#include <utp/context.h>
 
+#include "connection/connection.h"
 #include "context/context.h"
 #include "proto/frame.h"
-#include "proto/proto.h"
-#include "socket/udp.h"
 
 #if defined(__APPLE__)
 #include <net/if.h>
@@ -181,36 +180,111 @@ int main(void)
         assert(server_probe.connected_connection != NULL);
 
         {
-            uint8_t                   packet[UTP_PACKET_HEADER_SIZE + 1u] = {0u};
-            const uint8_t             ping                                = UTP_FRAME_TYPE_PING;
-            const utp_packet_header_t header      = {client_probe.connected_connection->local_cid,
-                                                     server_probe.connected_connection->local_cid,
-                                                     UINT64_C(1000),
-                                                     sizeof(ping),
-                                                     UTP_PACKET_TYPE_CTRL,
-                                                     0u};
-            size_t                    sent_length = 0u;
+            const uint8_t data[]      = "api";
+            uint8_t       received[8] = {0u};
+            uint32_t      stream_id   = UINT32_MAX;
+            utp_stream_t* stream;
+            size_t        received_length = 0u;
 
-            assert(utp_connection_queue_close(server_probe.connected_connection, 42u) == UTP_INTERNAL_ERROR_OK);
-            assert(utp_proto_encode_header(packet, sizeof(packet), &header) == UTP_INTERNAL_ERROR_OK);
-            packet[UTP_PACKET_HEADER_SIZE] = ping;
-            assert(utp_udp_socket_send_to(&client->udp_socket, &packet, sizeof(packet),
-                                          &client_probe.connected_connection->peer,
-                                          &sent_length) == UTP_INTERNAL_ERROR_OK);
-            assert(sent_length == sizeof(packet));
+            assert(utp_connection_create_stream(client_probe.connected_connection, UTP_STREAM_TYPE_BIDIRECTIONAL,
+                                                &stream_id) == UTP_STATUS_OK);
+            stream = utp_connection_get_stream(client_probe.connected_connection, stream_id);
+            assert(stream != NULL);
+            assert(utp_stream_id(stream) == stream_id);
+            assert(utp_stream_write(stream, data, sizeof(data) - 1u) == UTP_STATUS_OK);
+            assert(utp_stream_set_priority(stream, UTP_STREAM_PRIORITY_HIGHEST) == UTP_STATUS_OK);
+            assert(utp_stream_priority(stream) == UTP_STREAM_PRIORITY_HIGHEST);
+            utp_stream_close(stream);
+            pump_event_loop(event_base, 8);
+            stream = utp_connection_get_stream(server_probe.connected_connection, stream_id);
+            assert(stream != NULL);
+            assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_OK);
+            assert(received_length == sizeof(data) - 1u);
+            assert(memcmp(received, data, received_length) == 0);
+            assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_CLOSED);
+            assert(received_length == 0u);
         }
-        pump_event_loop(event_base, 16);
-        assert(client_probe.connection_error_count == 1);
-        assert(client_probe.last_connection_status == UTP_STATUS_CLOSED);
-        assert(client_probe.last_peer_error_code == 42u);
-        assert(client_probe.last_reason_length == 0u);
-        assert(client_probe.last_peer_initiated);
-        assert(server_probe.connection_error_count == 0);
-
         connect_options.encryption = UTP_ENCRYPTION_AES_GCM_128;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_UNSUPPORTED);
-        utp_context_destroy(server);
         utp_context_destroy(client);
+        client = NULL;
+        pump_event_loop(event_base, 16);
+        assert(server_probe.connection_error_count == 1);
+        assert(server_probe.last_connection_status == UTP_STATUS_OK);
+        assert(server_probe.last_peer_error_code == 0u);
+        assert(server_probe.last_reason_length == 0u);
+        assert(server_probe.last_peer_initiated);
+        utp_context_destroy(server);
+    }
+    {
+        utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+        utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+        utp_context_t*        client          = NULL;
+        utp_context_t*        server          = NULL;
+        uint16_t              client_port     = 0u;
+        uint16_t              server_port     = 0u;
+        public_api_probe_t    client_probe    = {0};
+        public_api_probe_t    server_probe    = {0};
+        utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
+
+        client_options.event_base = event_base;
+        client_options.context_id = 23u;
+        server_options.event_base = event_base;
+        server_options.context_id = 24u;
+        assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
+        assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
+        assert(utp_context_bind(client, "127.0.0.1", 0u, NULL, &client_port) == UTP_STATUS_OK);
+        assert(utp_context_bind(server, "127.0.0.1", 0u, NULL, &server_port) == UTP_STATUS_OK);
+        utp_context_set_on_connected(client, test_on_connected, &client_probe);
+        utp_context_set_on_connected(server, test_on_connected, &server_probe);
+        utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
+        utp_context_set_on_connection_error(server, test_on_connection_error, &server_probe);
+
+        connect_options.address = "127.0.0.1";
+        connect_options.port    = server_port;
+        assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
+        pump_event_loop(event_base, 8);
+        assert(utp_context_accept(server) == UTP_STATUS_OK);
+        pump_event_loop(event_base, 16);
+        assert(client_probe.connected_connection != NULL);
+        assert(server_probe.connected_connection != NULL);
+
+        {
+            const uint8_t      data[]                                               = {'x'};
+            uint8_t            payload[UTP_FRAME_STREAM_HEADER_SIZE + sizeof(data)] = {0u};
+            uint32_t           stream_id                                            = UINT32_MAX;
+            utp_stream_t*      stream;
+            utp_frame_stream_t invalid;
+
+            assert(utp_connection_create_stream(server_probe.connected_connection, UTP_STREAM_TYPE_UNIDIRECTIONAL,
+                                                &stream_id) == UTP_STATUS_OK);
+            stream = utp_connection_get_stream(server_probe.connected_connection, stream_id);
+            assert(stream != NULL);
+            assert(utp_stream_write(stream, data, sizeof(data)) == UTP_STATUS_OK);
+            utp_stream_close(stream);
+            pump_event_loop(event_base, 8);
+            assert(utp_connection_get_stream(client_probe.connected_connection, stream_id) != NULL);
+
+            invalid.flags       = UTP_STREAM_FLAG_NONE;
+            invalid.stream_id   = stream_id;
+            invalid.offset      = 0u;
+            invalid.data        = data;
+            invalid.data_length = (uint16_t)sizeof(data);
+            assert(utp_frame_stream_encode(payload, sizeof(payload), &invalid) == UTP_INTERNAL_ERROR_OK);
+            assert(utp_connection_queue_packet(client_probe.connected_connection, UTP_PACKET_TYPE_CTRL, payload,
+                                               sizeof(payload), false) == UTP_INTERNAL_ERROR_OK);
+            assert(utp_context_flush_public_connection(client, client_probe.connected_connection) ==
+                   UTP_INTERNAL_ERROR_OK);
+        }
+        pump_event_loop(event_base, 16);
+        assert(server_probe.connection_error_count == 1);
+        assert(server_probe.last_connection_status == UTP_STATUS_PROTOCOL);
+        assert(server_probe.last_peer_error_code == 0u);
+        assert(server_probe.last_reason_length != 0u);
+        assert(!server_probe.last_peer_initiated);
+
+        utp_context_destroy(client);
+        utp_context_destroy(server);
     }
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;

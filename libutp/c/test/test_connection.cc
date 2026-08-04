@@ -98,6 +98,11 @@ TEST_CASE("active connection binds a peer CID and replies to a Handshake without
     REQUIRE(utp_connection_queue_close(&active, 0u) == UTP_INTERNAL_ERROR_OK);
     send_to_peer(&active, &passive, &active_address, &passive_address, 400u);
     REQUIRE(utp_connection_state(&active) == UTP_CONNECTION_STATE_CLOSING);
+    REQUIRE(utp_connection_state(&passive) == UTP_CONNECTION_STATE_CLOSING);
+    REQUIRE(passive.close_pending);
+    REQUIRE_FALSE(passive.local_close_started);
+    send_to_peer(&passive, &active, &passive_address, &active_address, 500u);
+    REQUIRE(utp_connection_state(&active) == UTP_CONNECTION_STATE_DRAINING);
     REQUIRE(utp_connection_state(&passive) == UTP_CONNECTION_STATE_DRAINING);
 
     utp_connection_cleanup(&passive);
@@ -110,7 +115,6 @@ TEST_CASE("connection close bypasses the ordinary send queue and packet pool", "
     const uint8_t       ping       = UTP_FRAME_TYPE_PING;
     utp_connection_t    connection = {};
     utp_packet_out_t*   packet;
-    uint64_t            first_packet_number;
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 33u, 44u, &peer, 1u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
@@ -135,18 +139,64 @@ TEST_CASE("connection close bypasses the ordinary send queue and packet pool", "
     REQUIRE(utp_send_control_scheduled_packet_count(&connection.send_control) == 0u);
     REQUIRE(utp_connection_next_packet_to_send(&connection) == packet);
 
-    first_packet_number = packet->packet_number;
     REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(!connection.close_pending);
     REQUIRE(packet->raw_data == connection.close_packet_data);
     REQUIRE(utp_send_control_unacked_packet_count(&connection.send_control) == 0u);
 
-    REQUIRE(utp_connection_queue_close(&connection, 42u) == UTP_INTERNAL_ERROR_OK);
-    packet = utp_connection_next_packet_to_send(&connection);
-    REQUIRE(packet == &connection.close_packet);
-    REQUIRE(packet->packet_number > first_packet_number);
+    REQUIRE(utp_connection_queue_close(&connection, 99u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.close_error_code == 42u);
+    REQUIRE(utp_connection_next_packet_to_send(&connection) == nullptr);
 
     utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("a pending local close is reused as the peer close response", "[connection][close]")
+{
+    const utp_address_t          address_a    = loopback_address(10004u);
+    const utp_address_t          address_b    = loopback_address(10005u);
+    utp_connection_t             connection_a = {};
+    utp_connection_t             connection_b = {};
+    utp_packet_out_t*            packet;
+    utp_packet_view_t            view  = {};
+    utp_frame_connection_close_t close = {};
+    const uint8_t*               frame;
+    uint8_t                      frame_type;
+    size_t                       frame_length;
+    size_t                       offset = 0u;
+
+    REQUIRE(utp_connection_init(&connection_a, UTP_CONNECTION_ROLE_ACTIVE, 41u, 42u, &address_b, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection_b, UTP_CONNECTION_ROLE_PASSIVE, 42u, 41u, &address_a, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection_a.state = UTP_CONNECTION_STATE_CONNECTED;
+    connection_b.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection_a.send_control, true);
+    utp_send_control_set_connected(&connection_b.send_control, true);
+
+    REQUIRE(utp_connection_queue_close(&connection_a, 11u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_close(&connection_b, 22u) == UTP_INTERNAL_ERROR_OK);
+    send_to_peer(&connection_b, &connection_a, &address_b, &address_a, 100u);
+    REQUIRE(utp_connection_state(&connection_a) == UTP_CONNECTION_STATE_CLOSING);
+    REQUIRE(connection_a.close_pending);
+    REQUIRE(connection_a.local_close_started);
+    REQUIRE(connection_a.peer_close_received);
+
+    packet = utp_connection_next_packet_to_send(&connection_a);
+    REQUIRE(packet == &connection_a.close_packet);
+    REQUIRE(utp_packet_view_decode(&view, packet->raw_data, packet->data_size) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_CONNECTION_CLOSE);
+    REQUIRE(utp_frame_connection_close_decode(&close, frame, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(close.error_code == 11u);
+    REQUIRE(offset == view.payload_length);
+
+    send_to_peer(&connection_a, &connection_b, &address_a, &address_b, 200u);
+    REQUIRE(utp_connection_state(&connection_a) == UTP_CONNECTION_STATE_DRAINING);
+    REQUIRE(utp_connection_state(&connection_b) == UTP_CONNECTION_STATE_DRAINING);
+
+    utp_connection_cleanup(&connection_b);
+    utp_connection_cleanup(&connection_a);
 }
 
 TEST_CASE("connection retransmission timeout resends a tracked handshake packet with a fresh packet number",
@@ -356,7 +406,7 @@ TEST_CASE("connection validates a candidate address before migration", "[connect
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_address_equal(&connection.peer, &expected_peer));
     REQUIRE(connection.path_state == UTP_CONNECTION_PATH_STATE_VALIDATING);
-    REQUIRE(utp_connection_find_stream(&connection, 0u) == nullptr);
+    REQUIRE(utp_connection_find_stream_internal(&connection, 0u) == nullptr);
 
     challenge = utp_connection_next_packet_to_send(&connection);
     REQUIRE(challenge != nullptr);

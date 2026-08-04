@@ -7,7 +7,7 @@
 #include <catch2/catch.hpp>
 
 extern "C" {
-#include <utp/utp.h>
+#include <utp/context.h>
 
 #include "connection/connection.h"
 }
@@ -73,6 +73,29 @@ const uint8_t* first_packet_frame(utp_packet_out_t* packet, uint8_t* out_frame_t
     return frame;
 }
 
+const uint8_t* packet_frame_of_type(utp_packet_out_t* packet, uint8_t requested_type, size_t* out_frame_length)
+{
+    utp_packet_view_t view   = {};
+    size_t            offset = 0u;
+
+    REQUIRE(packet != nullptr);
+    REQUIRE(out_frame_length != nullptr);
+    REQUIRE(utp_packet_view_decode(&view, packet->raw_data, packet->data_size) == UTP_INTERNAL_ERROR_OK);
+    while (offset < view.payload_length) {
+        const uint8_t* frame        = nullptr;
+        uint8_t        frame_type   = UTP_FRAME_TYPE_INVALID;
+        size_t         frame_length = 0u;
+
+        REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) ==
+                UTP_INTERNAL_ERROR_OK);
+        if (frame_type == requested_type) {
+            *out_frame_length = frame_length;
+            return frame;
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 TEST_CASE("stream reassembles out-of-order frames and reports FIN after data is consumed", "[stream]")
@@ -85,7 +108,7 @@ TEST_CASE("stream reassembles out-of-order frames and reports FIN after data is 
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 2u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&stream, 0u);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
     REQUIRE(length == 0u);
     REQUIRE_FALSE(fin);
     {
@@ -101,11 +124,11 @@ TEST_CASE("stream reassembles out-of-order frames and reports FIN after data is 
         utp_packet_in_release(head_in);
     }
     REQUIRE(utp_stream_readable_bytes(&stream) == 10u);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(length == 10u);
     REQUIRE(std::memcmp(buffer, "helloworld", 10u) == 0);
     REQUIRE_FALSE(fin);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_CLOSED);
     REQUIRE(length == 0u);
     REQUIRE(fin);
     utp_packet_in_pool_cleanup(&pool);
@@ -134,7 +157,7 @@ TEST_CASE("stream packet-backed fragments keep packet_in referenced until consum
     utp_packet_in_release(packet);
     REQUIRE(packet->in_use);
     REQUIRE(packet->ref_count == 1u);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(length == 5u);
     REQUIRE(std::memcmp(buffer, data, length) == 0);
     REQUIRE_FALSE(fin);
@@ -163,11 +186,11 @@ TEST_CASE("stream packet-backed fragments accept payloads larger than the 1280 M
     utp_stream_init(&stream, 0u);
     REQUIRE(utp_stream_on_frame_packet(&stream, &decoded, packet) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_release(packet);
-    REQUIRE(utp_stream_acquire_read_view(&stream, &view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.length == payload.size());
     REQUIRE(view.data == decoded.data);
     REQUIRE(std::memcmp(view.data, payload.data(), payload.size()) == 0);
-    REQUIRE(utp_stream_commit_read_view(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE_FALSE(packet->in_use);
     utp_packet_in_pool_cleanup(&pool);
 }
@@ -194,30 +217,30 @@ TEST_CASE("stream read views consume packet-backed fragments without copying", "
     REQUIRE(packet->in_use);
     REQUIRE(packet->ref_count == 1u);
 
-    REQUIRE(utp_stream_acquire_read_view(&stream, &view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.offset == 0u);
     REQUIRE(view.length == 5u);
     REQUIRE_FALSE(view.fin);
     REQUIRE(view.data == decoded.data);
     REQUIRE(std::memcmp(view.data, data, view.length) == 0);
-    REQUIRE(utp_stream_commit_read_view(&stream, view.offset, 2u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, 2u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(packet->in_use);
     REQUIRE(packet->ref_count == 1u);
 
-    REQUIRE(utp_stream_acquire_read_view(&stream, &view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.offset == 2u);
     REQUIRE(view.length == 3u);
     REQUIRE(std::memcmp(view.data, data + 2u, view.length) == 0);
-    REQUIRE(utp_stream_commit_read_view(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE_FALSE(packet->in_use);
     REQUIRE(packet->ref_count == 0u);
 
-    REQUIRE(utp_stream_acquire_read_view(&stream, &fin_view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &fin_view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(fin_view.offset == 5u);
     REQUIRE(fin_view.length == 0u);
     REQUIRE(fin_view.data == nullptr);
     REQUIRE(fin_view.fin);
-    REQUIRE(utp_stream_commit_read_view(&stream, fin_view.offset, fin_view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, fin_view.offset, fin_view.length) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_pool_cleanup(&pool);
 }
 
@@ -232,17 +255,17 @@ TEST_CASE("stream write credit includes in-flight bytes until ACKed", "[stream]"
     bool                                                                                fin              = false;
 
     utp_stream_init(&stream, 0u);
-    REQUIRE(utp_stream_write(&stream, data.data(), data.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(&stream, data.data(), data.size()) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_build_frame(&stream, payload.data(), payload.size(), &payload_length, &stream_data_size,
                                    &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_data_size == data.size());
     REQUIRE_FALSE(fin);
     REQUIRE(utp_stream_commit_built_frame(&stream, stream_data_size, fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_send_in_flight_bytes(&stream) == data.size());
-    REQUIRE(utp_stream_write(&stream, data.data(), 1u) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    REQUIRE(utp_stream_write_internal(&stream, data.data(), 1u) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
     REQUIRE(utp_stream_on_packet_acked(&stream, stream_data_size) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_send_in_flight_bytes(&stream) == 0u);
-    REQUIRE(utp_stream_write(&stream, data.data(), 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(&stream, data.data(), 1u) == UTP_INTERNAL_ERROR_OK);
 }
 
 TEST_CASE("stream write views commit caller-filled data without an extra copy", "[stream][write_view]")
@@ -259,15 +282,16 @@ TEST_CASE("stream write views commit caller-filled data without an extra copy", 
     bool                    fin                                  = false;
 
     utp_stream_init(&stream, 0u);
-    REQUIRE(utp_stream_acquire_write_views(&stream, views, 2u, &view_count, &writable) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_write_views_internal(&stream, views, 2u, &view_count, &writable) ==
+            UTP_INTERNAL_ERROR_OK);
     REQUIRE(view_count == 1u);
     REQUIRE(writable == UTP_STREAM_SEND_BUFFER_CAPACITY);
     REQUIRE(views[0].data == stream.send_buffer);
     REQUIRE(views[0].length == UTP_STREAM_SEND_BUFFER_CAPACITY);
     std::memcpy(views[0].data, "abc", 3u);
-    REQUIRE(utp_stream_commit_write_views(&stream, 3u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(&stream) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(&stream, reinterpret_cast<const uint8_t*>("d"), 1u) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_commit_write_views_internal(&stream, 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(&stream) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("d"), 1u) == UTP_INTERNAL_ERROR_CLOSED);
     REQUIRE(utp_stream_build_frame_view(&stream, header, sizeof(header), &header_length, &stream_data,
                                         &stream_data_size, &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(header_length == UTP_FRAME_STREAM_HEADER_SIZE);
@@ -287,7 +311,8 @@ TEST_CASE("stream write views expose both ring segments when free space wraps", 
 
     utp_stream_init(&stream, 0u);
     stream.send_buffer_start = UTP_STREAM_SEND_BUFFER_CAPACITY - 2u;
-    REQUIRE(utp_stream_acquire_write_views(&stream, views, 2u, &view_count, &writable) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_write_views_internal(&stream, views, 2u, &view_count, &writable) ==
+            UTP_INTERNAL_ERROR_OK);
     REQUIRE(view_count == 2u);
     REQUIRE(writable == UTP_STREAM_SEND_BUFFER_CAPACITY);
     REQUIRE(views[0].data == stream.send_buffer + UTP_STREAM_SEND_BUFFER_CAPACITY - 2u);
@@ -316,9 +341,9 @@ TEST_CASE("stream close sends an empty FIN and keeps the read side open", "[stre
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&stream, 0u);
-    REQUIRE(utp_stream_close(&stream) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(&stream) == UTP_INTERNAL_ERROR_CLOSED);
-    REQUIRE(utp_stream_acquire_write_views(&stream, &write_view, 1u, &view_count, &writable) ==
+    REQUIRE(utp_stream_close_internal(&stream) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(&stream) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_acquire_write_views_internal(&stream, &write_view, 1u, &view_count, &writable) ==
             UTP_INTERNAL_ERROR_CLOSED);
     REQUIRE(utp_stream_build_frame_view(&stream, header, sizeof(header), &header_length, &stream_data,
                                         &stream_data_size, &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
@@ -329,11 +354,12 @@ TEST_CASE("stream close sends an empty FIN and keeps the read side open", "[stre
     packet = stream_frame_packet(&pool, 0u, 0u, "peer", false, &decoded);
     REQUIRE(utp_stream_on_frame_packet(&stream, &decoded, packet) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_release(packet);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &read_length, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &read_length, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(read_length == 4u);
     REQUIRE(std::memcmp(buffer, "peer", 4u) == 0);
     REQUIRE_FALSE(fin);
-    REQUIRE(utp_stream_read(&stream, buffer, sizeof(buffer), &read_length, &fin) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &read_length, &fin) ==
+            UTP_INTERNAL_ERROR_WOULD_BLOCK);
     utp_packet_in_pool_cleanup(&pool);
 }
 
@@ -348,7 +374,7 @@ TEST_CASE("stream send and receive paths enforce stream-level flow-control limit
 
     utp_stream_init(&stream, 0u);
     stream.peer_max_stream_data = 2u;
-    REQUIRE(utp_stream_write(&stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_build_frame(&stream, payload.data(), payload.size(), &payload_length, &stream_data_size,
                                    &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_data_size == 2u);
@@ -436,7 +462,7 @@ TEST_CASE("stream reset clears buffered state and records peer reset", "[stream]
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&stream, 0u);
-    REQUIRE(utp_stream_write(&stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
     packet = stream_frame_packet(&pool, 0u, 0u, "xy", false, &decoded);
     REQUIRE(utp_stream_on_frame_packet(&stream, &decoded, packet) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_release(packet);
@@ -455,7 +481,7 @@ TEST_CASE("stream reset clears buffered state and records peer reset", "[stream]
     REQUIRE(stream.send_in_flight_bytes == 0u);
     REQUIRE(stream.recv_fragment_count == 0u);
     REQUIRE(stream.recv_pinned_memory_bytes == 0u);
-    REQUIRE(utp_stream_write(&stream, reinterpret_cast<const uint8_t*>("z"), 1u) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("z"), 1u) == UTP_INTERNAL_ERROR_CLOSED);
 
     utp_packet_in_pool_cleanup(&pool);
 }
@@ -480,36 +506,37 @@ TEST_CASE("connection allocates a local stream, sends STREAM frames, and the pee
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_id == 0u);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abc"),
-                             3u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(utp_connection_find_stream(&active, stream_id)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(utp_connection_find_stream_internal(&active, stream_id)) ==
+            UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
     REQUIRE(passive.recv_reassembly_fragment_count == 1u);
     REQUIRE(passive.recv_reassembly_memory_bytes >= 1280u);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(utp_stream_send_in_flight_bytes(stream) == 3u);
     }
 
-    REQUIRE(utp_stream_read(utp_connection_find_stream(&passive, stream_id), buffer, sizeof(buffer), &length, &fin) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(utp_connection_find_stream_internal(&passive, stream_id), buffer, sizeof(buffer),
+                                     &length, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(length == 3u);
     REQUIRE(std::memcmp(buffer, "abc", 3u) == 0);
     REQUIRE_FALSE(fin);
     REQUIRE(passive.recv_reassembly_fragment_count == 0u);
     REQUIRE(passive.recv_reassembly_memory_bytes == 0u);
-    REQUIRE(utp_stream_read(utp_connection_find_stream(&passive, stream_id), buffer, sizeof(buffer), &length, &fin) ==
-            UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_read_internal(utp_connection_find_stream_internal(&passive, stream_id), buffer, sizeof(buffer),
+                                     &length, &fin) == UTP_INTERNAL_ERROR_CLOSED);
     REQUIRE(length == 0u);
     REQUIRE(fin);
     REQUIRE(utp_connection_queue_ack(&passive, 200u) == UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&passive, &active, &passive_address, 200u, &receive_pool);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(utp_stream_send_in_flight_bytes(stream) == 0u);
@@ -518,6 +545,35 @@ TEST_CASE("connection allocates a local stream, sends STREAM frames, and the pee
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
     utp_packet_in_pool_cleanup(&receive_pool);
+}
+
+TEST_CASE("connection stream rejects write-side operations after connection close begins", "[stream][close]")
+{
+    const utp_address_t     peer       = loopback_address(13003u);
+    utp_connection_t        connection = {};
+    utp_stream_t*           stream;
+    utp_stream_write_view_t view       = {};
+    uint32_t                stream_id  = UINT32_MAX;
+    size_t                  view_count = 0u;
+    size_t                  capacity   = 0u;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 13u, 14u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&connection, stream_id);
+    REQUIRE(stream != nullptr);
+    connection.state = UTP_CONNECTION_STATE_DRAINING;
+
+    REQUIRE(utp_stream_write_internal(stream, reinterpret_cast<const uint8_t*>("data"), 4u) ==
+            UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_acquire_write_views_internal(stream, &view, 1u, &view_count, &capacity) ==
+            UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_commit_write_views_internal(stream, 1u) == UTP_INTERNAL_ERROR_CLOSED);
+
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("connection piggybacks a pending ACK on one zero-copy STREAM packet", "[stream][ack]")
@@ -556,10 +612,11 @@ TEST_CASE("connection piggybacks a pending ACK on one zero-copy STREAM packet", 
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_ack_pending_count(&active) == 1u);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("data"),
-                             4u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(utp_connection_find_stream(&active, stream_id)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("data"), 4u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(utp_connection_find_stream_internal(&active, stream_id)) ==
+            UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send_at(&active, 200u);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->frame_types == (UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) | UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)));
@@ -587,10 +644,11 @@ TEST_CASE("connection piggybacks a pending ACK on one zero-copy STREAM packet", 
     REQUIRE(utp_connection_on_packet_sent(&passive, packet, 300u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_on_packet_received(&active, wire.data(), length, &passive_address, 300u) ==
             UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("next"),
-                             4u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(utp_connection_find_stream(&active, stream_id)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("next"), 4u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(utp_connection_find_stream_internal(&active, stream_id)) ==
+            UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send_at(&active, 400u);
     REQUIRE(packet != nullptr);
     REQUIRE((packet->frame_types & (UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) | UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA) |
@@ -625,19 +683,20 @@ TEST_CASE("connection restores an unsent STREAM frame after a UDP write failure"
             UTP_INTERNAL_ERROR_OK);
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("data"),
-                             4u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_close(utp_connection_find_stream(&active, stream_id)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("data"), 4u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_close_internal(utp_connection_find_stream_internal(&active, stream_id)) ==
+            UTP_INTERNAL_ERROR_OK);
 
     packet = utp_connection_next_packet_to_send_at(&active, 200u);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->stream_offset == 0u);
     REQUIRE(packet->stream_data_size == 4u);
-    REQUIRE(utp_connection_find_stream(&active, stream_id)->send_in_flight_bytes == 4u);
+    REQUIRE(utp_connection_find_stream_internal(&active, stream_id)->send_in_flight_bytes == 4u);
     utp_connection_on_packet_abandoned(&active, packet);
     utp_packet_out_pool_release(&active.packet_pool, packet);
-    REQUIRE(utp_connection_find_stream(&active, stream_id)->send_in_flight_bytes == 0u);
+    REQUIRE(utp_connection_find_stream_internal(&active, stream_id)->send_in_flight_bytes == 0u);
     REQUIRE(active.stream_data_sent_total == 0u);
 
     retry = utp_connection_next_packet_to_send_at(&active, 201u);
@@ -661,16 +720,17 @@ TEST_CASE("strict stream scheduler honors priority and round-robins equal priori
             UTP_INTERNAL_ERROR_OK);
     connection.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&connection.send_control, true);
-    REQUIRE(utp_connection_create_stream(&connection, true, &first_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_create_stream(&connection, true, &second_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&connection, first_id),
-                             reinterpret_cast<const uint8_t*>("first"), 5u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&connection, second_id),
-                             reinterpret_cast<const uint8_t*>("second"), 6u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_priority(utp_connection_find_stream(&connection, first_id)) == UTP_STREAM_PRIORITY_DEFAULT);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, first_id), 6u) == UTP_STATUS_OK);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 1u) == UTP_STATUS_OK);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 8u) ==
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &first_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &second_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&connection, first_id),
+                                      reinterpret_cast<const uint8_t*>("first"), 5u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&connection, second_id),
+                                      reinterpret_cast<const uint8_t*>("second"), 6u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_priority(utp_connection_find_stream_internal(&connection, first_id)) ==
+            UTP_STREAM_PRIORITY_DEFAULT);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, first_id), 6u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, second_id), 1u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, second_id), 8u) ==
             UTP_STATUS_INVALID_ARGUMENT);
 
     packet = utp_connection_next_packet_to_send_at(&connection, 100u);
@@ -679,8 +739,8 @@ TEST_CASE("strict stream scheduler honors priority and round-robins equal priori
     utp_connection_on_packet_abandoned(&connection, packet);
     utp_packet_out_pool_release(&connection.packet_pool, packet);
 
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, first_id), 4u) == UTP_STATUS_OK);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, second_id), 4u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, first_id), 4u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, second_id), 4u) == UTP_STATUS_OK);
     connection.stream_scheduler_cursor = 0u;
     packet                             = utp_connection_next_packet_to_send_at(&connection, 101u);
     REQUIRE(packet != nullptr);
@@ -709,14 +769,14 @@ TEST_CASE("drr scheduler limits each STREAM fragment by its weighted deficit", "
     connection.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&connection.send_control, true);
     REQUIRE(utp_connection_set_stream_scheduler_mode(&connection, UTP_STREAM_SCHEDULER_DRR) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_create_stream(&connection, true, &high_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_create_stream(&connection, true, &low_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, high_id), 0u) == UTP_STATUS_OK);
-    REQUIRE(utp_stream_set_priority(utp_connection_find_stream(&connection, low_id), 7u) == UTP_STATUS_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&connection, high_id), data.data(), data.size()) ==
-            UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&connection, low_id), data.data(), data.size()) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &high_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &low_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, high_id), 0u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, low_id), 7u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&connection, high_id), data.data(),
+                                      data.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&connection, low_id), data.data(),
+                                      data.size()) == UTP_INTERNAL_ERROR_OK);
 
     packet = utp_connection_next_packet_to_send_at(&connection, 100u);
     REQUIRE(packet != nullptr);
@@ -757,13 +817,13 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abc"),
-                             3u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_reset(utp_connection_find_stream(&active, stream_id), UINT16_C(0x7788)) ==
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_reset_internal(utp_connection_find_stream_internal(&active, stream_id), UINT16_C(0x7788)) ==
             UTP_INTERNAL_ERROR_OK);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(stream->reset);
@@ -787,7 +847,7 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
     REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_on_packet_in_received(&passive, wire, &active_address, 100u) == UTP_INTERNAL_ERROR_OK);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&passive, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&passive, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(stream->reset);
@@ -815,9 +875,9 @@ TEST_CASE("connection does not retransmit old STREAM data after local stream res
             UTP_INTERNAL_ERROR_OK);
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abc"),
-                             3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
 
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
@@ -825,7 +885,7 @@ TEST_CASE("connection does not retransmit old STREAM data after local stream res
     REQUIRE(frame_type == UTP_FRAME_TYPE_STREAM);
     REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
 
-    REQUIRE(utp_stream_reset(utp_connection_find_stream(&active, stream_id), UINT16_C(0x0102)) ==
+    REQUIRE(utp_stream_reset_internal(utp_connection_find_stream_internal(&active, stream_id), UINT16_C(0x0102)) ==
             UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
@@ -857,9 +917,9 @@ TEST_CASE("connection STREAM packets use an external data slice", "[stream][zero
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abcd"),
-                             4u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abcd"), 4u) == UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->slice_count == 2u);
@@ -893,11 +953,11 @@ TEST_CASE("connection applies incoming flow-control limit updates monotonically"
     REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_id == 0u);
     active.peer_max_data = 1u;
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         stream->peer_max_stream_data = 1u;
@@ -913,7 +973,7 @@ TEST_CASE("connection applies incoming flow-control limit updates monotonically"
             UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&passive, &active, &passive_address, 200u, &receive_pool);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(stream->peer_max_stream_data == max_stream_data.maximum_stream_data);
@@ -947,17 +1007,17 @@ TEST_CASE("connection applies MAX_STREAM_DATA received before a local stream exi
     REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_CTRL, payload, sizeof(payload), false) ==
             UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
-    REQUIRE(active.peer_max_stream_data_count == 1u);
+    REQUIRE(utp_hash_table_count(&active.pending_peer_max_stream_data) == 1u);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_id == max_stream_data.stream_id);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&active, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(stream->peer_max_stream_data == max_stream_data.maximum_stream_data);
     }
-    REQUIRE(active.peer_max_stream_data_count == 0u);
+    REQUIRE(utp_hash_table_count(&active.pending_peer_max_stream_data) == 0u);
 
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
@@ -985,9 +1045,9 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
     utp_send_control_set_connected(&active.send_control, true);
     passive.recv_reassembly_fragment_count = UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT;
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("x"),
-                             1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("x"), 1u) == UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
     REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
@@ -999,7 +1059,7 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
     REQUIRE(passive.recv_reassembly_fragment_count == UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT);
     REQUIRE(passive.recv_reassembly_memory_bytes == 0u);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&passive, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&passive, stream_id);
 
         REQUIRE(stream != nullptr);
         REQUIRE(stream->recv_fragment_count == 0u);
@@ -1026,9 +1086,9 @@ TEST_CASE("connection send path respects peer MAX_DATA", "[stream][flow]")
     utp_send_control_set_connected(&active.send_control, true);
     active.peer_max_data = 2u;
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abcde"),
-                             5u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abcde"), 5u) == UTP_INTERNAL_ERROR_OK);
 
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
@@ -1073,9 +1133,9 @@ TEST_CASE("connection responds to DataBlocked and StreamDataBlocked with current
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("x"),
-                             1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("x"), 1u) == UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
 
     REQUIRE(utp_frame_data_blocked_encode(payload, sizeof(payload), &data_blocked) == UTP_INTERNAL_ERROR_OK);
@@ -1140,9 +1200,9 @@ TEST_CASE("connection rejects STREAM data beyond local connection receive window
     utp_send_control_set_connected(&active.send_control, true);
     passive.local_max_data_advertised = 2u;
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abc"),
-                             3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
     REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
@@ -1182,20 +1242,20 @@ TEST_CASE("connection sends MAX_DATA and MAX_STREAM_DATA after application consu
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id),
-                             reinterpret_cast<const uint8_t*>("abcdefghij"), 10u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abcdefghij"), 10u) == UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
     {
-        utp_stream_t* stream = utp_connection_find_stream(&passive, stream_id);
+        utp_stream_t* stream = utp_connection_find_stream_internal(&passive, stream_id);
 
         REQUIRE(stream != nullptr);
         passive.local_max_data_advertised        = connection_window - (connection_window / 10u);
         stream->local_max_stream_data_advertised = stream_window - (stream_window / 10u);
     }
 
-    REQUIRE(utp_stream_read(utp_connection_find_stream(&passive, stream_id), buffer, sizeof(buffer), &length, &fin) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(utp_connection_find_stream_internal(&passive, stream_id), buffer, sizeof(buffer),
+                                     &length, &fin) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(length == 10u);
     REQUIRE(passive.local_stream_data_consumed_total == 10u);
 
@@ -1260,17 +1320,17 @@ TEST_CASE("connection read-view commit advances flow-control windows", "[stream]
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
 
-    REQUIRE(utp_connection_create_stream(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write(utp_connection_find_stream(&active, stream_id), reinterpret_cast<const uint8_t*>("abcd"),
-                             4u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abcd"), 4u) == UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
     passive.local_max_data_advertised = connection_window - (connection_window / 10u);
 
-    REQUIRE(utp_stream_acquire_read_view(utp_connection_find_stream(&passive, stream_id), &view) ==
+    REQUIRE(utp_stream_acquire_read_view_internal(utp_connection_find_stream_internal(&passive, stream_id), &view) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.length == 4u);
-    REQUIRE(utp_stream_commit_read_view(utp_connection_find_stream(&passive, stream_id), view.offset, view.length) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_commit_read_view_internal(utp_connection_find_stream_internal(&passive, stream_id), view.offset,
+                                                 view.length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(passive.local_stream_data_consumed_total == 4u);
     {
         uint8_t              frame_type;
@@ -1285,6 +1345,360 @@ TEST_CASE("connection read-view commit advances flow-control windows", "[stream]
         REQUIRE(max_data.maximum_data == connection_window + 4u);
         REQUIRE(utp_connection_on_packet_sent(&passive, packet, 200u) == UTP_INTERNAL_ERROR_OK);
     }
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
+}
+
+TEST_CASE("stream creation waits for MAX_STREAMS after sending STREAMS_BLOCKED", "[stream][stream_limit]")
+{
+    const utp_address_t       active_address  = loopback_address(13035u);
+    const utp_address_t       passive_address = loopback_address(13036u);
+    utp_packet_in_pool_t      receive_pool    = {};
+    utp_connection_t          active          = {};
+    utp_connection_t          passive         = {};
+    uint32_t                  stream_id       = UINT32_MAX;
+    uint8_t                   frame_type      = UTP_FRAME_TYPE_INVALID;
+    size_t                    frame_length    = 0u;
+    utp_frame_streams_limit_t blocked         = {};
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 101u, 102u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 102u, 101u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 4u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    active.peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = 1u;
+
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 0u);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_STREAM_LIMIT);
+    {
+        utp_packet_out_t* packet     = utp_connection_next_packet_to_send_at(&active, 100u);
+        const uint8_t*    frame_data = first_packet_frame(packet, &frame_type, &frame_length);
+
+        REQUIRE(frame_type == UTP_FRAME_TYPE_STREAMS_BLOCKED);
+        REQUIRE(utp_frame_streams_blocked_decode(&blocked, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(blocked.stream_type == UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL);
+        REQUIRE(blocked.stream_limit == 1u);
+        REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_connection_on_packet_received(&passive, packet->raw_data, packet->data_size, &active_address,
+                                                  100u) == UTP_INTERNAL_ERROR_OK);
+    }
+    {
+        utp_packet_out_t* packet = utp_connection_next_packet_to_send_at(&passive, 200u);
+
+        REQUIRE(packet != nullptr);
+        REQUIRE(utp_connection_on_packet_sent(&passive, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_connection_on_packet_received(&active, packet->raw_data, packet->data_size, &passive_address,
+                                                  200u) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(active.peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] ==
+            passive.local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 4u);
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
+}
+
+TEST_CASE("connection supports the default bidirectional and unidirectional stream quotas", "[stream][stream_limit]")
+{
+    const utp_address_t peer       = loopback_address(13037u);
+    utp_connection_t    connection = {};
+    uint32_t            stream_id  = UINT32_MAX;
+    uint32_t            index;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 103u, 104u, &peer, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+
+    for (index = 0u; index < 64u; ++index) {
+        REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(stream_id == index * UTP_STREAM_TYPES);
+    }
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_STREAM_LIMIT);
+
+    for (index = 0u; index < 32u; ++index) {
+        REQUIRE(utp_connection_create_stream_internal(&connection, false, &stream_id) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(stream_id == index * UTP_STREAM_TYPES + UTP_STREAM_UNIDIRECTIONAL);
+    }
+    REQUIRE(utp_connection_create_stream_internal(&connection, false, &stream_id) == UTP_INTERNAL_ERROR_STREAM_LIMIT);
+
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection stream table has no fixed local concurrency cap", "[stream][stream_limit]")
+{
+    const utp_address_t peer       = loopback_address(13042u);
+    utp_connection_t    connection = {};
+    uint32_t            stream_id  = UINT32_MAX;
+    uint32_t            index;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 109u, 110u, &peer, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    connection.peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = 97u;
+
+    for (index = 0u; index < 97u; ++index) {
+        REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(stream_id == index * UTP_STREAM_TYPES);
+    }
+    REQUIRE(utp_hash_table_count(&connection.streams) == 97u);
+
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("unidirectional streams enforce their sender and receiver roles", "[stream][direction]")
+{
+    const utp_address_t  active_address  = loopback_address(13043u);
+    const utp_address_t  passive_address = loopback_address(13044u);
+    utp_packet_in_pool_t receive_pool    = {};
+    utp_connection_t     active          = {};
+    utp_connection_t     passive         = {};
+    uint8_t              received[8]     = {};
+    const uint8_t        data[]          = {'u', 'n', 'i'};
+    uint32_t             local_stream_id;
+    uint32_t             peer_stream_id;
+    size_t               received_length;
+    bool                 fin;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 111u, 112u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 112u, 111u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+
+    REQUIRE(utp_connection_create_stream_internal(&active, false, &local_stream_id) == UTP_INTERNAL_ERROR_OK);
+    {
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, local_stream_id);
+
+        REQUIRE(stream != nullptr);
+        REQUIRE(utp_stream_local_can_send(stream));
+        REQUIRE_FALSE(utp_stream_local_can_receive(stream));
+        REQUIRE(utp_stream_read_internal(stream, received, sizeof(received), &received_length, &fin) ==
+                UTP_INTERNAL_ERROR_STATE);
+    }
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, false, &peer_stream_id) == UTP_INTERNAL_ERROR_OK);
+    {
+        utp_stream_t* stream = utp_connection_find_stream_internal(&passive, peer_stream_id);
+
+        REQUIRE(utp_stream_write_internal(stream, data, sizeof(data)) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    }
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+    {
+        utp_stream_t* stream = utp_connection_find_stream_internal(&active, peer_stream_id);
+
+        REQUIRE(stream != nullptr);
+        REQUIRE_FALSE(utp_stream_local_can_send(stream));
+        REQUIRE(utp_stream_local_can_receive(stream));
+        REQUIRE(utp_stream_write_internal(stream, data, sizeof(data)) == UTP_INTERNAL_ERROR_STATE);
+        REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_STATE);
+        REQUIRE(utp_stream_reset_internal(stream, 7u) == UTP_INTERNAL_ERROR_STATE);
+        REQUIRE(utp_stream_read_internal(stream, received, sizeof(received), &received_length, &fin) ==
+                UTP_INTERNAL_ERROR_OK);
+        REQUIRE(received_length == sizeof(data));
+        REQUIRE(std::memcmp(received, data, sizeof(data)) == 0);
+        REQUIRE(utp_stream_read_internal(stream, received, sizeof(received), &received_length, &fin) ==
+                UTP_INTERNAL_ERROR_CLOSED);
+        REQUIRE(utp_stream_is_closed(stream));
+    }
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
+}
+
+TEST_CASE("peer STREAM on a locally initiated unidirectional stream is a protocol error", "[stream][direction]")
+{
+    const utp_address_t      active_address  = loopback_address(13045u);
+    const utp_address_t      passive_address = loopback_address(13046u);
+    utp_connection_t         active          = {};
+    utp_connection_t         passive         = {};
+    uint32_t                 stream_id;
+    const uint8_t            data[]                                               = {'x'};
+    uint8_t                  payload[UTP_FRAME_STREAM_HEADER_SIZE + sizeof(data)] = {};
+    const utp_frame_stream_t frame      = {UTP_STREAM_FLAG_NONE, 0u, 0u, data, (uint16_t)sizeof(data)};
+    uint8_t                  wire[1280] = {};
+    utp_packet_out_t*        packet;
+    size_t                   wire_length;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 113u, 114u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 114u, 113u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    REQUIRE(utp_connection_create_stream_internal(&active, false, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 2u);
+    {
+        utp_frame_stream_t invalid = frame;
+
+        invalid.stream_id = stream_id;
+        REQUIRE(utp_frame_stream_encode(payload, sizeof(payload), &invalid) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_CTRL, payload, sizeof(payload), false) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&passive);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_packet_out_flatten(packet, wire, sizeof(wire), &wire_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(&passive, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(&active, wire, wire_length, &passive_address, 100u) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("stream reclamation retains a stream referenced by an unacked FIN packet", "[stream][lifetime]")
+{
+    const utp_address_t peer       = loopback_address(13047u);
+    utp_connection_t    connection = {};
+    uint32_t            first_id;
+    uint32_t            second_id;
+    utp_stream_t*       first;
+    utp_packet_out_t*   packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 115u, 116u, &peer, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &first_id) == UTP_INTERNAL_ERROR_OK);
+    first           = utp_connection_find_stream_internal(&connection, first_id);
+    first->peer_fin = true;
+    REQUIRE(utp_stream_close_internal(first) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send_at(&connection, 100u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_id == first_id);
+    REQUIRE(packet->stream_data_size == 0u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &second_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(second_id != first_id);
+    REQUIRE(utp_connection_find_stream_internal(&connection, first_id) == first);
+
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("a completed peer stream releases a MAX_STREAMS credit", "[stream][stream_limit]")
+{
+    const utp_address_t       active_address  = loopback_address(13038u);
+    const utp_address_t       passive_address = loopback_address(13039u);
+    utp_packet_in_pool_t      receive_pool    = {};
+    utp_connection_t          active          = {};
+    utp_connection_t          passive         = {};
+    utp_stream_t*             stream          = nullptr;
+    utp_packet_out_t*         packet          = nullptr;
+    utp_frame_streams_limit_t maximum         = {};
+    const uint8_t*            frame           = nullptr;
+    size_t                    frame_length    = 0u;
+    uint32_t                  stream_id       = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 105u, 106u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 106u, 105u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 4u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    active.local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = 1u;
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 1u);
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+
+    stream = utp_connection_find_stream_internal(&active, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(stream->peer_fin);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&active, &passive, &active_address, 200u, &receive_pool);
+
+    packet = utp_connection_next_packet_to_send_at(&active, 300u);
+    REQUIRE(packet != nullptr);
+    frame = packet_frame_of_type(packet, UTP_FRAME_TYPE_MAX_STREAMS, &frame_length);
+    REQUIRE(frame != nullptr);
+    REQUIRE(utp_frame_max_streams_decode(&maximum, frame, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(maximum.stream_type == UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL);
+    REQUIRE(maximum.stream_limit == 2u);
+    REQUIRE(active.local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] == 2u);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 300u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 5u);
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 400u, &receive_pool);
+    REQUIRE(utp_connection_find_stream_internal(&active, stream_id) != nullptr);
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
+}
+
+TEST_CASE("peer streams beyond MAX_STREAMS are rejected", "[stream][stream_limit]")
+{
+    const utp_address_t  active_address  = loopback_address(13040u);
+    const utp_address_t  passive_address = loopback_address(13041u);
+    utp_packet_in_pool_t receive_pool    = {};
+    utp_connection_t     active          = {};
+    utp_connection_t     passive         = {};
+    utp_stream_t*        stream          = nullptr;
+    utp_packet_out_t*    packet          = nullptr;
+    utp_packet_in_t*     wire            = nullptr;
+    uint32_t             stream_id       = UINT32_MAX;
+    size_t               length          = 0u;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 107u, 108u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 108u, 107u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    active.local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = 1u;
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 1u);
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 5u);
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&passive);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_flatten(packet, wire->data, wire->capacity, &length) == UTP_INTERNAL_ERROR_OK);
+    wire->length = static_cast<uint16_t>(length);
+    REQUIRE(utp_connection_on_packet_sent(&passive, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_in_received(&active, wire, &passive_address, 200u) ==
+            UTP_INTERNAL_ERROR_STREAM_LIMIT);
+    utp_packet_in_release(wire);
 
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);

@@ -9,13 +9,13 @@
 #include <sys/socket.h>
 #endif
 
-#include <event2/event.h>
-
 #include <array>
-#include <catch2/catch.hpp>
 #include <cstdint>
 #include <cstring>
 #include <vector>
+
+#include <catch2/catch.hpp>
+#include <event2/event.h>
 
 extern "C" {
 #include "context/event_loop.h"
@@ -29,7 +29,8 @@ extern "C" {
 #include "util/time.h"
 }
 
-TEST_CASE("wire cursors encode and decode big endian integers", "[wire]") {
+TEST_CASE("wire cursors encode and decode big endian integers", "[wire]")
+{
     const std::array<uint8_t, 15> expected = {
         0x12u, 0x34u, 0x56u, 0x78u, 0x9au, 0xbcu, 0xdeu, 0x01u, 0x23u, 0x45u, 0x67u, 0x89u, 0xabu, 0xcdu, 0xefu,
     };
@@ -62,21 +63,23 @@ TEST_CASE("wire cursors encode and decode big endian integers", "[wire]") {
     REQUIRE(utp_wire_read_u8(&reader, &value8) == UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-static uint64_t test_clock_now(void *user_data) { return *static_cast<uint64_t *>(user_data); }
+static uint64_t test_clock_now(void* user_data) { return *static_cast<uint64_t*>(user_data); }
 
 struct test_event_probe {
     uint32_t events;
     size_t   calls;
 };
 
-static void test_event_probe_callback(uint32_t events, void *user_data) {
-    auto *probe = static_cast<test_event_probe *>(user_data);
+static void test_event_probe_callback(uint32_t events, void* user_data)
+{
+    auto* probe = static_cast<test_event_probe*>(user_data);
 
     probe->events |= events;
     ++probe->calls;
 }
 
-TEST_CASE("clock accepts a deterministic test source", "[time]") {
+TEST_CASE("clock accepts a deterministic test source", "[time]")
+{
     uint64_t          now   = UINT64_C(1234567);
     const utp_clock_t clock = {test_clock_now, &now};
 
@@ -85,7 +88,8 @@ TEST_CASE("clock accepts a deterministic test source", "[time]") {
     REQUIRE(utp_clock_now_us(&clock) == now);
 }
 
-TEST_CASE("address parses IPv4 and IPv6 without allocation", "[address]") {
+TEST_CASE("address parses IPv4 and IPv6 without allocation", "[address]")
+{
     utp_address_t ipv4      = {};
     utp_address_t ipv6      = {};
     utp_address_t same_ipv4 = {};
@@ -103,7 +107,8 @@ TEST_CASE("address parses IPv4 and IPv6 without allocation", "[address]") {
     REQUIRE(utp_address_parse(&same_ipv4, "not-an-address", 443u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("address recognizes only the IPv6 unspecified address", "[address]") {
+TEST_CASE("address recognizes only the IPv6 unspecified address", "[address]")
+{
     utp_address_t unspecified = {};
     utp_address_t loopback    = {};
     utp_address_t ipv4        = {};
@@ -116,9 +121,10 @@ TEST_CASE("address recognizes only the IPv6 unspecified address", "[address]") {
     REQUIRE_FALSE(utp_address_is_unspecified_ipv6(&ipv4));
 }
 
-TEST_CASE("address preserves the IPv6 scope identifier through sockaddr", "[address]") {
+TEST_CASE("address preserves the IPv6 scope identifier through sockaddr", "[address]")
+{
     sockaddr_storage storage        = {};
-    sockaddr_in6    *socket_address = reinterpret_cast<sockaddr_in6 *>(&storage);
+    sockaddr_in6*    socket_address = reinterpret_cast<sockaddr_in6*>(&storage);
     utp_address_t    parsed         = {};
     utp_address_t    round_trip     = {};
     size_t           length         = 0u;
@@ -129,12 +135,13 @@ TEST_CASE("address preserves the IPv6 scope identifier through sockaddr", "[addr
     REQUIRE(length == sizeof(sockaddr_in6));
     REQUIRE(socket_address->sin6_family == AF_INET6);
     REQUIRE(socket_address->sin6_scope_id == 7u);
-    REQUIRE(utp_address_from_sockaddr(&round_trip, reinterpret_cast<const sockaddr *>(&storage), length) ==
+    REQUIRE(utp_address_from_sockaddr(&round_trip, reinterpret_cast<const sockaddr*>(&storage), length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_address_equal(&parsed, &round_trip));
 }
 
-TEST_CASE("udp socket binds a nonblocking IPv4 loopback port", "[udp]") {
+TEST_CASE("udp socket binds a nonblocking IPv4 loopback port", "[udp]")
+{
     utp_address_t    requested = {};
     utp_address_t    local     = {};
     utp_udp_socket_t socket    = {};
@@ -152,7 +159,8 @@ TEST_CASE("udp socket binds a nonblocking IPv4 loopback port", "[udp]") {
     utp_udp_socket_close(&socket);
 }
 
-TEST_CASE("udp socket enables address reuse without reuse port", "[udp]") {
+TEST_CASE("udp socket enables address reuse without reuse port", "[udp]")
+{
     utp_udp_socket_t socket        = {};
     int              reuse_address = 0;
 
@@ -162,7 +170,7 @@ TEST_CASE("udp socket enables address reuse without reuse port", "[udp]") {
     {
         int option_length = (int)sizeof(reuse_address);
 
-        REQUIRE(getsockopt((SOCKET)socket.native_handle, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse_address,
+        REQUIRE(getsockopt((SOCKET)socket.native_handle, SOL_SOCKET, SO_REUSEADDR, (char*)&reuse_address,
                            &option_length) == 0);
     }
 #else
@@ -176,7 +184,8 @@ TEST_CASE("udp socket enables address reuse without reuse port", "[udp]") {
     utp_udp_socket_close(&socket);
 }
 
-TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]") {
+TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]")
+{
     utp_address_t    requested = {};
     utp_address_t    local     = {};
     utp_udp_socket_t socket    = {};
@@ -190,7 +199,7 @@ TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]")
     {
         int option_length = (int)sizeof(ipv6_only);
 
-        REQUIRE(getsockopt((SOCKET)socket.native_handle, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&ipv6_only,
+        REQUIRE(getsockopt((SOCKET)socket.native_handle, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&ipv6_only,
                            &option_length) == 0);
     }
 #else
@@ -204,14 +213,15 @@ TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]")
     utp_udp_socket_close(&socket);
 }
 
-TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]") {
+TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]")
+{
     const std::array<uint8_t, 1> payload        = {UINT8_C(0x42)};
     utp_address_t                loopback       = {};
     utp_address_t                sender_local   = {};
     utp_address_t                receiver_local = {};
     utp_event_loop_t             loop           = {};
     utp_event_t                  event          = {};
-    event_base                  *native_base    = event_base_new();
+    event_base*                  native_base    = event_base_new();
     utp_udp_socket_t             sender         = {};
     utp_udp_socket_t             receiver       = {};
     test_event_probe             probe          = {};
@@ -247,11 +257,12 @@ TEST_CASE("event loop dispatches a readable UDP socket", "[event][udp]") {
     event_base_free(native_base);
 }
 
-TEST_CASE("event loop dispatches a zero-delay one-shot timer", "[event]") {
+TEST_CASE("event loop dispatches a zero-delay one-shot timer", "[event]")
+{
     utp_event_loop_t loop        = {};
     utp_event_t      event       = {};
     test_event_probe probe       = {};
-    event_base      *native_base = event_base_new();
+    event_base*      native_base = event_base_new();
 
     REQUIRE(native_base != nullptr);
     REQUIRE(utp_event_loop_init(&loop, native_base, nullptr, nullptr) == UTP_INTERNAL_ERROR_OK);
@@ -265,11 +276,12 @@ TEST_CASE("event loop dispatches a zero-delay one-shot timer", "[event]") {
     event_base_free(native_base);
 }
 
-TEST_CASE("event loop rearms a pending timer without replacing its callback", "[event]") {
+TEST_CASE("event loop rearms a pending timer without replacing its callback", "[event]")
+{
     utp_event_loop_t loop        = {};
     utp_event_t      event       = {};
     test_event_probe probe       = {};
-    event_base      *native_base = event_base_new();
+    event_base*      native_base = event_base_new();
 
     REQUIRE(native_base != nullptr);
     REQUIRE(utp_event_loop_init(&loop, native_base, nullptr, nullptr) == UTP_INTERNAL_ERROR_OK);
@@ -285,7 +297,8 @@ TEST_CASE("event loop rearms a pending timer without replacing its callback", "[
     event_base_free(native_base);
 }
 
-TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]") {
+TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]")
+{
     const std::array<uint8_t, 5>        payload         = {'h', 'e', 'l', 'l', 'o'};
     std::array<uint8_t, payload.size()> received        = {};
     utp_address_t                       loopback        = {};
@@ -328,7 +341,8 @@ TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]") {
     utp_udp_socket_close(&sender);
 }
 
-TEST_CASE("udp socket sends a datagram from slices", "[udp]") {
+TEST_CASE("udp socket sends a datagram from slices", "[udp]")
+{
     const std::array<uint8_t, 2> first           = {UINT8_C(0xaa), UINT8_C(0xbb)};
     const std::array<uint8_t, 3> second          = {UINT8_C(0xcc), UINT8_C(0xdd), UINT8_C(0xee)};
     std::array<uint8_t, 8>       received        = {};
@@ -373,7 +387,8 @@ TEST_CASE("udp socket sends a datagram from slices", "[udp]") {
     utp_udp_socket_close(&sender);
 }
 
-TEST_CASE("udp socket rejects a datagram that exceeds receive capacity", "[udp]") {
+TEST_CASE("udp socket rejects a datagram that exceeds receive capacity", "[udp]")
+{
     const std::array<uint8_t, 6> payload = {'o', 'v', 'e', 'r', 'f', 'l'};
     struct {
         std::array<uint8_t, 5> bytes;
@@ -416,7 +431,8 @@ TEST_CASE("udp socket rejects a datagram that exceeds receive capacity", "[udp]"
     utp_udp_socket_close(&sender);
 }
 
-TEST_CASE("packet header encodes in network byte order", "[proto]") {
+TEST_CASE("packet header encodes in network byte order", "[proto]")
+{
     const utp_packet_header_t expected = {
         UINT32_C(0x12345678), UINT32_C(0x9abcdef0),    UINT64_C(0x0123456789abcdef),
         UINT16_C(0x1234),     UTP_PACKET_TYPE_INITIAL, UINT8_C(0xa5),
@@ -457,7 +473,8 @@ TEST_CASE("packet header encodes in network byte order", "[proto]") {
     REQUIRE(decoded.reserve == expected.reserve);
 }
 
-TEST_CASE("packet header rejects truncated buffers", "[proto]") {
+TEST_CASE("packet header rejects truncated buffers", "[proto]")
+{
     const utp_packet_header_t header = {
         UINT32_C(1), UINT32_C(2), UINT64_C(3), UINT16_C(0), UTP_PACKET_TYPE_CTRL, UINT8_C(0),
     };
@@ -468,7 +485,8 @@ TEST_CASE("packet header rejects truncated buffers", "[proto]") {
     REQUIRE(utp_proto_decode_header(&decoded, encoded.data(), encoded.size() - 1u) == UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("packet header rejects out of range packet numbers", "[proto]") {
+TEST_CASE("packet header rejects out of range packet numbers", "[proto]")
+{
     const utp_packet_header_t invalid = {
         UINT32_C(1), UINT32_C(2), UTP_PACKET_NUMBER_MAX + UINT64_C(1), UINT16_C(0), UTP_PACKET_TYPE_HANDSHAKE,
         UINT8_C(0),
@@ -481,17 +499,20 @@ TEST_CASE("packet header rejects out of range packet numbers", "[proto]") {
     REQUIRE(utp_proto_decode_header(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("frame length covers every supported wire frame", "[frame]") {
+TEST_CASE("frame length covers every supported wire frame", "[frame]")
+{
     struct frame_case {
         uint8_t type;
         size_t  length;
     };
-    const std::array<frame_case, 19> cases = {{{UTP_FRAME_TYPE_STREAM, 16u},
+    const std::array<frame_case, 21> cases = {{{UTP_FRAME_TYPE_STREAM, 16u},
                                                {UTP_FRAME_TYPE_ACK, 16u},
                                                {UTP_FRAME_TYPE_PADDING, 3u},
                                                {UTP_FRAME_TYPE_CONNECTION_CLOSE, 5u},
                                                {UTP_FRAME_TYPE_PING, 1u},
                                                {UTP_FRAME_TYPE_RESET_STREAM, 15u},
+                                               {UTP_FRAME_TYPE_STREAMS_BLOCKED, 4u},
+                                               {UTP_FRAME_TYPE_MAX_STREAMS, 4u},
                                                {UTP_FRAME_TYPE_PATH_CHALLENGE, 9u},
                                                {UTP_FRAME_TYPE_PATH_RESPONSE, 9u},
                                                {UTP_FRAME_TYPE_CRYPTO, 35u},
@@ -508,7 +529,7 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]") {
     std::vector<uint8_t>             payload;
     uint32_t                         expected_types = 0u;
 
-    for (const frame_case &test_case : cases) {
+    for (const frame_case& test_case : cases) {
         std::vector<uint8_t> frame(test_case.length, 0u);
         size_t               measured_length = 0u;
         uint8_t              measured_type   = 0u;
@@ -527,8 +548,9 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]") {
     REQUIRE(frame_types == expected_types);
 }
 
-TEST_CASE("frame length rejects unknown and truncated frames", "[frame]") {
-    const std::array<uint8_t, 1>  unknown          = {UTP_FRAME_TYPE_STREAMS_BLOCKED};
+TEST_CASE("frame length rejects unknown and truncated frames", "[frame]")
+{
+    const std::array<uint8_t, 1>  unknown          = {UTP_FRAME_TYPE_MAX};
     const std::array<uint8_t, 15> truncated_stream = {UTP_FRAME_TYPE_STREAM};
     size_t                        frame_length     = 0u;
     uint8_t                       frame_type       = 0u;
@@ -539,7 +561,29 @@ TEST_CASE("frame length rejects unknown and truncated frames", "[frame]") {
             UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("packet view validates frame layout without copying payload", "[frame]") {
+TEST_CASE("MAX_STREAMS and STREAMS_BLOCKED round trip", "[frame]")
+{
+    const utp_frame_streams_limit_t                   maximum = {UINT16_C(64), UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL};
+    const utp_frame_streams_limit_t                   blocked = {UINT16_C(32), UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL};
+    utp_frame_streams_limit_t                         decoded = {};
+    std::array<uint8_t, UTP_FRAME_STREAMS_LIMIT_SIZE> encoded = {};
+
+    REQUIRE(utp_frame_max_streams_encode(encoded.data(), encoded.size(), &maximum) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_max_streams_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.stream_type == maximum.stream_type);
+    REQUIRE(decoded.stream_limit == maximum.stream_limit);
+
+    REQUIRE(utp_frame_streams_blocked_encode(encoded.data(), encoded.size(), &blocked) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_streams_blocked_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.stream_type == blocked.stream_type);
+    REQUIRE(decoded.stream_limit == blocked.stream_limit);
+
+    encoded[1] = UINT8_C(2);
+    REQUIRE(utp_frame_streams_blocked_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_PROTOCOL);
+}
+
+TEST_CASE("packet view validates frame layout without copying payload", "[frame]")
+{
     const std::array<uint8_t, 6> payload = {
         UTP_FRAME_TYPE_PING, UTP_FRAME_TYPE_VERSION, 0u, 0u, 0u, 2u,
     };
@@ -548,7 +592,7 @@ TEST_CASE("packet view validates frame layout without copying payload", "[frame]
     };
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + payload.size()> packet       = {};
     utp_packet_view_t                                            view         = {};
-    const uint8_t                                               *frame_data   = nullptr;
+    const uint8_t*                                               frame_data   = nullptr;
     size_t                                                       frame_length = 0u;
     size_t                                                       offset       = 0u;
     uint8_t                                                      frame_type   = 0u;
@@ -573,7 +617,8 @@ TEST_CASE("packet view validates frame layout without copying payload", "[frame]
             UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("ack frame encodes and decodes descending ranges", "[ack]") {
+TEST_CASE("ack frame encodes and decodes descending ranges", "[ack]")
+{
     std::array<utp_ack_range_t, 2> ranges   = {{{100u, 105u}, {90u, 94u}}};
     const utp_ack_info_t           ack      = {105u, 288u, ranges.data(), ranges.size(), ranges.size()};
     const std::array<uint8_t, 24>  expected = {
@@ -622,7 +667,8 @@ TEST_CASE("ack frame encodes and decodes descending ranges", "[ack]") {
     REQUIRE(decoded.ranges[1].high == 94u);
 }
 
-TEST_CASE("ack decoder rejects invalid ranges without changing output", "[ack]") {
+TEST_CASE("ack decoder rejects invalid ranges without changing output", "[ack]")
+{
     const std::array<uint8_t, 16>  invalid  = {UTP_FRAME_TYPE_ACK};
     std::array<utp_ack_range_t, 1> ranges   = {{{7u, 8u}}};
     utp_ack_info_t                 decoded  = {8u, 9u, ranges.data(), 1u, ranges.size()};
@@ -637,7 +683,8 @@ TEST_CASE("ack decoder rejects invalid ranges without changing output", "[ack]")
     REQUIRE(decoded.ranges[0].high == 8u);
 }
 
-TEST_CASE("ack decoder preserves output when a later range is malformed", "[ack]") {
+TEST_CASE("ack decoder preserves output when a later range is malformed", "[ack]")
+{
     const std::array<uint8_t, 24> encoded = {
         UTP_FRAME_TYPE_ACK, 1u, 0u, 0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 10u, 0u, 0u, 0u, 1u, 0u, 0u, 0u, 0u,
     };
@@ -656,7 +703,8 @@ TEST_CASE("ack decoder preserves output when a later range is malformed", "[ack]
     REQUIRE(decoded.ranges[1].high == 21u);
 }
 
-TEST_CASE("ack decoder enforces the caller range capacity", "[ack]") {
+TEST_CASE("ack decoder enforces the caller range capacity", "[ack]")
+{
     const std::array<uint8_t, 24> encoded = {
         UTP_FRAME_TYPE_ACK, 1u, 0u, 0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 10u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u,
     };
@@ -667,7 +715,8 @@ TEST_CASE("ack decoder enforces the caller range capacity", "[ack]") {
     REQUIRE(utp_ack_decode(&decoded, encoded.data(), encoded.size(), 0u, &consumed) == UTP_INTERNAL_ERROR_LIMIT);
 }
 
-TEST_CASE("version frame round trips with an exact fixed layout", "[frame]") {
+TEST_CASE("version frame round trips with an exact fixed layout", "[frame]")
+{
     const utp_frame_version_t                         expected = {UINT32_C(0x01020304)};
     const std::array<uint8_t, UTP_FRAME_VERSION_SIZE> bytes    = {
         UTP_FRAME_TYPE_VERSION, 1u, 2u, 3u, 4u,
@@ -681,7 +730,8 @@ TEST_CASE("version frame round trips with an exact fixed layout", "[frame]") {
     REQUIRE(decoded.version == expected.version);
 }
 
-TEST_CASE("path and handshake done frames reject a mismatched type", "[frame]") {
+TEST_CASE("path and handshake done frames reject a mismatched type", "[frame]")
+{
     const utp_frame_path_t                             path         = {{0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}};
     const utp_frame_handshake_done_t                   done         = {UINT64_C(0x0102030405060708)};
     std::array<uint8_t, UTP_FRAME_PATH_SIZE>           path_bytes   = {};
@@ -704,7 +754,8 @@ TEST_CASE("path and handshake done frames reject a mismatched type", "[frame]") 
             UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("stream frame preserves its zero copy payload view", "[frame]") {
+TEST_CASE("stream frame preserves its zero copy payload view", "[frame]")
+{
     const std::array<uint8_t, 3>  data     = {0xaau, 0xbbu, 0xccu};
     const utp_frame_stream_t      stream   = {UTP_STREAM_FLAG_FIN, UINT32_C(0x01020304), UINT64_C(0x05060708090a0b0c),
                                               data.data(), static_cast<uint16_t>(data.size())};
@@ -744,7 +795,8 @@ TEST_CASE("stream frame preserves its zero copy payload view", "[frame]") {
     REQUIRE(utp_frame_stream_decode(&decoded, encoded.data(), encoded.size() - 1u) == UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("connection close frame preserves a binary reason view", "[frame]") {
+TEST_CASE("connection close frame preserves a binary reason view", "[frame]")
+{
     const std::array<uint8_t, 3>       reason = {0x00u, 0xaau, 0xbbu};
     const utp_frame_connection_close_t close  = {UINT16_C(0x0102), reason.data(), static_cast<uint16_t>(reason.size())};
     const std::array<uint8_t, 8>       expected = {
@@ -762,7 +814,8 @@ TEST_CASE("connection close frame preserves a binary reason view", "[frame]") {
     REQUIRE(std::memcmp(decoded.reason, reason.data(), reason.size()) == 0);
 }
 
-TEST_CASE("padding frame emits only zero padding bytes", "[frame]") {
+TEST_CASE("padding frame emits only zero padding bytes", "[frame]")
+{
     std::array<uint8_t, 6> encoded        = {0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu};
     uint16_t               padding_length = 0u;
 
@@ -780,7 +833,8 @@ TEST_CASE("padding frame emits only zero padding bytes", "[frame]") {
     REQUIRE(padding_length == 3u);
 }
 
-TEST_CASE("reset stream frame round trips its terminal state", "[frame]") {
+TEST_CASE("reset stream frame round trips its terminal state", "[frame]")
+{
     const utp_frame_reset_stream_t reset    = {UINT16_C(0x1122), UINT32_C(0x33445566), UINT64_C(0x778899aabbccddee)};
     const std::array<uint8_t, 15>  expected = {
         UTP_FRAME_TYPE_RESET_STREAM,
@@ -812,7 +866,8 @@ TEST_CASE("reset stream frame round trips its terminal state", "[frame]") {
             UTP_INTERNAL_ERROR_OVERFLOW);
 }
 
-TEST_CASE("flow-control frames round trip their limits", "[frame]") {
+TEST_CASE("flow-control frames round trip their limits", "[frame]")
+{
     std::array<uint8_t, 13>         encoded                 = {};
     utp_frame_max_data_t            max_data                = {UINT64_C(0x0102030405060708)};
     utp_frame_max_data_t            decoded_max_data        = {};

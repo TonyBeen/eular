@@ -7,7 +7,7 @@
 本文记录 C 实现阶段已确认的设计决定。`docs/superpowers/requirements/` 仍是功能需求基线；本文对 C
 发送路径的实现取舍优先，尤其在旧 `doc/` 或 cpp 当前行为不一致时。
 
-## 1. CONNECTION_CLOSE：严格 immediate close
+## 1. CONNECTION_CLOSE：一次回应的 immediate close
 
 `CONNECTION_CLOSE` 是终止连接的状态机屏障，不承担可靠交付业务数据的职责；业务完整性由应用层在发送
 connection close 前自行保证。
@@ -17,7 +17,11 @@ connection close 前自行保证。
   PING 或其他普通 control 包。
 - 已 unacked 的业务包可保留到连接销毁时统一回收，或用于现有统计收敛；**MUST NOT** 进入丢包重传。
 - closing 状态收到包时，不处理其中业务 frame；允许受限地重发单独的 `CONNECTION_CLOSE`。
-- 收到对端 `CONNECTION_CLOSE` 后进入 draining；draining 状态 **MUST NOT** 再发送任何包。
+- 首次收到对端 `CONNECTION_CLOSE` 后停止业务与 ACK。若本地 close 已写入 UDP，则立即进入 draining；若本地
+  close 尚未写出，则保留该 close，或排队一个独立的 close 回应。回应成功写入 UDP 后进入 draining。
+- 每个 peer close **MUST** 最多回应一次；重复 peer close 不得生成新的 close。自动回应不改变
+  peer-initiated close 的回调归属。
+- draining 状态 **MUST NOT** 再发送任何包。
 - closing/draining 的状态与 CID 解复用信息至少保留 `3 * PTO`，期限到达后才销毁连接。
 
 发送端的单独成包约束是本端行为，接收端 **MUST** 对对端错误共包的 `CONNECTION_CLOSE` 保持兼容：不得因
@@ -87,14 +91,15 @@ P0 ACK                 (仅作为 transient prefix)
 P1 PATH_RESPONSE
 P2 ACK_FREQUENCY
 P3 RESET_STREAM
-P4 MAX_DATA / MAX_STREAM_DATA
-P5 DATA_BLOCKED / STREAM_DATA_BLOCKED
+P4 MAX_DATA / MAX_STREAM_DATA / MAX_STREAMS
+P5 DATA_BLOCKED / STREAM_DATA_BLOCKED / STREAMS_BLOCKED
 P6 STREAM
 P7 PING / PADDING       (transient 或填充)
 ```
 
 - builder 按优先级贪心合包，受当前路径 MTU 与 `UTP_PACKET_OUT_MAX_FRAMES` 双重上限限制；同优先级 FIFO。
-- `MAX_DATA` 只保留最大待发送值；`MAX_STREAM_DATA` 按 stream id 保留最大待发送值。
+- `MAX_DATA` 只保留最大待发送值；`MAX_STREAM_DATA` 按 stream id 保留最大待发送值；`MAX_STREAMS`
+  按流方向保留最大待发送额度。
 - 同一 stream 的 `RESET_STREAM` 只保留一个待发送项；blocked 通知按 `(type, stream id)` 合并，避免发送
   过时重复通知。
 - 丢失的小 control 回到保存语义字段的 pending queue，和新的 control 再次合包；不复制旧 frame bytes。
@@ -119,14 +124,15 @@ range 零拷贝重传。
 
 ## 5. Control pending 的语义槽位与提交点
 
-control pending 不使用通用 frame FIFO，而是使用连接内固定容量的语义槽位；不增加 public config，容量由
-`UTP_CONNECTION_MAX_STREAMS` 和当前支持的 frame 类型推导。
+control pending 不使用通用 frame FIFO，而是使用连接内按语义 key 索引的动态语义槽位；不增加 public config。
 
 ```text
 1 个 MAX_DATA
 每 stream 1 个 MAX_STREAM_DATA
+每流方向 1 个 MAX_STREAMS
 1 个 DATA_BLOCKED
 每 stream 1 个 STREAM_DATA_BLOCKED
+每流方向 1 个 STREAMS_BLOCKED
 每 stream 1 个 RESET_STREAM
 ACK 由 ack_scheduler 持有，不占 control slot
 ```
@@ -134,19 +140,36 @@ ACK 由 ack_scheduler 持有，不占 control slot
 - slot 保存语义字段（例如 `stream_id`、`maximum_data`、`error_code`、`final_size`），builder 在选包时才
   编码 wire bytes。
 - `MAX_DATA`/`MAX_STREAM_DATA` 保存最大待发送值；blocked 保存最新限制值；同 stream 的 reset 只保留一个
-  终止状态。
+  终止状态。`MAX_STREAMS`/`STREAMS_BLOCKED` 以双向、单向两个方向分别合并。
 - 小 control 丢失时，恢复对应语义 pending 项并与新 control 合包；不复制旧 packet 的 frame bytes。
 - 每项状态分为 `desired`、`queued`、`sent`：仅 UDP 实际发送成功才更新 advertised 值、发送时间戳、限速
   时间戳或清除 ACK pending。
 - 已编码但未写出的 PacketOut 因发送失败、关闭屏障或队列取消而释放时，相关语义项必须恢复为 pending。
 
-该模型消除过时窗口更新的重复发送，保证 close/UDP 失败时不会提前认为状态已通告，并保持 established
-发送路径无运行期分配。
+该模型消除过时窗口更新的重复发送，保证 close/UDP 失败时不会提前认为状态已通告。新 stream 或新的 control
+语义 key 会按需分配表项；正常合包和语义重传复用已有表项，不复制 frame payload。
+
+## 5.1 动态流额度
+
+`MAX_STREAMS` 与 `STREAMS_BLOCKED` 均为 4 字节定长帧：`type(u8)`、`stream_type(u8)`、
+`stream_limit(u16)`；`stream_type=0` 表示双向流，`1` 表示单向流。
+
+- 对端发起的 STREAM 或 RESET_STREAM 必须同时通过发起方位、方向和
+  `stream_ordinal = stream_id / 4 + 1` 校验；ordinal 大于本端授予额度是协议错误。
+- 本端创建流时，ordinal 大于对端最近通告的额度则返回流额度错误，并按方向发送可合并的
+  `STREAMS_BLOCKED`。收到更大的 `MAX_STREAMS` 后才能继续创建。
+- 对端发起的流完成且接收缓冲已清空后，本端将对应方向的额度单调加一并发送 `MAX_STREAMS`。额度达到
+  `UINT16_MAX` 后不再增加。
+- 活动流按 `stream_id` 存入连接私有的动态哈希表，不设本地/对端共享的固定并发槽位。可创建流的数量仅由
+  对端按双向、单向分别通告的 `MAX_STREAMS` 额度约束；可接收流的数量仅由本端对应方向已授予的额度约束。
+- `utp_connection_get_stream()` 返回 connection-owned 的借用指针。流完全关闭且接收数据已消费后，连接可以
+  回收该对象；应用不得在这之后继续持有或调用该指针。这与 C++ `Connection::getStream()` 返回内部对象、
+  `collectClosedStreams()` 回收关闭流的生命周期一致。
 
 ## 6. STREAM 选择与公开优先级 API
 
-P0-P5 control 始终先于 P6 STREAM；只有要生成 STREAM 时才调用 stream scheduler。C 不再按
-`streams[]` 的数组下标直接选择，否则低下标持续可写时会饿死其他流。
+P0-P5 control 始终先于 P6 STREAM；只有要生成 STREAM 时才调用 stream scheduler。C 不按哈希桶遍历顺序
+直接选择，否则稳定落在前部桶位的可写流会饿死其他流。
 
 公开 API 只提供两种 scheduler mode：
 
@@ -219,8 +242,32 @@ frame priority 仅决定包构造时的选帧和合包顺序，**不**赋予普�
 - closing 期间收到任意对端包时，不处理业务 frame；仅当距上次 close 发送已过一个 `close_pto` 才限速重发
   一个单独的 `CONNECTION_CLOSE`。
 - closing 期间无入包时 **MUST NOT** 盲目按 PTO 周期重发 close。
-- 收到有效对端 `CONNECTION_CLOSE` 后立即进入 draining，不回 ACK、不回 close、不再发送任何包；
-  `drain_deadline = receive_time + 3 * close_pto`。
+- 收到有效对端 `CONNECTION_CLOSE` 后不回 ACK。若本地 close 已写出，立即进入 draining；若本地 close 尚未
+  写出，则保留已有 close 或排队一个独立 close 回应。回应成功写入 UDP 后进入 draining，并设置
+  `drain_deadline = sent_time + 3 * close_pto`。构造回应失败时立即进入 draining，避免无限停留在 closing。
 - deadline 到达后释放连接状态与 CID 解复用项。
 
 `close_pto` 由 RTT 派生；未知 RTT 使用 `333333us`，并 clamp 到 `[10ms, 60s]`。
+
+`DRAINING` 是网络隔离期，不是业务可靠关闭等待期：Context 保留 CID 到 `3 * PTO` 的 deadline，以吸收迟到、重复
+或乱序的旧连接报文，避免 CID 复用后错误投递给新连接；在此期间不处理业务、不生成 ACK、不重传，也不再回应
+重复 close。应用可在 peer-initiated close 回调后立即释放自身业务资源，deadline 到达后才由 Context 回收少量
+传输状态。
+
+`utp_context_destroy()` 是同步资源销毁：先移除全部 event，再对每条拥有对端 CID 且未进入 draining 的连接构造
+专用 `CONNECTION_CLOSE` 并直接尝试一次 UDP 写入。该 close 不进入普通发送队列、不注册可写事件、不等待 ACK 或
+`3 * PTO`；无论写入结果如何，随后立刻回收 connection、stream、CID 和 socket 资源。普通公开 close 不受此规则影响。
+
+## 11. C 公开 Connection / Stream API
+
+`include/utp/context.h`、`include/utp/connection.h` 与 `include/utp/stream.h` 是 C 的公开入口；
+`utp/context.h` 会聚合包含 connection 和 stream API，`utp/utp.h` 仅作为兼容包装。应用不得包含
+`src/connection/` 内部头文件。
+
+- `utp_connection_close()` 与 `utp_stream_close()` 返回 `void`，分别发起正常 connection close 和本地 stream
+  写方向 FIN。有效调用后的 UDP 发送错误通过 Context 的异步错误回调报告。
+- `utp_connection_create_stream()`、`utp_stream_write()`、`utp_stream_read()`、`utp_stream_reset()` 与零拷贝
+  acquire/commit 接口返回 `utp_status_t`；读端暂时无连续数据为 `UTP_STATUS_WOULD_BLOCK`，对端 FIN 已消费完为
+  `UTP_STATUS_CLOSED`。
+- 成功排队的公开 close、建流、写入、commit 与 reset 会立即请求所属 Context flush；调用方无需额外驱动私有
+  发送接口，仍须持续运行其 event loop。

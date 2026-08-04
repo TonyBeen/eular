@@ -19,8 +19,11 @@ extern "C" {
 #define UTP_FRAME_PADDING_HEADER_SIZE          3u
 #define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE 5u
 #define UTP_FRAME_RESET_STREAM_SIZE            15u
+#define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
 #define UTP_STREAM_FLAG_NONE                   0x00u
 #define UTP_STREAM_FLAG_FIN                    0x01u
+#define UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL    0u
+#define UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL   1u
 
 /*
  * Frame wire formats. All multi-byte fields are encoded in network byte order.
@@ -32,6 +35,8 @@ extern "C" {
  * CONNECTION_CLOSE:    type(1), error_code(2), reason_length(2), reason[reason_length]
  * PING:                type(1)
  * RESET_STREAM:        type(1), error_code(2), stream_id(4), final_size(8)
+ * STREAMS_BLOCKED:     type(1), stream_type(1), stream_limit(2)
+ * MAX_STREAMS:         type(1), stream_type(1), maximum_streams(2)
  * PATH_CHALLENGE:      type(1), data(8)
  * PATH_RESPONSE:       type(1), data(8)
  * CRYPTO:              type(1), crypto_type(1), reserved(1), ephemeral_public_key(32)
@@ -48,9 +53,6 @@ extern "C" {
  * MAX_STREAM_DATA:     type(1), stream_id(4), maximum_stream_data(8)
  * DATA_BLOCKED:        type(1), data_limit(8)
  * STREAM_DATA_BLOCKED: type(1), stream_id(4), stream_data_limit(8)
- *
- * STREAMS_BLOCKED and MAX_STREAMS are declared but unsupported frame types. The
- * C implementation has no encoder, decoder, or accepted wire layout for them yet.
  */
 typedef enum utp_frame_type {
     UTP_FRAME_TYPE_INVALID             = 0x00,
@@ -123,6 +125,12 @@ typedef struct utp_frame_reset_stream {
     uint64_t final_size;
 } utp_frame_reset_stream_t;
 
+/* STREAMS_BLOCKED/MAX_STREAMS wire: type(1), stream_type(1), stream_limit(2). */
+typedef struct utp_frame_streams_limit {
+    uint16_t stream_limit;
+    uint8_t  stream_type;
+} utp_frame_streams_limit_t;
+
 /* MAX_DATA wire: type(1), maximum_data(8). */
 typedef struct utp_frame_max_data {
     uint64_t maximum_data;
@@ -175,6 +183,14 @@ utp_internal_error_t utp_frame_reset_stream_encode(uint8_t* buffer, size_t capac
                                                    const utp_frame_reset_stream_t* reset);
 utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* reset, const uint8_t* buffer,
                                                    size_t length);
+utp_internal_error_t utp_frame_streams_blocked_encode(uint8_t* buffer, size_t capacity,
+                                                      const utp_frame_streams_limit_t* blocked);
+utp_internal_error_t utp_frame_streams_blocked_decode(utp_frame_streams_limit_t* blocked, const uint8_t* buffer,
+                                                      size_t length);
+utp_internal_error_t utp_frame_max_streams_encode(uint8_t* buffer, size_t capacity,
+                                                  const utp_frame_streams_limit_t* maximum);
+utp_internal_error_t utp_frame_max_streams_decode(utp_frame_streams_limit_t* maximum, const uint8_t* buffer,
+                                                  size_t length);
 utp_internal_error_t utp_frame_max_data_encode(uint8_t* buffer, size_t capacity, const utp_frame_max_data_t* max_data);
 utp_internal_error_t utp_frame_max_data_decode(utp_frame_max_data_t* max_data, const uint8_t* buffer, size_t length);
 utp_internal_error_t utp_frame_max_stream_data_encode(uint8_t* buffer, size_t capacity,

@@ -1,7 +1,7 @@
 #ifndef EULAR_UTP_CONTEXT_CONTEXT_H
 #define EULAR_UTP_CONTEXT_CONTEXT_H
 
-#include <utp/utp.h>
+#include <utp/context.h>
 
 #include "connection/connection.h"
 #include "context/event_loop.h"
@@ -60,5 +60,7 @@ struct utp_context {
     utp_logger_t                  logger;
     utp_log_tag_t                 tag;
 };
+
+utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
 
 #endif  // EULAR_UTP_CONTEXT_CONTEXT_H

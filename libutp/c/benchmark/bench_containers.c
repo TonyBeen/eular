@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <utp/utp.h>
+
+#include <utp/context.h>
 
 #include "util/hash.h"
 #include "util/range_set.h"
@@ -15,7 +16,8 @@ typedef struct benchmark_item {
     uint32_t        key;
 } benchmark_item_t;
 
-static uint64_t hash_key(uint32_t key) {
+static uint64_t hash_key(uint32_t key)
+{
     uint64_t value = key;
 
     value ^= value >> 16u;
@@ -26,33 +28,38 @@ static uint64_t hash_key(uint32_t key) {
     return value;
 }
 
-static benchmark_item_t *item_from_node(const utp_hash_node_t *node) {
-    return (benchmark_item_t *)((char *)node - offsetof(benchmark_item_t, node));
+static benchmark_item_t* item_from_node(const utp_hash_node_t* node)
+{
+    return (benchmark_item_t*)((char*)node - offsetof(benchmark_item_t, node));
 }
 
-static bool hash_matches(const utp_hash_node_t *node, const void *key, void *user_data) {
-    const uint32_t         *expected = key;
-    const benchmark_item_t *item     = item_from_node(node);
+static bool hash_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const uint32_t*         expected = key;
+    const benchmark_item_t* item     = item_from_node(node);
 
     (void)user_data;
     return item->key == *expected;
 }
 
-static uint32_t random_next(uint32_t *state) {
+static uint32_t random_next(uint32_t* state)
+{
     *state = *state * UINT32_C(1664525) + UINT32_C(1013904223);
     return *state;
 }
 
 static double elapsed_seconds(clock_t start, clock_t end) { return (double)(end - start) / (double)CLOCKS_PER_SEC; }
 
-static void print_rate(const char *name, size_t operations, double seconds) {
+static void   print_rate(const char* name, size_t operations, double seconds)
+{
     const double rate = seconds > 0.0 ? (double)operations / seconds : 0.0;
 
     printf("%-20s %10zu ops  %8.4f s  %12.0f ops/s\n", name, operations, seconds, rate);
 }
 
-static int parse_operations(int argc, char **argv, size_t *operations) {
-    char              *end;
+static int parse_operations(int argc, char** argv, size_t* operations)
+{
+    char*              end;
     unsigned long long parsed;
 
     *operations = 1000000u;
@@ -71,10 +78,11 @@ static int parse_operations(int argc, char **argv, size_t *operations) {
     return 1;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv)
+{
     enum { ITEM_COUNT = 262144 };
     const uint32_t    seed = UINT32_C(0x71d904a5);
-    benchmark_item_t *items;
+    benchmark_item_t* items;
     utp_hash_table_t  table;
     utp_range_set_t   ranges;
     size_t            operations;
@@ -122,7 +130,7 @@ int main(int argc, char **argv) {
     start = clock();
     for (index = 0; index < operations; ++index) {
         uint32_t         key  = random_next(&state) % ITEM_COUNT;
-        utp_hash_node_t *node = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
+        utp_hash_node_t* node = utp_hash_table_find(&table, hash_key(key), &key, hash_matches, NULL);
 
         if (node == NULL) {
             fputs("hash lookup failed\n", stderr);

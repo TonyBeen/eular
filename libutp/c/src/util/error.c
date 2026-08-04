@@ -2,7 +2,7 @@
 
 #include <errno.h>
 
-bool utp_internal_error_is_ok(utp_internal_error_t error) { return error == UTP_INTERNAL_ERROR_OK; }
+bool                 utp_internal_error_is_ok(utp_internal_error_t error) { return error == UTP_INTERNAL_ERROR_OK; }
 
 utp_internal_error_t utp_internal_error_from_errno(int32_t system_error)
 {
@@ -63,6 +63,8 @@ utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
         return UTP_STATUS_CONNECTION_PATH_VALIDATION_BLOCKED;
     case UTP_INTERNAL_ERROR_NOBUFS:
         return UTP_STATUS_LIMIT;
+    case UTP_INTERNAL_ERROR_STREAM_LIMIT:
+        return UTP_STATUS_CONNECTION_STREAM_LIMITED;
     default:
         break;
     }
