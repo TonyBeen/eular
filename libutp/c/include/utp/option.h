@@ -12,13 +12,18 @@ typedef enum utp_stream_scheduler_mode {
 } utp_stream_scheduler_mode_t;
 
 typedef struct utp_context_options {
+    // 由调用方创建并驱动，Context 仅借用该事件循环。
     struct event_base*          event_base;
+    // 为空时关闭日志；回调由协议处理线程同步调用。
     utp_log_sink_fn             log_sink;
+    // 用于日志标签和 CID 初始值，0 会自动跳过无效 CID。
     uint64_t                    context_id;
+    // 最低输出级别，低于该级别的日志会被过滤。
     utp_log_level_t             log_level;
+    // 新建连接采用的流发送调度策略。
     utp_stream_scheduler_mode_t stream_scheduler_mode;
 
-    // mtu probing and blackhole detection options
+    // MTU 阶梯探测与黑洞检测配置。
     bool                        enable_dplpmtud;
     uint16_t                    mtu_min;
     uint16_t                    mtu_max;

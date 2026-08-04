@@ -66,7 +66,7 @@ typedef struct utp_connection_pending_max_stream_data {
     uint32_t        stream_id;
 } utp_connection_pending_max_stream_data_t;
 
-// This is a private, connection-owned transport state. Context owns CID lookup and UDP I/O.
+// Connection 私有的传输状态；CID 解复用和 UDP I/O 由 Context 负责。
 typedef struct utp_connection {
     struct utp_context*         context;
     utp_send_control_t          send_control;
@@ -136,26 +136,25 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
 void                 utp_connection_cleanup(utp_connection_t* connection);
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
 
-// Builds a complete plaintext packet and places it in the bounded send queue.
+// 构造完整明文包并放入有界发送队列。
 utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
                                                  const uint8_t* payload, size_t payload_length, bool track_on_send);
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code);
-// Rebuilds the dedicated CONNECTION_CLOSE packet for synchronous Context destruction. The caller writes it directly
-// and then releases the connection without using the ordinary send queue or close/draining timers.
+// 为 Context 同步销毁重建专用 CONNECTION_CLOSE；调用方直接写 UDP，随后跳过普通发送队列和关闭定时器释放连接。
 utp_internal_error_t utp_connection_prepare_destroy_close(utp_connection_t* connection);
-// Returns a scheduled packet or a retransmission with a fresh packet number.
+// 返回可发送的排队包，或分配了新包号的重传包。
 utp_packet_out_t*    utp_connection_next_packet_to_send(utp_connection_t* connection);
 utp_packet_out_t*    utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us);
-// Marks a packet as successfully written. Non-tracked packets are returned to the pool here.
+// 标记 PacketOut 已成功写入 UDP；无需跟踪的包会在此归还对象池。
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
-// Handles a UDP write failure before the packet was put on the wire.
+// 处理 PacketOut 写入 UDP 前发生的发送错误。
 void                 utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
                                                          utp_internal_error_t error, uint64_t now_us);
 bool                 utp_connection_is_close_packet(const utp_connection_t* connection, const utp_packet_out_t* packet);
-// Releases a packet that was never written to UDP and restores its pending transport state.
+// 释放从未写入 UDP 的包，并恢复其可靠 control 和流发送状态。
 void                 utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
-// Validates peer/CIDs, processes ACK and lifecycle frames, and records received packet numbers.
+// 校验来源地址与 CID，处理 ACK 和生命周期帧，并记录收到的包号。
 utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, const uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer,
                                                        uint64_t now_us);

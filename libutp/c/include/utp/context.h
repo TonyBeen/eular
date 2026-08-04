@@ -18,7 +18,7 @@ extern "C" {
 #define UTP_VERSION_PATCH  1u
 #define UTP_VERSION_STRING "1.0.1"
 
-// Opaque handles reserved for the future stable C API.
+// 对外只暴露不透明句柄，对象内存均由对应的上级对象管理。
 typedef struct utp_context    utp_context_t;
 typedef struct utp_connection utp_connection_t;
 typedef struct utp_stream     utp_stream_t;
@@ -44,7 +44,7 @@ typedef struct utp_endpoint {
     uint8_t  address[16];
 } utp_endpoint_t;
 
-// Full initializer for utp_context_options_t. Set event_base before creating the Context.
+// Context 配置的完整默认值；创建 Context 前必须由调用方设置 event_base。
 #define UTP_CONTEXT_OPTIONS_INIT  \
     {NULL,                        \
      NULL,                        \
@@ -71,7 +71,7 @@ typedef struct utp_connect_options {
     utp_encryption_mode_t encryption;
 } utp_connect_options_t;
 
-// Full initializer for utp_connect_options_t.
+// 主动连接配置的完整默认值。
 #define UTP_CONNECT_OPTIONS_INIT {NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
 
 typedef struct utp_new_connection_info {
@@ -98,11 +98,11 @@ typedef void (*utp_on_connect_error_fn)(utp_status_t status, const char* message
                                         const utp_connect_attempt_info_t* attempt, void* user_data);
 typedef bool (*utp_on_new_connection_fn)(const utp_new_connection_info_t* info, void* user_data);
 typedef struct utp_connection_error_info {
-    // UTP_STATUS_OK denotes a normal peer close. Local fatal errors use their terminal status.
+    // UTP_STATUS_OK 表示对端正常关闭，本地致命错误使用对应的终止状态码。
     utp_status_t   status;
-    // The raw CONNECTION_CLOSE code from the peer, or zero for a local failure.
+    // 对端 CONNECTION_CLOSE 中的原始错误码；本地错误固定为 0。
     uint16_t       peer_error_code;
-    // A zero-copy reason view that is valid only for the duration of the callback.
+    // 零拷贝的关闭原因视图，仅在回调执行期间有效。
     const uint8_t* reason;
     size_t         reason_length;
     bool           peer_initiated;
@@ -111,11 +111,11 @@ typedef struct utp_connection_error_info {
 typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const utp_connection_error_info_t* info,
                                            void* user_data);
 
-// Returns the semantic version of the linked C library.
+// 返回当前链接的 C 库语义版本。
 const char*  utp_version(void);
 utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
-// Synchronously destroys all Context-owned connections and streams. Established connections get one direct
-// CONNECTION_CLOSE write attempt; this call does not wait for ACKs or a draining timeout.
+// 同步销毁 Context 管理的全部连接和流。已建立连接会直接尽力发送一次 CONNECTION_CLOSE，
+// 但不会等待 ACK 或 draining 超时。
 void         utp_context_destroy(utp_context_t* context);
 utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,
                               uint16_t* out_port);

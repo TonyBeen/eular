@@ -3,7 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static utp_internal_error_t append_fragment(utp_log_tag_t *tag, const char *fragment, size_t fragment_length) {
+static utp_internal_error_t append_fragment(utp_log_tag_t* tag, const char* fragment, size_t fragment_length)
+{
     size_t required;
 
     if (tag == NULL || fragment == NULL || fragment_length == 0u) {
@@ -22,14 +23,16 @@ static utp_internal_error_t append_fragment(utp_log_tag_t *tag, const char *frag
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_log_tag_clear(utp_log_tag_t *tag) {
+void utp_log_tag_clear(utp_log_tag_t* tag)
+{
     if (tag != NULL) {
         tag->tag[0]     = '\0';
         tag->tag_length = 0u;
     }
 }
 
-utp_internal_error_t utp_log_tag_init(utp_log_tag_t *tag, const char *fragment, size_t fragment_length) {
+utp_internal_error_t utp_log_tag_init(utp_log_tag_t* tag, const char* fragment, size_t fragment_length)
+{
     if (tag == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -37,8 +40,9 @@ utp_internal_error_t utp_log_tag_init(utp_log_tag_t *tag, const char *fragment, 
     return append_fragment(tag, fragment, fragment_length);
 }
 
-utp_internal_error_t utp_log_tag_append(utp_log_tag_t *tag, const utp_log_tag_t *parent, const char *fragment,
-                                        size_t fragment_length) {
+utp_internal_error_t utp_log_tag_append(utp_log_tag_t* tag, const utp_log_tag_t* parent, const char* fragment,
+                                        size_t fragment_length)
+{
     if (tag == NULL || parent == NULL || parent->tag_length > UTP_LOG_TAG_MAX_LENGTH) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -46,10 +50,11 @@ utp_internal_error_t utp_log_tag_append(utp_log_tag_t *tag, const utp_log_tag_t 
     return append_fragment(tag, fragment, fragment_length);
 }
 
-void utp_internal_log_error(const utp_logger_t *logger, const utp_log_tag_t *tag, utp_internal_error_t error,
-                            const char *message) {
+void utp_internal_log_error(const utp_logger_t* logger, const utp_log_tag_t* tag, utp_internal_error_t error,
+                            const char* message)
+{
     char          formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
-    const char   *status;
+    const char*   status;
     const int32_t system_error = utp_internal_error_to_errno(error);
 
     if (logger == NULL || logger->sink == NULL || message == NULL) {
@@ -69,4 +74,20 @@ void utp_internal_log_error(const utp_logger_t *logger, const utp_log_tag_t *tag
         (void)snprintf(formatted, sizeof(formatted), "%s: status=%s", message, status);
     }
     logger->sink(UTP_LOG_LEVEL_ERROR, formatted);
+}
+
+void utp_internal_log(const utp_logger_t* logger, const utp_log_tag_t* tag, utp_log_level_t level, const char* message)
+{
+    char formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
+
+    if (logger == NULL || logger->sink == NULL || message == NULL || level < UTP_LOG_LEVEL_DEBUG ||
+        level > UTP_LOG_LEVEL_ERROR) {
+        return;
+    }
+    if (tag != NULL && tag->tag_length != 0u) {
+        (void)snprintf(formatted, sizeof(formatted), "%s %s", tag->tag, message);
+    } else {
+        (void)snprintf(formatted, sizeof(formatted), "%s", message);
+    }
+    logger->sink(level, formatted);
 }

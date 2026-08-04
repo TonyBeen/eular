@@ -58,7 +58,7 @@ typedef struct utp_stream_send_ack_range {
 } utp_stream_send_ack_range_t;
 
 struct utp_stream {
-    // Non-NULL only for a stream allocated by utp_connection_t.
+    // 仅由 Connection 创建的流会设置 hash_node 和 connection。
     utp_hash_node_t             hash_node;
     struct utp_connection*      connection;
     uint64_t*                   connection_consumed_total;
@@ -102,9 +102,9 @@ bool                 utp_stream_local_can_receive(const utp_stream_t* stream);
 utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer);
 utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
 utp_internal_error_t utp_stream_write_internal(utp_stream_t* stream, const uint8_t* data, size_t length);
-// Gracefully closes the local write side. Pending data is sent before FIN; the read side remains open.
+// 正常关闭本地写方向：先发送剩余数据，再携带 FIN；读方向保持可用。
 utp_internal_error_t utp_stream_close_internal(utp_stream_t* stream);
-// Sends RESET_STREAM with error_code. This aborts the stream and is not a graceful FIN close.
+// 发送带 error_code 的 RESET_STREAM，立即终止流，不属于正常 FIN 关闭。
 utp_internal_error_t utp_stream_reset_internal(utp_stream_t* stream, uint16_t error_code);
 utp_internal_error_t utp_stream_acquire_write_views_internal(utp_stream_t* stream, utp_stream_write_view_t* views,
                                                              size_t view_capacity, size_t* out_view_count,

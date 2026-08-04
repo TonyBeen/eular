@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-// Connection-owned send state. Packet I/O and congestion policy remain in the connection layer.
+// Connection 持有的发送状态；Packet I/O 和拥塞策略仍由连接层控制。
 typedef struct utp_send_control {
     utp_send_ledger_t           ledger;
     utp_send_history_t          send_history;
@@ -65,27 +65,27 @@ utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t p
 void                 utp_send_control_cleanup(utp_send_control_t* control);
 utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control, utp_packet_out_t* packet);
 utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t* control, uint64_t* packet_number);
-// Schedules packet for one eventual send. Packets remain caller-owned until sent or explicitly released.
+// 将包排队等待一次发送；成功发送或显式释放前，PacketOut 所有权仍属于调用方。
 utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* control, utp_packet_out_t* packet,
                                                       bool track_on_send);
-// Schedules a newly built packet at the front of the send queue.
+// 将新构造的包插入发送队列头部。
 utp_internal_error_t utp_send_control_schedule_packet_front(utp_send_control_t* control, utp_packet_out_t* packet,
                                                             bool track_on_send);
-// Restores an unsent packet to the head of the scheduled queue without changing its tracking policy.
+// 将未发送包恢复到队首，不改变其确认跟踪策略。
 utp_internal_error_t utp_send_control_reschedule_packet(utp_send_control_t* control, utp_packet_out_t* packet);
-// Removes and returns the oldest scheduled packet, or NULL when no packet is ready.
-utp_packet_out_t* utp_send_control_next_scheduled(utp_send_control_t* control);
-// Returns the oldest scheduled packet without changing queue ownership.
-utp_packet_out_t* utp_send_control_peek_scheduled(const utp_send_control_t* control);
-// Scans tracked packets using the current ACK state and prepares each detected loss for retransmission or release.
+// 移除并返回最早排队包；当前没有就绪包时返回 NULL。
+utp_packet_out_t*    utp_send_control_next_scheduled(utp_send_control_t* control);
+// 查看最早排队包，但不改变队列所有权。
+utp_packet_out_t*    utp_send_control_peek_scheduled(const utp_send_control_t* control);
+// 根据当前 ACK 状态扫描跟踪包，将判定丢失的包转入重传或释放队列。
 utp_internal_error_t utp_send_control_detect_losses(utp_send_control_t* control);
-// Returns the oldest detected retransmission candidate. The packet remains marked lost until a successful resend.
-utp_packet_out_t* utp_send_control_next_lost(utp_send_control_t* control);
-// Restores a retransmission candidate to the head of the loss queue when admission is unavailable.
+// 返回最早的重传候选；重新发送成功前仍保持 lost 状态。
+utp_packet_out_t*    utp_send_control_next_lost(utp_send_control_t* control);
+// 拥塞控制暂不允许发送时，将重传候选恢复到丢失队列头部。
 utp_internal_error_t utp_send_control_reschedule_lost(utp_send_control_t* control, utp_packet_out_t* packet);
-// Returns a packet that the connection must release to its packet pool. No release occurs in send-control.
-utp_packet_out_t* utp_send_control_next_discarded(utp_send_control_t* control);
-// Removes an in-flight MTU probe without placing it on any retransmission queue.
+// 返回应由 Connection 归还对象池的包；send-control 自身不执行释放。
+utp_packet_out_t*    utp_send_control_next_discarded(utp_send_control_t* control);
+// 移除飞行中的 MTU 探测包，不放入普通重传队列。
 utp_internal_error_t utp_send_control_take_mtu_probe(utp_send_control_t* control, uint64_t packet_number,
                                                      utp_packet_out_t** out_packet);
 void                 utp_send_control_set_connected(utp_send_control_t* control, bool connected);
@@ -102,8 +102,8 @@ utp_send_control_retransmission_mode_t utp_send_control_retransmission_mode(cons
 uint64_t                               utp_send_control_calculate_handshake_delay(utp_send_control_t* control);
 uint64_t                               utp_send_control_calculate_tlp_delay(const utp_send_control_t* control);
 uint64_t                               utp_send_control_calculate_rto(const utp_send_control_t* control);
-// Applies the currently selected retransmission mode without allocating or performing I/O.
-utp_internal_error_t utp_send_control_on_retransmission_timeout(utp_send_control_t* control);
+// 执行当前选定的重传模式，不分配内存，也不执行 I/O。
+utp_internal_error_t                   utp_send_control_on_retransmission_timeout(utp_send_control_t* control);
 utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
                                              struct utp_packet_out_tailq*   acknowledged_packets,
                                              utp_send_control_ack_result_t* result);

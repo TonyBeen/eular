@@ -15,7 +15,7 @@
 
 static const uint16_t utp_mtu_probe_ladder[] = {1380u, 1450u, 1492u, 1500u};
 
-static uint16_t utp_mtu_clamp(uint16_t value, uint16_t minimum, uint16_t maximum)
+static uint16_t       utp_mtu_clamp(uint16_t value, uint16_t minimum, uint16_t maximum)
 {
     if (value < minimum) {
         return minimum;
@@ -49,8 +49,7 @@ static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
     uint16_t candidate;
 
     if ((uint32_t)discovery->search_high_mtu <= (uint32_t)discovery->search_low_mtu + discovery->probe_step) {
-        /* Confirm the configured ceiling instead of treating probe_step as a
-           reason to leave mtu_max unprobed. */
+        /* 最后一次直接确认配置上限，避免 probe_step 让 mtu_max 永远不被探测。 */
         if (discovery->search_high_mtu == discovery->mtu_max) {
             return discovery->search_high_mtu;
         }

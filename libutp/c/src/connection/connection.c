@@ -142,6 +142,7 @@ static utp_internal_error_t utp_connection_prepare_close_packet(utp_connection_t
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     packet = &connection->close_packet;
+    // close_packet 是连接内的专用存储，不进入 PacketOut 池，确保池耗尽时仍能关闭连接。
     utp_connection_reset_close_packet(connection);
     error = utp_frame_connection_close_encode(packet->raw_data + UTP_PACKET_HEADER_SIZE,
                                               packet->alloc_size - UTP_PACKET_HEADER_SIZE, &close);
@@ -271,6 +272,7 @@ static void utp_connection_enter_draining(utp_connection_t* connection, uint64_t
 {
     const uint64_t pto = utp_connection_close_pto(connection);
 
+    // draining 仅保留 CID 用于吸收迟到报文，不再处理帧、发送 ACK 或重传任何数据。
     connection->state                      = UTP_CONNECTION_STATE_DRAINING;
     connection->close_pending              = false;
     connection->close_pto_us               = pto;
@@ -715,6 +717,7 @@ static bool utp_connection_take_pending_peer_max_stream_data(utp_connection_t* c
     if (connection == NULL || out_max_stream_data == NULL) {
         return false;
     }
+    // MAX_STREAM_DATA 可以先于首个 STREAM 到达，先按 stream_id 保存其最新最大值。
     pending = utp_connection_pending_max_stream_data_from_node(
         utp_hash_table_find(&connection->pending_peer_max_stream_data, utp_connection_hash_u32(stream_id), &stream_id,
                             utp_connection_pending_max_stream_data_matches, NULL));
@@ -782,6 +785,7 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
     utp_hash_node_init(&stream->hash_node);
     stream->connection                = connection;
     stream->connection_consumed_total = &connection->local_stream_data_consumed_total;
+    // 先完成哈希表插入，再消费提前到达的窗口，失败路径不会丢失对端通告。
     error = utp_hash_table_insert(&connection->streams, &stream->hash_node, utp_connection_hash_u32(stream_id),
                                   &stream_id, utp_connection_stream_matches, NULL);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -871,6 +875,7 @@ static utp_connection_control_slot_t* utp_connection_find_control_slot(utp_conne
     if (connection == NULL) {
         return NULL;
     }
+    // control slot 按“帧类型 + 流 ID/方向”合并，只保留具有最新语义的一份待发送状态。
     key  = ((uint64_t)frame_type << 32u) | stream_id;
     slot = utp_connection_control_slot_from_node(utp_hash_table_find(
         &connection->control_slots, utp_connection_hash_u64(key), &key, utp_connection_control_slot_matches, NULL));
@@ -903,6 +908,7 @@ static utp_connection_control_slot_t* utp_connection_find_control_slot(utp_conne
 
 static void utp_connection_control_advance_generation(utp_connection_control_slot_t* slot)
 {
+    // generation 区分同一语义槽位的不同时代，旧包 ACK/丢失不能覆盖更新后的值。
     if (slot->generation == UINT32_MAX) {
         slot->generation = 1u;
     } else {
@@ -1129,6 +1135,7 @@ static void utp_connection_update_completed_peer_streams(utp_connection_t* conne
             !utp_connection_stream_is_limit_complete(connection, stream)) {
             continue;
         }
+        // 每条对端流只归还一次额度，MAX_STREAMS 始终单调递增。
         stream->stream_limit_released = true;
         stream_type                   = utp_connection_stream_type_from_id(stream->stream_id);
         if (connection->local_max_streams[stream_type] == UINT16_MAX) {
@@ -1152,6 +1159,7 @@ static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connect
     while ((node = utp_hash_iter_next(&connection->streams, &iter)) != NULL) {
         utp_stream_t* stream = utp_connection_stream_from_node(node);
 
+        // 流即使逻辑关闭，只要 PacketOut 或可靠 control 仍引用它，就不能释放对象。
         if (stream == NULL || stream->recv_buffered_bytes != 0u || stream->send_buffer_length != 0u ||
             stream->send_in_flight_bytes != 0u ||
             utp_connection_stream_has_packet_reference(connection, stream->stream_id) ||
@@ -1334,6 +1342,7 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
     if (packet_capacity < UTP_PACKET_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
+    // ACK 是瞬态前缀，可靠 control 按优先级填充剩余 MTU；重传时会自动剔除旧 ACK。
     if (include_ack) {
         error = utp_connection_encode_ack_payload(connection, now_us, ack_payload, sizeof(ack_payload), &ack_length);
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -1488,6 +1497,7 @@ static utp_stream_t* utp_connection_select_stream(utp_connection_t* connection)
     if (connection == NULL) {
         return NULL;
     }
+    // DRR 使用游标和 deficit 控制份额；Strict 使用等待轮次提升防止低优先级永久饥饿。
     if (connection->stream_scheduler_mode == 1u) {
         utp_hash_iter_init(&iter);
         while ((node = utp_hash_iter_next(&connection->streams, &iter)) != NULL) {
@@ -1602,6 +1612,7 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
     if (packet_capacity < UTP_PACKET_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
+    // 包内布局固定为 ACK、可靠 control、STREAM header、外部数据视图，数据本身不复制。
     if (include_ack) {
         error = utp_connection_encode_ack_payload(connection, now_us, ack_payload, sizeof(ack_payload), &ack_length);
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -2213,6 +2224,7 @@ utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, ui
     if (connection->state == UTP_CONNECTION_STATE_CLOSED || connection->state == UTP_CONNECTION_STATE_DRAINING) {
         return UTP_INTERNAL_ERROR_CLOSED;
     }
+    // close 是幂等屏障：首次调用后不再接受业务发送，也不重复生成新的 close。
     if (connection->state == UTP_CONNECTION_STATE_CLOSING) {
         if (connection->local_close_started) {
             return UTP_INTERNAL_ERROR_OK;
@@ -2876,7 +2888,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     if (peer_close) {
         error = utp_connection_prepare_close_packet(connection, connection->peer_close_error_code, false);
         if (error != UTP_INTERNAL_ERROR_OK) {
-            /* The peer has already terminated this connection; do not retain it indefinitely. */
+            /* 对端已终止连接，回应包构造失败时也不能无限停留在 closing。 */
             utp_connection_enter_draining(connection, now_us);
         }
     } else {

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <event2/event.h>
@@ -28,6 +29,18 @@ typedef struct public_api_probe {
     bool              last_peer_initiated;
     utp_connection_t* connected_connection;
 } public_api_probe_t;
+
+static int32_t         test_log_count;
+static utp_log_level_t test_log_level;
+static char            test_log_message[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
+
+static void            test_log_sink(utp_log_level_t level, const char* message)
+{
+    assert(message != NULL);
+    ++test_log_count;
+    test_log_level = level;
+    (void)snprintf(test_log_message, sizeof(test_log_message), "%s", message);
+}
 
 static bool test_on_new_connection(const utp_new_connection_info_t* info, void* user_data)
 {
@@ -110,16 +123,41 @@ int main(void)
     assert(options.mtu_probe_retries == 1u);
     options.event_base = event_base;
     options.context_id = 7u;
+    options.log_sink   = test_log_sink;
+    options.log_level  = UTP_LOG_LEVEL_INFO;
+    test_log_count     = 0;
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     assert(context != NULL);
+    assert(test_log_count == 1);
+    assert(test_log_level == UTP_LOG_LEVEL_INFO);
+    assert(strstr(test_log_message, "context created") != NULL);
     {
         uint16_t local_port = 0u;
 
         assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, &local_port) == UTP_STATUS_OK);
         assert(local_port != 0u);
+        assert(test_log_count == 2);
+        assert(strstr(test_log_message, "udp socket bound") != NULL);
         assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_SOCKET_OPEN);
     }
     utp_context_destroy(context);
+    assert(test_log_count == 3);
+    assert(strstr(test_log_message, "context destroy started") != NULL);
+    {
+        utp_context_options_t quiet_options = UTP_CONTEXT_OPTIONS_INIT;
+        utp_context_t*        quiet_context = NULL;
+
+        quiet_options.event_base = event_base;
+        quiet_options.context_id = 71u;
+        quiet_options.log_sink   = test_log_sink;
+        quiet_options.log_level  = UTP_LOG_LEVEL_WARNING;
+        test_log_count           = 0;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
+        utp_context_destroy(quiet_context);
+        assert(test_log_count == 0);
+        quiet_options.log_level = (utp_log_level_t)99;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+    }
 #if defined(__APPLE__)
     if (if_nametoindex("lo0") != 0u) {
         utp_context_options_t interface_options = UTP_CONTEXT_OPTIONS_INIT;

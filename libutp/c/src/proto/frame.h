@@ -26,7 +26,7 @@ extern "C" {
 #define UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL   1u
 
 /*
- * Frame wire formats. All multi-byte fields are encoded in network byte order.
+ * 帧的线格式。所有多字节整数均使用网络字节序编码，括号内数字表示字段字节数。
  *
  * STREAM:              type(1), flags(1), data_length(2), stream_id(4), offset(8), data(data_length)
  * ACK:                 type(1), additional_range_count(1), ack_delay(2), first_range_length(4),
@@ -87,22 +87,22 @@ typedef struct utp_packet_view {
     uint32_t            frame_types;
 } utp_packet_view_t;
 
-/* PATH_CHALLENGE/PATH_RESPONSE wire: type(1), data(8). */
+/* PATH_CHALLENGE/PATH_RESPONSE：type(1), data(8)。 */
 typedef struct utp_frame_path {
     uint8_t data[8];
 } utp_frame_path_t;
 
-/* VERSION wire: type(1), version(4). */
+/* VERSION：type(1), version(4)。 */
 typedef struct utp_frame_version {
     uint32_t version;
 } utp_frame_version_t;
 
-/* HANDSHAKE_DONE wire: type(1), ack_handshake_packet_number(8). */
+/* HANDSHAKE_DONE：type(1), ack_handshake_packet_number(8)。 */
 typedef struct utp_frame_handshake_done {
     uint64_t ack_handshake_packet_number;
 } utp_frame_handshake_done_t;
 
-/* STREAM wire: type(1), flags(1), data_length(2), stream_id(4), offset(8), data[data_length]. */
+/* STREAM：type(1), flags(1), data_length(2), stream_id(4), offset(8), data[data_length]。 */
 typedef struct utp_frame_stream {
     uint8_t        flags;
     uint32_t       stream_id;
@@ -111,43 +111,43 @@ typedef struct utp_frame_stream {
     uint16_t       data_length;
 } utp_frame_stream_t;
 
-/* CONNECTION_CLOSE wire: type(1), error_code(2), reason_length(2), reason[reason_length]. */
+/* CONNECTION_CLOSE：type(1), error_code(2), reason_length(2), reason[reason_length]。 */
 typedef struct utp_frame_connection_close {
     uint16_t       error_code;
     const uint8_t* reason;
     uint16_t       reason_length;
 } utp_frame_connection_close_t;
 
-/* RESET_STREAM wire: type(1), error_code(2), stream_id(4), final_size(8). */
+/* RESET_STREAM：type(1), error_code(2), stream_id(4), final_size(8)。 */
 typedef struct utp_frame_reset_stream {
     uint16_t error_code;
     uint32_t stream_id;
     uint64_t final_size;
 } utp_frame_reset_stream_t;
 
-/* STREAMS_BLOCKED/MAX_STREAMS wire: type(1), stream_type(1), stream_limit(2). */
+/* STREAMS_BLOCKED/MAX_STREAMS：type(1), stream_type(1), stream_limit(2)。 */
 typedef struct utp_frame_streams_limit {
     uint16_t stream_limit;
     uint8_t  stream_type;
 } utp_frame_streams_limit_t;
 
-/* MAX_DATA wire: type(1), maximum_data(8). */
+/* MAX_DATA：type(1), maximum_data(8)。 */
 typedef struct utp_frame_max_data {
     uint64_t maximum_data;
 } utp_frame_max_data_t;
 
-/* MAX_STREAM_DATA wire: type(1), stream_id(4), maximum_stream_data(8). */
+/* MAX_STREAM_DATA：type(1), stream_id(4), maximum_stream_data(8)。 */
 typedef struct utp_frame_max_stream_data {
     uint32_t stream_id;
     uint64_t maximum_stream_data;
 } utp_frame_max_stream_data_t;
 
-/* DATA_BLOCKED wire: type(1), data_limit(8). */
+/* DATA_BLOCKED：type(1), data_limit(8)。 */
 typedef struct utp_frame_data_blocked {
     uint64_t data_limit;
 } utp_frame_data_blocked_t;
 
-/* STREAM_DATA_BLOCKED wire: type(1), stream_id(4), stream_data_limit(8). */
+/* STREAM_DATA_BLOCKED：type(1), stream_id(4), stream_data_limit(8)。 */
 typedef struct utp_frame_stream_data_blocked {
     uint32_t stream_id;
     uint64_t stream_data_limit;

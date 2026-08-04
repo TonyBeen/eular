@@ -35,7 +35,7 @@ typedef struct utp_event {
     bool                  timer;
 } utp_event_t;
 
-// Borrows native_base, logger, and tag. The caller retains event_base creation, dispatch, and destruction ownership.
+// 借用 native_base、logger 和 tag；event_base 的创建、调度与销毁仍由调用方负责。
 utp_internal_error_t utp_event_loop_init(utp_event_loop_t* loop, struct event_base* native_base,
                                          const utp_logger_t* logger, const utp_log_tag_t* tag);
 void                 utp_event_loop_close(utp_event_loop_t* loop);

@@ -47,6 +47,7 @@ struct utp_context {
     utp_context_connection_slot_t connections[UTP_CONTEXT_MAX_CONNECTIONS];
     utp_context_pending_slot_t    pending_incoming[UTP_CONTEXT_MAX_PENDING_INCOMING];
     uint32_t                      next_cid;
+    utp_log_level_t               log_level;
     utp_stream_scheduler_mode_t   stream_scheduler_mode;
     utp_mtu_config_t              mtu_config;
     utp_on_connected_fn           on_connected;

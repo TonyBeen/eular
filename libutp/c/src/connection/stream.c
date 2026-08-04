@@ -26,12 +26,14 @@ static bool utp_stream_is_local_initiated(const utp_stream_t* stream)
 
 bool utp_stream_local_can_send(const utp_stream_t* stream)
 {
+    // 双向流两端均可发送；单向流只有发起方拥有写方向。
     return stream != NULL && stream->used &&
            ((stream->stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u || utp_stream_is_local_initiated(stream));
 }
 
 bool utp_stream_local_can_receive(const utp_stream_t* stream)
 {
+    // 单向流的非发起方只拥有读方向。
     return stream != NULL && stream->used &&
            ((stream->stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u || !utp_stream_is_local_initiated(stream));
 }
@@ -55,6 +57,7 @@ static void utp_stream_copy_into_send_buffer(utp_stream_t* stream, const uint8_t
 {
     size_t offset = stream->send_buffer_length;
 
+    // 发送缓冲是环形区域，最多拆成尾部和头部两个连续段。
     while (length != 0u) {
         size_t index   = utp_stream_send_index(stream, offset);
         size_t segment = UTP_STREAM_SEND_BUFFER_CAPACITY - index;
@@ -130,6 +133,7 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
     if (stream == NULL || fragment == NULL || fragment->accounted) {
         return stream != NULL && fragment != NULL;
     }
+    // PacketIn 被 fragment 持有期间不能回池，容量而非有效载荷才是真实内存成本。
     new_cost = utp_stream_recv_fragment_memory_cost(fragment);
     if (stream_memory_limit == 0u) {
         stream_memory_limit = 1u;
@@ -387,6 +391,7 @@ utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_co
     if (from_peer && !utp_stream_local_can_receive(stream)) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    // 当前协议将 RESET_STREAM 视为整条流终止，同时清理读写两侧的缓冲状态。
     stream->reset_error_code     = error_code;
     stream->reset_by_peer        = from_peer;
     stream->send_buffer_length   = 0u;
@@ -632,6 +637,7 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
     if (capacity < UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
+    // 只编码 STREAM header，payload 直接引用环形发送缓冲，交给 PacketOut 的 slice 发送。
     data          = utp_stream_unsent_data(stream, &contiguous_length);
     data_length   = contiguous_length;
     unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
@@ -725,6 +731,7 @@ utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint
     if (data_size == 0u) {
         return UTP_INTERNAL_ERROR_OK;
     }
+    // ACK 可能乱序到达，先合并区间，仅释放从 send_buffer_offset 开始的连续前缀。
     error = utp_stream_insert_ack_range(stream, stream_offset, end);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -775,6 +782,7 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
     if (original_end < stream->recv_offset) {
         return UTP_INTERNAL_ERROR_OK;
     }
+    // 仅为尚未接收的空洞创建 fragment，重复和重叠字节继续引用原 PacketIn，不复制数据。
     start      = frame->offset;
     data_index = 0u;
     if (start < stream->recv_offset) {
@@ -851,6 +859,7 @@ utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream,
     if (!utp_stream_local_can_receive(stream)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
+    // read view 只暴露当前连续前缀，commit 前 PacketIn 会一直保持引用。
     view.offset = stream->recv_offset;
     if (stream->recv_fragment_count != 0u &&
         utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset) {

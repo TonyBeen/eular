@@ -169,6 +169,13 @@ static void test_internal_error_and_log_tag(void)
                    "[context 1][connection scid 21313][send_control] udp send failed: status=would_block, errno=%d",
                    EAGAIN);
     assert(strcmp(g_log_capture.message, expected_message) == 0);
+    assert(utp_log_tag_init(&context_tag, "context 1", 9u) == UTP_INTERNAL_ERROR_OK);
+    utp_internal_log(&logger, &context_tag, UTP_LOG_LEVEL_INFO, "connection established");
+    assert(g_log_capture.calls == 2u);
+    assert(g_log_capture.level == UTP_LOG_LEVEL_INFO);
+    assert(strcmp(g_log_capture.message, "[context 1] connection established") == 0);
+    utp_internal_log(&logger, &context_tag, (utp_log_level_t)-1, "invalid level");
+    assert(g_log_capture.calls == 2u);
 }
 
 static void test_buffer(void)
