@@ -8,30 +8,32 @@
 #include "mtu/mtu.h"
 #include "util/allocator.h"
 
+// 协议帧调度策略
 #define UTP_CONNECTION_RETRANSMITTABLE_FRAMES                                      \
     ((UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX) - 1u) &                                    \
      ~(UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) | UTP_FRAME_BIT(UTP_FRAME_TYPE_PADDING) | \
        UTP_FRAME_BIT(UTP_FRAME_TYPE_PING)))
-#define UTP_CONNECTION_ACK_ELICITING_THRESHOLD        2u
-#define UTP_CONNECTION_ACK_REORDER_THRESHOLD          1u
-#define UTP_CONNECTION_MAX_ACK_DELAY_MS               25u
-#define UTP_CONNECTION_DEFAULT_FLOW_WINDOW            (UTP_STREAM_DEFAULT_FLOW_WINDOW * 4u)
-#define UTP_CONNECTION_FLOW_UPDATE_DIVISOR            10u
-#define UTP_CONNECTION_FLOW_UPDATE_MIN_INTERVAL_US    UINT64_C(20000)
-#define UTP_CONNECTION_FLOW_BLOCKED_MIN_INTERVAL_US   UINT64_C(50000)
-#define UTP_CONNECTION_MAX_DATA_FRAME_SIZE            9u
-#define UTP_CONNECTION_MAX_STREAM_DATA_FRAME_SIZE     13u
-#define UTP_CONNECTION_DATA_BLOCKED_FRAME_SIZE        9u
-#define UTP_CONNECTION_STREAM_DATA_BLOCKED_FRAME_SIZE 13u
-#define UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE       UTP_FRAME_STREAMS_LIMIT_SIZE
-#define UTP_CONNECTION_RESET_STREAM_FRAME_SIZE        15u
-#define UTP_CONNECTION_CLOSE_PTO_DEFAULT_US           UINT64_C(333333)    // 默认 333 毫秒
-#define UTP_CONNECTION_CLOSE_PTO_MIN_US               UINT64_C(10000)     // 最小 10 毫秒
-#define UTP_CONNECTION_CLOSE_PTO_MAX_US               UINT64_C(60000000)  // 最大 60 秒
-#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US      UINT64_C(1500000)  // 路径验证期间等待 PATH_RESPONSE 的超时时间(us)
-#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES     3u                 // 路径验证期间允许的最大重试次数
-#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT \
-    (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)             // 路径验证期间允许发送的最大字节数
+
+// ACK 与流量控制策略
+#define UTP_CONNECTION_ACK_ELICITING_THRESHOLD      2u
+#define UTP_CONNECTION_ACK_REORDER_THRESHOLD        1u
+#define UTP_CONNECTION_MAX_ACK_DELAY_MS             25u
+#define UTP_CONNECTION_DEFAULT_FLOW_WINDOW          (UTP_STREAM_DEFAULT_FLOW_WINDOW * 4u)
+#define UTP_CONNECTION_FLOW_UPDATE_DIVISOR          10u
+#define UTP_CONNECTION_FLOW_UPDATE_MIN_INTERVAL_US  UINT64_C(20000)
+#define UTP_CONNECTION_FLOW_BLOCKED_MIN_INTERVAL_US UINT64_C(50000)
+
+// 关闭状态机参数
+#define UTP_CONNECTION_CLOSE_PTO_DEFAULT_US UINT64_C(333333)    // 默认 333 毫秒
+#define UTP_CONNECTION_CLOSE_PTO_MIN_US     UINT64_C(10000)     // 最小 10 毫秒
+#define UTP_CONNECTION_CLOSE_PTO_MAX_US     UINT64_C(60000000)  // 最大 60 秒
+
+// 路径验证参数
+#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US    UINT64_C(1500000) // 路径验证期间等待 PATH_RESPONSE 的超时时间(us)
+#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES   3u // 路径验证期间允许的最大重试次数
+#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT  (UINT64_C(3) * UTP_PACKET_MTU_FLOOR) // 路径验证期间允许发送的最大字节数
+
+// 本端默认流额度
 #define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 默认双向流可创建数量
 #define UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI  32u  // 默认单向流可创建数量
 
@@ -39,6 +41,7 @@ void        utp_connection_on_packet_abandoned(utp_connection_t* connection, con
 static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connection);
 static void utp_connection_update_completed_peer_streams(utp_connection_t* connection);
 
+/* 收包基础校验与明文握手保护。 */
 static bool utp_connection_packet_type_is_valid(uint8_t type)
 {
     return type >= UTP_PACKET_TYPE_INITIAL && type <= UTP_PACKET_TYPE_CONNECT;
@@ -129,6 +132,7 @@ static utp_internal_error_t utp_connection_find_handshake_done(const utp_packet_
     return UTP_INTERNAL_ERROR_OK;
 }
 
+/* 发包编码、关闭状态机与发送资格判定。 */
 static utp_internal_error_t utp_connection_encode_header(utp_connection_t* connection, utp_packet_out_t* packet,
                                                          uint8_t packet_type)
 {
@@ -360,6 +364,7 @@ static void utp_connection_enter_draining(utp_connection_t* connection, uint64_t
     utp_send_control_set_connected(&connection->send_control, false);
 }
 
+/* 路径验证。 */
 static bool utp_connection_candidate_can_queue(const utp_connection_t* connection, size_t packet_length)
 {
     uint64_t limit;
@@ -522,6 +527,7 @@ static utp_internal_error_t utp_connection_handle_path_response(utp_connection_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
+/* 已发送包确认、丢失与控制帧生命周期。 */
 static void utp_connection_release_queue(utp_connection_t* connection, struct utp_packet_out_tailq* packets)
 {
     utp_packet_out_t* packet;
@@ -708,6 +714,7 @@ static bool utp_connection_has_pending_controls(const utp_connection_t* connecti
     return false;
 }
 
+/* 流、可靠控制帧与哈希索引管理。 */
 static uint32_t utp_connection_local_stream_initiator_bit(const utp_connection_t* connection)
 {
     return connection->role == UTP_CONNECTION_ROLE_ACTIVE ? UTP_STREAM_CLIENT_INITIATED : UTP_STREAM_SERVER_INITIATED;
@@ -1258,6 +1265,7 @@ static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connect
     }
 }
 
+/* 流量控制更新与可靠控制帧合包。 */
 static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connection_t* connection, uint64_t now_us,
                                                                       bool* queued)
 {
@@ -1332,43 +1340,43 @@ static utp_internal_error_t utp_connection_encode_control_slot(const utp_connect
     case UTP_FRAME_TYPE_RESET_STREAM: {
         const utp_frame_reset_stream_t frame = {slot->error_code, slot->stream_id, slot->final_size};
 
-        *out_length = UTP_CONNECTION_RESET_STREAM_FRAME_SIZE;
+        *out_length = UTP_FRAME_RESET_STREAM_SIZE;
         return utp_frame_reset_stream_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_MAX_DATA: {
         const utp_frame_max_data_t frame = {slot->value};
 
-        *out_length = UTP_CONNECTION_MAX_DATA_FRAME_SIZE;
+        *out_length = UTP_FRAME_MAX_DATA_SIZE;
         return utp_frame_max_data_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_MAX_STREAM_DATA: {
         const utp_frame_max_stream_data_t frame = {slot->stream_id, slot->value};
 
-        *out_length = UTP_CONNECTION_MAX_STREAM_DATA_FRAME_SIZE;
+        *out_length = UTP_FRAME_MAX_STREAM_DATA_SIZE;
         return utp_frame_max_stream_data_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_MAX_STREAMS: {
         const utp_frame_streams_limit_t frame = {(uint16_t)slot->value, (uint8_t)slot->stream_id};
 
-        *out_length = UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE;
+        *out_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
         return utp_frame_max_streams_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_DATA_BLOCKED: {
         const utp_frame_data_blocked_t frame = {slot->value};
 
-        *out_length = UTP_CONNECTION_DATA_BLOCKED_FRAME_SIZE;
+        *out_length = UTP_FRAME_DATA_BLOCKED_SIZE;
         return utp_frame_data_blocked_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_STREAM_DATA_BLOCKED: {
         const utp_frame_stream_data_blocked_t frame = {slot->stream_id, slot->value};
 
-        *out_length = UTP_CONNECTION_STREAM_DATA_BLOCKED_FRAME_SIZE;
+        *out_length = UTP_FRAME_STREAM_DATA_BLOCKED_SIZE;
         return utp_frame_stream_data_blocked_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_STREAMS_BLOCKED: {
         const utp_frame_streams_limit_t frame = {(uint16_t)slot->value, (uint8_t)slot->stream_id};
 
-        *out_length = UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE;
+        *out_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
         return utp_frame_streams_blocked_encode(buffer, capacity, &frame);
     }
     default:
@@ -1447,19 +1455,19 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
             }
             switch (slot->frame_type) {
             case UTP_FRAME_TYPE_RESET_STREAM:
-                frame_length = UTP_CONNECTION_RESET_STREAM_FRAME_SIZE;
+                frame_length = UTP_FRAME_RESET_STREAM_SIZE;
                 break;
             case UTP_FRAME_TYPE_MAX_DATA:
             case UTP_FRAME_TYPE_DATA_BLOCKED:
-                frame_length = UTP_CONNECTION_MAX_DATA_FRAME_SIZE;
+                frame_length = UTP_FRAME_MAX_DATA_SIZE;
                 break;
             case UTP_FRAME_TYPE_MAX_STREAM_DATA:
             case UTP_FRAME_TYPE_STREAM_DATA_BLOCKED:
-                frame_length = UTP_CONNECTION_MAX_STREAM_DATA_FRAME_SIZE;
+                frame_length = UTP_FRAME_MAX_STREAM_DATA_SIZE;
                 break;
             case UTP_FRAME_TYPE_MAX_STREAMS:
             case UTP_FRAME_TYPE_STREAMS_BLOCKED:
-                frame_length = UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE;
+                frame_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
                 break;
             default:
                 return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -1552,6 +1560,7 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
+/* 流调度与 STREAM/control/ACK 合包。 */
 static uint8_t utp_connection_stream_effective_priority(const utp_stream_t* stream)
 {
     uint8_t boost;
@@ -1718,19 +1727,19 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                 }
                 switch (slot->frame_type) {
                 case UTP_FRAME_TYPE_RESET_STREAM:
-                    frame_length = UTP_CONNECTION_RESET_STREAM_FRAME_SIZE;
+                    frame_length = UTP_FRAME_RESET_STREAM_SIZE;
                     break;
                 case UTP_FRAME_TYPE_MAX_DATA:
                 case UTP_FRAME_TYPE_DATA_BLOCKED:
-                    frame_length = UTP_CONNECTION_MAX_DATA_FRAME_SIZE;
+                    frame_length = UTP_FRAME_MAX_DATA_SIZE;
                     break;
                 case UTP_FRAME_TYPE_MAX_STREAM_DATA:
                 case UTP_FRAME_TYPE_STREAM_DATA_BLOCKED:
-                    frame_length = UTP_CONNECTION_MAX_STREAM_DATA_FRAME_SIZE;
+                    frame_length = UTP_FRAME_MAX_STREAM_DATA_SIZE;
                     break;
                 case UTP_FRAME_TYPE_MAX_STREAMS:
                 case UTP_FRAME_TYPE_STREAMS_BLOCKED:
-                    frame_length = UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE;
+                    frame_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
                     break;
                 default:
                     return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -1845,18 +1854,18 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                 for (prior_index = 0u; prior_index < control_index; ++prior_index) {
                     switch (selected[prior_index]->frame_type) {
                     case UTP_FRAME_TYPE_RESET_STREAM:
-                        offset += UTP_CONNECTION_RESET_STREAM_FRAME_SIZE;
+                        offset += UTP_FRAME_RESET_STREAM_SIZE;
                         break;
                     case UTP_FRAME_TYPE_MAX_DATA:
                     case UTP_FRAME_TYPE_DATA_BLOCKED:
-                        offset += UTP_CONNECTION_MAX_DATA_FRAME_SIZE;
+                        offset += UTP_FRAME_MAX_DATA_SIZE;
                         break;
                     case UTP_FRAME_TYPE_MAX_STREAMS:
                     case UTP_FRAME_TYPE_STREAMS_BLOCKED:
-                        offset += UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE;
+                        offset += UTP_FRAME_STREAMS_LIMIT_SIZE;
                         break;
                     default:
-                        offset += UTP_CONNECTION_MAX_STREAM_DATA_FRAME_SIZE;
+                        offset += UTP_FRAME_MAX_STREAM_DATA_SIZE;
                         break;
                     }
                 }

@@ -3,17 +3,10 @@
 #include "proto/ack.h"
 #include "proto/wire.h"
 
-#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE 4u
-#define UTP_FRAME_ACK_FREQUENCY_SIZE        7u
-#define UTP_FRAME_TRANSPORT_PARAMS_SIZE     38u
-#define UTP_FRAME_HANDSHAKE_DELAY_SIZE      5u
-#define UTP_FRAME_MAX_DATA_SIZE             9u
-#define UTP_FRAME_MAX_STREAM_DATA_SIZE      13u
-#define UTP_FRAME_DATA_BLOCKED_SIZE         9u
-#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE  13u
-
+/** @brief 从网络字节序缓冲区读取无对齐要求的 16 位整数。 */
 static uint16_t utp_frame_read_u16(const uint8_t* data) { return (uint16_t)(((uint16_t)data[0] << 8u) | data[1]); }
 
+/** @brief 确认输入缓冲区至少容纳指定长度的帧或固定头。 */
 static utp_internal_error_t utp_frame_require_size(size_t available, size_t required)
 {
     return available < required ? UTP_INTERNAL_ERROR_OVERFLOW : UTP_INTERNAL_ERROR_OK;

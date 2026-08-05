@@ -111,19 +111,26 @@ typedef struct utp_connection_error_info {
 typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const utp_connection_error_info_t* info,
                                            void* user_data);
 
-// 返回当前链接的 C 库语义版本。
+/** @brief 返回当前链接的 C 库语义版本字符串。 */
 const char*  utp_version(void);
+/** @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。 */
 utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
-// 同步销毁 Context 管理的全部连接和流。已建立连接会直接尽力发送一次 CONNECTION_CLOSE，
-// 但不会等待 ACK 或 draining 超时。
+/** @brief 同步销毁 Context 管理的连接和流；已建立连接仅尽力发送一次 CONNECTION_CLOSE。 */
 void         utp_context_destroy(utp_context_t* context);
+/** @brief 绑定 UDP 地址及可选网卡，空 @p ifname 表示不绑定特定网卡。 */
 utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,
                               uint16_t* out_port);
+/** @brief 设置连接建立成功回调，回调内获得的连接由 Context 持有。 */
 void         utp_context_set_on_connected(utp_context_t* context, utp_on_connected_fn callback, void* user_data);
+/** @brief 设置主动建连失败回调。 */
 void utp_context_set_on_connect_error(utp_context_t* context, utp_on_connect_error_fn callback, void* user_data);
+/** @brief 设置被动建连决策回调，返回 false 会拒绝该连接。 */
 void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connection_fn callback, void* user_data);
+/** @brief 设置被动关闭或本地致命错误回调，关闭原因仅在回调期间有效。 */
 void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
+/** @brief 发起异步主动连接，建连结果通过回调报告。 */
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
+/** @brief 接受一个已通过 on_new_connection 回调的 pending 被动连接。 */
 utp_status_t utp_context_accept(utp_context_t* context);
 
 #ifdef __cplusplus

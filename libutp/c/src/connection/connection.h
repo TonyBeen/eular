@@ -138,66 +138,97 @@ typedef struct utp_connection {
     utp_connection_path_state_t path_state;
 } utp_connection_t;
 
+/** @brief 初始化连接运行状态及其有界发送、接收资源。 */
 utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_connection_role_t role, uint32_t local_cid,
                                          uint32_t peer_cid, const utp_address_t* peer, size_t packet_limit,
                                          uint16_t packet_capacity);
+/** @brief 释放连接持有的流、包、加密与计时资源。 */
 void                 utp_connection_cleanup(utp_connection_t* connection);
+/** @brief 应用 Context 的 MTU 配置，并重置连接级 MTU 运行状态。 */
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
+/** @brief 为主动连接生成密钥对并选择握手加密算法。 */
 utp_internal_error_t utp_connection_configure_crypto(utp_connection_t* connection, uint8_t crypto_type);
+/** @brief 将本端临时公钥编码为 CRYPTO 帧。 */
 utp_internal_error_t utp_connection_encode_crypto(const utp_connection_t* connection, uint8_t* buffer, size_t capacity);
+/** @brief 接管 pending 阶段派生的双向 AEAD 上下文，调用后清空 @p tx 和 @p rx。 */
 utp_internal_error_t utp_connection_adopt_crypto(utp_connection_t* connection, uint8_t crypto_type,
                                                  utp_crypto_aead_t* tx, utp_crypto_aead_t* rx);
+/** @brief 将 PacketOut 展平为可发送线上字节；加密包会在此执行 AEAD 封装。 */
 utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* connection,
                                                        const utp_packet_out_t* packet, uint8_t* buffer, size_t capacity,
                                                        size_t* out_length);
 
-// 构造完整明文包并放入有界发送队列。
+/** @brief 构造完整明文包并放入有界发送队列。 */
 utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
                                                  const uint8_t* payload, size_t payload_length, bool track_on_send);
+/** @brief 排入单独成包的 CONNECTION_CLOSE，并关闭本端普通发送。 */
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code);
-// 为 Context 同步销毁重建专用 CONNECTION_CLOSE；调用方直接写 UDP，随后跳过普通发送队列和关闭定时器释放连接。
+/** @brief 为 Context 同步销毁构造专用 CONNECTION_CLOSE，不进入发送队列。 */
 utp_internal_error_t utp_connection_prepare_destroy_close(utp_connection_t* connection);
-// 返回可发送的排队包，或分配了新包号的重传包。
+/** @brief 返回当前可发送包，必要时为重传包分配新包号。 */
 utp_packet_out_t*    utp_connection_next_packet_to_send(utp_connection_t* connection);
+/** @brief 按给定时间和拥塞、pacing 状态选择可发送包。 */
 utp_packet_out_t*    utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us);
-// 标记 PacketOut 已成功写入 UDP；无需跟踪的包会在此归还对象池。
+/** @brief 标记 PacketOut 已成功写入 UDP；无需跟踪的包会在此归还对象池。 */
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
-// 处理 PacketOut 写入 UDP 前发生的发送错误。
+/** @brief 处理 UDP 发送失败，决定重试、MTU 回退或本地关闭。 */
 void                 utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
                                                          utp_internal_error_t error, uint64_t now_us);
+/** @brief 判断给定 PacketOut 是否为本连接的 CONNECTION_CLOSE。 */
 bool                 utp_connection_is_close_packet(const utp_connection_t* connection, const utp_packet_out_t* packet);
-// 释放从未写入 UDP 的包，并恢复其可靠 control 和流发送状态。
+/** @brief 释放从未写入 UDP 的包，并恢复其可靠 control 和流发送状态。 */
 void                 utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
-// 校验来源地址与 CID，处理 ACK 和生命周期帧，并记录收到的包号。
+/** @brief 校验来源地址与 CID，解密并处理普通接收包。 */
 utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer,
                                                        uint64_t now_us);
+/** @brief 处理 PacketIn 承载的接收包，使流重组可借用包内数据。 */
 utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* connection, utp_packet_in_t* packet,
                                                           const utp_address_t* peer, uint64_t now_us);
+/** @brief 处理已经在 pending 阶段完成解密的 PacketIn。 */
 utp_internal_error_t utp_connection_on_plaintext_packet_in_received(utp_connection_t* connection,
                                                                     utp_packet_in_t* packet, size_t wire_packet_length,
                                                                     const utp_address_t* peer, uint64_t now_us);
+/** @brief 将当前 ACK 接收历史编码并排入发送队列。 */
 utp_internal_error_t utp_connection_queue_ack(utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回等待发送 ACK 的接收包数量。 */
 uint32_t             utp_connection_ack_pending_count(const utp_connection_t* connection);
+/** @brief 返回 ACK 调度器的下一截止时间，未安排时为零。 */
 uint64_t             utp_connection_ack_deadline(const utp_connection_t* connection);
+/** @brief 根据当前发送账本确保已设置重传定时器。 */
 utp_internal_error_t utp_connection_ensure_retransmission_deadline(utp_connection_t* connection, uint64_t now_us);
+/** @brief 处理重传定时器到期，检测丢失并重新排队可重传数据。 */
 utp_internal_error_t utp_connection_on_retransmission_timeout(utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回发送控制模块的重传截止时间，未安排时为零。 */
 uint64_t             utp_connection_retransmission_deadline(const utp_connection_t* connection);
+/** @brief 返回本端关闭等待截止时间，未关闭时为零。 */
 uint64_t             utp_connection_close_deadline(const utp_connection_t* connection);
+/** @brief 返回保活探测截止时间，未启用时为零。 */
 uint64_t             utp_connection_keepalive_deadline(const utp_connection_t* connection);
+/** @brief 处理保活超时并排队 PING，连续失败时进入 draining。 */
 utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回 MTU 探测的下一截止时间，未安排时为零。 */
 uint64_t             utp_connection_mtu_deadline(const utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回 pacing 模块允许下次发送的时间。 */
 uint64_t             utp_connection_pacing_deadline(const utp_connection_t* connection);
+/** @brief 处理 MTU 探测定时器并按状态排队探测包。 */
 utp_internal_error_t utp_connection_on_mtu_timeout(utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回候选路径验证截止时间，未验证时为零。 */
 uint64_t             utp_connection_path_validation_deadline(const utp_connection_t* connection);
+/** @brief 处理 PATH_CHALLENGE 超时，重试或回退到原路径。 */
 utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t* connection, uint64_t now_us);
+/** @brief 设置流调度模式，支持 Strict 和 DRR。 */
 utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode);
+/** @brief 创建本端发起流，并返回其唯一 stream_id。 */
 utp_internal_error_t utp_connection_create_stream_internal(utp_connection_t* connection, bool bidirectional,
                                                            uint32_t* out_stream_id);
+/** @brief 按 stream_id 查找已存在流，不创建对端流。 */
 utp_stream_t*        utp_connection_find_stream_internal(utp_connection_t* connection, uint32_t stream_id);
 
+/** @brief 返回当前连接状态；空指针视为 CLOSED。 */
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);
+/** @brief 判断连接是否处于可读写的 CONNECTED 状态。 */
 bool                   utp_connection_is_connected(const utp_connection_t* connection);
 
 #ifdef __cplusplus

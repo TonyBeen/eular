@@ -11,7 +11,9 @@
 extern "C" {
 #endif
 
-#define UTP_FRAME_BIT(type)                    (UINT32_C(1) << (type))
+#define UTP_FRAME_BIT(type) (UINT32_C(1) << (type))
+
+/* 固定长度帧及可变长度帧固定头部的线上尺寸。 */
 #define UTP_FRAME_PATH_SIZE                    9u
 #define UTP_FRAME_VERSION_SIZE                 5u
 #define UTP_FRAME_HANDSHAKE_DONE_SIZE          9u
@@ -21,6 +23,14 @@ extern "C" {
 #define UTP_FRAME_RESET_STREAM_SIZE            15u
 #define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
 #define UTP_FRAME_CRYPTO_SIZE                  35u
+#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    4u
+#define UTP_FRAME_ACK_FREQUENCY_SIZE           7u
+#define UTP_FRAME_TRANSPORT_PARAMS_SIZE        38u
+#define UTP_FRAME_HANDSHAKE_DELAY_SIZE         5u
+#define UTP_FRAME_MAX_DATA_SIZE                9u
+#define UTP_FRAME_MAX_STREAM_DATA_SIZE         13u
+#define UTP_FRAME_DATA_BLOCKED_SIZE            9u
+#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE     13u
 #define UTP_STREAM_FLAG_NONE                   0x00u
 #define UTP_STREAM_FLAG_FIN                    0x01u
 #define UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL    0u
@@ -162,58 +172,91 @@ typedef struct utp_frame_stream_data_blocked {
     uint64_t stream_data_limit;
 } utp_frame_stream_data_blocked_t;
 
+/** @brief 测量首个帧的完整线上长度与类型，不修改输入缓冲区。 */
 utp_internal_error_t utp_frame_measure(const uint8_t* frame, size_t available, uint8_t* frame_type,
                                        size_t* frame_length);
+/** @brief 扫描 payload 中的所有帧并返回帧类型位图。 */
 utp_internal_error_t utp_frame_scan(const uint8_t* payload, size_t payload_length, uint32_t* frame_types);
+/** @brief 解析固定包头和 payload 边界，构造零拷贝包视图。 */
 utp_internal_error_t utp_packet_view_decode(utp_packet_view_t* view, const uint8_t* packet, size_t packet_length);
+/** @brief 从包视图当前位置读取下一帧，并推进 @p offset。 */
 utp_internal_error_t utp_packet_view_next_frame(const utp_packet_view_t* view, size_t* offset, uint8_t* frame_type,
                                                 const uint8_t** frame_data, size_t* frame_length);
+/** @brief 编码 PATH_CHALLENGE 或 PATH_RESPONSE 帧。 */
 utp_internal_error_t utp_frame_path_encode(uint8_t* buffer, size_t capacity, uint8_t type,
                                            const utp_frame_path_t* path);
+/** @brief 解码并校验指定类型的路径验证帧。 */
 utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t* buffer, size_t length,
                                            uint8_t expected_type);
+/** @brief 编码明文握手阶段携带的 CRYPTO 帧。 */
 utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, const utp_frame_crypto_t* crypto);
+/** @brief 解码并校验 CRYPTO 帧的保留字段与算法类型。 */
 utp_internal_error_t utp_frame_crypto_decode(utp_frame_crypto_t* crypto, const uint8_t* buffer, size_t length);
+/** @brief 编码协议版本协商帧。 */
 utp_internal_error_t utp_frame_version_encode(uint8_t* buffer, size_t capacity, const utp_frame_version_t* version);
+/** @brief 解码协议版本协商帧。 */
 utp_internal_error_t utp_frame_version_decode(utp_frame_version_t* version, const uint8_t* buffer, size_t length);
+/** @brief 编码确认服务端 Handshake 包号的 HANDSHAKE_DONE 帧。 */
 utp_internal_error_t utp_frame_handshake_done_encode(uint8_t* buffer, size_t capacity,
                                                      const utp_frame_handshake_done_t* done);
+/** @brief 解码 HANDSHAKE_DONE 帧。 */
 utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t* done, const uint8_t* buffer,
                                                      size_t length);
+/** @brief 编码完整 STREAM 帧，包括数据副本。 */
 utp_internal_error_t utp_frame_stream_encode(uint8_t* buffer, size_t capacity, const utp_frame_stream_t* stream);
+/** @brief 仅编码 STREAM 固定头，用于零拷贝发送数据切片。 */
 utp_internal_error_t utp_frame_stream_header_encode(uint8_t* buffer, size_t capacity, uint8_t flags, uint32_t stream_id,
                                                     uint64_t offset, uint16_t data_length);
+/** @brief 解码 STREAM 帧；返回的数据指针借用输入缓冲区。 */
 utp_internal_error_t utp_frame_stream_decode(utp_frame_stream_t* stream, const uint8_t* buffer, size_t length);
+/** @brief 编码指定长度的零填充 PADDING 帧。 */
 utp_internal_error_t utp_frame_padding_encode(uint8_t* buffer, size_t capacity, uint16_t padding_length);
+/** @brief 解码 PADDING 帧并验证所有填充字节为零。 */
 utp_internal_error_t utp_frame_padding_decode(uint16_t* padding_length, const uint8_t* buffer, size_t length);
+/** @brief 编码 CONNECTION_CLOSE 帧及可选关闭原因。 */
 utp_internal_error_t utp_frame_connection_close_encode(uint8_t* buffer, size_t capacity,
                                                        const utp_frame_connection_close_t* close);
+/** @brief 解码 CONNECTION_CLOSE 帧；原因指针借用输入缓冲区。 */
 utp_internal_error_t utp_frame_connection_close_decode(utp_frame_connection_close_t* close, const uint8_t* buffer,
                                                        size_t length);
+/** @brief 编码 RESET_STREAM 帧。 */
 utp_internal_error_t utp_frame_reset_stream_encode(uint8_t* buffer, size_t capacity,
                                                    const utp_frame_reset_stream_t* reset);
+/** @brief 解码 RESET_STREAM 帧。 */
 utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* reset, const uint8_t* buffer,
                                                    size_t length);
+/** @brief 编码 STREAMS_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_streams_blocked_encode(uint8_t* buffer, size_t capacity,
                                                       const utp_frame_streams_limit_t* blocked);
+/** @brief 解码 STREAMS_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_streams_blocked_decode(utp_frame_streams_limit_t* blocked, const uint8_t* buffer,
                                                       size_t length);
+/** @brief 编码 MAX_STREAMS 帧。 */
 utp_internal_error_t utp_frame_max_streams_encode(uint8_t* buffer, size_t capacity,
                                                   const utp_frame_streams_limit_t* maximum);
+/** @brief 解码 MAX_STREAMS 帧。 */
 utp_internal_error_t utp_frame_max_streams_decode(utp_frame_streams_limit_t* maximum, const uint8_t* buffer,
                                                   size_t length);
+/** @brief 编码连接级发送额度 MAX_DATA 帧。 */
 utp_internal_error_t utp_frame_max_data_encode(uint8_t* buffer, size_t capacity, const utp_frame_max_data_t* max_data);
+/** @brief 解码连接级发送额度 MAX_DATA 帧。 */
 utp_internal_error_t utp_frame_max_data_decode(utp_frame_max_data_t* max_data, const uint8_t* buffer, size_t length);
+/** @brief 编码流级发送额度 MAX_STREAM_DATA 帧。 */
 utp_internal_error_t utp_frame_max_stream_data_encode(uint8_t* buffer, size_t capacity,
                                                       const utp_frame_max_stream_data_t* max_stream_data);
+/** @brief 解码流级发送额度 MAX_STREAM_DATA 帧。 */
 utp_internal_error_t utp_frame_max_stream_data_decode(utp_frame_max_stream_data_t* max_stream_data,
                                                       const uint8_t* buffer, size_t length);
+/** @brief 编码连接级受阻通知 DATA_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_data_blocked_encode(uint8_t* buffer, size_t capacity,
                                                    const utp_frame_data_blocked_t* blocked);
+/** @brief 解码连接级受阻通知 DATA_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_data_blocked_decode(utp_frame_data_blocked_t* blocked, const uint8_t* buffer,
                                                    size_t length);
+/** @brief 编码流级受阻通知 STREAM_DATA_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_stream_data_blocked_encode(uint8_t* buffer, size_t capacity,
                                                           const utp_frame_stream_data_blocked_t* blocked);
+/** @brief 解码流级受阻通知 STREAM_DATA_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_stream_data_blocked_decode(utp_frame_stream_data_blocked_t* blocked,
                                                           const uint8_t* buffer, size_t length);
 

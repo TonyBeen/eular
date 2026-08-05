@@ -95,52 +95,79 @@ struct utp_stream {
     bool                        stream_limit_released;
 };
 
+/** @brief 初始化由 Connection 管理的流状态。 */
 void                 utp_stream_init(utp_stream_t* stream, uint32_t stream_id);
+/** @brief 释放流持有的 PacketIn 引用及重组状态。 */
 void                 utp_stream_cleanup(utp_stream_t* stream);
+/** @brief 判断本端是否拥有该流的发送方向。 */
 bool                 utp_stream_local_can_send(const utp_stream_t* stream);
+/** @brief 判断本端是否拥有该流的接收方向。 */
 bool                 utp_stream_local_can_receive(const utp_stream_t* stream);
+/** @brief 应用本地或对端 RESET_STREAM，终止读写方向。 */
 utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer);
+/** @brief 返回发送缓冲区逻辑末尾偏移。 */
 utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
+/** @brief 将数据复制写入流发送环形缓冲。 */
 utp_internal_error_t utp_stream_write_internal(utp_stream_t* stream, const uint8_t* data, size_t length);
-// 正常关闭本地写方向：先发送剩余数据，再携带 FIN；读方向保持可用。
+/** @brief 正常关闭本地写方向：先发送剩余数据，再携带 FIN；读方向保持可用。 */
 utp_internal_error_t utp_stream_close_internal(utp_stream_t* stream);
-// 发送带 error_code 的 RESET_STREAM，立即终止流，不属于正常 FIN 关闭。
+/** @brief 请求发送 RESET_STREAM，立即终止流，不属于正常 FIN 关闭。 */
 utp_internal_error_t utp_stream_reset_internal(utp_stream_t* stream, uint16_t error_code);
+/** @brief 获取内部发送环形缓冲的可写视图。 */
 utp_internal_error_t utp_stream_acquire_write_views_internal(utp_stream_t* stream, utp_stream_write_view_t* views,
                                                              size_t view_capacity, size_t* out_view_count,
                                                              size_t* out_capacity);
+/** @brief 提交通过可写视图写入的字节数。 */
 utp_internal_error_t utp_stream_commit_write_views_internal(utp_stream_t* stream, size_t length);
+/** @brief 判断流是否存在待发送数据或待发送 FIN。 */
 bool                 utp_stream_has_send_work(const utp_stream_t* stream);
+/** @brief 构造包含数据副本的完整 STREAM 帧。 */
 utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* payload, size_t capacity,
                                             size_t* out_payload_length, uint32_t* out_stream_data_size,
                                             uint64_t* out_stream_offset, bool* out_fin);
+/** @brief 构造零拷贝 STREAM 头和借用的数据视图。 */
 utp_internal_error_t utp_stream_build_frame_view(utp_stream_t* stream, uint8_t* header, size_t capacity,
                                                  size_t* out_header_length, const uint8_t** out_data,
                                                  uint32_t* out_stream_data_size, uint64_t* out_stream_offset,
                                                  bool* out_fin);
+/** @brief 在给定数据上限内构造零拷贝 STREAM 视图。 */
 utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, uint8_t* header, size_t capacity,
                                                          size_t max_data_length, size_t* out_header_length,
                                                          const uint8_t** out_data, uint32_t* out_stream_data_size,
                                                          uint64_t* out_stream_offset, bool* out_fin);
+/** @brief 提交已排队 STREAM 帧，推进发送偏移和 FIN 状态。 */
 utp_internal_error_t utp_stream_commit_built_frame(utp_stream_t* stream, uint32_t stream_data_size, bool fin);
+/** @brief 回滚尚未写入 UDP 的已构造 STREAM 帧。 */
 utp_internal_error_t utp_stream_abandon_built_frame(utp_stream_t* stream, uint64_t stream_offset,
                                                     uint32_t stream_data_size, bool fin);
+/** @brief 处理连续发送数据被确认。 */
 utp_internal_error_t utp_stream_on_packet_acked(utp_stream_t* stream, uint32_t stream_data_size);
+/** @brief 处理任意偏移区间被确认。 */
 utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint64_t stream_offset,
                                                       uint32_t stream_data_size);
+/** @brief 单调更新对端公布的流级发送额度。 */
 void                 utp_stream_update_peer_max_stream_data(utp_stream_t* stream, uint64_t maximum_stream_data);
+/** @brief 接收普通缓冲区承载的 STREAM 帧。 */
 utp_internal_error_t utp_stream_on_frame(utp_stream_t* stream, const utp_frame_stream_t* frame);
+/** @brief 接收 PacketIn 承载的 STREAM 帧并借用其数据。 */
 utp_internal_error_t utp_stream_on_frame_packet(utp_stream_t* stream, const utp_frame_stream_t* frame,
                                                 utp_packet_in_t* packet);
+/** @brief 接收已关联连接级内存账本的零拷贝 STREAM 帧。 */
 utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, const utp_frame_stream_t* frame,
                                                           utp_packet_in_t*                 packet,
                                                           const utp_stream_recv_account_t* account);
+/** @brief 获取可读的零拷贝重组片段视图。 */
 utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream, utp_stream_read_view_t* out_view);
+/** @brief 提交已消费的零拷贝片段范围。 */
 utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, uint64_t offset, size_t length);
+/** @brief 将连续重组数据复制给调用方。 */
 utp_internal_error_t utp_stream_read_internal(utp_stream_t* stream, uint8_t* buffer, size_t capacity,
                                               size_t* out_length, bool* out_fin);
+/** @brief 返回连续可读取的字节数。 */
 size_t               utp_stream_readable_bytes(const utp_stream_t* stream);
+/** @brief 返回仍由发送账本引用的流数据字节数。 */
 size_t               utp_stream_send_in_flight_bytes(const utp_stream_t* stream);
+/** @brief 判断流是否完全关闭或被重置。 */
 bool                 utp_stream_is_closed(const utp_stream_t* stream);
 
 #ifdef __cplusplus
