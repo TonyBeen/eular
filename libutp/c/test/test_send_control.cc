@@ -173,6 +173,48 @@ TEST_CASE("handshake retirement removes an Initial already queued for retransmis
     utp_send_control_cleanup(&control);
 }
 
+TEST_CASE("handshake retirement clears flight bytes without reporting an ACK", "[send_control][handshake][congestion]")
+{
+    utp_send_control_t          control    = {};
+    utp_packet_out_t            initial    = make_packet(1u, 100u);
+    CongestionTrace             trace      = {};
+    utp_congestion_t            congestion = {&trace, &kTraceCongestionOps};
+    struct utp_packet_out_tailq retired;
+
+    initial.frame_types = UINT32_C(0x01);
+    initial.po_flags    = UTP_PO_HELLO;
+    trace.cwnd          = 1000u;
+    TAILQ_INIT(&retired);
+    REQUIRE(utp_send_control_init(&control, 2u, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
+    utp_send_control_set_congestion(&control, &congestion);
+    REQUIRE(utp_send_control_on_packet_sent(&control, &initial) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_unacked_packet_count(&control) == 1u);
+
+    REQUIRE(utp_send_control_retire_handshake_packets(&control, 200u, &retired) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_unacked_packet_count(&control) == 0u);
+    REQUIRE(trace.begin_calls == 0u);
+    REQUIRE(trace.ack_calls == 0u);
+    REQUIRE(trace.end_calls == 0u);
+    REQUIRE(TAILQ_FIRST(&retired) == &initial);
+    TAILQ_REMOVE(&retired, &initial, po_next);
+
+    utp_send_control_cleanup(&control);
+}
+
+TEST_CASE("send control adopts a pending connection next packet number", "[send_control][packet_number]")
+{
+    utp_send_control_t control = {};
+    uint64_t           packet_number;
+
+    REQUIRE(utp_send_control_init(&control, 2u, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 7u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_allocate_packet_number(&control, &packet_number) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet_number == 7u);
+    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 7u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    utp_send_control_cleanup(&control);
+}
+
 TEST_CASE("send control rejects an invalid ACK without changing pending packets", "[send_control]")
 {
     utp_send_control_t            control = {};

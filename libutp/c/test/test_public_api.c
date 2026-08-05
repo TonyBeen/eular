@@ -161,6 +161,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     assert(server_probe.connected_count == 1);
     assert(client_probe.connected_connection->crypto_ready);
     assert(server_probe.connected_connection->crypto_ready);
+    assert(server_probe.connected_connection->send_control.current_packet_number >= 2u);
     assert(utp_connection_create_stream(client_probe.connected_connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
            UTP_STATUS_OK);
     stream = utp_connection_get_stream(client_probe.connected_connection, stream_id);

@@ -327,6 +327,49 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
     utp_connection_cleanup(&active);
 }
 
+TEST_CASE("encrypted connections reject plaintext Handshake packets with control frames", "[connection][crypto]")
+{
+    const utp_address_t                            peer       = loopback_address(10026u);
+    utp_connection_t                               connection = {};
+    utp_packet_out_t*                              packet;
+    utp_ack_range_t                                ranges[]     = {{1u, 1u}};
+    const utp_ack_info_t                           ack          = {1u, 0u, ranges, 1u, 1u};
+    utp_frame_crypto_t                             crypto       = {};
+    std::array<uint8_t, UTP_FRAME_CRYPTO_SIZE>     crypto_frame = {};
+    std::array<uint8_t, UTP_ACK_FRAME_HEADER_SIZE> ack_frame    = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE> wire   = {};
+    const utp_packet_header_t                                                                       header = {
+        11u, 77u, 1u, UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE, UTP_PACKET_TYPE_HANDSHAKE, 0u};
+    size_t        ack_length = 0u;
+    const uint8_t ping       = UTP_FRAME_TYPE_PING;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 77u, 11u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state             = UTP_CONNECTION_STATE_CONNECTED;
+    connection.crypto_type       = UTP_FRAME_CRYPTO_TYPE_AES_GCM_128;
+    connection.crypto_configured = true;
+    connection.crypto_ready      = true;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_unacked_packet_count(&connection.send_control) == 1u);
+
+    crypto.crypto_type = connection.crypto_type;
+    REQUIRE(utp_frame_crypto_encode(crypto_frame.data(), crypto_frame.size(), &crypto) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_ack_encode(ack_frame.data(), ack_frame.size(), &ack, 0u, &ack_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(wire.data(), wire.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(wire.data() + UTP_PACKET_HEADER_SIZE, crypto_frame.data(), crypto_frame.size());
+    std::memcpy(wire.data() + UTP_PACKET_HEADER_SIZE + crypto_frame.size(), ack_frame.data(), ack_length);
+    REQUIRE(utp_connection_on_packet_received(&connection, wire.data(), wire.size(), &peer, 200u) ==
+            UTP_INTERNAL_ERROR_AUTH);
+    REQUIRE(utp_send_control_unacked_packet_count(&connection.send_control) == 1u);
+
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("connection sends a pure ACK while cwnd or pacer blocks ordinary packets", "[connection][ack][congestion]")
 {
     const uint8_t            ping       = UTP_FRAME_TYPE_PING;

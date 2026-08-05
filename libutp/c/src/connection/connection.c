@@ -25,14 +25,15 @@
 #define UTP_CONNECTION_STREAM_DATA_BLOCKED_FRAME_SIZE 13u
 #define UTP_CONNECTION_STREAMS_LIMIT_FRAME_SIZE       UTP_FRAME_STREAMS_LIMIT_SIZE
 #define UTP_CONNECTION_RESET_STREAM_FRAME_SIZE        15u
-#define UTP_CONNECTION_CLOSE_PTO_DEFAULT_US           UINT64_C(333333)
-#define UTP_CONNECTION_CLOSE_PTO_MIN_US               UINT64_C(10000)
-#define UTP_CONNECTION_CLOSE_PTO_MAX_US               UINT64_C(60000000)
-#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US      UINT64_C(1500000)
-#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES     3u
-#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT    (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)
-#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI       64u
-#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI        32u
+#define UTP_CONNECTION_CLOSE_PTO_DEFAULT_US           UINT64_C(333333)    // 默认 333 毫秒
+#define UTP_CONNECTION_CLOSE_PTO_MIN_US               UINT64_C(10000)     // 最小 10 毫秒
+#define UTP_CONNECTION_CLOSE_PTO_MAX_US               UINT64_C(60000000)  // 最大 60 秒
+#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US      UINT64_C(1500000)  // 路径验证期间等待 PATH_RESPONSE 的超时时间(us)
+#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES     3u                 // 路径验证期间允许的最大重试次数
+#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT \
+    (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)             // 路径验证期间允许发送的最大字节数
+#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 默认双向流可创建数量
+#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI  32u  // 默认单向流可创建数量
 
 void        utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connection);
@@ -41,6 +42,58 @@ static void utp_connection_update_completed_peer_streams(utp_connection_t* conne
 static bool utp_connection_packet_type_is_valid(uint8_t type)
 {
     return type >= UTP_PACKET_TYPE_INITIAL && type <= UTP_PACKET_TYPE_CONNECT;
+}
+
+static utp_internal_error_t utp_connection_untrusted_packet_error(const utp_connection_t* connection)
+{
+    return connection != NULL && connection->crypto_configured ? UTP_INTERNAL_ERROR_AUTH : UTP_INTERNAL_ERROR_PROTOCOL;
+}
+
+static bool utp_connection_is_handshake_frame(uint8_t frame_type)
+{
+    return frame_type == UTP_FRAME_TYPE_PADDING || frame_type == UTP_FRAME_TYPE_CRYPTO ||
+           frame_type == UTP_FRAME_TYPE_ACK_FREQUENCY || frame_type == UTP_FRAME_TYPE_VERSION ||
+           frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS || frame_type == UTP_FRAME_TYPE_HANDSHAKE_DELAY;
+}
+
+// Initial/Handshake 是明文协商包，必须在进入通用帧处理前完成白名单校验。
+static utp_internal_error_t utp_connection_validate_plaintext_handshake(const utp_connection_t*  connection,
+                                                                        const utp_packet_view_t* view)
+{
+    bool   has_crypto = false;
+    size_t offset     = 0u;
+
+    if (connection == NULL || view == NULL || view->header.type != UTP_PACKET_TYPE_HANDSHAKE ||
+        connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
+        (connection->state != UTP_CONNECTION_STATE_INITIAL_SENT &&
+         connection->state != UTP_CONNECTION_STATE_CONNECTED)) {
+        return utp_connection_untrusted_packet_error(connection);
+    }
+    while (offset < view->payload_length) {
+        const uint8_t*       frame;
+        uint8_t              frame_type;
+        size_t               frame_length;
+        utp_internal_error_t error = utp_packet_view_next_frame(view, &offset, &frame_type, &frame, &frame_length);
+
+        if (error != UTP_INTERNAL_ERROR_OK || !utp_connection_is_handshake_frame(frame_type)) {
+            return utp_connection_untrusted_packet_error(connection);
+        }
+        if (frame_type == UTP_FRAME_TYPE_CRYPTO) {
+            utp_frame_crypto_t crypto;
+
+            if (has_crypto || utp_frame_crypto_decode(&crypto, frame, frame_length) != UTP_INTERNAL_ERROR_OK ||
+                !connection->crypto_configured || crypto.crypto_type != connection->crypto_type ||
+                (connection->crypto_ready && memcmp(connection->peer_crypto_public_key, crypto.ephemeral_public_key,
+                                                    sizeof(connection->peer_crypto_public_key)) != 0)) {
+                return utp_connection_untrusted_packet_error(connection);
+            }
+            has_crypto = true;
+        }
+    }
+    if (connection->crypto_configured != has_crypto) {
+        return utp_connection_untrusted_packet_error(connection);
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 static bool utp_connection_packet_is_ack_eliciting(const utp_packet_view_t* view)
@@ -2712,6 +2765,15 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
         view.header.dcid != connection->local_cid) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    if (view.header.type == UTP_PACKET_TYPE_INITIAL && connection->crypto_configured) {
+        return utp_connection_untrusted_packet_error(connection);
+    }
+    if (view.header.type == UTP_PACKET_TYPE_HANDSHAKE) {
+        error = utp_connection_validate_plaintext_handshake(connection, &view);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
     if (connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_INITIAL_SENT &&
         view.header.type == UTP_PACKET_TYPE_HANDSHAKE && connection->peer_cid == 0u) {
         if (view.header.scid == 0u) {
@@ -2719,7 +2781,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
         }
         connection->peer_cid = view.header.scid;
     } else if (view.header.scid != connection->peer_cid) {
-        return UTP_INTERNAL_ERROR_PROTOCOL;
+        return utp_connection_untrusted_packet_error(connection);
     }
     candidate_path = !utp_address_equal(&connection->peer, peer);
     if (candidate_path && !utp_connection_is_connected(connection)) {
@@ -3103,9 +3165,18 @@ static utp_internal_error_t utp_connection_decrypt_packet(utp_connection_t* conn
     if (error != UTP_INTERNAL_ERROR_OK || *packet_length != UTP_PACKET_HEADER_SIZE + header.payload_length) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    if (!connection->crypto_ready || header.type == UTP_PACKET_TYPE_INITIAL ||
-        header.type == UTP_PACKET_TYPE_HANDSHAKE) {
+    if (!connection->crypto_ready) {
         return UTP_INTERNAL_ERROR_OK;
+    }
+    if (header.type == UTP_PACKET_TYPE_INITIAL) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    if (header.type == UTP_PACKET_TYPE_HANDSHAKE) {
+        return connection->role == UTP_CONNECTION_ROLE_ACTIVE &&
+                       (connection->state == UTP_CONNECTION_STATE_INITIAL_SENT ||
+                        connection->state == UTP_CONNECTION_STATE_CONNECTED)
+                   ? UTP_INTERNAL_ERROR_OK
+                   : UTP_INTERNAL_ERROR_AUTH;
     }
     if (header.payload_length < UTP_CRYPTO_AEAD_TAG_SIZE) {
         return UTP_INTERNAL_ERROR_CRYPTO;

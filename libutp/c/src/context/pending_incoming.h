@@ -34,6 +34,7 @@ typedef struct utp_pending_incoming {
     uint32_t              local_cid;
     uint32_t              peer_cid;
     uint64_t              last_handshake_packet_number;
+    uint64_t              next_packet_number;
     uint64_t              handshake_retransmission_deadline_us;
     uint32_t              handshake_retransmission_count;
     utp_crypto_key_pair_t crypto_key_pair;

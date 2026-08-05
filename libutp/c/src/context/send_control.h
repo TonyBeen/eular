@@ -65,6 +65,9 @@ utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t p
 void                 utp_send_control_cleanup(utp_send_control_t* control);
 utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control, utp_packet_out_t* packet);
 utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t* control, uint64_t* packet_number);
+// pending 阶段已经使用的包号属于同一发送方向；晋升后从 next_packet_number 继续分配。
+utp_internal_error_t utp_send_control_adopt_next_packet_number(utp_send_control_t* control,
+                                                               uint64_t            next_packet_number);
 // 将包排队等待一次发送；成功发送或显式释放前，PacketOut 所有权仍属于调用方。
 utp_internal_error_t utp_send_control_schedule_packet(utp_send_control_t* control, utp_packet_out_t* packet,
                                                       bool track_on_send);
@@ -107,7 +110,7 @@ utp_internal_error_t                   utp_send_control_on_retransmission_timeou
 utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
                                              struct utp_packet_out_tailq*   acknowledged_packets,
                                              utp_send_control_ack_result_t* result);
-// 收到有效 Handshake 即证明 Initial 已到达，从 scheduled/unacked/lost/discarded 中退休全部握手包。
+// 收到有效 Handshake 后退休 Initial。Handshake 未确认具体 Initial 包号，不能产生拥塞 ACK 样本。
 utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_t* control, uint64_t now_us,
                                                                struct utp_packet_out_tailq* retired_packets);
 uint64_t             utp_send_control_largest_sent(const utp_send_control_t* control);

@@ -55,6 +55,7 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     pending->local_cid                            = local_cid;
     pending->peer_cid                             = peer_cid;
     pending->last_handshake_packet_number         = 0u;
+    pending->next_packet_number                   = 1u;
     pending->handshake_retransmission_deadline_us = 0u;
     pending->handshake_retransmission_count       = 0u;
     pending->tx_aead                              = (utp_crypto_aead_t){0};
@@ -82,6 +83,7 @@ void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
         pending->local_cid                            = 0u;
         pending->peer_cid                             = 0u;
         pending->last_handshake_packet_number         = 0u;
+        pending->next_packet_number                   = 0u;
         pending->handshake_retransmission_deadline_us = 0u;
         pending->handshake_retransmission_count       = 0u;
         pending->crypto_type                          = 0u;

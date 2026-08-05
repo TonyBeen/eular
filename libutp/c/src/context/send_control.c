@@ -158,6 +158,16 @@ utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t*
     return UTP_INTERNAL_ERROR_OK;
 }
 
+utp_internal_error_t utp_send_control_adopt_next_packet_number(utp_send_control_t* control, uint64_t next_packet_number)
+{
+    if (control == NULL || next_packet_number == 0u || next_packet_number > UTP_PACKET_NUMBER_MAX + 1u ||
+        next_packet_number <= control->current_packet_number) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    control->current_packet_number = next_packet_number - 1u;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static utp_internal_error_t utp_send_control_schedule_packet_at(utp_send_control_t* control, utp_packet_out_t* packet,
                                                                 bool track_on_send, bool front)
 {
@@ -771,8 +781,6 @@ utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_
 {
     utp_packet_out_t* packet;
     utp_packet_out_t* next;
-    uint64_t          inflight_before;
-    bool              began_ack = false;
 
     if (control == NULL || retired_packets == NULL || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -794,30 +802,18 @@ utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_
         control->scheduled_byte_count -= packet_size;
         TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
     }
-    inflight_before = utp_send_ledger_bytes_in_flight(&control->ledger);
     for (packet = TAILQ_FIRST(&control->ledger.unacked_packets); packet != NULL; packet = next) {
-        utp_congestion_packet_info_t info;
-        utp_internal_error_t         error;
+        utp_internal_error_t error;
 
         next = TAILQ_NEXT(packet, po_next);
         if ((packet->po_flags & UTP_PO_HELLO) == 0u) {
             continue;
         }
-        if (!began_ack) {
-            utp_congestion_on_begin_ack(control->congestion, now_us, inflight_before);
-            began_ack = true;
-        }
         error = utp_send_ledger_remove(&control->ledger, packet);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-        utp_send_control_packet_info(packet, &info);
-        utp_congestion_on_ack(control->congestion, &info, now_us, control->app_limited ? 1 : 0);
-        packet->bw_state = info.state;
         TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
-    }
-    if (began_ack) {
-        utp_congestion_on_end_ack(control->congestion, utp_send_ledger_bytes_in_flight(&control->ledger));
     }
     for (packet = TAILQ_FIRST(&control->lost_packets); packet != NULL; packet = next) {
         next = TAILQ_NEXT(packet, po_next);
