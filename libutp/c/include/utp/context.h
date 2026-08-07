@@ -63,7 +63,7 @@ typedef struct utp_endpoint {
      3000u,                       \
      5000u,                       \
      600u,                        \
-     10u}
+     4096u}
 
 typedef struct utp_connect_options {
     const char*           address;
@@ -145,6 +145,8 @@ void utp_context_set_on_connect_error(utp_context_t* context, utp_on_connect_err
 void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connection_fn callback, void* user_data);
 /** @brief 设置被动关闭或本地致命错误回调，关闭原因仅在回调期间有效。 */
 void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
+/** @brief 设置恢复根密钥；替换后立即废止该 Context 已签发的恢复凭证。 */
+void utp_context_set_resumption_key(utp_context_t* context, const uint8_t root_key[32]);
 /** @brief 发起异步主动连接，建连结果通过回调报告。 */
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 /** @brief 基于会话票据发起非加密 0-RTT 建连；早数据固定写入客户端首个双向流，可能被重放。 */

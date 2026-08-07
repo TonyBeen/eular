@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 
 #include <catch2/catch.hpp>
 
@@ -338,4 +339,152 @@ TEST_CASE("directional AEAD contexts interoperate in both directions in place", 
         utp_crypto_key_pair_clear(&client_key_pair);
         utp_crypto_key_pair_clear(&server_key_pair);
     }
+}
+
+TEST_CASE("resumption keys are isolated and local state sealing authenticates data", "[crypto]")
+{
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_KEY_SIZE> root      = {};
+    std::array<uint8_t, 13>                             plaintext = {0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u,
+                                                                     0x08u, 0x09u, 0x0au, 0x0bu, 0x0cu, 0x0du};
+    std::array<uint8_t, 7>                              aad       = {0x20u, 0x21u, 0x22u, 0x23u, 0x24u, 0x25u, 0x26u};
+    std::array<uint8_t, UTP_CRYPTO_AEAD_NONCE_SIZE + plaintext.size() + UTP_CRYPTO_AEAD_TAG_SIZE> sealed         = {};
+    std::array<uint8_t, plaintext.size()>                                                         decoded        = {};
+    utp_crypto_resumption_keys_t                                                                  keys           = {};
+    size_t                                                                                        sealed_length  = 0u;
+    size_t                                                                                        decoded_length = 0u;
+
+    utp_crypto_default_resumption_key(root.data());
+    REQUIRE(utp_crypto_derive_resumption_keys(&keys, root.data()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(keys.ticket_seal_key, keys.local_state_key, UTP_CRYPTO_RESUMPTION_KEY_SIZE) != 0);
+    REQUIRE(utp_crypto_aes256gcm_seal(keys.local_state_key, plaintext.data(), plaintext.size(), aad.data(), aad.size(),
+                                      sealed.data(), sealed.size(), &sealed_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sealed_length == sealed.size());
+    REQUIRE(utp_crypto_aes256gcm_open(keys.local_state_key, sealed.data(), sealed_length, aad.data(), aad.size(),
+                                      decoded.data(), decoded.size(), &decoded_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_length == plaintext.size());
+    REQUIRE(decoded == plaintext);
+
+    sealed.back() ^= 0x01u;
+    REQUIRE(utp_crypto_aes256gcm_open(keys.local_state_key, sealed.data(), sealed_length, aad.data(), aad.size(),
+                                      decoded.data(), decoded.size(), &decoded_length) == UTP_INTERNAL_ERROR_CRYPTO);
+    utp_crypto_resumption_keys_clear(&keys);
+}
+
+TEST_CASE("early AEAD separates directions and binds the complete attempt context", "[crypto]")
+{
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_PSK_SIZE>              psk           = {};
+    std::array<uint8_t, UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE>         attempt_nonce = {};
+    std::array<uint8_t, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE>       server_info   = {};
+    std::array<uint8_t, 5>                                           plaintext = {0x30u, 0x31u, 0x32u, 0x33u, 0x34u};
+    std::array<uint8_t, 4>                                           aad       = {0x40u, 0x41u, 0x42u, 0x43u};
+    std::array<uint8_t, plaintext.size() + UTP_CRYPTO_AEAD_TAG_SIZE> sealed    = {};
+    std::array<uint8_t, plaintext.size()>                            decoded   = {};
+    utp_crypto_aead_t                                                client_tx = {};
+    utp_crypto_aead_t                                                server_rx = {};
+    utp_crypto_aead_t                                                wrong_direction = {};
+    size_t                                                           sealed_length   = 0u;
+    size_t                                                           decoded_length  = 0u;
+
+    std::iota(psk.begin(), psk.end(), static_cast<uint8_t>(1u));
+    std::iota(attempt_nonce.begin(), attempt_nonce.end(), static_cast<uint8_t>(33u));
+    std::iota(server_info.begin(), server_info.end(), static_cast<uint8_t>(49u));
+    REQUIRE(utp_crypto_derive_early_aead(&client_tx, psk.data(), attempt_nonce.data(), server_info.data(),
+                                         UTP_CRYPTO_TYPE_AES_GCM_256, true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_derive_early_aead(&server_rx, psk.data(), attempt_nonce.data(), server_info.data(),
+                                         UTP_CRYPTO_TYPE_AES_GCM_256, true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_derive_early_aead(&wrong_direction, psk.data(), attempt_nonce.data(), server_info.data(),
+                                         UTP_CRYPTO_TYPE_AES_GCM_256, false) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_aead_seal(&client_tx, 7u, plaintext.data(), plaintext.size(), aad.data(), aad.size(),
+                                 sealed.data(), sealed.size(), &sealed_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_aead_open(&server_rx, 7u, sealed.data(), sealed_length, aad.data(), aad.size(), decoded.data(),
+                                 decoded.size(), &decoded_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded == plaintext);
+    REQUIRE(utp_crypto_aead_open(&wrong_direction, 7u, sealed.data(), sealed_length, aad.data(), aad.size(),
+                                 decoded.data(), decoded.size(), &decoded_length) == UTP_INTERNAL_ERROR_CRYPTO);
+
+    utp_crypto_aead_cleanup(&client_tx);
+    utp_crypto_aead_cleanup(&server_rx);
+    utp_crypto_aead_cleanup(&wrong_direction);
+}
+
+TEST_CASE("encrypted resumption state round-trips only with its root-derived keys", "[crypto]")
+{
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_KEY_SIZE>         root               = {};
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_KEY_SIZE>         other_root         = {};
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_PSK_SIZE>         psk                = {};
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_PSK_SIZE>         opened_psk         = {};
+    std::array<uint8_t, UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE>  token_payload      = {};
+    std::array<uint8_t, UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE>  opened_payload     = {};
+    std::array<uint8_t, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE>  server_info        = {};
+    std::array<uint8_t, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE>  opened_server_info = {};
+    std::array<uint8_t, UTP_CRYPTO_LOCAL_RESUMPTION_STATE_SIZE> state              = {};
+    utp_crypto_resumption_keys_t                                keys               = {};
+    utp_crypto_resumption_keys_t                                other_keys         = {};
+    uint8_t                                                     encryption_mode    = UINT8_MAX;
+    uint64_t                                                    expires_at_seconds = 0u;
+    size_t                                                      state_length       = 0u;
+    size_t                                                      payload_length     = 0u;
+
+    std::iota(root.begin(), root.end(), static_cast<uint8_t>(1u));
+    std::iota(other_root.begin(), other_root.end(), static_cast<uint8_t>(2u));
+    std::iota(psk.begin(), psk.end(), static_cast<uint8_t>(31u));
+    REQUIRE(utp_crypto_derive_resumption_keys(&keys, root.data()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_derive_resumption_keys(&other_keys, other_root.data()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_server_info_seal(keys.ticket_seal_key, psk.data(), UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256,
+                                        UINT64_C(1710000000), server_info.data()) == UTP_INTERNAL_ERROR_OK);
+    std::copy(psk.begin(), psk.end(), token_payload.begin());
+    std::copy(server_info.begin(), server_info.end(), token_payload.begin() + UTP_CRYPTO_RESUMPTION_PSK_SIZE);
+    REQUIRE(utp_crypto_local_resumption_state_seal(keys.local_state_key, UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256,
+                                                   UINT64_C(1710000000), token_payload.data(),
+                                                   static_cast<uint8_t>(token_payload.size()), state.data(),
+                                                   state.size(), &state_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(state_length == state.size());
+    REQUIRE(utp_crypto_local_resumption_state_open(keys.local_state_key, state.data(), state_length, &encryption_mode,
+                                                   &expires_at_seconds, opened_payload.data(), opened_payload.size(),
+                                                   &payload_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(payload_length == token_payload.size());
+    REQUIRE(opened_payload == token_payload);
+    REQUIRE(encryption_mode == UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256);
+    REQUIRE(expires_at_seconds == UINT64_C(1710000000));
+    std::copy(opened_payload.begin() + UTP_CRYPTO_RESUMPTION_PSK_SIZE, opened_payload.end(),
+              opened_server_info.begin());
+    REQUIRE(utp_crypto_server_info_open(keys.ticket_seal_key, expires_at_seconds, opened_server_info.data(),
+                                        opened_psk.data(), &encryption_mode) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(opened_psk == psk);
+    REQUIRE(utp_crypto_local_resumption_state_open(
+                other_keys.local_state_key, state.data(), state_length, &encryption_mode, &expires_at_seconds,
+                opened_payload.data(), opened_payload.size(), &payload_length) == UTP_INTERNAL_ERROR_CRYPTO);
+
+    utp_crypto_resumption_keys_clear(&keys);
+    utp_crypto_resumption_keys_clear(&other_keys);
+}
+
+TEST_CASE("local resumption state length follows its authenticated payload", "[crypto]")
+{
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_KEY_SIZE>             root           = {};
+    std::array<uint8_t, 7u>                                         payload        = {1u, 2u, 3u, 4u, 5u, 6u, 7u};
+    std::array<uint8_t, UTP_CRYPTO_LOCAL_RESUMPTION_STATE_MAX_SIZE> state          = {};
+    std::array<uint8_t, 16u>                                        opened_payload = {};
+    utp_crypto_resumption_keys_t                                    keys           = {};
+    uint8_t                                                         encryption_mode;
+    uint64_t                                                        expires_at_seconds;
+    size_t                                                          state_length;
+    size_t                                                          payload_length;
+
+    std::iota(root.begin(), root.end(), static_cast<uint8_t>(9u));
+    REQUIRE(utp_crypto_derive_resumption_keys(&keys, root.data()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_crypto_local_resumption_state_seal(keys.local_state_key, UTP_CRYPTO_ENCRYPTION_MODE_NONE,
+                                                   UINT64_C(1810000000), payload.data(),
+                                                   static_cast<uint8_t>(payload.size()), state.data(), state.size(),
+                                                   &state_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(state_length == UTP_CRYPTO_LOCAL_RESUMPTION_OVERHEAD_SIZE + payload.size());
+    REQUIRE(state_length != UTP_CRYPTO_LOCAL_RESUMPTION_STATE_SIZE);
+    REQUIRE(utp_crypto_local_resumption_state_open(keys.local_state_key, state.data(), state_length, &encryption_mode,
+                                                   &expires_at_seconds, opened_payload.data(), opened_payload.size(),
+                                                   &payload_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(encryption_mode == UTP_CRYPTO_ENCRYPTION_MODE_NONE);
+    REQUIRE(expires_at_seconds == UINT64_C(1810000000));
+    REQUIRE(payload_length == payload.size());
+    REQUIRE(std::equal(payload.begin(), payload.end(), opened_payload.begin()));
+    utp_crypto_resumption_keys_clear(&keys);
 }

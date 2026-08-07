@@ -23,7 +23,7 @@ extern "C" {
 #define UTP_FRAME_RESET_STREAM_SIZE            15u
 #define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
 #define UTP_FRAME_CRYPTO_SIZE                  35u
-#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    4u
+#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    10u
 #define UTP_FRAME_ACK_FREQUENCY_SIZE           7u
 #define UTP_FRAME_TRANSPORT_PARAMS_SIZE        38u
 #define UTP_FRAME_HANDSHAKE_DELAY_SIZE         5u
@@ -53,7 +53,7 @@ extern "C" {
  * PATH_CHALLENGE:      type(1), data(8)
  * PATH_RESPONSE:       type(1), data(8)
  * CRYPTO:              type(1), crypto_type(1), reserved(1), ephemeral_public_key(32)
- * SESSION_TOKEN:       type(1), token_length(1), validity_period_seconds(2), token[token_length]
+ * SESSION_TOKEN:       type(1), payload_length(1), expires_at_seconds(8), payload[payload_length]
  * ACK_FREQUENCY:       type(1), ack_eliciting_threshold(1), reordering_threshold(1), max_ack_delay_ms(4)
  * VERSION:             type(1), version(4)
  * HANDSHAKE_DONE:      type(1), ack_handshake_packet_number(8)
@@ -130,11 +130,11 @@ typedef struct utp_frame_stream {
     uint16_t       data_length;
 } utp_frame_stream_t;
 
-/* SESSION_TOKEN：type(1), token_length(1), validity_period_seconds(2), token[token_length]。 */
+/* SESSION_TOKEN：type(1), payload_length(1), expires_at_seconds(8), payload[payload_length]。 */
 typedef struct utp_frame_session_token {
-    const uint8_t* token;
-    uint16_t       validity_period_seconds;
-    uint8_t        token_length;
+    const uint8_t* payload;
+    uint64_t       expires_at_seconds;
+    uint8_t        payload_length;
 } utp_frame_session_token_t;
 
 /* CONNECTION_CLOSE：type(1), error_code(2), reason_length(2), reason[reason_length]。 */

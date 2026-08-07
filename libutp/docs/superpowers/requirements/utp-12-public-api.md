@@ -139,6 +139,7 @@
 |---|---|---|
 | `zero_rtt_token_max_lifetime` | `600` | 0-RTT 票据最长时效（秒） |
 | `zero_rtt_replay_window` | `10` | C++ 现状的抗重放窗口（秒）；C 版加密 0-RTT 不采用该窗口作为记录保留期，replay record 必须保留至 token 绝对过期时间，详见 utp-10 §10.4 |
+| `zero_rtt_replay_cache_capacity` | `4096` | C 版 Context 的动态 replay 哈希表容量；4096 仅为默认值，不是硬上限，容量满时不得淘汰未过期记录 |
 
 **Path Migration** (`config.h:81`)
 | 字段 | 默认值 | 含义 |

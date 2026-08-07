@@ -562,10 +562,10 @@ utp_internal_error_t utp_frame_session_token_encode(uint8_t* buffer, size_t capa
     size_t               index;
     utp_internal_error_t error;
 
-    if (buffer == NULL || token == NULL || (token->token_length != 0u && token->token == NULL)) {
+    if (buffer == NULL || token == NULL || (token->payload_length != 0u && token->payload == NULL)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (capacity < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)token->token_length) {
+    if (capacity < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)token->payload_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     error = utp_wire_writer_init(&writer, buffer, capacity);
@@ -573,13 +573,13 @@ utp_internal_error_t utp_frame_session_token_encode(uint8_t* buffer, size_t capa
         error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_SESSION_TOKEN);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u8(&writer, token->token_length);
+        error = utp_wire_write_u8(&writer, token->payload_length);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u16(&writer, token->validity_period_seconds);
+        error = utp_wire_write_u64(&writer, token->expires_at_seconds);
     }
-    for (index = 0u; error == UTP_INTERNAL_ERROR_OK && index < (size_t)token->token_length; ++index) {
-        error = utp_wire_write_u8(&writer, token->token[index]);
+    for (index = 0u; error == UTP_INTERNAL_ERROR_OK && index < (size_t)token->payload_length; ++index) {
+        error = utp_wire_write_u8(&writer, token->payload[index]);
     }
     return error;
 }
@@ -603,19 +603,19 @@ utp_internal_error_t utp_frame_session_token_decode(utp_frame_session_token_t* t
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_read_u8(&reader, &decoded.token_length);
+        error = utp_wire_read_u8(&reader, &decoded.payload_length);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_read_u16(&reader, &decoded.validity_period_seconds);
+        error = utp_wire_read_u64(&reader, &decoded.expires_at_seconds);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    if (length < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)decoded.token_length) {
+    if (length < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)decoded.payload_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    decoded.token = buffer + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE;
-    *token        = decoded;
+    decoded.payload = buffer + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE;
+    *token          = decoded;
     return UTP_INTERNAL_ERROR_OK;
 }
 

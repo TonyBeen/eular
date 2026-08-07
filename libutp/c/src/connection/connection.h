@@ -28,7 +28,7 @@ extern "C" {
 #define UTP_CONNECTION_KEEPALIVE_INTERVAL_US          UINT64_C(30000000)
 #define UTP_CONNECTION_KEEPALIVE_TIMEOUT_US           UINT64_C(1500000)
 #define UTP_CONNECTION_KEEPALIVE_MAX_PROBES           3u
-#define UTP_CONNECTION_SESSION_TOKEN_SIZE             64u
+#define UTP_CONNECTION_SESSION_TOKEN_SIZE             UTP_CRYPTO_LOCAL_RESUMPTION_STATE_MAX_SIZE
 
 typedef enum utp_connection_role { UTP_CONNECTION_ROLE_ACTIVE = 0, UTP_CONNECTION_ROLE_PASSIVE } utp_connection_role_t;
 
@@ -127,8 +127,8 @@ typedef struct utp_connection {
     uint32_t                    stream_scheduler_cursor;
     uint8_t                     path_challenge_retry_count;
     uint16_t                    keepalive_missed_probes;
-    uint16_t                    session_token_validity_seconds;
-    uint8_t                     session_token_size;
+    uint64_t                    session_token_expires_at_seconds;
+    uint16_t                    session_token_size;
     bool                        close_pending;
     bool                        udp_write_pending;
     bool                        local_close_started;
@@ -240,6 +240,8 @@ utp_internal_error_t   utp_connection_export_session_token_internal(const utp_co
                                                                     size_t capacity, size_t* out_length);
 /** @brief 为 0-RTT 首个双向流建立本地发送状态，避免后续重用 stream_id 0。 */
 utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, size_t data_length, bool fin);
+/** @brief 标记被动 0-RTT 正在等待首个 HANDSHAKE 响应成功写出。 */
+utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
 
 #ifdef __cplusplus
 }

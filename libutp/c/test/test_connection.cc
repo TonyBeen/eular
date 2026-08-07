@@ -1,5 +1,6 @@
 #define CATCH_CONFIG_MAIN
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -234,6 +235,64 @@ TEST_CASE("connection retransmission timeout resends a tracked handshake packet 
     REQUIRE(utp_connection_retransmission_deadline(&active) > deadline + 1u);
 
     utp_connection_cleanup(&active);
+}
+
+TEST_CASE("0-RTT request and response retransmissions preserve packet number and wire bytes",
+          "[connection][retransmission][0rtt]")
+{
+    const std::array<uint8_t, UTP_FRAME_VERSION_SIZE> version         = version_frame();
+    const utp_address_t                               passive_address = loopback_address(10010u);
+    const utp_address_t                               active_address  = loopback_address(10011u);
+    utp_connection_t                                  active          = {};
+    utp_connection_t                                  passive         = {};
+    std::array<uint8_t, 1280>                         first_wire      = {};
+    utp_packet_out_t*                                 packet;
+    size_t                                            first_length;
+    uint64_t                                          deadline;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 56u, 0u, &passive_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(&active, UTP_PACKET_TYPE_0RTT, version.data(), version.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE((packet->po_flags & UTP_PO_IMMUTABLE) != 0u);
+    REQUIRE(packet->packet_number == 1u);
+    first_length = packet->data_size;
+    std::copy_n(packet->raw_data, first_length, first_wire.begin());
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    deadline = utp_connection_retransmission_deadline(&active);
+    REQUIRE(deadline > 100u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&active, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(packet->data_size == first_length);
+    REQUIRE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
+    utp_connection_cleanup(&active);
+
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 57u, 56u, &active_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_begin_zero_rtt_response(&passive) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE_FALSE(utp_connection_is_connected(&passive));
+    REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_HANDSHAKE, version.data(), version.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&passive);
+    REQUIRE(packet != nullptr);
+    REQUIRE((packet->po_flags & UTP_PO_IMMUTABLE) != 0u);
+    first_length = packet->data_size;
+    std::copy_n(packet->raw_data, first_length, first_wire.begin());
+    REQUIRE(utp_connection_on_packet_sent(&passive, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_is_connected(&passive));
+    deadline = utp_connection_retransmission_deadline(&passive);
+    REQUIRE(deadline > 200u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&passive, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&passive);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(packet->data_size == first_length);
+    REQUIRE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
+    utp_connection_cleanup(&passive);
 }
 
 TEST_CASE("connection releases acknowledged and non-tracked packets back to its pool", "[connection][ack]")

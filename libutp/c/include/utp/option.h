@@ -33,7 +33,7 @@ typedef struct utp_context_options {
 
     // 0-RTT 会话票据与抗重放配置
     uint32_t                    zero_rtt_token_max_lifetime_seconds;
-    uint32_t                    zero_rtt_replay_window_seconds;
+    uint32_t                    zero_rtt_replay_cache_capacity;
 } utp_context_options_t;
 
 #endif  // EULAR_UTP_C_OPTION_H

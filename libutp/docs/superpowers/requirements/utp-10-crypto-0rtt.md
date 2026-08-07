@@ -258,7 +258,7 @@
 ### 10.1 恢复根密钥生命周期
 
 - Context 仅提供 `utp_context_set_resumption_key(root[32])` 设置恢复根密钥。
-- 内部通过不同 HKDF 标签从 root 派生 `ticket_seal_key` 与 `local_state_key`，不得直接将 root 作为两类 AEAD 的工作密钥。
+- 内部先对 root 执行 `HKDF-Extract`，再通过不同标签分别执行 `HKDF-Expand` 派生 `ticket_seal_key` 与 `local_state_key`；不得直接将 root 作为两类 AEAD 的工作密钥，也不得以 one-shot `HKDF()` 隐藏两个阶段。
 - 未设置 root 时使用库内置固定默认 root，以允许 Context 或进程重启后继续解析此前签发的恢复状态；每个 Context 仅记录一次英文 Warn：`utp: using built-in default resumption key; configure a custom key for production`。
 - **不支持平滑轮换**：不维护 `key_id`、旧 keyring、宽限期或自动轮换任务。
 - 调用 `utp_context_set_resumption_key()` 替换 root 后，旧 `SESSION_TOKEN` 与客户端本地恢复状态必须立即失效；后续连接应走普通 1-RTT 握手，不得尝试旧 0-RTT 状态。
@@ -267,13 +267,13 @@
 ### 10.2 `SESSION_TOKEN` 与本地恢复状态
 
 - 不新增 `SESSION_TOKEN_V2`；现有帧改为 `type[1] | payload_length[1] | expires_at_seconds_be[8] | payload`。`expires_at_seconds` 是以大端编码的绝对 Unix 秒时间。
-- 服务端仅在已建立连接的 1-RTT 加密 `CTRL` 中签发 token：`payload = resumption_psk[32] | encrypted_server_info[93]`。
+- 服务端在已建立连接的 `CTRL` 中签发统一 token，原连接是明文还是加密不改变 payload 结构：`payload = resumption_psk[32] | encrypted_server_info[93]`。明文连接只将 `encryption_mode` 记录为 `NONE`，恢复凭证本身仍必须加密保护。
 - 客户端发起加密 0-RTT 时回传：`payload = early_attempt_nonce[16] | encrypted_server_info[93]`。`early_attempt_nonce` 每次新的连接尝试随机生成；同一尝试的 PTO 重传必须复用。
 - `encrypted_server_info` 固定 93 字节：`nonce[12] | AES-256-GCM ciphertext[65] | tag[16]`。其明文为 `resumption_psk[32] | encryption_mode[1] | peer_id[32]`；当前 `peer_id` 全零，为后续 NTRS 预留。其 AAD 为 ASCII `"UTP-SessionToken" | expires_at_seconds_be[8]`。
 - `encrypted_server_info` 不绑定地址或地址族，也不是对端身份凭证。服务端重启后，只要恢复根密钥不变，仍可解析未过期 token。
-- `utp_connection_export_session_token()` 对加密连接导出的本地恢复状态固定为 166 字节：`"URS1"[4] | nonce[12] | AES-256-GCM ciphertext[134] | tag[16]`。内层明文为 `resumption_psk[32] | encryption_mode[1] | expires_at_seconds_be[8] | encrypted_server_info[93]`，AAD 为 ASCII `"UTP-LocalResumptionState"`。
+- `utp_connection_export_session_token()` 对明文与加密连接都导出相同的本地加密 envelope：`"URS1"[4] | nonce[12] | AES-256-GCM ciphertext | tag[16]`，AAD 为 ASCII `"UTP-LocalResumptionState"`。当前 125 字节 token payload 对应的编码长度是 166 字节，内层明文为 `encryption_mode[1] | expires_at_seconds_be[8] | token_payload`；解码必须以认证后的内层 payload 长度为准，不得通过外层总长度等于 166 来判断恢复状态类型，以允许后续增删字段。
 - 客户端不向应用暴露明文 `resumption_psk`；`utp_context_connect_0rtt()` 从上述本地恢复状态恢复它和加密方式。服务端从 `encrypted_server_info` 恢复它们，且双方的 `encryption_mode` 必须与 `CRYPTO.crypto_type` 一致。
-- 普通加密连接完成以及每次成功的 0-RTT 重连完成后，服务端均应通过新的 1-RTT 加密 `CTRL` 签发新的 token。旧 token 仅自然过期，不支持单独撤销。
+- 普通连接（明文或加密）完成以及每次成功的 0-RTT 重连完成后，服务端均应通过新的 `CTRL` 签发 token；加密连接的 `CTRL` 仍按 1-RTT 密钥加密。旧 token 仅自然过期，不支持单独撤销。
 
 ### 10.3 early key 派生与报文鉴权
 

@@ -5,6 +5,7 @@
 
 #include <openssl/rand.h>
 
+#include "context/context.h"
 #include "mtu/mtu.h"
 #include "util/allocator.h"
 
@@ -2111,7 +2112,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->session_token_issued                                    = false;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
-    connection->session_token_validity_seconds                          = 0u;
+    connection->session_token_expires_at_seconds                        = 0u;
     connection->stream_scheduler_mode                                   = 0u;
     connection->stream_scheduler_cursor                                 = 0u;
     connection->local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]  = UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI;
@@ -2336,7 +2337,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->session_token_issued                                    = false;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
-    connection->session_token_validity_seconds                          = 0u;
+    connection->session_token_expires_at_seconds                        = 0u;
     connection->role                                                    = UTP_CONNECTION_ROLE_ACTIVE;
     connection->state                                                   = UTP_CONNECTION_STATE_CLOSED;
     connection->path_state                                              = UTP_CONNECTION_PATH_STATE_UNKNOWN;
@@ -2395,8 +2396,14 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
         if (payload_length != 0u) {
             memcpy(packet->raw_data + UTP_PACKET_HEADER_SIZE, payload, payload_length);
         }
-        if (packet_type == UTP_PACKET_TYPE_INITIAL || packet_type == UTP_PACKET_TYPE_HANDSHAKE) {
+        if (packet_type == UTP_PACKET_TYPE_INITIAL || packet_type == UTP_PACKET_TYPE_0RTT ||
+            packet_type == UTP_PACKET_TYPE_HANDSHAKE) {
             packet->po_flags |= UTP_PO_HELLO;
+        }
+        // 0-RTT 请求和响应参与重放判定，PTO 重传必须保持包号与线上字节完全不变。
+        if (packet_type == UTP_PACKET_TYPE_0RTT ||
+            (packet_type == UTP_PACKET_TYPE_HANDSHAKE && connection->role == UTP_CONNECTION_ROLE_PASSIVE)) {
+            packet->po_flags |= UTP_PO_IMMUTABLE;
         }
         error = utp_connection_encode_header(connection, packet, packet_type);
     }
@@ -2543,6 +2550,13 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         return utp_connection_next_scheduled_admitted(connection);
     }
     while ((packet = utp_send_control_next_lost(&connection->send_control)) != NULL) {
+        if ((packet->po_flags & UTP_PO_IMMUTABLE) != 0u) {
+            if (!utp_connection_can_transmit_packet(connection, packet)) {
+                (void)utp_send_control_reschedule_lost(&connection->send_control, packet);
+                return NULL;
+            }
+            return packet;
+        }
         utp_connection_requeue_lost_controls(packet);
         if (packet->control_prefix_size != 0u &&
             utp_packet_out_strip_prefix(packet, packet->control_prefix_size) != UTP_INTERNAL_ERROR_OK) {
@@ -2649,6 +2663,11 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
     if ((packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT) &&
         connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_NEW) {
         connection->state = UTP_CONNECTION_STATE_INITIAL_SENT;
+    } else if (packet->packet_type == UTP_PACKET_TYPE_HANDSHAKE && (packet->po_flags & UTP_PO_IMMUTABLE) != 0u &&
+               connection->role == UTP_CONNECTION_ROLE_PASSIVE &&
+               connection->state == UTP_CONNECTION_STATE_INITIAL_SENT) {
+        connection->state = UTP_CONNECTION_STATE_CONNECTED;
+        utp_send_control_set_connected(&connection->send_control, true);
     } else if (packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
                (packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_CONNECTION_CLOSE)) != 0u) {
         connection->close_last_sent_us = now_us;
@@ -2963,10 +2982,25 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }
-            if (token.token_length == UTP_CONNECTION_SESSION_TOKEN_SIZE) {
-                memcpy(connection->session_token, token.token, token.token_length);
-                connection->session_token_size             = token.token_length;
-                connection->session_token_validity_seconds = token.validity_period_seconds;
+            if (connection->role == UTP_CONNECTION_ROLE_ACTIVE &&
+                token.payload_length == UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE && connection->context != NULL &&
+                connection->context->resumption_keys_ready) {
+                const uint8_t encryption_mode = connection->crypto_configured
+                                                    ? (connection->crypto_type == UTP_CRYPTO_TYPE_AES_GCM_256
+                                                           ? UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256
+                                                           : UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_128)
+                                                    : UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+                size_t        state_length    = 0u;
+
+                error = utp_crypto_local_resumption_state_seal(connection->context->resumption_keys.local_state_key,
+                                                               encryption_mode, token.expires_at_seconds, token.payload,
+                                                               token.payload_length, connection->session_token,
+                                                               sizeof(connection->session_token), &state_length);
+                if (error != UTP_INTERNAL_ERROR_OK) {
+                    return error;
+                }
+                connection->session_token_size               = (uint16_t)state_length;
+                connection->session_token_expires_at_seconds = token.expires_at_seconds;
             }
         } else if (frame_type == UTP_FRAME_TYPE_CONNECTION_CLOSE) {
             utp_frame_connection_close_t close;
@@ -3598,6 +3632,17 @@ utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* co
     stream->local_fin_sent                                  = fin;
     connection->stream_data_sent_total                      = (uint64_t)data_length;
     connection->next_stream_id[UTP_STREAM_CLIENT_INITIATED] = UTP_STREAM_TYPES;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* connection)
+{
+    if (connection == NULL || connection->role != UTP_CONNECTION_ROLE_PASSIVE ||
+        connection->state != UTP_CONNECTION_STATE_CONNECTED) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    connection->state = UTP_CONNECTION_STATE_INITIAL_SENT;
+    utp_send_control_set_connected(&connection->send_control, false);
     return UTP_INTERNAL_ERROR_OK;
 }
 

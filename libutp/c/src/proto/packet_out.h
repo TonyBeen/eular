@@ -31,6 +31,7 @@ extern "C" {
 #define UTP_PO_LOSS_RECORDED   0x0100u
 #define UTP_PO_KEEP_PLAINTEXT  0x0200u
 #define UTP_PO_PATH_VALIDATION 0x0400u
+#define UTP_PO_IMMUTABLE       0x0800u
 
 #define UTP_POL_LOSS             0x0001u
 #define UTP_POL_LIMITED          0x0002u

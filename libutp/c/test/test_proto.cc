@@ -516,7 +516,7 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
                                                {UTP_FRAME_TYPE_PATH_CHALLENGE, 9u},
                                                {UTP_FRAME_TYPE_PATH_RESPONSE, 9u},
                                                {UTP_FRAME_TYPE_CRYPTO, 35u},
-                                               {UTP_FRAME_TYPE_SESSION_TOKEN, 4u},
+                                               {UTP_FRAME_TYPE_SESSION_TOKEN, 10u},
                                                {UTP_FRAME_TYPE_ACK_FREQUENCY, 7u},
                                                {UTP_FRAME_TYPE_VERSION, 5u},
                                                {UTP_FRAME_TYPE_HANDSHAKE_DONE, 9u},
@@ -557,15 +557,15 @@ TEST_CASE("session token frame keeps a borrowed token view", "[frame]")
     for (size_t index = 0u; index < 64u; ++index) {
         buffer[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + index] = static_cast<uint8_t>(index);
     }
-    encoded.token                   = buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE;
-    encoded.token_length            = 64u;
-    encoded.validity_period_seconds = 600u;
+    encoded.payload            = buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE;
+    encoded.payload_length     = 64u;
+    encoded.expires_at_seconds = UINT64_C(1710000000);
     REQUIRE(utp_frame_session_token_encode(buffer.data(), buffer.size(), &encoded) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_frame_session_token_decode(&decoded, buffer.data(), buffer.size()) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(decoded.token_length == 64u);
-    REQUIRE(decoded.validity_period_seconds == 600u);
-    REQUIRE(decoded.token == buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE);
-    REQUIRE(decoded.token[63] == 63u);
+    REQUIRE(decoded.payload_length == 64u);
+    REQUIRE(decoded.expires_at_seconds == UINT64_C(1710000000));
+    REQUIRE(decoded.payload == buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE);
+    REQUIRE(decoded.payload[63] == 63u);
 }
 
 TEST_CASE("frame length rejects unknown and truncated frames", "[frame]")
