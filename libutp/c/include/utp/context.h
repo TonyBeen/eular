@@ -61,7 +61,9 @@ typedef struct utp_endpoint {
      1u,                          \
      3u,                          \
      3000u,                       \
-     5000u}
+     5000u,                       \
+     600u,                        \
+     10u}
 
 typedef struct utp_connect_options {
     const char*           address;
@@ -73,6 +75,21 @@ typedef struct utp_connect_options {
 
 // 主动连接配置的完整默认值。
 #define UTP_CONNECT_OPTIONS_INIT {NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
+
+typedef struct utp_connect_0rtt_options {
+    const char*    address;
+    uint16_t       port;
+    uint32_t       timeout_ms;
+    int8_t         retries;
+    const uint8_t* session_token;
+    size_t         session_token_size;
+    const uint8_t* early_data;
+    size_t         early_data_size;
+    bool           early_fin;
+} utp_connect_0rtt_options_t;
+
+// early_data 可被网络重放，调用方只能放入幂等或自行去重的应用数据。
+#define UTP_CONNECT_0RTT_OPTIONS_INIT {NULL, 0u, 3000u, 0, NULL, 0u, NULL, 0u, false}
 
 typedef struct utp_new_connection_info {
     utp_endpoint_t        remote;
@@ -130,6 +147,8 @@ void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connec
 void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
 /** @brief 发起异步主动连接，建连结果通过回调报告。 */
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
+/** @brief 基于会话票据发起非加密 0-RTT 建连；早数据固定写入客户端首个双向流，可能被重放。 */
+utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_0rtt_options_t* options);
 /** @brief 接受一个已通过 on_new_connection 回调的 pending 被动连接。 */
 utp_status_t utp_context_accept(utp_context_t* context);
 

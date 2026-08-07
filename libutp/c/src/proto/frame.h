@@ -130,6 +130,13 @@ typedef struct utp_frame_stream {
     uint16_t       data_length;
 } utp_frame_stream_t;
 
+/* SESSION_TOKEN：type(1), token_length(1), validity_period_seconds(2), token[token_length]。 */
+typedef struct utp_frame_session_token {
+    const uint8_t* token;
+    uint16_t       validity_period_seconds;
+    uint8_t        token_length;
+} utp_frame_session_token_t;
+
 /* CONNECTION_CLOSE：type(1), error_code(2), reason_length(2), reason[reason_length]。 */
 typedef struct utp_frame_connection_close {
     uint16_t       error_code;
@@ -209,6 +216,12 @@ utp_internal_error_t utp_frame_stream_header_encode(uint8_t* buffer, size_t capa
                                                     uint64_t offset, uint16_t data_length);
 /** @brief 解码 STREAM 帧；返回的数据指针借用输入缓冲区。 */
 utp_internal_error_t utp_frame_stream_decode(utp_frame_stream_t* stream, const uint8_t* buffer, size_t length);
+/** @brief 编码 SESSION_TOKEN 帧。 */
+utp_internal_error_t utp_frame_session_token_encode(uint8_t* buffer, size_t capacity,
+                                                    const utp_frame_session_token_t* token);
+/** @brief 解码 SESSION_TOKEN 帧；票据指针借用输入缓冲区。 */
+utp_internal_error_t utp_frame_session_token_decode(utp_frame_session_token_t* token, const uint8_t* buffer,
+                                                    size_t length);
 /** @brief 编码指定长度的零填充 PADDING 帧。 */
 utp_internal_error_t utp_frame_padding_encode(uint8_t* buffer, size_t capacity, uint16_t padding_length);
 /** @brief 解码 PADDING 帧并验证所有填充字节为零。 */

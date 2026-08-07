@@ -99,7 +99,7 @@
 | 编号 | 决策(C 内建) | 落点 C 模块 | 出处 |
 |---|---|---|---|
 | **C1** | **不设无条件 `SO_REUSEPORT`**。UDP 顺序 rebind 只需 `SO_REUSEADDR` 处理竞态。REUSEPORT 的多 socket 同端口负载均衡会破坏 `(IP+端口+scid)` 解复用。 | socket(步4) | punch §6.1/§11;index C1 |
-| **C2** | **server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected**;HandshakeDone 前数据 buffer,promote 时回放。放弃"任一非 Initial 包即 promote"。`RendezvousPending` 复用此 `PendingIncomingConnection` 模式。 | connection/context(步5) | punch §4.3/§15;index C2 |
+| **C2** | **普通 1-RTT** 保持 server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected；**加密恢复 0-RTT** 例外：server 验证后以 early_s2c 加密 `HANDSHAKE_DONE`，客户端验证该响应即 connected，server 成功写出即 connected。两者都不得由任意非 Initial 包 promote。 | connection/context(步5) | punch §4.3/§15;utp-10 §10.6;index C2 |
 | **C3** | 抗放大 credit 常量 **`3×MTU`(≈3840)**;**punch 多候选按候选地址分别跟踪收/发字节**、各自独立 `3×收+credit` 额度;直连保持整连接模型;仅"来自该候选的可验证回包"解除该地址额度。 | path-validation(步4)+ punch(步5) | punch §12/§16;index C3 |
 | **C4** | **握手/打洞/CONNECT 包 MTU floor = 1280**(置 DF,IPv6 min);连接后 PLPMTUD 从 `mtu_base` 经 `{1380,1450,1492,1500}` 梯队后继续二分至配置的 `mtu_max`。`1500` 是默认值和梯队节点，不是 C 端硬上限。 | proto(步2)+ mtu(步4) | punch §6.7/§16;index C4 |
 | **C5** | **公共 API 直接返错误码 + 出参**:`0`=成功;**所有错误 < 0**;`>0` 仅返值接口(如 createStream 返流 ID)。断连/拒绝经回调抛出的错误也为负。**C 里原生如此**(`utp_status_t` 已是负值),无需 cpp 的 0/-1 归一。 | 全公共 API(步1)utp-12 | punch §15;index C5;`c/ERRORS.md` |
@@ -167,7 +167,7 @@
 
 ## 8. 未决 / 后续
 
-- **crypto spec(独立)**:peer↔peer 身份、抗主动 MITM、显式 Finished/双向 key confirmation、加密 0-RTT 放行、`doc/全包加密与无状态可验证CID混淆方案.md` 的全包加密 + opaque CID(SipHash mask/tag)—— 均**未实现**,是目标架构。
+- **crypto spec(独立)**:peer↔peer 身份、抗主动 MITM、显式 Finished/双向 key confirmation、`doc/全包加密与无状态可验证CID混淆方案.md` 的全包加密 + opaque CID(SipHash mask/tag)—— 均**未实现**,是目标架构。加密恢复 0-RTT 的两消息规则已在 `utp-10` §10 另行确定。
 - **relay/TURN spec(独立)**:双对称 NAT、UDP 阻断兜底转发。
 - **调参 TBD**:端口预测置信阈值(punch §16)。
 - **NTRS 客户端认证**:首期单向(节点验 NtrsA);NtrsA 认证节点靠 access 凭据,mTLS 式客户端签名留后续(auth spec §8)。

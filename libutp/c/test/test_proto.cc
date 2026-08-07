@@ -548,6 +548,26 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
     REQUIRE(frame_types == expected_types);
 }
 
+TEST_CASE("session token frame keeps a borrowed token view", "[frame]")
+{
+    std::array<uint8_t, UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + 64u> buffer  = {};
+    utp_frame_session_token_t                                      encoded = {};
+    utp_frame_session_token_t                                      decoded = {};
+
+    for (size_t index = 0u; index < 64u; ++index) {
+        buffer[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + index] = static_cast<uint8_t>(index);
+    }
+    encoded.token                   = buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE;
+    encoded.token_length            = 64u;
+    encoded.validity_period_seconds = 600u;
+    REQUIRE(utp_frame_session_token_encode(buffer.data(), buffer.size(), &encoded) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_session_token_decode(&decoded, buffer.data(), buffer.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.token_length == 64u);
+    REQUIRE(decoded.validity_period_seconds == 600u);
+    REQUIRE(decoded.token == buffer.data() + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE);
+    REQUIRE(decoded.token[63] == 63u);
+}
+
 TEST_CASE("frame length rejects unknown and truncated frames", "[frame]")
 {
     const std::array<uint8_t, 1>  unknown          = {UTP_FRAME_TYPE_MAX};

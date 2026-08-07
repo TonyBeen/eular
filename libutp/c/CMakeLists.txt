@@ -37,7 +37,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(UTP_C_SOURCES
-    src/util/allocator.c src/proto/ack.c src/socket/address.c src/util/buffer.c src/crypto/crypto.c src/util/error.c
+    src/util/allocator.c src/proto/ack.c src/socket/address.c src/util/buffer.c src/crypto/crypto.c src/crypto/token.c src/util/error.c
     src/context/event_loop.c src/proto/frame.c src/util/hash.c src/util/log.c src/util/range_set.c src/util/ring.c
     src/status.c src/util/time.c src/socket/udp.c src/proto/proto.c src/context/ack_scheduler.c src/util/send_history.c
     src/util/rtt.c src/util/receive_history.c src/proto/packet_out.c src/proto/packet_in.c src/context/send_ledger.c
@@ -46,7 +46,7 @@ set(UTP_C_SOURCES
     src/connection/stream.c src/connection/connection.c src/context/context.c src/utp.c)
 set(UTP_C_HEADERS
     include/utp/connection.h include/utp/context.h include/utp/log.h include/utp/option.h include/utp/status.h include/utp/stream.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
-    src/util/buffer.h src/crypto/crypto.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
+    src/util/buffer.h src/crypto/crypto.h src/crypto/token.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
     src/util/log.h src/util/range_set.h src/util/ring.h src/util/time.h src/socket/udp.h src/proto/proto.h
     src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h src/proto/packet_in.h
     src/proto/wire.h src/context/send_ledger.h src/context/send_control.h src/context/pending_incoming.h src/congestion/congestion.h

@@ -113,6 +113,8 @@
    Initial/Handshake 的重传 = 打洞重试(同一套定时器,首包 sub-RTO 小突发再退避);起 keepalive 维持映射
 ```
 
+> 此流程只描述普通 Initial/punch。持有恢复状态的加密 0-RTT 走 `utp-10` §10.6 的两消息流程：server 验证 0-RTT 后回复 early_s2c 加密 `HANDSHAKE_DONE`，不等待 client→server HandshakeDone。
+
 **角色与开洞包**
 - **ACTIVE / PASSIVE 只决定握手角色**:ACTIVE=client(发 Initial=ClientHello),PASSIVE=server(回 Handshake=ServerHello),由 NtrsB 按 NAT 封闭度判定(见 §6.3)。
 - **开洞包 = 纯 hole-opener**:PASSIVE 先发一个 **`PATH_CHALLENGE` 类型、header `scid=dcid=0`、不带 FrameConnect/握手/数据**的包,唯一作用是打开自己的 NAT 出向过滤(NAT 在发送瞬间建映射,与是否到达对端无关)。**ACTIVE 的 Initial 本身就是它的开洞包**,不另发。不分 NAT 类型统一如此。
@@ -433,9 +435,9 @@ libutp 已有 `zero_rtt_replay_window=10s`、`zero_rtt_token_max_lifetime=600s`�
   - 直连 Initial 里也带公钥用于**一致性交叉校验**(relay 份与直连份须相等,不等即拒)。
 - **安全边界(诚实声明)**:临时公钥经 NtrsB 中转**不泄密**(被动 NtrsB 无法从两个公钥推出共享密钥,DH 困难性),携带公钥零机密性代价;NtrsB 能做的只有**主动替换公钥 MITM**,而这正是"无身份加密不抗主动 MITM"的既有边界,与是否经中继无关。抗主动 MITM 需身份签名,属独立 crypto spec。
 
-### 10.1 #9 定稿:HandshakeDone 在打洞下的传输行为
+### 10.1 #9 定稿:普通 Initial/punch 的 HandshakeDone 传输行为
 
-HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acked/重传定时器)**,不提升为包类型。**server 的 connected 判据 = 收到 client 的 HandshakeDone 帧(ack 匹配)→ promote**(§4.3,对齐现有代码,评审 C2 定 A)。libutp 无独立 "Finished";加密的密钥确认是隐式的(能 AEAD 解密即密钥一致)。nat.md 的显式 Finished / 双向 key confirmation / 抗主动 MITM 属 crypto spec,不在本 spec。
+普通 Initial/punch 的 HandshakeDone **保持现有帧 `kFrameHandshakeDone`(可 piggyback,pending/acked/重传定时器)**。**server 的 connected 判据 = 收到 client 的 HandshakeDone 帧(ack 匹配)→ promote**(§4.3,对齐现有代码,评审 C2 定 A)。加密恢复 0-RTT 是独立例外：服务端的 early_s2c `HANDSHAKE_DONE` 响应复用 header `types = UTP_TYPE_HANDSHAKE`，线格式与状态机以 `utp-10` §10.7 为准。libutp 无独立 "Finished";加密的密钥确认是隐式的(能 AEAD 解密即密钥一致)。nat.md 的显式 Finished / 双向 key confirmation / 抗主动 MITM 属 crypto spec,不在本 spec。
 
 1. **可靠送达**:HandshakeDone 及 client 的后续包有 pn、要 ACK、丢了重传;`connected` 不清空未确认包的重传队列(§4.3 不变量)。重传耗尽 → 该路径失败。
 2. **connected 判据**:client 收 `HANDSHAKE` → connected;server 收 client 的 HandshakeDone 帧(ack 匹配)→ promote(加密下须能 AEAD 解密)。开洞包不参与(§4.3)。
@@ -549,7 +551,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 - **H4 — M2 预算量级**:统一 `credit = 3×MTU`,复用现有 3× 反放大。见 §12。
 
 **反推 utp 现有实现后新增的待定项(见 `requirements/utp-00-index.md` §4):**
-- **C2 [已定 = A] connected 触发 / HandshakeDone**:对齐现有代码——**server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote+connected**,HandshakeDone 前的数据 buffer+回放(§4.3/§10.1)。放弃"任一非 Initial 包即 promote"(依赖流重组+HandshakeDone 重传两层隐含正确、且漏 HandshakeDelay,收益边际)。`RendezvousPending` 复用现有 `PendingIncomingConnection` 模式,几乎不改现有 promote 代码。
+- **C2 [已定 = A] connected 触发 / HandshakeDone**:普通 Initial/punch 对齐现有代码——**server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote+connected**,HandshakeDone 前的数据 buffer+回放(§4.3/§10.1)。放弃"任一非 Initial 包即 promote"。加密恢复 0-RTT 是独立例外：按 `utp-10` §10.6，server 验证后回复 early_s2c 加密 `HANDSHAKE_DONE`，客户端验证响应即 connected；该规则后续接入 NTRS 的 0-RTT 路径。`RendezvousPending` 仍复用普通 `PendingIncomingConnection` 模式。
 - **C5 [已定 = A] 公共 API 返回值语义**:改**直接返错误码 + 出参**(对齐 c/ 迁移 `ERRORS.md`),废弃 `NormalizePublicStatus` 的 0/-1 归一。**约定:`0` = 成功;所有错误码 **< 0(负值)**;`> 0` 仅用于返值接口(如 `createStream` 返流 ID)。**断连/拒绝等经回调抛出的错误(`OnConnectError` code、`OnClosed`/ConnectionClose reason、`OnNewConnection` 拒绝)也统一为负值**。`errno.h` 全部 `UTP_ERR_*` 需从当前正值(如 `0x0010`)改为负值;连接关闭 reason 的**线上表示可仍为无符号,在抛给应用时映射为负错误码**。属全公共 API 范围改动(utp-12),非仅 punch;punch 的 `connect0Rtt` 等按此返负码 + 出参。
 - 已定并已回写:C1(去 SO_REUSEPORT,§6.1/§11)、C3(3×MTU + 按候选地址额度,§12/§11)、C4(MTU floor 1280,§6.7/§12/§16)。
 

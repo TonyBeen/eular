@@ -2,6 +2,7 @@
 #define EULAR_UTP_C_CONNECTION_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <utp/status.h>
@@ -24,6 +25,9 @@ utp_status_t  utp_connection_create_stream(utp_connection_t* connection, utp_str
 utp_stream_t* utp_connection_get_stream(utp_connection_t* connection, uint32_t stream_id);
 /** @brief 判断连接是否处于可读写的 CONNECTED 状态。 */
 bool          utp_connection_is_connected(const utp_connection_t* connection);
+/** @brief 导出最近接收的会话票据；缓冲区不足时返回 OVERFLOW 并给出所需长度。 */
+utp_status_t  utp_connection_export_session_token(const utp_connection_t* connection, uint8_t* buffer, size_t capacity,
+                                                  size_t* out_length);
 
 #ifdef __cplusplus
 }

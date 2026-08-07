@@ -138,7 +138,7 @@
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `zero_rtt_token_max_lifetime` | `600` | 0-RTT 票据最长时效（秒） |
-| `zero_rtt_replay_window` | `10` | 抗重放窗口（秒） |
+| `zero_rtt_replay_window` | `10` | C++ 现状的抗重放窗口（秒）；C 版加密 0-RTT 不采用该窗口作为记录保留期，replay record 必须保留至 token 绝对过期时间，详见 utp-10 §10.4 |
 
 **Path Migration** (`config.h:81`)
 | 字段 | 默认值 | 含义 |
@@ -288,6 +288,8 @@
 | `OnZeroRttDecision` | `void(const ZeroRttDecisionInfo&)` | 0-RTT 接受/拒绝决策（含无效票据、重放拒绝等），`accepted` + `reason` | `context.h:161`；`context_impl.cpp:1095-1103` |
 
 - **收敛出口统一**：`handleConnectionState` 是所有连接状态回调的单一出口（`context_impl.cpp:398`）。connected→只走 `OnConnected`；handshake 期 close/timedwait 且无重试剩余→`OnConnectError`；disconnected 且非 pending→`OnConnectionClosed`；disconnected 且仍 pending 且有重试→重发不回调。`context_impl.cpp:413-492`
+
+> C 版目标语义：普通连接和 0-RTT 的 `utp_on_new_connection_fn` 都必须在回调内部调用 `utp_context_accept()`；调用成功后返回 `true`，拒绝或调用失败返回 `false`。0-RTT 的两消息响应只由成功的 `utp_context_accept()` 触发。
 
 ### 7.3 Connection 级回调
 | 回调 | 签名 | 触发时机 | 位置 |

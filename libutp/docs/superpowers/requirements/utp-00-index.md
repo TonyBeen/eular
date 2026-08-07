@@ -53,7 +53,7 @@
 | **utp-core**(现有传输基线) | 01/02/03/04/05/06/09/11/12 | 已实现,本次反推为需求 |
 | **punch / fast-connect**(`2026-07-24-libutp-ntrs-fast-connect-design.md`) | 在 core 之上新增 CONNECT/FrameConnect/rendezvous/打洞/方向/NAT;**依赖并修改** 02/07/08/09/10/11 | 设计定稿,待与 core 对齐(见 §4 冲突) |
 | **NTRS 认证**(`2026-07-27-libutp-ntrs-auth-design.md`) | **home NtrsA↔节点**的自签 Ed25519 根认证 + NodeCertificate + 根证书轮换;单向服务端认证;只做 Ed25519 profile(不支持 TLS);认证材料走新增帧、X25519 复用 kFrameCrypto。跨 NtrsB 单包不认证(rendezvous_id + DoS) | 初稿已起草 |
-| **crypto**(后续) | 扩展 10:**peer 身份**/Ed25519/显式 Finished/加密 0-RTT 放行/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现) | 未开始 |
+| **crypto**(后续) | 扩展 10:**peer 身份**/Ed25519/显式 Finished/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现)。加密恢复 0-RTT 已在 utp-10 §10 确定两消息目标，尚待实现 | 未开始 |
 | **relay**(后续) | 双对称 / UDP 阻断兜底转发 | 未开始 |
 
 **punch spec 里"复用现有 X"→ 对齐到 core 需求条目**:
@@ -75,7 +75,7 @@
 
 > 这些原是"反推后发现 punch spec 想当然复用 与 cpp 现状的分歧"。**方向改为 C 重写后,它们不再是"改 cpp"任务,而是 C 实现从一开始就要内建的设计决策**。汇总权威表见 [总纲 §5.1](../00-C-IMPLEMENTATION-ROADMAP.md)。
 
-**决策状态(2026-07-27,全部定稿)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ HandshakeDone 帧驱动 promote+connected / C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**,"须"改为 **C 实现要内建的目标**。
+**决策状态(2026-07-27 后续更新)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ 普通 1-RTT 由 client→server HandshakeDone 帧驱动 promote；加密恢复 0-RTT 采用 server→client 两消息 `HANDSHAKE_DONE`（详见 utp-10 §10.6）/ C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**,"须"改为 **C 实现要内建的目标**。
 
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
@@ -85,7 +85,7 @@
 **C2 [P0] connected 触发 / HandshakeDone 方向**
 - 现状(utp-02):HandshakeDone 是 **client→server**;服务端被动连接**惰性创建**——`accept()` 只发 server hello,真正 `ConnectionImpl` 在**收到 client 的 HandshakeDone 回声后**才建(`context_impl.cpp:1608-1642`);`initPassive` 一旦调用即置 `kStateConnected`(`:617`)。
 - punch §4.3 现写"server 收到**第一个非 Initial 包**→ connected"。
-- **需对齐**:代码实际是**按 HandshakeDone 驱动惰性建连**,不是"任一非 Initial 包"。要么 punch 对齐到 HandshakeDone,要么把代码泛化为"任一非 Initial 包";并明确 `initPassive` 立即 Connected 与"半连接"语义的关系。
+- **C 目标**:普通 1-RTT 仍按 client→server HandshakeDone 驱动惰性建连；加密恢复 0-RTT 是明确例外，服务端验证后发送 early_s2c 加密 `HANDSHAKE_DONE`，客户端验证后立即 connected。两者均不得泛化为“任一非 Initial 包即 promote”。
 
 **C3 [P1] 抗放大:credit 值 + 每路径 vs 整连接**
 - 现状(utp-07):`kPathValidationSendCredit = 256`;`m_bytesIn/out` 是**整连接累计、迁移不清零**(非 RFC9000 每路径额度)。
@@ -108,7 +108,7 @@
 | doc 说 | 代码实为 | 出处 |
 |---|---|---|
 | 全包加密 + opaque CID(SipHash)+ ChaCha20 | 未实现;现状 = 20B **明文头**作 AAD + payload AES-128/256-GCM + HKDF v2 转录派生,无 CID 混淆/无 ChaCha20 | utp-10 |
-| 加密 0-RTT 可用 | **显式禁用**(`connect0RttWithState` 加密→`NOT_IMPLEMENTED`);仅非加密 0-RTT | utp-10 |
+| 加密 0-RTT 可用 | **C++ 现状**为显式禁用(`connect0RttWithState` 加密→`NOT_IMPLEMENTED`)，仅非加密 0-RTT；**C 版目标**为 utp-10 §10 的两消息恢复流程 | utp-10 |
 | PN-space(Init/Hsk/App)分离 | **未落地**,单一 App 语义;`LostAckInit/Hsk` 等定义未置位 | utp-04 |
 | stream_id 为 u64 | **u32**(帧与 API 均 u32) | utp-03 |
 | BBR 若干常量待配置化 | 多数已配置化;真正未配置化的是 `m_maxCwnd`/MinMax 窗口/burst_tokens 等;`bbr_init_cwnd_mss` **16(config) vs 32(doc/无Config默认)不一致** | utp-06 |

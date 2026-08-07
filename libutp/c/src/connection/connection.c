@@ -29,9 +29,10 @@
 #define UTP_CONNECTION_CLOSE_PTO_MAX_US     UINT64_C(60000000)  // 最大 60 秒
 
 // 路径验证参数
-#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US    UINT64_C(1500000) // 路径验证期间等待 PATH_RESPONSE 的超时时间(us)
-#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES   3u // 路径验证期间允许的最大重试次数
-#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT  (UINT64_C(3) * UTP_PACKET_MTU_FLOOR) // 路径验证期间允许发送的最大字节数
+#define UTP_CONNECTION_PATH_CHALLENGE_TIMEOUT_US  UINT64_C(1500000)  // 路径验证期间等待 PATH_RESPONSE 的超时时间(us)
+#define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES 3u                 // 路径验证期间允许的最大重试次数
+#define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT \
+    (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)  // 路径验证期间允许发送的最大字节数
 
 // 本端默认流额度
 #define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 默认双向流可创建数量
@@ -2107,7 +2108,10 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->crypto_type                                             = 0u;
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
+    connection->session_token_issued                                    = false;
     connection->peer_close_reason                                       = NULL;
+    connection->session_token_size                                      = 0u;
+    connection->session_token_validity_seconds                          = 0u;
     connection->stream_scheduler_mode                                   = 0u;
     connection->stream_scheduler_cursor                                 = 0u;
     connection->local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]  = UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI;
@@ -2329,7 +2333,10 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->crypto_type                                             = 0u;
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
+    connection->session_token_issued                                    = false;
     connection->peer_close_reason                                       = NULL;
+    connection->session_token_size                                      = 0u;
+    connection->session_token_validity_seconds                          = 0u;
     connection->role                                                    = UTP_CONNECTION_ROLE_ACTIVE;
     connection->state                                                   = UTP_CONNECTION_STATE_CLOSED;
     connection->path_state                                              = UTP_CONNECTION_PATH_STATE_UNKNOWN;
@@ -2353,7 +2360,8 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if ((connection->state == UTP_CONNECTION_STATE_NEW &&
-         (connection->role != UTP_CONNECTION_ROLE_ACTIVE || packet_type != UTP_PACKET_TYPE_INITIAL)) ||
+         (connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
+          (packet_type != UTP_PACKET_TYPE_INITIAL && packet_type != UTP_PACKET_TYPE_0RTT))) ||
         (connection->state == UTP_CONNECTION_STATE_INITIAL_SENT && packet_type == UTP_PACKET_TYPE_INITIAL)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
@@ -2638,8 +2646,8 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
     if (packet->transient_ack_size != 0u) {
         utp_ack_scheduler_on_ack_sent(&connection->ack_scheduler);
     }
-    if (packet->packet_type == UTP_PACKET_TYPE_INITIAL && connection->role == UTP_CONNECTION_ROLE_ACTIVE &&
-        connection->state == UTP_CONNECTION_STATE_NEW) {
+    if ((packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT) &&
+        connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_NEW) {
         connection->state = UTP_CONNECTION_STATE_INITIAL_SENT;
     } else if (packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
                (packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_CONNECTION_CLOSE)) != 0u) {
@@ -2771,7 +2779,9 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     error = utp_packet_view_decode(&view, packet, packet_length);
     if (error != UTP_INTERNAL_ERROR_OK || packet_length != UTP_PACKET_HEADER_SIZE + view.payload_length ||
         !utp_connection_packet_type_is_valid(view.header.type) || view.header.packet_number == 0u ||
-        view.header.dcid != connection->local_cid) {
+        (view.header.dcid != connection->local_cid &&
+         !(view.header.type == UTP_PACKET_TYPE_0RTT && connection->role == UTP_CONNECTION_ROLE_PASSIVE &&
+           view.header.dcid == 0u))) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     if (view.header.type == UTP_PACKET_TYPE_INITIAL && connection->crypto_configured) {
@@ -2946,6 +2956,18 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             }
         } else if (frame_type == UTP_FRAME_TYPE_HANDSHAKE_DONE) {
             handshake_done = true;
+        } else if (frame_type == UTP_FRAME_TYPE_SESSION_TOKEN) {
+            utp_frame_session_token_t token;
+
+            error = utp_frame_session_token_decode(&token, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            if (token.token_length == UTP_CONNECTION_SESSION_TOKEN_SIZE) {
+                memcpy(connection->session_token, token.token, token.token_length);
+                connection->session_token_size             = token.token_length;
+                connection->session_token_validity_seconds = token.validity_period_seconds;
+            }
         } else if (frame_type == UTP_FRAME_TYPE_CONNECTION_CLOSE) {
             utp_frame_connection_close_t close;
 
@@ -3555,4 +3577,43 @@ utp_connection_state_t utp_connection_state(const utp_connection_t* connection)
 bool utp_connection_is_connected(const utp_connection_t* connection)
 {
     return connection != NULL && connection->state == UTP_CONNECTION_STATE_CONNECTED;
+}
+
+utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, size_t data_length, bool fin)
+{
+    utp_stream_t*        stream;
+    utp_internal_error_t error;
+
+    if (connection == NULL || connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
+        connection->state != UTP_CONNECTION_STATE_NEW || (uint64_t)data_length > connection->peer_max_data) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_connection_alloc_stream(connection, UTP_STREAM_CLIENT_INITIATED, &stream);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    stream->send_buffer_offset                              = (uint64_t)data_length;
+    stream->next_send_offset                                = (uint64_t)data_length;
+    stream->local_fin_queued                                = fin;
+    stream->local_fin_sent                                  = fin;
+    connection->stream_data_sent_total                      = (uint64_t)data_length;
+    connection->next_stream_id[UTP_STREAM_CLIENT_INITIATED] = UTP_STREAM_TYPES;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,
+                                                                  size_t capacity, size_t* out_length)
+{
+    if (out_length == NULL || connection == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    *out_length = connection->session_token_size;
+    if (connection->session_token_size == 0u) {
+        return UTP_INTERNAL_ERROR_NOT_FOUND;
+    }
+    if (buffer == NULL || capacity < connection->session_token_size) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    memcpy(buffer, connection->session_token, connection->session_token_size);
+    return UTP_INTERNAL_ERROR_OK;
 }

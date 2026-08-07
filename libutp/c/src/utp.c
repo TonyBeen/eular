@@ -41,6 +41,16 @@ utp_stream_t* utp_connection_get_stream(utp_connection_t* connection, uint32_t s
     return utp_connection_find_stream_internal(connection, stream_id);
 }
 
+utp_status_t utp_connection_export_session_token(const utp_connection_t* connection, uint8_t* buffer, size_t capacity,
+                                                 size_t* out_length)
+{
+    const utp_internal_error_t error =
+        utp_connection_export_session_token_internal(connection, buffer, capacity, out_length);
+
+    return error == UTP_INTERNAL_ERROR_NOT_FOUND ? UTP_STATUS_CONNECTION_SESSION_TOKEN_UNAVAILABLE
+                                                 : utp_internal_error_to_status(error);
+}
+
 uint32_t utp_stream_id(const utp_stream_t* stream)
 {
     return stream == NULL || !stream->used ? UINT32_MAX : stream->stream_id;

@@ -18,7 +18,7 @@
 | `utp_stream_on_frame()` raw 数据帧 | raw packet 没有可借用生命周期，不能被 recv fragment 持有 | 有数据的 STREAM frame 必须走 `PacketIn`；无数据 FIN 可保留 raw 兼容 |
 | `utp_stream_read()` 拷贝到应用 buffer | 传统 read API 的语义就是复制到调用方 buffer | 内部已增加 acquire/commit read view，后续 public/API 层可映射到该模型 |
 | 控制帧 payload 复制到 `PacketOut` | 控制帧很小，当前收益低，且重传依赖完整 packet | 后续 frame builder 直接写 packet 或小帧固定内联 |
-| pending incoming 缓存完整 wire packet | HandshakeDone 前没有正式 connection，暂按有界 storage 缓存 | promote replay 时用 context PacketIn 池包装回放包，避免 stream fragment 指向 raw storage |
+| 加密 0-RTT 客户端在 HandshakeDone 前收到乱序 CTRL | 已创建但尚未向应用暴露的 pending Connection 可持有 PacketIn 生命周期 | Connection 零拷贝保留至多一个 PacketIn；派生 1-RTT 密钥后送入正常收包路径。Context 只做 CID 路由，不持有该缓存 |
 | crypto key/nonce/transcript 小块复制 | 加密材料构造需要独立存储，且非数据面大块 payload | 保留；敏感材料后续按 crypto 规范显式清理 |
 | socket/address/system struct 清零或小块复制 | 平台 ABI 或地址表示转换要求明确布局 | 保留，除非有等价且更清晰的字段初始化 |
 

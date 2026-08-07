@@ -9,6 +9,7 @@
 
 extern "C" {
 #include "crypto/crypto.h"
+#include "crypto/token.h"
 }
 
 namespace {
@@ -237,6 +238,44 @@ TEST_CASE("AES-GCM context uses the supplied allocator", "[crypto]")
 
     utp_crypto_aead_cleanup(&aead);
     REQUIRE(tracker.frees == 1u);
+}
+
+TEST_CASE("0-RTT token binds address and survives one key rotation", "[crypto]")
+{
+    utp_token_auth_t                    auth    = {};
+    utp_token_meta_t                    meta    = {};
+    utp_token_meta_t                    decoded = {};
+    utp_address_t                       peer    = {};
+    std::array<uint8_t, UTP_TOKEN_SIZE> token   = {};
+
+    peer.family            = UTP_ADDRESS_FAMILY_IPV4;
+    peer.address[0]        = 192u;
+    peer.address[1]        = 0u;
+    peer.address[2]        = 2u;
+    peer.address[3]        = 1u;
+    meta.token_type        = UTP_TOKEN_TYPE_ZERO_RTT;
+    meta.timestamp_seconds = 100u;
+    meta.cid               = 42u;
+    meta.version           = 2u;
+    meta.family            = UTP_ADDRESS_FAMILY_IPV4;
+    std::memcpy(meta.address, peer.address, 4u);
+
+    REQUIRE(utp_token_auth_init(&auth, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_token_auth_seal(&auth, &meta, token.data(), 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_token_auth_open(&auth, token.data(), UTP_TOKEN_TYPE_ZERO_RTT, &decoded, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.cid == meta.cid);
+    REQUIRE(utp_token_meta_address_matches(&decoded, &peer));
+
+    peer.address[3] = 2u;
+    REQUIRE_FALSE(utp_token_meta_address_matches(&decoded, &peer));
+    peer.address[3] = 1u;
+    REQUIRE(utp_token_auth_open(&auth, token.data(), UTP_TOKEN_TYPE_ZERO_RTT, &decoded, 3700u) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    token[UTP_TOKEN_NONCE_SIZE] ^= 0x01u;
+    REQUIRE(utp_token_auth_open(&auth, token.data(), UTP_TOKEN_TYPE_ZERO_RTT, &decoded, 3700u) ==
+            UTP_INTERNAL_ERROR_CRYPTO);
+    utp_token_auth_cleanup(&auth);
 }
 
 TEST_CASE("directional AEAD contexts interoperate in both directions in place", "[crypto]")
