@@ -79,7 +79,6 @@ struct utp_context {
     utp_hash_table_t                         pending_incoming;
     struct utp_context_pending_slot_tailq    free_pending_slots;
     uint32_t                                 next_cid;
-    utp_log_level_t                          log_level;
     utp_stream_scheduler_mode_t              stream_scheduler_mode;
     utp_mtu_config_t                         mtu_config;
     uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];

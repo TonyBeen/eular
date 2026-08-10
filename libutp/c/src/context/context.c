@@ -219,8 +219,7 @@ static bool utp_context_remember_zero_rtt_replay(
 
 static void utp_context_log(utp_context_t* context, utp_log_level_t level, const char* message)
 {
-    if (context == NULL || context->logger.sink == NULL || message == NULL || level < context->log_level ||
-        level > UTP_LOG_LEVEL_ERROR) {
+    if (context == NULL || message == NULL || !utp_internal_log_enabled(&context->logger, level)) {
         return;
     }
     utp_internal_log(&context->logger, &context->tag, level, message);
@@ -229,11 +228,10 @@ static void utp_context_log(utp_context_t* context, utp_log_level_t level, const
 static void utp_context_log_ids(utp_context_t* context, utp_log_level_t level, const char* event, uint32_t local_cid,
                                 uint32_t peer_cid)
 {
-    char message[160];
-
-    if (event == NULL) {
+    if (context == NULL || event == NULL || !utp_internal_log_enabled(&context->logger, level)) {
         return;
     }
+    char message[160];
     (void)snprintf(message, sizeof(message), "%s: local_cid=%" PRIu32 ", peer_cid=%" PRIu32, event, local_cid,
                    peer_cid);
     utp_context_log(context, level, message);
@@ -242,12 +240,15 @@ static void utp_context_log_ids(utp_context_t* context, utp_log_level_t level, c
 static void utp_context_log_close(utp_context_t* context, const utp_context_connection_slot_t* slot,
                                   utp_status_t status, uint16_t peer_error_code, bool peer_initiated)
 {
+    const utp_log_level_t level = status == UTP_STATUS_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING;
+    if (context == NULL || slot == NULL || !utp_internal_log_enabled(&context->logger, level)) {
+        return;
+    }
     char message[256];
-
     (void)snprintf(message, sizeof(message),
                    "connection closed: local_cid=%" PRIu32 ", status=%s, peer_initiated=%u, peer_error=%" PRIu16,
                    slot->connection.local_cid, utp_status_string(status), peer_initiated ? 1u : 0u, peer_error_code);
-    utp_context_log(context, status == UTP_STATUS_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING, message);
+    utp_context_log(context, level, message);
 }
 
 static uint64_t utp_context_now_us(void)
@@ -343,7 +344,7 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t* conte
 static bool utp_context_log_level_is_valid(utp_log_level_t level)
 {
     return level == UTP_LOG_LEVEL_DEBUG || level == UTP_LOG_LEVEL_INFO || level == UTP_LOG_LEVEL_WARNING ||
-           level == UTP_LOG_LEVEL_ERROR;
+           level == UTP_LOG_LEVEL_ERROR || level == UTP_LOG_LEVEL_SILENCE;
 }
 
 static bool utp_context_cid_in_use(const utp_context_t* context, uint32_t cid)
@@ -2011,7 +2012,6 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->callback_accept_requested             = false;
     context->next_cid                              = (uint32_t)options->context_id;
     context->next_cid                              = context->next_cid == 0u ? 1u : context->next_cid;
-    context->log_level                             = options->log_level;
     context->stream_scheduler_mode                 = options->stream_scheduler_mode;
     context->mtu_config.enabled                    = options->enable_dplpmtud;
     context->mtu_config.mtu_min                    = options->mtu_min;
@@ -2045,7 +2045,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (error == UTP_INTERNAL_ERROR_OK) {
         context->resumption_keys_ready = true;
     }
-    context->logger.sink = options->log_sink;
+    context->logger.sink  = options->log_sink;
+    context->logger.level = options->log_level;
     char    fragment[32];
     int32_t fragment_length = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
@@ -2165,6 +2166,15 @@ utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint1
     }
     utp_context_log(context, UTP_LOG_LEVEL_INFO, "udp socket bound");
     return UTP_STATUS_OK;
+}
+
+void utp_context_set_logger(utp_context_t* context, utp_log_sink_fn callback, utp_log_level_t level)
+{
+    if (context == NULL || !utp_context_log_level_is_valid(level)) {
+        return;
+    }
+    context->logger.sink  = callback;
+    context->logger.level = level;
 }
 
 void utp_context_set_on_connected(utp_context_t* context, utp_on_connected_fn callback, void* user_data)

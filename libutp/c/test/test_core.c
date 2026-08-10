@@ -145,7 +145,7 @@ static void test_internal_error_and_log_tag(void)
     utp_log_tag_t        context_tag;
     utp_log_tag_t        connection_tag;
     utp_log_tag_t        send_control_tag;
-    utp_logger_t         logger;
+    utp_logger_t         logger                                     = UTP_LOGGER_INIT;
     utp_internal_error_t error                                      = utp_internal_error_from_errno(EAGAIN);
     char                 oversized_tag[UTP_LOG_TAG_MAX_LENGTH + 1u] = {0};
     char                 expected_message[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
@@ -161,7 +161,8 @@ static void test_internal_error_and_log_tag(void)
     assert(utp_log_tag_append(&send_control_tag, &connection_tag, "send_control", 12u) == UTP_INTERNAL_ERROR_OK);
     assert(utp_log_tag_init(&context_tag, oversized_tag, sizeof(oversized_tag)) == UTP_INTERNAL_ERROR_LIMIT);
     memset(&g_log_capture, 0, sizeof(g_log_capture));
-    logger.sink = capture_log;
+    logger.sink  = capture_log;
+    logger.level = UTP_LOG_LEVEL_DEBUG;
     utp_internal_log_error(&logger, &send_control_tag, error, "udp send failed");
     assert(g_log_capture.calls == 1u);
     assert(g_log_capture.level == UTP_LOG_LEVEL_ERROR);
@@ -176,6 +177,15 @@ static void test_internal_error_and_log_tag(void)
     assert(strcmp(g_log_capture.message, "[context 1] connection established") == 0);
     utp_internal_log(&logger, &context_tag, (utp_log_level_t)-1, "invalid level");
     assert(g_log_capture.calls == 2u);
+    logger.level = UTP_LOG_LEVEL_WARNING;
+    utp_internal_log(&logger, &context_tag, UTP_LOG_LEVEL_INFO, "filtered info");
+    assert(g_log_capture.calls == 2u);
+    utp_internal_log(&logger, &context_tag, UTP_LOG_LEVEL_WARNING, "warning emitted");
+    assert(g_log_capture.calls == 3u);
+    assert(g_log_capture.level == UTP_LOG_LEVEL_WARNING);
+    logger.level = UTP_LOG_LEVEL_SILENCE;
+    utp_internal_log_error(&logger, &context_tag, error, "filtered error");
+    assert(g_log_capture.calls == 3u);
 }
 
 static void test_buffer(void)

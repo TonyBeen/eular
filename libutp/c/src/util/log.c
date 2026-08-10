@@ -48,17 +48,21 @@ utp_internal_error_t utp_log_tag_append(utp_log_tag_t* tag, const utp_log_tag_t*
     return append_fragment(tag, fragment, fragment_length);
 }
 
+bool utp_internal_log_enabled(const utp_logger_t* logger, utp_log_level_t level)
+{
+    return logger != NULL && logger->sink != NULL && logger->level >= UTP_LOG_LEVEL_DEBUG &&
+           logger->level <= UTP_LOG_LEVEL_SILENCE && level >= logger->level && level <= UTP_LOG_LEVEL_ERROR;
+}
+
 void utp_internal_log_error(const utp_logger_t* logger, const utp_log_tag_t* tag, utp_internal_error_t error,
                             const char* message)
 {
-    char          formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
-    const char*   status;
-    const int32_t system_error = utp_internal_error_to_errno(error);
-
-    if (logger == NULL || logger->sink == NULL || message == NULL) {
+    if (message == NULL || !utp_internal_log_enabled(logger, UTP_LOG_LEVEL_ERROR)) {
         return;
     }
-    status = utp_status_string(utp_internal_error_to_status(error));
+    char          formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
+    const char*   status       = utp_status_string(utp_internal_error_to_status(error));
+    const int32_t system_error = utp_internal_error_to_errno(error);
     if (tag != NULL && tag->tag_length != 0u) {
         if (system_error != 0) {
             (void)snprintf(formatted, sizeof(formatted), "%s %s: status=%s, errno=%d", tag->tag, message, status,
@@ -76,12 +80,10 @@ void utp_internal_log_error(const utp_logger_t* logger, const utp_log_tag_t* tag
 
 void utp_internal_log(const utp_logger_t* logger, const utp_log_tag_t* tag, utp_log_level_t level, const char* message)
 {
-    char formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
-
-    if (logger == NULL || logger->sink == NULL || message == NULL || level < UTP_LOG_LEVEL_DEBUG ||
-        level > UTP_LOG_LEVEL_ERROR) {
+    if (message == NULL || !utp_internal_log_enabled(logger, level)) {
         return;
     }
+    char formatted[UTP_LOG_MESSAGE_MAX_LENGTH + 1u];
     if (tag != NULL && tag->tag_length != 0u) {
         (void)snprintf(formatted, sizeof(formatted), "%s %s", tag->tag, message);
     } else {

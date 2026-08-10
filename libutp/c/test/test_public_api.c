@@ -312,9 +312,9 @@ int main(void)
         assert(strstr(test_log_message, "udp socket bound") != NULL);
         assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_SOCKET_OPEN);
     }
+    utp_context_set_logger(context, NULL, UTP_LOG_LEVEL_SILENCE);
     utp_context_destroy(context);
-    assert(test_log_count == 3);
-    assert(strstr(test_log_message, "context destroy started") != NULL);
+    assert(test_log_count == 2);
     {
         utp_context_options_t quiet_options = UTP_CONTEXT_OPTIONS_INIT;
         utp_context_t*        quiet_context = NULL;
@@ -328,6 +328,17 @@ int main(void)
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
         assert(quiet_context->zero_rtt_replay_cache_capacity == 8192u);
         assert(quiet_context->zero_rtt_replay.max_entries == 8192u);
+        utp_context_destroy(quiet_context);
+        assert(test_log_count == 0);
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
+        utp_context_set_logger(quiet_context, test_log_sink, UTP_LOG_LEVEL_INFO);
+        utp_context_destroy(quiet_context);
+        assert(test_log_count == 1);
+        assert(strstr(test_log_message, "context destroy started") != NULL);
+        quiet_options.log_level = UTP_LOG_LEVEL_SILENCE;
+        test_log_count          = 0;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
+        assert(test_log_count == 0);
         utp_context_destroy(quiet_context);
         assert(test_log_count == 0);
         quiet_options.log_level = (utp_log_level_t)99;
