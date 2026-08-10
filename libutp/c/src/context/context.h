@@ -12,8 +12,7 @@
 #include "util/hash.h"
 #include "util/log.h"
 
-#define UTP_CONTEXT_MAX_CONNECTIONS                  32u
-#define UTP_CONTEXT_MAX_PENDING_INCOMING             32u
+#define UTP_CONTEXT_MAX_PENDING_INCOMING             1024u
 #define UTP_CONTEXT_PACKET_LIMIT                     32u
 #define UTP_CONTEXT_PACKET_IN_LIMIT                  64u
 #define UTP_CONTEXT_PACKET_IN_CAPACITY               65535u
@@ -34,6 +33,8 @@ typedef struct utp_context_zero_rtt_replay_entry {
 } utp_context_zero_rtt_replay_entry_t;
 
 typedef struct utp_context_connection_slot {
+    utp_hash_node_t node;
+    TAILQ_ENTRY(utp_context_connection_slot) free_next;
     utp_connection_t           connection;
     utp_connect_attempt_info_t connect_attempt;
     uint64_t                   connect_deadline_us;
@@ -52,50 +53,56 @@ typedef struct utp_context_connection_slot {
     bool                       connection_error_reported;
     bool                       connect_pending;
 } utp_context_connection_slot_t;
+TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
 typedef struct utp_context_pending_slot {
+    utp_hash_node_t node;
+    TAILQ_ENTRY(utp_context_pending_slot) free_next;
     utp_pending_incoming_t pending;
     uint8_t                storage[UTP_CONTEXT_PENDING_STORAGE_CAPACITY];
     bool                   used;
     bool                   queued;
 } utp_context_pending_slot_t;
+TAILQ_HEAD(utp_context_pending_slot_tailq, utp_context_pending_slot);
 
 struct utp_context {
-    utp_event_loop_t               event_loop;
-    utp_event_t                    udp_event;
-    utp_event_t                    udp_write_event;
-    utp_event_t                    timer_event;
-    utp_udp_socket_t               udp_socket;
-    utp_packet_in_pool_t           packet_in_pool;
+    utp_event_loop_t                         event_loop;
+    utp_event_t                              udp_event;
+    utp_event_t                              udp_write_event;
+    utp_event_t                              timer_event;
+    utp_udp_socket_t                         udp_socket;
+    utp_packet_in_pool_t                     packet_in_pool;
     // 加密只在最终 UDP 写入前进行，单个 Context 的事件循环串行复用该缓冲。
-    uint8_t                        encrypt_send_buffer[UINT16_MAX];
-    utp_context_connection_slot_t  connections[UTP_CONTEXT_MAX_CONNECTIONS];
-    utp_context_pending_slot_t     pending_incoming[UTP_CONTEXT_MAX_PENDING_INCOMING];
-    uint32_t                       next_cid;
-    utp_log_level_t                log_level;
-    utp_stream_scheduler_mode_t    stream_scheduler_mode;
-    utp_mtu_config_t               mtu_config;
-    uint8_t                        resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
-    utp_crypto_resumption_keys_t   resumption_keys;
-    utp_hash_table_t               zero_rtt_replay;
-    uint32_t                       zero_rtt_token_max_lifetime_seconds;
-    uint32_t                       zero_rtt_replay_cache_capacity;
-    utp_context_pending_slot_t*    callback_accept_pending;
-    utp_context_connection_slot_t* callback_accept_zero_rtt;
-    bool                           callback_accept_requested;
-    bool                           resumption_key_explicit;
-    bool                           resumption_keys_ready;
-    bool                           default_resumption_key_warning_logged;
-    utp_on_connected_fn            on_connected;
-    void*                          on_connected_user_data;
-    utp_on_connect_error_fn        on_connect_error;
-    void*                          on_connect_error_user_data;
-    utp_on_new_connection_fn       on_new_connection;
-    void*                          on_new_connection_user_data;
-    utp_on_connection_error_fn     on_connection_error;
-    void*                          on_connection_error_user_data;
-    utp_logger_t                   logger;
-    utp_log_tag_t                  tag;
+    uint8_t                                  encrypt_send_buffer[UINT16_MAX];
+    utp_hash_table_t                         connections;
+    struct utp_context_connection_slot_tailq free_connection_slots;
+    utp_hash_table_t                         pending_incoming;
+    struct utp_context_pending_slot_tailq    free_pending_slots;
+    uint32_t                                 next_cid;
+    utp_log_level_t                          log_level;
+    utp_stream_scheduler_mode_t              stream_scheduler_mode;
+    utp_mtu_config_t                         mtu_config;
+    uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
+    utp_crypto_resumption_keys_t             resumption_keys;
+    utp_hash_table_t                         zero_rtt_replay;
+    uint32_t                                 zero_rtt_token_max_lifetime_seconds;
+    uint32_t                                 zero_rtt_replay_cache_capacity;
+    utp_context_pending_slot_t*              callback_accept_pending;
+    utp_context_connection_slot_t*           callback_accept_zero_rtt;
+    bool                                     callback_accept_requested;
+    bool                                     resumption_key_explicit;
+    bool                                     resumption_keys_ready;
+    bool                                     default_resumption_key_warning_logged;
+    utp_on_connected_fn                      on_connected;
+    void*                                    on_connected_user_data;
+    utp_on_connect_error_fn                  on_connect_error;
+    void*                                    on_connect_error_user_data;
+    utp_on_new_connection_fn                 on_new_connection;
+    void*                                    on_new_connection_user_data;
+    utp_on_connection_error_fn               on_connection_error;
+    void*                                    on_connection_error_user_data;
+    utp_logger_t                             logger;
+    utp_log_tag_t                            tag;
 };
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);

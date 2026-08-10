@@ -28,8 +28,9 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
 static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, uint64_t now_us);
 static void                 utp_context_on_udp_writable(uint32_t events, void* user_data);
 static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot);
-static void                 utp_context_release_connection_slot(utp_context_connection_slot_t* slot);
-static void                 utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot);
+static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot);
+static void utp_context_release_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot);
+static void utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot);
 static utp_internal_error_t utp_context_queue_session_token(utp_context_t*                 context,
                                                             utp_context_connection_slot_t* slot);
 
@@ -41,21 +42,55 @@ static uint64_t             utp_context_now_seconds(void)
     return now > 0 ? (uint64_t)now : UINT64_C(1);
 }
 
+/** @brief 从哈希节点取得动态 Connection 槽位。 */
+static utp_context_connection_slot_t* utp_context_connection_slot_from_node(utp_hash_node_t* node)
+{
+    return node == NULL
+               ? NULL
+               : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
+}
+
+/** @brief 按本地 CID 比较 Connection 槽位。 */
+static bool utp_context_connection_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_connection_slot_t* slot;
+
+    (void)user_data;
+    slot = (const utp_context_connection_slot_t*)((const uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
+    return key != NULL && slot->connection.local_cid == *(const uint32_t*)key;
+}
+
+/** @brief 从哈希节点取得动态 pending 槽位。 */
+static utp_context_pending_slot_t* utp_context_pending_slot_from_node(utp_hash_node_t* node)
+{
+    return node == NULL ? NULL
+                        : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
+}
+
+/** @brief 按本地 CID 比较 pending 槽位。 */
+static bool utp_context_pending_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_pending_slot_t* slot;
+
+    (void)user_data;
+    slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
+    return key != NULL && slot->pending.local_cid == *(const uint32_t*)key;
+}
+
 /** @brief 使所有已缓存的恢复凭证失效，根密钥替换后不得继续导出或使用旧状态。 */
 static void utp_context_invalidate_resumption_state(utp_context_t* context)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
     if (context == NULL) {
         return;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        utp_context_connection_slot_t* slot       = &context->connections[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot       = utp_context_connection_slot_from_node(node);
         utp_connection_t*              connection = &slot->connection;
 
-        if (!slot->used) {
-            continue;
-        }
         utp_crypto_secure_clear(connection->session_token, sizeof(connection->session_token));
         connection->session_token_size               = 0u;
         connection->session_token_expires_at_seconds = 0u;
@@ -65,7 +100,7 @@ static void utp_context_invalidate_resumption_state(utp_context_t* context)
             const utp_connect_attempt_info_t attempt = slot->connect_attempt;
 
             utp_context_report_connect_error(context, UTP_STATUS_CANCELLED, "resumption key replaced", &attempt);
-            utp_context_release_connection_slot(slot);
+            utp_context_release_connection_slot(context, slot);
         }
     }
 }
@@ -322,22 +357,11 @@ static bool utp_context_log_level_is_valid(utp_log_level_t level)
 
 static bool utp_context_cid_in_use(const utp_context_t* context, uint32_t cid)
 {
-    size_t index;
-
     if (cid == 0u) {
         return true;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        if (context->connections[index].used && context->connections[index].connection.local_cid == cid) {
-            return true;
-        }
-    }
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        if (context->pending_incoming[index].used && context->pending_incoming[index].pending.local_cid == cid) {
-            return true;
-        }
-    }
-    return false;
+    return utp_hash_table_find(&context->connections, cid, &cid, utp_context_connection_slot_matches, NULL) != NULL ||
+           utp_hash_table_find(&context->pending_incoming, cid, &cid, utp_context_pending_slot_matches, NULL) != NULL;
 }
 
 static utp_internal_error_t utp_context_alloc_cid(utp_context_t* context, uint32_t* out_cid)
@@ -367,24 +391,30 @@ static utp_internal_error_t utp_context_alloc_cid(utp_context_t* context, uint32
 
 static utp_context_connection_slot_t* utp_context_find_connection_slot(utp_context_t* context, uint32_t local_cid)
 {
-    size_t index;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        if (context->connections[index].used && context->connections[index].connection.local_cid == local_cid) {
-            return &context->connections[index];
-        }
+    if (context == NULL || local_cid == 0u) {
+        return NULL;
     }
-    return NULL;
+    node = utp_hash_table_find(&context->connections, local_cid, &local_cid, utp_context_connection_slot_matches, NULL);
+    return utp_context_connection_slot_from_node(node);
 }
 
 static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_context_t*       context,
                                                                           const utp_address_t* peer)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        if (context->connections[index].used && utp_address_equal(&context->connections[index].connection.peer, peer)) {
-            return &context->connections[index];
+    if (context == NULL || peer == NULL) {
+        return NULL;
+    }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
+
+        if (utp_address_equal(&slot->connection.peer, peer)) {
+            return slot;
         }
     }
     return NULL;
@@ -392,33 +422,63 @@ static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_co
 
 static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_context_t* context)
 {
-    size_t index;
+    utp_context_connection_slot_t* slot;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        if (!context->connections[index].used) {
-            context->connections[index].connection.local_cid        = 0u;
-            context->connections[index].connection.peer_cid         = 0u;
-            context->connections[index].connect_deadline_us         = 0u;
-            context->connections[index].connect_retries_remaining   = 0;
-            context->connections[index].zero_rtt_early_data_size    = 0u;
-            context->connections[index].zero_rtt_expires_at_seconds = 0u;
-            context->connections[index].zero_rtt_early_fin          = false;
-            context->connections[index].zero_rtt_awaiting_accept    = false;
-            context->connections[index].zero_rtt_accepted           = false;
-            context->connections[index].zero_rtt_encryption_mode    = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-            context->connections[index].used                        = true;
-            context->connections[index].connected_reported          = false;
-            context->connections[index].connection_error_reported   = false;
-            context->connections[index].connect_pending             = false;
-            return &context->connections[index];
+    if (context == NULL) {
+        return NULL;
+    }
+    slot = TAILQ_FIRST(&context->free_connection_slots);
+    if (slot != NULL) {
+        TAILQ_REMOVE(&context->free_connection_slots, slot, free_next);
+    } else {
+        slot = utp_allocator_alloc(NULL, sizeof(*slot));
+        if (slot == NULL) {
+            return NULL;
         }
     }
-    return NULL;
+    utp_hash_node_init(&slot->node);
+    slot->connection.local_cid        = 0u;
+    slot->connection.peer_cid         = 0u;
+    slot->connect_deadline_us         = 0u;
+    slot->connect_retries_remaining   = 0;
+    slot->zero_rtt_early_data_size    = 0u;
+    slot->zero_rtt_expires_at_seconds = 0u;
+    slot->zero_rtt_early_fin          = false;
+    slot->zero_rtt_awaiting_accept    = false;
+    slot->zero_rtt_accepted           = false;
+    slot->zero_rtt_encryption_mode    = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->used                        = true;
+    slot->connected_reported          = false;
+    slot->connection_error_reported   = false;
+    slot->connect_pending             = false;
+    return slot;
 }
 
-static void utp_context_release_connection_slot(utp_context_connection_slot_t* slot)
+/** @brief 将完成初始化的 Connection 槽位注册到 CID 哈希表。 */
+static utp_internal_error_t utp_context_register_connection_slot(utp_context_t*                 context,
+                                                                 utp_context_connection_slot_t* slot)
 {
-    if (slot != NULL && slot->used) {
+    const uint32_t local_cid = slot == NULL ? 0u : slot->connection.local_cid;
+
+    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    return utp_hash_table_insert(&context->connections, &slot->node, local_cid, &local_cid,
+                                 utp_context_connection_slot_matches, NULL);
+}
+
+/** @brief 从 CID 哈希表摘除 Connection，但保留槽位供重试重新初始化。 */
+static void utp_context_unregister_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    if (context != NULL && slot != NULL && slot->node.table == &context->connections) {
+        (void)utp_hash_table_remove(&context->connections, &slot->node);
+    }
+}
+
+static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    if (context != NULL && slot != NULL && slot->used) {
+        utp_context_unregister_connection_slot(context, slot);
         if (slot->connection.local_cid != 0u) {
             utp_connection_cleanup(&slot->connection);
         }
@@ -435,6 +495,7 @@ static void utp_context_release_connection_slot(utp_context_connection_slot_t* s
         slot->zero_rtt_accepted           = false;
         slot->zero_rtt_encryption_mode    = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
         slot->used                        = false;
+        TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
     }
 }
 
@@ -466,25 +527,31 @@ static utp_internal_error_t utp_context_close_on_peer_protocol_error(utp_context
 
 static utp_context_pending_slot_t* utp_context_find_pending_slot(utp_context_t* context, uint32_t local_cid)
 {
-    size_t index;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        if (context->pending_incoming[index].used && context->pending_incoming[index].pending.local_cid == local_cid) {
-            return &context->pending_incoming[index];
-        }
+    if (context == NULL || local_cid == 0u) {
+        return NULL;
     }
-    return NULL;
+    node =
+        utp_hash_table_find(&context->pending_incoming, local_cid, &local_cid, utp_context_pending_slot_matches, NULL);
+    return utp_context_pending_slot_from_node(node);
 }
 
 static utp_context_pending_slot_t* utp_context_find_pending_by_peer(utp_context_t* context, uint32_t peer_cid,
                                                                     const utp_address_t* peer)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        if (context->pending_incoming[index].used && context->pending_incoming[index].pending.peer_cid == peer_cid &&
-            utp_address_equal(&context->pending_incoming[index].pending.peer, peer)) {
-            return &context->pending_incoming[index];
+    if (context == NULL || peer == NULL) {
+        return NULL;
+    }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
+
+        if (slot->pending.peer_cid == peer_cid && utp_address_equal(&slot->pending.peer, peer)) {
+            return slot;
         }
     }
     return NULL;
@@ -492,24 +559,49 @@ static utp_context_pending_slot_t* utp_context_find_pending_by_peer(utp_context_
 
 static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t* context)
 {
-    size_t index;
+    utp_context_pending_slot_t* slot;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        if (!context->pending_incoming[index].used) {
-            context->pending_incoming[index].used   = true;
-            context->pending_incoming[index].queued = false;
-            return &context->pending_incoming[index];
+    if (context == NULL || utp_hash_table_count(&context->pending_incoming) >= UTP_CONTEXT_MAX_PENDING_INCOMING) {
+        return NULL;
+    }
+    slot = TAILQ_FIRST(&context->free_pending_slots);
+    if (slot != NULL) {
+        TAILQ_REMOVE(&context->free_pending_slots, slot, free_next);
+    } else {
+        slot = utp_allocator_alloc(NULL, sizeof(*slot));
+        if (slot == NULL) {
+            return NULL;
         }
     }
-    return NULL;
+    utp_hash_node_init(&slot->node);
+    slot->pending.local_cid = 0u;
+    slot->used              = true;
+    slot->queued            = false;
+    return slot;
 }
 
-static void utp_context_release_pending_slot(utp_context_pending_slot_t* slot)
+/** @brief 将 pending 注册到 CID 哈希表并计入 1024 项容量。 */
+static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
-    if (slot != NULL && slot->used) {
+    const uint32_t local_cid = slot == NULL ? 0u : slot->pending.local_cid;
+
+    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    return utp_hash_table_insert(&context->pending_incoming, &slot->node, local_cid, &local_cid,
+                                 utp_context_pending_slot_matches, NULL);
+}
+
+static void utp_context_release_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
+{
+    if (context != NULL && slot != NULL && slot->used) {
+        if (slot->node.table == &context->pending_incoming) {
+            (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
+        }
         utp_pending_incoming_reset(&slot->pending);
         slot->queued = false;
         slot->used   = false;
+        TAILQ_INSERT_TAIL(&context->free_pending_slots, slot, free_next);
     }
 }
 
@@ -627,20 +719,22 @@ static void utp_context_report_terminal_send_error(utp_context_t* context, utp_c
     } else {
         utp_context_report_connection_error(context, slot, status, 0u, (const uint8_t*)reason, reason_length, false);
     }
-    utp_context_release_connection_slot(slot);
+    utp_context_release_connection_slot(context, slot);
 }
 
 static bool utp_context_has_pending_udp_write(const utp_context_t* context)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
     if (context == NULL) {
         return false;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        const utp_context_connection_slot_t* slot = &context->connections[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
 
-        if (slot->used && slot->connection.udp_write_pending) {
+        if (slot->connection.udp_write_pending) {
             return true;
         }
     }
@@ -747,25 +841,21 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection)
 {
-    size_t index;
+    utp_context_connection_slot_t* slot;
+    utp_internal_error_t           error;
 
     if (context == NULL || connection == NULL || connection->context != context) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        utp_context_connection_slot_t* slot = &context->connections[index];
-        utp_internal_error_t           error;
-
-        if (!slot->used || &slot->connection != connection) {
-            continue;
-        }
-        error = utp_context_flush_connection(context, slot);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-        return utp_context_refresh_timer(context, utp_context_now_us());
+    slot = utp_context_find_connection_slot(context, connection->local_cid);
+    if (slot == NULL || &slot->connection != connection) {
+        return UTP_INTERNAL_ERROR_NOT_FOUND;
     }
-    return UTP_INTERNAL_ERROR_NOT_FOUND;
+    error = utp_context_flush_connection(context, slot);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    return utp_context_refresh_timer(context, utp_context_now_us());
 }
 
 static utp_internal_error_t utp_context_encode_version_frame(uint8_t* buffer, size_t capacity, size_t* out_length)
@@ -907,7 +997,7 @@ static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* conte
         attempt.type       = UTP_CONNECT_ATTEMPT_PASSIVE;
         utp_context_report_connect_error(context, utp_internal_error_to_status(error), "passive accept failed",
                                          &attempt);
-        utp_context_release_pending_slot(slot);
+        utp_context_release_pending_slot(context, slot);
         return error;
     }
     utp_context_log_ids(context, UTP_LOG_LEVEL_INFO, "incoming connection accepted", slot->pending.local_cid,
@@ -989,6 +1079,7 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     }
     error = utp_context_alloc_cid(context, &local_cid);
     if (error == UTP_INTERNAL_ERROR_OK && slot->connection.local_cid != 0u) {
+        utp_context_unregister_connection_slot(context, slot);
         utp_connection_cleanup(&slot->connection);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1012,6 +1103,9 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
         } else {
             error = utp_connection_configure_crypto(&slot->connection, crypto_type);
         }
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_register_connection_slot(context, slot);
     }
     if (error == UTP_INTERNAL_ERROR_OK && (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
                                            slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE)) {
@@ -1091,7 +1185,7 @@ static void utp_context_fail_pending_connect(utp_context_t* context, utp_context
 {
     utp_context_log(context, UTP_LOG_LEVEL_WARNING, "connection attempt failed");
     utp_context_report_connect_error(context, status, message, &slot->connect_attempt);
-    utp_context_release_connection_slot(slot);
+    utp_context_release_connection_slot(context, slot);
 }
 
 static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* context, utp_context_connection_slot_t* slot)
@@ -1139,19 +1233,19 @@ static void utp_context_take_deadline(uint64_t* deadline, uint64_t candidate)
 
 static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t now_us)
 {
-    uint64_t deadline = 0u;
-    size_t   index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
+    uint64_t         deadline = 0u;
 
     // Context 只注册一个 timer，每次从全部连接和握手项中选取最近期限。
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        const utp_connection_t* connection = &context->connections[index].connection;
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        const utp_context_connection_slot_t* slot       = utp_context_connection_slot_from_node(node);
+        const utp_connection_t*              connection = &slot->connection;
 
-        if (!context->connections[index].used) {
-            continue;
-        }
         if (connection->state == UTP_CONNECTION_STATE_CLOSING || connection->state == UTP_CONNECTION_STATE_DRAINING) {
             utp_context_take_deadline(&deadline, utp_connection_close_deadline(connection));
-            if (context->connections[index].connect_pending && !utp_connection_is_connected(connection)) {
+            if (slot->connect_pending && !utp_connection_is_connected(connection)) {
                 utp_context_take_deadline(&deadline, now_us);
             }
             continue;
@@ -1167,15 +1261,15 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         utp_context_take_deadline(&deadline, utp_connection_mtu_deadline(connection, now_us));
         utp_context_take_deadline(&deadline, utp_connection_pacing_deadline(connection));
         utp_context_take_deadline(&deadline, utp_connection_path_validation_deadline(connection));
-        if (context->connections[index].connect_pending) {
-            utp_context_take_deadline(&deadline, context->connections[index].connect_deadline_us);
+        if (slot->connect_pending) {
+            utp_context_take_deadline(&deadline, slot->connect_deadline_us);
         }
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        if (context->pending_incoming[index].used) {
-            utp_context_take_deadline(
-                &deadline, utp_pending_incoming_handshake_deadline(&context->pending_incoming[index].pending));
-        }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        const utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
+
+        utp_context_take_deadline(&deadline, utp_pending_incoming_handshake_deadline(&slot->pending));
     }
     return deadline;
 }
@@ -1237,7 +1331,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     promotion_committed = false;
     slot                = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
-        return UTP_INTERNAL_ERROR_LIMIT;
+        return UTP_INTERNAL_ERROR_NOMEM;
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
                                 pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
@@ -1261,13 +1355,16 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         error = utp_send_control_adopt_next_packet_number(&slot->connection.send_control,
                                                           pending_slot->pending.next_packet_number);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_register_connection_slot(context, slot);
+    }
     if (error == UTP_INTERNAL_ERROR_OK && !pending_slot->pending.crypto_ready) {
         promotion_committed = true;
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
-        utp_context_release_connection_slot(slot);
+        utp_context_release_connection_slot(context, slot);
         if (promotion_committed) {
-            utp_context_release_pending_slot(pending_slot);
+            utp_context_release_pending_slot(context, pending_slot);
         }
         return error;
     }
@@ -1299,12 +1396,12 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         error = utp_pending_incoming_replay(&pending_slot->pending, utp_context_replay_pending_packet, &replay);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
-        utp_context_release_connection_slot(slot);
+        utp_context_release_connection_slot(context, slot);
         // 已开始处理 HandshakeDone，pending 已经不再是可重试的完整握手状态。
-        utp_context_release_pending_slot(pending_slot);
+        utp_context_release_pending_slot(context, pending_slot);
         return error;
     }
-    utp_context_release_pending_slot(pending_slot);
+    utp_context_release_pending_slot(context, pending_slot);
     utp_context_report_connected(context, slot);
     error = utp_context_queue_session_token(context, slot);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -1457,8 +1554,11 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     if (error == UTP_INTERNAL_ERROR_OK && has_crypto) {
         error = utp_pending_incoming_configure_crypto(&slot->pending, &peer_crypto);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_register_pending_slot(context, slot);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
-        utp_context_release_pending_slot(slot);
+        utp_context_release_pending_slot(context, slot);
         return error;
     }
     slot->queued = true;
@@ -1480,7 +1580,7 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         utp_context_log_ids(context, UTP_LOG_LEVEL_INFO, "incoming connection rejected", slot->pending.local_cid,
                             slot->pending.peer_cid);
         utp_context_send_pending_close(context, &slot->pending, (uint16_t)(-UTP_STATUS_CANCELLED));
-        utp_context_release_pending_slot(slot);
+        utp_context_release_pending_slot(context, slot);
     } else if (context->on_new_connection != NULL) {
         error = utp_context_accept_pending_slot(context, slot);
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -1576,7 +1676,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     slot = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
         utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
-        return UTP_INTERNAL_ERROR_LIMIT;
+        return UTP_INTERNAL_ERROR_NOMEM;
     }
     memcpy(slot->zero_rtt_resumption_psk, resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
     utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
@@ -1588,6 +1688,9 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         slot->connection.context = context;
         utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
         error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_register_connection_slot(context, slot);
     }
     now_us = utp_context_now_us();
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1607,7 +1710,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         context->callback_accept_requested = false;
         slot->zero_rtt_awaiting_accept     = false;
         if (!accepted || !slot->zero_rtt_accepted) {
-            utp_context_release_connection_slot(slot);
+            utp_context_release_connection_slot(context, slot);
             return UTP_INTERNAL_ERROR_OK;
         }
     }
@@ -1625,7 +1728,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         }
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
-        utp_context_release_connection_slot(slot);
+        utp_context_release_connection_slot(context, slot);
         return error;
     }
     error = utp_context_flush_connection(context, slot);
@@ -1711,17 +1814,19 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
 
 static void utp_context_on_udp_writable(uint32_t events, void* user_data)
 {
-    utp_context_t* context = user_data;
-    size_t         index;
+    utp_context_t*   context = user_data;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
     if ((events & UTP_EVENT_WRITABLE) == 0u || context == NULL) {
         return;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        utp_context_connection_slot_t* slot = &context->connections[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
         utp_internal_error_t           error;
 
-        if (!slot->used || !slot->connection.udp_write_pending) {
+        if (!slot->connection.udp_write_pending) {
             continue;
         }
         error = utp_context_flush_connection(context, slot);
@@ -1747,16 +1852,15 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
 
 static utp_internal_error_t utp_context_process_connection_timers(utp_context_t* context, uint64_t now_us)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        utp_context_connection_slot_t* slot = &context->connections[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
         uint64_t                       deadline;
         utp_internal_error_t           error;
 
-        if (!slot->used) {
-            continue;
-        }
         if (slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
             ((utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
               utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING) ||
@@ -1787,7 +1891,7 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         }
         if (utp_connection_close_deadline(&slot->connection) != 0u &&
             utp_connection_close_deadline(&slot->connection) <= now_us) {
-            utp_context_release_connection_slot(slot);
+            utp_context_release_connection_slot(context, slot);
             continue;
         }
         error = utp_connection_on_keepalive_timeout(&slot->connection, now_us);
@@ -1796,7 +1900,7 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
 
             utp_context_report_connection_error(context, slot, UTP_STATUS_TIMEOUT, 0u, timeout_reason,
                                                 sizeof(timeout_reason) - 1u, false);
-            utp_context_release_connection_slot(slot);
+            utp_context_release_connection_slot(context, slot);
             continue;
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1833,15 +1937,14 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
 
 static utp_internal_error_t utp_context_process_pending_timers(utp_context_t* context, uint64_t now_us)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        utp_context_pending_slot_t* slot = &context->pending_incoming[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
         uint64_t                    deadline;
 
-        if (!slot->used) {
-            continue;
-        }
         deadline = utp_pending_incoming_handshake_deadline(&slot->pending);
         if (deadline != 0u && deadline <= now_us) {
             uint64_t             packet_number = 0u;
@@ -1900,13 +2003,11 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (context == NULL) {
         return UTP_STATUS_NOMEM;
     }
-    for (uint32_t index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-        context->connections[index].used = false;
-    }
-    for (uint32_t index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        context->pending_incoming[index].used   = false;
-        context->pending_incoming[index].queued = false;
-    }
+    context->connections      = (utp_hash_table_t){0};
+    context->pending_incoming = (utp_hash_table_t){0};
+    context->zero_rtt_replay  = (utp_hash_table_t){0};
+    TAILQ_INIT(&context->free_connection_slots);
+    TAILQ_INIT(&context->free_pending_slots);
     utp_event_init(&context->udp_event);
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
@@ -1950,7 +2051,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->resumption_keys_ready                 = false;
     context->default_resumption_key_warning_logged = false;
     utp_crypto_default_resumption_key(context->resumption_root_key);
-    error = utp_hash_table_init(&context->zero_rtt_replay, NULL, context->zero_rtt_replay_cache_capacity);
+    error = utp_hash_table_init(&context->connections, NULL, SIZE_MAX);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->pending_incoming, NULL, UTP_CONTEXT_MAX_PENDING_INCOMING);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->zero_rtt_replay, NULL, context->zero_rtt_replay_cache_capacity);
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_crypto_derive_resumption_keys(&context->resumption_keys, context->resumption_root_key);
     }
@@ -1960,6 +2067,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->logger.sink = options->log_sink;
     fragment_length      = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
+        utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -1979,6 +2088,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_internal_log_error(&context->logger, &context->tag, error, "context initialization failed");
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
+        utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -1994,18 +2105,37 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
 void utp_context_destroy(utp_context_t* context)
 {
     if (context != NULL) {
-        size_t index;
+        utp_hash_iter_t  iter;
+        utp_hash_node_t* node;
 
         utp_context_log(context, UTP_LOG_LEVEL_INFO, "context destroy started");
         utp_event_remove(&context->timer_event);
         utp_event_remove(&context->udp_write_event);
         utp_event_remove(&context->udp_event);
-        for (index = 0u; index < UTP_CONTEXT_MAX_CONNECTIONS; ++index) {
-            utp_context_send_destroy_close(context, &context->connections[index]);
-            utp_context_release_connection_slot(&context->connections[index]);
+        utp_hash_iter_init(&iter);
+        while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+            utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
+
+            utp_context_send_destroy_close(context, slot);
+            utp_context_release_connection_slot(context, slot);
         }
-        for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-            utp_context_release_pending_slot(&context->pending_incoming[index]);
+        utp_hash_iter_init(&iter);
+        while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+            utp_context_release_pending_slot(context, utp_context_pending_slot_from_node(node));
+        }
+        utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
+        while (!TAILQ_EMPTY(&context->free_connection_slots)) {
+            utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->free_connection_slots);
+
+            TAILQ_REMOVE(&context->free_connection_slots, slot, free_next);
+            utp_allocator_free(NULL, slot);
+        }
+        while (!TAILQ_EMPTY(&context->free_pending_slots)) {
+            utp_context_pending_slot_t* slot = TAILQ_FIRST(&context->free_pending_slots);
+
+            TAILQ_REMOVE(&context->free_pending_slots, slot, free_next);
+            utp_allocator_free(NULL, slot);
         }
         utp_udp_socket_close(&context->udp_socket);
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
@@ -2146,7 +2276,7 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     }
     slot = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
-        return UTP_STATUS_LIMIT;
+        return UTP_STATUS_NOMEM;
     }
     utp_context_endpoint_from_address(&slot->connect_attempt.remote, &peer);
     slot->connect_attempt.timeout_ms            = options->timeout_ms == 0u ? 3000u : options->timeout_ms;
@@ -2230,7 +2360,7 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
     slot = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
         utp_crypto_secure_clear(state_payload, state_payload_length);
-        return UTP_STATUS_LIMIT;
+        return UTP_STATUS_NOMEM;
     }
     utp_context_endpoint_from_address(&slot->connect_attempt.remote, &peer);
     slot->connect_attempt.timeout_ms         = options->timeout_ms == 0u ? 3000u : options->timeout_ms;
@@ -2248,7 +2378,7 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
     utp_crypto_secure_clear(state_payload, state_payload_length);
     error = utp_crypto_random_bytes(slot->zero_rtt_session_token, UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE);
     if (error != UTP_INTERNAL_ERROR_OK) {
-        utp_context_release_connection_slot(slot);
+        utp_context_release_connection_slot(context, slot);
         return utp_internal_error_to_status(error);
     }
     slot->zero_rtt_expires_at_seconds = expires_at_seconds;
@@ -2278,7 +2408,8 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
 
 utp_status_t utp_context_accept(utp_context_t* context)
 {
-    size_t index;
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
 
     if (context == NULL) {
         return UTP_STATUS_INVALID_ARGUMENT;
@@ -2293,11 +2424,12 @@ utp_status_t utp_context_accept(utp_context_t* context)
         context->callback_accept_requested = true;
         return UTP_STATUS_OK;
     }
-    for (index = 0u; index < UTP_CONTEXT_MAX_PENDING_INCOMING; ++index) {
-        utp_context_pending_slot_t* slot = &context->pending_incoming[index];
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
         utp_internal_error_t        error;
 
-        if (!slot->used || !slot->queued) {
+        if (!slot->queued) {
             continue;
         }
         error = utp_context_accept_pending_slot(context, slot);

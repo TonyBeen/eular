@@ -333,6 +333,27 @@ int main(void)
         quiet_options.log_level = (utp_log_level_t)99;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
     }
+    {
+        utp_context_options_t many_options     = UTP_CONTEXT_OPTIONS_INIT;
+        utp_connect_options_t connect          = UTP_CONNECT_OPTIONS_INIT;
+        utp_context_t*        many_context     = NULL;
+        static const uint32_t connection_count = 33u;
+
+        many_options.event_base = event_base;
+        many_options.context_id = 72u;
+        assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
+        assert(utp_context_bind(many_context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+        assert(many_context->connections.max_entries == SIZE_MAX);
+        assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_MAX_PENDING_INCOMING);
+        assert(UTP_CONTEXT_MAX_PENDING_INCOMING == 1024u);
+        connect.address = "127.0.0.1";
+        for (uint32_t index = 0u; index < connection_count; ++index) {
+            connect.port = (uint16_t)(10000u + index);
+            assert(utp_context_connect(many_context, &connect) == UTP_STATUS_OK);
+        }
+        assert(utp_hash_table_count(&many_context->connections) == connection_count);
+        utp_context_destroy(many_context);
+    }
 #if defined(__APPLE__)
     if (if_nametoindex("lo0") != 0u) {
         utp_context_options_t interface_options = UTP_CONTEXT_OPTIONS_INIT;
