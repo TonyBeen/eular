@@ -97,13 +97,11 @@ void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
 utp_internal_error_t utp_pending_incoming_configure_crypto(utp_pending_incoming_t*   pending,
                                                            const utp_frame_crypto_t* peer_crypto)
 {
-    utp_internal_error_t error;
-
     if (pending == NULL || peer_crypto == NULL || pending->crypto_configured || pending->local_cid == 0u ||
         pending->peer_cid == 0u || peer_crypto->crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    error = utp_crypto_key_pair_generate(&pending->crypto_key_pair);
+    utp_internal_error_t error = utp_crypto_key_pair_generate(&pending->crypto_key_pair);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_crypto_create_directional_aead(&pending->crypto_key_pair, peer_crypto->ephemeral_public_key,
                                                    pending->peer_cid, pending->local_cid, peer_crypto->crypto_type,
@@ -124,11 +122,10 @@ utp_internal_error_t utp_pending_incoming_configure_crypto(utp_pending_incoming_
 utp_internal_error_t utp_pending_incoming_encode_crypto(const utp_pending_incoming_t* pending, uint8_t* buffer,
                                                         size_t capacity)
 {
-    utp_frame_crypto_t crypto;
-
     if (pending == NULL || buffer == NULL || !pending->crypto_configured) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    utp_frame_crypto_t crypto;
     crypto.crypto_type = pending->crypto_type;
     memcpy(crypto.ephemeral_public_key, pending->crypto_key_pair.public_key, sizeof(crypto.ephemeral_public_key));
     return utp_frame_crypto_encode(buffer, capacity, &crypto);
@@ -195,12 +192,10 @@ static uint64_t utp_pending_incoming_next_handshake_delay(const utp_pending_inco
 utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incoming_t* pending,
                                                               uint64_t handshake_packet_number, uint64_t now_us)
 {
-    uint64_t delay_us;
-
     if (pending == NULL || !pending->accepted || handshake_packet_number == 0u || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    delay_us = utp_pending_incoming_next_handshake_delay(pending);
+    uint64_t delay_us = utp_pending_incoming_next_handshake_delay(pending);
     if (delay_us > UINT64_MAX - now_us) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -224,23 +219,19 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
                                                     size_t packet_length, size_t wire_packet_length,
                                                     const utp_address_t* peer, utp_pending_incoming_result_t* result)
 {
-    utp_packet_view_t    view;
-    utp_internal_error_t error;
-    uint64_t             ack_packet_number;
-    bool                 has_handshake_done;
-    size_t               required;
-    utp_wire_writer_t    writer;
-
     if (pending == NULL || packet == NULL || peer == NULL || result == NULL || !pending->accepted ||
         wire_packet_length < packet_length || !utp_address_equal(&pending->peer, peer)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    error = utp_packet_view_decode(&view, packet, packet_length);
+    utp_packet_view_t    view;
+    utp_internal_error_t error = utp_packet_view_decode(&view, packet, packet_length);
     if (error != UTP_INTERNAL_ERROR_OK || packet_length != UTP_PACKET_HEADER_SIZE + view.payload_length ||
         view.header.packet_number == 0u || view.header.dcid != pending->local_cid ||
         view.header.scid != pending->peer_cid) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    uint64_t ack_packet_number;
+    bool     has_handshake_done;
     error = utp_pending_incoming_find_handshake_done(&view, &ack_packet_number, &has_handshake_done);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -255,9 +246,10 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
         2u * sizeof(uint16_t) > pending->storage_capacity - pending->storage_length - packet_length) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    required = pending->storage_length + 2u * sizeof(uint16_t) + packet_length;
-    error    = utp_wire_writer_init(&writer, pending->storage + pending->storage_length,
-                                    pending->storage_capacity - pending->storage_length);
+    size_t            required = pending->storage_length + 2u * sizeof(uint16_t) + packet_length;
+    utp_wire_writer_t writer;
+    error = utp_wire_writer_init(&writer, pending->storage + pending->storage_length,
+                                 pending->storage_capacity - pending->storage_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u16(&writer, (uint16_t)packet_length);
     }

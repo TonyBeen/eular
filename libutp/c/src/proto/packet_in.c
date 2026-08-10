@@ -5,14 +5,11 @@
 utp_internal_error_t utp_packet_in_pool_init(utp_packet_in_pool_t* pool, const utp_allocator_t* allocator,
                                              size_t packet_capacity, uint16_t buffer_capacity)
 {
-    const utp_allocator_t* resolved_allocator;
-    size_t                 index;
-
     if (pool == NULL || packet_capacity == 0u || buffer_capacity == 0u ||
         packet_capacity > SIZE_MAX / sizeof(*pool->packets) || packet_capacity > SIZE_MAX / buffer_capacity) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    resolved_allocator = utp_allocator_resolve(allocator);
+    const utp_allocator_t* resolved_allocator = utp_allocator_resolve(allocator);
     if (resolved_allocator == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -31,7 +28,7 @@ utp_internal_error_t utp_packet_in_pool_init(utp_packet_in_pool_t* pool, const u
         utp_packet_in_pool_cleanup(pool);
         return UTP_INTERNAL_ERROR_NOMEM;
     }
-    for (index = 0u; index < packet_capacity; ++index) {
+    for (size_t index = 0u; index < packet_capacity; ++index) {
         pool->packets[index].data      = pool->storage + index * (size_t)buffer_capacity;
         pool->packets[index].length    = 0u;
         pool->packets[index].capacity  = buffer_capacity;
@@ -61,15 +58,13 @@ void utp_packet_in_pool_cleanup(utp_packet_in_pool_t* pool)
 
 utp_internal_error_t utp_packet_in_pool_acquire(utp_packet_in_pool_t* pool, utp_packet_in_t** out_packet)
 {
-    size_t index;
-
     if (out_packet != NULL) {
         *out_packet = NULL;
     }
     if (pool == NULL || out_packet == NULL || pool->packets == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    for (index = 0u; index < pool->packet_capacity; ++index) {
+    for (size_t index = 0u; index < pool->packet_capacity; ++index) {
         if (!pool->packets[index].in_use) {
             pool->packets[index].length    = 0u;
             pool->packets[index].ref_count = 1u;

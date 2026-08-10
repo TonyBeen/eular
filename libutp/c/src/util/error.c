@@ -24,8 +24,6 @@ int32_t utp_internal_error_to_errno(utp_internal_error_t error)
 
 utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
 {
-    int32_t system_error;
-
     switch (error) {
     case UTP_INTERNAL_ERROR_OK:
         return UTP_STATUS_OK;
@@ -68,7 +66,7 @@ utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
     default:
         break;
     }
-    system_error = utp_internal_error_to_errno(error);
+    int32_t system_error = utp_internal_error_to_errno(error);
     if (system_error == 0) {
         return UTP_STATUS_IO;
     }

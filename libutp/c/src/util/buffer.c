@@ -3,7 +3,8 @@
 #include <limits.h>
 #include <string.h>
 
-static size_t next_capacity(size_t current, size_t required, size_t maximum) {
+static size_t next_capacity(size_t current, size_t required, size_t maximum)
+{
     size_t capacity = current == 0 ? (maximum < 64u ? maximum : 64u) : current;
 
     while (capacity < required) {
@@ -15,8 +16,9 @@ static size_t next_capacity(size_t current, size_t required, size_t maximum) {
     return capacity;
 }
 
-utp_internal_error_t utp_buffer_init(utp_buffer_t *buffer, const utp_allocator_t *allocator, size_t max_capacity) {
-    const utp_allocator_t *resolved;
+utp_internal_error_t utp_buffer_init(utp_buffer_t* buffer, const utp_allocator_t* allocator, size_t max_capacity)
+{
+    const utp_allocator_t* resolved;
 
     if (buffer == NULL || max_capacity == 0) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -31,7 +33,8 @@ utp_internal_error_t utp_buffer_init(utp_buffer_t *buffer, const utp_allocator_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_buffer_cleanup(utp_buffer_t *buffer) {
+void utp_buffer_cleanup(utp_buffer_t* buffer)
+{
     if (buffer == NULL) {
         return;
     }
@@ -39,16 +42,15 @@ void utp_buffer_cleanup(utp_buffer_t *buffer) {
     memset(buffer, 0, sizeof(*buffer));
 }
 
-void utp_buffer_clear(utp_buffer_t *buffer) {
+void utp_buffer_clear(utp_buffer_t* buffer)
+{
     if (buffer != NULL) {
         buffer->length = 0;
     }
 }
 
-utp_internal_error_t utp_buffer_reserve(utp_buffer_t *buffer, size_t capacity) {
-    uint8_t *new_data;
-    size_t   next;
-
+utp_internal_error_t utp_buffer_reserve(utp_buffer_t* buffer, size_t capacity)
+{
     if (buffer == NULL || buffer->allocator == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -58,11 +60,11 @@ utp_internal_error_t utp_buffer_reserve(utp_buffer_t *buffer, size_t capacity) {
     if (capacity <= buffer->capacity) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    next = next_capacity(buffer->capacity, capacity, buffer->max_capacity);
-    if (next < capacity || next > buffer->max_capacity || next > SIZE_MAX / sizeof(*new_data)) {
+    size_t next = next_capacity(buffer->capacity, capacity, buffer->max_capacity);
+    if (next < capacity || next > buffer->max_capacity || next > SIZE_MAX / sizeof(uint8_t)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    new_data = utp_allocator_realloc(buffer->allocator, buffer->data, next);
+    uint8_t* new_data = utp_allocator_realloc(buffer->allocator, buffer->data, next);
     if (new_data == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
     }
@@ -71,13 +73,12 @@ utp_internal_error_t utp_buffer_reserve(utp_buffer_t *buffer, size_t capacity) {
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_buffer_resize(utp_buffer_t *buffer, size_t length) {
-    utp_internal_error_t status;
-
+utp_internal_error_t utp_buffer_resize(utp_buffer_t* buffer, size_t length)
+{
     if (buffer == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    status = utp_buffer_reserve(buffer, length);
+    utp_internal_error_t status = utp_buffer_reserve(buffer, length);
     if (status != UTP_INTERNAL_ERROR_OK) {
         return status;
     }
@@ -88,10 +89,8 @@ utp_internal_error_t utp_buffer_resize(utp_buffer_t *buffer, size_t length) {
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_buffer_append(utp_buffer_t *buffer, const void *data, size_t length) {
-    utp_internal_error_t status;
-    size_t               required;
-
+utp_internal_error_t utp_buffer_append(utp_buffer_t* buffer, const void* data, size_t length)
+{
     if (buffer == NULL || (data == NULL && length != 0)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -101,8 +100,8 @@ utp_internal_error_t utp_buffer_append(utp_buffer_t *buffer, const void *data, s
     if (length > SIZE_MAX - buffer->length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    required = buffer->length + length;
-    status   = utp_buffer_reserve(buffer, required);
+    size_t               required = buffer->length + length;
+    utp_internal_error_t status   = utp_buffer_reserve(buffer, required);
     if (status != UTP_INTERNAL_ERROR_OK) {
         return status;
     }

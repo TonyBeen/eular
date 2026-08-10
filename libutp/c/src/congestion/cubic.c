@@ -23,7 +23,8 @@ static uint64_t utp_cubic_min(uint64_t first, uint64_t second) { return first < 
 
 static uint64_t utp_cubic_max(uint64_t first, uint64_t second) { return first > second ? first : second; }
 
-static uint64_t utp_cubic_mss_to_bytes(uint32_t mss) {
+static uint64_t utp_cubic_mss_to_bytes(uint32_t mss)
+{
     uint64_t value = mss == 0u ? UINT64_C(1) : mss;
 
     if (value > UTP_CUBIC_MAX_CWND / UTP_CUBIC_DEFAULT_MSS) {
@@ -32,7 +33,8 @@ static uint64_t utp_cubic_mss_to_bytes(uint32_t mss) {
     return value * UTP_CUBIC_DEFAULT_MSS;
 }
 
-static uint64_t utp_cubic_smoothed_rtt(const utp_cubic_t* cubic) {
+static uint64_t utp_cubic_smoothed_rtt(const utp_cubic_t* cubic)
+{
     uint64_t srtt = UTP_CUBIC_FALLBACK_RTT_US;
 
     if (cubic->rtt_stats != NULL && utp_rtt_stats_srtt(cubic->rtt_stats) != 0u) {
@@ -41,23 +43,25 @@ static uint64_t utp_cubic_smoothed_rtt(const utp_cubic_t* cubic) {
     return srtt;
 }
 
-static void utp_cubic_reset_epoch(utp_cubic_t* cubic) {
+static void utp_cubic_reset_epoch(utp_cubic_t* cubic)
+{
     cubic->epoch_start_us    = 0u;
     cubic->origin_point_cwnd = 0u;
     cubic->k                 = 0.0;
     cubic->acked_bytes       = 0u;
 }
 
-static void utp_cubic_ensure_epoch(utp_cubic_t* cubic, uint64_t now_us) {
-    double cwnd_packets;
-    double delta_packets;
-    double max_packets;
-
+static void utp_cubic_ensure_epoch(utp_cubic_t* cubic, uint64_t now_us)
+{
     if (cubic->epoch_start_us != 0u) {
         return;
     }
     cubic->epoch_start_us = now_us;
     if (cubic->last_max_cwnd > cubic->cwnd) {
+        double max_packets;
+        double cwnd_packets;
+        double delta_packets;
+
         cubic->origin_point_cwnd = cubic->last_max_cwnd;
         max_packets              = (double)cubic->last_max_cwnd / (double)UTP_CUBIC_DEFAULT_MSS;
         cwnd_packets             = (double)cubic->cwnd / (double)UTP_CUBIC_DEFAULT_MSS;
@@ -69,17 +73,17 @@ static void utp_cubic_ensure_epoch(utp_cubic_t* cubic, uint64_t now_us) {
     }
 }
 
-static uint64_t utp_cubic_target_cwnd(const utp_cubic_t* cubic, uint64_t now_us) {
-    double elapsed_seconds;
+static uint64_t utp_cubic_target_cwnd(const utp_cubic_t* cubic, uint64_t now_us)
+{
+    if (cubic->epoch_start_us == 0u || now_us < cubic->epoch_start_us) {
+        return cubic->cwnd;
+    }
+    double elapsed_seconds = (double)(now_us - cubic->epoch_start_us) / 1000000.0;
     double dt;
     double origin_packets;
     double target_packets;
     double target_bytes;
 
-    if (cubic->epoch_start_us == 0u || now_us < cubic->epoch_start_us) {
-        return cubic->cwnd;
-    }
-    elapsed_seconds  = (double)(now_us - cubic->epoch_start_us) / 1000000.0;
     elapsed_seconds += (double)utp_cubic_smoothed_rtt(cubic) / 1000000.0;
     dt               = elapsed_seconds - cubic->k;
     origin_packets   = (double)cubic->origin_point_cwnd / (double)UTP_CUBIC_DEFAULT_MSS;
@@ -94,30 +98,28 @@ static uint64_t utp_cubic_target_cwnd(const utp_cubic_t* cubic, uint64_t now_us)
     return utp_cubic_max(cubic->minimum_cwnd, (uint64_t)target_bytes);
 }
 
-static uint64_t utp_cubic_cubic_increment(const utp_cubic_t* cubic, uint64_t acked_bytes, uint64_t now_us) {
-    uint64_t target;
-    uint64_t cwnd;
-    uint64_t distance;
-
+static uint64_t utp_cubic_cubic_increment(const utp_cubic_t* cubic, uint64_t acked_bytes, uint64_t now_us)
+{
     if (acked_bytes == 0u) {
         return 0u;
     }
-    target = utp_cubic_target_cwnd(cubic, now_us);
-    cwnd   = utp_cubic_max(cubic->cwnd, UINT64_C(1));
+    uint64_t target = utp_cubic_target_cwnd(cubic, now_us);
+    uint64_t cwnd   = utp_cubic_max(cubic->cwnd, UINT64_C(1));
     if (target <= cwnd) {
         if (acked_bytes > UINT64_MAX / UTP_CUBIC_DEFAULT_MSS) {
             return UTP_CUBIC_MAX_CWND - cwnd;
         }
         return utp_cubic_max(UINT64_C(1), (acked_bytes * UTP_CUBIC_DEFAULT_MSS) / (cwnd * UINT64_C(100)));
     }
-    distance = target - cwnd;
+    const uint64_t distance = target - cwnd;
     if (acked_bytes > UINT64_MAX / distance) {
         return UTP_CUBIC_MAX_CWND - cwnd;
     }
     return utp_cubic_max(UINT64_C(1), (acked_bytes * distance) / cwnd);
 }
 
-static uint64_t utp_cubic_reno_increment(const utp_cubic_t* cubic, uint64_t acked_bytes) {
+static uint64_t utp_cubic_reno_increment(const utp_cubic_t* cubic, uint64_t acked_bytes)
+{
     uint64_t cwnd = utp_cubic_max(cubic->cwnd, UINT64_C(1));
 
     if (acked_bytes == 0u) {
@@ -131,7 +133,8 @@ static uint64_t utp_cubic_reno_increment(const utp_cubic_t* cubic, uint64_t acke
 
 static uint64_t utp_cubic_get_cwnd(void* state) { return state == NULL ? 0u : ((const utp_cubic_t*)state)->cwnd; }
 
-static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery) {
+static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery)
+{
     const utp_cubic_t* cubic = state;
     uint64_t           srtt;
     uint64_t           base_rate;
@@ -147,7 +150,8 @@ static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery) {
     return base_rate > UINT64_MAX / gain_percent ? UINT64_MAX : (base_rate * gain_percent) / UINT64_C(100);
 }
 
-static void utp_cubic_on_init(void* state, const utp_rtt_stats_t* rtt_stats) {
+static void utp_cubic_on_init(void* state, const utp_rtt_stats_t* rtt_stats)
+{
     utp_cubic_t* cubic = state;
 
     if (cubic == NULL) {
@@ -160,7 +164,8 @@ static void utp_cubic_on_init(void* state, const utp_rtt_stats_t* rtt_stats) {
     utp_cubic_reset_epoch(cubic);
 }
 
-static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited) {
+static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited)
+{
     utp_cubic_t* cubic = state;
     uint64_t     acked_bytes;
     uint64_t     cubic_increment;
@@ -184,7 +189,8 @@ static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, 
     cubic->cwnd     = increment > UTP_CUBIC_MAX_CWND - cubic->cwnd ? UTP_CUBIC_MAX_CWND : cubic->cwnd + increment;
 }
 
-static void utp_cubic_on_lost(void* state, utp_congestion_packet_info_t* packet) {
+static void utp_cubic_on_lost(void* state, utp_congestion_packet_info_t* packet)
+{
     utp_cubic_t* cubic = state;
 
     (void)packet;
@@ -201,7 +207,8 @@ static void utp_cubic_on_lost(void* state, utp_congestion_packet_info_t* packet)
     utp_cubic_reset_epoch(cubic);
 }
 
-static void utp_cubic_was_quiet(void* state, uint64_t now_us, uint64_t inflight_bytes) {
+static void utp_cubic_was_quiet(void* state, uint64_t now_us, uint64_t inflight_bytes)
+{
     utp_cubic_t* cubic = state;
 
     (void)now_us;
@@ -210,7 +217,8 @@ static void utp_cubic_was_quiet(void* state, uint64_t now_us, uint64_t inflight_
     }
 }
 
-static void utp_cubic_on_timeout(void* state) {
+static void utp_cubic_on_timeout(void* state)
+{
     utp_cubic_t* cubic = state;
 
     if (cubic == NULL) {
@@ -228,7 +236,8 @@ static const utp_congestion_ops_t k_utp_cubic_ops = {
     utp_cubic_on_timeout,
 };
 
-void utp_cubic_init(utp_cubic_t* cubic, const utp_cubic_config_t* config) {
+void utp_cubic_init(utp_cubic_t* cubic, const utp_cubic_config_t* config)
+{
     uint64_t minimum_cwnd;
     uint64_t initial_cwnd;
 
@@ -251,6 +260,7 @@ void utp_cubic_init(utp_cubic_t* cubic, const utp_cubic_config_t* config) {
 
 utp_congestion_t* utp_cubic_as_congestion(utp_cubic_t* cubic) { return cubic == NULL ? NULL : &cubic->congestion; }
 
-const utp_congestion_t* utp_cubic_as_const_congestion(const utp_cubic_t* cubic) {
+const utp_congestion_t* utp_cubic_as_const_congestion(const utp_cubic_t* cubic)
+{
     return cubic == NULL ? NULL : &cubic->congestion;
 }

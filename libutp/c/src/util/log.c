@@ -5,8 +5,6 @@
 
 static utp_internal_error_t append_fragment(utp_log_tag_t* tag, const char* fragment, size_t fragment_length)
 {
-    size_t required;
-
     if (tag == NULL || fragment == NULL || fragment_length == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -14,7 +12,7 @@ static utp_internal_error_t append_fragment(utp_log_tag_t* tag, const char* frag
         tag->tag_length > UTP_LOG_TAG_MAX_LENGTH - fragment_length - 2u) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    required                  = tag->tag_length + fragment_length + 2u;
+    size_t required           = tag->tag_length + fragment_length + 2u;
     tag->tag[tag->tag_length] = '[';
     memcpy(tag->tag + tag->tag_length + 1u, fragment, fragment_length);
     tag->tag[required - 1u] = ']';

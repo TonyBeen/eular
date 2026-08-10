@@ -14,13 +14,11 @@ static bool utp_stream_send_side_is_closed(const utp_stream_t* stream)
 
 static bool utp_stream_is_local_initiated(const utp_stream_t* stream)
 {
-    uint32_t local_initiator;
-
     if (stream == NULL || stream->connection == NULL) {
         return true;
     }
-    local_initiator = stream->connection->role == UTP_CONNECTION_ROLE_ACTIVE ? UTP_STREAM_CLIENT_INITIATED
-                                                                             : UTP_STREAM_SERVER_INITIATED;
+    uint32_t local_initiator = stream->connection->role == UTP_CONNECTION_ROLE_ACTIVE ? UTP_STREAM_CLIENT_INITIATED
+                                                                                      : UTP_STREAM_SERVER_INITIATED;
     return (stream->stream_id & UINT32_C(1)) == local_initiator;
 }
 
@@ -74,20 +72,16 @@ static void utp_stream_copy_into_send_buffer(utp_stream_t* stream, const uint8_t
 
 static const uint8_t* utp_stream_unsent_data(const utp_stream_t* stream, size_t* contiguous_length)
 {
-    size_t unsent_length;
-    size_t index;
-    size_t contiguous;
-
     if (contiguous_length == NULL || stream->send_buffer_length < stream->send_in_flight_bytes) {
         return NULL;
     }
-    unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
+    size_t unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
     if (unsent_length == 0u) {
         *contiguous_length = 0u;
         return NULL;
     }
-    index      = utp_stream_send_index(stream, stream->send_in_flight_bytes);
-    contiguous = UTP_STREAM_SEND_BUFFER_CAPACITY - index;
+    size_t index      = utp_stream_send_index(stream, stream->send_in_flight_bytes);
+    size_t contiguous = UTP_STREAM_SEND_BUFFER_CAPACITY - index;
     if (contiguous > unsent_length) {
         contiguous = unsent_length;
     }
@@ -126,15 +120,11 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
 {
     size_t stream_memory_limit   = UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT;
     size_t stream_fragment_limit = UTP_STREAM_RECV_FRAGMENT_LIMIT;
-    size_t connection_memory_limit;
-    size_t connection_fragment_limit;
-    size_t new_cost;
-
     if (stream == NULL || fragment == NULL || fragment->accounted) {
         return stream != NULL && fragment != NULL;
     }
     // PacketIn 被 fragment 持有期间不能回池，容量而非有效载荷才是真实内存成本。
-    new_cost = utp_stream_recv_fragment_memory_cost(fragment);
+    size_t new_cost = utp_stream_recv_fragment_memory_cost(fragment);
     if (stream_memory_limit == 0u) {
         stream_memory_limit = 1u;
     }
@@ -147,8 +137,9 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
         return false;
     }
     if (account != NULL && account->connection_memory_bytes != NULL && account->connection_fragment_count != NULL) {
-        connection_memory_limit   = account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
-        connection_fragment_limit = account->connection_fragment_limit == 0u ? 1u : account->connection_fragment_limit;
+        size_t connection_memory_limit = account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
+        size_t connection_fragment_limit =
+            account->connection_fragment_limit == 0u ? 1u : account->connection_fragment_limit;
         if (*account->connection_memory_bytes > connection_memory_limit ||
             new_cost > connection_memory_limit - *account->connection_memory_bytes ||
             *account->connection_fragment_count >= connection_fragment_limit) {
@@ -168,12 +159,10 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
 
 static void utp_stream_unaccount_recv_fragment(utp_stream_t* stream, utp_stream_recv_fragment_t* fragment)
 {
-    size_t cost;
-
     if (stream == NULL || fragment == NULL || !fragment->accounted) {
         return;
     }
-    cost = fragment->memory_cost;
+    size_t cost = fragment->memory_cost;
     stream->recv_pinned_memory_bytes =
         stream->recv_pinned_memory_bytes >= cost ? stream->recv_pinned_memory_bytes - cost : 0u;
     if (stream->recv_accounted_fragment_count != 0u) {
@@ -266,16 +255,13 @@ static void utp_stream_clear_recv_fragments(utp_stream_t* stream)
 static void utp_stream_rollback_frame_fragments(utp_stream_t* stream, utp_packet_in_t* packet,
                                                 const uint64_t* inserted_offsets, size_t inserted_count)
 {
-    size_t offset_index;
-
     if (stream == NULL || packet == NULL || inserted_offsets == NULL) {
         return;
     }
-    for (offset_index = inserted_count; offset_index != 0u; --offset_index) {
-        size_t   fragment_index;
+    for (size_t offset_index = inserted_count; offset_index != 0u; --offset_index) {
         uint64_t offset = inserted_offsets[offset_index - 1u];
 
-        for (fragment_index = 0u; fragment_index < stream->recv_fragment_count; ++fragment_index) {
+        for (size_t fragment_index = 0u; fragment_index < stream->recv_fragment_count; ++fragment_index) {
             if (stream->recv_fragments[fragment_index].packet == packet &&
                 stream->recv_fragments[fragment_index].offset == offset) {
                 utp_stream_remove_fragment(stream, fragment_index);
@@ -332,13 +318,11 @@ static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uin
 static utp_internal_error_t utp_stream_mark_fin(utp_stream_t* stream, uint64_t fin_offset,
                                                 const utp_stream_recv_account_t* account)
 {
-    size_t index;
-
     if (fin_offset == stream->recv_offset) {
         stream->peer_fin = true;
         return UTP_INTERNAL_ERROR_OK;
     }
-    for (index = 0u; index < stream->recv_fragment_count; ++index) {
+    for (size_t index = 0u; index < stream->recv_fragment_count; ++index) {
         if (utp_stream_fragment_end(&stream->recv_fragments[index]) == fin_offset) {
             stream->recv_fragments[index].fin = true;
             return UTP_INTERNAL_ERROR_OK;
@@ -477,10 +461,6 @@ utp_internal_error_t utp_stream_acquire_write_views_internal(utp_stream_t* strea
                                                              size_t view_capacity, size_t* out_view_count,
                                                              size_t* out_capacity)
 {
-    size_t free_capacity;
-    size_t tail;
-    size_t first_length;
-
     if (out_view_count != NULL) {
         *out_view_count = 0u;
     }
@@ -503,12 +483,12 @@ utp_internal_error_t utp_stream_acquire_write_views_internal(utp_stream_t* strea
     if (stream->send_buffer_length > UTP_STREAM_SEND_BUFFER_CAPACITY) {
         return UTP_INTERNAL_ERROR_STATE;
     }
-    free_capacity = UTP_STREAM_SEND_BUFFER_CAPACITY - stream->send_buffer_length;
+    size_t free_capacity = UTP_STREAM_SEND_BUFFER_CAPACITY - stream->send_buffer_length;
     if (free_capacity == 0u) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
-    tail         = utp_stream_send_index(stream, stream->send_buffer_length);
-    first_length = UTP_STREAM_SEND_BUFFER_CAPACITY - tail;
+    size_t tail         = utp_stream_send_index(stream, stream->send_buffer_length);
+    size_t first_length = UTP_STREAM_SEND_BUFFER_CAPACITY - tail;
     if (first_length > free_capacity) {
         first_length = free_capacity;
     }
@@ -558,12 +538,6 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
                                             size_t* out_payload_length, uint32_t* out_stream_data_size,
                                             uint64_t* out_stream_offset, bool* out_fin)
 {
-    utp_frame_stream_t   frame;
-    size_t               data_length;
-    size_t               contiguous_length;
-    const uint8_t*       data;
-    utp_internal_error_t error;
-
     if (stream == NULL || payload == NULL || out_payload_length == NULL || out_stream_data_size == NULL ||
         out_stream_offset == NULL || out_fin == NULL || !utp_stream_has_send_work(stream)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -571,8 +545,9 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
     if (capacity <= UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    data        = utp_stream_unsent_data(stream, &contiguous_length);
-    data_length = contiguous_length;
+    size_t         contiguous_length;
+    const uint8_t* data        = utp_stream_unsent_data(stream, &contiguous_length);
+    size_t         data_length = contiguous_length;
     if (data_length > capacity - UTP_FRAME_STREAM_HEADER_SIZE) {
         data_length = capacity - UTP_FRAME_STREAM_HEADER_SIZE;
     }
@@ -588,6 +563,7 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
     if (data_length == 0u && stream->send_buffer_length != stream->send_in_flight_bytes) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
+    utp_frame_stream_t frame;
     frame.flags       = UTP_STREAM_FLAG_NONE;
     frame.stream_id   = stream->stream_id;
     frame.offset      = stream->next_send_offset;
@@ -597,7 +573,7 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
         !stream->local_fin_sent) {
         frame.flags |= UTP_STREAM_FLAG_FIN;
     }
-    error = utp_frame_stream_encode(payload, capacity, &frame);
+    utp_internal_error_t error = utp_frame_stream_encode(payload, capacity, &frame);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -622,13 +598,7 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
                                                          const uint8_t** out_data, uint32_t* out_stream_data_size,
                                                          uint64_t* out_stream_offset, bool* out_fin)
 {
-    size_t               data_length;
-    size_t               contiguous_length;
-    size_t               unsent_length;
-    uint8_t              flags = UTP_STREAM_FLAG_NONE;
-    const uint8_t*       data;
-    utp_internal_error_t error;
-
+    uint8_t flags = UTP_STREAM_FLAG_NONE;
     if (stream == NULL || header == NULL || out_header_length == NULL || out_data == NULL ||
         out_stream_data_size == NULL || out_stream_offset == NULL || out_fin == NULL ||
         !utp_stream_has_send_work(stream)) {
@@ -638,9 +608,10 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     // 只编码 STREAM header，payload 直接引用环形发送缓冲，交给 PacketOut 的 slice 发送。
-    data          = utp_stream_unsent_data(stream, &contiguous_length);
-    data_length   = contiguous_length;
-    unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
+    size_t         contiguous_length;
+    const uint8_t* data          = utp_stream_unsent_data(stream, &contiguous_length);
+    size_t         data_length   = contiguous_length;
+    size_t         unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
     if (data_length > max_data_length) {
         data_length = max_data_length;
     }
@@ -659,8 +630,8 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
     if (data_length == unsent_length && stream->local_fin_queued && !stream->local_fin_sent) {
         flags |= UTP_STREAM_FLAG_FIN;
     }
-    error = utp_frame_stream_header_encode(header, capacity, flags, stream->stream_id, stream->next_send_offset,
-                                           (uint16_t)data_length);
+    utp_internal_error_t error = utp_frame_stream_header_encode(header, capacity, flags, stream->stream_id,
+                                                                stream->next_send_offset, (uint16_t)data_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -715,15 +686,12 @@ utp_internal_error_t utp_stream_on_packet_acked(utp_stream_t* stream, uint32_t s
 utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint64_t stream_offset,
                                                       uint32_t stream_data_size)
 {
-    size_t               data_size = (size_t)stream_data_size;
-    uint64_t             end;
-    utp_internal_error_t error;
-
+    size_t data_size = (size_t)stream_data_size;
     if (stream == NULL || !stream->used || data_size > stream->send_in_flight_bytes ||
         (uint64_t)data_size > UINT64_MAX - stream_offset) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    end = stream_offset + (uint64_t)data_size;
+    uint64_t end = stream_offset + (uint64_t)data_size;
     if (stream_offset < stream->send_buffer_offset ||
         end > stream->send_buffer_offset + (uint64_t)stream->send_buffer_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -732,7 +700,7 @@ utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint
         return UTP_INTERNAL_ERROR_OK;
     }
     // ACK 可能乱序到达，先合并区间，仅释放从 send_buffer_offset 开始的连续前缀。
-    error = utp_stream_insert_ack_range(stream, stream_offset, end);
+    utp_internal_error_t error = utp_stream_insert_ack_range(stream, stream_offset, end);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -851,14 +819,13 @@ utp_internal_error_t utp_stream_on_frame(utp_stream_t* stream, const utp_frame_s
 
 utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream, utp_stream_read_view_t* out_view)
 {
-    utp_stream_read_view_t view = {NULL, 0u, 0u, false};
-
     if (stream == NULL || out_view == NULL || !stream->used) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (!utp_stream_local_can_receive(stream)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
+    utp_stream_read_view_t view = {NULL, 0u, 0u, false};
     // read view 只暴露当前连续前缀，commit 前 PacketIn 会一直保持引用。
     view.offset = stream->recv_offset;
     if (stream->recv_fragment_count != 0u &&
@@ -890,9 +857,6 @@ utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream,
 
 utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, uint64_t offset, size_t length)
 {
-    utp_stream_recv_fragment_t* fragment;
-    size_t                      available;
-
     if (stream == NULL || !stream->used || offset != stream->recv_offset) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -913,8 +877,8 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
         utp_stream_fragment_read_offset(&stream->recv_fragments[0]) != stream->recv_offset) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    fragment  = &stream->recv_fragments[0];
-    available = fragment->length - fragment->consumed;
+    utp_stream_recv_fragment_t* fragment  = &stream->recv_fragments[0];
+    size_t                      available = fragment->length - fragment->consumed;
     if (available == 0u || length > available) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -993,15 +957,12 @@ utp_internal_error_t utp_stream_read_internal(utp_stream_t* stream, uint8_t* buf
 
 size_t utp_stream_readable_bytes(const utp_stream_t* stream)
 {
-    size_t   readable = 0u;
-    uint64_t offset;
-    size_t   index;
-
     if (stream == NULL || !utp_stream_local_can_receive(stream)) {
         return 0u;
     }
-    offset = stream->recv_offset;
-    for (index = 0u; index < stream->recv_fragment_count; ++index) {
+    size_t   readable = 0u;
+    uint64_t offset   = stream->recv_offset;
+    for (size_t index = 0u; index < stream->recv_fragment_count; ++index) {
         const utp_stream_recv_fragment_t* fragment = &stream->recv_fragments[index];
         size_t                            remaining;
 

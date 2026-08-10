@@ -6,19 +6,16 @@
 #include "proto/proto.h"
 #include "proto/wire.h"
 
-utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t *ack, const utp_receive_history_t *history,
-                                                  uint64_t now, size_t max_ranges) {
-    uint64_t largest_received_at;
-    size_t   range_count;
-    size_t   index;
-
+utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t* ack, const utp_receive_history_t* history,
+                                                  uint64_t now, size_t max_ranges)
+{
     if (ack == NULL || history == NULL || max_ranges == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (max_ranges > UTP_ACK_MAX_RANGES) {
         max_ranges = UTP_ACK_MAX_RANGES;
     }
-    range_count = utp_receive_history_range_count(history);
+    size_t range_count = utp_receive_history_range_count(history);
     if (range_count > max_ranges) {
         range_count = max_ranges;
     }
@@ -32,8 +29,8 @@ utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t *ack, const utp
         ack->range_count   = 0u;
         return UTP_INTERNAL_ERROR_OK;
     }
-    for (index = 0u; index < range_count; ++index) {
-        const utp_receive_range_t *range = utp_receive_history_range_at(history, index);
+    for (size_t index = 0u; index < range_count; ++index) {
+        const utp_receive_range_t* range = utp_receive_history_range_at(history, index);
 
         if (range == NULL) {
             return UTP_INTERNAL_ERROR_STATE;
@@ -41,20 +38,19 @@ utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t *ack, const utp
         ack->ranges[index].low  = range->low;
         ack->ranges[index].high = range->high;
     }
-    largest_received_at = utp_receive_history_largest_received_at(history);
-    ack->largest_acked  = utp_receive_history_largest(history);
-    ack->ack_delay      = now >= largest_received_at ? now - largest_received_at : 0u;
-    ack->range_count    = range_count;
+    uint64_t largest_received_at = utp_receive_history_largest_received_at(history);
+    ack->largest_acked           = utp_receive_history_largest(history);
+    ack->ack_delay               = now >= largest_received_at ? now - largest_received_at : 0u;
+    ack->range_count             = range_count;
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static utp_internal_error_t utp_ack_range_length(const utp_ack_range_t *range, uint32_t *length) {
-    uint64_t difference;
-
+static utp_internal_error_t utp_ack_range_length(const utp_ack_range_t* range, uint32_t* length)
+{
     if (range == NULL || length == NULL || range->low > range->high || range->high > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    difference = range->high - range->low;
+    uint64_t difference = range->high - range->low;
     if (difference >= UINT32_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -62,9 +58,8 @@ static utp_internal_error_t utp_ack_range_length(const utp_ack_range_t *range, u
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t *ack) {
-    size_t   index;
-    uint64_t previous_low;
+static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t* ack)
+{
     uint32_t range_length;
 
     if (ack == NULL || ack->range_count > UTP_ACK_MAX_RANGES || ack->range_count > ack->range_capacity) {
@@ -77,8 +72,8 @@ static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t *
         ack->largest_acked != ack->ranges[0].high) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    previous_low = ack->ranges[0].low;
-    for (index = 1u; index < ack->range_count; ++index) {
+    uint64_t previous_low = ack->ranges[0].low;
+    for (size_t index = 1u; index < ack->range_count; ++index) {
         if (utp_ack_range_length(&ack->ranges[index], &range_length) != UTP_INTERNAL_ERROR_OK ||
             previous_low <= ack->ranges[index].high || previous_low - ack->ranges[index].high - 1u > UINT32_MAX) {
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -88,20 +83,13 @@ static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t *
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_ack_encode(uint8_t *buffer, size_t capacity, const utp_ack_info_t *ack,
-                                    uint8_t ack_delay_exponent, size_t *encoded_length) {
-    utp_wire_writer_t    writer;
-    size_t               frame_length;
-    size_t               index;
-    uint64_t             previous_low;
-    uint64_t             encoded_delay;
-    uint32_t             range_length;
-    utp_internal_error_t error;
-
+utp_internal_error_t utp_ack_encode(uint8_t* buffer, size_t capacity, const utp_ack_info_t* ack,
+                                    uint8_t ack_delay_exponent, size_t* encoded_length)
+{
     if (buffer == NULL || ack == NULL || encoded_length == NULL || ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    error = utp_ack_validate_encode_input(ack);
+    utp_internal_error_t error = utp_ack_validate_encode_input(ack);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -109,18 +97,20 @@ utp_internal_error_t utp_ack_encode(uint8_t *buffer, size_t capacity, const utp_
         *encoded_length = 0u;
         return UTP_INTERNAL_ERROR_OK;
     }
-    frame_length = UTP_ACK_FRAME_HEADER_SIZE + (ack->range_count - 1u) * UTP_ACK_FRAME_RANGE_SIZE;
+    size_t frame_length = UTP_ACK_FRAME_HEADER_SIZE + (ack->range_count - 1u) * UTP_ACK_FRAME_RANGE_SIZE;
     if (capacity < frame_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
+    utp_wire_writer_t writer;
     error = utp_wire_writer_init(&writer, buffer, capacity);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    encoded_delay = ack->ack_delay >> ack_delay_exponent;
+    uint64_t encoded_delay = ack->ack_delay >> ack_delay_exponent;
     if (encoded_delay > UINT16_MAX) {
         encoded_delay = UINT16_MAX;
     }
+    uint32_t range_length;
     error = utp_ack_range_length(&ack->ranges[0], &range_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -145,8 +135,8 @@ utp_internal_error_t utp_ack_encode(uint8_t *buffer, size_t capacity, const utp_
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    previous_low = ack->ranges[0].low;
-    for (index = 1u; index < ack->range_count; ++index) {
+    uint64_t previous_low = ack->ranges[0].low;
+    for (size_t index = 1u; index < ack->range_count; ++index) {
         uint32_t gap = (uint32_t)(previous_low - ack->ranges[index].high - 1u);
 
         error = utp_ack_range_length(&ack->ranges[index], &range_length);
@@ -167,22 +157,11 @@ utp_internal_error_t utp_ack_encode(uint8_t *buffer, size_t capacity, const utp_
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, size_t frame_length,
-                                    uint8_t ack_delay_exponent, size_t *consumed) {
-    utp_wire_reader_t    reader;
-    utp_internal_error_t error;
-    uint8_t              frame_type;
-    uint8_t              additional_range_count;
-    uint16_t             encoded_delay;
-    uint32_t             first_range_length;
-    uint64_t             largest_acked;
-    uint64_t             first_low;
-    uint64_t             previous_low;
-    uint32_t             gaps[UTP_ACK_MAX_RANGES - 1u];
-    uint32_t             range_lengths[UTP_ACK_MAX_RANGES - 1u];
-    size_t               range_count;
-    size_t               expected_length;
-    size_t               index;
+utp_internal_error_t utp_ack_decode(utp_ack_info_t* ack, const uint8_t* frame, size_t frame_length,
+                                    uint8_t ack_delay_exponent, size_t* consumed)
+{
+    uint32_t gaps[UTP_ACK_MAX_RANGES - 1u];
+    uint32_t range_lengths[UTP_ACK_MAX_RANGES - 1u];
 
     if (ack == NULL || frame == NULL || consumed == NULL || ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT ||
         ack->ranges == NULL) {
@@ -194,19 +173,21 @@ utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, s
     if (frame[0] != UTP_FRAME_TYPE_ACK) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    additional_range_count = frame[1];
-    range_count            = (size_t)additional_range_count + 1u;
-    expected_length        = UTP_ACK_FRAME_HEADER_SIZE + (size_t)additional_range_count * UTP_ACK_FRAME_RANGE_SIZE;
+    uint8_t additional_range_count = frame[1];
+    size_t  range_count            = (size_t)additional_range_count + 1u;
+    size_t  expected_length = UTP_ACK_FRAME_HEADER_SIZE + (size_t)additional_range_count * UTP_ACK_FRAME_RANGE_SIZE;
     if (frame_length < expected_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     if (range_count > ack->range_capacity) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    error = utp_wire_reader_init(&reader, frame, expected_length);
+    utp_wire_reader_t    reader;
+    utp_internal_error_t error = utp_wire_reader_init(&reader, frame, expected_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
+    uint8_t frame_type;
     error = utp_wire_read_u8(&reader, &frame_type);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -215,14 +196,17 @@ utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, s
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
+    uint16_t encoded_delay;
     error = utp_wire_read_u16(&reader, &encoded_delay);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
+    uint32_t first_range_length;
     error = utp_wire_read_u32(&reader, &first_range_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
+    uint64_t largest_acked;
     error = utp_wire_read_u64(&reader, &largest_acked);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -231,9 +215,9 @@ utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, s
         largest_acked < (uint64_t)first_range_length - 1u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    first_low    = largest_acked - (uint64_t)first_range_length + 1u;
-    previous_low = first_low;
-    for (index = 1u; index < range_count; ++index) {
+    uint64_t first_low    = largest_acked - (uint64_t)first_range_length + 1u;
+    uint64_t previous_low = first_low;
+    for (size_t index = 1u; index < range_count; ++index) {
         uint32_t gap;
         uint32_t range_length;
         uint64_t range_high;
@@ -260,7 +244,7 @@ utp_internal_error_t utp_ack_decode(utp_ack_info_t *ack, const uint8_t *frame, s
     ack->ranges[0].low  = first_low;
     ack->ranges[0].high = largest_acked;
     previous_low        = first_low;
-    for (index = 1u; index < range_count; ++index) {
+    for (size_t index = 1u; index < range_count; ++index) {
         uint64_t range_high;
 
         range_high              = previous_low - (uint64_t)gaps[index - 1u] - 1u;

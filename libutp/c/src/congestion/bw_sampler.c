@@ -3,11 +3,13 @@
 #include <limits.h>
 #include <stddef.h>
 
-static uint64_t utp_bw_rate(uint64_t bytes, uint64_t interval_us) {
+static uint64_t utp_bw_rate(uint64_t bytes, uint64_t interval_us)
+{
     return interval_us == 0u || bytes > UINT64_MAX / UINT64_C(1000000) ? 0u : bytes * UINT64_C(1000000) / interval_us;
 }
 
-void utp_bw_sampler_init(utp_bw_sampler_t *sampler) {
+void utp_bw_sampler_init(utp_bw_sampler_t* sampler)
+{
     if (sampler != NULL) {
         sampler->total_bytes_sent                = 0u;
         sampler->total_bytes_acked               = 0u;
@@ -21,8 +23,9 @@ void utp_bw_sampler_init(utp_bw_sampler_t *sampler) {
     }
 }
 
-void utp_bw_sampler_on_packet_sent(utp_bw_sampler_t *sampler, utp_bw_packet_state_t *packet, uint64_t packet_number,
-                                   uint32_t packet_size, uint64_t sent_time_us) {
+void utp_bw_sampler_on_packet_sent(utp_bw_sampler_t* sampler, utp_bw_packet_state_t* packet, uint64_t packet_number,
+                                   uint32_t packet_size, uint64_t sent_time_us)
+{
     if (sampler == NULL || packet == NULL || packet_number == 0u || packet_size == 0u) {
         return;
     }
@@ -42,15 +45,16 @@ void utp_bw_sampler_on_packet_sent(utp_bw_sampler_t *sampler, utp_bw_packet_stat
     sampler->last_sent_packet_number  = packet_number;
 }
 
-bool utp_bw_sampler_on_packet_acked(utp_bw_sampler_t *sampler, utp_bw_packet_state_t *packet, uint64_t packet_number,
-                                    uint64_t ack_time_us, utp_bw_sample_t *sample) {
-    uint64_t delivered;
-    uint64_t interval;
-
+bool utp_bw_sampler_on_packet_acked(utp_bw_sampler_t* sampler, utp_bw_packet_state_t* packet, uint64_t packet_number,
+                                    uint64_t ack_time_us, utp_bw_sample_t* sample)
+{
     if (sampler == NULL || packet == NULL || sample == NULL || !packet->valid ||
         packet->packet_number != packet_number || ack_time_us <= packet->last_ack_time_us) {
         return false;
     }
+    uint64_t delivered;
+    uint64_t interval;
+
     sample->bandwidth_bytes_per_second  = 0u;
     sample->rtt_us                      = 0u;
     sample->is_app_limited              = false;
@@ -67,14 +71,16 @@ bool utp_bw_sampler_on_packet_acked(utp_bw_sampler_t *sampler, utp_bw_packet_sta
     return sample->rtt_us != 0u;
 }
 
-void utp_bw_sampler_on_packet_lost(utp_bw_sampler_t *sampler, utp_bw_packet_state_t *packet) {
+void utp_bw_sampler_on_packet_lost(utp_bw_sampler_t* sampler, utp_bw_packet_state_t* packet)
+{
     if (sampler != NULL && packet != NULL && packet->valid) {
         sampler->total_bytes_lost += packet->packet_size;
         packet->valid              = false;
     }
 }
 
-void utp_bw_sampler_set_app_limited(utp_bw_sampler_t *sampler) {
+void utp_bw_sampler_set_app_limited(utp_bw_sampler_t* sampler)
+{
     if (sampler != NULL) {
         sampler->app_limited                     = true;
         sampler->app_limited_until_packet_number = sampler->last_sent_packet_number;

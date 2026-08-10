@@ -1,11 +1,13 @@
 #include "context/event_loop.h"
 
-#include <event2/event.h>
 #include <string.h>
+
+#include <event2/event.h>
 
 #define UTP_EVENT_MAX_TIMER_DELAY_US (UINT64_C(4294967295) * UINT64_C(1000000))
 
-static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval *timeout) {
+static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval* timeout)
+{
     if (timeout == NULL || delay_us > UTP_EVENT_MAX_TIMER_DELAY_US) {
         return false;
     }
@@ -18,8 +20,9 @@ static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval *timeout) 
     return true;
 }
 
-static void utp_event_native_callback(evutil_socket_t file_descriptor, short native_events, void *user_data) {
-    utp_event_t *event  = user_data;
+static void utp_event_native_callback(evutil_socket_t file_descriptor, short native_events, void* user_data)
+{
+    utp_event_t* event  = user_data;
     uint32_t     events = 0u;
 
     (void)file_descriptor;
@@ -37,8 +40,9 @@ static void utp_event_native_callback(evutil_socket_t file_descriptor, short nat
     }
 }
 
-utp_internal_error_t utp_event_loop_init(utp_event_loop_t *loop, struct event_base *native_base,
-                                         const utp_logger_t *logger, const utp_log_tag_t *tag) {
+utp_internal_error_t utp_event_loop_init(utp_event_loop_t* loop, struct event_base* native_base,
+                                         const utp_logger_t* logger, const utp_log_tag_t* tag)
+{
     if (loop == NULL || native_base == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -48,13 +52,15 @@ utp_internal_error_t utp_event_loop_init(utp_event_loop_t *loop, struct event_ba
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_event_loop_close(utp_event_loop_t *loop) {
+void utp_event_loop_close(utp_event_loop_t* loop)
+{
     if (loop != NULL) {
         loop->native_base = NULL;
     }
 }
 
-utp_internal_error_t utp_event_loop_run_once(utp_event_loop_t *loop, bool nonblocking) {
+utp_internal_error_t utp_event_loop_run_once(utp_event_loop_t* loop, bool nonblocking)
+{
     int flags = EVLOOP_ONCE;
 
     if (loop == NULL || loop->native_base == NULL) {
@@ -70,22 +76,25 @@ utp_internal_error_t utp_event_loop_run_once(utp_event_loop_t *loop, bool nonblo
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_event_init(utp_event_t *event) {
+void utp_event_init(utp_event_t* event)
+{
     if (event != NULL) {
         memset(event, 0, sizeof(*event));
     }
 }
 
-void utp_event_remove(utp_event_t *event) {
+void utp_event_remove(utp_event_t* event)
+{
     if (event != NULL && event->initialized && event->active) {
         (void)event_del(&event->native_event);
         event->active = false;
     }
 }
 
-utp_internal_error_t utp_event_add_udp(utp_event_loop_t *loop, utp_event_t *event, const utp_udp_socket_t *udp_socket,
+utp_internal_error_t utp_event_add_udp(utp_event_loop_t* loop, utp_event_t* event, const utp_udp_socket_t* udp_socket,
                                        uint32_t events, bool persistent, utp_event_callback_fn callback,
-                                       void *user_data) {
+                                       void* user_data)
+{
     short native_events = 0;
 
     if (loop == NULL || loop->native_base == NULL || event == NULL || !utp_udp_socket_is_open(udp_socket) ||
@@ -118,17 +127,20 @@ utp_internal_error_t utp_event_add_udp(utp_event_loop_t *loop, utp_event_t *even
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_event_add_timer(utp_event_loop_t *loop, utp_event_t *event, uint64_t delay_us, bool persistent,
-                                         utp_event_callback_fn callback, void *user_data) {
-    struct timeval timeout;
-    short          native_events = persistent ? EV_PERSIST : 0;
-
+utp_internal_error_t utp_event_add_timer(utp_event_loop_t* loop, utp_event_t* event, uint64_t delay_us, bool persistent,
+                                         utp_event_callback_fn callback, void* user_data)
+{
     if (loop == NULL || loop->native_base == NULL || event == NULL || callback == NULL || event->active ||
-        (persistent && delay_us == 0u) || !utp_event_timer_timeout(delay_us, &timeout)) {
+        (persistent && delay_us == 0u)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    event->callback  = callback;
-    event->user_data = user_data;
+    struct timeval timeout;
+    if (!utp_event_timer_timeout(delay_us, &timeout)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    short native_events = persistent ? EV_PERSIST : 0;
+    event->callback     = callback;
+    event->user_data    = user_data;
     if (event_assign(&event->native_event, loop->native_base, (evutil_socket_t)-1, native_events,
                      utp_event_native_callback, event) != 0 ||
         event_add(&event->native_event, &timeout) != 0) {
@@ -143,11 +155,13 @@ utp_internal_error_t utp_event_add_timer(utp_event_loop_t *loop, utp_event_t *ev
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_event_reset_timer(utp_event_t *event, uint64_t delay_us) {
+utp_internal_error_t utp_event_reset_timer(utp_event_t* event, uint64_t delay_us)
+{
+    if (event == NULL || !event->initialized || !event->active || !event->timer) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
     struct timeval timeout;
-
-    if (event == NULL || !event->initialized || !event->active || !event->timer ||
-        !utp_event_timer_timeout(delay_us, &timeout)) {
+    if (!utp_event_timer_timeout(delay_us, &timeout)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
     return event_add(&event->native_event, &timeout) == 0 ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_IO;

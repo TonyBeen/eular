@@ -167,17 +167,16 @@ utp_internal_error_t utp_token_auth_open(utp_token_auth_t* auth, const uint8_t t
 
 bool utp_token_meta_address_matches(const utp_token_meta_t* meta, const utp_address_t* address)
 {
-    size_t length;
-
     if (meta == NULL || address == NULL || meta->family != address->family) {
         return false;
     }
     if (address->family == UTP_ADDRESS_FAMILY_IPV4) {
-        length = 4u;
+        const size_t length = 4u;
+        return memcmp(meta->address, address->address, length) == 0;
     } else if (address->family == UTP_ADDRESS_FAMILY_IPV6) {
-        length = 16u;
+        const size_t length = 16u;
+        return memcmp(meta->address, address->address, length) == 0;
     } else {
         return false;
     }
-    return memcmp(meta->address, address->address, length) == 0;
 }

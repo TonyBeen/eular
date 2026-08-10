@@ -5,17 +5,16 @@
 
 #include "proto/proto.h"
 
-utp_internal_error_t utp_receive_history_init(utp_receive_history_t *history, const utp_allocator_t *allocator,
-                                              size_t range_capacity) {
-    const utp_allocator_t *resolved_allocator;
-
+utp_internal_error_t utp_receive_history_init(utp_receive_history_t* history, const utp_allocator_t* allocator,
+                                              size_t range_capacity)
+{
     if (history == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (range_capacity == 0u || range_capacity > SIZE_MAX / sizeof(*history->ranges)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    resolved_allocator = utp_allocator_resolve(allocator);
+    const utp_allocator_t* resolved_allocator = utp_allocator_resolve(allocator);
     if (resolved_allocator == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -32,7 +31,8 @@ utp_internal_error_t utp_receive_history_init(utp_receive_history_t *history, co
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_receive_history_cleanup(utp_receive_history_t *history) {
+void utp_receive_history_cleanup(utp_receive_history_t* history)
+{
     if (history == NULL) {
         return;
     }
@@ -46,12 +46,9 @@ void utp_receive_history_cleanup(utp_receive_history_t *history) {
     history->allocator           = NULL;
 }
 
-utp_internal_error_t utp_receive_history_insert(utp_receive_history_t *history, uint64_t packet_number,
-                                                uint64_t received_at) {
-    bool   extends_higher_range;
-    bool   extends_lower_range;
-    size_t position;
-
+utp_internal_error_t utp_receive_history_insert(utp_receive_history_t* history, uint64_t packet_number,
+                                                uint64_t received_at)
+{
     if (history == NULL || history->ranges == NULL || packet_number == 0u || packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -63,7 +60,7 @@ utp_internal_error_t utp_receive_history_insert(utp_receive_history_t *history, 
         history->largest_received_at = received_at;
     }
 
-    position = 0u;
+    size_t position = 0u;
     while (position < history->range_count) {
         if (packet_number > history->ranges[position].high) {
             break;
@@ -74,8 +71,8 @@ utp_internal_error_t utp_receive_history_insert(utp_receive_history_t *history, 
         ++position;
     }
 
-    extends_higher_range = position > 0u && history->ranges[position - 1u].low == packet_number + 1u;
-    extends_lower_range  = position < history->range_count && history->ranges[position].high + 1u == packet_number;
+    bool extends_higher_range = position > 0u && history->ranges[position - 1u].low == packet_number + 1u;
+    bool extends_lower_range  = position < history->range_count && history->ranges[position].high + 1u == packet_number;
     if (extends_higher_range && extends_lower_range) {
         history->ranges[position - 1u].low = history->ranges[position].low;
         memmove(&history->ranges[position], &history->ranges[position + 1u],
@@ -112,17 +109,16 @@ utp_internal_error_t utp_receive_history_insert(utp_receive_history_t *history, 
     return UTP_INTERNAL_ERROR_OK;
 }
 
-bool utp_receive_history_contains(const utp_receive_history_t *history, uint64_t packet_number) {
-    size_t index;
-
+bool utp_receive_history_contains(const utp_receive_history_t* history, uint64_t packet_number)
+{
     if (history == NULL || packet_number == 0u) {
         return false;
     }
     if (history->cutoff != 0u && packet_number < history->cutoff) {
         return true;
     }
-    for (index = 0u; index < history->range_count; ++index) {
-        const utp_receive_range_t *range = &history->ranges[index];
+    for (size_t index = 0u; index < history->range_count; ++index) {
+        const utp_receive_range_t* range = &history->ranges[index];
 
         if (packet_number > range->high) {
             return false;
@@ -134,7 +130,8 @@ bool utp_receive_history_contains(const utp_receive_history_t *history, uint64_t
     return false;
 }
 
-utp_internal_error_t utp_receive_history_stop_wait(utp_receive_history_t *history, uint64_t cutoff) {
+utp_internal_error_t utp_receive_history_stop_wait(utp_receive_history_t* history, uint64_t cutoff)
+{
     if (history == NULL || cutoff > UTP_PACKET_NUMBER_MAX + 1u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -143,7 +140,7 @@ utp_internal_error_t utp_receive_history_stop_wait(utp_receive_history_t *histor
     }
     history->cutoff = cutoff;
     while (history->range_count != 0u) {
-        utp_receive_range_t *oldest = &history->ranges[history->range_count - 1u];
+        utp_receive_range_t* oldest = &history->ranges[history->range_count - 1u];
 
         if (oldest->high < cutoff) {
             --history->range_count;
@@ -157,7 +154,8 @@ utp_internal_error_t utp_receive_history_stop_wait(utp_receive_history_t *histor
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_receive_history_clear(utp_receive_history_t *history) {
+void utp_receive_history_clear(utp_receive_history_t* history)
+{
     if (history != NULL) {
         history->range_count         = 0u;
         history->cutoff              = 0u;
@@ -166,23 +164,28 @@ void utp_receive_history_clear(utp_receive_history_t *history) {
     }
 }
 
-uint64_t utp_receive_history_largest(const utp_receive_history_t *history) {
+uint64_t utp_receive_history_largest(const utp_receive_history_t* history)
+{
     return history == NULL ? 0u : history->largest;
 }
 
-uint64_t utp_receive_history_largest_received_at(const utp_receive_history_t *history) {
+uint64_t utp_receive_history_largest_received_at(const utp_receive_history_t* history)
+{
     return history == NULL ? 0u : history->largest_received_at;
 }
 
-uint64_t utp_receive_history_cutoff(const utp_receive_history_t *history) {
+uint64_t utp_receive_history_cutoff(const utp_receive_history_t* history)
+{
     return history == NULL ? 0u : history->cutoff;
 }
 
-size_t utp_receive_history_range_count(const utp_receive_history_t *history) {
+size_t utp_receive_history_range_count(const utp_receive_history_t* history)
+{
     return history == NULL ? 0u : history->range_count;
 }
 
-const utp_receive_range_t *utp_receive_history_range_at(const utp_receive_history_t *history, size_t index) {
+const utp_receive_range_t* utp_receive_history_range_at(const utp_receive_history_t* history, size_t index)
+{
     if (history == NULL || index >= history->range_count) {
         return NULL;
     }

@@ -43,13 +43,12 @@ static bool utp_udp_socket_ifname_empty(const char* ifname) { return ifname == N
 static utp_internal_error_t utp_udp_socket_validate_slices(const utp_udp_send_slice_t* slices, size_t slice_count,
                                                            size_t* total_length)
 {
-    size_t index;
-    size_t total = 0u;
-
     if (slices == NULL || slice_count == 0u || slice_count > UTP_UDP_SOCKET_MAX_SEND_SLICES || total_length == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    for (index = 0u; index < slice_count; ++index) {
+    size_t total = 0u;
+
+    for (size_t index = 0u; index < slice_count; ++index) {
         if (slices[index].data == NULL || slices[index].length == 0u || slices[index].length > SIZE_MAX - total) {
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
         }
@@ -247,8 +246,7 @@ void utp_udp_socket_close(utp_udp_socket_t* udp_socket)
 
 utp_internal_error_t utp_udp_socket_open(utp_udp_socket_t* udp_socket, uint8_t address_family)
 {
-    int                  native_family;
-    utp_internal_error_t error;
+    int native_family;
 
     if (udp_socket == NULL || utp_udp_socket_is_open(udp_socket)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -309,7 +307,7 @@ utp_internal_error_t utp_udp_socket_open(utp_udp_socket_t* udp_socket, uint8_t a
         udp_socket->native_handle = (uintptr_t)native_handle;
     }
 #endif
-    error = utp_udp_socket_enable_dont_fragment(udp_socket, address_family);
+    utp_internal_error_t error = utp_udp_socket_enable_dont_fragment(udp_socket, address_family);
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_udp_socket_close(udp_socket);
         return error;
@@ -320,14 +318,12 @@ utp_internal_error_t utp_udp_socket_open(utp_udp_socket_t* udp_socket, uint8_t a
 utp_internal_error_t utp_udp_socket_bind(utp_udp_socket_t* udp_socket, const utp_address_t* requested,
                                          const char* ifname, utp_address_t* local)
 {
-    struct sockaddr_storage storage;
-    size_t                  storage_length;
-    utp_internal_error_t    error;
-
     if (!utp_udp_socket_is_open(udp_socket) || requested == NULL || local == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    error = utp_address_to_sockaddr(requested, &storage, &storage_length);
+    struct sockaddr_storage storage;
+    size_t                  storage_length;
+    utp_internal_error_t    error = utp_address_to_sockaddr(requested, &storage, &storage_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }

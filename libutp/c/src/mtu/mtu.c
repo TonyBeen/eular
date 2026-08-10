@@ -30,9 +30,7 @@ static uint64_t utp_mtu_add_ms(uint64_t now_ms, uint64_t delay_ms)
 
 static uint16_t utp_mtu_next_ladder_target(const utp_mtu_discovery_t* discovery)
 {
-    size_t index;
-
-    for (index = 0u; index < sizeof(utp_mtu_probe_ladder) / sizeof(utp_mtu_probe_ladder[0]); ++index) {
+    for (size_t index = 0u; index < sizeof(utp_mtu_probe_ladder) / sizeof(utp_mtu_probe_ladder[0]); ++index) {
         const uint16_t candidate = utp_mtu_probe_ladder[index];
 
         if (candidate > discovery->search_low_mtu && candidate <= discovery->ceiling_mtu &&
@@ -45,9 +43,6 @@ static uint16_t utp_mtu_next_ladder_target(const utp_mtu_discovery_t* discovery)
 
 static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
 {
-    uint16_t low;
-    uint16_t candidate;
-
     if ((uint32_t)discovery->search_high_mtu <= (uint32_t)discovery->search_low_mtu + discovery->probe_step) {
         /* 最后一次直接确认配置上限，避免 probe_step 让 mtu_max 永远不被探测。 */
         if (discovery->search_high_mtu == discovery->mtu_max) {
@@ -55,11 +50,11 @@ static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
         }
         return discovery->search_low_mtu;
     }
-    low = (uint16_t)(discovery->search_low_mtu + 1u);
+    uint16_t low = (uint16_t)(discovery->search_low_mtu + 1u);
     if (low >= discovery->search_high_mtu) {
         return discovery->search_low_mtu;
     }
-    candidate = (uint16_t)(low + (uint16_t)((discovery->search_high_mtu - low) / 2u));
+    uint16_t candidate = (uint16_t)(low + (uint16_t)((discovery->search_high_mtu - low) / 2u));
     return candidate <= discovery->search_low_mtu ? discovery->search_low_mtu : candidate;
 }
 
@@ -240,8 +235,6 @@ uint16_t utp_mtu_discovery_path_mtu(const utp_mtu_discovery_t* discovery)
 
 uint16_t utp_mtu_discovery_next_probe_mtu(const utp_mtu_discovery_t* discovery)
 {
-    uint16_t candidate;
-
     if (discovery == NULL || !discovery->enabled) {
         return discovery == NULL ? 0u : discovery->search_low_mtu;
     }
@@ -255,7 +248,7 @@ uint16_t utp_mtu_discovery_next_probe_mtu(const utp_mtu_discovery_t* discovery)
         return discovery->search_low_mtu;
     }
     if (discovery->probe_phase == UTP_MTU_PROBE_PHASE_LADDER) {
-        candidate = utp_mtu_next_ladder_target(discovery);
+        uint16_t candidate = utp_mtu_next_ladder_target(discovery);
         return candidate > discovery->search_low_mtu ? candidate : utp_mtu_next_binary_target(discovery);
     }
     return discovery->probe_phase == UTP_MTU_PROBE_PHASE_BINARY ? utp_mtu_next_binary_target(discovery)
@@ -282,14 +275,12 @@ bool utp_mtu_discovery_should_probe(const utp_mtu_discovery_t* discovery, uint64
 bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint16_t probe_mtu,
                                      uint64_t now_ms)
 {
-    uint16_t clamped_probe;
-    uint16_t ladder_target;
-
     if (discovery == NULL || !discovery->enabled || packet_number == 0u ||
         discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
-    clamped_probe = utp_mtu_clamp(probe_mtu, (uint16_t)(discovery->search_low_mtu + 1u), discovery->ceiling_mtu);
+    uint16_t clamped_probe =
+        utp_mtu_clamp(probe_mtu, (uint16_t)(discovery->search_low_mtu + 1u), discovery->ceiling_mtu);
     if (clamped_probe <= discovery->search_low_mtu) {
         return false;
     }
@@ -302,7 +293,7 @@ bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t pa
         discovery->retry_probe_mtu   = 0u;
         discovery->probe_retry_count = 0u;
     }
-    ladder_target = utp_mtu_next_ladder_target(discovery);
+    uint16_t ladder_target = utp_mtu_next_ladder_target(discovery);
     if (discovery->probe_phase == UTP_MTU_PROBE_PHASE_LADDER &&
         (ladder_target == discovery->search_low_mtu || clamped_probe != ladder_target)) {
         discovery->probe_phase = UTP_MTU_PROBE_PHASE_BINARY;
@@ -367,13 +358,11 @@ bool utp_mtu_discovery_on_probe_ack(utp_mtu_discovery_t* discovery, uint64_t pac
 
 bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
 {
-    uint16_t probe_mtu;
-
     if (discovery == NULL || !discovery->has_in_flight_probe ||
         packet_number != discovery->in_flight_probe_packet_number) {
         return false;
     }
-    probe_mtu = discovery->in_flight_probe_mtu;
+    uint16_t probe_mtu = discovery->in_flight_probe_mtu;
     utp_mtu_clear_in_flight_probe(discovery);
     if (probe_mtu > discovery->search_low_mtu && discovery->probe_retry_count < discovery->probe_retries) {
         ++discovery->probe_retry_count;
@@ -388,13 +377,12 @@ bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t pa
 
 bool utp_mtu_discovery_on_probe_send_failed(utp_mtu_discovery_t* discovery, uint16_t probe_mtu, uint64_t now_ms)
 {
-    uint16_t clamped_probe;
-
     if (discovery == NULL || !discovery->enabled || discovery->has_in_flight_probe ||
         discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
-    clamped_probe = utp_mtu_clamp(probe_mtu, (uint16_t)(discovery->search_low_mtu + 1u), discovery->ceiling_mtu);
+    uint16_t clamped_probe =
+        utp_mtu_clamp(probe_mtu, (uint16_t)(discovery->search_low_mtu + 1u), discovery->ceiling_mtu);
     return clamped_probe > discovery->search_low_mtu &&
            utp_mtu_discovery_record_probe_failure(discovery, clamped_probe, now_ms);
 }

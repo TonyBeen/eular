@@ -4,14 +4,13 @@
 #include <stdint.h>
 #include <string.h>
 
-utp_internal_error_t utp_ring_init(utp_ring_t *ring, const utp_allocator_t *allocator, size_t element_size,
-                                   size_t capacity) {
-    const utp_allocator_t *resolved;
-
+utp_internal_error_t utp_ring_init(utp_ring_t* ring, const utp_allocator_t* allocator, size_t element_size,
+                                   size_t capacity)
+{
     if (ring == NULL || element_size == 0 || capacity == 0 || capacity > SIZE_MAX / element_size) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    resolved = utp_allocator_resolve(allocator);
+    const utp_allocator_t* resolved = utp_allocator_resolve(allocator);
     if (resolved == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -26,7 +25,8 @@ utp_internal_error_t utp_ring_init(utp_ring_t *ring, const utp_allocator_t *allo
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_ring_cleanup(utp_ring_t *ring) {
+void utp_ring_cleanup(utp_ring_t* ring)
+{
     if (ring == NULL) {
         return;
     }
@@ -34,37 +34,35 @@ void utp_ring_cleanup(utp_ring_t *ring) {
     memset(ring, 0, sizeof(*ring));
 }
 
-void utp_ring_clear(utp_ring_t *ring) {
+void utp_ring_clear(utp_ring_t* ring)
+{
     if (ring != NULL) {
         ring->head  = 0;
         ring->count = 0;
     }
 }
 
-size_t utp_ring_count(const utp_ring_t *ring) { return ring == NULL ? 0 : ring->count; }
+size_t               utp_ring_count(const utp_ring_t* ring) { return ring == NULL ? 0 : ring->count; }
 
-size_t utp_ring_capacity(const utp_ring_t *ring) { return ring == NULL ? 0 : ring->capacity; }
+size_t               utp_ring_capacity(const utp_ring_t* ring) { return ring == NULL ? 0 : ring->capacity; }
 
-utp_internal_error_t utp_ring_push(utp_ring_t *ring, const void *element) {
-    size_t index;
-
+utp_internal_error_t utp_ring_push(utp_ring_t* ring, const void* element)
+{
     if (ring == NULL || element == NULL || ring->data == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (ring->count == ring->capacity) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    if (ring->head >= ring->capacity - ring->count) {
-        index = ring->head - (ring->capacity - ring->count);
-    } else {
-        index = ring->head + ring->count;
-    }
+    size_t index = ring->head >= ring->capacity - ring->count ? ring->head - (ring->capacity - ring->count)
+                                                              : ring->head + ring->count;
     memcpy(ring->data + index * ring->element_size, element, ring->element_size);
     ++ring->count;
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_ring_peek(const utp_ring_t *ring, void *element) {
+utp_internal_error_t utp_ring_peek(const utp_ring_t* ring, void* element)
+{
     if (ring == NULL || element == NULL || ring->data == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -75,13 +73,12 @@ utp_internal_error_t utp_ring_peek(const utp_ring_t *ring, void *element) {
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_ring_pop(utp_ring_t *ring, void *element) {
-    utp_internal_error_t status;
-
+utp_internal_error_t utp_ring_pop(utp_ring_t* ring, void* element)
+{
     if (ring == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    status = utp_ring_peek(ring, element);
+    utp_internal_error_t status = utp_ring_peek(ring, element);
     if (status != UTP_INTERNAL_ERROR_OK) {
         return status;
     }
