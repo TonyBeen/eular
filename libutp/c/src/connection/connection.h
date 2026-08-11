@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <utp/connection.h>
 #include <utp/option.h>
 
 #include "congestion/bbr.h"
@@ -77,9 +78,15 @@ typedef struct utp_connection_pending_max_stream_data {
     uint32_t        stream_id;
 } utp_connection_pending_max_stream_data_t;
 
+typedef utp_on_session_token_ready_fn utp_session_token_cb_t;
+
 // Connection 私有的传输状态；CID 解复用和 UDP I/O 由 Context 负责。
 typedef struct utp_connection {
     struct utp_context*          context;
+    utp_on_incoming_stream_fn    on_incoming_stream;
+    void*                        on_incoming_stream_user_data;
+    utp_session_token_cb_t       session_token_cb;
+    void*                        session_token_cb_data;
     utp_send_control_t           send_control;
     utp_receive_history_t        receive_history;
     utp_ack_scheduler_t          ack_scheduler;
@@ -301,11 +308,17 @@ uint64_t             utp_connection_path_validation_deadline(const utp_connectio
 utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t* connection, uint64_t now_us);
 /** @brief 设置流调度模式，支持 Strict 和 DRR。 */
 utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode);
+/** @brief 设置对端首次创建流时的同步通知回调。 */
+void utp_connection_set_on_incoming_stream_internal(utp_connection_t* connection, utp_on_incoming_stream_fn callback,
+                                                    void* user_data);
+/** @brief 设置本地恢复状态就绪时的同步通知回调。 */
+void utp_connection_set_session_token_callback(utp_connection_t* connection, utp_session_token_cb_t callback,
+                                               void* user_data);
 /** @brief 创建本端发起流，并返回其唯一 stream_id。 */
-utp_internal_error_t utp_connection_create_stream_internal(utp_connection_t* connection, bool bidirectional,
-                                                           uint32_t* out_stream_id);
+utp_internal_error_t   utp_connection_create_stream_internal(utp_connection_t* connection, bool bidirectional,
+                                                             uint32_t* out_stream_id);
 /** @brief 按 stream_id 查找已存在流，不创建对端流。 */
-utp_stream_t*        utp_connection_find_stream_internal(utp_connection_t* connection, uint32_t stream_id);
+utp_stream_t*          utp_connection_find_stream_internal(utp_connection_t* connection, uint32_t stream_id);
 
 /** @brief 返回当前连接状态；空指针视为 CLOSED。 */
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);

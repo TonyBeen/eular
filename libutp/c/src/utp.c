@@ -41,6 +41,18 @@ utp_stream_t* utp_connection_get_stream(utp_connection_t* connection, uint32_t s
     return utp_connection_find_stream_internal(connection, stream_id);
 }
 
+void utp_connection_set_on_incoming_stream(utp_connection_t* connection, utp_on_incoming_stream_fn callback,
+                                           void* user_data)
+{
+    utp_connection_set_on_incoming_stream_internal(connection, callback, user_data);
+}
+
+void utp_connection_set_on_session_token_ready(utp_connection_t* connection, utp_on_session_token_ready_fn callback,
+                                               void* user_data)
+{
+    utp_connection_set_session_token_callback(connection, callback, user_data);
+}
+
 utp_status_t utp_connection_export_session_token(const utp_connection_t* connection, uint8_t* buffer, size_t capacity,
                                                  size_t* out_length)
 {

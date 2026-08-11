@@ -309,6 +309,10 @@ C 版已将下表中标为“支持”的参数下沉至 `utp_context_options_t`
 
 - 注意：Context 级 `OnConnectionClosed(Connection::Ptr)` 与 Connection 级 `OnClosed(ConnectionCloseInfo)` 是**两个不同回调**，前者用于 Context 侧生命周期回收，后者带关闭原因/发起方，供应用观测。
 
+> C 版已提供 `utp_connection_set_on_incoming_stream()` 与 `utp_connection_set_on_session_token_ready()`。两者均在
+> Context 事件循环线程同步触发；后者在注册时若恢复状态已缓存，会立即通知一次，回调内通过
+> `utp_connection_export_session_token()` 导出本地加密恢复状态。
+
 ### 7.4 Stream 级回调
 | 回调 | 签名 | 语义 | 位置 |
 |---|---|---|---|

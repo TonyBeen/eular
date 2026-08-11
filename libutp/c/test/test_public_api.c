@@ -30,6 +30,15 @@ typedef struct public_api_probe {
     utp_encryption_mode_t expected_encryption;
     utp_context_t*        context;
     utp_connection_t*     connected_connection;
+    utp_connection_t*     incoming_stream_connection;
+    utp_stream_t*         incoming_stream;
+    uint32_t              incoming_stream_id;
+    int32_t               incoming_stream_count;
+    bool                  register_session_token_callback;
+    int32_t               session_token_ready_count;
+    utp_connection_t*     session_token_connection;
+    uint8_t               session_token[256u];
+    size_t                session_token_length;
 } public_api_probe_t;
 
 static int32_t         test_log_count;
@@ -70,6 +79,17 @@ static bool test_on_new_connection_without_accept(const utp_new_connection_info_
     return true;
 }
 
+static void test_on_session_token_ready(utp_connection_t* connection, void* user_data)
+{
+    public_api_probe_t* probe = user_data;
+
+    assert(connection != NULL);
+    ++probe->session_token_ready_count;
+    probe->session_token_connection = connection;
+    assert(utp_connection_export_session_token(connection, probe->session_token, sizeof(probe->session_token),
+                                               &probe->session_token_length) == UTP_STATUS_OK);
+}
+
 static void test_on_connected(utp_connection_t* connection, void* user_data)
 {
     public_api_probe_t* probe = user_data;
@@ -77,6 +97,22 @@ static void test_on_connected(utp_connection_t* connection, void* user_data)
     assert(connection != NULL);
     ++probe->connected_count;
     probe->connected_connection = connection;
+    if (probe->register_session_token_callback) {
+        utp_connection_set_on_session_token_ready(connection, test_on_session_token_ready, probe);
+    }
+}
+
+static void test_on_incoming_stream(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+{
+    public_api_probe_t* probe = user_data;
+
+    assert(connection != NULL);
+    assert(stream != NULL);
+    assert(utp_connection_get_stream(connection, utp_stream_id(stream)) == stream);
+    ++probe->incoming_stream_count;
+    probe->incoming_stream_connection = connection;
+    probe->incoming_stream            = stream;
+    probe->incoming_stream_id         = utp_stream_id(stream);
 }
 
 static void test_on_connection_error(utp_connection_t* connection, const utp_connection_error_info_t* info,
@@ -141,6 +177,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     uint8_t               resumption_state[166u] = {0u};
     uint8_t               received[32]           = {0u};
     uint32_t              stream_id              = UINT32_MAX;
+    uint32_t              reset_stream_id        = UINT32_MAX;
     utp_stream_t*         stream;
     size_t                received_length = 0u;
 
@@ -162,6 +199,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     server_options.event_base                          = event_base;
     server_options.context_id                          = server_context_id;
     server_probe.expected_encryption                   = encryption;
+    client_probe.register_session_token_callback       = true;
     assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
     assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
     server_probe.context = server;
@@ -207,6 +245,15 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     assert(utp_connection_export_session_token(client_probe.connected_connection, resumption_state,
                                                sizeof(resumption_state), &received_length) == UTP_STATUS_OK);
     assert(received_length == sizeof(resumption_state));
+    assert(client_probe.session_token_ready_count == 1);
+    assert(client_probe.session_token_connection == client_probe.connected_connection);
+    assert(client_probe.session_token_length == received_length);
+    assert(memcmp(client_probe.session_token, resumption_state, received_length) == 0);
+    utp_connection_set_on_session_token_ready(client_probe.connected_connection, NULL, NULL);
+    utp_connection_set_on_session_token_ready(client_probe.connected_connection, test_on_session_token_ready,
+                                              &client_probe);
+    assert(client_probe.session_token_ready_count == 2);
+    utp_connection_set_on_incoming_stream(server_probe.connected_connection, test_on_incoming_stream, &server_probe);
     assert(utp_connection_create_stream(client_probe.connected_connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
            UTP_STATUS_OK);
     stream = utp_connection_get_stream(client_probe.connected_connection, stream_id);
@@ -214,12 +261,27 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     assert(utp_stream_write(stream, data, sizeof(data) - 1u) == UTP_STATUS_OK);
     utp_stream_close(stream);
     pump_event_loop(event_base, 12);
+    assert(server_probe.incoming_stream_count == 1);
+    assert(server_probe.incoming_stream_connection == server_probe.connected_connection);
+    assert(server_probe.incoming_stream_id == stream_id);
     stream = utp_connection_get_stream(server_probe.connected_connection, stream_id);
     assert(stream != NULL);
     assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_OK);
     assert(received_length == sizeof(data) - 1u);
     assert(memcmp(received, data, received_length) == 0);
     assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_CLOSED);
+    assert(utp_connection_create_stream(client_probe.connected_connection, UTP_STREAM_TYPE_UNIDIRECTIONAL,
+                                        &reset_stream_id) == UTP_STATUS_OK);
+    stream = utp_connection_get_stream(client_probe.connected_connection, reset_stream_id);
+    assert(stream != NULL);
+    assert(utp_stream_reset(stream, 1u) == UTP_STATUS_OK);
+    pump_event_loop(event_base, 12);
+    assert(server_probe.incoming_stream_count == 2);
+    assert(server_probe.incoming_stream_connection == server_probe.connected_connection);
+    assert(server_probe.incoming_stream_id == reset_stream_id);
+    assert(server_probe.incoming_stream ==
+           utp_connection_get_stream(server_probe.connected_connection, reset_stream_id));
+    assert(utp_stream_reset_by_peer(server_probe.incoming_stream));
     utp_context_destroy(client);
     pump_event_loop(event_base, 16);
     assert(server_probe.connection_error_count == 1);
