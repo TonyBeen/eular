@@ -359,7 +359,7 @@ TEST_CASE("0-RTT request and response retransmissions allocate a new packet numb
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_begin_zero_rtt_response(&passive) == UTP_INTERNAL_ERROR_OK);
     REQUIRE_FALSE(utp_connection_is_connected(&passive));
-    passive.congestion.cwnd                           = 1u;
+    passive.bbr_congestion.cwnd                       = 1u;
     passive.send_control.pacer.burst_tokens           = 0u;
     passive.send_control.pacer.next_scheduled_time_us = UINT64_C(1000000);
     REQUIRE(utp_connection_queue_zero_rtt_response(&passive, version.data(), version.size(), false) ==
@@ -633,12 +633,12 @@ TEST_CASE("connection sends a pure ACK while cwnd or pacer blocks ordinary packe
     REQUIRE(packet != nullptr);
     REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
 
-    connection.congestion.cwnd = 1u;
+    connection.bbr_congestion.cwnd = 1u;
     REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_next_packet_to_send_at(&connection, 200u) == nullptr);
 
-    connection.congestion.cwnd                           = UINT64_MAX;
+    connection.bbr_congestion.cwnd                       = UINT64_MAX;
     connection.send_control.pacer.burst_tokens           = 0u;
     connection.send_control.pacer.next_scheduled_time_us = UINT64_C(1000000);
     REQUIRE(utp_connection_next_packet_to_send_at(&connection, 200u) == nullptr);
@@ -656,6 +656,29 @@ TEST_CASE("connection sends a pure ACK while cwnd or pacer blocks ordinary packe
     REQUIRE(packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK));
     REQUIRE(utp_connection_on_packet_sent(&connection, packet, 200u) == UTP_INTERNAL_ERROR_OK);
 
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection fixes its congestion algorithm before the first packet is sent", "[connection][congestion]")
+{
+    const uint8_t       ping       = UTP_FRAME_TYPE_PING;
+    const utp_address_t peer       = loopback_address(10024u);
+    utp_connection_t    connection = {};
+    utp_packet_out_t*   packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 78u, 12u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.congestion_algorithm == UTP_CONGESTION_BBR);
+    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_CUBIC) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.send_control.congestion == utp_cubic_as_congestion(&connection.cubic_congestion));
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_BBR) == UTP_INTERNAL_ERROR_STATE);
     utp_connection_cleanup(&connection);
 }
 

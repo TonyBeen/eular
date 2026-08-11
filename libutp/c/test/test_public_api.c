@@ -394,6 +394,47 @@ static void test_encrypted_zero_rtt(struct event_base* event_base)
     utp_context_destroy(server);
 }
 
+static void test_congestion_algorithm_selection(struct event_base* event_base)
+{
+    utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
+    utp_context_t*        client          = NULL;
+    utp_context_t*        server          = NULL;
+    uint16_t              server_port     = 0u;
+    public_api_probe_t    client_probe    = {0};
+    public_api_probe_t    server_probe    = {0};
+
+    client_options.event_base   = event_base;
+    client_options.context_id   = 601u;
+    client_options.cc_algorithm = UTP_CONGESTION_CUBIC;
+    server_options.event_base   = event_base;
+    server_options.context_id   = 602u;
+    server_options.cc_algorithm = UTP_CONGESTION_BBR;
+    assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
+    assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
+    server_probe.context = server;
+    assert(utp_context_bind(client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+    assert(utp_context_bind(server, "127.0.0.1", 0u, NULL, &server_port) == UTP_STATUS_OK);
+    utp_context_set_on_connected(client, test_on_connected, &client_probe);
+    utp_context_set_on_connected(server, test_on_connected, &server_probe);
+    utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
+    connect_options.address = "127.0.0.1";
+    connect_options.port    = server_port;
+    assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
+    pump_event_loop(event_base, 16);
+    assert(client_probe.connected_connection != NULL);
+    assert(server_probe.connected_connection != NULL);
+    assert(client_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_CUBIC);
+    assert(client_probe.connected_connection->send_control.congestion ==
+           utp_cubic_as_congestion(&client_probe.connected_connection->cubic_congestion));
+    assert(server_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_BBR);
+    assert(server_probe.connected_connection->send_control.congestion ==
+           utp_bbr_as_congestion(&server_probe.connected_connection->bbr_congestion));
+    utp_context_destroy(client);
+    utp_context_destroy(server);
+}
+
 int main(void)
 {
     struct event_base*    event_base = event_base_new();
@@ -451,6 +492,11 @@ int main(void)
         utp_context_destroy(quiet_context);
         assert(test_log_count == 0);
         quiet_options.log_level = (utp_log_level_t)99;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+        quiet_options.log_level    = UTP_LOG_LEVEL_INFO;
+        quiet_options.cc_algorithm = (utp_congestion_algorithm_t)99;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+        quiet_options.cc_algorithm = (utp_congestion_algorithm_t)-1;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
     }
     {
@@ -572,6 +618,7 @@ int main(void)
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_256, 103u, 104u);
     test_plaintext_zero_rtt(event_base);
     test_encrypted_zero_rtt(event_base);
+    test_congestion_algorithm_selection(event_base);
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;

@@ -46,6 +46,10 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     connection->context = context;
+    error               = utp_connection_set_congestion_algorithm(connection, context->cc_algorithm);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
     utp_connection_set_mtu_config(connection, &context->mtu_config);
     error = utp_connection_set_local_transport_config(
         connection, &context->local_transport_params, &context->local_ack_frequency, context->enable_keepalive,
@@ -2909,7 +2913,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     }
     *out_context = NULL;
     if (options == NULL || options->event_base == NULL || !utp_context_log_level_is_valid(options->log_level) ||
-        options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR) {
+        options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
+        (options->cc_algorithm != UTP_CONGESTION_BBR && options->cc_algorithm != UTP_CONGESTION_CUBIC)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     utp_context_t* context = utp_allocator_alloc(NULL, sizeof(*context));
@@ -2945,6 +2950,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->next_cid                            = (uint32_t)options->context_id;
     context->next_cid                            = context->next_cid == 0u ? 1u : context->next_cid;
     context->stream_scheduler_mode               = options->stream_scheduler_mode;
+    context->cc_algorithm                        = options->cc_algorithm;
     context->mtu_config.enabled                  = options->enable_dplpmtud;
     context->mtu_config.mtu_min                  = options->mtu_min;
     context->mtu_config.mtu_max                  = options->mtu_max;

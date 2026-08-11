@@ -153,6 +153,11 @@
 | `send_buf_size` | `1024*1024` (1 MiB) | UDP 发送缓冲区 |
 
 **Congestion Control** (`config.h:88-104`)
+
+C 版当前通过 `utp_context_options_t.cc_algorithm` 提供 `UTP_CONGESTION_BBR`（默认）和
+`UTP_CONGESTION_CUBIC` 两种选择。C++ 的细粒度拥塞控制调参项尚未下沉到 C 公共 API。
+下表记录的是 C++ `Config` 的完整字段及其数值兼容语义，不能直接推断 C 枚举的数值。
+
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `cc_algorithm` | `0` | 算法：0=默认(BBR)/1=BBR/2=Cubic |

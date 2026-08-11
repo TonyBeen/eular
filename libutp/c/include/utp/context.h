@@ -51,6 +51,7 @@ typedef struct utp_endpoint {
      0u,                          \
      UTP_LOG_LEVEL_INFO,          \
      UTP_STREAM_SCHEDULER_STRICT, \
+     UTP_CONGESTION_BBR,          \
      true,                        \
      1280u,                       \
      1500u,                       \

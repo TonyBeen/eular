@@ -5,7 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <utp/option.h>
+
 #include "congestion/bbr.h"
+#include "congestion/cubic.h"
 #include "connection/stream.h"
 #include "context/ack_scheduler.h"
 #include "context/send_control.h"
@@ -82,7 +85,8 @@ typedef struct utp_connection {
     utp_ack_scheduler_t          ack_scheduler;
     utp_packet_out_pool_t        packet_pool;
     utp_mtu_discovery_t          mtu_discovery;
-    utp_bbr_t                    congestion;
+    utp_bbr_t                    bbr_congestion;
+    utp_cubic_t                  cubic_congestion;
     utp_crypto_key_pair_t        crypto_key_pair;
     utp_crypto_aead_t            tx_aead;
     utp_crypto_aead_t            rx_aead;
@@ -143,6 +147,7 @@ typedef struct utp_connection {
     uint8_t                      session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];
     uint8_t                      close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];
     uint8_t                      stream_scheduler_mode;
+    utp_congestion_algorithm_t   congestion_algorithm;
     uint8_t                      crypto_type;
     uint8_t                      peer_ack_delay_exponent;
     utp_frame_transport_params_t peer_transport_params;
@@ -182,6 +187,9 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
 void                 utp_connection_cleanup(utp_connection_t* connection);
 /** @brief 应用 Context 的 MTU 配置，并重置连接级 MTU 运行状态。 */
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
+/** @brief 重置并选择连接使用的拥塞控制算法；仅允许在任何数据包入队前调用。 */
+utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
+                                                             utp_congestion_algorithm_t algorithm);
 /** @brief 设置本端协商参数和保活策略；仅允许在尚未创建流时调用。 */
 utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*                   connection,
                                                                const utp_frame_transport_params_t* params,

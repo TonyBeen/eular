@@ -93,6 +93,7 @@ struct utp_context {
     struct utp_context_pending_slot_tailq    free_pending_slots;
     uint32_t                                 next_cid;
     utp_stream_scheduler_mode_t              stream_scheduler_mode;
+    utp_congestion_algorithm_t               cc_algorithm;
     utp_mtu_config_t                         mtu_config;
     uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
     utp_crypto_resumption_keys_t             resumption_keys;

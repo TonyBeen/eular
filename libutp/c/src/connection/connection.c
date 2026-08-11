@@ -2370,8 +2370,9 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     error = utp_send_control_init(&connection->send_control, packet_limit, UTP_CONNECTION_RETRANSMITTABLE_FRAMES, 16u,
                                   (uint64_t)UTP_CONNECTION_MAX_ACK_DELAY_MS * UINT64_C(1000));
     if (error == UTP_INTERNAL_ERROR_OK) {
-        utp_bbr_init(&connection->congestion, NULL);
-        utp_send_control_set_congestion(&connection->send_control, utp_bbr_as_congestion(&connection->congestion));
+        error = utp_connection_set_congestion_algorithm(connection, UTP_CONGESTION_BBR);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
         utp_send_control_set_pacing_enabled(&connection->send_control, true);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -2420,6 +2421,33 @@ void utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_c
     if (connection != NULL) {
         utp_mtu_discovery_init(&connection->mtu_discovery, config, connection->peer.family);
     }
+}
+
+utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
+                                                             utp_congestion_algorithm_t algorithm)
+{
+    if (connection == NULL || (algorithm != UTP_CONGESTION_BBR && algorithm != UTP_CONGESTION_CUBIC)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (utp_send_control_largest_sent(&connection->send_control) != 0u ||
+        utp_send_control_scheduled_packet_count(&connection->send_control) != 0u) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    switch (algorithm) {
+    case UTP_CONGESTION_BBR:
+        utp_bbr_init(&connection->bbr_congestion, NULL);
+        utp_send_control_set_congestion(&connection->send_control, utp_bbr_as_congestion(&connection->bbr_congestion));
+        break;
+    case UTP_CONGESTION_CUBIC:
+        utp_cubic_init(&connection->cubic_congestion, NULL);
+        utp_send_control_set_congestion(&connection->send_control,
+                                        utp_cubic_as_congestion(&connection->cubic_congestion));
+        break;
+    default:
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection->congestion_algorithm = algorithm;
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*                   connection,

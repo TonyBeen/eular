@@ -11,12 +11,19 @@ typedef enum utp_stream_scheduler_mode {
     UTP_STREAM_SCHEDULER_DRR,
 } utp_stream_scheduler_mode_t;
 
+// Context 内所有连接共用的拥塞控制算法选择。
+typedef enum utp_congestion_algorithm {
+    UTP_CONGESTION_BBR,
+    UTP_CONGESTION_CUBIC,
+} utp_congestion_algorithm_t;
+
 typedef struct utp_context_options {
     struct event_base*          event_base;             // 由调用方创建并驱动, Context 仅借用该事件循环
     utp_log_sink_fn             log_sink;               // 为空时关闭日志, 回调由协议处理线程同步调用
     uint64_t                    context_id;             // 用于日志标签和 CID 初始值, 0 会自动跳过无效 CID
     utp_log_level_t             log_level;              // 最低输出级别, 低于该级别的日志会被过滤
     utp_stream_scheduler_mode_t stream_scheduler_mode;  // 新建连接采用的流发送调度策略
+    utp_congestion_algorithm_t  cc_algorithm;           // 新建连接采用的拥塞控制算法
 
     // MTU 阶梯探测与黑洞检测配置
     bool                        enable_dplpmtud;
