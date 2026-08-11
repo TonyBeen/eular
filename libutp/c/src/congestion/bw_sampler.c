@@ -19,7 +19,7 @@ void utp_bw_sampler_init(utp_bw_sampler_t* sampler)
         sampler->last_acked_time_us              = 0u;
         sampler->last_sent_packet_number         = 0u;
         sampler->app_limited_until_packet_number = 0u;
-        sampler->app_limited                     = false;
+        sampler->app_limited                     = true;
     }
 }
 
@@ -59,15 +59,18 @@ bool utp_bw_sampler_on_packet_acked(utp_bw_sampler_t* sampler, utp_bw_packet_sta
     sample->rtt_us                      = 0u;
     sample->is_app_limited              = false;
     sampler->total_bytes_acked         += packet->packet_size;
-    delivered                           = sampler->total_bytes_acked - packet->total_bytes_acked;
-    interval                            = ack_time_us - packet->last_ack_time_us;
-    sample->bandwidth_bytes_per_second  = utp_bw_rate(delivered, interval);
-    sample->rtt_us                      = ack_time_us - packet->sent_time_us;
-    sample->is_app_limited              = packet->app_limited;
-    sampler->last_acked_total_sent      = packet->total_bytes_sent;
-    sampler->last_acked_sent_time_us    = packet->last_ack_sent_time_us;
-    sampler->last_acked_time_us         = ack_time_us;
-    packet->valid                       = false;
+    if (sampler->app_limited && packet_number > sampler->app_limited_until_packet_number) {
+        sampler->app_limited = false;
+    }
+    delivered                          = sampler->total_bytes_acked - packet->total_bytes_acked;
+    interval                           = ack_time_us - packet->last_ack_time_us;
+    sample->bandwidth_bytes_per_second = utp_bw_rate(delivered, interval);
+    sample->rtt_us                     = ack_time_us - packet->sent_time_us;
+    sample->is_app_limited             = packet->app_limited;
+    sampler->last_acked_total_sent     = packet->total_bytes_sent;
+    sampler->last_acked_sent_time_us   = packet->last_ack_sent_time_us;
+    sampler->last_acked_time_us        = ack_time_us;
+    packet->valid                      = false;
     return sample->rtt_us != 0u;
 }
 

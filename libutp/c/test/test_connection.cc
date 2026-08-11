@@ -669,7 +669,8 @@ TEST_CASE("connection fixes its congestion algorithm before the first packet is 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 78u, 12u, &peer, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(connection.congestion_algorithm == UTP_CONGESTION_BBR);
-    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_CUBIC) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_CUBIC, nullptr, nullptr, 1u) ==
+            UTP_INTERNAL_ERROR_OK);
     REQUIRE(connection.send_control.congestion == utp_cubic_as_congestion(&connection.cubic_congestion));
     connection.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&connection.send_control, true);
@@ -678,7 +679,8 @@ TEST_CASE("connection fixes its congestion algorithm before the first packet is 
     packet = utp_connection_next_packet_to_send(&connection);
     REQUIRE(packet != nullptr);
     REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_BBR) == UTP_INTERNAL_ERROR_STATE);
+    REQUIRE(utp_connection_set_congestion_algorithm(&connection, UTP_CONGESTION_BBR, nullptr, nullptr, 1u) ==
+            UTP_INTERNAL_ERROR_STATE);
     utp_connection_cleanup(&connection);
 }
 

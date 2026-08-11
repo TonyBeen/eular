@@ -439,11 +439,12 @@ void utp_send_control_set_congestion(utp_send_control_t* control, utp_congestion
     }
 }
 
-void utp_send_control_set_pacing_enabled(utp_send_control_t* control, bool enabled)
+void utp_send_control_set_pacing_enabled(utp_send_control_t* control, bool enabled, uint32_t clock_granularity_us)
 {
     if (control != NULL) {
         control->pacing_enabled = enabled;
-        utp_pacer_init(&control->pacer, UTP_SEND_CONTROL_PACER_GRANULARITY_US);
+        utp_pacer_init(&control->pacer,
+                       clock_granularity_us == 0u ? UTP_SEND_CONTROL_PACER_GRANULARITY_US : clock_granularity_us);
     }
 }
 

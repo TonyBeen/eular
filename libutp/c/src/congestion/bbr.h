@@ -1,6 +1,8 @@
 #ifndef EULAR_UTP_CONGESTION_BBR_H
 #define EULAR_UTP_CONGESTION_BBR_H
 
+#include <utp/option.h>
+
 #include "congestion/bw_sampler.h"
 #include "congestion/congestion.h"
 #include "congestion/minmax.h"
@@ -16,11 +18,18 @@ typedef enum utp_bbr_recovery_state {
 typedef struct utp_bbr_config {
     uint32_t initial_cwnd_mss;
     uint32_t minimum_cwnd_mss;
+    double   startup_high_gain;
+    double   cwnd_gain;
+    double   startup_growth_target;
+    uint32_t startup_full_bandwidth_rounds;
+    uint32_t probe_rtt_ms;
+    uint32_t min_rtt_expiry_ms;
+    double   pacing_gains[UTP_BBR_PACING_GAIN_COUNT];
 } utp_bbr_config_t;
 
 typedef struct utp_bbr {
     utp_congestion_t         congestion;
-    const utp_rtt_stats_t   *rtt_stats;
+    const utp_rtt_stats_t*   rtt_stats;
     utp_bw_sampler_t         sampler;
     utp_minmax_t             max_bandwidth;
     utp_minmax_t             max_ack_height;
@@ -29,6 +38,7 @@ typedef struct utp_bbr {
     uint64_t                 minimum_cwnd;
     uint64_t                 pacing_rate;
     uint64_t                 acked_bytes;
+    uint64_t                 ack_max_bandwidth;
     uint64_t                 lost_bytes;
     uint64_t                 ack_time_us;
     uint64_t                 inflight_bytes;
@@ -37,6 +47,7 @@ typedef struct utp_bbr {
     uint64_t                 aggregation_epoch_start_us;
     uint64_t                 aggregation_epoch_bytes;
     uint64_t                 last_sent_packet_number;
+    uint64_t                 max_acked_packet_number;
     uint64_t                 current_round_end_packet_number;
     uint64_t                 end_recovery_packet_number;
     uint64_t                 round_count;
@@ -46,6 +57,8 @@ typedef struct utp_bbr {
     uint64_t                 min_rtt_since_last_probe_us;
     uint64_t                 last_cycle_start_us;
     uint64_t                 probe_rtt_exit_us;
+    uint64_t                 probe_rtt_time_us;
+    uint64_t                 min_rtt_expiry_us;
     uint32_t                 cycle_index;
     uint32_t                 rounds_without_bandwidth_gain;
     uint32_t                 startup_round_limit;
@@ -54,6 +67,9 @@ typedef struct utp_bbr {
     double                   high_gain;
     double                   high_cwnd_gain;
     double                   drain_gain;
+    double                   configured_cwnd_gain;
+    double                   startup_growth_target;
+    double                   pacing_gains[UTP_BBR_PACING_GAIN_COUNT];
     bool                     in_ack;
     bool                     last_sample_app_limited;
     bool                     has_non_app_limited_sample;
@@ -62,11 +78,12 @@ typedef struct utp_bbr {
     bool                     ack_has_losses;
     bool                     ack_has_sample;
     bool                     app_limited_since_last_probe;
+    bool                     min_rtt_expired_in_ack;  // 本次 ACK 是否观察到 min_rtt 过期
     utp_bbr_recovery_state_t recovery_state;
     utp_bbr_mode_t           mode;
 } utp_bbr_t;
 
-void              utp_bbr_init(utp_bbr_t *bbr, const utp_bbr_config_t *config);
-utp_congestion_t *utp_bbr_as_congestion(utp_bbr_t *bbr);
+void              utp_bbr_init(utp_bbr_t* bbr, const utp_bbr_config_t* config);
+utp_congestion_t* utp_bbr_as_congestion(utp_bbr_t* bbr);
 
 #endif  // EULAR_UTP_CONGESTION_BBR_H

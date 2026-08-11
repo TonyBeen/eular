@@ -6,7 +6,8 @@ extern "C" {
 #include "congestion/bw_sampler.h"
 }
 
-TEST_CASE("bandwidth sampler derives a delivery-rate sample from packet state", "[congestion][bw_sampler]") {
+TEST_CASE("bandwidth sampler derives a delivery-rate sample from packet state", "[congestion][bw_sampler]")
+{
     utp_bw_sampler_t      sampler = {};
     utp_bw_packet_state_t packet  = {};
     utp_bw_sample_t       sample  = {};
@@ -16,5 +17,23 @@ TEST_CASE("bandwidth sampler derives a delivery-rate sample from packet state", 
     REQUIRE(utp_bw_sampler_on_packet_acked(&sampler, &packet, 1u, 1000u, &sample));
     REQUIRE(sample.bandwidth_bytes_per_second == 100000u);
     REQUIRE(sample.rtt_us == 900u);
-    REQUIRE_FALSE(sample.is_app_limited);
+    REQUIRE(sample.is_app_limited);
+    REQUIRE_FALSE(sampler.app_limited);
+}
+
+TEST_CASE("bandwidth sampler exits app-limited phase after its boundary is acknowledged", "[congestion][bw_sampler]")
+{
+    utp_bw_sampler_t      sampler      = {};
+    utp_bw_packet_state_t first_packet = {};
+    utp_bw_packet_state_t next_packet  = {};
+    utp_bw_sample_t       sample       = {};
+
+    utp_bw_sampler_init(&sampler);
+    utp_bw_sampler_on_packet_sent(&sampler, &first_packet, 1u, 100u, 100u);
+    utp_bw_sampler_set_app_limited(&sampler);
+    utp_bw_sampler_on_packet_sent(&sampler, &next_packet, 2u, 100u, 200u);
+
+    REQUIRE(utp_bw_sampler_on_packet_acked(&sampler, &next_packet, 2u, 1000u, &sample));
+    REQUIRE(sample.is_app_limited);
+    REQUIRE_FALSE(sampler.app_limited);
 }

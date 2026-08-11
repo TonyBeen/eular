@@ -189,7 +189,10 @@ void                 utp_connection_cleanup(utp_connection_t* connection);
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
 /** @brief 重置并选择连接使用的拥塞控制算法；仅允许在任何数据包入队前调用。 */
 utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
-                                                             utp_congestion_algorithm_t algorithm);
+                                                             utp_congestion_algorithm_t algorithm,
+                                                             const utp_bbr_config_t*    bbr_config,
+                                                             const utp_cubic_config_t*  cubic_config,
+                                                             uint32_t                   clock_granularity_us);
 /** @brief 设置本端协商参数和保活策略；仅允许在尚未创建流时调用。 */
 utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*                   connection,
                                                                const utp_frame_transport_params_t* params,

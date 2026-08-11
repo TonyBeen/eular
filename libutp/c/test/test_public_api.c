@@ -255,12 +255,17 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     server_options.zero_rtt_replay_cache_capacity = 1u;
     server_options.mtu_min                        = 1400u;
     server_options.mtu_base                       = 1400u;
+    server_options.clock_granularity_us           = 23u;
+    server_options.bbr_init_cwnd_mss              = 18u;
     first_options.event_base                      = event_base;
     first_options.context_id                      = 202u;
     early_options.event_base                      = event_base;
     early_options.context_id                      = 203u;
     early_options.mtu_min                         = 1400u;
     early_options.mtu_base                        = 1400u;
+    early_options.cc_algorithm                    = UTP_CONGESTION_CUBIC;
+    early_options.clock_granularity_us            = 29u;
+    early_options.cubic_init_cwnd_mss             = 28u;
     server_probe.expected_encryption              = UTP_ENCRYPTION_NONE;
     assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
     assert(utp_context_create(&first_options, &first_client) == UTP_STATUS_OK);
@@ -294,7 +299,13 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     pump_event_loop(event_base, 24);
     assert(early_probe.connected_connection != NULL);
     assert(utp_connection_get_stream(early_probe.connected_connection, 0u) != NULL);
+    assert(early_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_CUBIC);
+    assert(early_probe.connected_connection->send_control.pacer.clock_granularity_us == 29u);
+    assert(early_probe.connected_connection->cubic_congestion.initial_cwnd == UINT64_C(28) * 1460u);
     assert(server_probe.new_connection_count == 2);
+    assert(server_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_BBR);
+    assert(server_probe.connected_connection->send_control.pacer.clock_granularity_us == 23u);
+    assert(server_probe.connected_connection->bbr_congestion.initial_cwnd == UINT64_C(18) * 1460u);
     stream = utp_connection_get_stream(server_probe.connected_connection, 0u);
     assert(stream != NULL);
     assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_OK);
@@ -405,12 +416,27 @@ static void test_congestion_algorithm_selection(struct event_base* event_base)
     public_api_probe_t    client_probe    = {0};
     public_api_probe_t    server_probe    = {0};
 
-    client_options.event_base   = event_base;
-    client_options.context_id   = 601u;
-    client_options.cc_algorithm = UTP_CONGESTION_CUBIC;
-    server_options.event_base   = event_base;
-    server_options.context_id   = 602u;
-    server_options.cc_algorithm = UTP_CONGESTION_BBR;
+    client_options.event_base                 = event_base;
+    client_options.context_id                 = 601u;
+    client_options.cc_algorithm               = UTP_CONGESTION_CUBIC;
+    client_options.clock_granularity_us       = 17u;
+    client_options.cubic_beta                 = 0.65;
+    client_options.cubic_c                    = 0.8;
+    client_options.cubic_init_cwnd_mss        = 24u;
+    client_options.cubic_min_cwnd_mss         = 6u;
+    server_options.event_base                 = event_base;
+    server_options.context_id                 = 602u;
+    server_options.cc_algorithm               = UTP_CONGESTION_DEFAULT;
+    server_options.clock_granularity_us       = 19u;
+    server_options.bbr_init_cwnd_mss          = 20u;
+    server_options.bbr_min_cwnd_mss           = 7u;
+    server_options.bbr_startup_high_gain      = 2.5;
+    server_options.bbr_cwnd_gain              = 2.5;
+    server_options.bbr_startup_growth_target  = 1.5;
+    server_options.bbr_startup_full_bw_rounds = 5u;
+    server_options.bbr_probe_rtt_ms           = 75u;
+    server_options.bbr_min_rtt_expiry_ms      = 1250u;
+    server_options.bbr_pacing_gains[2u]       = 1.5;
     assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
     assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
     server_probe.context = server;
@@ -428,9 +454,24 @@ static void test_congestion_algorithm_selection(struct event_base* event_base)
     assert(client_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_CUBIC);
     assert(client_probe.connected_connection->send_control.congestion ==
            utp_cubic_as_congestion(&client_probe.connected_connection->cubic_congestion));
+    assert(client_probe.connected_connection->send_control.pacer.clock_granularity_us == 17u);
+    assert(client_probe.connected_connection->cubic_congestion.beta == 0.65);
+    assert(client_probe.connected_connection->cubic_congestion.cubic_c == 0.8);
+    assert(client_probe.connected_connection->cubic_congestion.initial_cwnd == UINT64_C(24) * 1460u);
+    assert(client_probe.connected_connection->cubic_congestion.minimum_cwnd == UINT64_C(6) * 1460u);
     assert(server_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_BBR);
     assert(server_probe.connected_connection->send_control.congestion ==
            utp_bbr_as_congestion(&server_probe.connected_connection->bbr_congestion));
+    assert(server_probe.connected_connection->send_control.pacer.clock_granularity_us == 19u);
+    assert(server_probe.connected_connection->bbr_congestion.initial_cwnd == UINT64_C(20) * 1460u);
+    assert(server_probe.connected_connection->bbr_congestion.minimum_cwnd == UINT64_C(7) * 1460u);
+    assert(server_probe.connected_connection->bbr_congestion.high_gain == 2.5);
+    assert(server_probe.connected_connection->bbr_congestion.configured_cwnd_gain == 2.5);
+    assert(server_probe.connected_connection->bbr_congestion.startup_growth_target == 1.5);
+    assert(server_probe.connected_connection->bbr_congestion.startup_round_limit == 5u);
+    assert(server_probe.connected_connection->bbr_congestion.probe_rtt_time_us == 75000u);
+    assert(server_probe.connected_connection->bbr_congestion.min_rtt_expiry_us == UINT64_C(1250000));
+    assert(server_probe.connected_connection->bbr_congestion.pacing_gains[2u] == 1.5);
     utp_context_destroy(client);
     utp_context_destroy(server);
 }
@@ -443,6 +484,7 @@ int main(void)
 
     assert(event_base != NULL);
     assert(options.mtu_probe_retries == 1u);
+    assert(options.cc_algorithm == UTP_CONGESTION_DEFAULT);
     options.event_base = event_base;
     options.context_id = 7u;
     options.log_sink   = test_log_sink;
@@ -498,6 +540,10 @@ int main(void)
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
         quiet_options.cc_algorithm = (utp_congestion_algorithm_t)-1;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+        quiet_options.cc_algorithm = UTP_CONGESTION_DEFAULT;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
+        assert(quiet_context->cc_algorithm == UTP_CONGESTION_DEFAULT);
+        utp_context_destroy(quiet_context);
     }
     {
         utp_context_options_t many_options     = UTP_CONTEXT_OPTIONS_INIT;

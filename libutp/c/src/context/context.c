@@ -46,7 +46,8 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     connection->context = context;
-    error               = utp_connection_set_congestion_algorithm(connection, context->cc_algorithm);
+    error = utp_connection_set_congestion_algorithm(connection, context->cc_algorithm, &context->bbr_config,
+                                                    &context->cubic_config, context->clock_granularity_us);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -2914,7 +2915,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     *out_context = NULL;
     if (options == NULL || options->event_base == NULL || !utp_context_log_level_is_valid(options->log_level) ||
         options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
-        (options->cc_algorithm != UTP_CONGESTION_BBR && options->cc_algorithm != UTP_CONGESTION_CUBIC)) {
+        (options->cc_algorithm != UTP_CONGESTION_DEFAULT && options->cc_algorithm != UTP_CONGESTION_BBR &&
+         options->cc_algorithm != UTP_CONGESTION_CUBIC)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     utp_context_t* context = utp_allocator_alloc(NULL, sizeof(*context));
@@ -2931,26 +2933,42 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
-    context->packet_in_pool.allocator            = NULL;
-    context->packet_in_pool.packets              = NULL;
-    context->packet_in_pool.storage              = NULL;
-    context->packet_in_pool.packet_capacity      = 0u;
-    context->packet_in_pool.buffer_capacity      = 0u;
-    context->on_connected                        = NULL;
-    context->on_connected_user_data              = NULL;
-    context->on_connect_error                    = NULL;
-    context->on_connect_error_user_data          = NULL;
-    context->on_new_connection                   = NULL;
-    context->on_new_connection_user_data         = NULL;
-    context->on_connection_error                 = NULL;
-    context->on_connection_error_user_data       = NULL;
-    context->callback_accept_pending             = NULL;
-    context->callback_accept_zero_rtt            = NULL;
-    context->callback_accept_requested           = false;
-    context->next_cid                            = (uint32_t)options->context_id;
-    context->next_cid                            = context->next_cid == 0u ? 1u : context->next_cid;
-    context->stream_scheduler_mode               = options->stream_scheduler_mode;
-    context->cc_algorithm                        = options->cc_algorithm;
+    context->packet_in_pool.allocator       = NULL;
+    context->packet_in_pool.packets         = NULL;
+    context->packet_in_pool.storage         = NULL;
+    context->packet_in_pool.packet_capacity = 0u;
+    context->packet_in_pool.buffer_capacity = 0u;
+    context->on_connected                   = NULL;
+    context->on_connected_user_data         = NULL;
+    context->on_connect_error               = NULL;
+    context->on_connect_error_user_data     = NULL;
+    context->on_new_connection              = NULL;
+    context->on_new_connection_user_data    = NULL;
+    context->on_connection_error            = NULL;
+    context->on_connection_error_user_data  = NULL;
+    context->callback_accept_pending        = NULL;
+    context->callback_accept_zero_rtt       = NULL;
+    context->callback_accept_requested      = false;
+    context->next_cid                       = (uint32_t)options->context_id;
+    context->next_cid                       = context->next_cid == 0u ? 1u : context->next_cid;
+    context->stream_scheduler_mode          = options->stream_scheduler_mode;
+    context->cc_algorithm                   = options->cc_algorithm;
+    context->clock_granularity_us           = options->clock_granularity_us == 0u ? 1u : options->clock_granularity_us;
+    context->bbr_config.initial_cwnd_mss    = options->bbr_init_cwnd_mss;
+    context->bbr_config.minimum_cwnd_mss    = options->bbr_min_cwnd_mss;
+    context->bbr_config.startup_high_gain   = options->bbr_startup_high_gain;
+    context->bbr_config.cwnd_gain           = options->bbr_cwnd_gain;
+    context->bbr_config.startup_growth_target         = options->bbr_startup_growth_target;
+    context->bbr_config.startup_full_bandwidth_rounds = options->bbr_startup_full_bw_rounds;
+    context->bbr_config.probe_rtt_ms                  = options->bbr_probe_rtt_ms;
+    context->bbr_config.min_rtt_expiry_ms             = options->bbr_min_rtt_expiry_ms;
+    for (uint32_t index = 0u; index < UTP_BBR_PACING_GAIN_COUNT; ++index) {
+        context->bbr_config.pacing_gains[index] = options->bbr_pacing_gains[index];
+    }
+    context->cubic_config.beta                   = options->cubic_beta;
+    context->cubic_config.cubic_c                = options->cubic_c;
+    context->cubic_config.initial_cwnd_mss       = options->cubic_init_cwnd_mss;
+    context->cubic_config.minimum_cwnd_mss       = options->cubic_min_cwnd_mss;
     context->mtu_config.enabled                  = options->enable_dplpmtud;
     context->mtu_config.mtu_min                  = options->mtu_min;
     context->mtu_config.mtu_max                  = options->mtu_max;

@@ -154,29 +154,31 @@
 
 **Congestion Control** (`config.h:88-104`)
 
-C 版当前通过 `utp_context_options_t.cc_algorithm` 提供 `UTP_CONGESTION_BBR`（默认）和
-`UTP_CONGESTION_CUBIC` 两种选择。C++ 的细粒度拥塞控制调参项尚未下沉到 C 公共 API。
-下表记录的是 C++ `Config` 的完整字段及其数值兼容语义，不能直接推断 C 枚举的数值。
+C 版当前通过 `utp_context_options_t.cc_algorithm` 提供 `UTP_CONGESTION_DEFAULT=0`、
+`UTP_CONGESTION_BBR=1`、`UTP_CONGESTION_CUBIC=2`；前两者均选择 BBR，与 C++ 的数值语义一致。
+C 版已将下表中标为“支持”的参数下沉至 `utp_context_options_t`，并在所有主动、被动及
+0-RTT 建连路径中应用。除 `bbr_probe_rtt_ms` 与 `bbr_min_rtt_expiry_ms` 按下限钳制外，`0` 值按各字段默认值回退；
+有明确有效区间的标量浮点参数超出范围或为非数值时回退默认值；固定 8 项的 `bbr_pacing_gains` 数值直接应用。
 
-| 字段 | 默认值 | 含义 |
-|---|---|---|
-| `cc_algorithm` | `0` | 算法：0=默认(BBR)/1=BBR/2=Cubic |
-| `clock_granularity_us` | `1` | Pacer 时钟粒度（us） |
-| `bbr_init_cwnd_mss` | `16` | BBR 初始 cwnd（MSS） |
-| `bbr_min_cwnd_mss` | `4` | BBR 最小 cwnd（MSS） |
-| `bbr_startup_high_gain` | `2.885f` | STARTUP 增益 |
-| `bbr_cwnd_gain` | `2.0f` | PROBE_BW cwnd 增益 |
-| `bbr_startup_growth_target` | `1.25f` | 带宽增长判定倍率 |
-| `bbr_startup_full_bw_rounds` | `3` | STARTUP 退出判定轮数 |
-| `bbr_probe_rtt_ms` | `200` | PROBE_RTT 时长（ms） |
-| `bbr_min_rtt_expiry_ms` | `10000` | min_rtt 过期（ms） |
-| `bbr_probe_rtt_multiplier` | `0.75f` | ProbeRTT 增益系数 |
-| `bbr_similar_min_rtt_threshold` | `1.125f` | 相似 RTT 判定阈值 |
-| `bbr_pacing_gains` | `{1.25,0.75,1,1,1,1,1,1}` | Pacing 周期增益 |
-| `cubic_beta` | `0.7` | CUBIC 丢包回退系数（有效区间 (0,1)，超界回退默认，见 doc） |
-| `cubic_c` | `0.4` | CUBIC 曲线常数（有效区间 (0,2]，超界回退默认，见 doc） |
-| `cubic_init_cwnd_mss` | `32` | CUBIC 初始 cwnd（MSS） |
-| `cubic_min_cwnd_mss` | `4` | CUBIC 最小 cwnd（MSS） |
+| 字段 | 默认值 | C 支持 | 含义 |
+|---|---|---|---|
+| `cc_algorithm` | `0` | 是 | 算法：0=默认(BBR)/1=BBR/2=Cubic |
+| `clock_granularity_us` | `1` | 是 | Pacer 时钟粒度（us） |
+| `bbr_init_cwnd_mss` | `16` | 是 | BBR 初始 cwnd（MSS） |
+| `bbr_min_cwnd_mss` | `4` | 是 | BBR 最小 cwnd（MSS） |
+| `bbr_startup_high_gain` | `2.885f` | 是 | STARTUP 增益 |
+| `bbr_cwnd_gain` | `2.0f` | 是 | PROBE_BW cwnd 增益 |
+| `bbr_startup_growth_target` | `1.25f` | 是 | 带宽增长判定倍率 |
+| `bbr_startup_full_bw_rounds` | `3` | 是 | STARTUP 退出判定轮数 |
+| `bbr_probe_rtt_ms` | `200` | 是 | PROBE_RTT 时长(ms)，最小值 50，低于该值钳制为 50 |
+| `bbr_min_rtt_expiry_ms` | `10000` | 是 | min_rtt 过期时间(ms)，最小值 1000，低于该值钳制为 1000 |
+| `bbr_probe_rtt_multiplier` | `0.75f` | 否 | 当前 BBR 未实现对应的可配置 ProbeRTT 增益 |
+| `bbr_similar_min_rtt_threshold` | `1.125f` | 否 | 当前 BBR 未实现对应的相似 RTT 判定 |
+| `bbr_pacing_gains` | `{1.25,0.75,1,1,1,1,1,1}` | 是 | 固定 8 项 PROBE_BW pacing 增益周期，数值直接应用 |
+| `cubic_beta` | `0.7` | 是 | CUBIC 丢包回退系数（有效区间 (0,1)，超界回退默认） |
+| `cubic_c` | `0.4` | 是 | CUBIC 曲线常数（有效区间 (0,2]，超界回退默认） |
+| `cubic_init_cwnd_mss` | `32` | 是 | CUBIC 初始 cwnd（MSS） |
+| `cubic_min_cwnd_mss` | `4` | 是 | CUBIC 最小 cwnd（MSS） |
 
 **ACK 行为** (`config.h:107-110`)
 | 字段 | 默认值 | 含义 |

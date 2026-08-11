@@ -44,43 +44,6 @@ typedef struct utp_endpoint {
     uint8_t  address[16];
 } utp_endpoint_t;
 
-// Context 配置的完整默认值；创建 Context 前必须由调用方设置 event_base。
-#define UTP_CONTEXT_OPTIONS_INIT  \
-    {NULL,                        \
-     NULL,                        \
-     0u,                          \
-     UTP_LOG_LEVEL_INFO,          \
-     UTP_STREAM_SCHEDULER_STRICT, \
-     UTP_CONGESTION_BBR,          \
-     true,                        \
-     1280u,                       \
-     1500u,                       \
-     1400u,                       \
-     300u,                        \
-     16u,                         \
-     2000u,                       \
-     1u,                          \
-     3u,                          \
-     3000u,                       \
-     5000u,                       \
-     600u,                        \
-     4096u,                       \
-     800u,                        \
-     2u,                          \
-     true,                        \
-     0u,                          \
-     1500u,                       \
-     3u,                          \
-     30000u,                      \
-     4u,                          \
-     3u,                          \
-     25u,                         \
-     32u,                         \
-     16u,                         \
-     UINT64_C(8) * 1024u * 1024u, \
-     UINT64_C(256) * 1024u,       \
-     UINT64_C(256) * 1024u}
-
 typedef struct utp_connect_options {
     const char*           address;
     uint16_t              port;

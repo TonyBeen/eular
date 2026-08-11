@@ -94,6 +94,9 @@ struct utp_context {
     uint32_t                                 next_cid;
     utp_stream_scheduler_mode_t              stream_scheduler_mode;
     utp_congestion_algorithm_t               cc_algorithm;
+    uint32_t                                 clock_granularity_us;
+    utp_bbr_config_t                         bbr_config;
+    utp_cubic_config_t                       cubic_config;
     utp_mtu_config_t                         mtu_config;
     uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
     utp_crypto_resumption_keys_t             resumption_keys;
