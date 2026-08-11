@@ -37,8 +37,26 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t*      
 static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t*                 context,
                                                                    utp_context_connection_slot_t* slot,
                                                                    uint64_t                       now_us);
+/** @brief 将 Context 固定配置应用至新建连接，所有建连路径必须调用。 */
+static utp_internal_error_t utp_context_configure_connection(utp_context_t* context, utp_connection_t* connection)
+{
+    utp_internal_error_t error;
 
-static const uint8_t        k_zero_rtt_version_frame[UTP_FRAME_VERSION_SIZE] = {
+    if (context == NULL || connection == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection->context = context;
+    utp_connection_set_mtu_config(connection, &context->mtu_config);
+    error = utp_connection_set_local_transport_config(
+        connection, &context->local_transport_params, &context->local_ack_frequency, context->enable_keepalive,
+        context->keepalive_interval_ms, context->keepalive_timeout_ms, context->keepalive_probes);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_set_stream_scheduler_mode(connection, (uint8_t)context->stream_scheduler_mode);
+    }
+    return error;
+}
+
+static const uint8_t k_zero_rtt_version_frame[UTP_FRAME_VERSION_SIZE] = {
     UTP_FRAME_TYPE_VERSION, 0u, 0u, 0u, UTP_PROTOCOL_VERSION,
 };
 static const uint8_t k_zero_rtt_transport_params_frame[UTP_FRAME_TRANSPORT_PARAMS_SIZE] = {
@@ -1147,11 +1165,12 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
         payload_length += UTP_FRAME_CRYPTO_SIZE;
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_encode_transport_params(context->handshake_timeout_ms, payload + payload_length,
-                                                       sizeof(payload) - payload_length);
+        error = utp_frame_transport_params_encode(payload + payload_length, sizeof(payload) - payload_length,
+                                                  &context->local_transport_params);
         if (error == UTP_INTERNAL_ERROR_OK) {
             payload_length += UTP_FRAME_TRANSPORT_PARAMS_SIZE;
-            error = utp_connection_encode_ack_frequency(payload + payload_length, sizeof(payload) - payload_length);
+            error           = utp_frame_ack_frequency_encode(payload + payload_length, sizeof(payload) - payload_length,
+                                                             &context->local_ack_frequency);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 payload_length += UTP_FRAME_ACK_FREQUENCY_SIZE;
             }
@@ -1419,13 +1438,7 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
                                     UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        slot->connection.context = context;
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+        error = utp_context_configure_connection(context, &slot->connection);
     }
     if (error == UTP_INTERNAL_ERROR_OK && slot->connect_attempt.encryption != UTP_ENCRYPTION_NONE) {
         uint8_t crypto_type;
@@ -1551,12 +1564,12 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
             }
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_connection_encode_transport_params(context->handshake_timeout_ms, payload + payload_length,
+            error = utp_connection_encode_transport_params(&slot->connection, payload + payload_length,
                                                            payload_capacity - payload_length);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 payload_length += UTP_FRAME_TRANSPORT_PARAMS_SIZE;
-                error =
-                    utp_connection_encode_ack_frequency(payload + payload_length, payload_capacity - payload_length);
+                error           = utp_connection_encode_ack_frequency(&slot->connection, payload + payload_length,
+                                                                      payload_capacity - payload_length);
                 if (error == UTP_INTERNAL_ERROR_OK) {
                     payload_length += UTP_FRAME_ACK_FREQUENCY_SIZE;
                 }
@@ -1766,13 +1779,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
                                 pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        slot->connection.context = context;
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+        error = utp_context_configure_connection(context, &slot->connection);
     }
     if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.peer_transport_params_received) {
         error =
@@ -1781,7 +1788,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.peer_ack_frequency_received) {
         const utp_frame_ack_frequency_t* frequency = &pending_slot->pending.peer_ack_frequency;
 
-        utp_connection_apply_peer_ack_frequency(&slot->connection, frequency);
+        utp_connection_apply_peer_ack_frequency(&slot->connection, frequency, 0u);
     }
     if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.crypto_ready) {
         error = utp_connection_adopt_crypto(&slot->connection, pending_slot->pending.crypto_type,
@@ -2336,12 +2343,10 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view->header.scid, peer,
                                 UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        slot->connection.context = context;
         memcpy(slot->zero_rtt_session_token, session_token->payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE);
         slot->zero_rtt_expires_at_seconds = session_token->expires_at_seconds;
         slot->zero_rtt_encryption_mode    = encryption_mode;
-        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
-        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+        error                             = utp_context_configure_connection(context, &slot->connection);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_configure_zero_rtt_crypto(&slot->connection, resumption_psk, session_token->payload,
@@ -2560,9 +2565,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view.header.scid, peer,
                                 UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        slot->connection.context = context;
-        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
-        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+        error = utp_context_configure_connection(context, &slot->connection);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_register_connection_slot(context, slot);
@@ -2959,8 +2962,50 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
                                                        : options->zero_rtt_replay_cache_capacity;
     context->handshake_timeout_ms                = options->handshake_timeout == 0u ? 800u : options->handshake_timeout;
     context->handshake_max_retries               = options->handshake_max_retries;
-    context->resumption_key_explicit             = false;
-    context->resumption_keys_ready               = false;
+    context->local_transport_params.flags        = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
+    context->local_transport_params.max_idle_timeout_ms =
+        options->max_idle_timeout == 0u ? 30000u : options->max_idle_timeout;
+    context->local_transport_params.handshake_timeout_ms = context->handshake_timeout_ms;
+    context->local_transport_params.initial_max_streams_bidi =
+        options->initial_max_streams_bidi == 0u ? 32u : options->initial_max_streams_bidi;
+    context->local_transport_params.initial_max_streams_uni =
+        options->initial_max_streams_uni == 0u ? 16u : options->initial_max_streams_uni;
+    context->local_transport_params.ack_delay_exponent =
+        options->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ? UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT
+                                                                            : options->ack_delay_exponent;
+    context->local_transport_params.initial_max_data =
+        options->initial_max_data == 0u ? UINT64_C(8) * 1024u * 1024u : options->initial_max_data;
+    context->local_transport_params.initial_max_stream_data_bidi_local =
+        options->initial_max_stream_data_bidi_local == 0u ? UINT64_C(256) * 1024u
+                                                          : options->initial_max_stream_data_bidi_local;
+    context->local_transport_params.initial_max_stream_data_bidi_remote =
+        options->initial_max_stream_data_bidi_remote == 0u ? UINT64_C(256) * 1024u
+                                                           : options->initial_max_stream_data_bidi_remote;
+    if (context->local_transport_params.initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
+        context->local_transport_params.initial_max_data = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
+    }
+    if (context->local_transport_params.initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
+        context->local_transport_params.initial_max_stream_data_bidi_local = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
+    }
+    if (context->local_transport_params.initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
+        context->local_transport_params.initial_max_stream_data_bidi_remote = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
+    }
+    context->local_ack_frequency.ack_eliciting_threshold =
+        options->ack_every_n_packets == 0u ? 4u : options->ack_every_n_packets;
+    if (context->local_ack_frequency.ack_eliciting_threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD) {
+        context->local_ack_frequency.ack_eliciting_threshold = UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD;
+    }
+    context->local_ack_frequency.reordering_threshold = 3u;
+    context->local_ack_frequency.max_ack_delay_ms     = options->ack_delay == 0u ? 25u : options->ack_delay;
+    if (context->local_ack_frequency.max_ack_delay_ms > UTP_ACK_FREQUENCY_MAX_DELAY_MS) {
+        context->local_ack_frequency.max_ack_delay_ms = UTP_ACK_FREQUENCY_MAX_DELAY_MS;
+    }
+    context->enable_keepalive                      = options->enable_keepalive;
+    context->keepalive_interval_ms                 = options->keepalive_interval;
+    context->keepalive_timeout_ms                  = options->keepalive_timeout;
+    context->keepalive_probes                      = options->keepalive_probes;
+    context->resumption_key_explicit               = false;
+    context->resumption_keys_ready                 = false;
     context->default_resumption_key_warning_logged = false;
     utp_crypto_default_resumption_key(context->resumption_root_key);
     utp_internal_error_t error = utp_hash_table_init(&context->connections, NULL, SIZE_MAX);

@@ -99,7 +99,12 @@ struct utp_context {
     utp_hash_table_t                         zero_rtt_replay;
     uint32_t                                 zero_rtt_token_max_lifetime_seconds;
     uint32_t                                 zero_rtt_replay_cache_capacity;
+    utp_frame_transport_params_t             local_transport_params;
+    utp_frame_ack_frequency_t                local_ack_frequency;
+    uint32_t                                 keepalive_interval_ms;
+    uint32_t                                 keepalive_timeout_ms;
     uint16_t                                 handshake_timeout_ms;
+    uint16_t                                 keepalive_probes;
     uint8_t                                  handshake_max_retries;
     utp_context_pending_slot_t*              callback_accept_pending;
     utp_context_connection_slot_t*           callback_accept_zero_rtt;
@@ -107,6 +112,7 @@ struct utp_context {
     bool                                     resumption_key_explicit;
     bool                                     resumption_keys_ready;
     bool                                     default_resumption_key_warning_logged;
+    bool                                     enable_keepalive;
     utp_on_connected_fn                      on_connected;
     void*                                    on_connected_user_data;
     utp_on_connect_error_fn                  on_connect_error;

@@ -16,13 +16,19 @@
        UTP_FRAME_BIT(UTP_FRAME_TYPE_PING)))
 
 // ACK 与流量控制策略
-#define UTP_CONNECTION_ACK_ELICITING_THRESHOLD      2u
-#define UTP_CONNECTION_ACK_REORDER_THRESHOLD        1u
-#define UTP_CONNECTION_MAX_ACK_DELAY_MS             25u
-#define UTP_CONNECTION_DEFAULT_FLOW_WINDOW          (UTP_STREAM_DEFAULT_FLOW_WINDOW * 4u)
-#define UTP_CONNECTION_FLOW_UPDATE_DIVISOR          10u
-#define UTP_CONNECTION_FLOW_UPDATE_MIN_INTERVAL_US  UINT64_C(20000)
-#define UTP_CONNECTION_FLOW_BLOCKED_MIN_INTERVAL_US UINT64_C(50000)
+#define UTP_CONNECTION_ACK_ELICITING_THRESHOLD         2u
+#define UTP_CONNECTION_ACK_REORDER_THRESHOLD           1u
+#define UTP_CONNECTION_MAX_ACK_DELAY_MS                25u
+#define UTP_CONNECTION_DEFAULT_FLOW_WINDOW             (UTP_STREAM_DEFAULT_FLOW_WINDOW * 4u)
+#define UTP_CONNECTION_FLOW_UPDATE_DIVISOR             10u
+#define UTP_CONNECTION_FLOW_UPDATE_MIN_INTERVAL_US     UINT64_C(20000)
+#define UTP_CONNECTION_FLOW_BLOCKED_MIN_INTERVAL_US    UINT64_C(50000)
+#define UTP_CONNECTION_ACK_FREQUENCY_APPLY_INTERVAL_US UINT64_C(1000000)
+#define UTP_CONNECTION_ACK_FREQUENCY_SEND_INTERVAL_US  UINT64_C(2000000)
+#define UTP_CONNECTION_ACK_PROFILE_PROMOTE_HOLD_US     UINT64_C(3000000)
+#define UTP_CONNECTION_ACK_PROFILE_ROLLBACK_HOLD_US    UINT64_C(6000000)
+#define UTP_CONNECTION_ACK_LOSS_WINDOW_US              UINT64_C(2000000)
+#define UTP_CONNECTION_ACK_LOSS_FREQUENT_THRESHOLD     2u
 
 // 关闭状态机参数
 #define UTP_CONNECTION_CLOSE_PTO_DEFAULT_US UINT64_C(333333)    // 默认 333 毫秒
@@ -36,8 +42,8 @@
     (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)  // 路径验证期间允许发送的最大字节数
 
 // 本端默认流额度
-#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 默认双向流可创建数量
-#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI  32u  // 默认单向流可创建数量
+#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 内部直接初始化时的兼容默认值
+#define UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI  32u  // Context 会覆盖为其配置值
 
 void        utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connection);
@@ -370,13 +376,23 @@ static uint64_t utp_connection_milliseconds_to_microseconds(uint64_t millisecond
 /** @brief 计算不晚于对端 idle 超时的保活间隔，为 RTT 波动预留发送余量。 */
 static uint64_t utp_connection_keepalive_interval_us(const utp_connection_t* connection)
 {
+    uint64_t local_interval_us;
     uint64_t peer_idle_us;
     uint64_t guard_us;
     uint64_t srtt_us;
 
-    if (connection == NULL || !connection->peer_transport_params_received ||
-        (connection->peer_transport_params.flags & UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT) == 0u) {
+    if (connection == NULL) {
         return UTP_CONNECTION_KEEPALIVE_INTERVAL_US;
+    }
+    local_interval_us = utp_connection_milliseconds_to_microseconds(
+        connection->keepalive_interval_ms != 0u ? connection->keepalive_interval_ms
+                                                : connection->local_transport_params.max_idle_timeout_ms);
+    if (local_interval_us < UINT64_C(1000)) {
+        local_interval_us = UINT64_C(1000);
+    }
+    if (!connection->peer_transport_params_received ||
+        (connection->peer_transport_params.flags & UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT) == 0u) {
+        return local_interval_us;
     }
     peer_idle_us =
         utp_connection_milliseconds_to_microseconds(connection->peer_transport_params.max_idle_timeout_ms == 0u
@@ -387,8 +403,9 @@ static uint64_t utp_connection_keepalive_interval_us(const utp_connection_t* con
     if (guard_us < UINT64_C(50000)) {
         guard_us = UINT64_C(50000);
     }
-    return peer_idle_us > guard_us && peer_idle_us - guard_us > UINT64_C(1000) ? peer_idle_us - guard_us
-                                                                               : UINT64_C(1000);
+    peer_idle_us =
+        peer_idle_us > guard_us && peer_idle_us - guard_us > UINT64_C(1000) ? peer_idle_us - guard_us : UINT64_C(1000);
+    return local_interval_us < peer_idle_us ? local_interval_us : peer_idle_us;
 }
 
 static uint16_t utp_connection_current_packet_capacity(const utp_connection_t* connection)
@@ -462,7 +479,8 @@ static utp_packet_out_t* utp_connection_next_scheduled_admitted(utp_connection_t
 
 static void utp_connection_mark_peer_activity(utp_connection_t* connection, uint64_t now_us)
 {
-    if (connection == NULL || connection->state != UTP_CONNECTION_STATE_CONNECTED || now_us == 0u) {
+    if (connection == NULL || !connection->keepalive_enabled || connection->state != UTP_CONNECTION_STATE_CONNECTED ||
+        now_us == 0u) {
         return;
     }
     connection->last_peer_activity_us   = now_us;
@@ -710,12 +728,20 @@ static void utp_connection_process_acknowledged_packets(utp_connection_t*       
 static void utp_connection_process_lost_packet(utp_connection_t* connection, const utp_packet_out_t* packet,
                                                uint64_t now_us)
 {
-    if (connection == NULL || packet == NULL || now_us == 0u ||
-        (packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) == 0u) {
+    if (connection == NULL || packet == NULL || now_us == 0u) {
         return;
     }
-    (void)utp_mtu_discovery_on_data_packet_loss(&connection->mtu_discovery, utp_connection_packet_wire_size(packet),
-                                                now_us / UINT64_C(1000));
+    if (connection->ack_loss_window_start_us == 0u || now_us < connection->ack_loss_window_start_us ||
+        now_us - connection->ack_loss_window_start_us >= UTP_CONNECTION_ACK_LOSS_WINDOW_US) {
+        connection->ack_loss_window_start_us = now_us;
+        connection->ack_loss_count           = 1u;
+    } else if (connection->ack_loss_count != UINT32_MAX) {
+        ++connection->ack_loss_count;
+    }
+    if ((packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) != 0u) {
+        (void)utp_mtu_discovery_on_data_packet_loss(&connection->mtu_discovery, utp_connection_packet_wire_size(packet),
+                                                    now_us / UINT64_C(1000));
+    }
 }
 
 static void utp_connection_process_detected_losses(utp_connection_t* connection, uint64_t now_us)
@@ -797,6 +823,10 @@ static void utp_connection_commit_sent_controls(utp_connection_t* connection, co
             }
             break;
         }
+        case UTP_FRAME_TYPE_ACK_FREQUENCY:
+            connection->send_control.peer_max_ack_delay_us = (meta->value >> 16u) * UINT64_C(1000);
+            connection->ack_profile_last_sent_us           = now_us;
+            break;
         default:
             break;
         }
@@ -1009,6 +1039,9 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
 
         stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
                                                          : connection->peer_initial_max_stream_data_bidi_local;
+        stream->local_max_stream_data_advertised =
+            locally_initiated ? connection->local_transport_params.initial_max_stream_data_bidi_remote
+                              : connection->local_transport_params.initial_max_stream_data_bidi_local;
     }
     utp_hash_node_init(&stream->hash_node);
     stream->connection                = connection;
@@ -1172,6 +1205,12 @@ static utp_internal_error_t utp_connection_mark_control_pending(utp_connection_t
             changed     = true;
         }
         break;
+    case UTP_FRAME_TYPE_ACK_FREQUENCY:
+        if (slot->generation == 0u || slot->value != value) {
+            slot->value = value;
+            changed     = true;
+        }
+        break;
     case UTP_FRAME_TYPE_RESET_STREAM:
         if (slot->generation != 0u) {
             return slot->error_code == error_code && slot->final_size == final_size ? UTP_INTERNAL_ERROR_OK
@@ -1200,6 +1239,16 @@ static utp_internal_error_t utp_connection_queue_max_data(utp_connection_t* conn
 {
     (void)now_us;
     return utp_connection_mark_control_pending(connection, UTP_FRAME_TYPE_MAX_DATA, 0u, maximum_data, 0u, 0u);
+}
+
+/** @brief 将 ACK 参数压缩到可靠控制槽位，避免为小帧单独分配发送状态。 */
+static utp_internal_error_t utp_connection_queue_ack_frequency(utp_connection_t*                connection,
+                                                               const utp_frame_ack_frequency_t* frequency)
+{
+    const uint64_t value = ((uint64_t)frequency->max_ack_delay_ms << 16u) |
+                           ((uint64_t)frequency->ack_eliciting_threshold << 8u) | frequency->reordering_threshold;
+
+    return utp_connection_mark_control_pending(connection, UTP_FRAME_TYPE_ACK_FREQUENCY, 0u, value, 0u, 0u);
 }
 
 static utp_internal_error_t utp_connection_queue_max_stream_data(utp_connection_t* connection, uint32_t stream_id,
@@ -1419,9 +1468,9 @@ static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connec
     if (!utp_connection_is_connected(connection)) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (utp_connection_flow_update_due(UTP_CONNECTION_DEFAULT_FLOW_WINDOW, connection->local_stream_data_consumed_total,
-                                       connection->local_max_data_advertised, connection->last_max_data_sent_us, now_us,
-                                       &target)) {
+    if (utp_connection_flow_update_due(
+            connection->local_transport_params.initial_max_data, connection->local_stream_data_consumed_total,
+            connection->local_max_data_advertised, connection->last_max_data_sent_us, now_us, &target)) {
         utp_internal_error_t error = utp_connection_queue_max_data(connection, target, now_us);
 
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -1436,9 +1485,14 @@ static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connec
         if (stream == NULL) {
             continue;
         }
-        if (utp_connection_flow_update_due(UTP_STREAM_DEFAULT_FLOW_WINDOW, stream->recv_offset,
-                                           stream->local_max_stream_data_advertised,
-                                           stream->last_max_stream_data_sent_us, now_us, &target)) {
+        if (utp_connection_flow_update_due(
+                (stream->stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u
+                    ? UTP_STREAM_DEFAULT_FLOW_WINDOW
+                    : (utp_connection_stream_is_peer_initiated(connection, stream->stream_id)
+                           ? connection->local_transport_params.initial_max_stream_data_bidi_local
+                           : connection->local_transport_params.initial_max_stream_data_bidi_remote),
+                stream->recv_offset, stream->local_max_stream_data_advertised, stream->last_max_stream_data_sent_us,
+                now_us, &target)) {
             utp_internal_error_t error =
                 utp_connection_queue_max_stream_data(connection, stream->stream_id, target, now_us);
 
@@ -1459,6 +1513,7 @@ static uint8_t utp_connection_control_priority(uint8_t frame_type)
     case UTP_FRAME_TYPE_MAX_DATA:
     case UTP_FRAME_TYPE_MAX_STREAM_DATA:
     case UTP_FRAME_TYPE_MAX_STREAMS:
+    case UTP_FRAME_TYPE_ACK_FREQUENCY:
         return 4u;
     case UTP_FRAME_TYPE_DATA_BLOCKED:
     case UTP_FRAME_TYPE_STREAM_DATA_BLOCKED:
@@ -1500,6 +1555,16 @@ static utp_internal_error_t utp_connection_encode_control_slot(const utp_connect
         *out_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
         return utp_frame_max_streams_encode(buffer, capacity, &frame);
     }
+    case UTP_FRAME_TYPE_ACK_FREQUENCY: {
+        const utp_frame_ack_frequency_t frame = {
+            (uint32_t)(slot->value >> 16u),
+            (uint8_t)(slot->value >> 8u),
+            (uint8_t)slot->value,
+        };
+
+        *out_length = UTP_FRAME_ACK_FREQUENCY_SIZE;
+        return utp_frame_ack_frequency_encode(buffer, capacity, &frame);
+    }
     case UTP_FRAME_TYPE_DATA_BLOCKED: {
         const utp_frame_data_blocked_t frame = {slot->value};
 
@@ -1538,7 +1603,7 @@ static utp_internal_error_t utp_connection_encode_ack_payload(utp_connection_t* 
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return utp_ack_encode(payload, capacity, &ack, 0u, out_length);
+    return utp_ack_encode(payload, capacity, &ack, connection->local_transport_params.ack_delay_exponent, out_length);
 }
 
 static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t* connection, uint64_t now_us,
@@ -1607,6 +1672,9 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
             case UTP_FRAME_TYPE_MAX_STREAMS:
             case UTP_FRAME_TYPE_STREAMS_BLOCKED:
                 frame_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
+                break;
+            case UTP_FRAME_TYPE_ACK_FREQUENCY:
+                frame_length = UTP_FRAME_ACK_FREQUENCY_SIZE;
                 break;
             default:
                 return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -1880,6 +1948,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                 case UTP_FRAME_TYPE_STREAMS_BLOCKED:
                     frame_length = UTP_FRAME_STREAMS_LIMIT_SIZE;
                     break;
+                case UTP_FRAME_TYPE_ACK_FREQUENCY:
+                    frame_length = UTP_FRAME_ACK_FREQUENCY_SIZE;
+                    break;
                 default:
                     return UTP_INTERNAL_ERROR_PROTOCOL;
                 }
@@ -2002,6 +2073,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                     case UTP_FRAME_TYPE_MAX_STREAMS:
                     case UTP_FRAME_TYPE_STREAMS_BLOCKED:
                         offset += UTP_FRAME_STREAMS_LIMIT_SIZE;
+                        break;
+                    case UTP_FRAME_TYPE_ACK_FREQUENCY:
+                        offset += UTP_FRAME_ACK_FREQUENCY_SIZE;
                         break;
                     default:
                         offset += UTP_FRAME_MAX_STREAM_DATA_SIZE;
@@ -2220,41 +2294,65 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
                                utp_connection_cleanup_pending_max_stream_data_node, NULL);
         return error;
     }
-    connection->context                                                 = NULL;
-    connection->rx_bytes                                                = 0u;
-    connection->tx_bytes                                                = 0u;
-    connection->peer_handshake_packet_number                            = 0u;
-    connection->peer_handshake_received_us                              = 0u;
-    connection->retransmission_deadline_us                              = 0u;
-    connection->close_deadline_us                                       = 0u;
-    connection->close_last_sent_us                                      = 0u;
-    connection->close_pto_us                                            = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
-    connection->keepalive_deadline_us                                   = 0u;
-    connection->last_peer_activity_us                                   = 0u;
-    connection->close_error_code                                        = 0u;
-    connection->peer_close_error_code                                   = 0u;
-    connection->peer_close_reason_length                                = 0u;
-    connection->path_challenge_deadline_us                              = 0u;
-    connection->candidate_rx_bytes                                      = 0u;
-    connection->candidate_tx_bytes                                      = 0u;
-    connection->candidate_queued_bytes                                  = 0u;
-    connection->path_validation_generation                              = 0u;
-    connection->path_challenge_retry_count                              = 0u;
-    connection->keepalive_missed_probes                                 = 0u;
-    connection->close_pending                                           = false;
-    connection->udp_write_pending                                       = false;
-    connection->local_close_started                                     = false;
-    connection->peer_close_received                                     = false;
-    connection->path_challenge_pending                                  = false;
-    connection->crypto_type                                             = 0u;
-    connection->peer_ack_delay_exponent                                 = 0u;
-    connection->peer_transport_params                                   = (utp_frame_transport_params_t){0};
-    connection->peer_ack_frequency                                      = (utp_frame_ack_frequency_t){0};
+    connection->context                        = NULL;
+    connection->rx_bytes                       = 0u;
+    connection->tx_bytes                       = 0u;
+    connection->peer_handshake_packet_number   = 0u;
+    connection->peer_handshake_received_us     = 0u;
+    connection->retransmission_deadline_us     = 0u;
+    connection->close_deadline_us              = 0u;
+    connection->close_last_sent_us             = 0u;
+    connection->close_pto_us                   = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
+    connection->keepalive_deadline_us          = 0u;
+    connection->last_peer_activity_us          = 0u;
+    connection->close_error_code               = 0u;
+    connection->peer_close_error_code          = 0u;
+    connection->peer_close_reason_length       = 0u;
+    connection->path_challenge_deadline_us     = 0u;
+    connection->ack_profile_candidate_since_us = 0u;
+    connection->ack_profile_last_sent_us       = 0u;
+    connection->ack_profile_baseline_srtt_us   = 0u;
+    connection->ack_loss_window_start_us       = 0u;
+    connection->last_ack_frequency_apply_us    = 0u;
+    connection->candidate_rx_bytes             = 0u;
+    connection->candidate_tx_bytes             = 0u;
+    connection->candidate_queued_bytes         = 0u;
+    connection->path_validation_generation     = 0u;
+    connection->path_challenge_retry_count     = 0u;
+    connection->keepalive_missed_probes        = 0u;
+    connection->keepalive_interval_ms          = 0u;
+    connection->keepalive_timeout_ms           = 1500u;
+    connection->keepalive_probes               = 3u;
+    connection->ack_loss_count                 = 0u;
+    connection->ack_profile_current            = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->ack_profile_candidate          = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->close_pending                  = false;
+    connection->udp_write_pending              = false;
+    connection->local_close_started            = false;
+    connection->peer_close_received            = false;
+    connection->path_challenge_pending         = false;
+    connection->crypto_type                    = 0u;
+    connection->peer_ack_delay_exponent        = 0u;
+    connection->peer_transport_params          = (utp_frame_transport_params_t){0};
+    connection->peer_ack_frequency             = (utp_frame_ack_frequency_t){0};
+    connection->local_transport_params         = (utp_frame_transport_params_t){
+        UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
+        UTP_STREAM_DEFAULT_FLOW_WINDOW,
+        UTP_STREAM_DEFAULT_FLOW_WINDOW,
+        30000u,
+        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
+        800u,
+        UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI,
+        UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI,
+        0u,
+    };
+    connection->local_ack_frequency                                     = (utp_frame_ack_frequency_t){25u, 2u, 3u};
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
     connection->session_token_issued                                    = false;
     connection->peer_transport_params_received                          = false;
     connection->peer_ack_frequency_received                             = false;
+    connection->keepalive_enabled                                       = true;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
     connection->session_token_expires_at_seconds                        = 0u;
@@ -2324,29 +2422,56 @@ void utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_c
     }
 }
 
-utp_internal_error_t utp_connection_encode_transport_params(uint16_t handshake_timeout_ms, uint8_t* buffer,
-                                                            size_t capacity)
+utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*                   connection,
+                                                               const utp_frame_transport_params_t* params,
+                                                               const utp_frame_ack_frequency_t*    frequency,
+                                                               bool enable_keepalive, uint32_t keepalive_interval_ms,
+                                                               uint32_t keepalive_timeout_ms, uint16_t keepalive_probes)
 {
-    const utp_frame_transport_params_t params = {
-        UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
-        UTP_STREAM_DEFAULT_FLOW_WINDOW,
-        UTP_STREAM_DEFAULT_FLOW_WINDOW,
-        600000u,
-        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
-        handshake_timeout_ms == 0u ? 800u : handshake_timeout_ms,
-        UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI,
-        UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI,
-        0u,
-    };
-
-    return utp_frame_transport_params_encode(buffer, capacity, &params);
+    if (connection == NULL || params == NULL || frequency == NULL || utp_hash_table_count(&connection->streams) != 0u ||
+        frequency->ack_eliciting_threshold == 0u || frequency->reordering_threshold == 0u ||
+        frequency->max_ack_delay_ms == 0u ||
+        frequency->ack_eliciting_threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD ||
+        frequency->reordering_threshold > UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD ||
+        frequency->max_ack_delay_ms > UTP_ACK_FREQUENCY_MAX_DELAY_MS ||
+        utp_frame_transport_params_encode((uint8_t[UTP_FRAME_TRANSPORT_PARAMS_SIZE]){0},
+                                          UTP_FRAME_TRANSPORT_PARAMS_SIZE, params) != UTP_INTERNAL_ERROR_OK ||
+        utp_frame_ack_frequency_encode((uint8_t[UTP_FRAME_ACK_FREQUENCY_SIZE]){0}, UTP_FRAME_ACK_FREQUENCY_SIZE,
+                                       frequency) != UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection->local_transport_params                                  = *params;
+    connection->local_ack_frequency                                     = *frequency;
+    connection->keepalive_enabled                                       = enable_keepalive;
+    connection->keepalive_interval_ms                                   = keepalive_interval_ms;
+    connection->keepalive_timeout_ms                                    = keepalive_timeout_ms;
+    connection->keepalive_probes                                        = keepalive_probes;
+    connection->local_max_data_advertised                               = params->initial_max_data;
+    connection->local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]  = params->initial_max_streams_bidi;
+    connection->local_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL] = params->initial_max_streams_uni;
+    connection->send_control.peer_max_ack_delay_us = (uint64_t)frequency->max_ack_delay_ms * UINT64_C(1000);
+    return utp_ack_scheduler_init(&connection->ack_scheduler, frequency->ack_eliciting_threshold,
+                                  frequency->reordering_threshold, frequency->max_ack_delay_ms);
 }
 
-utp_internal_error_t utp_connection_encode_ack_frequency(uint8_t* buffer, size_t capacity)
+utp_internal_error_t utp_connection_encode_transport_params(const utp_connection_t* connection, uint8_t* buffer,
+                                                            size_t capacity)
 {
-    const utp_frame_ack_frequency_t frequency = {25u, UTP_CONNECTION_ACK_ELICITING_THRESHOLD, 3u};
+    if (connection == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
 
-    return utp_frame_ack_frequency_encode(buffer, capacity, &frequency);
+    return utp_frame_transport_params_encode(buffer, capacity, &connection->local_transport_params);
+}
+
+utp_internal_error_t utp_connection_encode_ack_frequency(const utp_connection_t* connection, uint8_t* buffer,
+                                                         size_t capacity)
+{
+    if (connection == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+
+    return utp_frame_ack_frequency_encode(buffer, capacity, &connection->local_ack_frequency);
 }
 
 utp_internal_error_t utp_connection_apply_peer_transport_params(utp_connection_t*                   connection,
@@ -2383,9 +2508,15 @@ utp_internal_error_t utp_connection_apply_peer_transport_params(utp_connection_t
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const utp_frame_ack_frequency_t* frequency)
+void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const utp_frame_ack_frequency_t* frequency,
+                                             uint64_t now_us)
 {
     if (connection == NULL || frequency == NULL) {
+        return;
+    }
+    if (now_us != 0u && connection->last_ack_frequency_apply_us != 0u &&
+        (now_us <= connection->last_ack_frequency_apply_us ||
+         now_us - connection->last_ack_frequency_apply_us < UTP_CONNECTION_ACK_FREQUENCY_APPLY_INTERVAL_US)) {
         return;
     }
     connection->peer_ack_frequency                    = *frequency;
@@ -2394,6 +2525,105 @@ void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const
     connection->ack_scheduler.reordering_threshold    = frequency->reordering_threshold;
     connection->ack_scheduler.max_ack_delay_ms        = frequency->max_ack_delay_ms;
     connection->send_control.reorder_threshold        = frequency->reordering_threshold;
+    if (now_us != 0u) {
+        connection->last_ack_frequency_apply_us = now_us;
+    }
+}
+
+/** @brief 返回当前网络状态下请求对端采用的 ACK 档位。 */
+static uint8_t utp_connection_select_ack_profile(utp_connection_t* connection, uint64_t now_us)
+{
+    const uint64_t srtt_us = utp_send_control_srtt(&connection->send_control);
+
+    if (connection->ack_loss_window_start_us != 0u &&
+        (now_us < connection->ack_loss_window_start_us ||
+         now_us - connection->ack_loss_window_start_us >= UTP_CONNECTION_ACK_LOSS_WINDOW_US)) {
+        connection->ack_loss_window_start_us = 0u;
+        connection->ack_loss_count           = 0u;
+    }
+    if (connection->ack_loss_count >= UTP_CONNECTION_ACK_LOSS_FREQUENT_THRESHOLD) {
+        return UTP_CONNECTION_ACK_PROFILE_LOSSY;
+    }
+    if (srtt_us == 0u) {
+        return UTP_CONNECTION_ACK_PROFILE_STABLE;
+    }
+    if (connection->ack_profile_baseline_srtt_us == 0u) {
+        connection->ack_profile_baseline_srtt_us = srtt_us;
+        return UTP_CONNECTION_ACK_PROFILE_STABLE;
+    }
+    {
+        const uint64_t threshold = connection->ack_profile_baseline_srtt_us / 4u > UINT64_C(15000)
+                                       ? connection->ack_profile_baseline_srtt_us / 4u
+                                       : UINT64_C(15000);
+
+        return srtt_us > connection->ack_profile_baseline_srtt_us &&
+                       srtt_us - connection->ack_profile_baseline_srtt_us >= threshold
+                   ? UTP_CONNECTION_ACK_PROFILE_LATENCY_SENSITIVE
+                   : UTP_CONNECTION_ACK_PROFILE_STABLE;
+    }
+}
+
+/** @brief 将档位转换为线上 ACK_FREQUENCY；稳定档严格沿用 Context 初始配置。 */
+static utp_frame_ack_frequency_t utp_connection_ack_profile_frequency(const utp_connection_t* connection,
+                                                                      uint8_t                 profile)
+{
+    switch (profile) {
+    case UTP_CONNECTION_ACK_PROFILE_LATENCY_SENSITIVE:
+        return (utp_frame_ack_frequency_t){12u, 6u, 2u};
+    case UTP_CONNECTION_ACK_PROFILE_LOSSY:
+        return (utp_frame_ack_frequency_t){6u, 3u, 1u};
+    default:
+        return connection->local_ack_frequency;
+    }
+}
+
+/** @brief 在发送路径中按防抖规则排入可靠 ACK_FREQUENCY 控制帧。 */
+static void utp_connection_maybe_queue_ack_frequency(utp_connection_t* connection, uint64_t now_us)
+{
+    uint8_t  desired;
+    uint64_t hold_us;
+
+    if (connection == NULL || now_us == 0u || connection->state != UTP_CONNECTION_STATE_CONNECTED ||
+        connection->peer_cid == 0u) {
+        return;
+    }
+    desired = utp_connection_select_ack_profile(connection, now_us);
+    if (desired != connection->ack_profile_candidate) {
+        connection->ack_profile_candidate          = desired;
+        connection->ack_profile_candidate_since_us = now_us;
+    }
+    if (connection->ack_profile_candidate == connection->ack_profile_current) {
+        goto update_baseline;
+    }
+    hold_us = connection->ack_profile_candidate > connection->ack_profile_current
+                  ? UTP_CONNECTION_ACK_PROFILE_PROMOTE_HOLD_US
+                  : UTP_CONNECTION_ACK_PROFILE_ROLLBACK_HOLD_US;
+    if (connection->ack_profile_candidate_since_us == 0u || now_us < connection->ack_profile_candidate_since_us ||
+        now_us - connection->ack_profile_candidate_since_us < hold_us ||
+        (connection->ack_profile_last_sent_us != 0u && now_us > connection->ack_profile_last_sent_us &&
+         now_us - connection->ack_profile_last_sent_us < UTP_CONNECTION_ACK_FREQUENCY_SEND_INTERVAL_US)) {
+        return;
+    }
+    {
+        const utp_frame_ack_frequency_t frequency =
+            utp_connection_ack_profile_frequency(connection, connection->ack_profile_candidate);
+
+        if (utp_connection_queue_ack_frequency(connection, &frequency) == UTP_INTERNAL_ERROR_OK) {
+            connection->ack_profile_current = connection->ack_profile_candidate;
+        }
+    }
+
+update_baseline:
+    if (connection->ack_profile_current == UTP_CONNECTION_ACK_PROFILE_STABLE) {
+        const uint64_t srtt_us = utp_send_control_srtt(&connection->send_control);
+
+        if (srtt_us != 0u) {
+            connection->ack_profile_baseline_srtt_us =
+                connection->ack_profile_baseline_srtt_us == 0u
+                    ? srtt_us
+                    : (connection->ack_profile_baseline_srtt_us * 7u + srtt_us) / 8u;
+        }
+    }
 }
 
 utp_internal_error_t utp_connection_configure_crypto(utp_connection_t* connection, uint8_t crypto_type)
@@ -2858,6 +3088,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         return connection->close_pending ? &connection->close_packet : NULL;
     }
     utp_connection_update_completed_peer_streams(connection);
+    utp_connection_maybe_queue_ack_frequency(connection, now_us);
     packet = utp_connection_next_scheduled_admitted(connection);
     if (packet != NULL) {
         return packet;
@@ -3376,7 +3607,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
                 return error;
             }
             if (!connection->zero_rtt_encrypted) {
-                utp_connection_apply_peer_ack_frequency(connection, &frequency);
+                utp_connection_apply_peer_ack_frequency(connection, &frequency, now_us);
             }
         } else if (frame_type == UTP_FRAME_TYPE_SESSION_TOKEN) {
             utp_frame_session_token_t token;
@@ -3859,8 +4090,8 @@ utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* conne
     if (connection == NULL || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (connection->state != UTP_CONNECTION_STATE_CONNECTED || connection->keepalive_deadline_us == 0u ||
-        now_us < connection->keepalive_deadline_us) {
+    if (!connection->keepalive_enabled || connection->state != UTP_CONNECTION_STATE_CONNECTED ||
+        connection->keepalive_deadline_us == 0u || now_us < connection->keepalive_deadline_us) {
         return UTP_INTERNAL_ERROR_OK;
     }
     if (connection->last_peer_activity_us == 0u) {
@@ -3873,7 +4104,8 @@ utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* conne
         connection->keepalive_deadline_us = activity_deadline;
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (connection->keepalive_missed_probes >= UTP_CONNECTION_KEEPALIVE_MAX_PROBES) {
+    if (connection->keepalive_missed_probes >=
+        (connection->keepalive_probes == 0u ? 1u : connection->keepalive_probes)) {
         connection->state                      = UTP_CONNECTION_STATE_DRAINING;
         connection->keepalive_deadline_us      = 0u;
         connection->retransmission_deadline_us = 0u;
@@ -3887,7 +4119,10 @@ utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* conne
         return UTP_INTERNAL_ERROR_OK;
     }
     ++connection->keepalive_missed_probes;
-    connection->keepalive_deadline_us = utp_connection_add_deadline(now_us, UTP_CONNECTION_KEEPALIVE_TIMEOUT_US);
+    connection->keepalive_deadline_us = utp_connection_add_deadline(
+        now_us, connection->keepalive_timeout_ms != 0u
+                    ? utp_connection_milliseconds_to_microseconds(connection->keepalive_timeout_ms)
+                    : utp_connection_keepalive_interval_us(connection));
     return UTP_INTERNAL_ERROR_OK;
 }
 

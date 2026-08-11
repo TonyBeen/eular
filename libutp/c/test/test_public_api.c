@@ -144,11 +144,24 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     utp_stream_t*         stream;
     size_t                received_length = 0u;
 
-    client_options.event_base        = event_base;
-    client_options.context_id        = client_context_id;
-    server_options.event_base        = event_base;
-    server_options.context_id        = server_context_id;
-    server_probe.expected_encryption = encryption;
+    client_options.event_base                          = event_base;
+    client_options.context_id                          = client_context_id;
+    client_options.enable_keepalive                    = false;
+    client_options.keepalive_interval                  = 120u;
+    client_options.keepalive_timeout                   = 0u;
+    client_options.keepalive_probes                    = 0u;
+    client_options.max_idle_timeout                    = 12000u;
+    client_options.ack_every_n_packets                 = 5u;
+    client_options.ack_delay_exponent                  = 5u;
+    client_options.ack_delay                           = 40u;
+    client_options.initial_max_streams_bidi            = 40u;
+    client_options.initial_max_streams_uni             = 20u;
+    client_options.initial_max_data                    = UINT64_C(1024) * 1024u;
+    client_options.initial_max_stream_data_bidi_local  = UINT64_C(192) * 1024u;
+    client_options.initial_max_stream_data_bidi_remote = UINT64_C(128) * 1024u;
+    server_options.event_base                          = event_base;
+    server_options.context_id                          = server_context_id;
+    server_probe.expected_encryption                   = encryption;
     assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
     assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
     server_probe.context = server;
@@ -174,6 +187,23 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     assert(client_probe.connected_connection->crypto_ready);
     assert(server_probe.connected_connection->crypto_ready);
     assert(server_probe.connected_connection->send_control.current_packet_number >= 2u);
+    assert(client_probe.connected_connection->local_transport_params.max_idle_timeout_ms == 12000u);
+    assert(client_probe.connected_connection->local_transport_params.ack_delay_exponent == 5u);
+    assert(client_probe.connected_connection->local_transport_params.initial_max_data == UINT64_C(1024) * 1024u);
+    assert(client_probe.connected_connection->local_ack_frequency.ack_eliciting_threshold == 5u);
+    assert(!client_probe.connected_connection->keepalive_enabled);
+    assert(client_probe.connected_connection->keepalive_interval_ms == 120u);
+    assert(client_probe.connected_connection->keepalive_timeout_ms == 0u);
+    assert(client_probe.connected_connection->keepalive_probes == 0u);
+    assert(server_probe.connected_connection->peer_transport_params.max_idle_timeout_ms == 12000u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_streams_bidi == 40u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_streams_uni == 20u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_bidi_local ==
+           UINT64_C(192) * 1024u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_bidi_remote ==
+           UINT64_C(128) * 1024u);
+    assert(server_probe.connected_connection->peer_ack_frequency.ack_eliciting_threshold == 5u);
+    assert(server_probe.connected_connection->peer_ack_frequency.max_ack_delay_ms == 40u);
     assert(utp_connection_export_session_token(client_probe.connected_connection, resumption_state,
                                                sizeof(resumption_state), &received_length) == UTP_STATUS_OK);
     assert(received_length == sizeof(resumption_state));

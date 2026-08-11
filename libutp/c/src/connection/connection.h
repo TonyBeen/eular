@@ -48,6 +48,12 @@ typedef enum utp_connection_path_state {
     UTP_CONNECTION_PATH_STATE_FAILED
 } utp_connection_path_state_t;
 
+typedef enum utp_connection_ack_profile {
+    UTP_CONNECTION_ACK_PROFILE_STABLE = 0,
+    UTP_CONNECTION_ACK_PROFILE_LATENCY_SENSITIVE,
+    UTP_CONNECTION_ACK_PROFILE_LOSSY,
+} utp_connection_ack_profile_t;
+
 typedef struct utp_connection_control_slot {
     utp_hash_node_t node;
     uint64_t        value;
@@ -94,6 +100,8 @@ typedef struct utp_connection {
     uint64_t                     peer_max_data;
     uint64_t                     peer_initial_max_stream_data_bidi_local;
     uint64_t                     peer_initial_max_stream_data_bidi_remote;
+    utp_frame_transport_params_t local_transport_params;
+    utp_frame_ack_frequency_t    local_ack_frequency;
     uint64_t                     local_max_data_advertised;
     uint64_t                     stream_data_sent_total;
     uint64_t                     local_stream_data_received_total;
@@ -114,6 +122,11 @@ typedef struct utp_connection {
     uint64_t                     keepalive_deadline_us;
     uint64_t                     last_peer_activity_us;
     uint64_t                     path_challenge_deadline_us;
+    uint64_t                     ack_profile_candidate_since_us;
+    uint64_t                     ack_profile_last_sent_us;
+    uint64_t                     ack_profile_baseline_srtt_us;
+    uint64_t                     ack_loss_window_start_us;
+    uint64_t                     last_ack_frequency_apply_us;
     uint64_t                     candidate_rx_bytes;
     uint64_t                     candidate_tx_bytes;
     uint64_t                     candidate_queued_bytes;
@@ -121,6 +134,8 @@ typedef struct utp_connection {
     uint16_t                     close_error_code;
     uint16_t                     peer_close_error_code;
     uint16_t                     peer_close_reason_length;
+    uint32_t                     keepalive_interval_ms;
+    uint32_t                     keepalive_timeout_ms;
     uint16_t                     local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
     uint16_t                     peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
     uint8_t                      path_challenge[8];
@@ -135,6 +150,10 @@ typedef struct utp_connection {
     uint32_t                     stream_scheduler_cursor;
     uint8_t                      path_challenge_retry_count;
     uint16_t                     keepalive_missed_probes;
+    uint16_t                     keepalive_probes;
+    uint32_t                     ack_loss_count;
+    uint8_t                      ack_profile_current;
+    uint8_t                      ack_profile_candidate;
     uint64_t                     session_token_expires_at_seconds;
     uint16_t                     session_token_size;
     bool                         close_pending;
@@ -148,6 +167,7 @@ typedef struct utp_connection {
     bool                         session_token_issued;
     bool                         peer_transport_params_received;
     bool                         peer_ack_frequency_received;
+    bool                         keepalive_enabled;
     const uint8_t*               peer_close_reason;
     utp_connection_role_t        role;
     utp_connection_state_t       state;
@@ -162,16 +182,25 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
 void                 utp_connection_cleanup(utp_connection_t* connection);
 /** @brief 应用 Context 的 MTU 配置，并重置连接级 MTU 运行状态。 */
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
-/** @brief 编码本端固定传输参数；握手超时由所属 Context 提供。 */
-utp_internal_error_t utp_connection_encode_transport_params(uint16_t handshake_timeout_ms, uint8_t* buffer,
+/** @brief 设置本端协商参数和保活策略；仅允许在尚未创建流时调用。 */
+utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*                   connection,
+                                                               const utp_frame_transport_params_t* params,
+                                                               const utp_frame_ack_frequency_t*    frequency,
+                                                               bool enable_keepalive, uint32_t keepalive_interval_ms,
+                                                               uint32_t keepalive_timeout_ms,
+                                                               uint16_t keepalive_probes);
+/** @brief 编码本端传输参数。 */
+utp_internal_error_t utp_connection_encode_transport_params(const utp_connection_t* connection, uint8_t* buffer,
                                                             size_t capacity);
 /** @brief 编码本端初始 ACK 调度偏好。 */
-utp_internal_error_t utp_connection_encode_ack_frequency(uint8_t* buffer, size_t capacity);
+utp_internal_error_t utp_connection_encode_ack_frequency(const utp_connection_t* connection, uint8_t* buffer,
+                                                         size_t capacity);
 /** @brief 应用对端握手传输参数；重复参数必须与首次接收内容完全一致。 */
 utp_internal_error_t utp_connection_apply_peer_transport_params(utp_connection_t*                   connection,
                                                                 const utp_frame_transport_params_t* params);
 /** @brief 应用对端 ACK 调度偏好；后续控制包可更新该偏好。 */
-void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const utp_frame_ack_frequency_t* frequency);
+void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const utp_frame_ack_frequency_t* frequency,
+                                             uint64_t now_us);
 /** @brief 为主动连接生成密钥对并选择握手加密算法。 */
 utp_internal_error_t utp_connection_configure_crypto(utp_connection_t* connection, uint8_t crypto_type);
 /** @brief 将本端临时公钥编码为 CRYPTO 帧。 */

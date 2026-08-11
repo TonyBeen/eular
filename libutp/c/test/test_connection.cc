@@ -978,3 +978,57 @@ TEST_CASE("connection feeds repeated large stream losses into MTU black-hole det
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&connection.mtu_discovery) == UTP_MTU_DEFAULT_BASE);
     utp_connection_cleanup(&connection);
 }
+
+TEST_CASE("connection applies configured local ACK parameters to outgoing ACK frames", "[connection][ack][config]")
+{
+    const utp_address_t                              peer       = loopback_address(10024u);
+    const uint8_t                                    ping       = UTP_FRAME_TYPE_PING;
+    const utp_packet_header_t                        header     = {11u, 77u, 1u, 1u, UTP_PACKET_TYPE_CTRL, 0u};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> incoming   = {};
+    utp_connection_t                                 connection = {};
+    utp_frame_transport_params_t                     params;
+    const utp_frame_ack_frequency_t                  frequency = {25u, 4u, 3u};
+    utp_packet_out_t*                                ack_packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    params                    = connection.local_transport_params;
+    params.ack_delay_exponent = 3u;
+    REQUIRE(utp_connection_set_local_transport_config(&connection, &params, &frequency, true, 0u, 1500u, 3u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    incoming[UTP_PACKET_HEADER_SIZE] = ping;
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_ack(&connection, 1124u) == UTP_INTERNAL_ERROR_OK);
+    ack_packet = utp_connection_next_packet_to_send_at(&connection, 1124u);
+    REQUIRE(ack_packet != nullptr);
+    REQUIRE(ack_packet->raw_data[UTP_PACKET_HEADER_SIZE] == UTP_FRAME_TYPE_ACK);
+    REQUIRE(ack_packet->raw_data[UTP_PACKET_HEADER_SIZE + 2u] == 0u);
+    REQUIRE(ack_packet->raw_data[UTP_PACKET_HEADER_SIZE + 3u] == 128u);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection queues dynamic ACK frequency as reliable control", "[connection][ack][control]")
+{
+    const utp_address_t peer       = loopback_address(10025u);
+    utp_connection_t    connection = {};
+    utp_packet_out_t*   packet;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 77u, 11u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state                    = UTP_CONNECTION_STATE_CONNECTED;
+    connection.ack_loss_window_start_us = UINT64_C(3000001);
+    connection.ack_loss_count           = 2u;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, UINT64_C(3000001)) == nullptr);
+    connection.ack_loss_window_start_us = UINT64_C(6000001);
+    packet                              = utp_connection_next_packet_to_send_at(&connection, UINT64_C(6000001));
+    REQUIRE(packet != nullptr);
+    REQUIRE((packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK_FREQUENCY)) != 0u);
+    REQUIRE((packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK)) == 0u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, UINT64_C(6000001)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.send_control.peer_max_ack_delay_us == 6000u);
+    REQUIRE(connection.ack_profile_last_sent_us == UINT64_C(6000001));
+    utp_connection_cleanup(&connection);
+}
