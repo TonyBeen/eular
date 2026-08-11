@@ -19,7 +19,7 @@
 #define UTP_CONTEXT_PENDING_PACKET_LIMIT             16u
 #define UTP_CONTEXT_PENDING_STORAGE_CAPACITY         32768u
 #define UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY 4096u
-#define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE         40u
+#define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE         32u
 #define UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE \
     (UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE + UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE)
 #define UTP_CONTEXT_ZERO_RTT_EARLY_DATA_MAX                                                \
@@ -38,16 +38,29 @@ typedef struct utp_context_connection_slot {
     utp_connection_t           connection;
     utp_connect_attempt_info_t connect_attempt;
     uint64_t                   connect_deadline_us;
+    utp_packet_in_t*           zero_rtt_early_packet;
+    size_t                     zero_rtt_early_wire_size;
+    uint64_t                   zero_rtt_request_packet_number;
+    uint64_t                   zero_rtt_request_received_us;
+    uint64_t                   zero_rtt_response_deadline_us;
+    uint64_t                   zero_rtt_expire_deadline_us;
+    uint64_t                   zero_rtt_amplification_rx_bytes;
+    uint64_t                   zero_rtt_amplification_tx_bytes;
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];
     uint8_t                    zero_rtt_early_data[UTP_CONTEXT_ZERO_RTT_EARLY_DATA_MAX];
     size_t                     zero_rtt_early_data_size;
     uint64_t                   zero_rtt_expires_at_seconds;
     int8_t                     connect_retries_remaining;
+    uint8_t                    zero_rtt_response_retries;
     uint8_t                    zero_rtt_encryption_mode;
     bool                       zero_rtt_early_fin;
     bool                       zero_rtt_awaiting_accept;
     bool                       zero_rtt_accepted;
+    bool                       zero_rtt_response_active;
+    bool                       zero_rtt_response_queued;
+    bool                       zero_rtt_response_sent;
+    bool                       zero_rtt_early_delivered;
     bool                       used;
     bool                       connected_reported;
     bool                       connection_error_reported;
@@ -72,7 +85,7 @@ struct utp_context {
     utp_event_t                              timer_event;
     utp_udp_socket_t                         udp_socket;
     utp_packet_in_pool_t                     packet_in_pool;
-    // 加密只在最终 UDP 写入前进行，单个 Context 的事件循环串行复用该缓冲。
+    // 握手构造和最终 UDP 加密串行复用该缓冲，排入 PacketOut 后不再引用其中数据。
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];
     utp_hash_table_t                         connections;
     struct utp_context_connection_slot_tailq free_connection_slots;
@@ -86,6 +99,8 @@ struct utp_context {
     utp_hash_table_t                         zero_rtt_replay;
     uint32_t                                 zero_rtt_token_max_lifetime_seconds;
     uint32_t                                 zero_rtt_replay_cache_capacity;
+    uint16_t                                 handshake_timeout_ms;
+    uint8_t                                  handshake_max_retries;
     utp_context_pending_slot_t*              callback_accept_pending;
     utp_context_connection_slot_t*           callback_accept_zero_rtt;
     bool                                     callback_accept_requested;

@@ -63,7 +63,9 @@ typedef struct utp_endpoint {
      3000u,                       \
      5000u,                       \
      600u,                        \
-     4096u}
+     4096u,                       \
+     800u,                        \
+     2u}
 
 typedef struct utp_connect_options {
     const char*           address;

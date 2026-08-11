@@ -33,18 +33,27 @@ typedef struct utp_pending_incoming {
     size_t                packet_count;
     uint32_t              local_cid;
     uint32_t              peer_cid;
+    uint64_t              first_handshake_packet_number;
     uint64_t              last_handshake_packet_number;
     uint64_t              next_packet_number;
+    uint64_t              latest_initial_packet_number;
+    uint64_t              latest_initial_received_us;
+    uint64_t              last_handshake_sent_us;
+    uint64_t              handshake_rtt_sample_us;
     uint64_t              handshake_retransmission_deadline_us;
+    uint64_t              handshake_base_delay_us;
     uint32_t              handshake_retransmission_count;
     utp_crypto_key_pair_t crypto_key_pair;
     utp_crypto_aead_t     tx_aead;
     utp_crypto_aead_t     rx_aead;
     uint8_t               crypto_type;
+    uint8_t               handshake_max_retries;
     bool                  crypto_configured;
     bool                  crypto_ready;
     bool                  accepted;
     bool                  handshake_sent;
+    // UDP 暂不可写时保留首个或重传 HANDSHAKE，等待 writable 事件原包号重建发送。
+    bool                  handshake_write_pending;
 } utp_pending_incoming_t;
 
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,
@@ -52,6 +61,12 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
                                                size_t packet_limit);
 void                 utp_pending_incoming_reset(utp_pending_incoming_t* pending);
 utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t* pending);
+/** @brief 设置被动握手响应的基础超时和最大重传次数。 */
+utp_internal_error_t utp_pending_incoming_set_handshake_policy(utp_pending_incoming_t* pending, uint16_t timeout_ms,
+                                                               uint8_t max_retries);
+/** @brief 记录最新有效 Initial 的包号与首次接收时刻，旧包和重复包不会回退时间基准。 */
+utp_internal_error_t utp_pending_incoming_record_initial(utp_pending_incoming_t* pending, uint64_t packet_number,
+                                                         uint64_t received_at_us);
 utp_internal_error_t utp_pending_incoming_configure_crypto(utp_pending_incoming_t*   pending,
                                                            const utp_frame_crypto_t* peer_crypto);
 utp_internal_error_t utp_pending_incoming_encode_crypto(const utp_pending_incoming_t* pending, uint8_t* buffer,
@@ -63,7 +78,8 @@ utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incomi
 uint64_t             utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t* pending);
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pending, const uint8_t* packet,
                                                     size_t packet_length, size_t wire_packet_length,
-                                                    const utp_address_t* peer, utp_pending_incoming_result_t* result);
+                                                    const utp_address_t* peer, uint64_t received_at_us,
+                                                    utp_pending_incoming_result_t* result);
 utp_internal_error_t utp_pending_incoming_replay(const utp_pending_incoming_t*  pending,
                                                  utp_pending_incoming_replay_fn replay, void* user_data);
 

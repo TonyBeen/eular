@@ -251,9 +251,14 @@
 
 ---
 
-## 10. C 版加密 0-RTT TODO（已确认设计）
+## 10. C 版加密 0-RTT 实现约束与进度（已确认设计）
 
-> 本节是 C 版后续实现的约束，优先于本文从 C++ 现状反推的轮换设计；尚未实现。
+> 本节是 C 版实现的约束，优先于本文从 C++ 现状反推的轮换设计。
+>
+> 当前已实现：恢复状态解封、半加密 `0RTT` 包、early C2S/S2C AEAD、固定帧序校验、两消息建连、
+> attempt 级 replay 命中的握手响应重建，以及服务端在响应 UDP 写成功后才投递 early stream。
+> 仍待补齐：客户端提前收到普通 `CTRL` 的单包缓存与快速重传，以及超过首个 early 包容量的数据转入
+> 1-RTT 流发送队列。
 
 ### 10.1 恢复根密钥生命周期
 
@@ -279,18 +284,20 @@
 
 - `resumption_psk` 只作为 HKDF 的输入，不得直接用作 0-RTT AEAD 工作密钥。
 - 设 `early_secret = HKDF-Extract(salt = SHA256("libutp-0rtt-early-v1"), IKM = resumption_psk)`。两方向的 HKDF info 分别为 `"libutp-0rtt-c2s-v1" | early_attempt_nonce[16] | encrypted_server_info[93] | encryption_mode[1]` 和 `"libutp-0rtt-s2c-v1" | early_attempt_nonce[16] | encrypted_server_info[93] | encryption_mode[1]`，输出 `AEAD key || nonce_prefix[4]`；AEAD key 长度由 `encryption_mode` 决定。
-- 两个方向必须使用独立的 early AEAD：客户端 `0RTT` 用 `early_c2s`，服务端 `HANDSHAKE_DONE` 用 `early_s2c`。这样客户端可确认响应来自持有 `resumption_psk` 的服务端。
-- 同一尝试的 PTO 重传必须复用完整密文包、CID、packet number、`early_attempt_nonce` 和 X25519 密钥对；新的 `utp_context_connect_0rtt()` 调用必须产生新的 `early_attempt_nonce`。这保证复用未过期 token 时不会复用 AES-GCM 的 `(key, nonce)`。
+- 两个方向必须使用独立的 early AEAD：客户端 `0RTT` 用 `early_c2s`，服务端 `UTP_TYPE_HANDSHAKE` 响应用 `early_s2c`。这样客户端可确认响应来自持有 `resumption_psk` 的服务端。
+- 同一尝试的 PTO 重传必须复用 CID、`early_attempt_nonce` 和 X25519 密钥对，但每次请求和响应都必须分配新的 packet number，并以新 nonce 重新执行 AEAD。新的 `utp_context_connect_0rtt()` 调用必须产生新的 `early_attempt_nonce`；任何方向都不得在相同 early key 下复用 `(key, packet_number)`。
 - early AEAD 的 AAD 必须为当前 UTP Header 与本次尝试的完整明文 `SESSION_TOKEN` 帧，防止 token、CID 或包头被替换到另一份密文包。
 - early AEAD nonce 固定为 `nonce_prefix[4] | packet_number_be[8]`。early_c2s 与 early_s2c 使用方向独立的 key、nonce prefix 和 packet number 空间。
 
 ### 10.4 重放缓存与 pending 握手清理
 
-- Context 的 `zero_rtt_replay_cache_capacity` 必须可配置，默认 `4096` 条。replay key 固定为 `SHA256(encrypted_server_info)[0..15] | early_attempt_nonce[16] | packet_number_be[8]`；记录保存到 token 的绝对过期时间，不得为了接纳新记录而淘汰未过期记录。
+- Context 的 `zero_rtt_replay_cache_capacity` 必须可配置，默认 `4096` 条。replay key 固定为 `SHA256(encrypted_server_info)[0..15] | early_attempt_nonce[16]`，用于标识整个连接尝试，不能包含 packet number；记录保存到 token 的绝对过期时间，不得为了接纳新记录而淘汰未过期记录。
+- Context 的被动握手响应基础超时由 `handshake_timeout` 配置，默认 `800ms`；最大重传次数由 `handshake_max_retries` 配置，默认 `2` 次。普通 1-RTT pending 与 0-RTT 响应 flight 必须共用这组策略，重试耗尽后释放各自持有的 pending 状态。
+- 普通 1-RTT Handshake 每次重传也必须使用新 packet number。客户端的 `HANDSHAKE_DONE` 确认本次实际收到的 Handshake packet number；服务端必须接受当前 pending 已发送范围内的任一 Handshake 确认，不能因已经发出更新的响应而拒绝较早响应的迟到确认。只有确认可关联到精确发送时刻的最新响应时才形成 RTT 样本，其他情况按 Karn 原则跳过 RTT 更新。
 - 服务端必须先完成 token 与 early AEAD 校验，再查询并插入 replay record；插入成功后才能创建 pending Connection 或缓存 early stream，避免无效包耗尽缓存、重复包创建多个连接。
 - replay table 满且不存在可清理的过期记录时，拒绝新的 0-RTT 包且不响应；不得放宽重放保护。
-- pending Connection 不区分 `0-RTT pending` 与 `1-RTT pending`：0-RTT 的差异仅限入站校验和可选 early stream。客户端等待服务端 `HANDSHAKE_DONE`；服务端验证通过后生成 `HANDSHAKE_DONE`，仅在该包成功写出后进入 `CONNECTED`。遇到暂时发送阻塞时，服务端按握手 PTO 重发该不可变包；达到握手重传上限后必须从 Context 移除并释放 Connection。
-- 重复 0-RTT 包不得重置 pending Connection 的 PTO 截止时间或重传计数。服务端已连接后仍需在短期握手响应缓存有效期内，按既有 PTO、重传次数和防放大额度重发缓存的不可变 `HANDSHAKE_DONE`；不得重复投递 early stream 或创建 Connection。该响应缓存必须绑定首次请求的来源地址，来源改变的重复包不响应。
+- pending Connection 共享普通握手的 Context 生命周期与清理原则；0-RTT 的差异仅限入站校验、early stream 暂存和独立响应 flight。客户端等待服务端 `UTP_TYPE_HANDSHAKE`；服务端验证通过后生成响应，仅在该包成功写出后进入 `CONNECTED`。遇到暂时发送阻塞时必须保留 PacketOut 与 early PacketIn，等待 UDP writable 后继续发送；达到握手重传上限后必须从 Context 移除并释放 Connection。
+- 重复 0-RTT 包不得重置 pending Connection 的总过期时间或重传额度。服务端已连接后仍需在短期握手响应有效期内，按既有 PTO、重传次数和防放大额度重新构造 `UTP_TYPE_HANDSHAKE` 响应；每次响应使用新 packet number、新密文和当前 `HANDSHAKE_DELAY`，不得重复投递 early stream 或创建 Connection。该响应状态必须绑定首次请求的来源地址与完整 token，来源改变的重复包不响应。
 - 服务端收到任意可验证的客户端 1-RTT 包后可释放响应缓存；响应缓存超时、达到重传上限或所属 Connection 关闭时也必须释放。replay record 仍保留到 token 过期，仅继续拒绝后续重复包。
 - replay cache 是 Context 内存状态，不跨进程或集群共享。服务端重启后，旧 token 仍可被恢复根密钥解析且允许再次连接，但此前的重放记录已丢失；应用层 early data 因此必须幂等。
 
@@ -300,26 +307,26 @@
 - `SESSION_TOKEN` 后的字节在 early AEAD 验证成功前必须一律视为密文，禁止进入普通帧解析路径；校验失败、长度不足、未知帧或截断均静默丢弃。
 - 明文 `expires_at_seconds` 必须参与 `encrypted_server_info` 的 AAD，防止被替换或篡改。
 - 客户端 0-RTT 解密后的帧顺序固定为：`CRYPTO(client_x25519_pub) | VERSION | TRANSPORT_PARAMS | ACK_FREQUENCY | [STREAM(stream_id=0)] | [PING] | PADDING`。前四帧必须各出现一次且顺序固定；除可选的 stream 0、PING 和末尾 PADDING 外，ACK、关闭、其他 stream 及其他控制帧必须拒绝。
-- 服务端响应的 early_s2c 明文帧顺序固定为：`CRYPTO(server_x25519_pub) | VERSION | TRANSPORT_PARAMS | ACK_FREQUENCY | HANDSHAKE_DELAY | PADDING`。`HANDSHAKE_DELAY` 必须携带服务端从首次收到有效 0-RTT 到首次构造响应时的处理耗时；暂时发送阻塞后的重传仍复用该不可变响应及原始 delay 值。
+- 服务端响应的 early_s2c 明文帧顺序固定为：`CRYPTO(server_x25519_pub) | VERSION | TRANSPORT_PARAMS | ACK_FREQUENCY | ACK | HANDSHAKE_DELAY | PADDING`。`ACK` 必须只确认触发本次响应的 0-RTT 请求 packet number；`HANDSHAKE_DELAY` 必须携带该请求接收至本次响应构造时的处理耗时。响应重传必须重新编码二者，以便客户端把 RTT 样本关联到具体请求。
 - 客户端 0-RTT 和服务端 early_s2c 响应都必须补齐到配置的 `mtu_min`；为补齐加入的 `PADDING` 只能位于对应的 AEAD 密文区。
 - early stream 数据超过单包密文容量时，仅首段放入 0-RTT；余量保留在 stream 0 的普通发送队列，待 1-RTT 建立后从连续 offset 发送。FIN 仅能放在最终片段。
 
 ### 10.6 两消息加密 0-RTT 与 `CTRL` 乱序处理
 
 - 加密 0-RTT 使用两消息建连：客户端发送 `0RTT`，服务端验证成功后以 `UTP_TYPE_HANDSHAKE` 发送 early_s2c 加密响应。客户端成功验证该响应、校验 §10.5 的服务端帧序列并派生 1-RTT 密钥后立即进入 `CONNECTED`，不发送额外握手确认包。
-- `HANDSHAKE_DONE` 是服务端的首个必发响应，不能等待业务处理结果或客户端重传触发。服务端成功写出该包后可进入 `CONNECTED` 并发送正常 1-RTT `CTRL`；普通 `CTRL` 不得充当握手响应，因为客户端在取得服务端 X25519 公钥前无法解密它。
-- 服务端进入 `CONNECTED` 不等于原路径已验证。在收到客户端任意可验证的 1-RTT 包前，`HANDSHAKE_DONE`、响应缓存重发以及随后发送的所有 1-RTT `CTRL` 合计仍受该来源地址的防放大额度约束；客户端 0-RTT padding 提供的接收字节可计入额度。
-- 服务端在回复 `HANDSHAKE_DONE` 前不得向应用投递 early stream；early 数据在 Connection 内缓存，服务端成功写出该包并进入 `CONNECTED` 后才按普通 stream 接收路径投递。
+- `UTP_TYPE_HANDSHAKE` 是服务端的首个必发响应，不能等待业务处理结果或客户端重传触发。服务端成功写出该包后可进入 `CONNECTED` 并发送正常 1-RTT `CTRL`；普通 `CTRL` 不得充当握手响应，因为客户端在取得服务端 X25519 公钥前无法解密它。
+- 服务端进入 `CONNECTED` 不等于原路径已验证。在收到客户端任意可验证的 1-RTT 包前，Handshake 响应重发以及随后发送的所有 1-RTT `CTRL` 合计仍受该来源地址的防放大额度约束；客户端 0-RTT padding 提供的接收字节可计入额度。
+- 服务端在 Handshake 响应真正写入 UDP 前不得向应用投递 early stream；early PacketIn 由 Connection 槽位持有，UDP `EAGAIN` 时继续保留，响应发送成功后才按普通 stream 接收路径投递一次。
 - 客户端调用 `utp_context_connect_0rtt()` 时必须立即创建并注册 Context 所有的 pending Connection，以其 CID 接收后续报文；该对象在握手成功前不得交给调用者。失败时通过不携带 Connection 参数的既有 `on_connect_error` 报告并释放。
 - pending 客户端若先收到来自预期对端、CID 匹配的普通 `CTRL`，但尚无 1-RTT 接收密钥，Connection 自身必须零拷贝保留至多一个原始 `PacketIn`，并触发一次受限的 0-RTT 快速重传。Context 仅负责 CID 路由，不持有该缓存。
-- 快速重传必须复用完整 0-RTT 包，且只允许一次、消耗既有握手重传额度、不延长握手总超时。服务端命中 replay record 后从短期响应缓存重发同一份 `HANDSHAKE_DONE`。
-- 客户端收到并验证 `HANDSHAKE_DONE`、派生 1-RTT 密钥后，必须将缓存的 `CTRL` 交给标准 1-RTT 收包路径解密和处理；认证失败即丢弃。缓存包在成功回放、握手失败或超时时释放。
-- early 与 1-RTT 使用不同密钥 epoch，可各自使用独立 packet number 空间；缓存的普通 `CTRL` 只按 1-RTT 包号窗口处理，不与 `HANDSHAKE_DONE` 的 early 包号混用。
-- 客户端仅在本次 0-RTT 从未重传时，使用 `本地响应接收时刻 - 首次 0-RTT 发送时刻 - HANDSHAKE_DELAY` 形成握手 RTT 样本；发生过快速重传或 PTO 重传时必须遵循 Karn 原则跳过该样本。服务端在连接后通过正常 1-RTT ACK 更新 RTT。
+- 快速重传只允许一次、消耗既有握手重传额度且不延长握手总超时；重传必须沿用 attempt 身份但生成新 packet number 和新密文。服务端命中 replay record 后使用最新有效请求重新构造 Handshake 响应。
+- 客户端收到并验证 Handshake 响应、派生 1-RTT 密钥后，必须将缓存的 `CTRL` 交给标准 1-RTT 收包路径解密和处理；认证失败即丢弃。缓存包在成功回放、握手失败或超时时释放。
+- early 与 1-RTT 使用不同密钥 epoch，可各自使用独立 packet number 空间；缓存的普通 `CTRL` 只按 1-RTT 包号窗口处理，不与 Handshake 的 early 包号混用。
+- 客户端仅在响应 ACK 的请求 packet number 仍可关联到唯一发送时刻时，使用 `本地响应接收时刻 - 对应请求发送时刻 - HANDSHAKE_DELAY` 形成握手 RTT 样本；延迟到达且只确认已退休旧包号的响应按 Karn 原则跳过样本。服务端在连接后通过正常 1-RTT ACK 更新 RTT。
 
-### 10.7 `HANDSHAKE_DONE` 线格式与被动回调时点
+### 10.7 Handshake 响应线格式与被动回调时点
 
-- 加密 0-RTT 的完成响应复用 header `types = UTP_TYPE_HANDSHAKE`，不新增包类型，也不携带旧 `UTP_FRAME_TYPE_HANDSHAKE_DONE` 帧。客户端必须根据本地 pending 尝试类型选择解析路径：普通 1-RTT pending 将其作为 server hello 处理；加密 0-RTT pending 必须使用 `early_s2c` 解密，并严格校验 §10.5 的服务端帧序列。不得退回普通 `CTRL` 或明文 Handshake 解析路径。
+- 加密 0-RTT 的完成响应复用 header `types = UTP_TYPE_HANDSHAKE`，不新增包类型，也不携带旧 `UTP_FRAME_TYPE_HANDSHAKE_DONE` 帧。客户端必须根据本地 pending 尝试类型选择解析路径：普通 1-RTT pending 将其作为 server hello 处理；加密 0-RTT pending 必须使用 `early_s2c` 解密，并严格校验 §10.5 的服务端帧序列及 ACK 关联。不得退回普通 `CTRL` 或明文 Handshake 解析路径。
 - 被动加密 0-RTT 的 `on_new_connection` 必须在 token、重放、early AEAD 以及 §10.5 客户端完整帧序列全部校验完成后，且在服务端发送完成响应前调用，以保留应用拒绝机会。回调只接收 `utp_new_connection_info_t`，内部 Connection 仍由 Context 持有并保持 pending；early stream 只在 Connection 内缓存，不向应用投递。
 - 普通连接与 0-RTT 使用相同的应用接受语义：应用必须在 `on_new_connection` 回调内部调用 `utp_context_accept(context)`，调用成功后返回 `true`；若不接受或 `accept` 失败则返回 `false`。0-RTT pending 必须在调用回调前进入可被 `utp_context_accept()` 取得的待接受队列。
-- 对 0-RTT，`utp_context_accept()` 成功后服务端生成并发送不可变的 early_s2c `UTP_TYPE_HANDSHAKE` 响应；仅在 UDP 写成功后进入 `CONNECTED` 并投递 early stream。若回调拒绝，则不得发送响应，也不得投递 early stream。
+- 对 0-RTT，`utp_context_accept()` 成功后服务端生成并发送 early_s2c `UTP_TYPE_HANDSHAKE` 响应；仅在 UDP 写成功后进入 `CONNECTED` 并投递 early stream。后续重传重新构造新包，若回调拒绝，则不得发送响应，也不得投递 early stream。

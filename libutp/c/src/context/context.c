@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "proto/ack.h"
 #include "proto/frame.h"
 #include "proto/proto.h"
 #include "socket/address.h"
@@ -33,9 +34,119 @@ static void utp_context_release_pending_slot(utp_context_t* context, utp_context
 static void utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot);
 static utp_internal_error_t utp_context_queue_session_token(utp_context_t*                 context,
                                                             utp_context_connection_slot_t* slot);
+static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t*                 context,
+                                                                   utp_context_connection_slot_t* slot,
+                                                                   uint64_t                       now_us);
+
+static const uint8_t        k_zero_rtt_version_frame[UTP_FRAME_VERSION_SIZE] = {
+    UTP_FRAME_TYPE_VERSION, 0u, 0u, 0u, UTP_PROTOCOL_VERSION,
+};
+static const uint8_t k_zero_rtt_transport_params_frame[UTP_FRAME_TRANSPORT_PARAMS_SIZE] = {
+    UTP_FRAME_TYPE_TRANSPORT_PARAMS,
+};
+static const uint8_t k_zero_rtt_ack_frequency_frame[UTP_FRAME_ACK_FREQUENCY_SIZE] = {
+    UTP_FRAME_TYPE_ACK_FREQUENCY, 2u, 1u, 0u, 0u, 0u, 25u,
+};
+
+/** @brief 追加 0-RTT 固定协商参数；这些参数仅用于握手序校验，连接默认值仍由本地配置生效。 */
+static utp_internal_error_t utp_context_append_zero_rtt_parameters(uint8_t* buffer, size_t capacity, size_t* offset,
+                                                                   bool include_delay, uint32_t delay_us)
+{
+    if (buffer == NULL || offset == NULL || *offset > capacity ||
+        capacity - *offset < sizeof(k_zero_rtt_version_frame) + sizeof(k_zero_rtt_transport_params_frame) +
+                                 sizeof(k_zero_rtt_ack_frequency_frame) +
+                                 (include_delay ? UTP_FRAME_HANDSHAKE_DELAY_SIZE : 0u)) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    memcpy(buffer + *offset, k_zero_rtt_version_frame, sizeof(k_zero_rtt_version_frame));
+    *offset += sizeof(k_zero_rtt_version_frame);
+    memcpy(buffer + *offset, k_zero_rtt_transport_params_frame, sizeof(k_zero_rtt_transport_params_frame));
+    *offset += sizeof(k_zero_rtt_transport_params_frame);
+    memcpy(buffer + *offset, k_zero_rtt_ack_frequency_frame, sizeof(k_zero_rtt_ack_frequency_frame));
+    *offset += sizeof(k_zero_rtt_ack_frequency_frame);
+    if (include_delay) {
+        const utp_frame_handshake_delay_t delay = {delay_us};
+        const utp_internal_error_t        error =
+            utp_frame_handshake_delay_encode(buffer + *offset, capacity - *offset, &delay);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        *offset += UTP_FRAME_HANDSHAKE_DELAY_SIZE;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 追加确认请求包号的单区间 ACK，以及与该请求严格绑定的本地处理耗时。 */
+static utp_internal_error_t utp_context_append_handshake_feedback(uint8_t* buffer, size_t capacity, size_t* offset,
+                                                                  uint64_t request_packet_number,
+                                                                  uint64_t request_received_us, uint64_t now_us)
+{
+    utp_ack_range_t             range;
+    utp_ack_info_t              ack;
+    utp_frame_handshake_delay_t delay;
+    size_t                      ack_length;
+    uint64_t                    delay_us;
+    utp_internal_error_t        error;
+
+    if (buffer == NULL || offset == NULL || *offset > capacity || request_packet_number == 0u ||
+        request_received_us == 0u || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    delay_us           = now_us > request_received_us ? now_us - request_received_us : 0u;
+    range.low          = request_packet_number;
+    range.high         = request_packet_number;
+    ack.largest_acked  = request_packet_number;
+    ack.ack_delay      = delay_us;
+    ack.ranges         = &range;
+    ack.range_count    = 1u;
+    ack.range_capacity = 1u;
+    error              = utp_ack_encode(buffer + *offset, capacity - *offset, &ack, 0u, &ack_length);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    *offset             += ack_length;
+    delay.delay_time_us  = delay_us > UINT32_MAX ? UINT32_MAX : (uint32_t)delay_us;
+    error                = utp_frame_handshake_delay_encode(buffer + *offset, capacity - *offset, &delay);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        *offset += UTP_FRAME_HANDSHAKE_DELAY_SIZE;
+    }
+    return error;
+}
+
+/** @brief 将 early 区补齐至握手最小包长，PADDING 始终位于加密边界之后。 */
+static utp_internal_error_t utp_context_pad_zero_rtt_payload(utp_connection_t* connection, uint8_t* payload,
+                                                             size_t capacity, size_t prefix_length, bool encrypted,
+                                                             size_t* payload_length)
+{
+    uint16_t target_size;
+    size_t   required_padding;
+
+    if (connection == NULL || payload == NULL || payload_length == NULL || prefix_length > *payload_length) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    target_size           = utp_mtu_packet_size_from_mtu(connection->mtu_discovery.mtu_min, connection->peer.family);
+    const size_t tag_size = encrypted ? UTP_CRYPTO_AEAD_TAG_SIZE : 0u;
+
+    if ((size_t)target_size <= UTP_PACKET_HEADER_SIZE + tag_size + *payload_length) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    required_padding = (size_t)target_size - UTP_PACKET_HEADER_SIZE - tag_size - *payload_length;
+    if (required_padding < UTP_FRAME_PADDING_HEADER_SIZE || required_padding > UINT16_MAX ||
+        required_padding > capacity - *payload_length) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    if (utp_frame_padding_encode(payload + *payload_length, capacity - *payload_length,
+                                 (uint16_t)(required_padding - UTP_FRAME_PADDING_HEADER_SIZE)) !=
+        UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    *payload_length += required_padding;
+    return UTP_INTERNAL_ERROR_OK;
+}
 
 /** @brief 返回 Unix 秒；票据时效必须使用墙上时间而非单调时钟。 */
-static uint64_t             utp_context_now_seconds(void)
+static uint64_t utp_context_now_seconds(void)
 {
     const time_t now = time(NULL);
 
@@ -172,14 +283,14 @@ static void utp_context_purge_expired_zero_rtt_replay(utp_context_t* context, ui
 /** @brief 记录一个已认证的 0-RTT 包；缓存满时绝不淘汰未过期记录。 */
 static bool utp_context_remember_zero_rtt_replay(
     utp_context_t* context, const uint8_t encrypted_server_info[UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE],
-    const uint8_t early_attempt_nonce[UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE], uint64_t packet_number,
-    uint64_t now_seconds, uint64_t expires_at_seconds)
+    const uint8_t early_attempt_nonce[UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE], uint64_t now_seconds,
+    uint64_t expires_at_seconds)
 {
     uint8_t              digest[UTP_CRYPTO_SHA256_SIZE];
     uint8_t              key[UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE];
     utp_internal_error_t error;
 
-    if (context == NULL || encrypted_server_info == NULL || early_attempt_nonce == NULL || packet_number == 0u ||
+    if (context == NULL || encrypted_server_info == NULL || early_attempt_nonce == NULL ||
         expires_at_seconds <= now_seconds) {
         return false;
     }
@@ -189,9 +300,6 @@ static bool utp_context_remember_zero_rtt_replay(
     }
     memcpy(key, digest, 16u);
     memcpy(key + 16u, early_attempt_nonce, UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE);
-    for (size_t index = 0u; index < 8u; ++index) {
-        key[32u + index] = (uint8_t)(packet_number >> (56u - index * 8u));
-    }
     const uint64_t hash = utp_context_replay_hash(key);
     if (utp_hash_table_find(&context->zero_rtt_replay, hash, key, utp_context_replay_matches, NULL) != NULL) {
         return false;
@@ -412,6 +520,30 @@ static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_co
     return NULL;
 }
 
+/** @brief 查找可响应重复加密 0-RTT 的短期握手缓存，匹配必须同时绑定来源和完整 token payload。 */
+static utp_context_connection_slot_t* utp_context_find_zero_rtt_response(
+    utp_context_t* context, const utp_address_t* peer,
+    const uint8_t token_payload[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE])
+{
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
+
+    if (context == NULL || peer == NULL || token_payload == NULL) {
+        return NULL;
+    }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
+
+        if (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->zero_rtt_response_active &&
+            utp_address_equal(&slot->connection.peer, peer) &&
+            memcmp(slot->zero_rtt_session_token, token_payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE) == 0) {
+            return slot;
+        }
+    }
+    return NULL;
+}
+
 static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_context_t* context)
 {
     utp_context_connection_slot_t* slot;
@@ -429,20 +561,33 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
         }
     }
     utp_hash_node_init(&slot->node);
-    slot->connection.local_cid        = 0u;
-    slot->connection.peer_cid         = 0u;
-    slot->connect_deadline_us         = 0u;
-    slot->connect_retries_remaining   = 0;
-    slot->zero_rtt_early_data_size    = 0u;
-    slot->zero_rtt_expires_at_seconds = 0u;
-    slot->zero_rtt_early_fin          = false;
-    slot->zero_rtt_awaiting_accept    = false;
-    slot->zero_rtt_accepted           = false;
-    slot->zero_rtt_encryption_mode    = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-    slot->used                        = true;
-    slot->connected_reported          = false;
-    slot->connection_error_reported   = false;
-    slot->connect_pending             = false;
+    slot->connection.local_cid            = 0u;
+    slot->connection.peer_cid             = 0u;
+    slot->connect_deadline_us             = 0u;
+    slot->zero_rtt_early_packet           = NULL;
+    slot->zero_rtt_early_wire_size        = 0u;
+    slot->zero_rtt_request_packet_number  = 0u;
+    slot->zero_rtt_request_received_us    = 0u;
+    slot->zero_rtt_response_deadline_us   = 0u;
+    slot->zero_rtt_expire_deadline_us     = 0u;
+    slot->zero_rtt_amplification_rx_bytes = 0u;
+    slot->zero_rtt_amplification_tx_bytes = 0u;
+    slot->connect_retries_remaining       = 0;
+    slot->zero_rtt_response_retries       = 0u;
+    slot->zero_rtt_early_data_size        = 0u;
+    slot->zero_rtt_expires_at_seconds     = 0u;
+    slot->zero_rtt_early_fin              = false;
+    slot->zero_rtt_awaiting_accept        = false;
+    slot->zero_rtt_accepted               = false;
+    slot->zero_rtt_response_active        = false;
+    slot->zero_rtt_response_queued        = false;
+    slot->zero_rtt_response_sent          = false;
+    slot->zero_rtt_early_delivered        = false;
+    slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->used                            = true;
+    slot->connected_reported              = false;
+    slot->connection_error_reported       = false;
+    slot->connect_pending                 = false;
     return slot;
 }
 
@@ -479,14 +624,30 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
         slot->connect_deadline_us       = 0u;
         slot->connect_retries_remaining = 0;
         slot->connect_pending           = false;
+        if (slot->zero_rtt_early_packet != NULL) {
+            utp_packet_in_release(slot->zero_rtt_early_packet);
+            slot->zero_rtt_early_packet = NULL;
+        }
         utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
-        slot->zero_rtt_early_data_size    = 0u;
-        slot->zero_rtt_expires_at_seconds = 0u;
-        slot->zero_rtt_early_fin          = false;
-        slot->zero_rtt_awaiting_accept    = false;
-        slot->zero_rtt_accepted           = false;
-        slot->zero_rtt_encryption_mode    = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-        slot->used                        = false;
+        slot->zero_rtt_early_wire_size        = 0u;
+        slot->zero_rtt_request_packet_number  = 0u;
+        slot->zero_rtt_request_received_us    = 0u;
+        slot->zero_rtt_response_deadline_us   = 0u;
+        slot->zero_rtt_expire_deadline_us     = 0u;
+        slot->zero_rtt_amplification_rx_bytes = 0u;
+        slot->zero_rtt_amplification_tx_bytes = 0u;
+        slot->zero_rtt_response_retries       = 0u;
+        slot->zero_rtt_early_data_size        = 0u;
+        slot->zero_rtt_expires_at_seconds     = 0u;
+        slot->zero_rtt_early_fin              = false;
+        slot->zero_rtt_awaiting_accept        = false;
+        slot->zero_rtt_accepted               = false;
+        slot->zero_rtt_response_active        = false;
+        slot->zero_rtt_response_queued        = false;
+        slot->zero_rtt_response_sent          = false;
+        slot->zero_rtt_early_delivered        = false;
+        slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+        slot->used                            = false;
         TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
     }
 }
@@ -728,6 +889,14 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
             return true;
         }
     }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        const utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
+
+        if (slot->pending.handshake_write_pending) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -750,6 +919,24 @@ static void utp_context_disable_udp_write_event_if_idle(utp_context_t* context)
     }
 }
 
+/** @brief 在收到首个有效 1-RTT 包前，将 0-RTT 路径发送量限制为已认证接收量的三倍。 */
+static bool utp_context_zero_rtt_amplification_allows(const utp_context_connection_slot_t* slot,
+                                                      const utp_packet_out_t*              packet)
+{
+    uint64_t limit;
+    uint64_t packet_size;
+
+    if (!slot->zero_rtt_response_active || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE) {
+        return true;
+    }
+    limit       = slot->zero_rtt_amplification_rx_bytes > UINT64_MAX / UINT64_C(3)
+                      ? UINT64_MAX
+                      : slot->zero_rtt_amplification_rx_bytes * UINT64_C(3);
+    packet_size = (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
+    return slot->zero_rtt_amplification_tx_bytes <= limit &&
+           packet_size <= limit - slot->zero_rtt_amplification_tx_bytes;
+}
+
 static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
     utp_connection_t* connection;
@@ -768,10 +955,27 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
             utp_send_control_pacer_tick_out(&connection->send_control);
             return UTP_INTERNAL_ERROR_OK;
         }
+        if (!utp_context_zero_rtt_amplification_allows(slot, packet)) {
+            // 新的已认证 0-RTT 请求会增加额度并再次触发 flush；总过期定时器负责最终清理。
+            (void)utp_send_control_reschedule_packet(&connection->send_control, packet);
+            utp_send_control_pacer_tick_out(&connection->send_control);
+            return UTP_INTERNAL_ERROR_OK;
+        }
         error = utp_context_send_packet(context, connection,
                                         packet->has_destination ? &packet->destination : &connection->peer, packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_connection_on_packet_sent(connection, packet, utp_context_now_us());
+            const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
+            const uint64_t sent_at_us        = utp_context_now_us();
+            const uint64_t packet_size =
+                (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
+
+            error = utp_connection_on_packet_sent(connection, packet, sent_at_us);
+            if (error == UTP_INTERNAL_ERROR_OK && slot->zero_rtt_response_active) {
+                slot->zero_rtt_amplification_tx_bytes += packet_size;
+            }
+            if (error == UTP_INTERNAL_ERROR_OK && zero_rtt_response) {
+                error = utp_context_complete_zero_rtt_response(context, slot, sent_at_us);
+            }
         } else if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
             // 暂时不可写时保留 PacketOut 所有权，由一次性 writable 事件继续发送。
             if (utp_connection_is_close_packet(connection, packet)) {
@@ -923,7 +1127,8 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE];
+    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE +
+                    UTP_FRAME_HANDSHAKE_DELAY_SIZE];
     size_t               payload_length;
     utp_internal_error_t error;
 
@@ -941,8 +1146,40 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
         }
         payload_length += UTP_FRAME_CRYPTO_SIZE;
     }
+    if (pending->latest_initial_packet_number == 0u || pending->latest_initial_received_us == 0u) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    error = utp_context_append_handshake_feedback(payload, sizeof(payload), &payload_length,
+                                                  pending->latest_initial_packet_number,
+                                                  pending->latest_initial_received_us, utp_context_now_us());
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
     return utp_context_send_pending_packet(context, pending, UTP_PACKET_TYPE_HANDSHAKE, payload, payload_length,
                                            out_packet_number);
+}
+
+/** @brief 发送普通被动 HANDSHAKE；UDP 暂不可写时保留 pending，等待 writable 事件重试。 */
+static utp_internal_error_t utp_context_send_or_defer_pending_handshake(utp_context_t*              context,
+                                                                        utp_context_pending_slot_t* slot,
+                                                                        uint64_t                    now_us)
+{
+    uint64_t             packet_number = 0u;
+    utp_internal_error_t error;
+
+    if (context == NULL || slot == NULL || !slot->used || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
+    if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+        slot->pending.handshake_write_pending = true;
+        return utp_context_enable_udp_write_event(context);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    slot->pending.handshake_write_pending = false;
+    return utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us);
 }
 
 static void utp_context_send_pending_close(utp_context_t* context, utp_pending_incoming_t* pending, uint16_t error_code)
@@ -960,7 +1197,6 @@ static void utp_context_send_pending_close(utp_context_t* context, utp_pending_i
 static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
     utp_internal_error_t error;
-    uint64_t             packet_number;
     uint64_t             now_us;
 
     if (context == NULL || slot == NULL || !slot->used || !slot->queued) {
@@ -970,10 +1206,7 @@ static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* conte
     error        = utp_pending_incoming_accept(&slot->pending);
     now_us       = utp_context_now_us();
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us);
+        error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_refresh_timer(context, now_us);
@@ -1017,7 +1250,101 @@ static utp_internal_error_t utp_context_complete_connected_side_effects(utp_cont
         return UTP_INTERNAL_ERROR_OK;
     }
     utp_context_report_connected(context, slot);
+    if (!slot->used || !utp_connection_is_connected(&slot->connection)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
     return utp_context_queue_session_token(context, slot);
+}
+
+/** @brief 计算 0-RTT 响应的指数退避间隔，指数按已经完成的重传次数增长。 */
+static uint64_t utp_context_zero_rtt_response_delay(const utp_context_t* context, uint8_t retries)
+{
+    uint64_t delay_us = (uint64_t)context->handshake_timeout_ms * UINT64_C(1000);
+    uint8_t  exponent = retries > 8u ? 8u : retries;
+
+    while (exponent-- != 0u && delay_us <= UINT64_MAX / 2u) {
+        delay_us *= 2u;
+    }
+    return delay_us;
+}
+
+/** @brief 固定一次 0-RTT attempt 的总寿命，重复请求不得延长该截止时间。 */
+static uint64_t utp_context_zero_rtt_expire_deadline(const utp_context_t* context, uint64_t now_us)
+{
+    uint64_t deadline = now_us;
+    uint16_t attempt;
+
+    for (attempt = 0u; attempt <= (uint16_t)context->handshake_max_retries; ++attempt) {
+        const uint64_t delay_us =
+            utp_context_zero_rtt_response_delay(context, attempt > UINT8_MAX ? UINT8_MAX : (uint8_t)attempt);
+
+        if (delay_us > UINT64_MAX - deadline) {
+            return UINT64_MAX;
+        }
+        deadline += delay_us;
+    }
+    return deadline;
+}
+
+/** @brief 在 0-RTT HANDSHAKE 真正写入 UDP 后提交连接状态并仅投递一次 early 数据。 */
+static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t*                 context,
+                                                                   utp_context_connection_slot_t* slot, uint64_t now_us)
+{
+    utp_internal_error_t error = UTP_INTERNAL_ERROR_OK;
+
+    if (context == NULL || slot == NULL || !slot->used || now_us == 0u || !slot->zero_rtt_response_active ||
+        !slot->zero_rtt_response_queued || !utp_connection_is_connected(&slot->connection)) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    slot->zero_rtt_response_queued = false;
+    if (slot->zero_rtt_response_sent) {
+        if (slot->zero_rtt_response_retries != UINT8_MAX) {
+            ++slot->zero_rtt_response_retries;
+        }
+    } else {
+        slot->zero_rtt_response_sent = true;
+    }
+    if (!slot->zero_rtt_early_delivered && slot->zero_rtt_early_packet != NULL) {
+        error = utp_connection_on_plaintext_packet_in_received(&slot->connection, slot->zero_rtt_early_packet,
+                                                               slot->zero_rtt_early_wire_size, &slot->connection.peer,
+                                                               now_us);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            slot->zero_rtt_early_delivered = true;
+        }
+        utp_packet_in_release(slot->zero_rtt_early_packet);
+        slot->zero_rtt_early_packet    = NULL;
+        slot->zero_rtt_early_wire_size = 0u;
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        const utp_status_t status = utp_internal_error_to_status(error);
+        const char*        reason = utp_status_string(status);
+        const uint16_t close_code = status < 0 && status >= -((int32_t)UINT16_MAX) ? (uint16_t)(-status) : UINT16_C(1);
+
+        (void)utp_connection_retire_handshake_flight(&slot->connection, now_us);
+        slot->zero_rtt_response_active      = false;
+        slot->zero_rtt_response_queued      = false;
+        slot->zero_rtt_response_deadline_us = 0u;
+        slot->zero_rtt_expire_deadline_us   = 0u;
+        if (utp_context_is_peer_protocol_error(error)) {
+            return utp_context_close_on_peer_protocol_error(context, slot, error);
+        }
+        utp_context_report_connection_error(context, slot, status, 0u, (const uint8_t*)reason, strlen(reason), false);
+        error = utp_connection_queue_close(&slot->connection, close_code);
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, slot) : error;
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_complete_connected_side_effects(context, slot);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && slot->zero_rtt_response_active) {
+        const uint64_t delay_us = utp_context_zero_rtt_response_delay(context, slot->zero_rtt_response_retries);
+
+        slot->zero_rtt_response_deadline_us = delay_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + delay_us;
+        if (slot->zero_rtt_expire_deadline_us != 0u &&
+            slot->zero_rtt_response_deadline_us > slot->zero_rtt_expire_deadline_us) {
+            slot->zero_rtt_response_deadline_us = slot->zero_rtt_expire_deadline_us;
+        }
+    }
+    return error;
 }
 
 static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
@@ -1059,15 +1386,19 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
                                                               utp_context_connection_slot_t* slot,
                                                               const utp_address_t* peer, uint64_t now_us)
 {
-    uint8_t              payload[UTP_PACKET_MTU_FLOOR];
+    uint8_t*             payload;
+    size_t               payload_capacity;
     size_t               payload_length;
+    size_t               early_data_length;
     uint32_t             local_cid;
     utp_internal_error_t error;
 
     if (context == NULL || slot == NULL || peer == NULL || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    error = utp_context_alloc_cid(context, &local_cid);
+    payload          = context->encrypt_send_buffer;
+    payload_capacity = sizeof(context->encrypt_send_buffer);
+    error            = utp_context_alloc_cid(context, &local_cid);
     if (error == UTP_INTERNAL_ERROR_OK && slot->connection.local_cid != 0u) {
         utp_context_unregister_connection_slot(context, slot);
         utp_connection_cleanup(&slot->connection);
@@ -1090,6 +1421,10 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
 
         if (!utp_context_crypto_type_from_encryption(slot->connect_attempt.encryption, &crypto_type)) {
             error = UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        } else if (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
+            error = utp_connection_configure_zero_rtt_crypto(
+                &slot->connection, slot->zero_rtt_resumption_psk, slot->zero_rtt_session_token,
+                slot->zero_rtt_session_token + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE, crypto_type);
         } else {
             error = utp_connection_configure_crypto(&slot->connection, crypto_type);
         }
@@ -1101,34 +1436,105 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
                                            slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE)) {
         utp_frame_session_token_t token;
 
-        error                = utp_connection_reserve_zero_rtt_stream(&slot->connection, slot->zero_rtt_early_data_size,
-                                                                      slot->zero_rtt_early_fin);
-        token.payload        = slot->zero_rtt_session_token;
-        token.payload_length = UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        early_data_length        = 0u;
+        token.payload            = slot->zero_rtt_session_token;
+        token.payload_length     = UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
         token.expires_at_seconds = slot->zero_rtt_expires_at_seconds;
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_frame_session_token_encode(payload, sizeof(payload), &token);
+            error = utp_frame_session_token_encode(payload, payload_capacity, &token);
         }
         payload_length = UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        if (error == UTP_INTERNAL_ERROR_OK && (slot->zero_rtt_early_data_size != 0u || slot->zero_rtt_early_fin)) {
-            error =
-                utp_frame_stream_header_encode(payload + payload_length, sizeof(payload) - payload_length,
-                                               slot->zero_rtt_early_fin ? UTP_STREAM_FLAG_FIN : UTP_STREAM_FLAG_NONE,
-                                               0u, 0u, (uint16_t)slot->zero_rtt_early_data_size);
+        if (error == UTP_INTERNAL_ERROR_OK && slot->connection.zero_rtt_encrypted) {
+            const size_t token_length = payload_length;
+
+            error = utp_connection_encode_crypto(&slot->connection, payload + payload_length,
+                                                 payload_capacity - payload_length);
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                payload_length += UTP_FRAME_CRYPTO_SIZE;
+                error = utp_context_append_zero_rtt_parameters(payload, payload_capacity, &payload_length, false, 0u);
+            }
+            if (error == UTP_INTERNAL_ERROR_OK && (slot->zero_rtt_early_data_size != 0u || slot->zero_rtt_early_fin)) {
+                const uint16_t target_size =
+                    utp_mtu_packet_size_from_mtu(slot->connection.mtu_discovery.mtu_min, slot->connection.peer.family);
+                const size_t fixed_length = UTP_PACKET_HEADER_SIZE + UTP_CRYPTO_AEAD_TAG_SIZE + payload_length;
+
+                if (target_size < fixed_length + UTP_FRAME_STREAM_HEADER_SIZE) {
+                    error = UTP_INTERNAL_ERROR_LIMIT;
+                } else {
+                    early_data_length = slot->zero_rtt_early_data_size;
+                    if (early_data_length > (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE) {
+                        early_data_length = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
+                    }
+                    error = utp_connection_reserve_zero_rtt_stream(&slot->connection, slot->zero_rtt_early_data,
+                                                                   slot->zero_rtt_early_data_size, early_data_length,
+                                                                   slot->zero_rtt_early_fin);
+                }
+            }
+            if (error == UTP_INTERNAL_ERROR_OK && (slot->zero_rtt_early_data_size != 0u || slot->zero_rtt_early_fin)) {
+                error = utp_frame_stream_header_encode(
+                    payload + payload_length, payload_capacity - payload_length,
+                    slot->zero_rtt_early_fin && early_data_length == slot->zero_rtt_early_data_size
+                        ? UTP_STREAM_FLAG_FIN
+                        : UTP_STREAM_FLAG_NONE,
+                    0u, 0u, (uint16_t)early_data_length);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    memcpy(payload + payload_length + UTP_FRAME_STREAM_HEADER_SIZE, slot->zero_rtt_early_data,
+                           early_data_length);
+                    payload_length += UTP_FRAME_STREAM_HEADER_SIZE + early_data_length;
+                }
+            }
+            if (error == UTP_INTERNAL_ERROR_OK && payload_length < payload_capacity) {
+                payload[payload_length++] = UTP_FRAME_TYPE_PING;
+                error = utp_context_pad_zero_rtt_payload(&slot->connection, payload, payload_capacity, token_length,
+                                                         true, &payload_length);
+            }
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_connection_queue_early_packet(&slot->connection, UTP_PACKET_TYPE_0RTT, payload,
+                                                          payload_length, (uint16_t)token_length, true);
+            }
+        } else if (error == UTP_INTERNAL_ERROR_OK &&
+                   (slot->zero_rtt_early_data_size != 0u || slot->zero_rtt_early_fin)) {
+            const uint16_t target_size =
+                utp_mtu_packet_size_from_mtu(slot->connection.mtu_discovery.mtu_min, slot->connection.peer.family);
+            const size_t fixed_length = UTP_PACKET_HEADER_SIZE + payload_length;
+
+            if (target_size < fixed_length + UTP_FRAME_STREAM_HEADER_SIZE) {
+                error = UTP_INTERNAL_ERROR_LIMIT;
+            } else {
+                early_data_length = slot->zero_rtt_early_data_size;
+                if (early_data_length > (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE) {
+                    early_data_length = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
+                }
+                error = utp_connection_reserve_zero_rtt_stream(&slot->connection, slot->zero_rtt_early_data,
+                                                               slot->zero_rtt_early_data_size, early_data_length,
+                                                               slot->zero_rtt_early_fin);
+            }
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_frame_stream_header_encode(
+                    payload + payload_length, payload_capacity - payload_length,
+                    slot->zero_rtt_early_fin && early_data_length == slot->zero_rtt_early_data_size
+                        ? UTP_STREAM_FLAG_FIN
+                        : UTP_STREAM_FLAG_NONE,
+                    0u, 0u, (uint16_t)early_data_length);
+            }
             if (error == UTP_INTERNAL_ERROR_OK) {
                 memcpy(payload + payload_length + UTP_FRAME_STREAM_HEADER_SIZE, slot->zero_rtt_early_data,
-                       slot->zero_rtt_early_data_size);
-                payload_length += UTP_FRAME_STREAM_HEADER_SIZE + slot->zero_rtt_early_data_size;
+                       early_data_length);
+                payload_length += UTP_FRAME_STREAM_HEADER_SIZE + early_data_length;
             }
         }
-        if (error == UTP_INTERNAL_ERROR_OK) {
+        if (error == UTP_INTERNAL_ERROR_OK && !slot->connection.zero_rtt_encrypted) {
+            error = utp_context_pad_zero_rtt_payload(&slot->connection, payload, payload_capacity, 0u, false,
+                                                     &payload_length);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK && !slot->connection.zero_rtt_encrypted) {
             error = utp_connection_queue_packet(&slot->connection, UTP_PACKET_TYPE_0RTT, payload, payload_length, true);
         }
     } else if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
+        error = utp_context_encode_version_frame(payload, payload_capacity, &payload_length);
         if (error == UTP_INTERNAL_ERROR_OK && slot->connection.crypto_configured) {
             error = utp_connection_encode_crypto(&slot->connection, payload + payload_length,
-                                                 sizeof(payload) - payload_length);
+                                                 payload_capacity - payload_length);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 payload_length += UTP_FRAME_CRYPTO_SIZE;
             }
@@ -1149,7 +1555,7 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     return error;
 }
 
-/** @brief 0-RTT 显式重试只催发原始 PacketOut，不改变 CID、包号、nonce 或线上字节。 */
+/** @brief 0-RTT 显式重试沿用同一 attempt，并为重排包分配新包号和 AEAD nonce。 */
 static utp_internal_error_t utp_context_retry_zero_rtt_attempt(utp_context_t*                 context,
                                                                utp_context_connection_slot_t* slot, uint64_t now_us)
 {
@@ -1180,18 +1586,27 @@ static void utp_context_fail_pending_connect(utp_context_t* context, utp_context
 
 static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
-    uint8_t                    payload[UTP_FRAME_HANDSHAKE_DONE_SIZE];
-    utp_connection_t*          connection;
-    utp_frame_handshake_done_t done;
-    utp_internal_error_t       error;
+    uint8_t                     payload[UTP_FRAME_HANDSHAKE_DONE_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
+    utp_connection_t*           connection;
+    utp_frame_handshake_done_t  done;
+    utp_frame_handshake_delay_t delay;
+    utp_internal_error_t        error;
 
     if (context == NULL || slot == NULL || !slot->used) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     connection                       = &slot->connection;
     done.ack_handshake_packet_number = connection->peer_handshake_packet_number;
+    const uint64_t now_us            = utp_context_now_us();
+    const uint64_t delay_us =
+        now_us > connection->peer_handshake_received_us ? now_us - connection->peer_handshake_received_us : 0u;
+    delay.delay_time_us = delay_us > UINT32_MAX ? UINT32_MAX : (uint32_t)delay_us;
 
     error = utp_frame_handshake_done_encode(payload, sizeof(payload), &done);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_frame_handshake_delay_encode(payload + UTP_FRAME_HANDSHAKE_DONE_SIZE,
+                                                 sizeof(payload) - UTP_FRAME_HANDSHAKE_DONE_SIZE, &delay);
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_queue_packet(connection, UTP_PACKET_TYPE_CTRL, payload, sizeof(payload), false);
     }
@@ -1253,6 +1668,10 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         utp_context_take_deadline(&deadline, utp_connection_path_validation_deadline(connection));
         if (slot->connect_pending) {
             utp_context_take_deadline(&deadline, slot->connect_deadline_us);
+        }
+        if (slot->zero_rtt_response_active) {
+            utp_context_take_deadline(&deadline, slot->zero_rtt_response_deadline_us);
+            utp_context_take_deadline(&deadline, slot->zero_rtt_expire_deadline_us);
         }
     }
     utp_hash_iter_init(&iter);
@@ -1343,6 +1762,10 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         error = utp_send_control_adopt_next_packet_number(&slot->connection.send_control,
                                                           pending_slot->pending.next_packet_number);
     }
+    if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.handshake_rtt_sample_us != 0u) {
+        error = utp_rtt_stats_update(&slot->connection.send_control.rtt_stats,
+                                     pending_slot->pending.handshake_rtt_sample_us);
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_register_connection_slot(context, slot);
     }
@@ -1411,6 +1834,35 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     uint64_t             now_us;
 
     now_us = utp_context_now_us();
+    if (!slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
+         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+        // 完成后的迟到响应属于已退休的 early epoch，不能交给 1-RTT 明文握手解析。
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (slot->connect_pending && slot->connection.zero_rtt_encrypted &&
+        slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+        size_t decrypted_length = packet_length;
+
+        error = utp_connection_on_zero_rtt_handshake(&slot->connection, packet_in == NULL ? packet : packet_in->data,
+                                                     &decrypted_length, peer, now_us);
+        if (error == UTP_INTERNAL_ERROR_OK && packet_in != NULL) {
+            packet_in->length = (uint16_t)decrypted_length;
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error == UTP_INTERNAL_ERROR_AUTH || error == UTP_INTERNAL_ERROR_CRYPTO ? UTP_INTERNAL_ERROR_OK
+                                                                                          : error;
+        }
+        error = utp_context_complete_connected_side_effects(context, slot);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
+            utp_crypto_aead_cleanup(&slot->connection.early_tx_aead);
+            utp_crypto_aead_cleanup(&slot->connection.early_rx_aead);
+            slot->connection.zero_rtt_encrypted = false;
+        }
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, slot) : error;
+    }
     if (packet_in != NULL) {
         error = utp_connection_on_packet_in_received(&slot->connection, packet_in, peer, now_us);
     } else {
@@ -1425,8 +1877,27 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         }
         return error;
     }
+    if (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->zero_rtt_response_active &&
+        (header->type == UTP_PACKET_TYPE_CTRL || header->type == UTP_PACKET_TYPE_CONNECTION_CLOSE)) {
+        // 首个有效 1-RTT 包证明客户端已收到响应，立即退休所有未发出的响应副本。
+        error = utp_connection_retire_handshake_flight(&slot->connection, now_us);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        slot->zero_rtt_response_active      = false;
+        slot->zero_rtt_response_queued      = false;
+        slot->zero_rtt_response_deadline_us = 0u;
+        slot->zero_rtt_expire_deadline_us   = 0u;
+        if (slot->connection.zero_rtt_encrypted) {
+            utp_crypto_aead_cleanup(&slot->connection.early_tx_aead);
+            utp_crypto_aead_cleanup(&slot->connection.early_rx_aead);
+            slot->connection.zero_rtt_encrypted = false;
+        }
+    }
     if (slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && header->type == UTP_PACKET_TYPE_HANDSHAKE &&
-        slot->connection.peer_handshake_packet_number == header->packet_number) {
+        slot->connection.peer_handshake_packet_number == header->packet_number &&
+        slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN &&
+        slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
         error = utp_context_send_handshake_done(context, slot);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
@@ -1474,7 +1945,8 @@ static utp_internal_error_t utp_context_on_pending_packet(utp_context_t* context
             packet_in->length = (uint16_t)packet_length;
         }
     }
-    error = utp_pending_incoming_on_packet(&slot->pending, packet, packet_length, wire_packet_length, peer, &result);
+    error = utp_pending_incoming_on_packet(&slot->pending, packet, packet_length, wire_packet_length, peer,
+                                           utp_context_now_us(), &result);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -1499,14 +1971,20 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     }
     slot = utp_context_find_pending_by_peer(context, view->header.scid, peer);
     if (slot != NULL) {
+        error = utp_pending_incoming_record_initial(&slot->pending, view->header.packet_number, utp_context_now_us());
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
         if (slot->pending.handshake_sent) {
-            uint64_t packet_number = 0u;
-            uint64_t now_us        = utp_context_now_us();
+            uint64_t now_us = utp_context_now_us();
 
-            error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
-            if (error == UTP_INTERNAL_ERROR_OK) {
-                error = utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us);
+            if (slot->pending.handshake_retransmission_count > slot->pending.handshake_max_retries) {
+                utp_context_log_ids(context, UTP_LOG_LEVEL_WARNING, "incoming handshake response retries exhausted",
+                                    slot->pending.local_cid, slot->pending.peer_cid);
+                utp_context_release_pending_slot(context, slot);
+                return UTP_INTERNAL_ERROR_OK;
             }
+            error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = utp_context_refresh_timer(context, now_us);
             }
@@ -1542,6 +2020,13 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     }
     if (error == UTP_INTERNAL_ERROR_OK && has_crypto) {
         error = utp_pending_incoming_configure_crypto(&slot->pending, &peer_crypto);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_pending_incoming_record_initial(&slot->pending, view->header.packet_number, utp_context_now_us());
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_pending_incoming_set_handshake_policy(&slot->pending, context->handshake_timeout_ms,
+                                                          context->handshake_max_retries);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_register_pending_slot(context, slot);
@@ -1585,44 +2070,325 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     return UTP_INTERNAL_ERROR_OK;
 }
 
+/** @brief 校验客户端 early 密文的固定帧序，并返回可交给普通流处理的尾部起点。 */
+static utp_internal_error_t utp_context_validate_zero_rtt_client_frames(
+    const uint8_t* payload, size_t payload_length, uint8_t crypto_type,
+    uint8_t client_public_key[UTP_CRYPTO_X25519_KEY_SIZE], size_t* post_offset)
+{
+    static const uint8_t required[] = {
+        UTP_FRAME_TYPE_CRYPTO,
+        UTP_FRAME_TYPE_VERSION,
+        UTP_FRAME_TYPE_TRANSPORT_PARAMS,
+        UTP_FRAME_TYPE_ACK_FREQUENCY,
+    };
+    size_t offset       = 0u;
+    bool   stream_seen  = false;
+    bool   ping_seen    = false;
+    bool   padding_seen = false;
+
+    if (payload == NULL || client_public_key == NULL || post_offset == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    for (size_t index = 0u; index < sizeof(required); ++index) {
+        uint8_t              type;
+        size_t               length;
+        utp_internal_error_t error = utp_frame_measure(payload + offset, payload_length - offset, &type, &length);
+
+        if (error != UTP_INTERNAL_ERROR_OK || type != required[index]) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        if (type == UTP_FRAME_TYPE_CRYPTO) {
+            utp_frame_crypto_t crypto;
+
+            error = utp_frame_crypto_decode(&crypto, payload + offset, length);
+            if (error != UTP_INTERNAL_ERROR_OK || crypto.crypto_type != crypto_type) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            memcpy(client_public_key, crypto.ephemeral_public_key, UTP_CRYPTO_X25519_KEY_SIZE);
+        } else if (type == UTP_FRAME_TYPE_VERSION) {
+            utp_frame_version_t version;
+
+            error = utp_frame_version_decode(&version, payload + offset, length);
+            if (error != UTP_INTERNAL_ERROR_OK || version.version != UTP_PROTOCOL_VERSION) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+        }
+        offset += length;
+    }
+    *post_offset = offset;
+    while (offset < payload_length) {
+        uint8_t              type;
+        size_t               length;
+        utp_internal_error_t error = utp_frame_measure(payload + offset, payload_length - offset, &type, &length);
+
+        if (error != UTP_INTERNAL_ERROR_OK || padding_seen) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        if (type == UTP_FRAME_TYPE_STREAM) {
+            utp_frame_stream_t stream;
+
+            error = utp_frame_stream_decode(&stream, payload + offset, length);
+            if (error != UTP_INTERNAL_ERROR_OK || stream_seen || stream.stream_id != 0u) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            stream_seen = true;
+        } else if (type == UTP_FRAME_TYPE_PING) {
+            if (ping_seen) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            ping_seen = true;
+        } else if (type == UTP_FRAME_TYPE_PADDING) {
+            padding_seen = true;
+        } else {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        offset += length;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 按最新 0-RTT 请求重新构造 HANDSHAKE；每次调用都会分配新包号并重新执行 AEAD。 */
+static utp_internal_error_t utp_context_queue_zero_rtt_response(utp_context_t*                 context,
+                                                                utp_context_connection_slot_t* slot, uint64_t now_us)
+{
+    uint8_t*             response;
+    size_t               response_capacity;
+    size_t               response_length = 0u;
+    bool                 encrypted;
+    utp_internal_error_t error;
+
+    if (context == NULL || slot == NULL || !slot->used || now_us == 0u || !slot->zero_rtt_response_active ||
+        slot->zero_rtt_response_queued || slot->zero_rtt_request_packet_number == 0u ||
+        slot->zero_rtt_request_received_us == 0u) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    response          = context->encrypt_send_buffer;
+    response_capacity = sizeof(context->encrypt_send_buffer);
+    encrypted         = slot->connection.zero_rtt_encrypted;
+    error             = slot->zero_rtt_response_sent ? UTP_INTERNAL_ERROR_OK
+                                                     : utp_connection_begin_zero_rtt_response(&slot->connection);
+    if (error == UTP_INTERNAL_ERROR_OK && encrypted) {
+        error           = utp_connection_encode_crypto(&slot->connection, response, response_capacity);
+        response_length = UTP_FRAME_CRYPTO_SIZE;
+    } else if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_encode_version_frame(response, response_capacity, &response_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && encrypted) {
+        error = utp_context_append_zero_rtt_parameters(response, response_capacity, &response_length, false, 0u);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_append_handshake_feedback(response, response_capacity, &response_length,
+                                                      slot->zero_rtt_request_packet_number,
+                                                      slot->zero_rtt_request_received_us, now_us);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_pad_zero_rtt_payload(&slot->connection, response, response_capacity, 0u, encrypted,
+                                                 &response_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_queue_zero_rtt_response(&slot->connection, response, response_length, encrypted);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        slot->zero_rtt_response_queued      = true;
+        slot->zero_rtt_response_deadline_us = 0u;
+    }
+    return error;
+}
+
+/** @brief 认证加密 0-RTT 后创建待接受连接，并仅在 early 响应写成功后投递其尾部帧。 */
+static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
+    utp_context_t* context, utp_packet_in_t* packet_in, const utp_address_t* peer, const utp_packet_view_t* view,
+    const utp_frame_session_token_t* session_token, const uint8_t resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE],
+    uint8_t encryption_mode)
+{
+    utp_crypto_aead_t              early_rx = {0};
+    utp_context_connection_slot_t* slot;
+    utp_packet_header_t            header;
+    uint8_t                        client_public_key[UTP_CRYPTO_X25519_KEY_SIZE];
+    uint8_t                        crypto_type;
+    size_t                         token_length;
+    size_t                         plaintext_length;
+    size_t                         post_offset;
+    uint64_t                       received_at_us;
+    uint64_t                       now_us;
+    utp_internal_error_t           error;
+
+    if (context == NULL || packet_in == NULL || peer == NULL || view == NULL || session_token == NULL ||
+        resumption_psk == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_128 &&
+        encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    crypto_type  = encryption_mode == UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256 ? UTP_CRYPTO_TYPE_AES_GCM_256
+                                                                             : UTP_CRYPTO_TYPE_AES_GCM_128;
+    token_length = UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)session_token->payload_length;
+    if (token_length >= view->payload_length || view->payload_length - token_length < UTP_CRYPTO_AEAD_TAG_SIZE) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    error =
+        utp_crypto_derive_early_aead(&early_rx, resumption_psk, session_token->payload,
+                                     session_token->payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE, crypto_type, true);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_crypto_aead_open(
+            &early_rx, view->header.packet_number, packet_in->data + UTP_PACKET_HEADER_SIZE + token_length,
+            view->payload_length - token_length, packet_in->data, UTP_PACKET_HEADER_SIZE + token_length,
+            packet_in->data + UTP_PACKET_HEADER_SIZE + token_length, view->payload_length - token_length,
+            &plaintext_length);
+    }
+    utp_crypto_aead_cleanup(&early_rx);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    received_at_us = utp_context_now_us();
+    error = utp_context_validate_zero_rtt_client_frames(packet_in->data + UTP_PACKET_HEADER_SIZE + token_length,
+                                                        plaintext_length, crypto_type, client_public_key, &post_offset);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (!utp_context_remember_zero_rtt_replay(context, session_token->payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
+                                              session_token->payload, utp_context_now_seconds(),
+                                              session_token->expires_at_seconds)) {
+        slot = utp_context_find_zero_rtt_response(context, peer, session_token->payload);
+        if (slot == NULL) {
+            return UTP_INTERNAL_ERROR_AUTH;
+        }
+        if ((uint64_t)packet_in->length > UINT64_MAX - slot->zero_rtt_amplification_rx_bytes) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        slot->zero_rtt_amplification_rx_bytes += (uint64_t)packet_in->length;
+        if (view->header.packet_number > slot->zero_rtt_request_packet_number) {
+            slot->zero_rtt_request_packet_number = view->header.packet_number;
+            slot->zero_rtt_request_received_us   = received_at_us;
+        }
+        if (!slot->zero_rtt_response_queued &&
+            (!slot->zero_rtt_response_sent || slot->zero_rtt_response_retries < context->handshake_max_retries)) {
+            error = utp_context_queue_zero_rtt_response(context, slot, utp_context_now_us());
+        } else {
+            error = UTP_INTERNAL_ERROR_OK;
+        }
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, slot) : error;
+    }
+    uint32_t local_cid;
+
+    error = utp_context_alloc_cid(context, &local_cid);
+    slot  = error == UTP_INTERNAL_ERROR_OK ? utp_context_alloc_connection_slot(context) : NULL;
+    if (error != UTP_INTERNAL_ERROR_OK || slot == NULL) {
+        return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_NOMEM : error;
+    }
+    error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view->header.scid, peer,
+                                UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        slot->connection.context = context;
+        memcpy(slot->zero_rtt_session_token, session_token->payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE);
+        slot->zero_rtt_expires_at_seconds = session_token->expires_at_seconds;
+        slot->zero_rtt_encryption_mode    = encryption_mode;
+        utp_connection_set_mtu_config(&slot->connection, &context->mtu_config);
+        error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_configure_zero_rtt_crypto(&slot->connection, resumption_psk, session_token->payload,
+                                                         session_token->payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
+                                                         crypto_type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_complete_zero_rtt_crypto(&slot->connection, client_public_key);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_register_connection_slot(context, slot);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_release_connection_slot(context, slot);
+        return error;
+    }
+    utp_new_connection_info_t info = {0};
+
+    utp_context_endpoint_from_address(&info.remote, peer);
+    info.local_cid                     = local_cid;
+    info.peer_cid                      = view->header.scid;
+    info.encryption                    = utp_context_encryption_from_crypto_type(crypto_type);
+    slot->zero_rtt_awaiting_accept     = context->on_new_connection != NULL;
+    slot->zero_rtt_accepted            = context->on_new_connection == NULL;
+    context->callback_accept_zero_rtt  = slot;
+    context->callback_accept_requested = false;
+    bool accepted =
+        context->on_new_connection == NULL || context->on_new_connection(&info, context->on_new_connection_user_data);
+    context->callback_accept_zero_rtt = NULL;
+    if (context->callback_accept_requested) {
+        slot->zero_rtt_accepted = true;
+    }
+    context->callback_accept_requested = false;
+    slot->zero_rtt_awaiting_accept     = false;
+    if (!accepted || !slot->zero_rtt_accepted) {
+        utp_context_release_connection_slot(context, slot);
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    header                = view->header;
+    header.payload_length = (uint16_t)(plaintext_length - post_offset);
+    memmove(packet_in->data + UTP_PACKET_HEADER_SIZE,
+            packet_in->data + UTP_PACKET_HEADER_SIZE + token_length + post_offset, header.payload_length);
+    error = utp_proto_encode_header(packet_in->data, packet_in->capacity, &header);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        packet_in->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + header.payload_length);
+        if (!utp_packet_in_ref(packet_in)) {
+            error = UTP_INTERNAL_ERROR_LIMIT;
+        }
+    }
+    now_us = utp_context_now_us();
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        slot->zero_rtt_early_packet           = packet_in;
+        slot->zero_rtt_early_wire_size        = UTP_PACKET_HEADER_SIZE + view->payload_length;
+        slot->zero_rtt_request_packet_number  = view->header.packet_number;
+        slot->zero_rtt_request_received_us    = received_at_us;
+        slot->zero_rtt_response_active        = true;
+        slot->zero_rtt_amplification_rx_bytes = (uint64_t)slot->zero_rtt_early_wire_size;
+        slot->zero_rtt_expire_deadline_us     = utp_context_zero_rtt_expire_deadline(context, now_us);
+        error                                 = utp_context_queue_zero_rtt_response(context, slot, now_us);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_flush_connection(context, slot);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK && slot->used) {
+        utp_context_release_connection_slot(context, slot);
+    }
+    return error;
+}
+
 /** @brief 验证并接收首个明文 0-RTT 包，恢复凭证本身始终经过 Context 根密钥保护。 */
 static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* context, utp_packet_in_t* packet_in,
                                                            const utp_address_t* peer)
 {
+    uint16_t minimum_packet_size;
+
     if (context == NULL || packet_in == NULL || peer == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    minimum_packet_size = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer->family);
     utp_packet_view_t    view;
-    utp_internal_error_t error = utp_packet_view_decode(&view, packet_in->data, packet_in->length);
+    utp_internal_error_t error = utp_proto_decode_header(&view.header, packet_in->data, packet_in->length);
 
     if (error != UTP_INTERNAL_ERROR_OK || view.header.type != UTP_PACKET_TYPE_0RTT || view.header.dcid != 0u ||
-        view.header.scid == 0u || UTP_PACKET_HEADER_SIZE + view.payload_length > UTP_PACKET_MTU_FLOOR) {
+        view.header.scid == 0u || packet_in->length != UTP_PACKET_HEADER_SIZE + view.header.payload_length ||
+        packet_in->length < minimum_packet_size) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    view.payload        = packet_in->data + UTP_PACKET_HEADER_SIZE;
+    view.payload_length = view.header.payload_length;
+    view.frame_types    = 0u;
     utp_frame_session_token_t session_token;
-    bool                      has_token = false;
-    size_t                    offset    = 0u;
-    while (offset < view.payload_length) {
-        const uint8_t* frame;
-        uint8_t        frame_type;
-        size_t         frame_length;
+    size_t                    token_length;
 
-        error = utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-        if (frame_type == UTP_FRAME_TYPE_SESSION_TOKEN && !has_token) {
-            error     = utp_frame_session_token_decode(&session_token, frame, frame_length);
-            has_token = error == UTP_INTERNAL_ERROR_OK;
-        } else if (frame_type != UTP_FRAME_TYPE_STREAM) {
-            return UTP_INTERNAL_ERROR_PROTOCOL;
-        }
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
+    error = utp_frame_session_token_decode(&session_token, view.payload, view.payload_length);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    token_length = UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)session_token.payload_length;
+    if (token_length > view.payload_length) {
+        return UTP_INTERNAL_ERROR_AUTH;
     }
     const uint64_t now_seconds = utp_context_now_seconds();
-    if (!has_token || session_token.payload_length != UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE ||
+    if (session_token.payload_length != UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE ||
         session_token.expires_at_seconds < now_seconds) {
         return UTP_INTERNAL_ERROR_AUTH;
     }
@@ -1635,15 +2401,79 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     error = utp_crypto_server_info_open(context->resumption_keys.ticket_seal_key, session_token.expires_at_seconds,
                                         session_token.payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE, resumption_psk,
                                         &encryption_mode);
-    if (error != UTP_INTERNAL_ERROR_OK || encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
+    if (error != UTP_INTERNAL_ERROR_OK) {
         utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
         return UTP_INTERNAL_ERROR_AUTH;
     }
-    if (!utp_context_remember_zero_rtt_replay(context, session_token.payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
-                                              session_token.payload, view.header.packet_number, now_seconds,
-                                              session_token.expires_at_seconds)) {
+    if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
+        error = utp_context_on_encrypted_zero_rtt_packet(context, packet_in, peer, &view, &session_token,
+                                                         resumption_psk, encryption_mode);
         utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
-        return UTP_INTERNAL_ERROR_AUTH;
+        return error;
+    }
+    size_t offset       = token_length;
+    bool   stream_seen  = false;
+    bool   ping_seen    = false;
+    bool   padding_seen = false;
+
+    while (offset < view.payload_length) {
+        const uint8_t* frame;
+        uint8_t        frame_type;
+        size_t         frame_length;
+
+        error = utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        if (padding_seen) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        if (frame_type == UTP_FRAME_TYPE_STREAM) {
+            utp_frame_stream_t stream;
+
+            error = utp_frame_stream_decode(&stream, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK || stream_seen || stream.stream_id != 0u) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            stream_seen = true;
+        } else if (frame_type == UTP_FRAME_TYPE_PING) {
+            if (ping_seen) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            ping_seen = true;
+        } else if (frame_type == UTP_FRAME_TYPE_PADDING) {
+            padding_seen = true;
+        } else {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+    }
+    const uint64_t received_at_us = utp_context_now_us();
+
+    if (!utp_context_remember_zero_rtt_replay(context, session_token.payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
+                                              session_token.payload, now_seconds, session_token.expires_at_seconds)) {
+        utp_context_connection_slot_t* duplicate =
+            utp_context_find_zero_rtt_response(context, peer, session_token.payload);
+
+        utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
+        if (duplicate == NULL) {
+            return UTP_INTERNAL_ERROR_AUTH;
+        }
+        if ((uint64_t)packet_in->length > UINT64_MAX - duplicate->zero_rtt_amplification_rx_bytes) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        duplicate->zero_rtt_amplification_rx_bytes += (uint64_t)packet_in->length;
+        if (view.header.packet_number > duplicate->zero_rtt_request_packet_number) {
+            duplicate->zero_rtt_request_packet_number = view.header.packet_number;
+            duplicate->zero_rtt_request_received_us   = received_at_us;
+        }
+        if (!duplicate->zero_rtt_response_queued &&
+            (!duplicate->zero_rtt_response_sent ||
+             duplicate->zero_rtt_response_retries < context->handshake_max_retries)) {
+            error = utp_context_queue_zero_rtt_response(context, duplicate, utp_context_now_us());
+        } else {
+            error = UTP_INTERNAL_ERROR_OK;
+        }
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, duplicate) : error;
     }
     uint32_t local_cid;
 
@@ -1667,6 +2497,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         return UTP_INTERNAL_ERROR_NOMEM;
     }
     memcpy(slot->zero_rtt_resumption_psk, resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
+    memcpy(slot->zero_rtt_session_token, session_token.payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE);
     utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
     slot->zero_rtt_expires_at_seconds = session_token.expires_at_seconds;
     slot->zero_rtt_encryption_mode    = encryption_mode;
@@ -1679,10 +2510,6 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_register_connection_slot(context, slot);
-    }
-    const uint64_t now_us = utp_context_now_us();
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_on_packet_in_received(&slot->connection, packet_in, peer, now_us);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         slot->zero_rtt_awaiting_accept     = context->on_new_connection != NULL;
@@ -1703,29 +2530,27 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
             return UTP_INTERNAL_ERROR_OK;
         }
     }
+    const uint64_t now_us = utp_context_now_us();
+    if (error == UTP_INTERNAL_ERROR_OK && !utp_packet_in_ref(packet_in)) {
+        error = UTP_INTERNAL_ERROR_LIMIT;
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        uint8_t payload[UTP_FRAME_VERSION_SIZE];
-        size_t  payload_length;
-
-        error = utp_connection_begin_zero_rtt_response(&slot->connection);
-        if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
-        }
-        if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_connection_queue_packet(&slot->connection, UTP_PACKET_TYPE_HANDSHAKE, payload, payload_length,
-                                                true);
-        }
+        slot->zero_rtt_early_packet           = packet_in;
+        slot->zero_rtt_early_wire_size        = packet_in->length;
+        slot->zero_rtt_request_packet_number  = view.header.packet_number;
+        slot->zero_rtt_request_received_us    = received_at_us;
+        slot->zero_rtt_response_active        = true;
+        slot->zero_rtt_amplification_rx_bytes = (uint64_t)packet_in->length;
+        slot->zero_rtt_expire_deadline_us     = utp_context_zero_rtt_expire_deadline(context, now_us);
+        error                                 = utp_context_queue_zero_rtt_response(context, slot, now_us);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(context, slot);
         return error;
     }
     error = utp_context_flush_connection(context, slot);
-    if (error == UTP_INTERNAL_ERROR_OK && utp_connection_is_connected(&slot->connection)) {
-        error = utp_context_complete_connected_side_effects(context, slot);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK && utp_connection_is_connected(&slot->connection)) {
-        error = utp_context_flush_connection(context, slot);
+    if (error != UTP_INTERNAL_ERROR_OK && slot->used) {
+        utp_context_release_connection_slot(context, slot);
     }
     return error;
 }
@@ -1826,6 +2651,21 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
             utp_internal_log_error(&context->logger, &context->tag, error, "udp writable retry failed");
         }
     }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
+        utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
+
+        if (slot->pending.handshake_write_pending) {
+            const utp_internal_error_t error =
+                utp_context_send_or_defer_pending_handshake(context, slot, utp_context_now_us());
+
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                utp_internal_log_error(&context->logger, &context->tag, error,
+                                       "pending handshake writable retry failed");
+                utp_context_release_pending_slot(context, slot);
+            }
+        }
+    }
     utp_context_disable_udp_write_event_if_idle(context);
     {
         const utp_internal_error_t error = utp_context_refresh_timer(context, utp_context_now_us());
@@ -1846,6 +2686,37 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
         uint64_t                       deadline;
         utp_internal_error_t           error;
+
+        if (slot->zero_rtt_response_active &&
+            ((slot->zero_rtt_expire_deadline_us != 0u && slot->zero_rtt_expire_deadline_us <= now_us) ||
+             (slot->zero_rtt_response_deadline_us != 0u && slot->zero_rtt_response_deadline_us <= now_us &&
+              slot->zero_rtt_response_retries >= context->handshake_max_retries))) {
+            static const uint8_t timeout_reason[] = "0-RTT handshake response timeout";
+
+            if (slot->connected_reported) {
+                utp_context_report_connection_error(context, slot, UTP_STATUS_TIMEOUT, 0u, timeout_reason,
+                                                    sizeof(timeout_reason) - 1u, false);
+            }
+            utp_context_release_connection_slot(context, slot);
+            continue;
+        }
+        if (slot->zero_rtt_response_active && !slot->zero_rtt_response_queued &&
+            slot->zero_rtt_response_deadline_us != 0u && slot->zero_rtt_response_deadline_us <= now_us) {
+            error = utp_context_queue_zero_rtt_response(context, slot, now_us);
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_context_flush_connection(context, slot);
+            }
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                if (slot->connected_reported) {
+                    static const uint8_t retry_reason[] = "0-RTT handshake response retry failed";
+
+                    utp_context_report_connection_error(context, slot, utp_internal_error_to_status(error), 0u,
+                                                        retry_reason, sizeof(retry_reason) - 1u, false);
+                }
+                utp_context_release_connection_slot(context, slot);
+                continue;
+            }
+        }
 
         if (slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
             ((utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_CLOSING ||
@@ -1933,13 +2804,15 @@ static utp_internal_error_t utp_context_process_pending_timers(utp_context_t* co
 
         deadline = utp_pending_incoming_handshake_deadline(&slot->pending);
         if (deadline != 0u && deadline <= now_us) {
-            uint64_t             packet_number = 0u;
             utp_internal_error_t error;
 
-            error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
-            if (error == UTP_INTERNAL_ERROR_OK) {
-                error = utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us);
+            if (slot->pending.handshake_retransmission_count > slot->pending.handshake_max_retries) {
+                utp_context_log_ids(context, UTP_LOG_LEVEL_WARNING, "incoming handshake response timeout",
+                                    slot->pending.local_cid, slot->pending.peer_cid);
+                utp_context_release_pending_slot(context, slot);
+                continue;
             }
+            error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }
@@ -1994,42 +2867,44 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
-    context->packet_in_pool.allocator              = NULL;
-    context->packet_in_pool.packets                = NULL;
-    context->packet_in_pool.storage                = NULL;
-    context->packet_in_pool.packet_capacity        = 0u;
-    context->packet_in_pool.buffer_capacity        = 0u;
-    context->on_connected                          = NULL;
-    context->on_connected_user_data                = NULL;
-    context->on_connect_error                      = NULL;
-    context->on_connect_error_user_data            = NULL;
-    context->on_new_connection                     = NULL;
-    context->on_new_connection_user_data           = NULL;
-    context->on_connection_error                   = NULL;
-    context->on_connection_error_user_data         = NULL;
-    context->callback_accept_pending               = NULL;
-    context->callback_accept_zero_rtt              = NULL;
-    context->callback_accept_requested             = false;
-    context->next_cid                              = (uint32_t)options->context_id;
-    context->next_cid                              = context->next_cid == 0u ? 1u : context->next_cid;
-    context->stream_scheduler_mode                 = options->stream_scheduler_mode;
-    context->mtu_config.enabled                    = options->enable_dplpmtud;
-    context->mtu_config.mtu_min                    = options->mtu_min;
-    context->mtu_config.mtu_max                    = options->mtu_max;
-    context->mtu_config.mtu_base                   = options->mtu_base;
-    context->mtu_config.probe_interval_seconds     = options->mtu_probe_interval;
-    context->mtu_config.probe_step                 = options->mtu_probe_step;
-    context->mtu_config.probe_timeout_ms           = options->mtu_probe_timeout;
-    context->mtu_config.probe_retries              = options->mtu_probe_retries;
-    context->mtu_config.blackhole_loss_threshold   = options->mtu_blackhole_loss_threshold;
-    context->mtu_config.blackhole_loss_window_ms   = options->mtu_blackhole_loss_window_ms;
-    context->mtu_config.blackhole_cooldown_ms      = options->mtu_blackhole_cooldown_ms;
-    context->zero_rtt_token_max_lifetime_seconds   = options->zero_rtt_token_max_lifetime_seconds;
-    context->zero_rtt_replay_cache_capacity        = options->zero_rtt_replay_cache_capacity == 0u
-                                                         ? UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY
-                                                         : options->zero_rtt_replay_cache_capacity;
-    context->resumption_key_explicit               = false;
-    context->resumption_keys_ready                 = false;
+    context->packet_in_pool.allocator            = NULL;
+    context->packet_in_pool.packets              = NULL;
+    context->packet_in_pool.storage              = NULL;
+    context->packet_in_pool.packet_capacity      = 0u;
+    context->packet_in_pool.buffer_capacity      = 0u;
+    context->on_connected                        = NULL;
+    context->on_connected_user_data              = NULL;
+    context->on_connect_error                    = NULL;
+    context->on_connect_error_user_data          = NULL;
+    context->on_new_connection                   = NULL;
+    context->on_new_connection_user_data         = NULL;
+    context->on_connection_error                 = NULL;
+    context->on_connection_error_user_data       = NULL;
+    context->callback_accept_pending             = NULL;
+    context->callback_accept_zero_rtt            = NULL;
+    context->callback_accept_requested           = false;
+    context->next_cid                            = (uint32_t)options->context_id;
+    context->next_cid                            = context->next_cid == 0u ? 1u : context->next_cid;
+    context->stream_scheduler_mode               = options->stream_scheduler_mode;
+    context->mtu_config.enabled                  = options->enable_dplpmtud;
+    context->mtu_config.mtu_min                  = options->mtu_min;
+    context->mtu_config.mtu_max                  = options->mtu_max;
+    context->mtu_config.mtu_base                 = options->mtu_base;
+    context->mtu_config.probe_interval_seconds   = options->mtu_probe_interval;
+    context->mtu_config.probe_step               = options->mtu_probe_step;
+    context->mtu_config.probe_timeout_ms         = options->mtu_probe_timeout;
+    context->mtu_config.probe_retries            = options->mtu_probe_retries;
+    context->mtu_config.blackhole_loss_threshold = options->mtu_blackhole_loss_threshold;
+    context->mtu_config.blackhole_loss_window_ms = options->mtu_blackhole_loss_window_ms;
+    context->mtu_config.blackhole_cooldown_ms    = options->mtu_blackhole_cooldown_ms;
+    context->zero_rtt_token_max_lifetime_seconds = options->zero_rtt_token_max_lifetime_seconds;
+    context->zero_rtt_replay_cache_capacity      = options->zero_rtt_replay_cache_capacity == 0u
+                                                       ? UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY
+                                                       : options->zero_rtt_replay_cache_capacity;
+    context->handshake_timeout_ms                = options->handshake_timeout == 0u ? 800u : options->handshake_timeout;
+    context->handshake_max_retries               = options->handshake_max_retries;
+    context->resumption_key_explicit             = false;
+    context->resumption_keys_ready               = false;
     context->default_resumption_key_warning_logged = false;
     utp_crypto_default_resumption_key(context->resumption_root_key);
     utp_internal_error_t error = utp_hash_table_init(&context->connections, NULL, SIZE_MAX);
@@ -2321,10 +3196,11 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         utp_crypto_secure_clear(state_payload, state_payload_length);
         return UTP_STATUS_AUTH;
     }
-    // 加密 0-RTT 数据面尚未接入前不得把加密恢复状态降级为明文发送。
-    if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
+    if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE &&
+        encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_128 &&
+        encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256) {
         utp_crypto_secure_clear(state_payload, state_payload_length);
-        return UTP_STATUS_UNSUPPORTED;
+        return UTP_STATUS_AUTH;
     }
     utp_address_t peer;
 

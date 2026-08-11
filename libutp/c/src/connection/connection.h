@@ -80,6 +80,8 @@ typedef struct utp_connection {
     utp_crypto_key_pair_t       crypto_key_pair;
     utp_crypto_aead_t           tx_aead;
     utp_crypto_aead_t           rx_aead;
+    utp_crypto_aead_t           early_tx_aead;
+    utp_crypto_aead_t           early_rx_aead;
     utp_packet_out_t            close_packet;
     utp_hash_table_t            streams;
     utp_hash_table_t            control_slots;
@@ -102,6 +104,7 @@ typedef struct utp_connection {
     uint64_t                    rx_bytes;
     uint64_t                    tx_bytes;
     uint64_t                    peer_handshake_packet_number;
+    uint64_t                    peer_handshake_received_us;
     uint64_t                    retransmission_deadline_us;
     uint64_t                    close_deadline_us;
     uint64_t                    close_last_sent_us;
@@ -136,6 +139,7 @@ typedef struct utp_connection {
     bool                        path_challenge_pending;
     bool                        crypto_configured;
     bool                        crypto_ready;
+    bool                        zero_rtt_encrypted;
     bool                        session_token_issued;
     const uint8_t*              peer_close_reason;
     utp_connection_role_t       role;
@@ -158,6 +162,14 @@ utp_internal_error_t utp_connection_encode_crypto(const utp_connection_t* connec
 /** @brief 接管 pending 阶段派生的双向 AEAD 上下文，调用后清空 @p tx 和 @p rx。 */
 utp_internal_error_t utp_connection_adopt_crypto(utp_connection_t* connection, uint8_t crypto_type,
                                                  utp_crypto_aead_t* tx, utp_crypto_aead_t* rx);
+/** @brief 配置加密 0-RTT 的临时密钥、early 双向 AEAD 与 X25519 密钥对。 */
+utp_internal_error_t utp_connection_configure_zero_rtt_crypto(
+    utp_connection_t* connection, const uint8_t resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE],
+    const uint8_t early_attempt_nonce[UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE],
+    const uint8_t encrypted_server_info[UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE], uint8_t crypto_type);
+/** @brief 用已验证的对端 X25519 公钥安装 1-RTT 双向 AEAD。 */
+utp_internal_error_t utp_connection_complete_zero_rtt_crypto(utp_connection_t* connection,
+                                                             const uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE]);
 /** @brief 将 PacketOut 展平为可发送线上字节；加密包会在此执行 AEAD 封装。 */
 utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* connection,
                                                        const utp_packet_out_t* packet, uint8_t* buffer, size_t capacity,
@@ -166,6 +178,13 @@ utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* c
 /** @brief 构造完整明文包并放入有界发送队列。 */
 utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
                                                  const uint8_t* payload, size_t payload_length, bool track_on_send);
+/** @brief 排入 early AEAD 包；@p prefix_length 指示不加密的 SESSION_TOKEN 前缀。 */
+utp_internal_error_t utp_connection_queue_early_packet(utp_connection_t* connection, uint8_t packet_type,
+                                                       const uint8_t* payload, size_t payload_length,
+                                                       uint16_t prefix_length, bool track_on_send);
+/** @brief 排入由 Context 独立管理重传的 0-RTT HANDSHAKE 响应。 */
+utp_internal_error_t utp_connection_queue_zero_rtt_response(utp_connection_t* connection, const uint8_t* payload,
+                                                            size_t payload_length, bool encrypted);
 /** @brief 排入单独成包的 CONNECTION_CLOSE，并关闭本端普通发送。 */
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code);
 /** @brief 为 Context 同步销毁构造专用 CONNECTION_CLOSE，不进入发送队列。 */
@@ -238,10 +257,17 @@ bool                   utp_connection_is_connected(const utp_connection_t* conne
 /** @brief 导出连接缓存的会话票据。 */
 utp_internal_error_t   utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,
                                                                     size_t capacity, size_t* out_length);
-/** @brief 为 0-RTT 首个双向流建立本地发送状态，避免后续重用 stream_id 0。 */
-utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, size_t data_length, bool fin);
+/** @brief 为 0-RTT 首个双向流保留已发送前缀，并将余量写入普通 1-RTT 发送缓冲。 */
+utp_internal_error_t   utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
+                                                              size_t data_length, size_t early_data_length, bool fin);
 /** @brief 标记被动 0-RTT 正在等待首个 HANDSHAKE 响应成功写出。 */
-utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
+utp_internal_error_t   utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
+/** @brief 退休本连接仍在发送、未确认或待重排的握手 flight。 */
+utp_internal_error_t   utp_connection_retire_handshake_flight(utp_connection_t* connection, uint64_t now_us);
+/** @brief 解密并严格校验加密 0-RTT 的服务端 HANDSHAKE 响应，随后进入 CONNECTED。 */
+utp_internal_error_t   utp_connection_on_zero_rtt_handshake(utp_connection_t* connection, uint8_t* packet,
+                                                            size_t* packet_length, const utp_address_t* peer,
+                                                            uint64_t now_us);
 
 #ifdef __cplusplus
 }

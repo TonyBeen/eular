@@ -56,9 +56,99 @@ static utp_internal_error_t utp_connection_untrusted_packet_error(const utp_conn
 
 static bool utp_connection_is_handshake_frame(uint8_t frame_type)
 {
-    return frame_type == UTP_FRAME_TYPE_PADDING || frame_type == UTP_FRAME_TYPE_CRYPTO ||
-           frame_type == UTP_FRAME_TYPE_ACK_FREQUENCY || frame_type == UTP_FRAME_TYPE_VERSION ||
-           frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS || frame_type == UTP_FRAME_TYPE_HANDSHAKE_DELAY;
+    return frame_type == UTP_FRAME_TYPE_ACK || frame_type == UTP_FRAME_TYPE_PADDING ||
+           frame_type == UTP_FRAME_TYPE_CRYPTO || frame_type == UTP_FRAME_TYPE_ACK_FREQUENCY ||
+           frame_type == UTP_FRAME_TYPE_VERSION || frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS ||
+           frame_type == UTP_FRAME_TYPE_HANDSHAKE_DELAY;
+}
+
+/** @brief 从 Handshake 中取得唯一的处理耗时，供其中 ACK 的 RTT 样本使用。 */
+static utp_internal_error_t utp_connection_find_handshake_delay(const utp_packet_view_t* view, uint32_t* delay_us,
+                                                                bool* found)
+{
+    size_t offset = 0u;
+
+    if (view == NULL || delay_us == NULL || found == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    *delay_us = 0u;
+    *found    = false;
+    while (offset < view->payload_length) {
+        const uint8_t*       frame;
+        uint8_t              frame_type;
+        size_t               frame_length;
+        utp_internal_error_t error = utp_packet_view_next_frame(view, &offset, &frame_type, &frame, &frame_length);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        if (frame_type == UTP_FRAME_TYPE_HANDSHAKE_DELAY) {
+            utp_frame_handshake_delay_t delay;
+
+            if (*found) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            error = utp_frame_handshake_delay_decode(&delay, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            *delay_us = delay.delay_time_us;
+            *found    = true;
+        }
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 0-RTT early 区固定帧序校验，返回 CRYPTO 帧携带的服务端公钥。 */
+static utp_internal_error_t utp_connection_validate_zero_rtt_handshake_frames(
+    const uint8_t* payload, size_t payload_length, uint8_t crypto_type,
+    uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE])
+{
+    static const uint8_t required[] = {
+        UTP_FRAME_TYPE_CRYPTO,        UTP_FRAME_TYPE_VERSION, UTP_FRAME_TYPE_TRANSPORT_PARAMS,
+        UTP_FRAME_TYPE_ACK_FREQUENCY, UTP_FRAME_TYPE_ACK,     UTP_FRAME_TYPE_HANDSHAKE_DELAY,
+    };
+    size_t offset = 0u;
+
+    for (size_t index = 0u; index < sizeof(required); ++index) {
+        const uint8_t*       frame;
+        uint8_t              type;
+        size_t               length;
+        utp_internal_error_t error = utp_frame_measure(payload + offset, payload_length - offset, &type, &length);
+
+        if (error != UTP_INTERNAL_ERROR_OK || type != required[index]) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        frame = payload + offset;
+        if (type == UTP_FRAME_TYPE_CRYPTO) {
+            utp_frame_crypto_t crypto;
+
+            error = utp_frame_crypto_decode(&crypto, frame, length);
+            if (error != UTP_INTERNAL_ERROR_OK || crypto.crypto_type != crypto_type) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            memcpy(peer_public_key, crypto.ephemeral_public_key, UTP_CRYPTO_X25519_KEY_SIZE);
+        } else if (type == UTP_FRAME_TYPE_VERSION) {
+            utp_frame_version_t version;
+
+            error = utp_frame_version_decode(&version, frame, length);
+            if (error != UTP_INTERNAL_ERROR_OK || version.version != UTP_PROTOCOL_VERSION) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+        }
+        offset += length;
+    }
+    while (offset < payload_length) {
+        uint8_t              type;
+        size_t               length;
+        utp_internal_error_t error = utp_frame_measure(payload + offset, payload_length - offset, &type, &length);
+
+        if (error != UTP_INTERNAL_ERROR_OK || type != UTP_FRAME_TYPE_PADDING) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        offset += length;
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 // Initial/Handshake 是明文协商包，必须在进入通用帧处理前完成白名单校验。
@@ -280,7 +370,7 @@ static uint16_t utp_connection_plaintext_packet_capacity(const utp_connection_t*
 {
     uint16_t capacity = utp_connection_current_packet_capacity(connection);
 
-    if (connection != NULL && connection->crypto_ready) {
+    if (connection != NULL && (connection->crypto_ready || connection->zero_rtt_encrypted)) {
         return capacity > UTP_CRYPTO_AEAD_TAG_SIZE ? (uint16_t)(capacity - UTP_CRYPTO_AEAD_TAG_SIZE) : 0u;
     }
     return capacity;
@@ -297,7 +387,8 @@ static bool utp_connection_packet_bypasses_congestion(const utp_packet_out_t* pa
     if (packet == NULL) {
         return false;
     }
-    return packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
+    return (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u ||
+           packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
            packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) ||
            packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE);
 }
@@ -2058,8 +2149,10 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         packet_capacity < UTP_PACKET_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    connection->tx_aead = (utp_crypto_aead_t){0};
-    connection->rx_aead = (utp_crypto_aead_t){0};
+    connection->tx_aead       = (utp_crypto_aead_t){0};
+    connection->rx_aead       = (utp_crypto_aead_t){0};
+    connection->early_tx_aead = (utp_crypto_aead_t){0};
+    connection->early_rx_aead = (utp_crypto_aead_t){0};
     utp_crypto_key_pair_clear(&connection->crypto_key_pair);
     for (index = 0u; index < UTP_STREAM_TYPES; ++index) {
         connection->next_stream_id[index] = 0u;
@@ -2085,6 +2178,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->rx_bytes                                                = 0u;
     connection->tx_bytes                                                = 0u;
     connection->peer_handshake_packet_number                            = 0u;
+    connection->peer_handshake_received_us                              = 0u;
     connection->retransmission_deadline_us                              = 0u;
     connection->close_deadline_us                                       = 0u;
     connection->close_last_sent_us                                      = 0u;
@@ -2223,6 +2317,71 @@ utp_internal_error_t utp_connection_adopt_crypto(utp_connection_t* connection, u
     return UTP_INTERNAL_ERROR_OK;
 }
 
+utp_internal_error_t utp_connection_configure_zero_rtt_crypto(
+    utp_connection_t* connection, const uint8_t resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE],
+    const uint8_t early_attempt_nonce[UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE],
+    const uint8_t encrypted_server_info[UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE], uint8_t crypto_type)
+{
+    utp_internal_error_t error;
+
+    if (connection == NULL || resumption_psk == NULL || early_attempt_nonce == NULL || encrypted_server_info == NULL ||
+        connection->crypto_configured || crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_crypto_key_pair_generate(&connection->crypto_key_pair);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_crypto_derive_early_aead(&connection->early_tx_aead, resumption_psk, early_attempt_nonce,
+                                             encrypted_server_info, crypto_type,
+                                             connection->role == UTP_CONNECTION_ROLE_ACTIVE);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_crypto_derive_early_aead(&connection->early_rx_aead, resumption_psk, early_attempt_nonce,
+                                             encrypted_server_info, crypto_type,
+                                             connection->role != UTP_CONNECTION_ROLE_ACTIVE);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_crypto_aead_cleanup(&connection->early_tx_aead);
+        utp_crypto_aead_cleanup(&connection->early_rx_aead);
+        utp_crypto_key_pair_clear(&connection->crypto_key_pair);
+        return error;
+    }
+    connection->crypto_type        = crypto_type;
+    connection->crypto_configured  = true;
+    connection->zero_rtt_encrypted = true;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_connection_complete_zero_rtt_crypto(utp_connection_t* connection,
+                                                             const uint8_t peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE])
+{
+    utp_crypto_aead_t    tx = {0};
+    utp_crypto_aead_t    rx = {0};
+    utp_internal_error_t error;
+
+    if (connection == NULL || peer_public_key == NULL || !connection->zero_rtt_encrypted ||
+        !connection->crypto_configured || connection->crypto_ready) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    const uint32_t client_cid =
+        connection->role == UTP_CONNECTION_ROLE_ACTIVE ? connection->local_cid : connection->peer_cid;
+    const uint32_t server_cid =
+        connection->role == UTP_CONNECTION_ROLE_ACTIVE ? connection->peer_cid : connection->local_cid;
+
+    error = utp_crypto_create_directional_aead(&connection->crypto_key_pair, peer_public_key, client_cid, server_cid,
+                                               connection->crypto_type, connection->role == UTP_CONNECTION_ROLE_ACTIVE,
+                                               &tx, &rx);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        connection->tx_aead      = tx;
+        connection->rx_aead      = rx;
+        connection->crypto_ready = true;
+        memcpy(connection->peer_crypto_public_key, peer_public_key, UTP_CRYPTO_X25519_KEY_SIZE);
+    } else {
+        utp_crypto_aead_cleanup(&tx);
+        utp_crypto_aead_cleanup(&rx);
+    }
+    return error;
+}
+
 utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* connection,
                                                        const utp_packet_out_t* packet, uint8_t* buffer, size_t capacity,
                                                        size_t* out_length)
@@ -2240,6 +2399,39 @@ utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* c
     }
     if ((packet->po_flags & UTP_PO_ENCRYPTED) == 0u) {
         return utp_packet_out_flatten(packet, buffer, capacity, out_length);
+    }
+    if ((packet->po_flags & UTP_PO_EARLY_ENCRYPTED) != 0u) {
+        const uint16_t prefix_length = packet->early_plaintext_prefix_size;
+
+        if (!connection->zero_rtt_encrypted || prefix_length > packet->data_size - UTP_PACKET_HEADER_SIZE ||
+            packet->encrypt_data_size != packet->data_size + UTP_CRYPTO_AEAD_TAG_SIZE ||
+            packet->encrypt_data_size > capacity) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        error = utp_packet_out_flatten(packet, buffer, capacity - UTP_CRYPTO_AEAD_TAG_SIZE, &plaintext_length);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        error = utp_proto_decode_header(&header, buffer, plaintext_length);
+        if (error != UTP_INTERNAL_ERROR_OK || plaintext_length != UTP_PACKET_HEADER_SIZE + header.payload_length) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        header.payload_length = (uint16_t)(header.payload_length + UTP_CRYPTO_AEAD_TAG_SIZE);
+        error                 = utp_proto_encode_header(buffer, capacity, &header);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_crypto_aead_seal(
+                &connection->early_tx_aead, packet->packet_number, buffer + UTP_PACKET_HEADER_SIZE + prefix_length,
+                plaintext_length - UTP_PACKET_HEADER_SIZE - prefix_length, buffer,
+                UTP_PACKET_HEADER_SIZE + prefix_length, buffer + UTP_PACKET_HEADER_SIZE + prefix_length,
+                capacity - UTP_PACKET_HEADER_SIZE - prefix_length, &ciphertext_length);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            *out_length = UTP_PACKET_HEADER_SIZE + prefix_length + ciphertext_length;
+            if (*out_length != packet->encrypt_data_size) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+        }
+        return error;
     }
     if (!connection->crypto_ready || packet->encrypt_data_size != packet->data_size + UTP_CRYPTO_AEAD_TAG_SIZE ||
         packet->encrypt_data_size > capacity) {
@@ -2279,6 +2471,8 @@ void utp_connection_cleanup(utp_connection_t* connection)
     }
     utp_crypto_aead_cleanup(&connection->tx_aead);
     utp_crypto_aead_cleanup(&connection->rx_aead);
+    utp_crypto_aead_cleanup(&connection->early_tx_aead);
+    utp_crypto_aead_cleanup(&connection->early_rx_aead);
     utp_crypto_key_pair_clear(&connection->crypto_key_pair);
     utp_send_control_cleanup(&connection->send_control);
     utp_receive_history_cleanup(&connection->receive_history);
@@ -2310,6 +2504,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->rx_bytes                                                = 0u;
     connection->tx_bytes                                                = 0u;
     connection->peer_handshake_packet_number                            = 0u;
+    connection->peer_handshake_received_us                              = 0u;
     connection->retransmission_deadline_us                              = 0u;
     connection->close_deadline_us                                       = 0u;
     connection->close_last_sent_us                                      = 0u;
@@ -2334,6 +2529,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->crypto_type                                             = 0u;
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
+    connection->zero_rtt_encrypted                                      = false;
     connection->session_token_issued                                    = false;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
@@ -2343,8 +2539,10 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->path_state                                              = UTP_CONNECTION_PATH_STATE_UNKNOWN;
 }
 
-utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
-                                                 const uint8_t* payload, size_t payload_length, bool track_on_send)
+static utp_internal_error_t utp_connection_queue_packet_internal(utp_connection_t* connection, uint8_t packet_type,
+                                                                 const uint8_t* payload, size_t payload_length,
+                                                                 uint16_t early_prefix_length, bool track_on_send,
+                                                                 uint16_t extra_flags, bool schedule_front)
 {
     utp_packet_out_t*    packet;
     utp_internal_error_t error;
@@ -2363,7 +2561,8 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
     if ((connection->state == UTP_CONNECTION_STATE_NEW &&
          (connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
           (packet_type != UTP_PACKET_TYPE_INITIAL && packet_type != UTP_PACKET_TYPE_0RTT))) ||
-        (connection->state == UTP_CONNECTION_STATE_INITIAL_SENT && packet_type == UTP_PACKET_TYPE_INITIAL)) {
+        (connection->state == UTP_CONNECTION_STATE_INITIAL_SENT && packet_type == UTP_PACKET_TYPE_INITIAL) ||
+        (early_prefix_length != UINT16_MAX && early_prefix_length > payload_length)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
     packet_length   = UTP_PACKET_HEADER_SIZE + payload_length;
@@ -2389,10 +2588,11 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
     }
     error = utp_send_control_allocate_packet_number(&connection->send_control, &packet_number);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        packet->packet_number = packet_number;
-        packet->data_size     = (uint16_t)packet_length;
-        packet->packet_type   = packet_type;
-        packet->frame_types   = frame_types;
+        packet->packet_number  = packet_number;
+        packet->data_size      = (uint16_t)packet_length;
+        packet->packet_type    = packet_type;
+        packet->frame_types    = frame_types;
+        packet->po_flags      |= extra_flags;
         if (payload_length != 0u) {
             memcpy(packet->raw_data + UTP_PACKET_HEADER_SIZE, payload, payload_length);
         }
@@ -2400,15 +2600,21 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
             packet_type == UTP_PACKET_TYPE_HANDSHAKE) {
             packet->po_flags |= UTP_PO_HELLO;
         }
-        // 0-RTT 请求和响应参与重放判定，PTO 重传必须保持包号与线上字节完全不变。
-        if (packet_type == UTP_PACKET_TYPE_0RTT ||
-            (packet_type == UTP_PACKET_TYPE_HANDSHAKE && connection->role == UTP_CONNECTION_ROLE_PASSIVE)) {
-            packet->po_flags |= UTP_PO_IMMUTABLE;
-        }
         error = utp_connection_encode_header(connection, packet, packet_type);
+        if (error == UTP_INTERNAL_ERROR_OK && early_prefix_length != UINT16_MAX) {
+            if ((size_t)packet->data_size + UTP_CRYPTO_AEAD_TAG_SIZE > UINT16_MAX) {
+                error = UTP_INTERNAL_ERROR_OVERFLOW;
+            } else {
+                packet->po_flags |= UTP_PO_ENCRYPTED | UTP_PO_EARLY_ENCRYPTED | UTP_PO_KEEP_PLAINTEXT;
+                packet->early_plaintext_prefix_size = early_prefix_length;
+                packet->encrypt_data_size           = (uint16_t)(packet->data_size + UTP_CRYPTO_AEAD_TAG_SIZE);
+            }
+        }
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_send_control_schedule_packet(&connection->send_control, packet, track_on_send);
+        error = schedule_front
+                    ? utp_send_control_schedule_packet_front(&connection->send_control, packet, track_on_send)
+                    : utp_send_control_schedule_packet(&connection->send_control, packet, track_on_send);
     }
     if (error == UTP_INTERNAL_ERROR_OK && packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE) {
         utp_frame_connection_close_t close;
@@ -2427,6 +2633,34 @@ utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, u
         utp_packet_out_pool_release(&connection->packet_pool, packet);
     }
     return error;
+}
+
+utp_internal_error_t utp_connection_queue_packet(utp_connection_t* connection, uint8_t packet_type,
+                                                 const uint8_t* payload, size_t payload_length, bool track_on_send)
+{
+    return utp_connection_queue_packet_internal(connection, packet_type, payload, payload_length, UINT16_MAX,
+                                                track_on_send, 0u, false);
+}
+
+utp_internal_error_t utp_connection_queue_early_packet(utp_connection_t* connection, uint8_t packet_type,
+                                                       const uint8_t* payload, size_t payload_length,
+                                                       uint16_t prefix_length, bool track_on_send)
+{
+    if (connection == NULL || !connection->zero_rtt_encrypted) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    return utp_connection_queue_packet_internal(connection, packet_type, payload, payload_length, prefix_length,
+                                                track_on_send, 0u, false);
+}
+
+utp_internal_error_t utp_connection_queue_zero_rtt_response(utp_connection_t* connection, const uint8_t* payload,
+                                                            size_t payload_length, bool encrypted)
+{
+    if (connection == NULL || (encrypted && !connection->zero_rtt_encrypted)) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    return utp_connection_queue_packet_internal(connection, UTP_PACKET_TYPE_HANDSHAKE, payload, payload_length,
+                                                encrypted ? 0u : UINT16_MAX, false, UTP_PO_ZERO_RTT_RESPONSE, true);
 }
 
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code)
@@ -2550,13 +2784,6 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         return utp_connection_next_scheduled_admitted(connection);
     }
     while ((packet = utp_send_control_next_lost(&connection->send_control)) != NULL) {
-        if ((packet->po_flags & UTP_PO_IMMUTABLE) != 0u) {
-            if (!utp_connection_can_transmit_packet(connection, packet)) {
-                (void)utp_send_control_reschedule_lost(&connection->send_control, packet);
-                return NULL;
-            }
-            return packet;
-        }
         utp_connection_requeue_lost_controls(packet);
         if (packet->control_prefix_size != 0u &&
             utp_packet_out_strip_prefix(packet, packet->control_prefix_size) != UTP_INTERNAL_ERROR_OK) {
@@ -2663,8 +2890,8 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
     if ((packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT) &&
         connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_NEW) {
         connection->state = UTP_CONNECTION_STATE_INITIAL_SENT;
-    } else if (packet->packet_type == UTP_PACKET_TYPE_HANDSHAKE && (packet->po_flags & UTP_PO_IMMUTABLE) != 0u &&
-               connection->role == UTP_CONNECTION_ROLE_PASSIVE &&
+    } else if (packet->packet_type == UTP_PACKET_TYPE_HANDSHAKE &&
+               (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u && connection->role == UTP_CONNECTION_ROLE_PASSIVE &&
                connection->state == UTP_CONNECTION_STATE_INITIAL_SENT) {
         connection->state = UTP_CONNECTION_STATE_CONNECTED;
         utp_send_control_set_connected(&connection->send_control, true);
@@ -2791,6 +3018,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     bool                 ack_progress;
     bool                 candidate_path;
     bool                 peer_close;
+    bool                 has_handshake_delay;
+    uint32_t             handshake_delay_us;
 
     if (connection == NULL || packet == NULL || peer == NULL || now_us == 0u || wire_packet_length < packet_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -2811,6 +3040,13 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
+        error = utp_connection_find_handshake_delay(&view, &handshake_delay_us, &has_handshake_delay);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    } else {
+        handshake_delay_us  = 0u;
+        has_handshake_delay = false;
     }
     if (connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_INITIAL_SENT &&
         view.header.type == UTP_PACKET_TYPE_HANDSHAKE && connection->peer_cid == 0u) {
@@ -2932,8 +3168,18 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             if (error == UTP_INTERNAL_ERROR_OK && consumed != frame_length) {
                 error = UTP_INTERNAL_ERROR_PROTOCOL;
             }
+            if (error == UTP_INTERNAL_ERROR_OK && view.header.type == UTP_PACKET_TYPE_HANDSHAKE) {
+                if (!has_handshake_delay) {
+                    error = UTP_INTERNAL_ERROR_PROTOCOL;
+                } else {
+                    ack.ack_delay = handshake_delay_us;
+                }
+            }
             if (error == UTP_INTERNAL_ERROR_OK) {
-                error = utp_send_control_on_ack(&connection->send_control, &ack, now_us, &acknowledged, &result);
+                error = view.header.type == UTP_PACKET_TYPE_HANDSHAKE
+                            ? utp_send_control_on_handshake_ack(&connection->send_control, &ack, now_us,
+                                                                handshake_delay_us, &acknowledged, &result)
+                            : utp_send_control_on_ack(&connection->send_control, &ack, now_us, &acknowledged, &result);
             }
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
@@ -3177,6 +3423,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
         connection->peer_handshake_packet_number = view.header.packet_number;
+        connection->peer_handshake_received_us   = now_us;
         if (connection->state == UTP_CONNECTION_STATE_INITIAL_SENT) {
             struct utp_packet_out_tailq retired_handshake_packets;
 
@@ -3613,24 +3860,33 @@ bool utp_connection_is_connected(const utp_connection_t* connection)
     return connection != NULL && connection->state == UTP_CONNECTION_STATE_CONNECTED;
 }
 
-utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, size_t data_length, bool fin)
+utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
+                                                            size_t data_length, size_t early_data_length, bool fin)
 {
     utp_stream_t*        stream;
     utp_internal_error_t error;
 
     if (connection == NULL || connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
-        connection->state != UTP_CONNECTION_STATE_NEW || (uint64_t)data_length > connection->peer_max_data) {
+        connection->state != UTP_CONNECTION_STATE_NEW || (data == NULL && data_length != 0u) ||
+        early_data_length > data_length || (uint64_t)data_length > connection->peer_max_data ||
+        data_length - early_data_length > UTP_STREAM_SEND_BUFFER_CAPACITY) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_connection_alloc_stream(connection, UTP_STREAM_CLIENT_INITIATED, &stream);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    stream->send_buffer_offset                              = (uint64_t)data_length;
-    stream->next_send_offset                                = (uint64_t)data_length;
+    stream->send_buffer_offset = (uint64_t)early_data_length;
+    stream->next_send_offset   = (uint64_t)early_data_length;
+    if (data_length != early_data_length) {
+        error = utp_stream_write_internal(stream, data + early_data_length, data_length - early_data_length);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
     stream->local_fin_queued                                = fin;
-    stream->local_fin_sent                                  = fin;
-    connection->stream_data_sent_total                      = (uint64_t)data_length;
+    stream->local_fin_sent                                  = fin && early_data_length == data_length;
+    connection->stream_data_sent_total                      = (uint64_t)early_data_length;
     connection->next_stream_id[UTP_STREAM_CLIENT_INITIATED] = UTP_STREAM_TYPES;
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -3644,6 +3900,68 @@ utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* co
     connection->state = UTP_CONNECTION_STATE_INITIAL_SENT;
     utp_send_control_set_connected(&connection->send_control, false);
     return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_connection_retire_handshake_flight(utp_connection_t* connection, uint64_t now_us)
+{
+    struct utp_packet_out_tailq retired_packets;
+    utp_internal_error_t        error;
+
+    if (connection == NULL || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    TAILQ_INIT(&retired_packets);
+    error = utp_send_control_retire_handshake_packets(&connection->send_control, now_us, &retired_packets);
+    utp_connection_release_queue(connection, &retired_packets);
+    return error;
+}
+
+utp_internal_error_t utp_connection_on_zero_rtt_handshake(utp_connection_t* connection, uint8_t* packet,
+                                                          size_t* packet_length, const utp_address_t* peer,
+                                                          uint64_t now_us)
+{
+    utp_packet_header_t  header;
+    uint8_t              peer_public_key[UTP_CRYPTO_X25519_KEY_SIZE];
+    size_t               wire_packet_length;
+    size_t               plaintext_length;
+    utp_internal_error_t error;
+
+    if (connection == NULL || packet == NULL || packet_length == NULL || peer == NULL || now_us == 0u ||
+        !connection->zero_rtt_encrypted || connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
+        connection->state != UTP_CONNECTION_STATE_INITIAL_SENT) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_proto_decode_header(&header, packet, *packet_length);
+    if (error != UTP_INTERNAL_ERROR_OK || header.type != UTP_PACKET_TYPE_HANDSHAKE ||
+        header.dcid != connection->local_cid || header.scid == 0u ||
+        *packet_length != UTP_PACKET_HEADER_SIZE + header.payload_length ||
+        header.payload_length < UTP_CRYPTO_AEAD_TAG_SIZE || !utp_address_equal(peer, &connection->peer)) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    error = utp_crypto_aead_open(&connection->early_rx_aead, header.packet_number, packet + UTP_PACKET_HEADER_SIZE,
+                                 header.payload_length, packet, UTP_PACKET_HEADER_SIZE, packet + UTP_PACKET_HEADER_SIZE,
+                                 header.payload_length, &plaintext_length);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    wire_packet_length = *packet_length;
+    error = utp_connection_validate_zero_rtt_handshake_frames(packet + UTP_PACKET_HEADER_SIZE, plaintext_length,
+                                                              connection->crypto_type, peer_public_key);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    connection->peer_cid = header.scid;
+    error                = utp_connection_complete_zero_rtt_crypto(connection, peer_public_key);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        header.payload_length = (uint16_t)plaintext_length;
+        error                 = utp_proto_encode_header(packet, *packet_length, &header);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        *packet_length = UTP_PACKET_HEADER_SIZE + plaintext_length;
+        error = utp_connection_on_packet_received_internal(connection, packet, *packet_length, wire_packet_length, NULL,
+                                                           peer, now_us);
+    }
+    return error;
 }
 
 utp_internal_error_t utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,

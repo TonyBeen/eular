@@ -121,6 +121,11 @@ typedef struct utp_frame_handshake_done {
     uint64_t ack_handshake_packet_number;
 } utp_frame_handshake_done_t;
 
+/* HANDSHAKE_DELAY：type(1), delay_time_us(4)。 */
+typedef struct utp_frame_handshake_delay {
+    uint32_t delay_time_us;
+} utp_frame_handshake_delay_t;
+
 /* STREAM：type(1), flags(1), data_length(2), stream_id(4), offset(8), data[data_length]。 */
 typedef struct utp_frame_stream {
     uint8_t        flags;
@@ -209,6 +214,12 @@ utp_internal_error_t utp_frame_handshake_done_encode(uint8_t* buffer, size_t cap
 /** @brief 解码 HANDSHAKE_DONE 帧。 */
 utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t* done, const uint8_t* buffer,
                                                      size_t length);
+/** @brief 编码握手阶段本端处理耗时。 */
+utp_internal_error_t utp_frame_handshake_delay_encode(uint8_t* buffer, size_t capacity,
+                                                      const utp_frame_handshake_delay_t* delay);
+/** @brief 解码握手阶段本端处理耗时。 */
+utp_internal_error_t utp_frame_handshake_delay_decode(utp_frame_handshake_delay_t* delay, const uint8_t* buffer,
+                                                      size_t length);
 /** @brief 编码完整 STREAM 帧，包括数据副本。 */
 utp_internal_error_t utp_frame_stream_encode(uint8_t* buffer, size_t capacity, const utp_frame_stream_t* stream);
 /** @brief 仅编码 STREAM 固定头，用于零拷贝发送数据切片。 */

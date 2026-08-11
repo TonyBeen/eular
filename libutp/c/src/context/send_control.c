@@ -711,9 +711,11 @@ utp_internal_error_t utp_send_control_on_retransmission_timeout(utp_send_control
     return UTP_INTERNAL_ERROR_STATE;
 }
 
-utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
-                                             struct utp_packet_out_tailq*   acknowledged_packets,
-                                             utp_send_control_ack_result_t* result)
+static utp_internal_error_t utp_send_control_on_ack_internal(utp_send_control_t* control, const utp_ack_info_t* ack,
+                                                             uint64_t now_us, bool exact_handshake_delay,
+                                                             uint64_t                       handshake_delay_us,
+                                                             struct utp_packet_out_tailq*   acknowledged_packets,
+                                                             utp_send_control_ack_result_t* result)
 {
     utp_internal_error_t error;
     utp_packet_out_t*    packet;
@@ -758,10 +760,24 @@ utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const 
 
         control->largest_acked_sent_time_us = acknowledged_sent_time_us;
         if (now_us > acknowledged_sent_time_us) {
-            error =
-                utp_rtt_stats_update_from_ack(&control->rtt_stats, now_us, acknowledged_sent_time_us, ack->ack_delay,
-                                              control->peer_max_ack_delay_us, &result->rtt_sample_us);
+            if (exact_handshake_delay) {
+                const uint64_t elapsed_us = now_us - acknowledged_sent_time_us;
+
+                error = elapsed_us <= handshake_delay_us
+                            ? UTP_INTERNAL_ERROR_INVALID_ARGUMENT
+                            : utp_rtt_stats_update(&control->rtt_stats, elapsed_us - handshake_delay_us);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    result->rtt_sample_us = elapsed_us - handshake_delay_us;
+                }
+            } else {
+                error = utp_rtt_stats_update_from_ack(&control->rtt_stats, now_us, acknowledged_sent_time_us,
+                                                      ack->ack_delay, control->peer_max_ack_delay_us,
+                                                      &result->rtt_sample_us);
+            }
             result->rtt_sample_valid = error == UTP_INTERNAL_ERROR_OK;
+            if (error == UTP_INTERNAL_ERROR_INVALID_ARGUMENT) {
+                error = UTP_INTERNAL_ERROR_OK;
+            }
         }
     }
     if (result->ledger.acknowledged_packet_count != 0u) {
@@ -774,6 +790,22 @@ utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const 
         control->was_quiet = true;
     }
     return utp_send_control_detect_losses(control);
+}
+
+utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
+                                             struct utp_packet_out_tailq*   acknowledged_packets,
+                                             utp_send_control_ack_result_t* result)
+{
+    return utp_send_control_on_ack_internal(control, ack, now_us, false, 0u, acknowledged_packets, result);
+}
+
+utp_internal_error_t utp_send_control_on_handshake_ack(utp_send_control_t* control, const utp_ack_info_t* ack,
+                                                       uint64_t now_us, uint64_t handshake_delay_us,
+                                                       struct utp_packet_out_tailq*   acknowledged_packets,
+                                                       utp_send_control_ack_result_t* result)
+{
+    return utp_send_control_on_ack_internal(control, ack, now_us, true, handshake_delay_us, acknowledged_packets,
+                                            result);
 }
 
 utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_t* control, uint64_t now_us,

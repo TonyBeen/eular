@@ -110,7 +110,12 @@ utp_internal_error_t                   utp_send_control_on_retransmission_timeou
 utp_internal_error_t utp_send_control_on_ack(utp_send_control_t* control, const utp_ack_info_t* ack, uint64_t now_us,
                                              struct utp_packet_out_tailq*   acknowledged_packets,
                                              utp_send_control_ack_result_t* result);
-// 收到有效 Handshake 后退休 Initial。Handshake 未确认具体 Initial 包号，不能产生拥塞 ACK 样本。
+/** @brief 处理握手 ACK，并使用不受普通 max_ack_delay 限制的精确握手处理耗时。 */
+utp_internal_error_t utp_send_control_on_handshake_ack(utp_send_control_t* control, const utp_ack_info_t* ack,
+                                                       uint64_t now_us, uint64_t handshake_delay_us,
+                                                       struct utp_packet_out_tailq*   acknowledged_packets,
+                                                       utp_send_control_ack_result_t* result);
+// 收到有效 Handshake 后退休仍残留的 Initial；其中的显式 ACK 已在此调用前单独形成 RTT 样本。
 utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_t* control, uint64_t now_us,
                                                                struct utp_packet_out_tailq* retired_packets);
 uint64_t             utp_send_control_largest_sent(const utp_send_control_t* control);

@@ -446,6 +446,58 @@ utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t*
     return UTP_INTERNAL_ERROR_OK;
 }
 
+utp_internal_error_t utp_frame_handshake_delay_encode(uint8_t* buffer, size_t capacity,
+                                                      const utp_frame_handshake_delay_t* delay)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+
+    if (buffer == NULL || delay == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (capacity < UTP_FRAME_HANDSHAKE_DELAY_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_HANDSHAKE_DELAY);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u32(&writer, delay->delay_time_us);
+    }
+    return error;
+}
+
+utp_internal_error_t utp_frame_handshake_delay_decode(utp_frame_handshake_delay_t* delay, const uint8_t* buffer,
+                                                      size_t length)
+{
+    utp_wire_reader_t           reader;
+    utp_frame_handshake_delay_t decoded;
+    uint8_t                     type;
+    utp_internal_error_t        error;
+
+    if (delay == NULL || buffer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (length < UTP_FRAME_HANDSHAKE_DELAY_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_HANDSHAKE_DELAY_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && type != UTP_FRAME_TYPE_HANDSHAKE_DELAY) {
+        error = UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u32(&reader, &decoded.delay_time_us);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        *delay = decoded;
+    }
+    return error;
+}
+
 utp_internal_error_t utp_frame_stream_encode(uint8_t* buffer, size_t capacity, const utp_frame_stream_t* stream)
 {
     size_t               index;

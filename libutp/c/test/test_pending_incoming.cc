@@ -47,6 +47,27 @@ std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DONE_SIZE> hand
     return packet;
 }
 
+std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DONE_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE>
+handshake_done_packet_with_delay(uint32_t scid, uint32_t dcid, uint64_t packet_number, uint64_t ack_number,
+                                 uint32_t delay_us)
+{
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DONE_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE>
+                              packet = {};
+    const utp_packet_header_t header = {
+        scid, dcid, packet_number, UTP_FRAME_HANDSHAKE_DONE_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE, UTP_PACKET_TYPE_CTRL,
+        0u,
+    };
+    const utp_frame_handshake_done_t  done  = {ack_number};
+    const utp_frame_handshake_delay_t delay = {delay_us};
+
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_handshake_done_encode(packet.data() + UTP_PACKET_HEADER_SIZE, UTP_FRAME_HANDSHAKE_DONE_SIZE,
+                                            &done) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_handshake_delay_encode(packet.data() + UTP_PACKET_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DONE_SIZE,
+                                             UTP_FRAME_HANDSHAKE_DELAY_SIZE, &delay) == UTP_INTERNAL_ERROR_OK);
+    return packet;
+}
+
 struct replay_capture {
     size_t   count             = 0u;
     uint64_t packet_numbers[2] = {};
@@ -75,7 +96,7 @@ TEST_CASE("pending incoming promotes only for a matching accepted HandshakeDone"
     const utp_address_t           peer     = loopback_address(12001u);
     const auto                    first    = version_packet(11u, 22u, 1u);
     const auto                    wrong    = handshake_done_packet(11u, 22u, 2u, 6u);
-    const auto                    matching = handshake_done_packet(11u, 22u, 3u, 7u);
+    const auto                    matching = handshake_done_packet_with_delay(11u, 22u, 3u, 7u, 10u);
     std::array<uint8_t, 256>      storage  = {};
     utp_pending_incoming_t        pending  = {};
     utp_pending_incoming_result_t result   = UTP_PENDING_INCOMING_PROMOTE;
@@ -83,21 +104,23 @@ TEST_CASE("pending incoming promotes only for a matching accepted HandshakeDone"
 
     REQUIRE(utp_pending_incoming_init(&pending, 22u, 11u, &peer, storage.data(), storage.size(), 2u) ==
             UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), first.size(), &peer, &result) ==
+    REQUIRE(utp_pending_incoming_set_handshake_policy(&pending, 800u, 2u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), first.size(), &peer, 90u, &result) ==
             UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
     REQUIRE(utp_pending_incoming_accept(&pending) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 7u, 100u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_handshake_deadline(&pending) > 100u);
+    REQUIRE(utp_pending_incoming_handshake_deadline(&pending) == 800100u);
 
-    REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), first.size() + 16u, &peer, &result) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_on_packet(&pending, first.data(), first.size(), first.size() + 16u, &peer, 110u,
+                                           &result) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(result == UTP_PENDING_INCOMING_BUFFERED);
-    REQUIRE(utp_pending_incoming_on_packet(&pending, wrong.data(), wrong.size(), wrong.size() + 16u, &peer, &result) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_on_packet(&pending, wrong.data(), wrong.size(), wrong.size() + 16u, &peer, 120u,
+                                           &result) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(result == UTP_PENDING_INCOMING_BUFFERED);
     REQUIRE(utp_pending_incoming_on_packet(&pending, matching.data(), matching.size(), matching.size() + 16u, &peer,
-                                           &result) == UTP_INTERNAL_ERROR_OK);
+                                           130u, &result) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(result == UTP_PENDING_INCOMING_PROMOTE);
+    REQUIRE(pending.handshake_rtt_sample_us == 20u);
     REQUIRE(pending.packet_count == 2u);
     REQUIRE(utp_pending_incoming_replay(&pending, capture_replay, &capture) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(capture.count == 2u);
@@ -119,8 +142,46 @@ TEST_CASE("pending incoming enforces bounded packet and byte storage", "[pending
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_accept(&pending) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 9u, 100u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), packet.size(), &peer, &result) ==
+    REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), packet.size(), &peer, 110u,
+                                           &result) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), packet.size(), &peer, 120u,
+                                           &result) == UTP_INTERNAL_ERROR_LIMIT);
+}
+
+TEST_CASE("pending incoming keeps the newest Initial packet and its receive time", "[pending][handshake]")
+{
+    const utp_address_t      peer    = loopback_address(12003u);
+    std::array<uint8_t, 128> storage = {};
+    utp_pending_incoming_t   pending = {};
+
+    REQUIRE(utp_pending_incoming_init(&pending, 51u, 61u, &peer, storage.data(), storage.size(), 1u) ==
             UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_pending_incoming_on_packet(&pending, packet.data(), packet.size(), packet.size(), &peer, &result) ==
-            UTP_INTERNAL_ERROR_LIMIT);
+    REQUIRE(utp_pending_incoming_record_initial(&pending, 3u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_record_initial(&pending, 2u, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pending.latest_initial_packet_number == 3u);
+    REQUIRE(pending.latest_initial_received_us == 100u);
+    REQUIRE(utp_pending_incoming_record_initial(&pending, 4u, 300u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pending.latest_initial_packet_number == 4u);
+    REQUIRE(pending.latest_initial_received_us == 300u);
+}
+
+TEST_CASE("pending incoming accepts HandshakeDone for an earlier retransmission", "[pending][handshake]")
+{
+    const utp_address_t           peer    = loopback_address(12004u);
+    const auto                    done    = handshake_done_packet_with_delay(71u, 81u, 1u, 7u, 10u);
+    std::array<uint8_t, 128>      storage = {};
+    utp_pending_incoming_t        pending = {};
+    utp_pending_incoming_result_t result  = UTP_PENDING_INCOMING_BUFFERED;
+
+    REQUIRE(utp_pending_incoming_init(&pending, 81u, 71u, &peer, storage.data(), storage.size(), 1u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_accept(&pending) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 7u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_pending_incoming_mark_handshake_sent(&pending, 8u, 150u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(pending.first_handshake_packet_number == 7u);
+    REQUIRE(pending.last_handshake_packet_number == 8u);
+    REQUIRE(utp_pending_incoming_on_packet(&pending, done.data(), done.size(), done.size(), &peer, 180u, &result) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(result == UTP_PENDING_INCOMING_PROMOTE);
+    REQUIRE(pending.handshake_rtt_sample_us == 0u);
 }

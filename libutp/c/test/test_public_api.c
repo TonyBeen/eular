@@ -223,10 +223,14 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     server_options.event_base                     = event_base;
     server_options.context_id                     = 201u;
     server_options.zero_rtt_replay_cache_capacity = 1u;
+    server_options.mtu_min                        = 1400u;
+    server_options.mtu_base                       = 1400u;
     first_options.event_base                      = event_base;
     first_options.context_id                      = 202u;
     early_options.event_base                      = event_base;
     early_options.context_id                      = 203u;
+    early_options.mtu_min                         = 1400u;
+    early_options.mtu_base                        = 1400u;
     server_probe.expected_encryption              = UTP_ENCRYPTION_NONE;
     assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
     assert(utp_context_create(&first_options, &first_client) == UTP_STATUS_OK);
@@ -280,6 +284,81 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
                                                    &token_length) == UTP_STATUS_CONNECTION_SESSION_TOKEN_UNAVAILABLE);
     }
     utp_context_destroy(replay_client);
+    utp_context_destroy(early_client);
+    utp_context_destroy(first_client);
+    utp_context_destroy(server);
+}
+
+static void test_encrypted_zero_rtt(struct event_base* event_base)
+{
+    utp_context_options_t      server_options  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t      first_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t      early_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t      connect         = UTP_CONNECT_OPTIONS_INIT;
+    utp_connect_0rtt_options_t early           = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*             server          = NULL;
+    utp_context_t*             first_client    = NULL;
+    utp_context_t*             early_client    = NULL;
+    public_api_probe_t         server_probe    = {0};
+    public_api_probe_t         first_probe     = {0};
+    public_api_probe_t         early_probe     = {0};
+    uint8_t                    token[166u]     = {0u};
+    uint8_t                    received[16u]   = {0u};
+    const uint8_t              early_data[]    = "early-aead";
+    uint16_t                   port            = 0u;
+    size_t                     token_length    = 0u;
+    size_t                     received_length = 0u;
+    utp_stream_t*              stream;
+
+    server_options.event_base        = event_base;
+    server_options.context_id        = 211u;
+    server_options.mtu_min           = 1500u;
+    server_options.mtu_base          = 1500u;
+    first_options.event_base         = event_base;
+    first_options.context_id         = 212u;
+    early_options.event_base         = event_base;
+    early_options.context_id         = 213u;
+    early_options.mtu_min            = 1500u;
+    early_options.mtu_base           = 1500u;
+    server_probe.context             = server;
+    server_probe.expected_encryption = UTP_ENCRYPTION_AES_GCM_128;
+    assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
+    assert(utp_context_create(&first_options, &first_client) == UTP_STATUS_OK);
+    server_probe.context = server;
+    assert(utp_context_bind(server, "127.0.0.1", 0u, NULL, &port) == UTP_STATUS_OK);
+    assert(utp_context_bind(first_client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+    utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
+    utp_context_set_on_connected(server, test_on_connected, &server_probe);
+    utp_context_set_on_connected(first_client, test_on_connected, &first_probe);
+    connect.address    = "127.0.0.1";
+    connect.port       = port;
+    connect.encryption = UTP_ENCRYPTION_AES_GCM_128;
+    assert(utp_context_connect(first_client, &connect) == UTP_STATUS_OK);
+    pump_event_loop(event_base, 32);
+    assert(first_probe.connected_connection != NULL);
+    assert(utp_connection_export_session_token(first_probe.connected_connection, token, sizeof(token), &token_length) ==
+           UTP_STATUS_OK);
+
+    assert(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
+    assert(utp_context_bind(early_client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+    utp_context_set_on_connected(early_client, test_on_connected, &early_probe);
+    early.address            = "127.0.0.1";
+    early.port               = port;
+    early.session_token      = token;
+    early.session_token_size = token_length;
+    early.early_data         = early_data;
+    early.early_data_size    = sizeof(early_data) - 1u;
+    early.early_fin          = true;
+    assert(utp_context_connect_0rtt(early_client, &early) == UTP_STATUS_OK);
+    pump_event_loop(event_base, 32);
+    assert(early_probe.connected_connection != NULL);
+    assert(early_probe.connected_connection->crypto_ready);
+    assert(server_probe.new_connection_count == 2);
+    stream = utp_connection_get_stream(server_probe.connected_connection, 0u);
+    assert(stream != NULL);
+    assert(utp_stream_read(stream, received, sizeof(received), &received_length) == UTP_STATUS_OK);
+    assert(received_length == sizeof(early_data) - 1u);
+    assert(memcmp(received, early_data, received_length) == 0);
     utp_context_destroy(early_client);
     utp_context_destroy(first_client);
     utp_context_destroy(server);
@@ -462,6 +541,7 @@ int main(void)
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_128, 101u, 102u);
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_256, 103u, 104u);
     test_plaintext_zero_rtt(event_base);
+    test_encrypted_zero_rtt(event_base);
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;

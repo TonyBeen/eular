@@ -45,6 +45,21 @@ void send_to_peer(utp_connection_t* sender, utp_connection_t* receiver, const ut
     (void)receiver_address;
 }
 
+void send_encrypted_to_peer(utp_connection_t* sender, utp_connection_t* receiver, const utp_address_t* sender_address,
+                            uint64_t now_us)
+{
+    utp_packet_out_t*         packet = utp_connection_next_packet_to_send(sender);
+    std::array<uint8_t, 1280> wire   = {};
+    size_t                    length = 0u;
+
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_encode_packet_wire(sender, packet, wire.data(), wire.size(), &length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(sender, packet, now_us) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(receiver, wire.data(), length, sender_address, now_us) ==
+            UTP_INTERNAL_ERROR_OK);
+}
+
 }  // namespace
 
 TEST_CASE("active connection binds a peer CID and replies to a Handshake without waiting for an ACK",
@@ -237,7 +252,7 @@ TEST_CASE("connection retransmission timeout resends a tracked handshake packet 
     utp_connection_cleanup(&active);
 }
 
-TEST_CASE("0-RTT request and response retransmissions preserve packet number and wire bytes",
+TEST_CASE("0-RTT request and response retransmissions allocate a new packet number",
           "[connection][retransmission][0rtt]")
 {
     const std::array<uint8_t, UTP_FRAME_VERSION_SIZE> version         = version_frame();
@@ -256,7 +271,6 @@ TEST_CASE("0-RTT request and response retransmissions preserve packet number and
             UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
-    REQUIRE((packet->po_flags & UTP_PO_IMMUTABLE) != 0u);
     REQUIRE(packet->packet_number == 1u);
     first_length = packet->data_size;
     std::copy_n(packet->raw_data, first_length, first_wire.begin());
@@ -266,33 +280,138 @@ TEST_CASE("0-RTT request and response retransmissions preserve packet number and
     REQUIRE(utp_connection_on_retransmission_timeout(&active, deadline) == UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&active);
     REQUIRE(packet != nullptr);
-    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(packet->packet_number == 2u);
     REQUIRE(packet->data_size == first_length);
-    REQUIRE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
+    REQUIRE_FALSE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
     utp_connection_cleanup(&active);
 
     REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 57u, 56u, &active_address, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_begin_zero_rtt_response(&passive) == UTP_INTERNAL_ERROR_OK);
     REQUIRE_FALSE(utp_connection_is_connected(&passive));
-    REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_HANDSHAKE, version.data(), version.size(), true) ==
+    passive.congestion.cwnd                           = 1u;
+    passive.send_control.pacer.burst_tokens           = 0u;
+    passive.send_control.pacer.next_scheduled_time_us = UINT64_C(1000000);
+    REQUIRE(utp_connection_queue_zero_rtt_response(&passive, version.data(), version.size(), false) ==
             UTP_INTERNAL_ERROR_OK);
-    packet = utp_connection_next_packet_to_send(&passive);
+    packet = utp_connection_next_packet_to_send_at(&passive, 200u);
     REQUIRE(packet != nullptr);
-    REQUIRE((packet->po_flags & UTP_PO_IMMUTABLE) != 0u);
     first_length = packet->data_size;
     std::copy_n(packet->raw_data, first_length, first_wire.begin());
     REQUIRE(utp_connection_on_packet_sent(&passive, packet, 200u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_is_connected(&passive));
-    deadline = utp_connection_retransmission_deadline(&passive);
-    REQUIRE(deadline > 200u);
-    REQUIRE(utp_connection_on_retransmission_timeout(&passive, deadline) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_retransmission_deadline(&passive) == 0u);
+    REQUIRE(utp_connection_begin_zero_rtt_response(&passive) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_zero_rtt_response(&passive, version.data(), version.size(), false) ==
+            UTP_INTERNAL_ERROR_OK);
     packet = utp_connection_next_packet_to_send(&passive);
     REQUIRE(packet != nullptr);
-    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(packet->packet_number == 2u);
     REQUIRE(packet->data_size == first_length);
-    REQUIRE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
+    REQUIRE_FALSE(std::equal(first_wire.begin(), first_wire.begin() + first_length, packet->raw_data));
     utp_connection_cleanup(&passive);
+}
+
+TEST_CASE("encrypted 0-RTT retransmission uses a new nonce and ciphertext", "[connection][retransmission][0rtt]")
+{
+    const std::array<uint8_t, UTP_FRAME_VERSION_SIZE>          version       = version_frame();
+    const utp_address_t                                        peer          = loopback_address(10012u);
+    std::array<uint8_t, UTP_CRYPTO_RESUMPTION_PSK_SIZE>        psk           = {};
+    std::array<uint8_t, UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE>   attempt_nonce = {};
+    std::array<uint8_t, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE> server_info   = {};
+    std::array<uint8_t, 1280>                                  first_wire    = {};
+    std::array<uint8_t, 1280>                                  second_wire   = {};
+    utp_connection_t                                           connection    = {};
+    utp_packet_out_t*                                          packet;
+    size_t                                                     first_length  = 0u;
+    size_t                                                     second_length = 0u;
+    uint64_t                                                   deadline;
+
+    psk[0]           = 1u;
+    attempt_nonce[0] = 2u;
+    server_info[0]   = 3u;
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 58u, 0u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_configure_zero_rtt_crypto(&connection, psk.data(), attempt_nonce.data(), server_info.data(),
+                                                     UTP_CRYPTO_TYPE_AES_GCM_128) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_early_packet(&connection, UTP_PACKET_TYPE_0RTT, version.data(), version.size(), 0u,
+                                              true) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(utp_connection_encode_packet_wire(&connection, packet, first_wire.data(), first_wire.size(),
+                                              &first_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    deadline = utp_connection_retransmission_deadline(&connection);
+    REQUIRE(utp_connection_on_retransmission_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 2u);
+    REQUIRE(utp_connection_encode_packet_wire(&connection, packet, second_wire.data(), second_wire.size(),
+                                              &second_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(second_length == first_length);
+    REQUIRE_FALSE(std::equal(first_wire.begin(), first_wire.begin() + first_length, second_wire.begin()));
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("encrypted 0-RTT promotes matching bidirectional 1-RTT keys", "[connection][crypto][0rtt]")
+{
+    const utp_address_t                                              client_address = loopback_address(10013u);
+    const utp_address_t                                              server_address = loopback_address(10014u);
+    const std::array<uint8_t, UTP_CRYPTO_RESUMPTION_PSK_SIZE>        psk            = {1u};
+    const std::array<uint8_t, UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE>   attempt_nonce  = {2u};
+    const std::array<uint8_t, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE> server_info    = {3u};
+    const uint8_t                                                    ping           = UTP_FRAME_TYPE_PING;
+    utp_connection_t                                                 client         = {};
+    utp_connection_t                                                 server         = {};
+
+    REQUIRE(utp_connection_init(&client, UTP_CONNECTION_ROLE_ACTIVE, 61u, 62u, &server_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&server, UTP_CONNECTION_ROLE_PASSIVE, 62u, 61u, &client_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_configure_zero_rtt_crypto(&client, psk.data(), attempt_nonce.data(), server_info.data(),
+                                                     UTP_CRYPTO_TYPE_AES_GCM_128) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_configure_zero_rtt_crypto(&server, psk.data(), attempt_nonce.data(), server_info.data(),
+                                                     UTP_CRYPTO_TYPE_AES_GCM_128) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_complete_zero_rtt_crypto(&client, server.crypto_key_pair.public_key) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_complete_zero_rtt_crypto(&server, client.crypto_key_pair.public_key) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    client.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&client.send_control, true);
+    REQUIRE(utp_connection_queue_packet(&client, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), false) ==
+            UTP_INTERNAL_ERROR_OK);
+    send_encrypted_to_peer(&client, &server, &client_address, 100u);
+
+    REQUIRE(utp_connection_queue_packet(&server, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), false) ==
+            UTP_INTERNAL_ERROR_OK);
+    send_encrypted_to_peer(&server, &client, &server_address, 200u);
+
+    utp_connection_cleanup(&server);
+    utp_connection_cleanup(&client);
+}
+
+TEST_CASE("0-RTT retains overflow early data for the first 1-RTT stream frame", "[connection][0rtt][stream]")
+{
+    const utp_address_t             peer       = loopback_address(10015u);
+    const std::array<uint8_t, 128u> data       = {};
+    utp_connection_t                connection = {};
+    utp_stream_t*                   stream;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 63u, 64u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_reserve_zero_rtt_stream(&connection, data.data(), data.size(), 40u, true) ==
+            UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&connection, 0u);
+    REQUIRE(stream != nullptr);
+    REQUIRE(stream->send_buffer_offset == 40u);
+    REQUIRE(stream->next_send_offset == 40u);
+    REQUIRE(stream->send_buffer_length == data.size() - 40u);
+    REQUIRE(stream->local_fin_queued);
+    REQUIRE_FALSE(stream->local_fin_sent);
+    REQUIRE(connection.stream_data_sent_total == 40u);
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("connection releases acknowledged and non-tracked packets back to its pool", "[connection][ack]")
@@ -386,21 +505,16 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
     utp_connection_cleanup(&active);
 }
 
-TEST_CASE("encrypted connections reject plaintext Handshake packets with control frames", "[connection][crypto]")
+TEST_CASE("encrypted connections reject plaintext Handshake packets with non-handshake frames", "[connection][crypto]")
 {
-    const utp_address_t                            peer       = loopback_address(10026u);
-    utp_connection_t                               connection = {};
-    utp_packet_out_t*                              packet;
-    utp_ack_range_t                                ranges[]     = {{1u, 1u}};
-    const utp_ack_info_t                           ack          = {1u, 0u, ranges, 1u, 1u};
-    utp_frame_crypto_t                             crypto       = {};
-    std::array<uint8_t, UTP_FRAME_CRYPTO_SIZE>     crypto_frame = {};
-    std::array<uint8_t, UTP_ACK_FRAME_HEADER_SIZE> ack_frame    = {};
-    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE> wire   = {};
-    const utp_packet_header_t                                                                       header = {
-        11u, 77u, 1u, UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE, UTP_PACKET_TYPE_HANDSHAKE, 0u};
-    size_t        ack_length = 0u;
-    const uint8_t ping       = UTP_FRAME_TYPE_PING;
+    const utp_address_t                                                      peer       = loopback_address(10026u);
+    utp_connection_t                                                         connection = {};
+    utp_packet_out_t*                                                        packet;
+    utp_frame_crypto_t                                                       crypto       = {};
+    std::array<uint8_t, UTP_FRAME_CRYPTO_SIZE>                               crypto_frame = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_CRYPTO_SIZE + 1u> wire         = {};
+    const utp_packet_header_t header = {11u, 77u, 1u, UTP_FRAME_CRYPTO_SIZE + 1u, UTP_PACKET_TYPE_HANDSHAKE, 0u};
+    const uint8_t             ping   = UTP_FRAME_TYPE_PING;
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 77u, 11u, &peer, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
@@ -418,10 +532,9 @@ TEST_CASE("encrypted connections reject plaintext Handshake packets with control
 
     crypto.crypto_type = connection.crypto_type;
     REQUIRE(utp_frame_crypto_encode(crypto_frame.data(), crypto_frame.size(), &crypto) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_ack_encode(ack_frame.data(), ack_frame.size(), &ack, 0u, &ack_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_proto_encode_header(wire.data(), wire.size(), &header) == UTP_INTERNAL_ERROR_OK);
     std::memcpy(wire.data() + UTP_PACKET_HEADER_SIZE, crypto_frame.data(), crypto_frame.size());
-    std::memcpy(wire.data() + UTP_PACKET_HEADER_SIZE + crypto_frame.size(), ack_frame.data(), ack_length);
+    wire.back() = ping;
     REQUIRE(utp_connection_on_packet_received(&connection, wire.data(), wire.size(), &peer, 200u) ==
             UTP_INTERNAL_ERROR_AUTH);
     REQUIRE(utp_send_control_unacked_packet_count(&connection.send_control) == 1u);
