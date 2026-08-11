@@ -25,35 +25,39 @@ typedef utp_internal_error_t (*utp_pending_incoming_replay_fn)(const uint8_t* pa
 // storage 由 Context 持有并在创建 pending 项时传入。每个缓存包保存明文长度、线上长度和解密后的完整包，
 // 因此接收热路径不需要动态分配，晋升后也能按实际 UDP 字节数记账。
 typedef struct utp_pending_incoming {
-    utp_address_t         peer;
-    uint8_t*              storage;
-    size_t                storage_capacity;
-    size_t                storage_length;
-    size_t                packet_limit;
-    size_t                packet_count;
-    uint32_t              local_cid;
-    uint32_t              peer_cid;
-    uint64_t              first_handshake_packet_number;
-    uint64_t              last_handshake_packet_number;
-    uint64_t              next_packet_number;
-    uint64_t              latest_initial_packet_number;
-    uint64_t              latest_initial_received_us;
-    uint64_t              last_handshake_sent_us;
-    uint64_t              handshake_rtt_sample_us;
-    uint64_t              handshake_retransmission_deadline_us;
-    uint64_t              handshake_base_delay_us;
-    uint32_t              handshake_retransmission_count;
-    utp_crypto_key_pair_t crypto_key_pair;
-    utp_crypto_aead_t     tx_aead;
-    utp_crypto_aead_t     rx_aead;
-    uint8_t               crypto_type;
-    uint8_t               handshake_max_retries;
-    bool                  crypto_configured;
-    bool                  crypto_ready;
-    bool                  accepted;
-    bool                  handshake_sent;
+    utp_address_t                peer;
+    uint8_t*                     storage;
+    size_t                       storage_capacity;
+    size_t                       storage_length;
+    size_t                       packet_limit;
+    size_t                       packet_count;
+    uint32_t                     local_cid;
+    uint32_t                     peer_cid;
+    uint64_t                     first_handshake_packet_number;
+    uint64_t                     last_handshake_packet_number;
+    uint64_t                     next_packet_number;
+    uint64_t                     latest_initial_packet_number;
+    uint64_t                     latest_initial_received_us;
+    uint64_t                     last_handshake_sent_us;
+    uint64_t                     handshake_rtt_sample_us;
+    uint64_t                     handshake_retransmission_deadline_us;
+    uint64_t                     handshake_base_delay_us;
+    uint32_t                     handshake_retransmission_count;
+    utp_crypto_key_pair_t        crypto_key_pair;
+    utp_crypto_aead_t            tx_aead;
+    utp_crypto_aead_t            rx_aead;
+    uint8_t                      crypto_type;
+    uint8_t                      handshake_max_retries;
+    utp_frame_transport_params_t peer_transport_params;
+    utp_frame_ack_frequency_t    peer_ack_frequency;
+    bool                         crypto_configured;
+    bool                         crypto_ready;
+    bool                         accepted;
+    bool                         handshake_sent;
     // UDP 暂不可写时保留首个或重传 HANDSHAKE，等待 writable 事件原包号重建发送。
-    bool                  handshake_write_pending;
+    bool                         handshake_write_pending;
+    bool                         peer_transport_params_received;
+    bool                         peer_ack_frequency_received;
 } utp_pending_incoming_t;
 
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,

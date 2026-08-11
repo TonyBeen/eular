@@ -1127,8 +1127,8 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_ACK_FRAME_HEADER_SIZE +
-                    UTP_FRAME_HANDSHAKE_DELAY_SIZE];
+    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+                    UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
     size_t               payload_length;
     utp_internal_error_t error;
 
@@ -1145,6 +1145,17 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
             return error;
         }
         payload_length += UTP_FRAME_CRYPTO_SIZE;
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_encode_transport_params(context->handshake_timeout_ms, payload + payload_length,
+                                                       sizeof(payload) - payload_length);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            payload_length += UTP_FRAME_TRANSPORT_PARAMS_SIZE;
+            error = utp_connection_encode_ack_frequency(payload + payload_length, sizeof(payload) - payload_length);
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                payload_length += UTP_FRAME_ACK_FREQUENCY_SIZE;
+            }
+        }
     }
     if (pending->latest_initial_packet_number == 0u || pending->latest_initial_received_us == 0u) {
         return UTP_INTERNAL_ERROR_STATE;
@@ -1540,6 +1551,18 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
             }
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_connection_encode_transport_params(context->handshake_timeout_ms, payload + payload_length,
+                                                           payload_capacity - payload_length);
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                payload_length += UTP_FRAME_TRANSPORT_PARAMS_SIZE;
+                error =
+                    utp_connection_encode_ack_frequency(payload + payload_length, payload_capacity - payload_length);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    payload_length += UTP_FRAME_ACK_FREQUENCY_SIZE;
+                }
+            }
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
             error =
                 utp_connection_queue_packet(&slot->connection, UTP_PACKET_TYPE_INITIAL, payload, payload_length, true);
         }
@@ -1750,6 +1773,15 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_set_stream_scheduler_mode(&slot->connection, (uint8_t)context->stream_scheduler_mode);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.peer_transport_params_received) {
+        error =
+            utp_connection_apply_peer_transport_params(&slot->connection, &pending_slot->pending.peer_transport_params);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.peer_ack_frequency_received) {
+        const utp_frame_ack_frequency_t* frequency = &pending_slot->pending.peer_ack_frequency;
+
+        utp_connection_apply_peer_ack_frequency(&slot->connection, frequency);
     }
     if (error == UTP_INTERNAL_ERROR_OK && pending_slot->pending.crypto_ready) {
         error = utp_connection_adopt_crypto(&slot->connection, pending_slot->pending.crypto_type,
@@ -2016,6 +2048,20 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
                 error      = utp_frame_crypto_decode(&peer_crypto, frame, frame_length);
                 has_crypto = error == UTP_INTERNAL_ERROR_OK;
             }
+        } else if (error == UTP_INTERNAL_ERROR_OK && frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS) {
+            if (slot->pending.peer_transport_params_received) {
+                error = UTP_INTERNAL_ERROR_PROTOCOL;
+            } else {
+                error = utp_frame_transport_params_decode(&slot->pending.peer_transport_params, frame, frame_length);
+                slot->pending.peer_transport_params_received = error == UTP_INTERNAL_ERROR_OK;
+            }
+        } else if (error == UTP_INTERNAL_ERROR_OK && frame_type == UTP_FRAME_TYPE_ACK_FREQUENCY) {
+            if (slot->pending.peer_ack_frequency_received) {
+                error = UTP_INTERNAL_ERROR_PROTOCOL;
+            } else {
+                error = utp_frame_ack_frequency_decode(&slot->pending.peer_ack_frequency, frame, frame_length);
+                slot->pending.peer_ack_frequency_received = error == UTP_INTERNAL_ERROR_OK;
+            }
         }
     }
     if (error == UTP_INTERNAL_ERROR_OK && has_crypto) {
@@ -2025,8 +2071,18 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         error = utp_pending_incoming_record_initial(&slot->pending, view->header.packet_number, utp_context_now_us());
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_pending_incoming_set_handshake_policy(&slot->pending, context->handshake_timeout_ms,
-                                                          context->handshake_max_retries);
+        {
+            uint16_t handshake_timeout_ms = context->handshake_timeout_ms;
+
+            if (slot->pending.peer_transport_params_received &&
+                (slot->pending.peer_transport_params.flags & UTP_TRANSPORT_PARAMS_FLAG_HANDSHAKE_TIMEOUT) != 0u &&
+                slot->pending.peer_transport_params.handshake_timeout_ms != 0u &&
+                slot->pending.peer_transport_params.handshake_timeout_ms < handshake_timeout_ms) {
+                handshake_timeout_ms = slot->pending.peer_transport_params.handshake_timeout_ms;
+            }
+            error = utp_pending_incoming_set_handshake_policy(&slot->pending, handshake_timeout_ms,
+                                                              context->handshake_max_retries);
+        }
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_register_pending_slot(context, slot);

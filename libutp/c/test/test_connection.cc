@@ -22,6 +22,22 @@ std::array<uint8_t, UTP_FRAME_VERSION_SIZE> version_frame()
     return frame;
 }
 
+std::array<uint8_t, UTP_FRAME_VERSION_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE + UTP_FRAME_ACK_FREQUENCY_SIZE>
+handshake_negotiation_payload(const utp_frame_transport_params_t& params)
+{
+    std::array<uint8_t, UTP_FRAME_VERSION_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE + UTP_FRAME_ACK_FREQUENCY_SIZE>
+                                    payload   = {};
+    const utp_frame_version_t       version   = {UTP_PROTOCOL_VERSION};
+    const utp_frame_ack_frequency_t frequency = {25u, 2u, 3u};
+
+    REQUIRE(utp_frame_version_encode(payload.data(), UTP_FRAME_VERSION_SIZE, &version) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_transport_params_encode(payload.data() + UTP_FRAME_VERSION_SIZE, UTP_FRAME_TRANSPORT_PARAMS_SIZE,
+                                              &params) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_ack_frequency_encode(payload.data() + UTP_FRAME_VERSION_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE,
+                                           UTP_FRAME_ACK_FREQUENCY_SIZE, &frequency) == UTP_INTERNAL_ERROR_OK);
+    return payload;
+}
+
 utp_address_t loopback_address(uint16_t port)
 {
     utp_address_t address = {};
@@ -120,6 +136,60 @@ TEST_CASE("active connection binds a peer CID and replies to a Handshake without
     send_to_peer(&passive, &active, &passive_address, &active_address, 500u);
     REQUIRE(utp_connection_state(&active) == UTP_CONNECTION_STATE_DRAINING);
     REQUIRE(utp_connection_state(&passive) == UTP_CONNECTION_STATE_DRAINING);
+
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection accepts an identical retransmitted Handshake transport parameters", "[connection][handshake]")
+{
+    const utp_address_t                active_address  = loopback_address(10021u);
+    const utp_address_t                passive_address = loopback_address(10022u);
+    const utp_frame_transport_params_t params          = {
+        UINT64_C(8388608),
+        UINT64_C(2097152),
+        UINT64_C(2097152),
+        600000u,
+        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
+        800u,
+        64u,
+        32u,
+        3u,
+    };
+    const auto        payload = handshake_negotiation_payload(params);
+    utp_connection_t  active  = {};
+    utp_connection_t  passive = {};
+    utp_packet_out_t* packet;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 31u, 0u, &passive_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 32u, 31u, &active_address, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(&active, UTP_PACKET_TYPE_INITIAL, payload.data(), UTP_FRAME_VERSION_SIZE,
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_HANDSHAKE, payload.data(), payload.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    send_to_peer(&passive, &active, &passive_address, &active_address, 200u);
+    REQUIRE(active.peer_transport_params_received);
+    REQUIRE(active.peer_max_data == params.initial_max_data);
+    REQUIRE(active.peer_ack_delay_exponent == params.ack_delay_exponent);
+
+    REQUIRE(utp_connection_queue_packet(&passive, UTP_PACKET_TYPE_HANDSHAKE, payload.data(), payload.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    send_to_peer(&passive, &active, &passive_address, &active_address, 300u);
+    REQUIRE(active.peer_transport_params_received);
+    REQUIRE(active.peer_max_data == params.initial_max_data);
+    REQUIRE(active.peer_ack_frequency_received);
+    {
+        utp_frame_transport_params_t changed_params = params;
+
+        ++changed_params.initial_max_data;
+        REQUIRE(utp_connection_apply_peer_transport_params(&active, &changed_params) == UTP_INTERNAL_ERROR_PROTOCOL);
+    }
 
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
@@ -751,6 +821,28 @@ TEST_CASE("connection keepalive probes are ACK-eliciting and abort after missed 
     REQUIRE(utp_connection_state(&connection) == UTP_CONNECTION_STATE_DRAINING);
     REQUIRE(utp_connection_close_deadline(&connection) == deadline);
     REQUIRE(utp_connection_keepalive_deadline(&connection) == 0u);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection keeps a peer idle timeout safety margin", "[connection][keepalive]")
+{
+    const utp_address_t                peer   = loopback_address(10023u);
+    const uint8_t                      ping   = UTP_FRAME_TYPE_PING;
+    const utp_frame_transport_params_t params = {
+        0u, 0u, 0u, 40u, UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT, 0u, 0u, 0u, 0u,
+    };
+    utp_connection_t                                 connection = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> packet     = {};
+    const utp_packet_header_t                        header     = {11u, 77u, 1u, 1u, UTP_PACKET_TYPE_CTRL, 0u};
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_apply_peer_transport_params(&connection, &params) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    packet[UTP_PACKET_HEADER_SIZE] = ping;
+    REQUIRE(utp_connection_on_packet_received(&connection, packet.data(), packet.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_keepalive_deadline(&connection) == 1100u);
     utp_connection_cleanup(&connection);
 }
 

@@ -1190,3 +1190,116 @@ utp_internal_error_t utp_frame_stream_data_blocked_decode(utp_frame_stream_data_
     return utp_frame_u32_u64_decode(&blocked->stream_id, &blocked->stream_data_limit, buffer, length,
                                     UTP_FRAME_TYPE_STREAM_DATA_BLOCKED, UTP_FRAME_STREAM_DATA_BLOCKED_SIZE);
 }
+
+utp_internal_error_t utp_frame_ack_frequency_encode(uint8_t* buffer, size_t capacity,
+                                                    const utp_frame_ack_frequency_t* frequency)
+{
+    utp_wire_writer_t    writer;
+    uint8_t              threshold;
+    uint8_t              reorder;
+    uint32_t             delay;
+    utp_internal_error_t error;
+
+    if (buffer == NULL || frequency == NULL || capacity < UTP_FRAME_ACK_FREQUENCY_SIZE) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    threshold = frequency->ack_eliciting_threshold == 0u ? 5u : frequency->ack_eliciting_threshold;
+    reorder   = frequency->reordering_threshold == 0u ? 3u : frequency->reordering_threshold;
+    delay     = frequency->max_ack_delay_ms == 0u ? 25u : frequency->max_ack_delay_ms;
+    if (threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD)
+        threshold = UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD;
+    if (reorder > UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD) reorder = UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD;
+    if (delay > UTP_ACK_FREQUENCY_MAX_DELAY_MS) delay = UTP_ACK_FREQUENCY_MAX_DELAY_MS;
+    error = utp_wire_writer_init(&writer, buffer, UTP_FRAME_ACK_FREQUENCY_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_ACK_FREQUENCY);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, threshold);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, reorder);
+    return error == UTP_INTERNAL_ERROR_OK ? utp_wire_write_u32(&writer, delay) : error;
+}
+
+utp_internal_error_t utp_frame_ack_frequency_decode(utp_frame_ack_frequency_t* frequency, const uint8_t* buffer,
+                                                    size_t length)
+{
+    utp_wire_reader_t    reader;
+    uint8_t              type;
+    utp_internal_error_t error;
+
+    if (frequency == NULL || buffer == NULL || length != UTP_FRAME_ACK_FREQUENCY_SIZE)
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_wire_reader_init(&reader, buffer, length);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &type);
+    if (error == UTP_INTERNAL_ERROR_OK && type != UTP_FRAME_TYPE_ACK_FREQUENCY) return UTP_INTERNAL_ERROR_PROTOCOL;
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &frequency->ack_eliciting_threshold);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &frequency->reordering_threshold);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u32(&reader, &frequency->max_ack_delay_ms);
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    if (frequency->ack_eliciting_threshold == 0u) frequency->ack_eliciting_threshold = 5u;
+    if (frequency->reordering_threshold == 0u) frequency->reordering_threshold = 3u;
+    if (frequency->max_ack_delay_ms == 0u) frequency->max_ack_delay_ms = 25u;
+    if (frequency->ack_eliciting_threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD)
+        frequency->ack_eliciting_threshold = UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD;
+    if (frequency->reordering_threshold > UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD)
+        frequency->reordering_threshold = UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD;
+    if (frequency->max_ack_delay_ms > UTP_ACK_FREQUENCY_MAX_DELAY_MS)
+        frequency->max_ack_delay_ms = UTP_ACK_FREQUENCY_MAX_DELAY_MS;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t capacity,
+                                                       const utp_frame_transport_params_t* params)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+
+    if (buffer == NULL || params == NULL || capacity < UTP_FRAME_TRANSPORT_PARAMS_SIZE ||
+        (params->flags & (uint16_t)~UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS) != 0u ||
+        params->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ||
+        params->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+        params->initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+        params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL)
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_wire_writer_init(&writer, buffer, UTP_FRAME_TRANSPORT_PARAMS_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_TRANSPORT_PARAMS);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, params->flags);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u32(&writer, params->max_idle_timeout_ms);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, params->handshake_timeout_ms);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, params->initial_max_streams_bidi);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, params->initial_max_streams_uni);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, params->ack_delay_exponent);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_data);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_local);
+    return error == UTP_INTERNAL_ERROR_OK ? utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_remote)
+                                          : error;
+}
+
+utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_params_t* params, const uint8_t* buffer,
+                                                       size_t length)
+{
+    utp_wire_reader_t    reader;
+    uint8_t              type;
+    utp_internal_error_t error;
+
+    if (params == NULL || buffer == NULL || length != UTP_FRAME_TRANSPORT_PARAMS_SIZE)
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_wire_reader_init(&reader, buffer, length);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &type);
+    if (error == UTP_INTERNAL_ERROR_OK && type != UTP_FRAME_TYPE_TRANSPORT_PARAMS) return UTP_INTERNAL_ERROR_PROTOCOL;
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u16(&reader, &params->flags);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u32(&reader, &params->max_idle_timeout_ms);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u16(&reader, &params->handshake_timeout_ms);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u16(&reader, &params->initial_max_streams_bidi);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u16(&reader, &params->initial_max_streams_uni);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &params->ack_delay_exponent);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &params->initial_max_data);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &params->initial_max_stream_data_bidi_local);
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_wire_read_u64(&reader, &params->initial_max_stream_data_bidi_remote);
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    return (params->flags & (uint16_t)~UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS) != 0u ||
+                   params->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ||
+                   params->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+                   params->initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+                   params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL
+               ? UTP_INTERNAL_ERROR_PROTOCOL
+               : UTP_INTERNAL_ERROR_OK;
+}

@@ -14,29 +14,48 @@ extern "C" {
 #define UTP_FRAME_BIT(type) (UINT32_C(1) << (type))
 
 /* 固定长度帧及可变长度帧固定头部的线上尺寸。 */
-#define UTP_FRAME_PATH_SIZE                    9u
-#define UTP_FRAME_VERSION_SIZE                 5u
-#define UTP_FRAME_HANDSHAKE_DONE_SIZE          9u
-#define UTP_FRAME_STREAM_HEADER_SIZE           16u
-#define UTP_FRAME_PADDING_HEADER_SIZE          3u
-#define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE 5u
-#define UTP_FRAME_RESET_STREAM_SIZE            15u
-#define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
-#define UTP_FRAME_CRYPTO_SIZE                  35u
-#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    10u
-#define UTP_FRAME_ACK_FREQUENCY_SIZE           7u
-#define UTP_FRAME_TRANSPORT_PARAMS_SIZE        38u
-#define UTP_FRAME_HANDSHAKE_DELAY_SIZE         5u
-#define UTP_FRAME_MAX_DATA_SIZE                9u
-#define UTP_FRAME_MAX_STREAM_DATA_SIZE         13u
-#define UTP_FRAME_DATA_BLOCKED_SIZE            9u
-#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE     13u
-#define UTP_STREAM_FLAG_NONE                   0x00u
-#define UTP_STREAM_FLAG_FIN                    0x01u
-#define UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL    0u
-#define UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL   1u
-#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_128      0u
-#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_256      1u
+#define UTP_FRAME_PATH_SIZE                                           9u
+#define UTP_FRAME_VERSION_SIZE                                        5u
+#define UTP_FRAME_HANDSHAKE_DONE_SIZE                                 9u
+#define UTP_FRAME_STREAM_HEADER_SIZE                                  16u
+#define UTP_FRAME_PADDING_HEADER_SIZE                                 3u
+#define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE                        5u
+#define UTP_FRAME_RESET_STREAM_SIZE                                   15u
+#define UTP_FRAME_STREAMS_LIMIT_SIZE                                  4u
+#define UTP_FRAME_CRYPTO_SIZE                                         35u
+#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE                           10u
+#define UTP_FRAME_ACK_FREQUENCY_SIZE                                  7u
+#define UTP_FRAME_TRANSPORT_PARAMS_SIZE                               38u
+#define UTP_FRAME_HANDSHAKE_DELAY_SIZE                                5u
+#define UTP_FRAME_MAX_DATA_SIZE                                       9u
+#define UTP_FRAME_MAX_STREAM_DATA_SIZE                                13u
+#define UTP_FRAME_DATA_BLOCKED_SIZE                                   9u
+#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE                            13u
+#define UTP_STREAM_FLAG_NONE                                          0x00u
+#define UTP_STREAM_FLAG_FIN                                           0x01u
+#define UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT                    UINT16_C(1) << 0u
+#define UTP_TRANSPORT_PARAMS_FLAG_HANDSHAKE_TIMEOUT                   UINT16_C(1) << 1u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI            UINT16_C(1) << 2u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_UNI             UINT16_C(1) << 3u
+#define UTP_TRANSPORT_PARAMS_FLAG_ACK_DELAY_EXPONENT                  UINT16_C(1) << 4u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_DATA                    UINT16_C(1) << 5u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL  UINT16_C(1) << 6u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE UINT16_C(1) << 7u
+#define UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS                                                                    \
+    (UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT | UTP_TRANSPORT_PARAMS_FLAG_HANDSHAKE_TIMEOUT |               \
+     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI | UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_UNI | \
+     UTP_TRANSPORT_PARAMS_FLAG_ACK_DELAY_EXPONENT | UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_DATA |              \
+     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL |                                           \
+     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE)
+#define UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT         20u
+#define UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL         ((UINT64_C(1) << 60) - UINT64_C(1))
+#define UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD 64u
+#define UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD    32u
+#define UTP_ACK_FREQUENCY_MAX_DELAY_MS                1000u
+#define UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL           0u
+#define UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL          1u
+#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_128             0u
+#define UTP_FRAME_CRYPTO_TYPE_AES_GCM_256             1u
 
 /*
  * 帧的线格式。所有多字节整数均使用网络字节序编码，括号内数字表示字段字节数。
@@ -184,6 +203,27 @@ typedef struct utp_frame_stream_data_blocked {
     uint64_t stream_data_limit;
 } utp_frame_stream_data_blocked_t;
 
+/* ACK_FREQUENCY：type(1), ack_eliciting_threshold(1), reordering_threshold(1), max_ack_delay_ms(4)。 */
+typedef struct utp_frame_ack_frequency {
+    uint32_t max_ack_delay_ms;
+    uint8_t  ack_eliciting_threshold;
+    uint8_t  reordering_threshold;
+} utp_frame_ack_frequency_t;
+
+/* TRANSPORT_PARAMS：type(1), flags(2), idle_timeout(4), handshake_timeout(2), streams(2+2), exponent(1), credits(8*3)。
+ */
+typedef struct utp_frame_transport_params {
+    uint64_t initial_max_data;
+    uint64_t initial_max_stream_data_bidi_local;
+    uint64_t initial_max_stream_data_bidi_remote;
+    uint32_t max_idle_timeout_ms;
+    uint16_t flags;
+    uint16_t handshake_timeout_ms;
+    uint16_t initial_max_streams_bidi;
+    uint16_t initial_max_streams_uni;
+    uint8_t  ack_delay_exponent;
+} utp_frame_transport_params_t;
+
 /** @brief 测量首个帧的完整线上长度与类型，不修改输入缓冲区。 */
 utp_internal_error_t utp_frame_measure(const uint8_t* frame, size_t available, uint8_t* frame_type,
                                        size_t* frame_length);
@@ -283,6 +323,18 @@ utp_internal_error_t utp_frame_stream_data_blocked_encode(uint8_t* buffer, size_
 /** @brief 解码流级受阻通知 STREAM_DATA_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_stream_data_blocked_decode(utp_frame_stream_data_blocked_t* blocked,
                                                           const uint8_t* buffer, size_t length);
+/** @brief 编码 ACK_FREQUENCY，并规范化零值与协议上限。 */
+utp_internal_error_t utp_frame_ack_frequency_encode(uint8_t* buffer, size_t capacity,
+                                                    const utp_frame_ack_frequency_t* frequency);
+/** @brief 解码 ACK_FREQUENCY，并规范化零值与协议上限。 */
+utp_internal_error_t utp_frame_ack_frequency_decode(utp_frame_ack_frequency_t* frequency, const uint8_t* buffer,
+                                                    size_t length);
+/** @brief 编码固定长度 TRANSPORT_PARAMS。 */
+utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t capacity,
+                                                       const utp_frame_transport_params_t* params);
+/** @brief 解码并校验 TRANSPORT_PARAMS 的 flags、ACK 指数和流控上限。 */
+utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_params_t* params, const uint8_t* buffer,
+                                                       size_t length);
 
 #ifdef __cplusplus
 }

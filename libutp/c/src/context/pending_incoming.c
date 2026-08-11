@@ -82,12 +82,16 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     pending->rx_aead                              = (utp_crypto_aead_t){0};
     pending->crypto_type                          = 0u;
     pending->handshake_max_retries                = UINT8_MAX;
+    pending->peer_transport_params                = (utp_frame_transport_params_t){0};
+    pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
     pending->crypto_configured                    = false;
     pending->crypto_ready                         = false;
     utp_crypto_key_pair_clear(&pending->crypto_key_pair);
-    pending->accepted                = false;
-    pending->handshake_sent          = false;
-    pending->handshake_write_pending = false;
+    pending->accepted                       = false;
+    pending->handshake_sent                 = false;
+    pending->handshake_write_pending        = false;
+    pending->peer_transport_params_received = false;
+    pending->peer_ack_frequency_received    = false;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -116,11 +120,15 @@ void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
         pending->handshake_retransmission_count       = 0u;
         pending->crypto_type                          = 0u;
         pending->handshake_max_retries                = 0u;
+        pending->peer_transport_params                = (utp_frame_transport_params_t){0};
+        pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
         pending->crypto_configured                    = false;
         pending->crypto_ready                         = false;
         pending->accepted                             = false;
         pending->handshake_sent                       = false;
         pending->handshake_write_pending              = false;
+        pending->peer_transport_params_received       = false;
+        pending->peer_ack_frequency_received          = false;
     }
 }
 

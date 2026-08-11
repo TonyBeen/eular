@@ -43,6 +43,20 @@ void        utp_connection_on_packet_abandoned(utp_connection_t* connection, con
 static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connection);
 static void utp_connection_update_completed_peer_streams(utp_connection_t* connection);
 
+/** @brief 比较传输参数字段，避免结构体填充字节影响协议判断。 */
+static bool utp_connection_transport_params_equal(const utp_frame_transport_params_t* left,
+                                                  const utp_frame_transport_params_t* right)
+{
+    return left != NULL && right != NULL && left->flags == right->flags &&
+           left->max_idle_timeout_ms == right->max_idle_timeout_ms &&
+           left->handshake_timeout_ms == right->handshake_timeout_ms &&
+           left->initial_max_streams_bidi == right->initial_max_streams_bidi &&
+           left->initial_max_streams_uni == right->initial_max_streams_uni &&
+           left->ack_delay_exponent == right->ack_delay_exponent && left->initial_max_data == right->initial_max_data &&
+           left->initial_max_stream_data_bidi_local == right->initial_max_stream_data_bidi_local &&
+           left->initial_max_stream_data_bidi_remote == right->initial_max_stream_data_bidi_remote;
+}
+
 /* 收包基础校验与明文握手保护。 */
 static bool utp_connection_packet_type_is_valid(uint8_t type)
 {
@@ -353,6 +367,30 @@ static uint64_t utp_connection_milliseconds_to_microseconds(uint64_t millisecond
     return milliseconds > UINT64_MAX / UINT64_C(1000) ? UINT64_MAX : milliseconds * UINT64_C(1000);
 }
 
+/** @brief 计算不晚于对端 idle 超时的保活间隔，为 RTT 波动预留发送余量。 */
+static uint64_t utp_connection_keepalive_interval_us(const utp_connection_t* connection)
+{
+    uint64_t peer_idle_us;
+    uint64_t guard_us;
+    uint64_t srtt_us;
+
+    if (connection == NULL || !connection->peer_transport_params_received ||
+        (connection->peer_transport_params.flags & UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT) == 0u) {
+        return UTP_CONNECTION_KEEPALIVE_INTERVAL_US;
+    }
+    peer_idle_us =
+        utp_connection_milliseconds_to_microseconds(connection->peer_transport_params.max_idle_timeout_ms == 0u
+                                                        ? UINT64_C(1)
+                                                        : connection->peer_transport_params.max_idle_timeout_ms);
+    srtt_us  = utp_send_control_srtt(&connection->send_control);
+    guard_us = srtt_us > UINT64_MAX / UINT64_C(3) ? UINT64_MAX : srtt_us * UINT64_C(3);
+    if (guard_us < UINT64_C(50000)) {
+        guard_us = UINT64_C(50000);
+    }
+    return peer_idle_us > guard_us && peer_idle_us - guard_us > UINT64_C(1000) ? peer_idle_us - guard_us
+                                                                               : UINT64_C(1000);
+}
+
 static uint16_t utp_connection_current_packet_capacity(const utp_connection_t* connection)
 {
     uint16_t capacity;
@@ -429,7 +467,8 @@ static void utp_connection_mark_peer_activity(utp_connection_t* connection, uint
     }
     connection->last_peer_activity_us   = now_us;
     connection->keepalive_missed_probes = 0u;
-    connection->keepalive_deadline_us   = utp_connection_add_deadline(now_us, UTP_CONNECTION_KEEPALIVE_INTERVAL_US);
+    connection->keepalive_deadline_us =
+        utp_connection_add_deadline(now_us, utp_connection_keepalive_interval_us(connection));
 }
 
 static bool utp_connection_record_peer_close(utp_connection_t* connection, const utp_frame_connection_close_t* close)
@@ -964,6 +1003,13 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
         return UTP_INTERNAL_ERROR_NOMEM;
     }
     utp_stream_init(stream, stream_id);
+    if ((stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u) {
+        const bool locally_initiated =
+            (stream_id & UINT32_C(1)) == utp_connection_local_stream_initiator_bit(connection);
+
+        stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
+                                                         : connection->peer_initial_max_stream_data_bidi_local;
+    }
     utp_hash_node_init(&stream->hash_node);
     stream->connection                = connection;
     stream->connection_consumed_total = &connection->local_stream_data_consumed_total;
@@ -2201,9 +2247,14 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->peer_close_received                                     = false;
     connection->path_challenge_pending                                  = false;
     connection->crypto_type                                             = 0u;
+    connection->peer_ack_delay_exponent                                 = 0u;
+    connection->peer_transport_params                                   = (utp_frame_transport_params_t){0};
+    connection->peer_ack_frequency                                      = (utp_frame_ack_frequency_t){0};
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
     connection->session_token_issued                                    = false;
+    connection->peer_transport_params_received                          = false;
+    connection->peer_ack_frequency_received                             = false;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
     connection->session_token_expires_at_seconds                        = 0u;
@@ -2236,21 +2287,23 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         utp_connection_cleanup(connection);
         return error;
     }
-    connection->peer                             = *peer;
-    connection->candidate_peer                   = *peer;
-    connection->local_cid                        = local_cid;
-    connection->peer_cid                         = peer_cid;
-    connection->peer_max_data                    = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
-    connection->local_max_data_advertised        = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
-    connection->stream_data_sent_total           = 0u;
-    connection->local_stream_data_received_total = 0u;
-    connection->local_stream_data_consumed_total = 0u;
-    connection->last_max_data_sent_us            = 0u;
-    connection->last_data_blocked_sent_us        = 0u;
-    connection->packet_capacity                  = packet_capacity;
-    connection->recv_reassembly_memory_bytes     = 0u;
-    connection->recv_reassembly_fragment_count   = 0u;
-    connection->role                             = role;
+    connection->peer                                     = *peer;
+    connection->candidate_peer                           = *peer;
+    connection->local_cid                                = local_cid;
+    connection->peer_cid                                 = peer_cid;
+    connection->peer_max_data                            = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
+    connection->peer_initial_max_stream_data_bidi_local  = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    connection->peer_initial_max_stream_data_bidi_remote = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    connection->local_max_data_advertised                = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
+    connection->stream_data_sent_total                   = 0u;
+    connection->local_stream_data_received_total         = 0u;
+    connection->local_stream_data_consumed_total         = 0u;
+    connection->last_max_data_sent_us                    = 0u;
+    connection->last_data_blocked_sent_us                = 0u;
+    connection->packet_capacity                          = packet_capacity;
+    connection->recv_reassembly_memory_bytes             = 0u;
+    connection->recv_reassembly_fragment_count           = 0u;
+    connection->role                                     = role;
     connection->state = role == UTP_CONNECTION_ROLE_PASSIVE ? UTP_CONNECTION_STATE_CONNECTED : UTP_CONNECTION_STATE_NEW;
     connection->path_state = UTP_CONNECTION_PATH_STATE_VALIDATED;
     utp_mtu_discovery_init(&connection->mtu_discovery, NULL, peer->family);
@@ -2269,6 +2322,78 @@ void utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_c
     if (connection != NULL) {
         utp_mtu_discovery_init(&connection->mtu_discovery, config, connection->peer.family);
     }
+}
+
+utp_internal_error_t utp_connection_encode_transport_params(uint16_t handshake_timeout_ms, uint8_t* buffer,
+                                                            size_t capacity)
+{
+    const utp_frame_transport_params_t params = {
+        UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
+        UTP_STREAM_DEFAULT_FLOW_WINDOW,
+        UTP_STREAM_DEFAULT_FLOW_WINDOW,
+        600000u,
+        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
+        handshake_timeout_ms == 0u ? 800u : handshake_timeout_ms,
+        UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI,
+        UTP_CONNECTION_DEFAULT_MAX_STREAMS_UNI,
+        0u,
+    };
+
+    return utp_frame_transport_params_encode(buffer, capacity, &params);
+}
+
+utp_internal_error_t utp_connection_encode_ack_frequency(uint8_t* buffer, size_t capacity)
+{
+    const utp_frame_ack_frequency_t frequency = {25u, UTP_CONNECTION_ACK_ELICITING_THRESHOLD, 3u};
+
+    return utp_frame_ack_frequency_encode(buffer, capacity, &frequency);
+}
+
+utp_internal_error_t utp_connection_apply_peer_transport_params(utp_connection_t*                   connection,
+                                                                const utp_frame_transport_params_t* params)
+{
+    if (connection == NULL || params == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (connection->peer_transport_params_received) {
+        return utp_connection_transport_params_equal(&connection->peer_transport_params, params)
+                   ? UTP_INTERNAL_ERROR_OK
+                   : UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    connection->peer_transport_params          = *params;
+    connection->peer_transport_params_received = true;
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_ACK_DELAY_EXPONENT) != 0u) {
+        connection->peer_ack_delay_exponent = params->ack_delay_exponent;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_DATA) != 0u) {
+        connection->peer_max_data = params->initial_max_data;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL) != 0u) {
+        connection->peer_initial_max_stream_data_bidi_local = params->initial_max_stream_data_bidi_local;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE) != 0u) {
+        connection->peer_initial_max_stream_data_bidi_remote = params->initial_max_stream_data_bidi_remote;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI) != 0u) {
+        connection->peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = params->initial_max_streams_bidi;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_UNI) != 0u) {
+        connection->peer_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL] = params->initial_max_streams_uni;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+void utp_connection_apply_peer_ack_frequency(utp_connection_t* connection, const utp_frame_ack_frequency_t* frequency)
+{
+    if (connection == NULL || frequency == NULL) {
+        return;
+    }
+    connection->peer_ack_frequency                    = *frequency;
+    connection->peer_ack_frequency_received           = true;
+    connection->ack_scheduler.ack_eliciting_threshold = frequency->ack_eliciting_threshold;
+    connection->ack_scheduler.reordering_threshold    = frequency->reordering_threshold;
+    connection->ack_scheduler.max_ack_delay_ms        = frequency->max_ack_delay_ms;
+    connection->send_control.reorder_threshold        = frequency->reordering_threshold;
 }
 
 utp_internal_error_t utp_connection_configure_crypto(utp_connection_t* connection, uint8_t crypto_type)
@@ -3019,6 +3144,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     bool                 candidate_path;
     bool                 peer_close;
     bool                 has_handshake_delay;
+    bool                 transport_params_seen;
     uint32_t             handshake_delay_us;
 
     if (connection == NULL || packet == NULL || peer == NULL || now_us == 0u || wire_packet_length < packet_length) {
@@ -3120,10 +3246,11 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             return error;
         }
     }
-    offset         = 0u;
-    handshake_done = false;
-    ack_progress   = false;
-    peer_close     = false;
+    offset                = 0u;
+    handshake_done        = false;
+    ack_progress          = false;
+    peer_close            = false;
+    transport_params_seen = false;
     while (offset < view.payload_length) {
         const uint8_t* frame;
         uint8_t        frame_type;
@@ -3164,7 +3291,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             size_t                        consumed;
 
             TAILQ_INIT(&acknowledged);
-            error = utp_ack_decode(&ack, frame, frame_length, 0u, &consumed);
+            error = utp_ack_decode(&ack, frame, frame_length, connection->peer_ack_delay_exponent, &consumed);
             if (error == UTP_INTERNAL_ERROR_OK && consumed != frame_length) {
                 error = UTP_INTERNAL_ERROR_PROTOCOL;
             }
@@ -3221,6 +3348,36 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             }
         } else if (frame_type == UTP_FRAME_TYPE_HANDSHAKE_DONE) {
             handshake_done = true;
+        } else if (frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS) {
+            utp_frame_transport_params_t params;
+
+            if (view.header.type != UTP_PACKET_TYPE_INITIAL && view.header.type != UTP_PACKET_TYPE_HANDSHAKE) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            if (transport_params_seen) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            transport_params_seen = true;
+            error                 = utp_frame_transport_params_decode(&params, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            if (!connection->zero_rtt_encrypted) {
+                error = utp_connection_apply_peer_transport_params(connection, &params);
+                if (error != UTP_INTERNAL_ERROR_OK) {
+                    return error;
+                }
+            }
+        } else if (frame_type == UTP_FRAME_TYPE_ACK_FREQUENCY) {
+            utp_frame_ack_frequency_t frequency;
+
+            error = utp_frame_ack_frequency_decode(&frequency, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            if (!connection->zero_rtt_encrypted) {
+                utp_connection_apply_peer_ack_frequency(connection, &frequency);
+            }
         } else if (frame_type == UTP_FRAME_TYPE_SESSION_TOKEN) {
             utp_frame_session_token_t token;
 
@@ -3710,8 +3867,8 @@ utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* conne
         utp_connection_mark_peer_activity(connection, now_us);
         return UTP_INTERNAL_ERROR_OK;
     }
-    activity_deadline =
-        utp_connection_add_deadline(connection->last_peer_activity_us, UTP_CONNECTION_KEEPALIVE_INTERVAL_US);
+    activity_deadline = utp_connection_add_deadline(connection->last_peer_activity_us,
+                                                    utp_connection_keepalive_interval_us(connection));
     if (now_us < activity_deadline) {
         connection->keepalive_deadline_us = activity_deadline;
         return UTP_INTERNAL_ERROR_OK;

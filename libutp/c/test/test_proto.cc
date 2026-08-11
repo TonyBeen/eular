@@ -548,6 +548,56 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
     REQUIRE(frame_types == expected_types);
 }
 
+TEST_CASE("transport parameter and ACK frequency frames normalize and validate values", "[frame]")
+{
+    const utp_frame_transport_params_t params = {
+        UINT64_C(1048576),
+        UINT64_C(262144),
+        UINT64_C(131072),
+        30000u,
+        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
+        800u,
+        64u,
+        32u,
+        3u,
+    };
+    const utp_frame_ack_frequency_t                      frequency         = {0u, 0u, 0u};
+    std::array<uint8_t, UTP_FRAME_TRANSPORT_PARAMS_SIZE> params_bytes      = {};
+    std::array<uint8_t, UTP_FRAME_ACK_FREQUENCY_SIZE>    frequency_bytes   = {};
+    utp_frame_transport_params_t                         decoded_params    = {};
+    utp_frame_ack_frequency_t                            decoded_frequency = {};
+
+    REQUIRE(utp_frame_transport_params_encode(params_bytes.data(), params_bytes.size(), &params) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_transport_params_decode(&decoded_params, params_bytes.data(), params_bytes.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_params.initial_max_data == params.initial_max_data);
+    REQUIRE(decoded_params.initial_max_stream_data_bidi_local == params.initial_max_stream_data_bidi_local);
+    REQUIRE(decoded_params.initial_max_stream_data_bidi_remote == params.initial_max_stream_data_bidi_remote);
+
+    REQUIRE(utp_frame_ack_frequency_encode(frequency_bytes.data(), frequency_bytes.size(), &frequency) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_ack_frequency_decode(&decoded_frequency, frequency_bytes.data(), frequency_bytes.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_frequency.ack_eliciting_threshold == 5u);
+    REQUIRE(decoded_frequency.reordering_threshold == 3u);
+    REQUIRE(decoded_frequency.max_ack_delay_ms == 25u);
+
+    params_bytes[1] = 0x01u;
+    params_bytes[2] = 0x00u;
+    REQUIRE(utp_frame_transport_params_decode(&decoded_params, params_bytes.data(), params_bytes.size()) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+    REQUIRE(utp_frame_transport_params_encode(params_bytes.data(), params_bytes.size() - 1u, &params) ==
+            UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    frequency_bytes[1] = 255u;
+    frequency_bytes[2] = 255u;
+    REQUIRE(utp_frame_ack_frequency_decode(&decoded_frequency, frequency_bytes.data(), frequency_bytes.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_frequency.ack_eliciting_threshold == UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD);
+    REQUIRE(decoded_frequency.reordering_threshold == UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD);
+}
+
 TEST_CASE("session token frame keeps a borrowed token view", "[frame]")
 {
     std::array<uint8_t, UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + 64u> buffer  = {};
