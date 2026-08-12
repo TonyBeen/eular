@@ -8,8 +8,8 @@
 #include "util/error.h"
 
 typedef struct utp_log_tag {
-    char   tag[UTP_LOG_TAG_MAX_LENGTH + 1u];
-    size_t tag_length;
+    char   tag[UTP_LOG_TAG_MAX_LENGTH + 1u];  // NUL 结尾的日志标签
+    size_t tag_length;                        // 不含 NUL 的标签长度
 } utp_log_tag_t;
 
 void                 utp_log_tag_clear(utp_log_tag_t* tag);

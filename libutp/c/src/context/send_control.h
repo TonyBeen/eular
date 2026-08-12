@@ -17,67 +17,67 @@ extern "C" {
 #define UTP_SEND_ATTEMPT_MAX_LEVEL 8u
 
 typedef struct utp_send_attempt_node {
-    struct utp_send_attempt_node* packet_next;
-    struct utp_send_attempt_node* packet_prev;
-    struct utp_send_attempt_node* free_next;
-    utp_packet_out_t*             packet;
-    uint64_t                      packet_number;
-    uint64_t                      sent_time_us;
-    struct utp_send_attempt_node* next[UTP_SEND_ATTEMPT_MAX_LEVEL];
+    struct utp_send_attempt_node* packet_next;                       // 同一逻辑包的下一发送尝试
+    struct utp_send_attempt_node* packet_prev;                       // 同一逻辑包的前一发送尝试
+    struct utp_send_attempt_node* free_next;                         // 空闲节点链表下一项
+    utp_packet_out_t*             packet;                            // 所属逻辑包，不拥有
+    uint64_t                      packet_number;                     // 此尝试包号
+    uint64_t                      sent_time_us;                      // 此尝试发送时刻
+    struct utp_send_attempt_node* next[UTP_SEND_ATTEMPT_MAX_LEVEL];  // 包号跳表前向指针
 } utp_send_attempt_node_t;
 
 typedef struct utp_send_attempt_block {
-    struct utp_send_attempt_block* next;
-    size_t                         capacity;
-    utp_send_attempt_node_t*       nodes;
+    struct utp_send_attempt_block* next;      // 下一扩容块
+    size_t                         capacity;  // 此块节点数量
+    utp_send_attempt_node_t*       nodes;     // 节点数组所有权
 } utp_send_attempt_block_t;
 
 // Connection 持有的发送状态；Packet I/O 和拥塞策略仍由连接层控制。
 typedef struct utp_send_control {
-    utp_send_ledger_t           ledger;
-    utp_send_history_t          send_history;
-    utp_rtt_stats_t             rtt_stats;
-    utp_congestion_t*           congestion;
-    utp_pacer_t                 pacer;
-    struct utp_packet_out_tailq scheduled_packets;
-    struct utp_packet_out_tailq lost_packets;
-    struct utp_packet_out_tailq discarded_packets;
-    utp_send_attempt_block_t*   attempt_blocks;
-    utp_send_attempt_node_t*    attempt_head[UTP_SEND_ATTEMPT_MAX_LEVEL];
-    utp_send_attempt_node_t*    attempt_free;
-    uint64_t                    largest_acked_packet_number;
-    uint64_t                    largest_acked_sent_time_us;
-    uint64_t                    last_sent_time_us;
-    uint64_t                    largest_sent_at_cutback;
-    uint64_t                    current_packet_number;
-    uint64_t                    peer_max_ack_delay_us;
-    uint64_t                    scheduled_byte_count;
-    size_t                      scheduled_packet_count;
-    size_t                      scheduled_packet_limit;
-    size_t                      lost_packet_count;
-    size_t                      discarded_packet_count;
-    size_t                      attempt_count;
-    size_t                      attempt_capacity;
-    size_t                      attempt_block_size;
-    uint8_t                     attempt_level;
-    uint32_t                    reorder_threshold;
-    uint32_t                    consecutive_rto_count;
-    uint32_t                    handshake_retransmission_count;
-    uint32_t                    tlp_count;
-    bool                        connected;
-    bool                        loss_pending;
-    bool                        pacing_enabled;
-    bool                        was_quiet;
-    bool                        app_limited;
+    utp_send_ledger_t           ledger;                                    // 未确认包账本
+    utp_send_history_t          send_history;                              // 已发送包号历史
+    utp_rtt_stats_t             rtt_stats;                                 // RTT 统计
+    utp_congestion_t*           congestion;                                // 当前拥塞算法，不拥有
+    utp_pacer_t                 pacer;                                     // pacing 调度状态
+    struct utp_packet_out_tailq scheduled_packets;                         // 等待实际发送的包队列
+    struct utp_packet_out_tailq lost_packets;                              // 待重新构造并重传的包队列
+    struct utp_packet_out_tailq discarded_packets;                         // 等待连接层释放的失效包队列
+    utp_send_attempt_block_t*   attempt_blocks;                            // 发送尝试索引分块所有权
+    utp_send_attempt_node_t*    attempt_head[UTP_SEND_ATTEMPT_MAX_LEVEL];  // 包号跳表头
+    utp_send_attempt_node_t*    attempt_free;                              // 可复用索引节点
+    uint64_t                    largest_acked_packet_number;               // 最大已确认包号
+    uint64_t                    largest_acked_sent_time_us;                // 对应发送时刻
+    uint64_t                    last_sent_time_us;                         // 最近实际发送时刻
+    uint64_t                    largest_sent_at_cutback;                   // 拥塞回退时最大已发送包号
+    uint64_t                    current_packet_number;                     // 下一个待分配包号
+    uint64_t                    peer_max_ack_delay_us;                     // 对端通告最大 ACK 延迟
+    uint64_t                    scheduled_byte_count;                      // 待发送队列总字节数
+    size_t                      scheduled_packet_count;                    // 待发送队列包数
+    size_t                      scheduled_packet_limit;                    // 待发送队列容量上限
+    size_t                      lost_packet_count;                         // 待重传丢失包数
+    size_t                      discarded_packet_count;                    // 待连接层回收包数
+    size_t                      attempt_count;                             // 活跃发送尝试索引数
+    size_t                      attempt_capacity;                          // 已分配发送尝试索引容量
+    size_t                      attempt_block_size;                        // 下一扩容块大小
+    uint8_t                     attempt_level;                             // 当前跳表层高
+    uint32_t                    reorder_threshold;                         // 包阈值丢失检测阈值
+    uint32_t                    consecutive_rto_count;                     // 连续 RTO 次数
+    uint32_t                    handshake_retransmission_count;            // 握手重传次数
+    uint32_t                    tlp_count;                                 // Tail Loss Probe 次数
+    bool                        connected;                                 // 是否进入普通可靠发送阶段
+    bool                        loss_pending;                              // 是否待执行丢失检测
+    bool                        pacing_enabled;                            // 是否启用 pacer
+    bool                        was_quiet;                                 // 上次发送前是否空闲
+    bool                        app_limited;                               // 当前是否应用数据受限
 } utp_send_control_t;
 
 typedef struct utp_send_control_ack_result {
-    utp_send_ledger_ack_result_t ledger;
-    uint64_t                     rtt_acknowledged_packet_number;
-    uint64_t                     rtt_acknowledged_sent_time_us;
-    uint64_t                     rtt_sample_us;
-    bool                         rtt_acknowledged_current_attempt;
-    bool                         rtt_sample_valid;
+    utp_send_ledger_ack_result_t ledger;                            // 账本确认结果
+    uint64_t                     rtt_acknowledged_packet_number;    // RTT 采样对应包号
+    uint64_t                     rtt_acknowledged_sent_time_us;     // RTT 采样对应发送时刻
+    uint64_t                     rtt_sample_us;                     // 计算出的 RTT 样本
+    bool                         rtt_acknowledged_current_attempt;  // 是否确认最新重传尝试
+    bool                         rtt_sample_valid;                  // RTT 样本是否有效
 } utp_send_control_ack_result_t;
 
 typedef enum utp_send_control_retransmission_mode {

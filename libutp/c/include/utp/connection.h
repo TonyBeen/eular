@@ -24,28 +24,28 @@ typedef enum utp_stream_type {
 
 /** @brief 连接的稳定描述信息；remote_host 为以 NUL 结尾的 IPv4 或 IPv6 文本。 */
 typedef struct utp_connection_description {
-    uint32_t local_cid;
-    uint32_t peer_cid;
-    char     remote_host[UTP_CONNECTION_REMOTE_HOST_MAX_LENGTH];
-    uint16_t remote_port;
+    uint32_t local_cid;                                           // 本端连接 ID
+    uint32_t peer_cid;                                            // 对端连接 ID
+    char     remote_host[UTP_CONNECTION_REMOTE_HOST_MAX_LENGTH];  // NUL 结尾的对端 IP 文本
+    uint16_t remote_port;                                         // 对端主机字节序端口号
 } utp_connection_description_t;
 
 /** @brief 连接运行统计快照；时间单位为 us，带宽单位为 bytes/s。 */
 typedef struct utp_connection_statistic {
-    uint16_t pmtu;
-    uint64_t rtt;
-    uint64_t rttvar;
-    uint64_t bw_estimate;
-    uint64_t rx_bytes;
-    uint64_t tx_bytes;
-    uint64_t rtx_bytes;
-    uint64_t scheduler_select_total;
-    uint64_t scheduler_select_strict;
-    uint64_t scheduler_select_drr;
-    uint64_t scheduler_strict_aging_promoted;
-    uint64_t scheduler_mode_switches;
-    uint64_t scheduler_drr_refills;
-    uint64_t scheduler_drr_consumes;
+    uint16_t pmtu;                             // 当前路径 MTU，单位 bytes
+    uint64_t rtt;                              // 平滑 RTT，单位 us
+    uint64_t rttvar;                           // RTT 方差，单位 us
+    uint64_t bw_estimate;                      // 拥塞控制带宽估计，单位 bytes/s
+    uint64_t rx_bytes;                         // 已认证且非重复的接收 UDP 字节数
+    uint64_t tx_bytes;                         // 实际发送的 UDP 字节数，含重传
+    uint64_t rtx_bytes;                        // 实际重传的 UDP 字节数
+    uint64_t scheduler_select_total;           // 流调度器总选择次数
+    uint64_t scheduler_select_strict;          // Strict 模式选择次数
+    uint64_t scheduler_select_drr;             // DRR 模式选择次数
+    uint64_t scheduler_strict_aging_promoted;  // Strict 老化提升次数
+    uint64_t scheduler_mode_switches;          // 调度模式切换次数
+    uint64_t scheduler_drr_refills;            // DRR 配额补充次数
+    uint64_t scheduler_drr_consumes;           // DRR 配额消耗次数
 } utp_connection_statistic_t;
 
 /** @brief 对端首次创建流时同步调用；Connection 和 Stream 均为借用指针，仅在其所属对象存续期间有效。 */

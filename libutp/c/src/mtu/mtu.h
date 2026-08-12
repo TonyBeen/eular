@@ -24,51 +24,51 @@ typedef enum utp_mtu_probe_phase {
 } utp_mtu_probe_phase_t;
 
 typedef struct utp_mtu_config {
-    bool     enabled;
-    uint16_t mtu_min;
-    uint16_t mtu_max;
-    uint16_t mtu_base;
-    uint32_t probe_interval_seconds;
-    uint16_t probe_step;
-    uint16_t probe_timeout_ms;
-    uint8_t  probe_retries;
-    uint8_t  blackhole_loss_threshold;
-    uint16_t blackhole_loss_window_ms;
-    uint16_t blackhole_cooldown_ms;
+    bool     enabled;                   // 是否启用 DPLPMTUD
+    uint16_t mtu_min;                   // 可服务 MTU 下限
+    uint16_t mtu_max;                   // 探测 MTU 上限
+    uint16_t mtu_base;                  // 初始安全 MTU
+    uint32_t probe_interval_seconds;    // 稳定期探测间隔
+    uint16_t probe_step;                // 阶梯探测步长
+    uint16_t probe_timeout_ms;          // 单次探测超时
+    uint8_t  probe_retries;             // 单个探测额外重试次数
+    uint8_t  blackhole_loss_threshold;  // 判定黑洞的连续大包丢失次数
+    uint16_t blackhole_loss_window_ms;  // 黑洞丢失观察窗口
+    uint16_t blackhole_cooldown_ms;     // 黑洞恢复冷却时间
 } utp_mtu_config_t;
 
 #define UTP_MTU_CONFIG_INIT {true, 1280u, 1500u, 1400u, 300u, 16u, 2000u, 1u, 3u, 3000u, 5000u}
 
 typedef struct utp_mtu_discovery {
-    uint64_t              next_probe_time_ms;
-    uint64_t              last_large_ack_ms;
-    uint64_t              last_large_loss_ms;
-    uint64_t              blackhole_cooldown_until_ms;
-    uint64_t              in_flight_probe_deadline_ms;
-    uint64_t              in_flight_probe_packet_number;
-    uint32_t              probe_interval_ms;
-    uint16_t              mtu_min;
-    uint16_t              mtu_max;
-    uint16_t              mtu_base;
-    uint16_t              probe_step;
-    uint16_t              probe_timeout_ms;
-    uint16_t              blackhole_loss_window_ms;
-    uint16_t              blackhole_cooldown_ms;
-    uint16_t              current_mtu;
-    uint16_t              ceiling_mtu;
-    uint16_t              search_low_mtu;
-    uint16_t              search_high_mtu;
-    uint16_t              in_flight_probe_mtu;
-    uint16_t              retry_probe_mtu;
-    uint8_t               blackhole_loss_threshold;
-    uint8_t               large_loss_streak;
-    uint8_t               probe_retries;
-    uint8_t               probe_retry_count;
-    uint8_t               family;
-    bool                  enabled;
-    bool                  has_in_flight_probe;
-    bool                  retry_pending;
-    utp_mtu_probe_phase_t probe_phase;
+    uint64_t              next_probe_time_ms;             // 下次可启动探测的时刻
+    uint64_t              last_large_ack_ms;              // 最近大包确认时刻
+    uint64_t              last_large_loss_ms;             // 最近大包丢失时刻
+    uint64_t              blackhole_cooldown_until_ms;    // 黑洞恢复冷却截止时刻
+    uint64_t              in_flight_probe_deadline_ms;    // 当前探测超时截止时刻
+    uint64_t              in_flight_probe_packet_number;  // 当前探测包号
+    uint32_t              probe_interval_ms;              // 稳定期探测间隔
+    uint16_t              mtu_min;                        // 可服务 MTU 下限
+    uint16_t              mtu_max;                        // 配置 MTU 上限
+    uint16_t              mtu_base;                       // 安全基准 MTU
+    uint16_t              probe_step;                     // 阶梯步长
+    uint16_t              probe_timeout_ms;               // 单次探测超时
+    uint16_t              blackhole_loss_window_ms;       // 黑洞统计窗口
+    uint16_t              blackhole_cooldown_ms;          // 黑洞冷却时间
+    uint16_t              current_mtu;                    // 当前已确认 MTU
+    uint16_t              ceiling_mtu;                    // 当前搜索上界
+    uint16_t              search_low_mtu;                 // 二分搜索下界
+    uint16_t              search_high_mtu;                // 二分搜索上界
+    uint16_t              in_flight_probe_mtu;            // 当前探测 MTU
+    uint16_t              retry_probe_mtu;                // 待重试探测 MTU
+    uint8_t               blackhole_loss_threshold;       // 黑洞连续丢失阈值
+    uint8_t               large_loss_streak;              // 连续大包丢失次数
+    uint8_t               probe_retries;                  // 额外探测重试次数
+    uint8_t               probe_retry_count;              // 当前探测已重试次数
+    uint8_t               family;                         // 当前路径地址族
+    bool                  enabled;                        // 是否启用探测
+    bool                  has_in_flight_probe;            // 是否有等待确认的探测包
+    bool                  retry_pending;                  // 是否待重新压入探测包
+    utp_mtu_probe_phase_t probe_phase;                    // 阶梯、二分或黑洞恢复阶段
 } utp_mtu_discovery_t;
 
 /** @brief 用配置与地址族初始化路径 MTU 发现状态。 */

@@ -113,115 +113,115 @@ typedef enum utp_frame_type {
 } utp_frame_type_t;
 
 typedef struct utp_packet_view {
-    utp_packet_header_t header;
-    const uint8_t*      payload;
-    size_t              payload_length;
-    uint32_t            frame_types;
+    utp_packet_header_t header;          // 已解码的固定包头
+    const uint8_t*      payload;         // 指向原始包 payload 的零拷贝视图
+    size_t              payload_length;  // payload 总长度
+    uint32_t            frame_types;     // 扫描得到的帧类型位图
 } utp_packet_view_t;
 
 /* PATH_CHALLENGE/PATH_RESPONSE：type(1), data(8)。 */
 typedef struct utp_frame_path {
-    uint8_t data[8];
+    uint8_t data[8];  // 路径验证随机质询或响应值
 } utp_frame_path_t;
 
 /* CRYPTO：type(1), crypto_type(1), reserved(1), ephemeral_public_key(32)。 */
 typedef struct utp_frame_crypto {
-    uint8_t crypto_type;
-    uint8_t ephemeral_public_key[32];
+    uint8_t crypto_type;               // 协商的密钥交换和 AEAD 类型
+    uint8_t ephemeral_public_key[32];  // 对端 X25519 临时公钥
 } utp_frame_crypto_t;
 
 /* VERSION：type(1), version(4)。 */
 typedef struct utp_frame_version {
-    uint32_t version;
+    uint32_t version;  // 协议版本号
 } utp_frame_version_t;
 
 /* HANDSHAKE_DONE：type(1), ack_handshake_packet_number(8)。 */
 typedef struct utp_frame_handshake_done {
-    uint64_t ack_handshake_packet_number;
+    uint64_t ack_handshake_packet_number;  // 被确认的对端握手包号
 } utp_frame_handshake_done_t;
 
 /* HANDSHAKE_DELAY：type(1), delay_time_us(4)。 */
 typedef struct utp_frame_handshake_delay {
-    uint32_t delay_time_us;
+    uint32_t delay_time_us;  // 本端处理对应握手包的耗时，单位 us
 } utp_frame_handshake_delay_t;
 
 /* STREAM：type(1), flags(1), data_length(2), stream_id(4), offset(8), data[data_length]。 */
 typedef struct utp_frame_stream {
-    uint8_t        flags;
-    uint32_t       stream_id;
-    uint64_t       offset;
-    const uint8_t* data;
-    uint16_t       data_length;
+    uint8_t        flags;        // FIN 等 STREAM 标志位
+    uint32_t       stream_id;    // 目标流 ID
+    uint64_t       offset;       // 数据在流内的起始偏移
+    const uint8_t* data;         // 指向原始包内的数据视图
+    uint16_t       data_length;  // 数据长度
 } utp_frame_stream_t;
 
 /* SESSION_TOKEN：type(1), payload_length(1), expires_at_seconds(8), payload[payload_length]。 */
 typedef struct utp_frame_session_token {
-    const uint8_t* payload;
-    uint64_t       expires_at_seconds;
-    uint8_t        payload_length;
+    const uint8_t* payload;             // 票据 payload 的零拷贝视图
+    uint64_t       expires_at_seconds;  // 绝对失效时间，Unix 秒
+    uint8_t        payload_length;      // 票据 payload 长度
 } utp_frame_session_token_t;
 
 /* CONNECTION_CLOSE：type(1), error_code(2), reason_length(2), reason[reason_length]。 */
 typedef struct utp_frame_connection_close {
-    uint16_t       error_code;
-    const uint8_t* reason;
-    uint16_t       reason_length;
+    uint16_t       error_code;     // 协议关闭错误码
+    const uint8_t* reason;         // 关闭原因的零拷贝视图
+    uint16_t       reason_length;  // 关闭原因长度
 } utp_frame_connection_close_t;
 
 /* RESET_STREAM：type(1), error_code(2), stream_id(4), final_size(8)。 */
 typedef struct utp_frame_reset_stream {
-    uint16_t error_code;
-    uint32_t stream_id;
-    uint64_t final_size;
+    uint16_t error_code;  // 流重置错误码
+    uint32_t stream_id;   // 被重置流 ID
+    uint64_t final_size;  // 发送方最终流偏移
 } utp_frame_reset_stream_t;
 
 /* STREAMS_BLOCKED/MAX_STREAMS：type(1), stream_type(1), stream_limit(2)。 */
 typedef struct utp_frame_streams_limit {
-    uint16_t stream_limit;
-    uint8_t  stream_type;
+    uint16_t stream_limit;  // 对应方向允许创建的累计流数
+    uint8_t  stream_type;   // 双向或单向流类型
 } utp_frame_streams_limit_t;
 
 /* MAX_DATA：type(1), maximum_data(8)。 */
 typedef struct utp_frame_max_data {
-    uint64_t maximum_data;
+    uint64_t maximum_data;  // 连接级最大接收偏移
 } utp_frame_max_data_t;
 
 /* MAX_STREAM_DATA：type(1), stream_id(4), maximum_stream_data(8)。 */
 typedef struct utp_frame_max_stream_data {
-    uint32_t stream_id;
-    uint64_t maximum_stream_data;
+    uint32_t stream_id;            // 流 ID
+    uint64_t maximum_stream_data;  // 该流最大接收偏移
 } utp_frame_max_stream_data_t;
 
 /* DATA_BLOCKED：type(1), data_limit(8)。 */
 typedef struct utp_frame_data_blocked {
-    uint64_t data_limit;
+    uint64_t data_limit;  // 发送方受阻时观察到的连接级额度
 } utp_frame_data_blocked_t;
 
 /* STREAM_DATA_BLOCKED：type(1), stream_id(4), stream_data_limit(8)。 */
 typedef struct utp_frame_stream_data_blocked {
-    uint32_t stream_id;
-    uint64_t stream_data_limit;
+    uint32_t stream_id;          // 受阻流 ID
+    uint64_t stream_data_limit;  // 发送方受阻时观察到的流级额度
 } utp_frame_stream_data_blocked_t;
 
 /* ACK_FREQUENCY：type(1), ack_eliciting_threshold(1), reordering_threshold(1), max_ack_delay_ms(4)。 */
 typedef struct utp_frame_ack_frequency {
-    uint32_t max_ack_delay_ms;
-    uint8_t  ack_eliciting_threshold;
-    uint8_t  reordering_threshold;
+    uint32_t max_ack_delay_ms;         // 最大 ACK 延迟，单位 ms
+    uint8_t  ack_eliciting_threshold;  // 累计多少 ACK-eliciting 包后立即 ACK
+    uint8_t  reordering_threshold;     // 检测到乱序缺口后的立即 ACK 阈值
 } utp_frame_ack_frequency_t;
 
 /* TRANSPORT_PARAMS：type(1), flags(2), idle_timeout(4), handshake_timeout(2), streams(2+2), exponent(1), credits(8*3)。
  */
 typedef struct utp_frame_transport_params {
-    uint64_t initial_max_data;
-    uint64_t initial_max_stream_data_bidi_local;
-    uint64_t initial_max_stream_data_bidi_remote;
-    uint32_t max_idle_timeout_ms;
-    uint16_t flags;
-    uint16_t handshake_timeout_ms;
-    uint16_t initial_max_streams_bidi;
-    uint16_t initial_max_streams_uni;
-    uint8_t  ack_delay_exponent;
+    uint64_t initial_max_data;                     // 对端可发送的连接级初始额度
+    uint64_t initial_max_stream_data_bidi_local;   // 对端发起双向流的初始额度
+    uint64_t initial_max_stream_data_bidi_remote;  // 本端发起双向流的初始额度
+    uint32_t max_idle_timeout_ms;                  // 最大空闲超时，单位 ms
+    uint16_t flags;                                // 传输参数标志位
+    uint16_t handshake_timeout_ms;                 // 握手超时，单位 ms
+    uint16_t initial_max_streams_bidi;             // 初始允许创建的双向流数量
+    uint16_t initial_max_streams_uni;              // 初始允许创建的单向流数量
+    uint8_t  ack_delay_exponent;                   // ACK 延迟编码指数
 } utp_frame_transport_params_t;
 
 /** @brief 测量首个帧的完整线上长度与类型，不修改输入缓冲区。 */

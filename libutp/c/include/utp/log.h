@@ -23,7 +23,7 @@ typedef enum utp_log_level {
 typedef void (*utp_log_sink_fn)(utp_log_level_t level, const char* message);
 
 typedef struct utp_logger {
-    utp_log_sink_fn sink;
+    utp_log_sink_fn sink;   // 同步日志输出回调，为空时关闭日志
     utp_log_level_t level;  // 最低输出级别
 } utp_logger_t;
 

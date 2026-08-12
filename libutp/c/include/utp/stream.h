@@ -27,15 +27,15 @@ typedef void (*utp_on_stream_reset_fn)(utp_stream_t* stream, uint16_t error_code
 #define UTP_STREAM_PRIORITY_DEFAULT 4u
 
 typedef struct utp_stream_read_view {
-    const uint8_t* data;
-    uint64_t       offset;
-    size_t         length;
-    bool           fin;
+    const uint8_t* data;    // 连续可读数据视图，commit 前有效
+    uint64_t       offset;  // 数据在流内的起始偏移
+    size_t         length;  // 可提交消费的数据长度
+    bool           fin;     // 此视图末尾是否为对端 FIN
 } utp_stream_read_view_t;
 
 typedef struct utp_stream_write_view {
-    uint8_t* data;
-    size_t   length;
+    uint8_t* data;    // 内部发送缓冲的可写视图，commit 前有效
+    size_t   length;  // 本段可写容量
 } utp_stream_write_view_t;
 
 /** @brief 返回协议流 ID；无效流返回 UINT32_MAX。 */

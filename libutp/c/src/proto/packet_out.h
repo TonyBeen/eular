@@ -49,97 +49,97 @@ extern "C" {
 struct utp_send_attempt_node;
 
 typedef struct utp_frame_meta_info {
-    void*    owner;
-    uint64_t value;
-    uint16_t offset;
-    uint16_t length;
-    uint32_t generation;
-    uint8_t  frame_type;
-    uint8_t  frame_flags;
+    void*    owner;        // 语义控制槽或帧所属对象，不拥有
+    uint64_t value;        // 帧携带的语义值
+    uint16_t offset;       // 帧在 raw_data 中的起始偏移
+    uint16_t length;       // 帧编码长度
+    uint32_t generation;   // 所属控制槽的版本号
+    uint8_t  frame_type;   // 帧类型
+    uint8_t  frame_flags;  // FIN、重传剥离等元数据标志
 } utp_frame_meta_info_t;
 
 typedef struct utp_packet_out_slice {
-    uint16_t    offset;
-    uint16_t    length;
-    const void* data;
-    uint8_t     source;
+    uint16_t    offset;  // RAW slice 在 raw_data 中的偏移
+    uint16_t    length;  // slice 长度
+    const void* data;    // EXTERNAL slice 的借用数据指针
+    uint8_t     source;  // RAW_OFFSET 或 EXTERNAL
 } utp_packet_out_slice_t;
 
 struct utp_packet_out;
 TAILQ_HEAD(utp_packet_out_tailq, utp_packet_out);
 
 typedef struct utp_packet_out {
-    TAILQ_ENTRY(utp_packet_out) po_next;
+    TAILQ_ENTRY(utp_packet_out) po_next;  // 发送队列链表节点
 
-    uint64_t                      sent_time_us;
-    uint64_t                      packet_number;
-    uint64_t                      ack_number;
-    struct utp_packet_out*        loss_chain;
+    uint64_t                      sent_time_us;   // 最近一次实际发送时刻，单位 us
+    uint64_t                      packet_number;  // 当前发送尝试的包号
+    uint64_t                      ack_number;     // 包构造时携带的最大 ACK 包号
+    struct utp_packet_out*        loss_chain;     // 同一逻辑包的丢失重传链
 
-    uint32_t                      frame_types;
-    uint16_t                      po_flags;
-    uint16_t                      local_flags;
+    uint32_t                      frame_types;  // 包内帧类型位图
+    uint16_t                      po_flags;     // 发送包协议状态标志
+    uint16_t                      local_flags;  // 本地调度与跟踪标志
 
-    uint16_t                      data_size;
-    uint16_t                      encrypt_data_size;
-    uint16_t                      alloc_size;
-    uint8_t                       packet_type;
-    uint8_t                       slice_count;
-    uint8_t                       frame_meta_count;
-    uint32_t                      stream_data_size;
-    uint32_t                      path_validation_generation;
-    uint16_t                      transient_ack_size;
-    uint16_t                      control_prefix_size;
+    uint16_t                      data_size;                   // 当前明文包长度
+    uint16_t                      encrypt_data_size;           // 加密后 payload 长度
+    uint16_t                      alloc_size;                  // raw_data 缓冲实际容量
+    uint8_t                       packet_type;                 // utp_packet_type_t
+    uint8_t                       slice_count;                 // 有效 slice 数量
+    uint8_t                       frame_meta_count;            // 有效帧元数据数量
+    uint32_t                      stream_data_size;            // 此包 STREAM 数据长度
+    uint32_t                      path_validation_generation;  // 所属候选路径验证代次
+    uint16_t                      transient_ack_size;          // 重传时应剥离的 ACK 前缀长度
+    uint16_t                      control_prefix_size;         // 重传时可剥离的 transient 控制前缀长度
     // 半加密 0-RTT 中保持明文的 SESSION_TOKEN payload 长度。
-    uint16_t                      early_plaintext_prefix_size;
-    uint32_t                      stream_id;
-    uint64_t                      stream_offset;
+    uint16_t                      early_plaintext_prefix_size;  // 0-RTT 保持明文的票据前缀长度
+    uint32_t                      stream_id;                    // STREAM 帧所属流 ID
+    uint64_t                      stream_offset;                // STREAM 数据起始偏移
 
-    utp_packet_out_slice_t        slices[UTP_PACKET_OUT_MAX_SLICES];
-    utp_frame_meta_info_t         frame_meta[UTP_PACKET_OUT_MAX_FRAMES];
+    utp_packet_out_slice_t        slices[UTP_PACKET_OUT_MAX_SLICES];      // 零拷贝发送片段
+    utp_frame_meta_info_t         frame_meta[UTP_PACKET_OUT_MAX_FRAMES];  // 帧生命周期元数据
     // 发送控制器持有的历史发送尝试链；每个包号都可被迟到 ACK 直接定位。
-    struct utp_send_attempt_node* attempts;
-    uint32_t                      attempt_count;
+    struct utp_send_attempt_node* attempts;       // 历史包号索引链
+    uint32_t                      attempt_count;  // 历史发送次数
 
-    utp_bw_packet_state_t         bw_packet_state;
-    void*                         bw_state;
+    utp_bw_packet_state_t         bw_packet_state;  // 带宽采样快照
+    void*                         bw_state;         // 拥塞算法附加状态，不拥有
 
-    uint8_t*                      raw_data;
-    uint8_t*                      encrypt_data;
-    utp_address_t                 destination;
-    bool                          has_destination;
+    uint8_t*                      raw_data;         // 包头和内联帧缓冲
+    uint8_t*                      encrypt_data;     // AEAD 输出缓冲，可为空
+    utp_address_t                 destination;      // 候选路径时的显式目标地址
+    bool                          has_destination;  // 是否使用 destination 而非连接当前 peer
 
     /* 池记账字段:acquire 时记录该对象缓冲区来自哪个桶,release 时用于 O(1) 归还,
        不属于协议/发送语义,不出现在 docs 的字段表里。 */
-    size_t                        bucket_index;
+    size_t                        bucket_index;  // raw_data 所属内存桶索引
 } utp_packet_out_t;
 
 typedef struct utp_packet_out_bucket_config {
-    uint16_t size;
-    size_t   count;
+    uint16_t size;   // 此桶每块缓冲容量
+    size_t   count;  // 此桶预分配缓冲数量
 } utp_packet_out_bucket_config_t;
 
 typedef struct utp_packet_out_buffer_node {
-    TAILQ_ENTRY(utp_packet_out_buffer_node) link;
-    uint8_t* data;
+    TAILQ_ENTRY(utp_packet_out_buffer_node) link;  // 空闲缓冲链表节点
+    uint8_t* data;                                 // 桶内缓冲地址
 } utp_packet_out_buffer_node_t;
 TAILQ_HEAD(utp_packet_out_buffer_node_tailq, utp_packet_out_buffer_node);
 
 typedef struct utp_packet_out_bucket {
-    uint16_t                                size;
-    size_t                                  count;
-    uint8_t*                                storage;
-    utp_packet_out_buffer_node_t*           nodes;
-    struct utp_packet_out_buffer_node_tailq free_buffers;
+    uint16_t                                size;          // 单块缓冲容量
+    size_t                                  count;         // 单块缓冲数量
+    uint8_t*                                storage;       // 连续缓冲区所有权
+    utp_packet_out_buffer_node_t*           nodes;         // 缓冲描述符数组所有权
+    struct utp_packet_out_buffer_node_tailq free_buffers;  // 当前可借出的空闲缓冲队列
 } utp_packet_out_bucket_t;
 
 typedef struct utp_packet_out_pool {
-    const utp_allocator_t*      allocator;
-    utp_packet_out_t*           structs;
-    size_t                      struct_capacity;
-    struct utp_packet_out_tailq free_structs;
-    utp_packet_out_bucket_t     buckets[UTP_PACKET_OUT_MAX_BUCKETS];
-    size_t                      bucket_count;
+    const utp_allocator_t*      allocator;                            // 内存分配器，不拥有
+    utp_packet_out_t*           structs;                              // PacketOut 描述符数组所有权
+    size_t                      struct_capacity;                      // 描述符总数
+    struct utp_packet_out_tailq free_structs;                         // 当前可借出的空闲 PacketOut 队列
+    utp_packet_out_bucket_t     buckets[UTP_PACKET_OUT_MAX_BUCKETS];  // 按容量分桶的缓冲池
+    size_t                      bucket_count;                         // 已启用桶数量
 } utp_packet_out_pool_t;
 
 utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t* pool, const utp_allocator_t* allocator,

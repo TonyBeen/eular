@@ -7,22 +7,22 @@
 extern "C" {
 #endif
 
-typedef void *(*utp_alloc_fn)(void *user_data, size_t size);
-typedef void *(*utp_realloc_fn)(void *user_data, void *ptr, size_t size);
-typedef void (*utp_free_fn)(void *user_data, void *ptr);
+typedef void* (*utp_alloc_fn)(void* user_data, size_t size);
+typedef void* (*utp_realloc_fn)(void* user_data, void* ptr, size_t size);
+typedef void (*utp_free_fn)(void* user_data, void* ptr);
 
 typedef struct utp_allocator {
-    utp_alloc_fn   alloc;
-    utp_realloc_fn realloc;
-    utp_free_fn    free;
-    void          *user_data;
+    utp_alloc_fn   alloc;      // 分配回调
+    utp_realloc_fn realloc;    // 扩容回调
+    utp_free_fn    free;       // 释放回调
+    void*          user_data;  // 三个回调共享的用户数据
 } utp_allocator_t;
 
-const utp_allocator_t *utp_default_allocator(void);
-const utp_allocator_t *utp_allocator_resolve(const utp_allocator_t *allocator);
-void                  *utp_allocator_alloc(const utp_allocator_t *allocator, size_t size);
-void                  *utp_allocator_realloc(const utp_allocator_t *allocator, void *ptr, size_t size);
-void                   utp_allocator_free(const utp_allocator_t *allocator, void *ptr);
+const utp_allocator_t* utp_default_allocator(void);
+const utp_allocator_t* utp_allocator_resolve(const utp_allocator_t* allocator);
+void*                  utp_allocator_alloc(const utp_allocator_t* allocator, size_t size);
+void*                  utp_allocator_realloc(const utp_allocator_t* allocator, void* ptr, size_t size);
+void                   utp_allocator_free(const utp_allocator_t* allocator, void* ptr);
 
 #ifdef __cplusplus
 }

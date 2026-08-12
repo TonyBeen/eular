@@ -24,21 +24,21 @@ typedef enum utp_token_type {
 } utp_token_type_t;
 
 typedef struct utp_token_meta {
-    uint32_t timestamp_seconds;
-    uint32_t cid;
-    uint32_t version;
-    uint32_t secret;
-    uint16_t family;
-    uint8_t  token_type;
-    uint8_t  encryption_mode;
-    uint8_t  address[16];
+    uint32_t timestamp_seconds;  // 签发时间，Unix 秒
+    uint32_t cid;                // 绑定连接 ID
+    uint32_t version;            // 票据格式版本
+    uint32_t secret;             // 防伪随机值
+    uint16_t family;             // 绑定地址族
+    uint8_t  token_type;         // 路径验证或 0-RTT 票据
+    uint8_t  encryption_mode;    // 恢复时使用的加密模式
+    uint8_t  address[16];        // 绑定对端地址
 } utp_token_meta_t;
 
 typedef struct utp_token_auth {
-    uint8_t  key[UTP_TOKEN_KEY_SIZE];
-    uint8_t  old_key[UTP_TOKEN_KEY_SIZE];
-    uint64_t key_updated_seconds;
-    bool     initialized;
+    uint8_t  key[UTP_TOKEN_KEY_SIZE];      // 当前票据认证密钥
+    uint8_t  old_key[UTP_TOKEN_KEY_SIZE];  // 上一代轮换密钥
+    uint64_t key_updated_seconds;          // 当前密钥启用时刻
+    bool     initialized;                  // 是否已生成认证密钥
 } utp_token_auth_t;
 
 /** @brief 初始化 Context 私有的票据认证密钥。 */

@@ -59,139 +59,139 @@ typedef enum utp_connection_ack_profile {
 } utp_connection_ack_profile_t;
 
 typedef struct utp_connection_control_slot {
-    utp_hash_node_t node;
-    uint64_t        value;
-    uint64_t        final_size;
-    uint32_t        stream_id;
-    uint32_t        generation;
-    uint32_t        in_flight_generation;
-    uint16_t        error_code;
-    uint8_t         frame_type;
-    bool            pending;
-    bool            queued;
-    bool            in_flight;
+    utp_hash_node_t node;                  // 按控制帧语义索引的哈希节点
+    uint64_t        value;                 // 控制帧携带的额度或限制值
+    uint64_t        final_size;            // RESET_STREAM 最终偏移
+    uint32_t        stream_id;             // 关联流 ID
+    uint32_t        generation;            // 语义值更新代次
+    uint32_t        in_flight_generation;  // 当前飞行帧代次
+    uint16_t        error_code;            // RESET_STREAM 错误码
+    uint8_t         frame_type;            // 控制帧类型
+    bool            pending;               // 是否待构造发送
+    bool            queued;                // 是否已有排队包承载本代次
+    bool            in_flight;             // 是否已有飞行包承载本代次
 } utp_connection_control_slot_t;
 
 typedef struct utp_connection_pending_max_stream_data {
-    utp_hash_node_t node;
-    uint64_t        value;
-    uint32_t        stream_id;
+    utp_hash_node_t node;       // 按流 ID 索引的哈希节点
+    uint64_t        value;      // 暂存的对端流发送额度
+    uint32_t        stream_id;  // 尚未创建的本端流 ID
 } utp_connection_pending_max_stream_data_t;
 
 typedef utp_on_session_token_ready_fn utp_session_token_cb_t;
 
 // Connection 私有的传输状态；CID 解复用和 UDP I/O 由 Context 负责。
 typedef struct utp_connection {
-    struct utp_context*          context;
-    utp_on_incoming_stream_fn    on_incoming_stream;
-    void*                        on_incoming_stream_user_data;
-    utp_session_token_cb_t       session_token_cb;
-    void*                        session_token_cb_data;
-    utp_send_control_t           send_control;
-    utp_receive_history_t        receive_history;
-    utp_ack_scheduler_t          ack_scheduler;
-    utp_packet_out_pool_t        packet_pool;
-    utp_mtu_discovery_t          mtu_discovery;
-    utp_bbr_t                    bbr_congestion;
-    utp_cubic_t                  cubic_congestion;
-    utp_crypto_key_pair_t        crypto_key_pair;
-    utp_crypto_aead_t            tx_aead;
-    utp_crypto_aead_t            rx_aead;
-    utp_crypto_aead_t            early_tx_aead;
-    utp_crypto_aead_t            early_rx_aead;
-    utp_packet_out_t             close_packet;
-    utp_hash_table_t             streams;
-    utp_hash_table_t             control_slots;
-    utp_hash_table_t             pending_peer_max_stream_data;
-    utp_address_t                peer;
-    utp_address_t                candidate_peer;
-    uint32_t                     local_cid;
-    uint32_t                     peer_cid;
-    uint32_t                     next_stream_id[UTP_STREAM_TYPES];
-    uint64_t                     peer_max_data;
-    uint64_t                     peer_initial_max_stream_data_bidi_local;
-    uint64_t                     peer_initial_max_stream_data_bidi_remote;
-    utp_frame_transport_params_t local_transport_params;
-    utp_frame_ack_frequency_t    local_ack_frequency;
-    uint64_t                     local_max_data_advertised;
-    uint64_t                     stream_data_sent_total;
-    uint64_t                     local_stream_data_received_total;
-    uint64_t                     local_stream_data_consumed_total;
-    uint64_t                     last_max_data_sent_us;
-    uint64_t                     last_data_blocked_sent_us;
-    uint16_t                     packet_capacity;
-    size_t                       recv_reassembly_memory_bytes;
-    size_t                       recv_reassembly_fragment_count;
-    uint64_t                     rx_bytes;
-    uint64_t                     tx_bytes;
-    uint64_t                     rtx_bytes;
-    uint64_t                     scheduler_select_total;
-    uint64_t                     scheduler_select_strict;
-    uint64_t                     scheduler_select_drr;
-    uint64_t                     scheduler_strict_aging_promoted;
-    uint64_t                     scheduler_mode_switches;
-    uint64_t                     scheduler_drr_refills;
-    uint64_t                     scheduler_drr_consumes;
-    uint64_t                     peer_handshake_packet_number;
-    uint64_t                     peer_handshake_received_us;
-    uint64_t                     retransmission_deadline_us;
-    uint64_t                     close_deadline_us;
-    uint64_t                     close_last_sent_us;
-    uint64_t                     close_pto_us;
-    uint64_t                     keepalive_deadline_us;
-    uint64_t                     last_peer_activity_us;
-    uint64_t                     path_challenge_deadline_us;
-    uint64_t                     ack_profile_candidate_since_us;
-    uint64_t                     ack_profile_last_sent_us;
-    uint64_t                     ack_profile_baseline_srtt_us;
-    uint64_t                     ack_loss_window_start_us;
-    uint64_t                     last_ack_frequency_apply_us;
-    uint64_t                     candidate_rx_bytes;
-    uint64_t                     candidate_tx_bytes;
-    uint64_t                     candidate_queued_bytes;
-    uint32_t                     path_validation_generation;
-    uint16_t                     close_error_code;
-    uint16_t                     peer_close_error_code;
-    uint16_t                     peer_close_reason_length;
-    uint32_t                     keepalive_interval_ms;
-    uint32_t                     keepalive_timeout_ms;
-    uint16_t                     local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
-    uint16_t                     peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];
-    uint8_t                      path_challenge[8];
-    uint8_t                      peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];
-    uint8_t                      session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];
-    uint8_t                      close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];
-    uint8_t                      stream_scheduler_mode;
-    utp_congestion_algorithm_t   congestion_algorithm;
-    uint8_t                      crypto_type;
-    uint8_t                      peer_ack_delay_exponent;
-    utp_frame_transport_params_t peer_transport_params;
-    utp_frame_ack_frequency_t    peer_ack_frequency;
-    uint32_t                     stream_scheduler_cursor;
-    uint8_t                      path_challenge_retry_count;
-    uint16_t                     keepalive_missed_probes;
-    uint16_t                     keepalive_probes;
-    uint32_t                     ack_loss_count;
-    uint8_t                      ack_profile_current;
-    uint8_t                      ack_profile_candidate;
-    uint64_t                     session_token_expires_at_seconds;
-    uint16_t                     session_token_size;
-    bool                         close_pending;
-    bool                         udp_write_pending;
-    bool                         local_close_started;
-    bool                         peer_close_received;
-    bool                         path_challenge_pending;
-    bool                         crypto_configured;
-    bool                         crypto_ready;
-    bool                         zero_rtt_encrypted;
-    bool                         session_token_issued;
-    bool                         peer_transport_params_received;
-    bool                         peer_ack_frequency_received;
-    bool                         keepalive_enabled;
-    const uint8_t*               peer_close_reason;
-    utp_connection_role_t        role;
-    utp_connection_state_t       state;
-    utp_connection_path_state_t  path_state;
+    struct utp_context*          context;                                              // 所属 Context，不拥有
+    utp_on_incoming_stream_fn    on_incoming_stream;                                   // 对端新流回调
+    void*                        on_incoming_stream_user_data;                         // 新流回调用户数据
+    utp_session_token_cb_t       session_token_cb;                                     // 恢复票据就绪回调
+    void*                        session_token_cb_data;                                // 恢复票据回调用户数据
+    utp_send_control_t           send_control;                                         // 发送、确认和重传状态
+    utp_receive_history_t        receive_history;                                      // 已认证接收包号历史
+    utp_ack_scheduler_t          ack_scheduler;                                        // ACK 调度状态
+    utp_packet_out_pool_t        packet_pool;                                          // 有界 PacketOut 对象池
+    utp_mtu_discovery_t          mtu_discovery;                                        // 路径 MTU 发现状态
+    utp_bbr_t                    bbr_congestion;                                       // BBR 算法状态
+    utp_cubic_t                  cubic_congestion;                                     // CUBIC 算法状态
+    utp_crypto_key_pair_t        crypto_key_pair;                                      // 本端握手临时密钥对
+    utp_crypto_aead_t            tx_aead;                                              // 1-RTT 发送 AEAD
+    utp_crypto_aead_t            rx_aead;                                              // 1-RTT 接收 AEAD
+    utp_crypto_aead_t            early_tx_aead;                                        // 0-RTT 发送 AEAD
+    utp_crypto_aead_t            early_rx_aead;                                        // 0-RTT 接收 AEAD
+    utp_packet_out_t             close_packet;                                         // 专用 CONNECTION_CLOSE 包
+    utp_hash_table_t             streams;                                              // 所有存活或待回收流
+    utp_hash_table_t             control_slots;                                        // 合并可靠控制帧槽位
+    utp_hash_table_t             pending_peer_max_stream_data;                         // 未创建流的额度缓存
+    utp_address_t                peer;                                                 // 当前已验证对端地址
+    utp_address_t                candidate_peer;                                       // 正在验证的候选地址
+    uint32_t                     local_cid;                                            // 本端连接 ID
+    uint32_t                     peer_cid;                                             // 对端连接 ID
+    uint32_t                     next_stream_id[UTP_STREAM_TYPES];                     // 各流类型下一个本端 ID
+    uint64_t                     peer_max_data;                                        // 对端通告的连接级发送额度
+    uint64_t                     peer_initial_max_stream_data_bidi_local;              // 本端双向流发送额度
+    uint64_t                     peer_initial_max_stream_data_bidi_remote;             // 对端双向流发送额度
+    utp_frame_transport_params_t local_transport_params;                               // 本端握手通告传输参数
+    utp_frame_ack_frequency_t    local_ack_frequency;                                  // 本端握手通告 ACK 策略
+    uint64_t                     local_max_data_advertised;                            // 本端通告连接接收额度
+    uint64_t                     stream_data_sent_total;                               // 已排队发送的流数据偏移总额
+    uint64_t                     local_stream_data_received_total;                     // 接收流数据最大偏移累计
+    uint64_t                     local_stream_data_consumed_total;                     // 应用已消费流数据累计
+    uint64_t                     last_max_data_sent_us;                                // 最近 MAX_DATA 发送时刻
+    uint64_t                     last_data_blocked_sent_us;                            // 最近 DATA_BLOCKED 发送时刻
+    uint16_t                     packet_capacity;                                      // PacketOut 初始包容量
+    size_t                       recv_reassembly_memory_bytes;                         // 所有流重组内存计费
+    size_t                       recv_reassembly_fragment_count;                       // 所有流重组分片计数
+    uint64_t                     rx_bytes;                                             // 已认证且非重复接收字节数
+    uint64_t                     tx_bytes;                                             // 实际发送字节数
+    uint64_t                     rtx_bytes;                                            // 实际重传字节数
+    uint64_t                     scheduler_select_total;                               // 流调度总选择次数
+    uint64_t                     scheduler_select_strict;                              // Strict 选择次数
+    uint64_t                     scheduler_select_drr;                                 // DRR 选择次数
+    uint64_t                     scheduler_strict_aging_promoted;                      // Strict 老化提升次数
+    uint64_t                     scheduler_mode_switches;                              // 调度模式切换次数
+    uint64_t                     scheduler_drr_refills;                                // DRR 配额补充次数
+    uint64_t                     scheduler_drr_consumes;                               // DRR 配额消耗次数
+    uint64_t                     peer_handshake_packet_number;                         // 已接收对端握手包号
+    uint64_t                     peer_handshake_received_us;                           // 对端握手接收时刻
+    uint64_t                     retransmission_deadline_us;                           // 普通数据重传截止时刻
+    uint64_t                     close_deadline_us;                                    // draining 结束时刻
+    uint64_t                     close_last_sent_us;                                   // 最近 CLOSE 发送时刻
+    uint64_t                     close_pto_us;                                         // CLOSE 重发 PTO
+    uint64_t                     keepalive_deadline_us;                                // 保活探测截止时刻
+    uint64_t                     last_peer_activity_us;                                // 最近有效对端活动时刻
+    uint64_t                     path_challenge_deadline_us;                           // 路径验证超时截止时刻
+    uint64_t                     ack_profile_candidate_since_us;                       // 候选 ACK 策略起始时刻
+    uint64_t                     ack_profile_last_sent_us;                             // 最近 ACK_FREQUENCY 发送时刻
+    uint64_t                     ack_profile_baseline_srtt_us;                         // 策略评估 RTT 基线
+    uint64_t                     ack_loss_window_start_us;                             // ACK 丢失窗口开始时刻
+    uint64_t                     last_ack_frequency_apply_us;                          // 最近应用对端 ACK 策略时刻
+    uint64_t                     candidate_rx_bytes;                                   // 候选路径已认证接收字节数
+    uint64_t                     candidate_tx_bytes;                                   // 候选路径已实际发送字节数
+    uint64_t                     candidate_queued_bytes;                               // 候选路径已排队字节数
+    uint32_t                     path_validation_generation;                           // 当前路径验证代次
+    uint16_t                     close_error_code;                                     // 本端关闭错误码
+    uint16_t                     peer_close_error_code;                                // 对端关闭错误码
+    uint16_t                     peer_close_reason_length;                             // 对端关闭原因长度
+    uint32_t                     keepalive_interval_ms;                                // 保活间隔
+    uint32_t                     keepalive_timeout_ms;                                 // 单次保活超时
+    uint16_t                     local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];  // 本端允许对端创建流数
+    uint16_t                     peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];   // 对端允许本端创建流数
+    uint8_t                      path_challenge[8];                                    // 当前路径挑战随机值
+    uint8_t                      peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // 对端临时公钥
+    uint8_t                      session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];     // 导出给客户端的恢复状态
+    uint8_t close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];  // CLOSE 内联缓冲
+    uint8_t stream_scheduler_mode;                                  // Strict 或 DRR 调度模式
+    utp_congestion_algorithm_t   congestion_algorithm;              // 当前拥塞控制算法
+    uint8_t                      crypto_type;                       // 协商的加密套件
+    uint8_t                      peer_ack_delay_exponent;           // 对端 ACK 延迟指数
+    utp_frame_transport_params_t peer_transport_params;             // 已解析对端传输参数
+    utp_frame_ack_frequency_t    peer_ack_frequency;                // 已解析对端 ACK 策略
+    uint32_t                     stream_scheduler_cursor;           // 流调度轮转游标
+    uint8_t                      path_challenge_retry_count;        // 路径挑战已重试次数
+    uint16_t                     keepalive_missed_probes;           // 连续未响应保活数
+    uint16_t                     keepalive_probes;                  // 允许连续未响应探测数
+    uint32_t                     ack_loss_count;                    // ACK 策略窗口中的丢失计数
+    uint8_t                      ack_profile_current;               // 当前 ACK 策略档位
+    uint8_t                      ack_profile_candidate;             // 候选 ACK 策略档位
+    uint64_t                     session_token_expires_at_seconds;  // 恢复状态绝对过期时间
+    uint16_t                     session_token_size;                // 当前恢复状态长度
+    bool                         close_pending;                     // CLOSE 包是否待发送
+    bool                         udp_write_pending;                 // socket 写事件是否已注册
+    bool                         local_close_started;               // 是否已由本端开始关闭
+    bool                         peer_close_received;               // 是否已接收对端 CLOSE
+    bool                         path_challenge_pending;            // 路径挑战包是否正在飞行
+    bool                         crypto_configured;                 // 是否配置加密
+    bool                         crypto_ready;                      // 1-RTT AEAD 是否就绪
+    bool                         zero_rtt_encrypted;                // 当前 0-RTT 是否使用 early AEAD
+    bool                         session_token_issued;              // 是否已向对端签发恢复票据
+    bool                         peer_transport_params_received;    // 是否已收到对端传输参数
+    bool                         peer_ack_frequency_received;       // 是否已收到对端 ACK 策略
+    bool                         keepalive_enabled;                 // 是否启用保活
+    const uint8_t*               peer_close_reason;                 // 对端 CLOSE 原包原因视图
+    utp_connection_role_t        role;                              // 主动或被动角色
+    utp_connection_state_t       state;                             // 连接生命周期状态
+    utp_connection_path_state_t  path_state;                        // 路径验证状态
 } utp_connection_t;
 
 /** @brief 初始化连接运行状态及其有界发送、接收资源。 */

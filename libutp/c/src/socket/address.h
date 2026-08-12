@@ -23,10 +23,10 @@ typedef enum utp_address_family {
 #define UTP_ADDRESS_TEXT_MAX_LENGTH 46u
 
 typedef struct utp_address {
-    uint8_t  family;
-    uint16_t port;
-    uint32_t scope_id;
-    uint8_t  address[16];
+    uint8_t  family;       // IPv4 或 IPv6 地址族
+    uint16_t port;         // 主机字节序端口号
+    uint32_t scope_id;     // IPv6 scope 标识
+    uint8_t  address[16];  // 网络字节序地址
 } utp_address_t;
 
 utp_internal_error_t utp_address_parse(utp_address_t* address, const char* text, uint16_t port);

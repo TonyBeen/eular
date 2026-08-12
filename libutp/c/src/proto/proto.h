@@ -26,16 +26,16 @@ typedef enum utp_packet_type {
 } utp_packet_type_t;
 
 typedef struct utp_packet_header {
-    uint32_t scid;
-    uint32_t dcid;
-    uint64_t packet_number;
-    uint16_t payload_length;
-    uint8_t  type;
-    uint8_t  reserve;
+    uint32_t scid;            // 发送方连接 ID
+    uint32_t dcid;            // 接收方连接 ID
+    uint64_t packet_number;   // 单方向递增包号
+    uint16_t payload_length;  // payload 字节数，不含固定包头
+    uint8_t  type;            // utp_packet_type_t
+    uint8_t  reserve;         // 保留位，编码时必须为 0
 } utp_packet_header_t;
 
-utp_internal_error_t utp_proto_encode_header(uint8_t *buffer, size_t capacity, const utp_packet_header_t *header);
-utp_internal_error_t utp_proto_decode_header(utp_packet_header_t *header, const uint8_t *buffer, size_t length);
+utp_internal_error_t utp_proto_encode_header(uint8_t* buffer, size_t capacity, const utp_packet_header_t* header);
+utp_internal_error_t utp_proto_decode_header(utp_packet_header_t* header, const uint8_t* buffer, size_t length);
 
 #ifdef __cplusplus
 }

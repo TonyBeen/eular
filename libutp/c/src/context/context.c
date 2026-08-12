@@ -14,10 +14,10 @@
 #include "util/time.h"
 
 typedef struct utp_context_replay {
-    utp_context_t*       context;
-    utp_connection_t*    connection;
-    const utp_address_t* peer;
-    uint64_t             now_us;
+    utp_context_t*       context;     // 所属 Context，不拥有
+    utp_connection_t*    connection;  // 被重放入站包的连接，不拥有
+    const utp_address_t* peer;        // 入站包来源地址，不拥有
+    uint64_t             now_us;      // 重放使用的接收时刻
 } utp_context_replay_t;
 
 static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,

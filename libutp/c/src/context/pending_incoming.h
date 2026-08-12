@@ -25,39 +25,39 @@ typedef utp_internal_error_t (*utp_pending_incoming_replay_fn)(const uint8_t* pa
 // storage 由 Context 持有并在创建 pending 项时传入。每个缓存包保存明文长度、线上长度和解密后的完整包，
 // 因此接收热路径不需要动态分配，晋升后也能按实际 UDP 字节数记账。
 typedef struct utp_pending_incoming {
-    utp_address_t                peer;
-    uint8_t*                     storage;
-    size_t                       storage_capacity;
-    size_t                       storage_length;
-    size_t                       packet_limit;
-    size_t                       packet_count;
-    uint32_t                     local_cid;
-    uint32_t                     peer_cid;
-    uint64_t                     first_handshake_packet_number;
-    uint64_t                     last_handshake_packet_number;
-    uint64_t                     next_packet_number;
-    uint64_t                     latest_initial_packet_number;
-    uint64_t                     latest_initial_received_us;
-    uint64_t                     last_handshake_sent_us;
-    uint64_t                     handshake_rtt_sample_us;
-    uint64_t                     handshake_retransmission_deadline_us;
-    uint64_t                     handshake_base_delay_us;
-    uint32_t                     handshake_retransmission_count;
-    utp_crypto_key_pair_t        crypto_key_pair;
-    utp_crypto_aead_t            tx_aead;
-    utp_crypto_aead_t            rx_aead;
-    uint8_t                      crypto_type;
-    uint8_t                      handshake_max_retries;
-    utp_frame_transport_params_t peer_transport_params;
-    utp_frame_ack_frequency_t    peer_ack_frequency;
-    bool                         crypto_configured;
-    bool                         crypto_ready;
-    bool                         accepted;
-    bool                         handshake_sent;
+    utp_address_t                peer;                                  // 发起方地址
+    uint8_t*                     storage;                               // Context 提供的缓存存储，不拥有
+    size_t                       storage_capacity;                      // 缓存存储容量
+    size_t                       storage_length;                        // 已缓存字节数
+    size_t                       packet_limit;                          // 缓存包数上限
+    size_t                       packet_count;                          // 已缓存包数
+    uint32_t                     local_cid;                             // 待晋升连接的本端 CID
+    uint32_t                     peer_cid;                              // 发起方 CID
+    uint64_t                     first_handshake_packet_number;         // 首个响应握手包号
+    uint64_t                     last_handshake_packet_number;          // 最近响应握手包号
+    uint64_t                     next_packet_number;                    // 晋升后下一发送包号
+    uint64_t                     latest_initial_packet_number;          // 最新 Initial 包号
+    uint64_t                     latest_initial_received_us;            // 最新 Initial 接收时刻
+    uint64_t                     last_handshake_sent_us;                // 最近 HANDSHAKE 发送时刻
+    uint64_t                     handshake_rtt_sample_us;               // 被动握手 RTT 样本
+    uint64_t                     handshake_retransmission_deadline_us;  // 握手重传截止时刻
+    uint64_t                     handshake_base_delay_us;               // 首次握手处理延迟
+    uint32_t                     handshake_retransmission_count;        // 已执行握手重传次数
+    utp_crypto_key_pair_t        crypto_key_pair;                       // 服务端临时密钥对
+    utp_crypto_aead_t            tx_aead;                               // 晋升后发送 AEAD
+    utp_crypto_aead_t            rx_aead;                               // 晋升后接收 AEAD
+    uint8_t                      crypto_type;                           // 协商加密类型
+    uint8_t                      handshake_max_retries;                 // 最大握手重试次数
+    utp_frame_transport_params_t peer_transport_params;                 // 对端传输参数
+    utp_frame_ack_frequency_t    peer_ack_frequency;                    // 对端 ACK 策略
+    bool                         crypto_configured;                     // 是否请求加密握手
+    bool                         crypto_ready;                          // AEAD 是否已完成派生
+    bool                         accepted;                              // 应用是否已接受连接
+    bool                         handshake_sent;                        // 是否至少发送过一次响应
     // UDP 暂不可写时保留首个或重传 HANDSHAKE，等待 writable 事件原包号重建发送。
-    bool                         handshake_write_pending;
-    bool                         peer_transport_params_received;
-    bool                         peer_ack_frequency_received;
+    bool                         handshake_write_pending;         // UDP 不可写时待重发握手
+    bool                         peer_transport_params_received;  // 是否收齐对端传输参数
+    bool                         peer_ack_frequency_received;     // 是否收齐对端 ACK 策略
 } utp_pending_incoming_t;
 
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,

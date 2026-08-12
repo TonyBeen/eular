@@ -15,26 +15,26 @@ extern "C" {
 typedef struct utp_hash_table utp_hash_table_t;
 
 typedef struct utp_hash_node {
-    struct utp_hash_node*  next;
-    struct utp_hash_node** prev_next;
-    utp_hash_table_t*      table;
-    uint64_t               hash;
+    struct utp_hash_node*  next;       // 桶内下一节点
+    struct utp_hash_node** prev_next;  // 指向前驱 next 的链接，支持 O(1) 删除
+    utp_hash_table_t*      table;      // 所属哈希表，不拥有
+    uint64_t               hash;       // 节点哈希值
 } utp_hash_node_t;
 
 typedef bool (*utp_hash_match_fn)(const utp_hash_node_t* node, const void* key, void* user_data);
 typedef void (*utp_hash_node_fn)(utp_hash_node_t* node, void* user_data);
 
 struct utp_hash_table {
-    utp_hash_node_t**      buckets;
-    size_t                 bucket_count;
-    size_t                 count;
-    size_t                 max_entries;
-    const utp_allocator_t* allocator;
+    utp_hash_node_t**      buckets;       // 桶头数组所有权
+    size_t                 bucket_count;  // 当前桶数
+    size_t                 count;         // 当前节点数
+    size_t                 max_entries;   // 节点数上限
+    const utp_allocator_t* allocator;     // 分配器，不拥有
 };
 
 typedef struct utp_hash_iter {
-    size_t           bucket_index;
-    utp_hash_node_t* next;
+    size_t           bucket_index;  // 正在遍历的桶下标
+    utp_hash_node_t* next;          // 下一待返回节点
 } utp_hash_iter_t;
 
 utp_internal_error_t utp_hash_table_init(utp_hash_table_t* table, const utp_allocator_t* allocator, size_t max_entries);

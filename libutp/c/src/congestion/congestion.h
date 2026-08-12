@@ -10,10 +10,10 @@ extern "C" {
 #endif
 
 typedef struct utp_congestion_packet_info {
-    uint64_t packet_number;
-    uint64_t sent_time_us;
-    uint32_t packet_size;
-    void*    state;
+    uint64_t packet_number;  // 发送包号
+    uint64_t sent_time_us;   // 实际发送时刻，单位 us
+    uint32_t packet_size;    // 线上包大小，单位 bytes
+    void*    state;          // 算法私有的每包状态，不拥有
 } utp_congestion_packet_info_t;
 
 typedef struct utp_congestion_ops {
@@ -32,8 +32,8 @@ typedef struct utp_congestion_ops {
 } utp_congestion_ops_t;
 
 typedef struct utp_congestion {
-    void*                       state;
-    const utp_congestion_ops_t* ops;
+    void*                       state;  // 具体拥塞控制算法状态，不拥有
+    const utp_congestion_ops_t* ops;    // 算法操作表，不拥有
 } utp_congestion_t;
 
 uint64_t utp_congestion_get_cwnd(const utp_congestion_t* congestion);

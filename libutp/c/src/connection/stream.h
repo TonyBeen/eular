@@ -33,28 +33,28 @@ struct utp_connection;
 #define UTP_STREAM_DEFAULT_FLOW_WINDOW          (2u * 1024u * 1024u)
 
 typedef struct utp_stream_recv_account {
-    size_t* connection_memory_bytes;
-    size_t* connection_fragment_count;
-    size_t  connection_memory_limit;
-    size_t  connection_fragment_limit;
+    size_t* connection_memory_bytes;    // 连接级已占用重组内存计数
+    size_t* connection_fragment_count;  // 连接级已保留分片数计数
+    size_t  connection_memory_limit;    // 连接级重组内存上限
+    size_t  connection_fragment_limit;  // 连接级重组分片数上限
 } utp_stream_recv_account_t;
 
 typedef struct utp_stream_recv_fragment {
-    utp_packet_in_t* packet;
-    const uint8_t*   data_view;
-    size_t*          connection_memory_bytes;
-    size_t*          connection_fragment_count;
-    uint64_t         offset;
-    size_t           memory_cost;
-    size_t           length;
-    size_t           consumed;
-    bool             fin;
-    bool             accounted;
+    utp_packet_in_t* packet;                     // 借用数据所在 PacketIn，可为空
+    const uint8_t*   data_view;                  // 分片数据零拷贝视图
+    size_t*          connection_memory_bytes;    // 所属连接的内存计数器
+    size_t*          connection_fragment_count;  // 所属连接的分片计数器
+    uint64_t         offset;                     // 分片在流内的起始偏移
+    size_t           memory_cost;                // 对连接级内存预算的计费字节数
+    size_t           length;                     // 分片总长度
+    size_t           consumed;                   // 已被应用消费的前缀长度
+    bool             fin;                        // 分片末尾是否带 FIN
+    bool             accounted;                  // 是否已计入连接级资源计数
 } utp_stream_recv_fragment_t;
 
 typedef struct utp_stream_send_ack_range {
-    uint64_t start;
-    uint64_t end;
+    uint64_t start;  // 已确认数据区间起始偏移（含）
+    uint64_t end;    // 已确认数据区间结束偏移（不含）
 } utp_stream_send_ack_range_t;
 
 typedef utp_on_stream_readable_fn utp_stream_read_cb_t;
@@ -64,52 +64,52 @@ typedef utp_on_stream_reset_fn    utp_stream_reset_cb_t;
 
 struct utp_stream {
     // 仅由 Connection 创建的流会设置 hash_node 和 connection。
-    utp_hash_node_t             hash_node;
-    struct utp_connection*      connection;
-    uint64_t*                   connection_consumed_total;
-    uint32_t                    stream_id;
-    uint64_t                    send_buffer_offset;
-    uint64_t                    next_send_offset;
-    uint64_t                    recv_offset;
-    uint64_t                    local_max_stream_offset_received;
-    uint64_t                    peer_max_stream_data;
-    uint64_t                    local_max_stream_data_advertised;
-    uint64_t                    last_max_stream_data_sent_us;
-    uint64_t                    last_stream_data_blocked_sent_us;
-    uint16_t                    reset_error_code;
-    uint32_t                    drr_deficit;
-    size_t                      send_buffer_length;
-    size_t                      send_buffer_start;
-    size_t                      send_in_flight_bytes;
-    size_t                      recv_buffered_bytes;
-    size_t                      recv_pinned_memory_bytes;
-    size_t                      recv_fragment_count;
-    size_t                      recv_accounted_fragment_count;
-    size_t                      send_ack_range_count;
-    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];
-    utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];
-    uint8_t                     send_buffer[UTP_STREAM_SEND_BUFFER_CAPACITY];
-    uint8_t                     priority;
-    uint8_t                     strict_wait_rounds;
-    utp_stream_read_cb_t        read_cb;
-    utp_stream_write_cb_t       write_cb;
-    utp_stream_close_cb_t       close_cb;
-    utp_stream_reset_cb_t       reset_cb;
-    void*                       read_cb_data;
-    void*                       write_cb_data;
-    void*                       close_cb_data;
-    void*                       reset_cb_data;
-    bool                        used;
-    bool                        local_fin_queued;
-    bool                        local_fin_sent;
-    bool                        peer_fin;
-    bool                        reset;
-    bool                        reset_by_peer;
-    bool                        stream_limit_released;
-    bool                        notifying_readable;
-    bool                        notifying_writable;
-    bool                        closed_notified;
-    bool                        reset_notified;
+    utp_hash_node_t             hash_node;                                       // Connection 流表节点
+    struct utp_connection*      connection;                                      // 所属连接，不拥有
+    uint64_t*                   connection_consumed_total;                       // 连接级已消费字节累计指针
+    uint32_t                    stream_id;                                       // 协议流 ID
+    uint64_t                    send_buffer_offset;                              // 发送环形缓冲逻辑起始偏移
+    uint64_t                    next_send_offset;                                // 下一段待发送数据的流偏移
+    uint64_t                    recv_offset;                                     // 下一字节连续读取偏移
+    uint64_t                    local_max_stream_offset_received;                // 已观察到的最大接收末尾偏移
+    uint64_t                    peer_max_stream_data;                            // 对端通告的发送额度
+    uint64_t                    local_max_stream_data_advertised;                // 本端通告的接收额度
+    uint64_t                    last_max_stream_data_sent_us;                    // 上次发送 MAX_STREAM_DATA 的时刻
+    uint64_t                    last_stream_data_blocked_sent_us;                // 上次发送 STREAM_DATA_BLOCKED 的时刻
+    uint16_t                    reset_error_code;                                // RESET_STREAM 错误码
+    uint32_t                    drr_deficit;                                     // DRR 当前可用配额
+    size_t                      send_buffer_length;                              // 发送环形缓冲有效长度
+    size_t                      send_buffer_start;                               // 发送环形缓冲物理起始下标
+    size_t                      send_in_flight_bytes;                            // 已构造但尚未确认的发送字节
+    size_t                      recv_buffered_bytes;                             // 等待应用读取的连续或乱序字节
+    size_t                      recv_pinned_memory_bytes;                        // 被 PacketIn 引用固定的接收内存
+    size_t                      recv_fragment_count;                             // 接收重组分片数
+    size_t                      recv_accounted_fragment_count;                   // 已进入连接级预算的分片数
+    size_t                      send_ack_range_count;                            // 已确认发送区间数
+    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];  // 按偏移排序的接收分片
+    utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];  // 已确认发送区间
+    uint8_t                     send_buffer[UTP_STREAM_SEND_BUFFER_CAPACITY];      // 有界环形发送缓冲
+    uint8_t                     priority;                                          // 用户设置的 0 至 7 优先级
+    uint8_t                     strict_wait_rounds;                                // Strict 调度等待轮数，用于老化
+    utp_stream_read_cb_t        read_cb;                                           // 可读通知回调
+    utp_stream_write_cb_t       write_cb;                                          // 可写通知回调
+    utp_stream_close_cb_t       close_cb;                                          // 双向关闭通知回调
+    utp_stream_reset_cb_t       reset_cb;                                          // RESET 通知回调
+    void*                       read_cb_data;                                      // 可读回调用户数据
+    void*                       write_cb_data;                                     // 可写回调用户数据
+    void*                       close_cb_data;                                     // 关闭回调用户数据
+    void*                       reset_cb_data;                                     // RESET 回调用户数据
+    bool                        used;                                              // 是否已初始化为有效流
+    bool                        local_fin_queued;                                  // 本端 FIN 已请求发送
+    bool                        local_fin_sent;                                    // 本端 FIN 已构造发送
+    bool                        peer_fin;                                          // 已接收到对端 FIN
+    bool                        reset;                                             // 流已被 RESET 终止
+    bool                        reset_by_peer;                                     // RESET 是否来自对端
+    bool                        stream_limit_released;                             // 对端流额度是否已归还
+    bool                        notifying_readable;                                // 正在执行可读回调，防止重入
+    bool                        notifying_writable;                                // 正在执行可写回调，防止重入
+    bool                        closed_notified;                                   // 关闭回调是否已通知
+    bool                        reset_notified;                                    // RESET 回调是否已通知
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */

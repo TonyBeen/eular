@@ -40,32 +40,32 @@ extern "C" {
 #define UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256 2u
 
 typedef struct utp_crypto_key_pair {
-    uint8_t public_key[UTP_CRYPTO_X25519_KEY_SIZE];
-    uint8_t private_key[UTP_CRYPTO_X25519_KEY_SIZE];
+    uint8_t public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // X25519 公钥
+    uint8_t private_key[UTP_CRYPTO_X25519_KEY_SIZE];  // X25519 私钥
 } utp_crypto_key_pair_t;
 
 typedef struct utp_crypto_traffic_secret {
-    uint8_t key[UTP_CRYPTO_MAX_KEY_SIZE];
-    uint8_t nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE];
+    uint8_t key[UTP_CRYPTO_MAX_KEY_SIZE];                // AEAD 密钥材料
+    uint8_t nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE];  // 每包 nonce 固定前缀
 } utp_crypto_traffic_secret_t;
 
 typedef struct utp_crypto_traffic_material {
-    utp_crypto_traffic_secret_t client_to_server;
-    utp_crypto_traffic_secret_t server_to_client;
-    size_t                      key_size;
+    utp_crypto_traffic_secret_t client_to_server;  // 客户端到服务端方向密钥
+    utp_crypto_traffic_secret_t server_to_client;  // 服务端到客户端方向密钥
+    size_t                      key_size;          // 实际使用的 AEAD 密钥长度
 } utp_crypto_traffic_material_t;
 
 typedef struct utp_crypto_aead {
-    void*                  provider_context;
-    const utp_allocator_t* allocator;
-    uint8_t                nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE];
-    size_t                 key_size;
+    void*                  provider_context;                            // OpenSSL AEAD 上下文所有权
+    const utp_allocator_t* allocator;                                   // 分配器，不拥有
+    uint8_t                nonce_prefix[UTP_CRYPTO_NONCE_PREFIX_SIZE];  // nonce 固定前缀
+    size_t                 key_size;                                    // AEAD 密钥长度
 } utp_crypto_aead_t;
 
 /** @brief 恢复根密钥派生出的服务端票据和本地状态工作密钥。 */
 typedef struct utp_crypto_resumption_keys {
-    uint8_t ticket_seal_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
-    uint8_t local_state_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];
+    uint8_t ticket_seal_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];  // 服务端票据加密密钥
+    uint8_t local_state_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];  // 客户端恢复状态加密密钥
 } utp_crypto_resumption_keys_t;
 
 void                 utp_crypto_key_pair_clear(utp_crypto_key_pair_t* key_pair);
