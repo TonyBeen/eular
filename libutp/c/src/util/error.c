@@ -63,6 +63,8 @@ utp_status_t utp_internal_error_to_status(utp_internal_error_t error)
         return UTP_STATUS_LIMIT;
     case UTP_INTERNAL_ERROR_STREAM_LIMIT:
         return UTP_STATUS_CONNECTION_STREAM_LIMITED;
+    case UTP_INTERNAL_ERROR_CANCELLED:
+        return UTP_STATUS_CANCELLED;
     default:
         break;
     }

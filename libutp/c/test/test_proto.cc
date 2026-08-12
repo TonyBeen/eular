@@ -505,7 +505,7 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
         uint8_t type;
         size_t  length;
     };
-    const std::array<frame_case, 21> cases = {{{UTP_FRAME_TYPE_STREAM, 16u},
+    const std::array<frame_case, 22> cases = {{{UTP_FRAME_TYPE_STREAM, 16u},
                                                {UTP_FRAME_TYPE_ACK, 16u},
                                                {UTP_FRAME_TYPE_PADDING, 3u},
                                                {UTP_FRAME_TYPE_CONNECTION_CLOSE, 5u},
@@ -525,7 +525,8 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
                                                {UTP_FRAME_TYPE_MAX_DATA, 9u},
                                                {UTP_FRAME_TYPE_MAX_STREAM_DATA, 13u},
                                                {UTP_FRAME_TYPE_DATA_BLOCKED, 9u},
-                                               {UTP_FRAME_TYPE_STREAM_DATA_BLOCKED, 13u}}};
+                                               {UTP_FRAME_TYPE_STREAM_DATA_BLOCKED, 13u},
+                                               {UTP_FRAME_TYPE_STOP_SENDING, 7u}}};
     std::vector<uint8_t>             payload;
     uint32_t                         expected_types = 0u;
 
@@ -964,6 +965,22 @@ TEST_CASE("reset stream frame round trips its terminal state", "[frame]")
     REQUIRE(decoded.stream_id == reset.stream_id);
     REQUIRE(decoded.final_size == reset.final_size);
     REQUIRE(utp_frame_reset_stream_decode(&decoded, encoded.data(), encoded.size() - 1u) ==
+            UTP_INTERNAL_ERROR_OVERFLOW);
+}
+
+TEST_CASE("stop sending frame round trips its cancellation request", "[frame]")
+{
+    const utp_frame_stop_sending_t stop     = {UINT16_C(0x1122), UINT32_C(0x33445566)};
+    const std::array<uint8_t, 7>   expected = {UTP_FRAME_TYPE_STOP_SENDING, 0x11u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u};
+    std::array<uint8_t, expected.size()> encoded = {};
+    utp_frame_stop_sending_t             decoded = {};
+
+    REQUIRE(utp_frame_stop_sending_encode(encoded.data(), encoded.size(), &stop) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(encoded.data(), expected.data(), expected.size()) == 0);
+    REQUIRE(utp_frame_stop_sending_decode(&decoded, encoded.data(), encoded.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.error_code == stop.error_code);
+    REQUIRE(decoded.stream_id == stop.stream_id);
+    REQUIRE(utp_frame_stop_sending_decode(&decoded, encoded.data(), encoded.size() - 1u) ==
             UTP_INTERNAL_ERROR_OVERFLOW);
 }
 

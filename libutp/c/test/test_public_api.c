@@ -259,7 +259,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     stream = utp_connection_get_stream(client_probe.connected_connection, stream_id);
     assert(stream != NULL);
     assert(utp_stream_write(stream, data, sizeof(data) - 1u) == UTP_STATUS_OK);
-    utp_stream_close(stream);
+    assert(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
     pump_event_loop(event_base, 12);
     assert(server_probe.incoming_stream_count == 1);
     assert(server_probe.incoming_stream_connection == server_probe.connected_connection);
@@ -281,7 +281,8 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     assert(server_probe.incoming_stream_id == reset_stream_id);
     assert(server_probe.incoming_stream ==
            utp_connection_get_stream(server_probe.connected_connection, reset_stream_id));
-    assert(utp_stream_reset_by_peer(server_probe.incoming_stream));
+    assert(utp_stream_read(server_probe.incoming_stream, received, sizeof(received), &received_length) ==
+           UTP_STATUS_CANCELLED);
     utp_context_destroy(client);
     pump_event_loop(event_base, 16);
     assert(server_probe.connection_error_count == 1);
@@ -547,6 +548,7 @@ int main(void)
     assert(event_base != NULL);
     assert(options.mtu_probe_retries == 1u);
     assert(options.cc_algorithm == UTP_CONGESTION_DEFAULT);
+    assert(options.stream_terminal_capacity == 4096u);
     options.event_base = event_base;
     options.context_id = 7u;
     options.log_sink   = test_log_sink;
@@ -702,7 +704,7 @@ int main(void)
             assert(utp_stream_write(stream, data, sizeof(data) - 1u) == UTP_STATUS_OK);
             assert(utp_stream_set_priority(stream, UTP_STREAM_PRIORITY_HIGHEST) == UTP_STATUS_OK);
             assert(utp_stream_priority(stream) == UTP_STREAM_PRIORITY_HIGHEST);
-            utp_stream_close(stream);
+            assert(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
             pump_event_loop(event_base, 8);
             stream = utp_connection_get_stream(server_probe.connected_connection, stream_id);
             assert(stream != NULL);
@@ -799,7 +801,7 @@ int main(void)
             stream = utp_connection_get_stream(server_probe.connected_connection, stream_id);
             assert(stream != NULL);
             assert(utp_stream_write(stream, data, sizeof(data)) == UTP_STATUS_OK);
-            utp_stream_close(stream);
+            assert(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
             pump_event_loop(event_base, 8);
             assert(utp_connection_get_stream(client_probe.connected_connection, stream_id) != NULL);
 

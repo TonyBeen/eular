@@ -55,6 +55,29 @@ void transfer_next_packet(utp_connection_t* sender, utp_connection_t* receiver, 
     utp_packet_in_release(wire);
 }
 
+utp_internal_error_t transfer_control_payload(utp_connection_t* sender, utp_connection_t* receiver,
+                                              const utp_address_t* sender_address, const uint8_t* payload,
+                                              size_t payload_length, uint64_t now_us,
+                                              utp_packet_in_pool_t* receive_pool)
+{
+    utp_packet_out_t*    packet;
+    utp_packet_in_t*     wire = nullptr;
+    size_t               length;
+    utp_internal_error_t error;
+
+    REQUIRE(utp_connection_queue_packet(sender, UTP_PACKET_TYPE_CTRL, payload, payload_length, false) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(sender);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_packet_in_pool_acquire(receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_flatten(packet, wire->data, wire->capacity, &length) == UTP_INTERNAL_ERROR_OK);
+    wire->length = static_cast<uint16_t>(length);
+    REQUIRE(utp_connection_on_packet_sent(sender, packet, now_us) == UTP_INTERNAL_ERROR_OK);
+    error = utp_connection_on_packet_in_received(receiver, wire, sender_address, now_us);
+    utp_packet_in_release(wire);
+    return error;
+}
+
 const uint8_t* first_packet_frame(utp_packet_out_t* packet, uint8_t* out_frame_type, size_t* out_frame_length)
 {
     utp_packet_view_t view         = {};
@@ -97,11 +120,20 @@ const uint8_t* packet_frame_of_type(utp_packet_out_t* packet, uint8_t requested_
 }
 
 struct stream_callback_probe {
-    int32_t  readable_count;
-    int32_t  writable_count;
-    int32_t  closed_count;
-    int32_t  reset_count;
-    uint16_t reset_error_code;
+    int32_t readable_count;
+    int32_t writable_count;
+    int32_t closed_count;
+};
+
+struct incoming_terminal_probe {
+    int32_t incoming_count;
+    int32_t closed_count;
+    int32_t writable_count;
+    bool    reset_visible;
+    bool    read_cancelled;
+    bool    write_cancelled;
+    bool    inside_incoming;
+    bool    writable_during_incoming;
 };
 
 void on_stream_readable(utp_stream_t* stream, void* user_data)
@@ -128,13 +160,60 @@ void on_stream_closed(utp_stream_t* stream, void* user_data)
     ++probe->closed_count;
 }
 
-void on_stream_reset(utp_stream_t* stream, uint16_t error_code, void* user_data)
+void on_incoming_terminal_closed(utp_stream_t* stream, void* user_data)
 {
-    auto* probe = static_cast<stream_callback_probe*>(user_data);
+    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
 
     REQUIRE(stream != nullptr);
-    ++probe->reset_count;
-    probe->reset_error_code = error_code;
+    ++probe->closed_count;
+}
+
+void on_incoming_terminal(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+{
+    auto*   probe = static_cast<incoming_terminal_probe*>(user_data);
+    uint8_t byte;
+    size_t  length = 0u;
+
+    REQUIRE(connection != nullptr);
+    REQUIRE(stream != nullptr);
+    ++probe->incoming_count;
+    probe->reset_visible = stream->peer_reset;
+    probe->read_cancelled =
+        utp_stream_read(stream, &byte, sizeof(byte), &length) == UTP_STATUS_CANCELLED && length == 0u;
+    utp_stream_set_on_closed(stream, on_incoming_terminal_closed, probe);
+    REQUIRE(utp_stream_reset(stream, UTP_STREAM_ERROR_CANCELLED) == UTP_STATUS_OK);
+}
+
+void on_incoming_stopped(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
+
+    REQUIRE(connection != nullptr);
+    REQUIRE(stream != nullptr);
+    ++probe->incoming_count;
+    probe->write_cancelled =
+        utp_stream_write(stream, "x", 1u) == UTP_STATUS_CANCELLED && stream->peer_stop_sending_received;
+}
+
+void on_incoming_writable(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->writable_count;
+    probe->writable_during_incoming = probe->inside_incoming;
+}
+
+void on_incoming_register_writable(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
+
+    REQUIRE(connection != nullptr);
+    REQUIRE(stream != nullptr);
+    ++probe->incoming_count;
+    probe->inside_incoming = true;
+    utp_stream_set_on_writable(stream, on_incoming_writable, probe);
+    probe->inside_incoming = false;
 }
 
 }  // namespace
@@ -144,12 +223,10 @@ TEST_CASE("stream callbacks notify readable writable closed and reset state", "[
     utp_packet_in_pool_t  pool                                       = {};
     utp_stream_t          receive                                    = {};
     utp_stream_t          writable                                   = {};
-    utp_stream_t          reset_stream                               = {};
     utp_frame_stream_t    frame                                      = {};
     utp_packet_in_t*      packet                                     = nullptr;
     stream_callback_probe receive_probe                              = {};
     stream_callback_probe writable_probe                             = {};
-    stream_callback_probe reset_probe                                = {};
     uint8_t               payload[UTP_FRAME_STREAM_HEADER_SIZE + 1u] = {};
     uint8_t               read_buffer[8]                             = {};
     size_t                payload_length                             = 0u;
@@ -190,20 +267,8 @@ TEST_CASE("stream callbacks notify readable writable closed and reset state", "[
     REQUIRE(utp_stream_on_packet_acked_range(&writable, stream_offset, stream_data_size) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(writable_probe.writable_count == 1);
 
-    utp_stream_init(&reset_stream, 0u);
-    utp_stream_set_on_reset(&reset_stream, on_stream_reset, &reset_probe);
-    utp_stream_set_on_closed(&reset_stream, on_stream_closed, &reset_probe);
-    REQUIRE(utp_stream_on_reset(&reset_stream, UINT16_C(0x1234), true) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(reset_probe.reset_count == 1);
-    REQUIRE(reset_probe.reset_error_code == UINT16_C(0x1234));
-    REQUIRE(reset_probe.closed_count == 1);
-    REQUIRE(utp_stream_on_reset(&reset_stream, UINT16_C(0x4567), true) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(reset_probe.reset_count == 1);
-    REQUIRE(reset_probe.closed_count == 1);
-
     utp_stream_cleanup(&receive);
     utp_stream_cleanup(&writable);
-    utp_stream_cleanup(&reset_stream);
     utp_packet_in_pool_cleanup(&pool);
 }
 
@@ -240,6 +305,33 @@ TEST_CASE("stream reassembles out-of-order frames and reports FIN after data is 
     REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_CLOSED);
     REQUIRE(length == 0u);
     REQUIRE(fin);
+    utp_packet_in_pool_cleanup(&pool);
+}
+
+TEST_CASE("stream rejects data and RESET beyond a FIN final offset", "[stream][fin][reset]")
+{
+    utp_packet_in_pool_t pool      = {};
+    utp_stream_t         stream    = {};
+    utp_frame_stream_t   fin_frame = {};
+    utp_frame_stream_t   overflow  = {};
+    utp_packet_in_t*     fin_packet;
+    utp_packet_in_t*     overflow_packet;
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 2u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&stream, 0u);
+    fin_packet = stream_frame_packet(&pool, 0u, 0u, "abc", true, &fin_frame);
+    REQUIRE(utp_stream_on_frame_packet(&stream, &fin_frame, fin_packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(fin_packet);
+    REQUIRE(stream.peer_final_size_known);
+    REQUIRE(stream.peer_final_size == 3u);
+
+    overflow_packet = stream_frame_packet(&pool, 0u, 3u, "d", false, &overflow);
+    REQUIRE(utp_stream_on_frame_packet(&stream, &overflow, overflow_packet) == UTP_INTERNAL_ERROR_PROTOCOL);
+    utp_packet_in_release(overflow_packet);
+    REQUIRE(utp_stream_on_peer_reset(&stream, 4u) == UTP_INTERNAL_ERROR_PROTOCOL);
+    REQUIRE(utp_stream_on_peer_reset(&stream, 3u) == UTP_INTERNAL_ERROR_OK);
+
+    utp_stream_cleanup(&stream);
     utp_packet_in_pool_cleanup(&pool);
 }
 
@@ -562,7 +654,7 @@ TEST_CASE("stream rolls back partial receive fragments when a split frame hits m
     utp_packet_in_pool_cleanup(&pool);
 }
 
-TEST_CASE("stream reset clears buffered state and records peer reset", "[stream][reset]")
+TEST_CASE("peer reset only closes the read direction", "[stream][reset]")
 {
     utp_packet_in_pool_t pool    = {};
     utp_stream_t         stream  = {};
@@ -579,18 +671,15 @@ TEST_CASE("stream reset clears buffered state and records peer reset", "[stream]
     REQUIRE(stream.recv_fragment_count == 1u);
     REQUIRE(stream.recv_pinned_memory_bytes != 0u);
 
-    REQUIRE(utp_stream_on_reset(&stream, UINT16_C(0x1234), true) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(stream.reset);
-    REQUIRE(stream.reset_by_peer);
-    REQUIRE(stream.reset_error_code == UINT16_C(0x1234));
-    REQUIRE(stream.local_fin_queued);
-    REQUIRE(stream.local_fin_sent);
-    REQUIRE(stream.peer_fin);
-    REQUIRE(stream.send_buffer_length == 0u);
+    REQUIRE(utp_stream_on_peer_reset(&stream, 2u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream.peer_reset);
+    REQUIRE_FALSE(stream.local_fin_queued);
+    REQUIRE_FALSE(stream.local_fin_sent);
+    REQUIRE(stream.send_buffer_length == 3u);
     REQUIRE(stream.send_in_flight_bytes == 0u);
     REQUIRE(stream.recv_fragment_count == 0u);
     REQUIRE(stream.recv_pinned_memory_bytes == 0u);
-    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("z"), 1u) == UTP_INTERNAL_ERROR_CLOSED);
+    REQUIRE(utp_stream_write_internal(&stream, reinterpret_cast<const uint8_t*>("z"), 1u) == UTP_INTERNAL_ERROR_OK);
 
     utp_packet_in_pool_cleanup(&pool);
 }
@@ -935,9 +1024,7 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
         utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
 
         REQUIRE(stream != nullptr);
-        REQUIRE(stream->reset);
-        REQUIRE_FALSE(stream->reset_by_peer);
-        REQUIRE(stream->reset_error_code == UINT16_C(0x7788));
+        REQUIRE(stream->local_write_reset);
         REQUIRE(stream->send_buffer_length == 0u);
     }
 
@@ -948,7 +1035,7 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
     REQUIRE(utp_frame_reset_stream_decode(&reset, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(reset.error_code == UINT16_C(0x7788));
     REQUIRE(reset.stream_id == stream_id);
-    REQUIRE(reset.final_size == 3u);
+    REQUIRE(reset.final_size == 0u);
 
     REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_packet_out_flatten(packet, wire->data, wire->capacity, &length) == UTP_INTERNAL_ERROR_OK);
@@ -959,12 +1046,231 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
         utp_stream_t* stream = utp_connection_find_stream_internal(&passive, stream_id);
 
         REQUIRE(stream != nullptr);
-        REQUIRE(stream->reset);
-        REQUIRE(stream->reset_by_peer);
-        REQUIRE(stream->reset_error_code == UINT16_C(0x7788));
+        REQUIRE(stream->peer_reset);
     }
 
     utp_packet_in_release(wire);
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection commits RESET state before incoming stream callback", "[stream][reset][callback]")
+{
+    const utp_address_t     active_address  = loopback_address(13041u);
+    const utp_address_t     passive_address = loopback_address(13042u);
+    utp_packet_in_pool_t    receive_pool    = {};
+    utp_connection_t        active          = {};
+    utp_connection_t        passive         = {};
+    incoming_terminal_probe probe           = {};
+    uint32_t                stream_id       = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 141u, 142u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 142u, 141u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    utp_connection_set_on_incoming_stream_internal(&active, on_incoming_terminal, &probe);
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_reset_internal(utp_connection_find_stream_internal(&passive, stream_id), UINT16_C(0x1234)) ==
+            UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+
+    REQUIRE(probe.incoming_count == 1);
+    REQUIRE(probe.reset_visible);
+    REQUIRE(probe.read_cancelled);
+    REQUIRE(probe.closed_count == 1);
+
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection commits STOP_SENDING before incoming stream callback", "[stream][shutdown][callback]")
+{
+    const utp_address_t            active_address                       = loopback_address(13043u);
+    const utp_address_t            passive_address                      = loopback_address(13044u);
+    utp_packet_in_pool_t           receive_pool                         = {};
+    utp_connection_t               active                               = {};
+    utp_connection_t               passive                              = {};
+    incoming_terminal_probe        probe                                = {};
+    uint8_t                        payload[UTP_FRAME_STOP_SENDING_SIZE] = {};
+    const utp_frame_stop_sending_t stop                                 = {UTP_STREAM_ERROR_CANCELLED, 1u};
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 151u, 152u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 152u, 151u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    utp_connection_set_on_incoming_stream_internal(&active, on_incoming_stopped, &probe);
+    REQUIRE(utp_frame_stop_sending_encode(payload, sizeof(payload), &stop) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 100u,
+                                     &receive_pool) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(probe.incoming_count == 1);
+    REQUIRE(probe.write_cancelled);
+
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection defers writable notification until incoming callback returns", "[stream][callback]")
+{
+    const utp_address_t     active_address  = loopback_address(13052u);
+    const utp_address_t     passive_address = loopback_address(13053u);
+    utp_packet_in_pool_t    receive_pool    = {};
+    utp_connection_t        active          = {};
+    utp_connection_t        passive         = {};
+    incoming_terminal_probe probe           = {};
+    uint32_t                stream_id       = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 211u, 212u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 212u, 211u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+    utp_connection_set_on_incoming_stream_internal(&active, on_incoming_register_writable, &probe);
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&passive, stream_id),
+                                      reinterpret_cast<const uint8_t*>("x"), 1u) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+    REQUIRE(probe.incoming_count == 1);
+    REQUIRE(probe.writable_count == 1);
+    REQUIRE_FALSE(probe.writable_during_incoming);
+
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection validates RESET final size and retires skipped receive bytes", "[stream][reset][flow]")
+{
+    const utp_address_t      active_address                       = loopback_address(13045u);
+    const utp_address_t      passive_address                      = loopback_address(13046u);
+    utp_packet_in_pool_t     receive_pool                         = {};
+    utp_connection_t         active                               = {};
+    utp_connection_t         passive                              = {};
+    uint32_t                 stream_id                            = UINT32_MAX;
+    uint8_t                  payload[UTP_FRAME_RESET_STREAM_SIZE] = {};
+    utp_frame_reset_stream_t reset                                = {UINT16_C(0x2233), 0u, 2u};
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 161u, 162u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 162u, 161u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 4u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+
+    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 1u);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&passive, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
+    reset.stream_id = stream_id;
+    REQUIRE(utp_frame_reset_stream_encode(payload, sizeof(payload), &reset) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 200u,
+                                     &receive_pool) == UTP_INTERNAL_ERROR_PROTOCOL);
+
+    reset.final_size = 4u;
+    REQUIRE(utp_frame_reset_stream_encode(payload, sizeof(payload), &reset) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 300u,
+                                     &receive_pool) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(active.local_stream_data_received_total == 4u);
+    REQUIRE(active.local_stream_data_consumed_total == 4u);
+    REQUIRE(utp_connection_find_stream_internal(&active, stream_id)->peer_final_size == 4u);
+
+    REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 400u,
+                                     &receive_pool) == UTP_INTERNAL_ERROR_OK);
+    reset.final_size = 5u;
+    REQUIRE(utp_frame_reset_stream_encode(payload, sizeof(payload), &reset) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 500u,
+                                     &receive_pool) == UTP_INTERNAL_ERROR_PROTOCOL);
+
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("stream shutdown read sends STOP_SENDING and peer replies RESET_STREAM", "[stream][shutdown]")
+{
+    const utp_address_t      active_address  = loopback_address(13039u);
+    const utp_address_t      passive_address = loopback_address(13040u);
+    utp_packet_in_pool_t     receive_pool    = {};
+    utp_connection_t         active          = {};
+    utp_connection_t         passive         = {};
+    utp_stream_t*            stream;
+    uint32_t                 stream_id = UINT32_MAX;
+    utp_packet_out_t*        packet;
+    utp_packet_in_t*         wire = nullptr;
+    uint8_t                  frame_type;
+    uint8_t                  read_buffer[1] = {};
+    bool                     fin            = false;
+    size_t                   read_length    = 0u;
+    size_t                   frame_length;
+    size_t                   wire_length;
+    const uint8_t*           frame_data;
+    utp_frame_stop_sending_t stop = {};
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 131u, 132u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 132u, 131u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&active, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_shutdown_internal(stream, UTP_STREAM_SHUTDOWN_READ) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream->local_read_shutdown);
+    REQUIRE(utp_stream_read_internal(stream, read_buffer, sizeof(read_buffer), &read_length, &fin) ==
+            UTP_INTERNAL_ERROR_CLOSED);
+
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    frame_data = first_packet_frame(packet, &frame_type, &frame_length);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_STOP_SENDING);
+    REQUIRE(utp_frame_stop_sending_decode(&stop, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stop.stream_id == stream_id);
+    REQUIRE(stop.error_code == UTP_STREAM_ERROR_CANCELLED);
+    REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_flatten(packet, wire->data, wire->capacity, &wire_length) == UTP_INTERNAL_ERROR_OK);
+    wire->length = static_cast<uint16_t>(wire_length);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_in_received(&passive, wire, &active_address, 100u) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(wire);
+
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(stream->local_write_reset);
+    REQUIRE(utp_stream_write_internal(stream, reinterpret_cast<const uint8_t*>("x"), 1u) ==
+            UTP_INTERNAL_ERROR_CANCELLED);
+    packet = utp_connection_next_packet_to_send(&passive);
+    REQUIRE(packet != nullptr);
+    (void)first_packet_frame(packet, &frame_type, &frame_length);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_RESET_STREAM);
+
     utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
@@ -1011,6 +1317,163 @@ TEST_CASE("connection does not retransmit old STREAM data after local stream res
 
     utp_connection_cleanup(&active);
     (void)active_address;
+}
+
+TEST_CASE("connection drops scheduled STREAM bytes when reset precedes transmission", "[stream][reset][flow]")
+{
+    const utp_address_t      passive_address = loopback_address(13047u);
+    utp_connection_t         active          = {};
+    utp_stream_t*            stream;
+    utp_packet_out_t*        packet;
+    uint32_t                 stream_id = UINT32_MAX;
+    uint8_t                  frame_type;
+    size_t                   frame_length;
+    const uint8_t*           frame_data;
+    utp_frame_reset_stream_t reset = {};
+    const uint8_t            ping  = UTP_FRAME_TYPE_PING;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 171u, 172u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    active.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    REQUIRE(utp_connection_queue_packet(&active, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send_at(&active, 50u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 50u) == UTP_INTERNAL_ERROR_OK);
+    active.bbr_congestion.cwnd = 1u;
+
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&active, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write_internal(stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_next_packet_to_send_at(&active, 100u) == nullptr);
+    REQUIRE(utp_send_control_scheduled_packet_count(&active.send_control) == 1u);
+    REQUIRE(active.stream_data_sent_total == 3u);
+    REQUIRE(stream->local_max_stream_offset_sent == 0u);
+
+    REQUIRE(utp_stream_reset_internal(stream, UINT16_C(0x3344)) == UTP_INTERNAL_ERROR_OK);
+    active.bbr_congestion.cwnd = UINT64_MAX;
+    packet                     = utp_connection_next_packet_to_send_at(&active, 200u);
+    REQUIRE(packet != nullptr);
+    frame_data = first_packet_frame(packet, &frame_type, &frame_length);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_RESET_STREAM);
+    REQUIRE(utp_frame_reset_stream_decode(&reset, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(reset.final_size == 0u);
+    REQUIRE(active.stream_data_sent_total == 0u);
+
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection reset final size tracks bytes actually transmitted", "[stream][reset]")
+{
+    const utp_address_t      passive_address = loopback_address(13048u);
+    utp_connection_t         active          = {};
+    utp_stream_t*            stream;
+    utp_packet_out_t*        packet;
+    uint32_t                 stream_id = UINT32_MAX;
+    uint8_t                  frame_type;
+    size_t                   frame_length;
+    const uint8_t*           frame_data;
+    utp_frame_reset_stream_t reset = {};
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 181u, 182u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    active.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&active, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write_internal(stream, reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream->local_max_stream_offset_sent == 3u);
+
+    REQUIRE(utp_stream_reset_internal(stream, UINT16_C(0x4455)) == UTP_INTERNAL_ERROR_OK);
+    packet     = utp_connection_next_packet_to_send(&active);
+    frame_data = first_packet_frame(packet, &frame_type, &frame_length);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_RESET_STREAM);
+    REQUIRE(utp_frame_reset_stream_decode(&reset, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(reset.final_size == 3u);
+
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("shutdown read retires buffered and later in-flight bytes", "[stream][shutdown][flow]")
+{
+    const utp_address_t  active_address  = loopback_address(13049u);
+    const utp_address_t  passive_address = loopback_address(13050u);
+    utp_packet_in_pool_t receive_pool    = {};
+    utp_connection_t     active          = {};
+    utp_connection_t     passive         = {};
+    utp_stream_t*        stream;
+    uint32_t             stream_id = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 191u, 192u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 192u, 191u, &active_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 4u, 1280u) == UTP_INTERNAL_ERROR_OK);
+    active.state  = UTP_CONNECTION_STATE_CONNECTED;
+    passive.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&active.send_control, true);
+    utp_send_control_set_connected(&passive.send_control, true);
+
+    REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("abc"), 3u) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
+    stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(stream->recv_buffered_bytes == 3u);
+    REQUIRE(utp_stream_shutdown_internal(stream, UTP_STREAM_SHUTDOWN_READ) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream->recv_buffered_bytes == 0u);
+    REQUIRE(passive.local_stream_data_received_total == 3u);
+    REQUIRE(passive.local_stream_data_consumed_total == 3u);
+
+    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
+                                      reinterpret_cast<const uint8_t*>("de"), 2u) == UTP_INTERNAL_ERROR_OK);
+    transfer_next_packet(&active, &passive, &active_address, 200u, &receive_pool);
+    REQUIRE(stream->recv_buffered_bytes == 0u);
+    REQUIRE(passive.local_stream_data_received_total == 5u);
+    REQUIRE(passive.local_stream_data_consumed_total == 5u);
+
+    utp_packet_in_pool_cleanup(&receive_pool);
+    utp_connection_cleanup(&passive);
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection stream terminal table evicts and reuses its oldest slot", "[stream][terminal]")
+{
+    const utp_address_t passive_address = loopback_address(13051u);
+    utp_connection_t    connection      = {};
+    utp_stream_t*       stream;
+    uint32_t            stream_id = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 201u, 202u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_set_stream_terminal_capacity(&connection, 2u) == UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+
+    for (uint32_t index = 0u; index < 4u; ++index) {
+        REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+        stream = utp_connection_find_stream_internal(&connection, stream_id);
+        REQUIRE(stream != nullptr);
+        stream->local_write_reset = true;
+        stream->peer_reset        = true;
+    }
+    REQUIRE(connection.stream_terminal_count == 2u);
+    REQUIRE(utp_hash_table_count(&connection.stream_terminals) == 2u);
+    REQUIRE(connection.stream_terminal_oldest != nullptr);
+    REQUIRE(connection.stream_terminal_newest != nullptr);
+    REQUIRE(connection.stream_terminal_oldest->stream_id == 4u);
+    REQUIRE(connection.stream_terminal_newest->stream_id == 8u);
+
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("connection STREAM packets use an external data slice", "[stream][zero-copy]")
@@ -1167,13 +1630,11 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
             UTP_INTERNAL_ERROR_WOULD_BLOCK);
     REQUIRE(passive.recv_reassembly_fragment_count == UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT);
     REQUIRE(passive.recv_reassembly_memory_bytes == 0u);
-    {
-        utp_stream_t* stream = utp_connection_find_stream_internal(&passive, stream_id);
+    REQUIRE(utp_connection_find_stream_internal(&passive, stream_id) == nullptr);
 
-        REQUIRE(stream != nullptr);
-        REQUIRE(stream->recv_fragment_count == 0u);
-        REQUIRE(stream->recv_pinned_memory_bytes == 0u);
-    }
+    passive.recv_reassembly_fragment_count = 0u;
+    REQUIRE(utp_connection_on_packet_in_received(&passive, wire, &active_address, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_find_stream_internal(&passive, stream_id) != nullptr);
 
     utp_packet_in_release(wire);
     utp_packet_in_pool_cleanup(&receive_pool);

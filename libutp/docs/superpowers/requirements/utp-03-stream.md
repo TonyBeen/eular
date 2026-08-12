@@ -112,10 +112,17 @@
 
 ### 3.5 关闭 / 重置
 
-- `close()` = `write(nullptr,0,true)`（`stream_impl.cpp:366-369`），置 `m_localFinQueued`。
-- `reset(errorCode)`（`stream_impl.cpp:371-398`）：发 RESET_STREAM（final size = `sendBufferedEndOffset()`），清空收发缓冲，`localFinQueued/localFinSent/peerFin` 全置真。
-- `onReset(errorCode, fromPeer)`（`stream_impl.cpp:634-654`）：`fromPeer` 时置 `m_resetByPeer`；清空缓冲，触发 `notifyResetOnce`。
-- `maybeNotifyClosed`（`stream_impl.cpp:1220-1232`）：`localFinQueued && localFinSent && peerFin && m_recvBufferedBytes==0` 时回调一次 `m_onClosed`。
+C 版以 `utp_stream_shutdown(stream, how)` 统一半关闭接口：`WRITE` 在已排队数据之后发送 FIN；`READ` 立即丢弃本地接收缓存并可靠发送 `STOP_SENDING(stream_id, UTP_STREAM_ERROR_CANCELLED)`；`BOTH` 组合两者。读关闭后，已经接收以及后续在途 STREAM 字节仍须通过流级、连接级流控校验，并从连接接收窗口退休，允许其他流继续使用 `MAX_DATA`；这些数据不再缓存或交付应用，也不再为该流发送 `MAX_STREAM_DATA`。
+
+`utp_stream_reset(error_code)` 只异常中止**本地写方向**：按该流已经成功写入 UDP 的最大偏移发送可靠 `RESET_STREAM`，尚在 scheduled 队列且未实际发送的 STREAM 字节必须取消并从连接发送流控账本回退；已发送但未确认或已判丢的数据不回退，只停止重传。后续写接口返回 `CANCELLED`，读方向保持可用。收到 `RESET_STREAM` 则只关闭本地读方向并释放接收重组缓存，后续读接口返回 `CANCELLED`；收到 `STOP_SENDING` 时必须停止本地写并回送 `RESET_STREAM`。迟到 ACK 按幂等方式回收。
+
+FIN 与 RESET_STREAM 共用接收侧最终偏移。首次 FIN/RESET 保存 `peer_final_size`；后续 STREAM 不得超过该偏移，重复 FIN/RESET 声明的最终偏移必须一致。RESET_STREAM 的 `final_size` 不得小于该流已见最大偏移，也不得超过流级或连接级接收额度。
+
+`on_closed` 仅在本地可读、可写方向均已结束且接收缓存排空时触发一次；不再提供单独的 reset 回调。
+
+四种 Stream ID 分别以 4 为步长单调递增，Connection 生命周期内不得复用。UDP 允许乱序，不能仅凭 `stream_id < max_seen` 判定迟到帧；C 版为已回收流维护有界终态哈希表和 LRU，默认每连接 4096 条，可通过 `stream_terminal_capacity` 配置，容量满时淘汰最旧记录并原地复用槽位。终态记录用于幂等处理迟到的 STREAM、RESET_STREAM 和 STOP_SENDING，不能再次触发 `on_incoming_stream`。
+
+首次收到会创建流的 STREAM、RESET_STREAM 或 STOP_SENDING 时，协议状态必须先提交，再调用 `on_incoming_stream`；用户可在该回调中立即注册状态回调或执行读写。因该首帧产生的 readable、writable、closed 通知在 `on_incoming_stream` 返回后触发，避免用户漏掉边沿。
 
 ---
 
@@ -212,9 +219,8 @@
 - `OnReset void(uint16_t errorCode)` — 收到/发生 RESET，仅回调一次。
 
 > C 版实现状态：已提供 `utp_stream_set_on_readable()`、`utp_stream_set_on_writable()`、
-> `utp_stream_set_on_closed()` 和 `utp_stream_set_on_reset()`。可读、可写回调具有重入保护；
-> 注册可读/可写回调时若状态已满足，会同步通知一次。关闭、重置只对之后发生的状态变化通知，
-> 且各自最多一次；流清理期间会先解除回调，避免析构路径回调应用。
+> `utp_stream_set_on_closed()`。可读、可写回调具有重入保护；注册可读/可写回调时若状态已满足，
+> 会同步通知一次。仅关闭状态变化触发 `on_closed`，且最多一次；流清理期间会先解除回调，避免析构路径回调应用。
 
 内部（`friend ConnectionImpl`）：`onFrame`、`onReset`、`onConnectionWritable`、`onPacketAcked`、`hasPendingSendWork`、`shouldDeferSend`、`coalesceDelayRemainingUs`（`stream_impl.h:82-112`）。
 

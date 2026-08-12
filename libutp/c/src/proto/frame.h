@@ -21,6 +21,7 @@ extern "C" {
 #define UTP_FRAME_PADDING_HEADER_SIZE                                 3u
 #define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE                        5u
 #define UTP_FRAME_RESET_STREAM_SIZE                                   15u
+#define UTP_FRAME_STOP_SENDING_SIZE                                   7u
 #define UTP_FRAME_STREAMS_LIMIT_SIZE                                  4u
 #define UTP_FRAME_CRYPTO_SIZE                                         35u
 #define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE                           10u
@@ -67,6 +68,7 @@ extern "C" {
  * CONNECTION_CLOSE:    type(1), error_code(2), reason_length(2), reason[reason_length]
  * PING:                type(1)
  * RESET_STREAM:        type(1), error_code(2), stream_id(4), final_size(8)
+ * STOP_SENDING:        type(1), error_code(2), stream_id(4)
  * STREAMS_BLOCKED:     type(1), stream_type(1), stream_limit(2)
  * MAX_STREAMS:         type(1), stream_type(1), maximum_streams(2)
  * PATH_CHALLENGE:      type(1), data(8)
@@ -109,7 +111,8 @@ typedef enum utp_frame_type {
     UTP_FRAME_TYPE_MAX_STREAM_DATA     = 0x13,
     UTP_FRAME_TYPE_DATA_BLOCKED        = 0x14,
     UTP_FRAME_TYPE_STREAM_DATA_BLOCKED = 0x15,
-    UTP_FRAME_TYPE_MAX                 = 0x16
+    UTP_FRAME_TYPE_STOP_SENDING        = 0x16,
+    UTP_FRAME_TYPE_MAX                 = 0x17
 } utp_frame_type_t;
 
 typedef struct utp_packet_view {
@@ -174,6 +177,12 @@ typedef struct utp_frame_reset_stream {
     uint32_t stream_id;   // 被重置流 ID
     uint64_t final_size;  // 发送方最终流偏移
 } utp_frame_reset_stream_t;
+
+/* STOP_SENDING：type(1), error_code(2), stream_id(4)。 */
+typedef struct utp_frame_stop_sending {
+    uint16_t error_code;  // 请求发送方使用的流错误码
+    uint32_t stream_id;   // 要求停止发送的流 ID
+} utp_frame_stop_sending_t;
 
 /* STREAMS_BLOCKED/MAX_STREAMS：type(1), stream_type(1), stream_limit(2)。 */
 typedef struct utp_frame_streams_limit {
@@ -288,6 +297,12 @@ utp_internal_error_t utp_frame_reset_stream_encode(uint8_t* buffer, size_t capac
                                                    const utp_frame_reset_stream_t* reset);
 /** @brief 解码 RESET_STREAM 帧。 */
 utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* reset, const uint8_t* buffer,
+                                                   size_t length);
+/** @brief 编码 STOP_SENDING 帧。 */
+utp_internal_error_t utp_frame_stop_sending_encode(uint8_t* buffer, size_t capacity,
+                                                   const utp_frame_stop_sending_t* stop);
+/** @brief 解码 STOP_SENDING 帧。 */
+utp_internal_error_t utp_frame_stop_sending_decode(utp_frame_stop_sending_t* stop, const uint8_t* buffer,
                                                    size_t length);
 /** @brief 编码 STREAMS_BLOCKED 帧。 */
 utp_internal_error_t utp_frame_streams_blocked_encode(uint8_t* buffer, size_t capacity,

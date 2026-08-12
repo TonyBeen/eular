@@ -1,6 +1,6 @@
 # UTP-01 需求文档：包头 + 包类型 + 帧体系（编解码）
 
-> 本文档由现有 C++ 实现（`cpp/`）反推。**代码是唯一 ground truth**；`doc/` 仅交叉参考，凡不一致以代码为准并在 §8 标注。
+> 本文档最初由 C++ 实现（`cpp/`）反推，现作为当前 C 协议规范维护。`docs/` 是当前 ground truth；C++ 仅作基础行为参考，`doc/` 为旧文档。带 `cpp/` 路径的说明记录参考实现历史行为，若与当前线格式表、MUST 规则或 C 实现冲突，以当前规范为准。
 > 引用格式：`文件:行号`。数值均取自代码；不确定处标注"待确认"。
 
 ---
@@ -65,8 +65,8 @@
 | 4 / 0x04 | `kFrameConnectionClose` | 是 | 是 |
 | 5 / 0x05 | `kFramePing` | **否**（无 FramePing 类） | 是（定长 1） |
 | 6 / 0x06 | `kFrameResetStream` | 是 | 是 |
-| 7 / 0x07 | `kFrameStreamsBlocked` | **否** | **否**（default→UNEXPECTED） |
-| 8 / 0x08 | `kFrameMaxStreams` | **否** | **否**（default→UNEXPECTED） |
+| 7 / 0x07 | `kFrameStreamsBlocked` | 是 | 是 |
+| 8 / 0x08 | `kFrameMaxStreams` | 是 | 是 |
 | 9 / 0x09 | `kFramePathChallenge` | 是 | 是 |
 | 10 / 0x0A | `kFramePathResponse` | 是 | 是 |
 | 11 / 0x0B | `kFrameCrypto` | 是 | 是 |
@@ -80,7 +80,8 @@
 | 19 / 0x13 | `kFrameMaxStreamData` | 是 | 是 |
 | 20 / 0x14 | `kFrameDataBlocked` | 是 | 是 |
 | 21 / 0x15 | `kFrameStreamDataBlocked` | 是 | 是 |
-| 22 | `kFrameMax` | 哨兵（帧类型上界） | — |
+| 22 / 0x16 | `StopSending` | 是 | 是 |
+| 23 | `kFrameMax` | 哨兵（帧类型上界） | — |
 
 辅助枚举：
 - `FrameStreamFlags`（`frame.h:66-69`）：`kFrameStreamFlagNone=0x00`，`kFrameStreamFlagFin=0x01`（bit0，流最后一帧）。宏 `STREAM_IS_FIN`/`STREAM_SET_FIN`（`frame.h:19-20`）。
@@ -98,6 +99,8 @@
 | ConnectionClose | `FRAME_CONNECTION_CLOSE_HDR_SIZE` (`connection_close.h:15`) | 5 | type(1), error_code(2), reason_length(2), reason(reason_length) |
 | Ping | 无宏（frameLength 内定长） | 1 | type(1) |
 | ResetStream | `FRAME_RESET_STREAM_SIZE` (`reset_stream.h:13`) | 15 | type(1), error_code(2), stream_id(4), final_size(8) |
+| StreamsBlocked/MaxStreams | `UTP_FRAME_STREAMS_LIMIT_SIZE` | 4 | type(1), stream_type(1), stream_limit(2) |
+| StopSending | `UTP_FRAME_STOP_SENDING_SIZE` | 7 | type(1), error_code(2), stream_id(4) |
 | PathChallenge/PathResponse | `FRAME_PATH_FRAME_SIZE` (`path.h:17`) | 9 | type(1), data(8) (`FRAME_PATH_DATA_SIZE`=8) |
 | Crypto | `FRAME_CRYPTO_SIZE` (`crypto.h:17`) | 35 | type(1), crypto_type(1), reserved(1,必须0), eph_pubkey(32, `FRAME_CRYPTO_EPH_PUBKEY_SIZE`) |
 | SessionToken | `FRAME_SESSION_TOKEN_HDR_SIZE` (`session_token.h:15`) | 4 | type(1), token_size(1), token_validity_period(2, 秒), token(token_size) |
@@ -167,8 +170,8 @@
 2. **[MUST]** 头部布局固定 20 字节、大端、字段顺序 scid,dcid,pn,payload_length,types,reserve（§2.1）。
 3. **[MUST]** `payload_length` ≤ 头后剩余字节，否则 `UTP_ERR_OVERFLOW`（`packet_in.cpp:71`）。
 4. **[MUST]** 帧区必须能被完整切分：所有帧 `frameLen` 之和恰好铺满 `payload_size`，且每个 `frameLen∈(0, 剩余]`（`packet_in.cpp:84`）。
-5. **[MUST]** 解出的帧类型 < `kFrameMax`(22)（`packet_in.cpp:90`）。
-6. **[MUST NOT]** 帧首字节不得为未在 `frameLength` switch 中处理的类型（`kFrameInvalid`、`kFrameStreamsBlocked`、`kFrameMaxStreams` 及 ≥22）——否则被判为不可解析（frameLength 返回 `UTP_ERR_FRAME_UNEXPECTED`，`PacketIn::decode` 对外呈现为 `UTP_ERR_FRAME_FORMAT_ERROR`）。
+5. **[MUST]** 解出的帧类型 < `UTP_FRAME_TYPE_MAX`(23)。
+6. **[MUST NOT]** 帧首字节不得为 `UTP_FRAME_TYPE_INVALID`、`UTP_FRAME_TYPE_MAX` 或更大的未知类型；否则按协议错误拒绝。
 7. **[MUST]** 单帧 `decode` 时类型字节必须与目标帧一致，否则 `UTP_ERR_FRAME_UNEXPECTED`（所有 `frame/*.cpp` 的 decode）。
 8. **[MUST]** Crypto 帧 `reserved` 字节必须为 0，且 `crypto_type∈{0,1}`，否则 `UTP_ERR_INVALID_PARAM`（`crypto.cpp:98-101`）。
 9. **[MUST]** Ack：`first_ack_range != 0`；`range_count < ackInfo.ack_ranges.size()`；`largest_acked >= first_ack_range-1`；各 gap 满足 `lastAcked > gap`；各 `ack_range_length != 0`——否则 `UTP_ERR_INVALID_PARAM`（`ack.cpp:118,144,155,175,186`）。`range_count` 表示**附加**范围数（不含 first_ack_range），`ackInfo.range_size = range_count+1`（`ack.cpp:117,129`）。
@@ -255,13 +258,16 @@
 
 ## 7. 当前实现边界（已实现 / 部分 / 预留 / TODO）
 
-**已实现（完整 encode+decode+frameLength）**：Stream、Ack、Padding、ConnectionClose、ResetStream、PathChallenge、PathResponse、Crypto、SessionToken、AckFrequency、Version、HandshakeDone、TransportParams、HandshakeDelay、MaxData、MaxStreamData、DataBlocked、StreamDataBlocked。
+> 规范优先级：`docs/` 是当前 C 协议实现依据；C++ 实现只作为基础行为参考，`doc/` 为旧文档。三者冲突时以本目录文档为准。
+
+**已实现（完整 encode+decode+frameLength）**：Stream、Ack、Padding、ConnectionClose、ResetStream、StopSending、StreamsBlocked、MaxStreams、PathChallenge、PathResponse、Crypto、SessionToken、AckFrequency、Version、HandshakeDone、TransportParams、HandshakeDelay、MaxData、MaxStreamData、DataBlocked、StreamDataBlocked。
 
 **部分实现**：
 - **Ping**：仅在 `frameLength` 中定长 1（`packet_in.cpp:129-131`），**无 `FramePing` 类**、无 encode/decode 文件。构造 Ping 需在别处直接写 1 字节（待确认）。
 
-**预留 / 未实现（枚举存在但无编解码，收到即被拒）**：
-- `kFrameStreamsBlocked`(7)、`kFrameMaxStreams`(8)：**既无帧类文件，也未在 `frameLength` 处理** → default 分支 `UTP_ERR_FRAME_UNEXPECTED`（`packet_in.cpp:199-201`）。即当前实现无法解析这两类帧。
+**C++ 参考实现缺口（不限制当前 C 规范）**：
+- C++ 的 `kFrameStreamsBlocked`(7)、`kFrameMaxStreams`(8) 仅有枚举，未在旧 `frameLength` 中处理；C 版已实现其编解码和流额度状态机。
+- C++ 尚无 `StopSending`；C 版使用 0x16，并将 `UTP_FRAME_TYPE_MAX` 更新为 0x17。
 - `FrameStream`（空占位）：`frame_stream.h:18-21` 定义空结构体 `struct FrameStream {}`，与真正的 `frame/stream.h::FrameStream` 同名但无内容，疑似残留/未用（待确认）。
 
 **TODO（代码内注释）**：
@@ -276,11 +282,11 @@
 
 | 项 | 代码 | doc | 判定 |
 |---|---|---|---|
-| 帧类型值 | 枚举 0 起：Stream=1…StreamDataBlocked=21（§2.3） | `doc/协议设计文档.md:167-187` 列 0x01…0x15 | **一致**（doc 未列 `kFrameInvalid=0` 与 `kFrameMax`） |
+| 帧类型值 | 枚举 0 起：Stream=1…StreamDataBlocked=21、StopSending=22（§2.3） | `doc/协议设计文档.md:167-187` 列 0x01…0x15 | C 版新增 StopSending=0x16；旧 doc 未列该帧 |
 | 包类型 | 含 `UTP_TYPE_NONE=0x00` | `doc/协议设计文档.md:143-149` 仅列 0x01–0x05 | 代码多 `NONE=0x00`；其余一致 |
 | Padding 用途 | 见 §2.4 | `doc/frame/帧重传.md:18` "填充 Initial 到 **1260** 字节" | doc 数值 1260，代码未定义此常量（待确认，属其他模块） |
 | Ping 帧 | 无独立帧类，仅定长 1 | `doc/协议设计文档.md:171` 列为正式帧 | 代码实现不完整（§7） |
-| StreamsBlocked/MaxStreams | 枚举存在但**无法解析** | doc 列为正式帧 | **代码未实现**（风险） |
+| StreamsBlocked/MaxStreams | C 版已完整解析并处理 | doc 列为正式帧 | C 版已实现；C++ 参考实现仍缺失 |
 | AckFrequency 默认 | 成员默认 10/3/150，normalize 后 5/3/25 | doc 未明确成员默认 | 代码内部两套默认不一致（§5.3） |
 | 头部 `UTP_HEADER_SIZE` 注释 | 注释误写"UDP 头部长度" | doc 明确为 UTP 20 字节固定头 | 代码注释文字瑕疵，值正确 |
 | 重传掩码 | ACK/Padding/Ping 不重传 | `doc/frame/帧重传.md` 说明一致 | 一致 |

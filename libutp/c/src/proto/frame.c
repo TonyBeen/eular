@@ -88,6 +88,9 @@ utp_internal_error_t utp_frame_measure(const uint8_t* frame, size_t available, u
     case UTP_FRAME_TYPE_RESET_STREAM:
         length = UTP_FRAME_RESET_STREAM_SIZE;
         break;
+    case UTP_FRAME_TYPE_STOP_SENDING:
+        length = UTP_FRAME_STOP_SENDING_SIZE;
+        break;
     case UTP_FRAME_TYPE_STREAMS_BLOCKED:
     case UTP_FRAME_TYPE_MAX_STREAMS:
         length = UTP_FRAME_STREAMS_LIMIT_SIZE;
@@ -895,6 +898,64 @@ utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* res
     }
     *reset = decoded;
     return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_frame_stop_sending_encode(uint8_t* buffer, size_t capacity,
+                                                   const utp_frame_stop_sending_t* stop)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+
+    if (buffer == NULL || stop == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (capacity < UTP_FRAME_STOP_SENDING_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_STOP_SENDING);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u16(&writer, stop->error_code);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u32(&writer, stop->stream_id);
+    }
+    return error;
+}
+
+utp_internal_error_t utp_frame_stop_sending_decode(utp_frame_stop_sending_t* stop, const uint8_t* buffer, size_t length)
+{
+    utp_wire_reader_t        reader;
+    utp_frame_stop_sending_t decoded;
+    uint8_t                  type;
+    utp_internal_error_t     error;
+
+    if (stop == NULL || buffer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (length < UTP_FRAME_STOP_SENDING_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_STOP_SENDING_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &type);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (type != UTP_FRAME_TYPE_STOP_SENDING) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    error = utp_wire_read_u16(&reader, &decoded.error_code);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u32(&reader, &decoded.stream_id);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        *stop = decoded;
+    }
+    return error;
 }
 
 static utp_internal_error_t utp_frame_streams_limit_encode(uint8_t* buffer, size_t capacity, uint8_t type,

@@ -59,6 +59,7 @@ typedef struct utp_context_options {
     // 0-RTT 会话票据与抗重放配置
     uint32_t                    zero_rtt_token_max_lifetime_seconds;  // 会话票据最大有效期(秒)
     uint32_t                    zero_rtt_replay_cache_capacity;       // Context 级抗重放缓存容量，0 时采用默认值
+    uint32_t                    stream_terminal_capacity;             // 每连接流终态记录容量，0 时采用 4096
 
     // 被动握手响应的超时与重试配置
     uint16_t                    handshake_timeout;      // 首轮握手超时(ms)，0 时采用 800
@@ -118,6 +119,7 @@ typedef struct utp_context_options {
         5000u,                                      /* mtu_blackhole_cooldown_ms: 黑洞冷却期 */                   \
         600u,                                       /* zero_rtt_token_max_lifetime_seconds: 票据最长有效期 */     \
         4096u,                                      /* zero_rtt_replay_cache_capacity: 抗重放缓存容量 */          \
+        4096u,                                      /* stream_terminal_capacity: 每连接流终态容量 */              \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
         true,                                       /* enable_keepalive: 启用保活 */                              \

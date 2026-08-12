@@ -140,8 +140,8 @@
 - **固定头 20B,大端**,字段序:`scid(u32) dcid(u32) pn(u64) payload_length(u16) types(u8) reserve(u8)`。`UTP_HEADER_SIZE=20`,`UTP_PROTOCOL_VERSION=2`。
 - **包类型**:`NONE=0x00 INITIAL=0x01 HANDSHAKE=0x02 0RTT=0x03 CONNECTION_CLOSE=0x04 CTRL=0x05`;**punch 新增 `CONNECT=0x06`**。
 - **开洞包**:`scid==0 && dcid==0` 的包**静默丢弃,绝不回 Reset**。
-- **帧目录**(0..21,`kFrameMax=22`):Invalid/Stream/Ack/Padding/ConnectionClose/Ping/ResetStream/StreamsBlocked/MaxStreams/PathChallenge/PathResponse/Crypto/SessionToken/AckFrequency/Version/HandshakeDone/TransportParams/HandshakeDelay/MaxData/MaxStreamData/DataBlocked/StreamDataBlocked。逐帧线格式见 utp-01 §2.4;不变量见 utp-01 §4。
-  - 现状缺口(C 实现时决定补否):Ping 无独立帧类(仅定长 1);StreamsBlocked(7)/MaxStreams(8) 有枚举无编解码(收到即 UNEXPECTED)。
+- **帧目录**(0..22,`UTP_FRAME_TYPE_MAX=23`):Invalid/Stream/Ack/Padding/ConnectionClose/Ping/ResetStream/StreamsBlocked/MaxStreams/PathChallenge/PathResponse/Crypto/SessionToken/AckFrequency/Version/HandshakeDone/TransportParams/HandshakeDelay/MaxData/MaxStreamData/DataBlocked/StreamDataBlocked/StopSending。逐帧线格式见 utp-01 §2.4;不变量见 utp-01 §4。
+  - C 版已实现 StreamsBlocked(7)、MaxStreams(8) 和 StopSending(22)；Ping 采用定长 1 字节直接构造。
 - **punch 新增 `FrameConnect`**:含 128 位 `rendezvous_id` + `src_pid/dst_pid/src_transport_cid/nat_type/candidates/direction/expiry` + 可选 `[eph_pubkey,nonce]` + 可选 `[token]`(前向兼容 hook)。线格式见 punch §5.2。
 - **MTU floor 1280**(C4);**反放大 credit 3×MTU**(C3);**PN space 单一 App 语义**(utp-04:Init/Hsk/App 分离**未落地**,C 复刻单空间)。
 

@@ -48,6 +48,7 @@
 void        utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet);
 static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connection);
 static void utp_connection_update_completed_peer_streams(utp_connection_t* connection);
+static bool utp_connection_packet_stream_is_reset(const utp_connection_t* connection, const utp_packet_out_t* packet);
 
 /** @brief 比较传输参数字段，避免结构体填充字节影响协议判断。 */
 static bool utp_connection_transport_params_equal(const utp_frame_transport_params_t* left,
@@ -464,6 +465,13 @@ static utp_packet_out_t* utp_connection_next_scheduled_admitted(utp_connection_t
         return NULL;
     }
     while ((packet = utp_send_control_peek_scheduled(&connection->send_control)) != NULL) {
+        if (utp_connection_packet_stream_is_reset(connection, packet)) {
+            packet = utp_send_control_next_scheduled(&connection->send_control);
+            utp_connection_on_packet_abandoned(connection, packet);
+            utp_send_control_forget_packet_attempts(&connection->send_control, packet);
+            utp_packet_out_pool_release(&connection->packet_pool, packet);
+            continue;
+        }
         if ((packet->po_flags & UTP_PO_PATH_VALIDATION) != 0u &&
             packet->path_validation_generation != connection->path_validation_generation) {
             packet = utp_send_control_next_scheduled(&connection->send_control);
@@ -958,6 +966,124 @@ static utp_connection_pending_max_stream_data_t* utp_connection_pending_max_stre
                                                              offsetof(utp_connection_pending_max_stream_data_t, node));
 }
 
+static utp_connection_stream_terminal_t* utp_connection_stream_terminal_from_node(utp_hash_node_t* node)
+{
+    return node == NULL
+               ? NULL
+               : (utp_connection_stream_terminal_t*)((uint8_t*)node - offsetof(utp_connection_stream_terminal_t, node));
+}
+
+static bool utp_connection_stream_terminal_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_connection_stream_terminal_t* terminal =
+        (const utp_connection_stream_terminal_t*)((const uint8_t*)node -
+                                                  offsetof(utp_connection_stream_terminal_t, node));
+
+    (void)user_data;
+    return key != NULL && terminal->stream_id == *(const uint32_t*)key;
+}
+
+static void utp_connection_stream_terminal_touch(utp_connection_t*                 connection,
+                                                 utp_connection_stream_terminal_t* terminal)
+{
+    if (connection == NULL || terminal == NULL || connection->stream_terminal_newest == terminal) {
+        return;
+    }
+    if (terminal->older != NULL) {
+        terminal->older->newer = terminal->newer;
+    } else {
+        connection->stream_terminal_oldest = terminal->newer;
+    }
+    if (terminal->newer != NULL) {
+        terminal->newer->older = terminal->older;
+    }
+    terminal->older = connection->stream_terminal_newest;
+    terminal->newer = NULL;
+    if (connection->stream_terminal_newest != NULL) {
+        connection->stream_terminal_newest->newer = terminal;
+    } else {
+        connection->stream_terminal_oldest = terminal;
+    }
+    connection->stream_terminal_newest = terminal;
+}
+
+static utp_connection_stream_terminal_t* utp_connection_find_stream_terminal(utp_connection_t* connection,
+                                                                             uint32_t          stream_id)
+{
+    utp_connection_stream_terminal_t* terminal;
+
+    if (connection == NULL) {
+        return NULL;
+    }
+    terminal = utp_connection_stream_terminal_from_node(
+        utp_hash_table_find(&connection->stream_terminals, utp_connection_hash_u32(stream_id), &stream_id,
+                            utp_connection_stream_terminal_matches, NULL));
+    utp_connection_stream_terminal_touch(connection, terminal);
+    return terminal;
+}
+
+static utp_internal_error_t utp_connection_record_stream_terminal(utp_connection_t*   connection,
+                                                                  const utp_stream_t* stream)
+{
+    utp_connection_stream_terminal_t* terminal;
+    utp_internal_error_t              error;
+    bool                              new_slot = false;
+
+    if (connection == NULL || stream == NULL || connection->stream_terminal_capacity == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    terminal = utp_connection_find_stream_terminal(connection, stream->stream_id);
+    if (terminal == NULL) {
+        if (connection->stream_terminal_slots == NULL) {
+            if ((size_t)connection->stream_terminal_capacity > SIZE_MAX / sizeof(*terminal)) {
+                return UTP_INTERNAL_ERROR_OVERFLOW;
+            }
+            connection->stream_terminal_slots = utp_allocator_alloc(
+                NULL, (size_t)connection->stream_terminal_capacity * sizeof(*connection->stream_terminal_slots));
+            if (connection->stream_terminal_slots == NULL) {
+                return UTP_INTERNAL_ERROR_NOMEM;
+            }
+        }
+        if (connection->stream_terminal_count < connection->stream_terminal_capacity) {
+            terminal = &connection->stream_terminal_slots[connection->stream_terminal_count];
+            new_slot = true;
+        } else {
+            terminal = connection->stream_terminal_oldest;
+            if (terminal == NULL) {
+                return UTP_INTERNAL_ERROR_STATE;
+            }
+            (void)utp_hash_table_remove(&connection->stream_terminals, &terminal->node);
+        }
+        utp_hash_node_init(&terminal->node);
+        terminal->stream_id = stream->stream_id;
+        error               = utp_hash_table_insert(&connection->stream_terminals, &terminal->node,
+                                                    utp_connection_hash_u32(terminal->stream_id), &terminal->stream_id,
+                                                    utp_connection_stream_terminal_matches, NULL);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        if (new_slot) {
+            terminal->older = connection->stream_terminal_newest;
+            terminal->newer = NULL;
+            if (connection->stream_terminal_newest != NULL) {
+                connection->stream_terminal_newest->newer = terminal;
+            } else {
+                connection->stream_terminal_oldest = terminal;
+            }
+            connection->stream_terminal_newest = terminal;
+            ++connection->stream_terminal_count;
+        } else {
+            utp_connection_stream_terminal_touch(connection, terminal);
+        }
+    }
+    terminal->peer_final_size       = stream->peer_final_size;
+    terminal->peer_final_size_known = stream->peer_final_size_known;
+    terminal->peer_reset            = stream->peer_reset;
+    terminal->local_write_reset     = stream->local_write_reset;
+    terminal->stop_sending_received = stream->peer_stop_sending_received;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static uint32_t utp_connection_stream_ordinal(uint32_t stream_id) { return stream_id / UTP_STREAM_TYPES + 1u; }
 
 static bool     utp_connection_stream_is_peer_initiated(const utp_connection_t* connection, uint32_t stream_id)
@@ -1066,6 +1192,16 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
     return UTP_INTERNAL_ERROR_OK;
 }
 
+static void utp_connection_discard_unannounced_stream(utp_connection_t* connection, utp_stream_t* stream)
+{
+    if (connection == NULL || stream == NULL || stream->connection != connection) {
+        return;
+    }
+    (void)utp_hash_table_remove(&connection->streams, &stream->hash_node);
+    utp_stream_cleanup(stream);
+    utp_allocator_free(NULL, stream);
+}
+
 static utp_internal_error_t utp_connection_get_or_create_peer_stream(utp_connection_t* connection, uint32_t stream_id,
                                                                      utp_stream_t** out_stream, bool* out_created)
 {
@@ -1100,6 +1236,72 @@ static utp_internal_error_t utp_connection_get_or_create_peer_stream(utp_connect
     }
     *out_stream  = stream;
     *out_created = true;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static utp_internal_error_t utp_connection_get_or_create_peer_writable_stream(utp_connection_t* connection,
+                                                                              uint32_t          stream_id,
+                                                                              utp_stream_t**    out_stream,
+                                                                              bool*             out_created)
+{
+    utp_stream_t* stream;
+
+    if (connection == NULL || out_stream == NULL || out_created == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    *out_created = false;
+    stream       = utp_connection_find_stream_internal(connection, stream_id);
+    if (stream != NULL) {
+        if (!utp_stream_local_can_send(stream)) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        *out_stream = stream;
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (!utp_connection_stream_is_peer_initiated(connection, stream_id) ||
+        (stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    utp_connection_update_completed_peer_streams(connection);
+    if (utp_connection_stream_ordinal(stream_id) >
+        (uint32_t)connection->local_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]) {
+        return UTP_INTERNAL_ERROR_STREAM_LIMIT;
+    }
+    {
+        const utp_internal_error_t error = utp_connection_alloc_stream(connection, stream_id, &stream);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    *out_stream  = stream;
+    *out_created = true;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static utp_internal_error_t utp_connection_validate_peer_final_size(const utp_connection_t* connection,
+                                                                    const utp_stream_t* stream, uint64_t final_size,
+                                                                    uint64_t* out_delta)
+{
+    uint64_t delta;
+
+    if (connection == NULL || stream == NULL || out_delta == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (final_size < stream->local_max_stream_offset_received ||
+        (stream->peer_final_size_known && final_size != stream->peer_final_size)) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (final_size > stream->local_max_stream_data_advertised) {
+        return UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL;
+    }
+    delta = final_size - stream->local_max_stream_offset_received;
+    if (delta > UINT64_MAX - connection->local_stream_data_received_total ||
+        connection->local_stream_data_received_total + delta > connection->local_max_data_advertised ||
+        final_size - stream->local_stream_offset_consumed > UINT64_MAX - connection->local_stream_data_consumed_total) {
+        return UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL;
+    }
+    *out_delta = delta;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -1219,6 +1421,7 @@ static utp_internal_error_t utp_connection_mark_control_pending(utp_connection_t
         }
         break;
     case UTP_FRAME_TYPE_RESET_STREAM:
+    case UTP_FRAME_TYPE_STOP_SENDING:
         if (slot->generation != 0u) {
             return slot->error_code == error_code && slot->final_size == final_size ? UTP_INTERNAL_ERROR_OK
                                                                                     : UTP_INTERNAL_ERROR_STATE;
@@ -1288,6 +1491,12 @@ static utp_internal_error_t utp_connection_queue_reset_stream(utp_connection_t* 
                                                final_size);
 }
 
+static utp_internal_error_t utp_connection_queue_stop_sending(utp_connection_t* connection, uint32_t stream_id,
+                                                              uint16_t error_code)
+{
+    return utp_connection_mark_control_pending(connection, UTP_FRAME_TYPE_STOP_SENDING, stream_id, 0u, error_code, 0u);
+}
+
 static utp_internal_error_t utp_connection_queue_max_streams(utp_connection_t* connection, uint8_t stream_type,
                                                              uint16_t maximum_streams)
 {
@@ -1313,14 +1522,12 @@ static bool utp_connection_stream_is_limit_complete(const utp_connection_t* conn
     if (connection == NULL || stream == NULL || !stream->used) {
         return false;
     }
-    if (stream->reset) {
-        return true;
-    }
     if (utp_connection_stream_type_from_id(stream->stream_id) == UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL) {
-        return utp_connection_stream_is_peer_initiated(connection, stream->stream_id) ? stream->peer_fin
-                                                                                      : stream->local_fin_sent;
+        return utp_connection_stream_is_peer_initiated(connection, stream->stream_id)
+                   ? (stream->peer_fin || stream->peer_reset)
+                   : (stream->local_fin_sent || stream->local_write_reset);
     }
-    return stream->local_fin_queued && stream->local_fin_sent && stream->peer_fin;
+    return (stream->local_fin_sent || stream->local_write_reset) && (stream->peer_fin || stream->peer_reset);
 }
 
 static bool utp_connection_control_slot_is_stream_specific(const utp_connection_control_slot_t* slot,
@@ -1328,7 +1535,8 @@ static bool utp_connection_control_slot_is_stream_specific(const utp_connection_
 {
     return slot != NULL && slot->stream_id == stream_id &&
            (slot->frame_type == UTP_FRAME_TYPE_MAX_STREAM_DATA ||
-            slot->frame_type == UTP_FRAME_TYPE_STREAM_DATA_BLOCKED || slot->frame_type == UTP_FRAME_TYPE_RESET_STREAM);
+            slot->frame_type == UTP_FRAME_TYPE_STREAM_DATA_BLOCKED || slot->frame_type == UTP_FRAME_TYPE_RESET_STREAM ||
+            slot->frame_type == UTP_FRAME_TYPE_STOP_SENDING);
 }
 
 static bool utp_connection_stream_has_active_control(const utp_connection_t* connection, uint32_t stream_id)
@@ -1453,6 +1661,9 @@ static void utp_connection_reclaim_closed_stream_slots(utp_connection_t* connect
              !stream->stream_limit_released)) {
             continue;
         }
+        if (utp_connection_record_stream_terminal(connection, stream) != UTP_INTERNAL_ERROR_OK) {
+            continue;
+        }
         utp_connection_release_idle_stream_controls(connection, stream->stream_id);
         (void)utp_hash_table_remove(&connection->streams, &stream->hash_node);
         utp_stream_cleanup(stream);
@@ -1489,7 +1700,7 @@ static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connec
     while ((node = utp_hash_iter_next(&connection->streams, &iter)) != NULL) {
         utp_stream_t* stream = utp_connection_stream_from_node(node);
 
-        if (stream == NULL) {
+        if (stream == NULL || stream->local_read_shutdown || stream->peer_reset) {
             continue;
         }
         if (utp_connection_flow_update_due(
@@ -1516,6 +1727,7 @@ static uint8_t utp_connection_control_priority(uint8_t frame_type)
 {
     switch (frame_type) {
     case UTP_FRAME_TYPE_RESET_STREAM:
+    case UTP_FRAME_TYPE_STOP_SENDING:
         return 3u;
     case UTP_FRAME_TYPE_MAX_DATA:
     case UTP_FRAME_TYPE_MAX_STREAM_DATA:
@@ -1543,6 +1755,12 @@ static utp_internal_error_t utp_connection_encode_control_slot(const utp_connect
 
         *out_length = UTP_FRAME_RESET_STREAM_SIZE;
         return utp_frame_reset_stream_encode(buffer, capacity, &frame);
+    }
+    case UTP_FRAME_TYPE_STOP_SENDING: {
+        const utp_frame_stop_sending_t frame = {slot->error_code, slot->stream_id};
+
+        *out_length = UTP_FRAME_STOP_SENDING_SIZE;
+        return utp_frame_stop_sending_encode(buffer, capacity, &frame);
     }
     case UTP_FRAME_TYPE_MAX_DATA: {
         const utp_frame_max_data_t frame = {slot->value};
@@ -1667,6 +1885,9 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
             switch (slot->frame_type) {
             case UTP_FRAME_TYPE_RESET_STREAM:
                 frame_length = UTP_FRAME_RESET_STREAM_SIZE;
+                break;
+            case UTP_FRAME_TYPE_STOP_SENDING:
+                frame_length = UTP_FRAME_STOP_SENDING_SIZE;
                 break;
             case UTP_FRAME_TYPE_MAX_DATA:
             case UTP_FRAME_TYPE_DATA_BLOCKED:
@@ -1953,6 +2174,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                 case UTP_FRAME_TYPE_RESET_STREAM:
                     frame_length = UTP_FRAME_RESET_STREAM_SIZE;
                     break;
+                case UTP_FRAME_TYPE_STOP_SENDING:
+                    frame_length = UTP_FRAME_STOP_SENDING_SIZE;
+                    break;
                 case UTP_FRAME_TYPE_MAX_DATA:
                 case UTP_FRAME_TYPE_DATA_BLOCKED:
                     frame_length = UTP_FRAME_MAX_DATA_SIZE;
@@ -2082,6 +2306,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                     switch (selected[prior_index]->frame_type) {
                     case UTP_FRAME_TYPE_RESET_STREAM:
                         offset += UTP_FRAME_RESET_STREAM_SIZE;
+                        break;
+                    case UTP_FRAME_TYPE_STOP_SENDING:
+                        offset += UTP_FRAME_STOP_SENDING_SIZE;
                         break;
                     case UTP_FRAME_TYPE_MAX_DATA:
                     case UTP_FRAME_TYPE_DATA_BLOCKED:
@@ -2300,6 +2527,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->streams                      = (utp_hash_table_t){0};
     connection->control_slots                = (utp_hash_table_t){0};
     connection->pending_peer_max_stream_data = (utp_hash_table_t){0};
+    connection->stream_terminals             = (utp_hash_table_t){0};
     error                                    = utp_hash_table_init(&connection->streams, NULL, SIZE_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&connection->control_slots, NULL, SIZE_MAX);
@@ -2307,11 +2535,16 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&connection->pending_peer_max_stream_data, NULL, SIZE_MAX);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error =
+            utp_hash_table_init(&connection->stream_terminals, NULL, UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_hash_table_cleanup(&connection->streams, utp_connection_cleanup_stream_node, NULL);
         utp_hash_table_cleanup(&connection->control_slots, utp_connection_cleanup_control_slot_node, NULL);
         utp_hash_table_cleanup(&connection->pending_peer_max_stream_data,
                                utp_connection_cleanup_pending_max_stream_data_node, NULL);
+        utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
         return error;
     }
     connection->context                         = NULL;
@@ -2319,6 +2552,11 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->on_incoming_stream_user_data    = NULL;
     connection->session_token_cb                = NULL;
     connection->session_token_cb_data           = NULL;
+    connection->stream_terminal_slots           = NULL;
+    connection->stream_terminal_oldest          = NULL;
+    connection->stream_terminal_newest          = NULL;
+    connection->stream_terminal_capacity        = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
+    connection->stream_terminal_count           = 0u;
     connection->rx_bytes                        = 0u;
     connection->tx_bytes                        = 0u;
     connection->rtx_bytes                       = 0u;
@@ -2450,6 +2688,25 @@ void utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_c
     if (connection != NULL) {
         utp_mtu_discovery_init(&connection->mtu_discovery, config, connection->peer.family);
     }
+}
+
+utp_internal_error_t utp_connection_set_stream_terminal_capacity(utp_connection_t* connection, uint32_t capacity)
+{
+    utp_internal_error_t error;
+
+    if (connection == NULL || capacity == 0u || connection->stream_terminal_count != 0u ||
+        utp_hash_table_count(&connection->streams) != 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if ((size_t)capacity > SIZE_MAX / sizeof(utp_connection_stream_terminal_t)) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
+    error = utp_hash_table_init(&connection->stream_terminals, NULL, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        connection->stream_terminal_capacity = capacity;
+    }
+    return error;
 }
 
 utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
@@ -2901,10 +3158,17 @@ void utp_connection_cleanup(utp_connection_t* connection)
     utp_hash_table_cleanup(&connection->control_slots, utp_connection_cleanup_control_slot_node, NULL);
     utp_hash_table_cleanup(&connection->pending_peer_max_stream_data,
                            utp_connection_cleanup_pending_max_stream_data_node, NULL);
+    utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
+    utp_allocator_free(NULL, connection->stream_terminal_slots);
     for (index = 0u; index < UTP_STREAM_TYPES; ++index) {
         connection->next_stream_id[index] = 0u;
     }
     connection->context                                                 = NULL;
+    connection->stream_terminal_slots                                   = NULL;
+    connection->stream_terminal_oldest                                  = NULL;
+    connection->stream_terminal_newest                                  = NULL;
+    connection->stream_terminal_capacity                                = 0u;
+    connection->stream_terminal_count                                   = 0u;
     connection->on_incoming_stream                                      = NULL;
     connection->on_incoming_stream_user_data                            = NULL;
     connection->session_token_cb                                        = NULL;
@@ -3020,6 +3284,40 @@ static utp_internal_error_t utp_connection_queue_packet_internal(utp_connection_
         if (payload_length != 0u) {
             memcpy(packet->raw_data + UTP_PACKET_HEADER_SIZE, payload, payload_length);
         }
+        if ((frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) != 0u) {
+            size_t frame_offset = 0u;
+
+            while (frame_offset < payload_length && error == UTP_INTERNAL_ERROR_OK) {
+                utp_frame_stream_t stream_frame;
+                uint8_t            queued_frame_type;
+                size_t             queued_frame_length;
+
+                error = utp_frame_measure(payload + frame_offset, payload_length - frame_offset, &queued_frame_type,
+                                          &queued_frame_length);
+                if (error == UTP_INTERNAL_ERROR_OK && queued_frame_type == UTP_FRAME_TYPE_STREAM) {
+                    error = utp_frame_stream_decode(&stream_frame, payload + frame_offset, queued_frame_length);
+                    if (error == UTP_INTERNAL_ERROR_OK) {
+                        packet->stream_id        = stream_frame.stream_id;
+                        packet->stream_offset    = stream_frame.offset;
+                        packet->stream_data_size = stream_frame.data_length;
+                        if (packet->frame_meta_count < UTP_PACKET_OUT_MAX_FRAMES) {
+                            utp_frame_meta_info_t* meta = &packet->frame_meta[packet->frame_meta_count++];
+
+                            meta->owner      = utp_connection_find_stream_internal(connection, stream_frame.stream_id);
+                            meta->value      = 0u;
+                            meta->offset     = (uint16_t)(UTP_PACKET_HEADER_SIZE + frame_offset);
+                            meta->length     = (uint16_t)UTP_FRAME_STREAM_HEADER_SIZE;
+                            meta->generation = 0u;
+                            meta->frame_type = UTP_FRAME_TYPE_STREAM;
+                            meta->frame_flags =
+                                (stream_frame.flags & UTP_STREAM_FLAG_FIN) != 0u ? UTP_FRAME_META_FIN : 0u;
+                        }
+                    }
+                    break;
+                }
+                frame_offset += queued_frame_length;
+            }
+        }
         if (packet_type == UTP_PACKET_TYPE_INITIAL || packet_type == UTP_PACKET_TYPE_0RTT ||
             packet_type == UTP_PACKET_TYPE_HANDSHAKE) {
             packet->po_flags |= UTP_PO_HELLO;
@@ -3131,7 +3429,7 @@ static bool utp_connection_packet_stream_is_reset(const utp_connection_t* connec
         return false;
     }
     stream = utp_connection_find_stream_internal((utp_connection_t*)connection, packet->stream_id);
-    return stream != NULL && stream->used && stream->reset;
+    return stream != NULL && stream->used && stream->local_write_reset;
 }
 
 utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connection, uint64_t now_us)
@@ -3327,6 +3625,25 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
         }
     }
     utp_connection_commit_sent_controls(connection, packet, now_us);
+    if ((packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) != 0u) {
+        utp_stream_t* stream = utp_connection_find_stream_internal(connection, packet->stream_id);
+
+        if (stream != NULL && !stream->local_write_reset) {
+            const uint64_t stream_end = packet->stream_offset + (uint64_t)packet->stream_data_size;
+            size_t         meta_index;
+
+            if (stream_end > stream->local_max_stream_offset_sent) {
+                stream->local_max_stream_offset_sent = stream_end;
+            }
+            for (meta_index = 0u; meta_index < packet->frame_meta_count; ++meta_index) {
+                if (packet->frame_meta[meta_index].frame_type == UTP_FRAME_TYPE_STREAM &&
+                    (packet->frame_meta[meta_index].frame_flags & UTP_FRAME_META_FIN) != 0u) {
+                    stream->local_fin_transmitted = true;
+                    break;
+                }
+            }
+        }
+    }
     if (packet->transient_ack_size != 0u) {
         utp_ack_scheduler_on_ack_sent(&connection->ack_scheduler);
     }
@@ -3439,11 +3756,14 @@ void utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_
     if ((packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) != 0u) {
         utp_stream_t* stream = utp_connection_find_stream_internal(connection, packet->stream_id);
 
-        if (stream != NULL &&
-            utp_stream_abandon_built_frame(stream, packet->stream_offset, packet->stream_data_size, stream_fin) ==
-                UTP_INTERNAL_ERROR_OK &&
-            (uint64_t)packet->stream_data_size <= connection->stream_data_sent_total) {
-            connection->stream_data_sent_total -= (uint64_t)packet->stream_data_size;
+        if ((uint64_t)packet->stream_data_size <= connection->stream_data_sent_total) {
+            if (stream != NULL && stream->local_write_reset) {
+                connection->stream_data_sent_total -= (uint64_t)packet->stream_data_size;
+            } else if (stream != NULL &&
+                       utp_stream_abandon_built_frame(stream, packet->stream_offset, packet->stream_data_size,
+                                                      stream_fin) == UTP_INTERNAL_ERROR_OK) {
+                connection->stream_data_sent_total -= (uint64_t)packet->stream_data_size;
+            }
         }
     }
 }
@@ -3562,13 +3882,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             return error;
         }
     }
-    largest_before = utp_receive_history_largest(&connection->receive_history);
-    if (!candidate_path) {
-        error = utp_receive_history_insert(&connection->receive_history, view.header.packet_number, now_us);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-    }
+    largest_before        = utp_receive_history_largest(&connection->receive_history);
     offset                = 0u;
     handshake_done        = false;
     ack_progress          = false;
@@ -3752,14 +4066,32 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
                 return error;
             }
         } else if (frame_type == UTP_FRAME_TYPE_STREAM) {
-            utp_frame_stream_t        stream_frame;
-            utp_stream_t*             stream;
-            utp_stream_recv_account_t recv_account;
-            uint64_t                  frame_end;
-            uint64_t                  stream_delta = 0u;
-            bool                      stream_created;
+            utp_frame_stream_t                stream_frame;
+            utp_stream_t*                     stream;
+            utp_connection_stream_terminal_t* terminal;
+            utp_stream_recv_account_t         recv_account;
+            uint64_t                          frame_end;
+            uint64_t                          stream_delta = 0u;
+            bool                              stream_created;
 
-            error = utp_frame_stream_decode(&stream_frame, frame, frame_length);
+            error    = utp_frame_stream_decode(&stream_frame, frame, frame_length);
+            terminal = error == UTP_INTERNAL_ERROR_OK
+                           ? utp_connection_find_stream_terminal(connection, stream_frame.stream_id)
+                           : NULL;
+            if (terminal != NULL) {
+                if (!utp_connection_stream_is_peer_initiated(connection, stream_frame.stream_id) &&
+                    (stream_frame.stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) {
+                    return UTP_INTERNAL_ERROR_PROTOCOL;
+                }
+                if ((terminal->peer_final_size_known &&
+                     ((uint64_t)stream_frame.data_length > UINT64_MAX - stream_frame.offset ||
+                      stream_frame.offset + (uint64_t)stream_frame.data_length > terminal->peer_final_size)) ||
+                    ((stream_frame.flags & UTP_STREAM_FLAG_FIN) != 0u && terminal->peer_final_size_known &&
+                     stream_frame.offset + (uint64_t)stream_frame.data_length != terminal->peer_final_size)) {
+                    return UTP_INTERNAL_ERROR_PROTOCOL;
+                }
+                continue;
+            }
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = utp_connection_get_or_create_peer_stream(connection, stream_frame.stream_id, &stream,
                                                                  &stream_created);
@@ -3778,18 +4110,20 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
                         } else if (connection->local_stream_data_received_total + stream_delta >
                                    connection->local_max_data_advertised) {
                             error = UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL;
+                        } else if ((stream->local_read_shutdown || stream->peer_reset) &&
+                                   frame_end - stream->local_stream_offset_consumed >
+                                       UINT64_MAX - connection->local_stream_data_consumed_total) {
+                            error = UTP_INTERNAL_ERROR_STREAM_FLOW_CONTROL;
                         }
                     }
                 }
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
-                if (stream_created && connection->on_incoming_stream != NULL) {
-                    connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
-                }
                 recv_account.connection_memory_bytes   = &connection->recv_reassembly_memory_bytes;
                 recv_account.connection_fragment_count = &connection->recv_reassembly_fragment_count;
                 recv_account.connection_memory_limit   = UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT;
                 recv_account.connection_fragment_limit = UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT;
+                stream->defer_user_notifications       = stream_created;
                 error = utp_stream_on_frame_packet_accounted(stream, &stream_frame, packet_in, &recv_account);
             }
             if (error == UTP_INTERNAL_ERROR_OK && stream_delta != 0u) {
@@ -3797,24 +4131,107 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
                 connection->local_stream_data_received_total += stream_delta;
             }
             if (error != UTP_INTERNAL_ERROR_OK) {
+                if (stream_created) {
+                    stream->defer_user_notifications = false;
+                    utp_connection_discard_unannounced_stream(connection, stream);
+                }
                 return error;
             }
+            if (stream_created && connection->on_incoming_stream != NULL) {
+                connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+            }
+            stream->defer_user_notifications = false;
+            utp_stream_notify_state_internal(stream);
         } else if (frame_type == UTP_FRAME_TYPE_RESET_STREAM) {
-            utp_frame_reset_stream_t reset;
-            utp_stream_t*            stream;
-            bool                     stream_created;
+            utp_frame_reset_stream_t          reset;
+            utp_stream_t*                     stream;
+            utp_connection_stream_terminal_t* terminal;
+            uint64_t                          stream_delta;
+            bool                              stream_created;
 
-            error = utp_frame_reset_stream_decode(&reset, frame, frame_length);
+            error    = utp_frame_reset_stream_decode(&reset, frame, frame_length);
+            terminal = error == UTP_INTERNAL_ERROR_OK ? utp_connection_find_stream_terminal(connection, reset.stream_id)
+                                                      : NULL;
+            if (terminal != NULL) {
+                if ((!utp_connection_stream_is_peer_initiated(connection, reset.stream_id) &&
+                     (reset.stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) ||
+                    !terminal->peer_final_size_known || reset.final_size != terminal->peer_final_size) {
+                    return UTP_INTERNAL_ERROR_PROTOCOL;
+                }
+                terminal->peer_reset = true;
+                continue;
+            }
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = utp_connection_get_or_create_peer_stream(connection, reset.stream_id, &stream, &stream_created);
             }
-            if (error == UTP_INTERNAL_ERROR_OK && stream_created && connection->on_incoming_stream != NULL) {
-                connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_connection_validate_peer_final_size(connection, stream, reset.final_size, &stream_delta);
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
-                error = utp_stream_on_reset(stream, reset.error_code, true);
+                stream->defer_user_notifications = stream_created;
+                error                            = utp_stream_on_peer_reset(stream, reset.final_size);
+            }
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                connection->local_stream_data_received_total += stream_delta;
+                if (stream_created && connection->on_incoming_stream != NULL) {
+                    connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+                }
+                stream->defer_user_notifications = false;
+                utp_stream_notify_state_internal(stream);
             }
             if (error != UTP_INTERNAL_ERROR_OK) {
+                if (stream_created) {
+                    stream->defer_user_notifications = false;
+                    utp_connection_discard_unannounced_stream(connection, stream);
+                }
+                return error;
+            }
+        } else if (frame_type == UTP_FRAME_TYPE_STOP_SENDING) {
+            utp_frame_stop_sending_t          stop;
+            utp_stream_t*                     stream;
+            utp_connection_stream_terminal_t* terminal;
+            uint64_t                          final_size;
+            bool                              stream_created;
+
+            error = utp_frame_stop_sending_decode(&stop, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            terminal = utp_connection_find_stream_terminal(connection, stop.stream_id);
+            if (terminal != NULL) {
+                if (utp_connection_stream_is_peer_initiated(connection, stop.stream_id) &&
+                    (stop.stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) {
+                    return UTP_INTERNAL_ERROR_PROTOCOL;
+                }
+                terminal->stop_sending_received = true;
+                continue;
+            }
+            error =
+                utp_connection_get_or_create_peer_writable_stream(connection, stop.stream_id, &stream, &stream_created);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            stream->defer_user_notifications   = stream_created;
+            stream->peer_stop_sending_received = true;
+            if (!stream->local_write_reset) {
+                final_size = stream->local_max_stream_offset_sent;
+                error = utp_connection_queue_reset_stream(connection, stream->stream_id, stop.error_code, final_size);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    error = utp_stream_abort_write_internal(stream);
+                }
+            }
+            if (error == UTP_INTERNAL_ERROR_OK) {
+                if (stream_created && connection->on_incoming_stream != NULL) {
+                    connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+                }
+                stream->defer_user_notifications = false;
+                utp_stream_notify_state_internal(stream);
+            }
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                stream->defer_user_notifications = false;
+                if (stream_created) {
+                    utp_connection_discard_unannounced_stream(connection, stream);
+                }
                 return error;
             }
         } else if (frame_type == UTP_FRAME_TYPE_MAX_STREAMS) {
@@ -3895,6 +4312,13 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }
+        }
+    }
+    if (!candidate_path) {
+        // 仅在整包处理成功后提交包号；本地资源不足等可恢复错误必须允许同包号重试。
+        error = utp_receive_history_insert(&connection->receive_history, view.header.packet_number, now_us);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
         }
     }
     if (!candidate_path && !peer_close) {
@@ -4341,6 +4765,54 @@ utp_stream_t* utp_connection_find_stream_internal(utp_connection_t* connection, 
                                                                &stream_id, utp_connection_stream_matches, NULL));
 }
 
+utp_internal_error_t utp_stream_shutdown_internal(utp_stream_t* stream, utp_stream_shutdown_t how)
+{
+    utp_connection_t*    connection;
+    utp_internal_error_t read_error  = UTP_INTERNAL_ERROR_STATE;
+    utp_internal_error_t write_error = UTP_INTERNAL_ERROR_STATE;
+
+    if (stream == NULL || !stream->used || stream->connection == NULL ||
+        (how != UTP_STREAM_SHUTDOWN_READ && how != UTP_STREAM_SHUTDOWN_WRITE && how != UTP_STREAM_SHUTDOWN_BOTH)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    connection = stream->connection;
+    if (!utp_connection_is_connected(connection)) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    if (how == UTP_STREAM_SHUTDOWN_READ || how == UTP_STREAM_SHUTDOWN_BOTH) {
+        if (!utp_stream_local_can_receive(stream)) {
+            read_error = UTP_INTERNAL_ERROR_STATE;
+        } else if (stream->peer_reset) {
+            read_error = UTP_INTERNAL_ERROR_CANCELLED;
+        } else if (stream->local_read_shutdown || stream->peer_fin) {
+            read_error = UTP_INTERNAL_ERROR_CLOSED;
+        } else {
+            read_error = utp_connection_queue_stop_sending(connection, stream->stream_id, UTP_STREAM_ERROR_CANCELLED);
+            if (read_error == UTP_INTERNAL_ERROR_OK) {
+                read_error = utp_stream_shutdown_read_internal(stream);
+            }
+        }
+        if (read_error != UTP_INTERNAL_ERROR_OK && read_error != UTP_INTERNAL_ERROR_CLOSED &&
+            read_error != UTP_INTERNAL_ERROR_CANCELLED && read_error != UTP_INTERNAL_ERROR_STATE) {
+            return read_error;
+        }
+    }
+    if (how == UTP_STREAM_SHUTDOWN_WRITE || how == UTP_STREAM_SHUTDOWN_BOTH) {
+        write_error = utp_stream_close_internal(stream);
+        if (write_error != UTP_INTERNAL_ERROR_OK && write_error != UTP_INTERNAL_ERROR_CLOSED &&
+            write_error != UTP_INTERNAL_ERROR_CANCELLED && write_error != UTP_INTERNAL_ERROR_STATE) {
+            return write_error;
+        }
+    }
+    if (read_error == UTP_INTERNAL_ERROR_OK || write_error == UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (how == UTP_STREAM_SHUTDOWN_WRITE) {
+        return write_error;
+    }
+    return read_error != UTP_INTERNAL_ERROR_STATE ? read_error : write_error;
+}
+
 utp_internal_error_t utp_stream_reset_internal(utp_stream_t* stream, uint16_t error_code)
 {
     utp_connection_t*    connection;
@@ -4357,18 +4829,15 @@ utp_internal_error_t utp_stream_reset_internal(utp_stream_t* stream, uint16_t er
     if (!utp_stream_local_can_send(stream)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
-    if (utp_stream_is_closed(stream)) {
+    if (stream->local_write_reset) {
         return UTP_INTERNAL_ERROR_CLOSED;
     }
-    error = utp_stream_send_buffered_end_offset(stream, &final_size);
+    final_size = stream->local_max_stream_offset_sent;
+    error      = utp_connection_queue_reset_stream(connection, stream->stream_id, error_code, final_size);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    error = utp_connection_queue_reset_stream(connection, stream->stream_id, error_code, final_size);
-    if (error != UTP_INTERNAL_ERROR_OK) {
-        return error;
-    }
-    return utp_stream_on_reset(stream, error_code, false);
+    return utp_stream_abort_write_internal(stream);
 }
 
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection)

@@ -58,6 +58,9 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_set_stream_scheduler_mode(connection, (uint8_t)context->stream_scheduler_mode);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_connection_set_stream_terminal_capacity(connection, context->stream_terminal_capacity);
+    }
     return error;
 }
 
@@ -2985,6 +2988,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->zero_rtt_replay_cache_capacity      = options->zero_rtt_replay_cache_capacity == 0u
                                                        ? UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY
                                                        : options->zero_rtt_replay_cache_capacity;
+    context->stream_terminal_capacity            = options->stream_terminal_capacity == 0u
+                                                       ? UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY
+                                                       : options->stream_terminal_capacity;
     context->handshake_timeout_ms                = options->handshake_timeout == 0u ? 800u : options->handshake_timeout;
     context->handshake_max_retries               = options->handshake_max_retries;
     context->local_transport_params.flags        = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;

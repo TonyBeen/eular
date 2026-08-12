@@ -82,7 +82,7 @@
 - 主动建流：`Connection::createStream(type)` → 返回流 ID（>0）或 -1（错误，见 §6.1）。`connection_impl.cpp:3617-3626`
 - 对端建流：触发 `Connection::OnIncomingStream(Stream*)`。`connection.h:65,114`
 - 读写：同步拷贝 `write`/`read`，或零拷贝 `acquireWriteBuffer`+`commitWrite` / `acquireReadViews`+`commitReadViews`。`stream.h:87-128`
-- 关闭：`Stream::close()` 发 FIN；`Stream::reset(errorCode)` 发 RESET_STREAM。`stream.h:151,158`
+- 关闭：`utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE)` 发 FIN；`utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_READ)` 可靠发送 STOP_SENDING；`utp_stream_reset(errorCode)` 异常终止本地写方向并发 RESET_STREAM。
 
 ### 3.4 0-RTT / 会话恢复
 - 导出：连接建立后 `Connection::exportSessionToken`（非加密）或 `exportSessionResumptionState`（加密），并可在 `OnSessionTokenReady` 后调用。`connection.h:117-120,166,174`
@@ -140,6 +140,7 @@
 | `zero_rtt_token_max_lifetime` | `600` | 0-RTT 票据最长时效（秒） |
 | `zero_rtt_replay_window` | `10` | C++ 现状的抗重放窗口（秒）；C 版加密 0-RTT 不采用该窗口作为记录保留期，replay record 必须保留至 token 绝对过期时间，详见 utp-10 §10.4 |
 | `zero_rtt_replay_cache_capacity` | `4096` | C 版 Context 的动态 replay 哈希表容量；4096 仅为默认值，不是硬上限，容量满时不得淘汰未过期记录 |
+| `stream_terminal_capacity` | `4096` | 每连接已回收流的终态记录容量；满时淘汰最旧记录并复用固定槽位 |
 
 **Path Migration** (`config.h:81`)
 | 字段 | 默认值 | 含义 |
@@ -328,13 +329,12 @@ C 版已将下表中标为“支持”的参数下沉至 `utp_context_options_t`
 | `OnReadable` | `void()` | 接收缓冲区可读 | `stream.h:66,183` |
 | `OnWritable` | `void()` | 发送缓冲区可写 | `stream.h:67,189` |
 | `OnClosed` | `void()` | 流双向完全关闭 | `stream.h:68,195` |
-| `OnReset` | `void(uint16_t)` | 本地或对端 RESET_STREAM（携带错误码） | `stream.h:69,201` |
 
 > C 版已提供 `utp_stream_set_on_readable()`、`utp_stream_set_on_writable()`、
-> `utp_stream_set_on_closed()` 和 `utp_stream_set_on_reset()`。回调均在 Context
+> `utp_stream_set_on_closed()`。回调均在 Context
 > 事件循环线程同步触发：可读回调在注册时已有连续数据或连续 FIN 时立即触发；可写回调在注册时
-> 有发送缓冲空间时立即触发，并在 ACK 释放连续发送缓冲前缀后再次触发；关闭和重置回调各最多
-> 触发一次。`utp_stream_cleanup()` 不会触发用户回调。
+> 有发送缓冲空间时立即触发，并在 ACK 释放连续发送缓冲前缀后再次触发；关闭回调最多触发一次。
+> `utp_stream_cleanup()` 不会触发用户回调。
 
 ### 7.5 全局日志回调
 - `utp_log_callback_t = void(*)(int32_t level, const char* msg, int32_t size)`，C 风格函数指针。`logger.h:35`

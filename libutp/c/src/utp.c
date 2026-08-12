@@ -109,11 +109,14 @@ utp_status_t utp_stream_read(utp_stream_t* stream, void* buffer, size_t capacity
     return utp_internal_error_to_status(error);
 }
 
-void utp_stream_close(utp_stream_t* stream)
+utp_status_t utp_stream_shutdown(utp_stream_t* stream, utp_stream_shutdown_t how)
 {
-    if (utp_stream_close_internal(stream) == UTP_INTERNAL_ERROR_OK && stream != NULL) {
-        (void)utp_public_flush_connection(stream->connection);
+    utp_internal_error_t error = utp_stream_shutdown_internal(stream, how);
+
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return utp_internal_error_to_status(error);
     }
+    return utp_public_flush_connection(stream->connection);
 }
 
 utp_status_t utp_stream_reset(utp_stream_t* stream, uint16_t error_code)
@@ -153,11 +156,6 @@ utp_status_t utp_stream_commit_read_view(utp_stream_t* stream, uint64_t offset, 
     return utp_internal_error_to_status(utp_stream_commit_read_view_internal(stream, offset, length));
 }
 
-bool utp_stream_reset_by_peer(const utp_stream_t* stream)
-{
-    return stream != NULL && stream->used && stream->reset && stream->reset_by_peer;
-}
-
 void utp_stream_set_on_readable(utp_stream_t* stream, utp_on_stream_readable_fn callback, void* user_data)
 {
     utp_stream_set_read_callback(stream, callback, user_data);
@@ -171,11 +169,6 @@ void utp_stream_set_on_writable(utp_stream_t* stream, utp_on_stream_writable_fn 
 void utp_stream_set_on_closed(utp_stream_t* stream, utp_on_stream_closed_fn callback, void* user_data)
 {
     utp_stream_set_close_callback(stream, callback, user_data);
-}
-
-void utp_stream_set_on_reset(utp_stream_t* stream, utp_on_stream_reset_fn callback, void* user_data)
-{
-    utp_stream_set_reset_callback(stream, callback, user_data);
 }
 
 utp_status_t utp_stream_set_priority(utp_stream_t* stream, uint8_t priority)

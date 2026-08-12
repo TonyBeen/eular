@@ -60,7 +60,6 @@ typedef struct utp_stream_send_ack_range {
 typedef utp_on_stream_readable_fn utp_stream_read_cb_t;
 typedef utp_on_stream_writable_fn utp_stream_write_cb_t;
 typedef utp_on_stream_closed_fn   utp_stream_close_cb_t;
-typedef utp_on_stream_reset_fn    utp_stream_reset_cb_t;
 
 struct utp_stream {
     // 仅由 Connection 创建的流会设置 hash_node 和 connection。
@@ -72,11 +71,13 @@ struct utp_stream {
     uint64_t                    next_send_offset;                                // 下一段待发送数据的流偏移
     uint64_t                    recv_offset;                                     // 下一字节连续读取偏移
     uint64_t                    local_max_stream_offset_received;                // 已观察到的最大接收末尾偏移
+    uint64_t                    local_stream_offset_consumed;                    // 已从连接接收窗口退休的流偏移
+    uint64_t                    local_max_stream_offset_sent;                    // 已实际写入 UDP 的最大发送末尾偏移
+    uint64_t                    peer_final_size;                                 // FIN 或 RESET 声明的对端最终偏移
     uint64_t                    peer_max_stream_data;                            // 对端通告的发送额度
     uint64_t                    local_max_stream_data_advertised;                // 本端通告的接收额度
     uint64_t                    last_max_stream_data_sent_us;                    // 上次发送 MAX_STREAM_DATA 的时刻
     uint64_t                    last_stream_data_blocked_sent_us;                // 上次发送 STREAM_DATA_BLOCKED 的时刻
-    uint16_t                    reset_error_code;                                // RESET_STREAM 错误码
     uint32_t                    drr_deficit;                                     // DRR 当前可用配额
     size_t                      send_buffer_length;                              // 发送环形缓冲有效长度
     size_t                      send_buffer_start;                               // 发送环形缓冲物理起始下标
@@ -94,22 +95,24 @@ struct utp_stream {
     utp_stream_read_cb_t        read_cb;                                           // 可读通知回调
     utp_stream_write_cb_t       write_cb;                                          // 可写通知回调
     utp_stream_close_cb_t       close_cb;                                          // 双向关闭通知回调
-    utp_stream_reset_cb_t       reset_cb;                                          // RESET 通知回调
     void*                       read_cb_data;                                      // 可读回调用户数据
     void*                       write_cb_data;                                     // 可写回调用户数据
     void*                       close_cb_data;                                     // 关闭回调用户数据
-    void*                       reset_cb_data;                                     // RESET 回调用户数据
     bool                        used;                                              // 是否已初始化为有效流
     bool                        local_fin_queued;                                  // 本端 FIN 已请求发送
     bool                        local_fin_sent;                                    // 本端 FIN 已构造发送
+    bool                        local_fin_transmitted;                             // 本端 FIN 已实际写入 UDP
     bool                        peer_fin;                                          // 已接收到对端 FIN
-    bool                        reset;                                             // 流已被 RESET 终止
-    bool                        reset_by_peer;                                     // RESET 是否来自对端
+    bool                        local_read_shutdown;                               // 本地已停止读取
+    bool                        local_write_reset;                                 // 本地写方向已被 RESET 终止
+    bool                        peer_reset;                                        // 对端已 RESET 其写方向
+    bool                        peer_stop_sending_received;                        // 是否收到过对端 STOP_SENDING
+    bool                        peer_final_size_known;                             // 对端最终偏移是否已经确定
     bool                        stream_limit_released;                             // 对端流额度是否已归还
     bool                        notifying_readable;                                // 正在执行可读回调，防止重入
     bool                        notifying_writable;                                // 正在执行可写回调，防止重入
     bool                        closed_notified;                                   // 关闭回调是否已通知
-    bool                        reset_notified;                                    // RESET 回调是否已通知
+    bool                        defer_user_notifications;                          // incoming 回调前暂缓状态通知
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */
@@ -120,14 +123,22 @@ void                 utp_stream_cleanup(utp_stream_t* stream);
 bool                 utp_stream_local_can_send(const utp_stream_t* stream);
 /** @brief 判断本端是否拥有该流的接收方向。 */
 bool                 utp_stream_local_can_receive(const utp_stream_t* stream);
-/** @brief 应用本地或对端 RESET_STREAM，终止读写方向。 */
-utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_code, bool from_peer);
+/** @brief 应用对端 RESET_STREAM，仅终止本地读方向并释放接收缓存。 */
+utp_internal_error_t utp_stream_on_peer_reset(utp_stream_t* stream, uint64_t final_size);
+/** @brief 关闭本地读方向并释放接收缓存。 */
+utp_internal_error_t utp_stream_shutdown_read_internal(utp_stream_t* stream);
+/** @brief 将接收偏移从连接级流控窗口退休。 */
+utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset);
+/** @brief 在终止状态提交和 incoming 回调完成后触发关闭通知。 */
+void                 utp_stream_notify_state_internal(utp_stream_t* stream);
 /** @brief 返回发送缓冲区逻辑末尾偏移。 */
 utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
 /** @brief 将数据复制写入流发送环形缓冲。 */
 utp_internal_error_t utp_stream_write_internal(utp_stream_t* stream, const uint8_t* data, size_t length);
 /** @brief 正常关闭本地写方向：先发送剩余数据，再携带 FIN；读方向保持可用。 */
 utp_internal_error_t utp_stream_close_internal(utp_stream_t* stream);
+/** @brief 异常中止本地写方向，丢弃待发数据和 FIN 状态。 */
+utp_internal_error_t utp_stream_abort_write_internal(utp_stream_t* stream);
 /** @brief 请求发送 RESET_STREAM，立即终止流，不属于正常 FIN 关闭。 */
 utp_internal_error_t utp_stream_reset_internal(utp_stream_t* stream, uint16_t error_code);
 /** @brief 获取内部发送环形缓冲的可写视图。 */
@@ -192,8 +203,6 @@ void                 utp_stream_set_read_callback(utp_stream_t* stream, utp_stre
 void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t callback, void* user_data);
 /** @brief 设置双向关闭回调。 */
 void utp_stream_set_close_callback(utp_stream_t* stream, utp_stream_close_cb_t callback, void* user_data);
-/** @brief 设置 RESET 回调。 */
-void utp_stream_set_reset_callback(utp_stream_t* stream, utp_stream_reset_cb_t callback, void* user_data);
 
 #ifdef __cplusplus
 }
