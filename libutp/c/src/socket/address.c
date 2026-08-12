@@ -115,3 +115,21 @@ bool utp_address_is_unspecified_ipv6(const utp_address_t* address)
     return address != NULL && address->family == UTP_ADDRESS_FAMILY_IPV6 &&
            memcmp(address->address, k_unspecified_ipv6_address, sizeof(k_unspecified_ipv6_address)) == 0;
 }
+
+utp_internal_error_t utp_address_format(const utp_address_t* address, char* text, size_t capacity)
+{
+    int32_t family;
+
+    if (address == NULL || text == NULL || capacity == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (address->family == UTP_ADDRESS_FAMILY_IPV4) {
+        family = AF_INET;
+    } else if (address->family == UTP_ADDRESS_FAMILY_IPV6) {
+        family = AF_INET6;
+    } else {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    return inet_ntop((int)family, address->address, text, (socklen_t)capacity) == NULL ? UTP_INTERNAL_ERROR_OVERFLOW
+                                                                                       : UTP_INTERNAL_ERROR_OK;
+}

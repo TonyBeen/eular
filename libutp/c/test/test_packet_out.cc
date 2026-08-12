@@ -45,26 +45,6 @@ void tracked_free(void* user_data, void* pointer)
 
 }  // namespace
 
-TEST_CASE("packet_out records a bounded sequence of send attempts", "[packet_out][attempt]")
-{
-    utp_packet_out_t packet = {};
-
-    REQUIRE(utp_packet_out_add_send_attempt(nullptr, 1u, 1u) == false);
-    REQUIRE(utp_packet_out_add_send_attempt(&packet, 0u, 1u) == false);
-    REQUIRE(utp_packet_out_add_send_attempt(&packet, 1u, 0u) == false);
-    for (uint64_t index = 0u; index < UTP_PACKET_OUT_MAX_ATTEMPTS; ++index) {
-        REQUIRE(utp_packet_out_add_send_attempt(&packet, index + 1u, (index + 1u) * 100u));
-    }
-    REQUIRE(packet.attempt_count == UTP_PACKET_OUT_MAX_ATTEMPTS);
-    REQUIRE(packet.attempts[0].packet_number == 1u);
-    REQUIRE(packet.attempts[UTP_PACKET_OUT_MAX_ATTEMPTS - 1u].sent_time_us == UTP_PACKET_OUT_MAX_ATTEMPTS * 100u);
-    REQUIRE_FALSE(utp_packet_out_add_send_attempt(&packet, UTP_PACKET_OUT_MAX_ATTEMPTS + 1u, 500u));
-
-    utp_packet_out_clear_send_attempts(&packet);
-    REQUIRE(packet.attempt_count == 0u);
-    REQUIRE(packet.attempts[0].packet_number == 0u);
-}
-
 TEST_CASE("packet_out pool init allocates once for structs plus two allocations per bucket", "[packet_out][pool]")
 {
     allocation_tracker             tracker   = {};

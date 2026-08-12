@@ -166,6 +166,7 @@ static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_b
     pkt->early_plaintext_prefix_size = 0u;
     pkt->stream_id                   = 0u;
     pkt->stream_offset               = 0u;
+    pkt->attempts                    = NULL;
     pkt->attempt_count               = 0u;
     pkt->bw_packet_state.valid       = false;
     pkt->bw_state                    = NULL;
@@ -176,10 +177,6 @@ static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_b
     pkt->destination.scope_id        = 0u;
     pkt->has_destination             = false;
     pkt->bucket_index                = bucket_index;
-    for (uint16_t index = 0u; index < UTP_PACKET_OUT_MAX_ATTEMPTS; ++index) {
-        pkt->attempts[index].packet_number = 0u;
-        pkt->attempts[index].sent_time_us  = 0u;
-    }
 }
 
 utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t* pool, uint16_t requested_size,
@@ -241,6 +238,7 @@ void utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_t* 
     pkt->early_plaintext_prefix_size = 0u;
     pkt->stream_id                   = 0u;
     pkt->stream_offset               = 0u;
+    pkt->attempts                    = NULL;
     pkt->attempt_count               = 0u;
     pkt->bw_packet_state.valid       = false;
     pkt->bw_state                    = NULL;
@@ -255,28 +253,6 @@ void utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_t* 
 
     size_t node_index = (size_t)(raw_data - bucket->storage) / bucket->size;
     TAILQ_INSERT_TAIL(&bucket->free_buffers, &bucket->nodes[node_index], link);
-}
-
-bool utp_packet_out_add_send_attempt(utp_packet_out_t* pkt, uint64_t packet_number, uint64_t sent_time_us)
-{
-    if (pkt == NULL || packet_number == 0u || sent_time_us == 0u || pkt->attempt_count >= UTP_PACKET_OUT_MAX_ATTEMPTS) {
-        return false;
-    }
-    pkt->attempts[pkt->attempt_count].packet_number = packet_number;
-    pkt->attempts[pkt->attempt_count].sent_time_us  = sent_time_us;
-    ++pkt->attempt_count;
-    return true;
-}
-
-void utp_packet_out_clear_send_attempts(utp_packet_out_t* pkt)
-{
-    if (pkt != NULL) {
-        for (uint16_t index = 0u; index < UTP_PACKET_OUT_MAX_ATTEMPTS; ++index) {
-            pkt->attempts[index].packet_number = 0u;
-            pkt->attempts[index].sent_time_us  = 0u;
-        }
-        pkt->attempt_count = 0u;
-    }
 }
 
 utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t* pkt, uint16_t prefix_length)

@@ -96,7 +96,116 @@ const uint8_t* packet_frame_of_type(utp_packet_out_t* packet, uint8_t requested_
     return nullptr;
 }
 
+struct stream_callback_probe {
+    int32_t  readable_count;
+    int32_t  writable_count;
+    int32_t  closed_count;
+    int32_t  reset_count;
+    uint16_t reset_error_code;
+};
+
+void on_stream_readable(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->readable_count;
+}
+
+void on_stream_writable(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->writable_count;
+}
+
+void on_stream_closed(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->closed_count;
+}
+
+void on_stream_reset(utp_stream_t* stream, uint16_t error_code, void* user_data)
+{
+    auto* probe = static_cast<stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->reset_count;
+    probe->reset_error_code = error_code;
+}
+
 }  // namespace
+
+TEST_CASE("stream callbacks notify readable writable closed and reset state", "[stream][callback]")
+{
+    utp_packet_in_pool_t  pool                                       = {};
+    utp_stream_t          receive                                    = {};
+    utp_stream_t          writable                                   = {};
+    utp_stream_t          reset_stream                               = {};
+    utp_frame_stream_t    frame                                      = {};
+    utp_packet_in_t*      packet                                     = nullptr;
+    stream_callback_probe receive_probe                              = {};
+    stream_callback_probe writable_probe                             = {};
+    stream_callback_probe reset_probe                                = {};
+    uint8_t               payload[UTP_FRAME_STREAM_HEADER_SIZE + 1u] = {};
+    uint8_t               read_buffer[8]                             = {};
+    size_t                payload_length                             = 0u;
+    size_t                read_length                                = 0u;
+    uint32_t              stream_data_size                           = 0u;
+    uint64_t              stream_offset                              = 0u;
+    bool                  fin                                        = false;
+    std::vector<uint8_t>  write_data(UTP_STREAM_SEND_BUFFER_CAPACITY, 0x5au);
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&receive, 0u);
+    utp_stream_set_on_readable(&receive, on_stream_readable, &receive_probe);
+    utp_stream_set_on_closed(&receive, on_stream_closed, &receive_probe);
+    packet = stream_frame_packet(&pool, 0u, 0u, "hello", true, &frame);
+    REQUIRE(utp_stream_on_frame_packet(&receive, &frame, packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(packet);
+    REQUIRE(receive_probe.readable_count == 1);
+    REQUIRE(receive_probe.closed_count == 0);
+    REQUIRE(utp_stream_close_internal(&receive) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_build_frame(&receive, payload, sizeof(payload), &payload_length, &stream_data_size,
+                                   &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_data_size == 0u);
+    REQUIRE(fin);
+    REQUIRE(utp_stream_commit_built_frame(&receive, stream_data_size, fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_read_internal(&receive, read_buffer, sizeof(read_buffer), &read_length, &fin) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(read_length == 5u);
+    REQUIRE(receive_probe.closed_count == 1);
+
+    utp_stream_init(&writable, 0u);
+    REQUIRE(utp_stream_write_internal(&writable, write_data.data(), write_data.size()) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_build_frame(&writable, payload, sizeof(payload), &payload_length, &stream_data_size,
+                                   &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_data_size != 0u);
+    REQUIRE(utp_stream_commit_built_frame(&writable, stream_data_size, fin) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_set_on_writable(&writable, on_stream_writable, &writable_probe);
+    REQUIRE(writable_probe.writable_count == 0);
+    REQUIRE(utp_stream_on_packet_acked_range(&writable, stream_offset, stream_data_size) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(writable_probe.writable_count == 1);
+
+    utp_stream_init(&reset_stream, 0u);
+    utp_stream_set_on_reset(&reset_stream, on_stream_reset, &reset_probe);
+    utp_stream_set_on_closed(&reset_stream, on_stream_closed, &reset_probe);
+    REQUIRE(utp_stream_on_reset(&reset_stream, UINT16_C(0x1234), true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(reset_probe.reset_count == 1);
+    REQUIRE(reset_probe.reset_error_code == UINT16_C(0x1234));
+    REQUIRE(reset_probe.closed_count == 1);
+    REQUIRE(utp_stream_on_reset(&reset_stream, UINT16_C(0x4567), true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(reset_probe.reset_count == 1);
+    REQUIRE(reset_probe.closed_count == 1);
+
+    utp_stream_cleanup(&receive);
+    utp_stream_cleanup(&writable);
+    utp_stream_cleanup(&reset_stream);
+    utp_packet_in_pool_cleanup(&pool);
+}
 
 TEST_CASE("stream reassembles out-of-order frames and reports FIN after data is consumed", "[stream]")
 {

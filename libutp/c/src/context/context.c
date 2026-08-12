@@ -1038,6 +1038,7 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
             if (!close_packet) {
                 utp_connection_on_packet_send_error(connection, packet, error, utp_context_now_us());
                 utp_connection_on_packet_abandoned(connection, packet);
+                utp_send_control_forget_packet_attempts(&connection->send_control, packet);
                 utp_packet_out_pool_release(&connection->packet_pool, packet);
             }
             if (error == UTP_INTERNAL_ERROR_NOBUFS || close_packet) {

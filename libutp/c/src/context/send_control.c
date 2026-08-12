@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "proto/proto.h"
+#include "util/allocator.h"
 
 #define UTP_SEND_CONTROL_DEFAULT_REORDER_THRESHOLD   3u
 #define UTP_SEND_CONTROL_MAX_RETRANSMISSION_DELAY_US UINT64_C(60000000)
@@ -13,6 +14,203 @@
 #define UTP_SEND_CONTROL_MAX_RTO_BACKOFFS            10u
 #define UTP_SEND_CONTROL_MAX_TLP_COUNT               2u
 #define UTP_SEND_CONTROL_PACER_GRANULARITY_US        1000u
+#define UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER          4u
+#define UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE      16u
+
+static utp_internal_error_t utp_send_control_attempt_add_block(utp_send_control_t* control)
+{
+    utp_send_attempt_block_t* block;
+    size_t                    allocation_size;
+    size_t                    index;
+
+    if (control == NULL || control->attempt_block_size == 0u ||
+        control->attempt_block_size > SIZE_MAX / sizeof(*block->nodes) ||
+        control->attempt_capacity > SIZE_MAX - control->attempt_block_size) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    allocation_size = control->attempt_block_size * sizeof(*block->nodes);
+    block           = utp_allocator_alloc(NULL, sizeof(*block));
+    if (block == NULL) {
+        return UTP_INTERNAL_ERROR_NOMEM;
+    }
+    block->nodes = utp_allocator_alloc(NULL, allocation_size);
+    if (block->nodes == NULL) {
+        utp_allocator_free(NULL, block);
+        return UTP_INTERNAL_ERROR_NOMEM;
+    }
+    block->next                = control->attempt_blocks;
+    block->capacity            = control->attempt_block_size;
+    control->attempt_blocks    = block;
+    control->attempt_capacity += block->capacity;
+    for (index = 0u; index < block->capacity; ++index) {
+        block->nodes[index].free_next = control->attempt_free;
+        control->attempt_free         = &block->nodes[index];
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static uint8_t utp_send_control_attempt_level(uint64_t packet_number)
+{
+    uint64_t value = packet_number ^ (packet_number >> 17u) ^ (packet_number >> 31u);
+    uint8_t  level = 1u;
+
+    while (level < UTP_SEND_ATTEMPT_MAX_LEVEL && (value & UINT64_C(3)) == 0u) {
+        ++level;
+        value >>= 2u;
+    }
+    return level;
+}
+
+static utp_send_attempt_node_t* utp_send_control_attempt_lower_bound(const utp_send_control_t* control,
+                                                                     uint64_t                  packet_number)
+{
+    utp_send_attempt_node_t* node;
+    uint8_t                  level;
+
+    if (control == NULL) {
+        return NULL;
+    }
+    node  = NULL;
+    level = control->attempt_level;
+    while (level != 0u) {
+        --level;
+        while ((node == NULL ? control->attempt_head[level] : node->next[level]) != NULL &&
+               (node == NULL ? control->attempt_head[level] : node->next[level])->packet_number < packet_number) {
+            node = node == NULL ? control->attempt_head[level] : node->next[level];
+        }
+    }
+    return node == NULL ? control->attempt_head[0] : node->next[0];
+}
+
+static void utp_send_control_attempt_find_predecessors(
+    const utp_send_control_t* control, uint64_t packet_number,
+    utp_send_attempt_node_t* predecessors[UTP_SEND_ATTEMPT_MAX_LEVEL])
+{
+    utp_send_attempt_node_t* node;
+    uint8_t                  level;
+    uint8_t                  clear_index;
+
+    node = NULL;
+    for (level = control->attempt_level; level != 0u; --level) {
+        const uint8_t index = (uint8_t)(level - 1u);
+
+        while ((node == NULL ? control->attempt_head[index] : node->next[index]) != NULL &&
+               (node == NULL ? control->attempt_head[index] : node->next[index])->packet_number < packet_number) {
+            node = node == NULL ? control->attempt_head[index] : node->next[index];
+        }
+        predecessors[index] = node;
+    }
+    for (clear_index = control->attempt_level; clear_index < UTP_SEND_ATTEMPT_MAX_LEVEL; ++clear_index) {
+        predecessors[clear_index] = NULL;
+    }
+}
+
+static void utp_send_control_attempt_unlink_index(utp_send_control_t* control, utp_send_attempt_node_t* target)
+{
+    utp_send_attempt_node_t* predecessors[UTP_SEND_ATTEMPT_MAX_LEVEL];
+    uint8_t                  level;
+
+    if (control == NULL || target == NULL) {
+        return;
+    }
+    utp_send_control_attempt_find_predecessors(control, target->packet_number, predecessors);
+    for (level = 0u; level < control->attempt_level; ++level) {
+        utp_send_attempt_node_t** link =
+            predecessors[level] == NULL ? &control->attempt_head[level] : &predecessors[level]->next[level];
+
+        if (*link == target) {
+            *link = target->next[level];
+        }
+    }
+    while (control->attempt_level > 1u && control->attempt_head[control->attempt_level - 1u] == NULL) {
+        --control->attempt_level;
+    }
+}
+
+static void utp_send_control_attempt_release(utp_send_control_t* control, utp_send_attempt_node_t* node)
+{
+    utp_packet_out_t* packet;
+
+    if (control == NULL || node == NULL || (packet = node->packet) == NULL) {
+        return;
+    }
+    utp_send_control_attempt_unlink_index(control, node);
+    if (node->packet_prev != NULL) {
+        node->packet_prev->packet_next = node->packet_next;
+    } else {
+        packet->attempts = node->packet_next;
+    }
+    if (node->packet_next != NULL) {
+        node->packet_next->packet_prev = node->packet_prev;
+    }
+    node->packet          = NULL;
+    node->packet_next     = NULL;
+    node->packet_prev     = NULL;
+    node->free_next       = control->attempt_free;
+    control->attempt_free = node;
+    if (control->attempt_count != 0u) {
+        --control->attempt_count;
+    }
+    if (packet->attempt_count != 0u) {
+        --packet->attempt_count;
+    }
+}
+
+static utp_internal_error_t utp_send_control_record_attempt(utp_send_control_t* control, utp_packet_out_t* packet)
+{
+    utp_send_attempt_node_t* predecessors[UTP_SEND_ATTEMPT_MAX_LEVEL];
+    utp_send_attempt_node_t* node;
+    uint8_t                  level;
+
+    if (control == NULL || packet == NULL || packet->packet_number == 0u || packet->sent_time_us == 0u) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+    if (control->attempt_free == NULL) {
+        const utp_internal_error_t error = utp_send_control_attempt_add_block(control);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    utp_send_control_attempt_find_predecessors(control, packet->packet_number, predecessors);
+    node = predecessors[0] == NULL ? control->attempt_head[0] : predecessors[0]->next[0];
+    if (node != NULL && node->packet_number == packet->packet_number) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    node                  = control->attempt_free;
+    control->attempt_free = node->free_next;
+    node->packet          = packet;
+    node->packet_number   = packet->packet_number;
+    node->sent_time_us    = packet->sent_time_us;
+    node->packet_prev     = NULL;
+    node->packet_next     = packet->attempts;
+    if (packet->attempts != NULL) {
+        packet->attempts->packet_prev = node;
+    }
+    packet->attempts = node;
+    ++packet->attempt_count;
+    level = utp_send_control_attempt_level(node->packet_number);
+    if (level > control->attempt_level) {
+        while (control->attempt_level < level) {
+            predecessors[control->attempt_level] = NULL;
+            ++control->attempt_level;
+        }
+    }
+    for (uint8_t index = 0u; index < level; ++index) {
+        node->next[index] =
+            predecessors[index] == NULL ? control->attempt_head[index] : predecessors[index]->next[index];
+        if (predecessors[index] == NULL) {
+            control->attempt_head[index] = node;
+        } else {
+            predecessors[index]->next[index] = node;
+        }
+    }
+    for (uint8_t index = level; index < UTP_SEND_ATTEMPT_MAX_LEVEL; ++index) {
+        node->next[index] = NULL;
+    }
+    ++control->attempt_count;
+    return UTP_INTERNAL_ERROR_OK;
+}
 
 static uint64_t utp_send_control_packet_size(const utp_packet_out_t* packet)
 {
@@ -40,6 +238,107 @@ static uint64_t utp_send_control_pacing_interval(const utp_send_control_t* contr
     return numerator / rate + (numerator % rate == 0u ? 0u : 1u);
 }
 
+static void utp_send_control_ack_result_add(utp_send_control_ack_result_t* result, const utp_packet_out_t* packet,
+                                            uint64_t packet_number, uint64_t sent_time_us, bool in_flight)
+{
+    const uint64_t packet_size = utp_send_control_packet_size(packet);
+
+    if (in_flight) {
+        result->ledger.acknowledged_bytes = packet_size > UINT64_MAX - result->ledger.acknowledged_bytes
+                                                ? UINT64_MAX
+                                                : result->ledger.acknowledged_bytes + packet_size;
+    }
+    ++result->ledger.acknowledged_packet_count;
+    if (packet_number > result->ledger.largest_acknowledged_packet_number) {
+        result->ledger.largest_acknowledged_packet_number = packet_number;
+        result->ledger.largest_acknowledged_sent_time_us  = sent_time_us;
+    }
+}
+
+static bool utp_send_control_ack_contains(const utp_ack_info_t* ack, uint64_t packet_number)
+{
+    for (size_t index = 0u; index < ack->range_count; ++index) {
+        if (packet_number >= ack->ranges[index].low && packet_number <= ack->ranges[index].high) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static utp_internal_error_t utp_send_control_acknowledge_packet(utp_send_control_t* control, const utp_ack_info_t* ack,
+                                                                utp_packet_out_t* packet,
+                                                                uint64_t          matched_packet_number,
+                                                                uint64_t matched_sent_time_us, uint64_t now_us,
+                                                                struct utp_packet_out_tailq*   acknowledged_packets,
+                                                                utp_send_control_ack_result_t* result)
+{
+    const bool           in_flight       = (packet->po_flags & UTP_PO_UNACKED) != 0u;
+    const bool           current_attempt = in_flight && utp_send_control_ack_contains(ack, packet->packet_number);
+    const uint64_t       acknowledged_packet_number = current_attempt ? packet->packet_number : matched_packet_number;
+    const uint64_t       acknowledged_sent_time_us  = current_attempt ? packet->sent_time_us : matched_sent_time_us;
+    utp_internal_error_t error;
+
+    if (in_flight) {
+        error = utp_send_ledger_remove(&control->ledger, packet);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    } else if ((packet->po_flags & UTP_PO_LOST) != 0u) {
+        if (control->lost_packet_count == 0u) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        TAILQ_REMOVE(&control->lost_packets, packet, po_next);
+        packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+        --control->lost_packet_count;
+    } else {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    if (current_attempt && control->congestion != NULL) {
+        utp_congestion_packet_info_t info;
+
+        utp_send_control_packet_info(packet, &info);
+        utp_congestion_on_ack(control->congestion, &info, now_us, control->app_limited ? 1 : 0);
+        packet->bw_state = info.state;
+    }
+    utp_send_control_ack_result_add(result, packet, acknowledged_packet_number, acknowledged_sent_time_us, in_flight);
+    if (current_attempt && (!result->rtt_acknowledged_current_attempt ||
+                            acknowledged_packet_number > result->rtt_acknowledged_packet_number)) {
+        result->rtt_acknowledged_packet_number   = acknowledged_packet_number;
+        result->rtt_acknowledged_sent_time_us    = acknowledged_sent_time_us;
+        result->rtt_acknowledged_current_attempt = true;
+    }
+    utp_send_control_forget_packet_attempts(control, packet);
+    TAILQ_INSERT_TAIL(acknowledged_packets, packet, po_next);
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static utp_internal_error_t utp_send_control_acknowledge_attempts(utp_send_control_t*            control,
+                                                                  const utp_ack_info_t*          ack,
+                                                                  struct utp_packet_out_tailq*   acknowledged_packets,
+                                                                  utp_send_control_ack_result_t* result,
+                                                                  uint64_t                       now_us)
+{
+    for (size_t range_index = 0u; range_index < ack->range_count; ++range_index) {
+        const utp_ack_range_t*   range = &ack->ranges[range_index];
+        utp_send_attempt_node_t* node  = utp_send_control_attempt_lower_bound(control, range->low);
+
+        while (node != NULL && node->packet_number <= range->high) {
+            utp_packet_out_t*    packet        = node->packet;
+            const uint64_t       packet_number = node->packet_number;
+            utp_internal_error_t error         = utp_send_control_acknowledge_packet(
+                control, ack, packet, packet_number, node->sent_time_us, now_us, acknowledged_packets, result);
+
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            node = packet_number == UTP_PACKET_NUMBER_MAX
+                       ? NULL
+                       : utp_send_control_attempt_lower_bound(control, packet_number + 1u);
+        }
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t packet_limit,
                                            uint32_t retransmittable_frame_mask, uint64_t gap_warning_threshold,
                                            uint64_t peer_max_ack_delay_us)
@@ -52,6 +351,20 @@ utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t p
     memset(control, 0, sizeof(*control));
     error = utp_send_ledger_init(&control->ledger, packet_limit, retransmittable_frame_mask);
     if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (packet_limit > SIZE_MAX / UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER) {
+        utp_send_ledger_cleanup(&control->ledger);
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    control->attempt_block_size = packet_limit * UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER;
+    if (control->attempt_block_size < UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE) {
+        control->attempt_block_size = UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE;
+    }
+    control->attempt_level = 1u;
+    error                  = utp_send_control_attempt_add_block(control);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_send_ledger_cleanup(&control->ledger);
         return error;
     }
     utp_send_history_init(&control->send_history, gap_warning_threshold);
@@ -84,7 +397,40 @@ void utp_send_control_cleanup(utp_send_control_t* control)
         TAILQ_REMOVE(&control->discarded_packets, packet, po_next);
     }
     utp_send_ledger_cleanup(&control->ledger);
+    while (control->attempt_blocks != NULL) {
+        utp_send_attempt_block_t* block = control->attempt_blocks;
+
+        control->attempt_blocks = block->next;
+        utp_allocator_free(NULL, block->nodes);
+        utp_allocator_free(NULL, block);
+    }
     memset(control, 0, sizeof(*control));
+}
+
+bool utp_send_control_can_record_attempt(utp_send_control_t* control, const utp_packet_out_t* packet)
+{
+    if (control == NULL || packet == NULL) {
+        return false;
+    }
+    if ((packet->local_flags & UTP_POL_NO_TRACK_ON_SEND) != 0u) {
+        return true;
+    }
+    if (control->ledger.packet_count >= control->ledger.packet_limit) {
+        return false;
+    }
+    return control->attempt_free != NULL || utp_send_control_attempt_add_block(control) == UTP_INTERNAL_ERROR_OK;
+}
+
+void utp_send_control_forget_packet_attempts(utp_send_control_t* control, utp_packet_out_t* packet)
+{
+    utp_send_attempt_node_t* node;
+
+    if (control == NULL || packet == NULL) {
+        return;
+    }
+    while ((node = packet->attempts) != NULL) {
+        utp_send_control_attempt_release(control, node);
+    }
 }
 
 utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control, utp_packet_out_t* packet)
@@ -111,16 +457,21 @@ utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control
         if (packet->packet_number > control->current_packet_number) {
             control->current_packet_number = packet->packet_number;
         }
-        (void)utp_packet_out_add_send_attempt(packet, packet->packet_number, packet->sent_time_us);
         return UTP_INTERNAL_ERROR_OK;
     }
     error = utp_send_ledger_track(&control->ledger, packet);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
+    error = utp_send_control_record_attempt(control, packet);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        (void)utp_send_ledger_remove(&control->ledger, packet);
+        return error;
+    }
     error = utp_send_history_update(&control->send_history, packet->packet_number);
     if (error != UTP_INTERNAL_ERROR_OK) {
         (void)utp_send_ledger_remove(&control->ledger, packet);
+        utp_send_control_attempt_release(control, packet->attempts);
         return error;
     }
     packet_size         = utp_send_control_packet_size(packet);
@@ -135,7 +486,6 @@ utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control
         utp_pacer_packet_scheduled(&control->pacer, packet_count_before, false,
                                    utp_send_control_pacing_interval(control, packet_size));
     }
-    (void)utp_packet_out_add_send_attempt(packet, packet->packet_number, packet->sent_time_us);
     control->last_sent_time_us = packet->sent_time_us;
     if (packet->packet_number > control->current_packet_number) {
         control->current_packet_number = packet->packet_number;
@@ -719,7 +1069,6 @@ static utp_internal_error_t utp_send_control_on_ack_internal(utp_send_control_t*
                                                              utp_send_control_ack_result_t* result)
 {
     utp_internal_error_t error;
-    utp_packet_out_t*    packet;
 
     if (control == NULL || ack == NULL || acknowledged_packets == NULL || result == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -728,13 +1077,15 @@ static utp_internal_error_t utp_send_control_on_ack_internal(utp_send_control_t*
     result->ledger.largest_acknowledged_sent_time_us  = 0u;
     result->ledger.acknowledged_bytes                 = 0u;
     result->ledger.acknowledged_packet_count          = 0u;
+    result->rtt_acknowledged_packet_number            = 0u;
+    result->rtt_acknowledged_sent_time_us             = 0u;
     result->rtt_sample_us                             = 0u;
+    result->rtt_acknowledged_current_attempt          = false;
     result->rtt_sample_valid                          = false;
     {
-        uint64_t inflight_before_ack = utp_send_ledger_bytes_in_flight(&control->ledger);
+        const uint64_t inflight_before_ack = utp_send_ledger_bytes_in_flight(&control->ledger);
 
-        error = utp_send_ledger_acknowledge(&control->ledger, ack, utp_send_history_largest(&control->send_history),
-                                            acknowledged_packets, &result->ledger);
+        error = utp_send_ledger_validate_ack(ack, utp_send_history_largest(&control->send_history));
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -743,21 +1094,18 @@ static utp_internal_error_t utp_send_control_on_ack_internal(utp_send_control_t*
             utp_congestion_was_quiet(control->congestion, now_us, inflight_before_ack);
         }
         utp_congestion_on_begin_ack(control->congestion, now_us, inflight_before_ack);
-    }
-    TAILQ_FOREACH(packet, acknowledged_packets, po_next)
-    {
-        utp_congestion_packet_info_t info;
-
-        utp_send_control_packet_info(packet, &info);
-        utp_congestion_on_ack(control->congestion, &info, now_us, control->app_limited ? 1 : 0);
-        packet->bw_state = info.state;
+        error = utp_send_control_acknowledge_attempts(control, ack, acknowledged_packets, result, now_us);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_congestion_on_end_ack(control->congestion, utp_send_ledger_bytes_in_flight(&control->ledger));
+            return error;
+        }
     }
     utp_congestion_on_end_ack(control->congestion, utp_send_ledger_bytes_in_flight(&control->ledger));
     if (ack->largest_acked > control->largest_acked_packet_number) {
         control->largest_acked_packet_number = ack->largest_acked;
     }
-    if (result->ledger.largest_acknowledged_packet_number != 0u) {
-        uint64_t acknowledged_sent_time_us = result->ledger.largest_acknowledged_sent_time_us;
+    if (result->rtt_acknowledged_current_attempt) {
+        uint64_t acknowledged_sent_time_us = result->rtt_acknowledged_sent_time_us;
 
         control->largest_acked_sent_time_us = acknowledged_sent_time_us;
         if (now_us > acknowledged_sent_time_us) {
@@ -917,4 +1265,9 @@ size_t utp_send_control_discarded_packet_count(const utp_send_control_t* control
 uint64_t utp_send_control_srtt(const utp_send_control_t* control)
 {
     return control == NULL ? 0u : utp_rtt_stats_srtt(&control->rtt_stats);
+}
+
+uint64_t utp_send_control_bandwidth_estimate(const utp_send_control_t* control)
+{
+    return control == NULL ? 0u : utp_congestion_get_pacing_rate(control->congestion, 0);
 }

@@ -13,6 +13,15 @@ extern "C" {
 
 typedef struct utp_stream utp_stream_t;
 
+/** @brief 流变为可读或接收到连续 FIN 时同步调用。 */
+typedef void (*utp_on_stream_readable_fn)(utp_stream_t* stream, void* user_data);
+/** @brief 流发送缓冲重新获得可写空间时同步调用。 */
+typedef void (*utp_on_stream_writable_fn)(utp_stream_t* stream, void* user_data);
+/** @brief 流双向关闭且接收缓冲已排空时同步调用，仅一次。 */
+typedef void (*utp_on_stream_closed_fn)(utp_stream_t* stream, void* user_data);
+/** @brief 流发生本地或对端 RESET_STREAM 后同步调用，仅一次。 */
+typedef void (*utp_on_stream_reset_fn)(utp_stream_t* stream, uint16_t error_code, void* user_data);
+
 #define UTP_STREAM_PRIORITY_HIGHEST 0u
 #define UTP_STREAM_PRIORITY_LOWEST  7u
 #define UTP_STREAM_PRIORITY_DEFAULT 4u
@@ -56,6 +65,14 @@ size_t       utp_stream_readable_bytes(const utp_stream_t* stream);
 bool         utp_stream_is_closed(const utp_stream_t* stream);
 /** @brief 判断流是否由对端 RESET_STREAM 终止。 */
 bool         utp_stream_reset_by_peer(const utp_stream_t* stream);
+/** @brief 设置可读回调；若已有连续数据或 FIN，设置时立即同步通知。 */
+void         utp_stream_set_on_readable(utp_stream_t* stream, utp_on_stream_readable_fn callback, void* user_data);
+/** @brief 设置可写回调；若当前可写，设置时立即同步通知。 */
+void         utp_stream_set_on_writable(utp_stream_t* stream, utp_on_stream_writable_fn callback, void* user_data);
+/** @brief 设置双向关闭回调；仅对后续关闭状态变化通知。 */
+void         utp_stream_set_on_closed(utp_stream_t* stream, utp_on_stream_closed_fn callback, void* user_data);
+/** @brief 设置 RESET 回调；仅对后续 RESET 状态变化通知。 */
+void         utp_stream_set_on_reset(utp_stream_t* stream, utp_on_stream_reset_fn callback, void* user_data);
 /** @brief 设置 Strict 或 DRR 调度使用的流优先级，范围为 0 至 7。 */
 utp_status_t utp_stream_set_priority(utp_stream_t* stream, uint8_t priority);
 /** @brief 返回流当前优先级。 */

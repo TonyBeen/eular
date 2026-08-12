@@ -124,6 +124,14 @@ typedef struct utp_connection {
     size_t                       recv_reassembly_fragment_count;
     uint64_t                     rx_bytes;
     uint64_t                     tx_bytes;
+    uint64_t                     rtx_bytes;
+    uint64_t                     scheduler_select_total;
+    uint64_t                     scheduler_select_strict;
+    uint64_t                     scheduler_select_drr;
+    uint64_t                     scheduler_strict_aging_promoted;
+    uint64_t                     scheduler_mode_switches;
+    uint64_t                     scheduler_drr_refills;
+    uint64_t                     scheduler_drr_consumes;
     uint64_t                     peer_handshake_packet_number;
     uint64_t                     peer_handshake_received_us;
     uint64_t                     retransmission_deadline_us;
@@ -324,20 +332,30 @@ utp_stream_t*          utp_connection_find_stream_internal(utp_connection_t* con
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);
 /** @brief 判断连接是否处于可读写的 CONNECTED 状态。 */
 bool                   utp_connection_is_connected(const utp_connection_t* connection);
+/** @brief 返回指定类型的现存流数；UTP_STREAM_TYPE_ALL 返回全部流。 */
+int32_t                utp_connection_stream_count_internal(const utp_connection_t* connection, utp_stream_type_t type);
+/** @brief 返回本端仍可创建的指定类型流数。 */
+int32_t utp_connection_creatable_stream_count_internal(const utp_connection_t* connection, utp_stream_type_t type);
+/** @brief 复制连接运行统计快照。 */
+utp_internal_error_t utp_connection_get_statistic_internal(const utp_connection_t*     connection,
+                                                           utp_connection_statistic_t* out_statistic);
+/** @brief 复制连接 CID 和对端地址描述。 */
+utp_internal_error_t utp_connection_get_description_internal(const utp_connection_t*       connection,
+                                                             utp_connection_description_t* out_description);
 /** @brief 导出连接缓存的会话票据。 */
-utp_internal_error_t   utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,
-                                                                    size_t capacity, size_t* out_length);
+utp_internal_error_t utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,
+                                                                  size_t capacity, size_t* out_length);
 /** @brief 为 0-RTT 首个双向流保留已发送前缀，并将余量写入普通 1-RTT 发送缓冲。 */
-utp_internal_error_t   utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
-                                                              size_t data_length, size_t early_data_length, bool fin);
+utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
+                                                            size_t data_length, size_t early_data_length, bool fin);
 /** @brief 标记被动 0-RTT 正在等待首个 HANDSHAKE 响应成功写出。 */
-utp_internal_error_t   utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
+utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
 /** @brief 退休本连接仍在发送、未确认或待重排的握手 flight。 */
-utp_internal_error_t   utp_connection_retire_handshake_flight(utp_connection_t* connection, uint64_t now_us);
+utp_internal_error_t utp_connection_retire_handshake_flight(utp_connection_t* connection, uint64_t now_us);
 /** @brief 解密并严格校验加密 0-RTT 的服务端 HANDSHAKE 响应，随后进入 CONNECTED。 */
-utp_internal_error_t   utp_connection_on_zero_rtt_handshake(utp_connection_t* connection, uint8_t* packet,
-                                                            size_t* packet_length, const utp_address_t* peer,
-                                                            uint64_t now_us);
+utp_internal_error_t utp_connection_on_zero_rtt_handshake(utp_connection_t* connection, uint8_t* packet,
+                                                          size_t* packet_length, const utp_address_t* peer,
+                                                          uint64_t now_us);
 
 #ifdef __cplusplus
 }

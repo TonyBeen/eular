@@ -14,7 +14,7 @@ static bool utp_send_ledger_is_retransmittable(const utp_send_ledger_t* ledger, 
     return (packet->frame_types & ledger->retransmittable_frame_mask) != 0u;
 }
 
-static utp_internal_error_t utp_send_ledger_validate_ack(const utp_ack_info_t* ack, uint64_t largest_sent_packet_number)
+utp_internal_error_t utp_send_ledger_validate_ack(const utp_ack_info_t* ack, uint64_t largest_sent_packet_number)
 {
     if (ack == NULL || ack->ranges == NULL || ack->range_count == 0u || ack->range_count > UTP_ACK_MAX_RANGES ||
         ack->range_count > ack->range_capacity || ack->largest_acked == 0u ||
@@ -33,18 +33,6 @@ static utp_internal_error_t utp_send_ledger_validate_ack(const utp_ack_info_t* a
         previous_low = range->low;
     }
     return UTP_INTERNAL_ERROR_OK;
-}
-
-static bool utp_send_ledger_ack_contains(const utp_ack_info_t* ack, uint64_t packet_number)
-{
-    for (size_t index = 0u; index < ack->range_count; ++index) {
-        const utp_ack_range_t* range = &ack->ranges[index];
-
-        if (packet_number <= range->high && packet_number >= range->low) {
-            return true;
-        }
-    }
-    return false;
 }
 
 utp_internal_error_t utp_send_ledger_init(utp_send_ledger_t* ledger, size_t packet_limit,
@@ -136,46 +124,6 @@ utp_internal_error_t utp_send_ledger_remove(utp_send_ledger_t* ledger, utp_packe
     if (retransmittable) {
         ledger->retransmittable_bytes_in_flight -= packet_size;
         --ledger->retransmittable_packet_count;
-    }
-    return UTP_INTERNAL_ERROR_OK;
-}
-
-utp_internal_error_t utp_send_ledger_acknowledge(utp_send_ledger_t* ledger, const utp_ack_info_t* ack,
-                                                 uint64_t                      largest_sent_packet_number,
-                                                 struct utp_packet_out_tailq*  acknowledged_packets,
-                                                 utp_send_ledger_ack_result_t* result)
-{
-    if (ledger == NULL || acknowledged_packets == NULL || result == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    result->largest_acknowledged_packet_number = 0u;
-    result->largest_acknowledged_sent_time_us  = 0u;
-    result->acknowledged_bytes                 = 0u;
-    result->acknowledged_packet_count          = 0u;
-    utp_internal_error_t error                 = utp_send_ledger_validate_ack(ack, largest_sent_packet_number);
-    if (error != UTP_INTERNAL_ERROR_OK) {
-        return error;
-    }
-    for (utp_packet_out_t *packet = TAILQ_FIRST(&ledger->unacked_packets), *next = NULL; packet != NULL;
-         packet = next) {
-        uint64_t packet_size;
-
-        next = TAILQ_NEXT(packet, po_next);
-        if (!utp_send_ledger_ack_contains(ack, packet->packet_number)) {
-            continue;
-        }
-        packet_size = utp_send_ledger_packet_size(packet);
-        error       = utp_send_ledger_remove(ledger, packet);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-        TAILQ_INSERT_TAIL(acknowledged_packets, packet, po_next);
-        result->acknowledged_bytes += packet_size;
-        ++result->acknowledged_packet_count;
-        if (packet->packet_number > result->largest_acknowledged_packet_number) {
-            result->largest_acknowledged_packet_number = packet->packet_number;
-            result->largest_acknowledged_sent_time_us  = packet->sent_time_us;
-        }
     }
     return UTP_INTERNAL_ERROR_OK;
 }

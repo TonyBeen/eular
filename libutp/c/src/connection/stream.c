@@ -46,6 +46,70 @@ static uint64_t utp_stream_fragment_read_offset(const utp_stream_recv_fragment_t
     return fragment->offset + (uint64_t)fragment->consumed;
 }
 
+static bool utp_stream_has_readable_event(const utp_stream_t* stream)
+{
+    if (stream == NULL || !utp_stream_local_can_receive(stream)) {
+        return false;
+    }
+    if (utp_stream_readable_bytes(stream) != 0u || stream->peer_fin) {
+        return true;
+    }
+    return stream->recv_fragment_count != 0u &&
+           utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset &&
+           stream->recv_fragments[0].length == stream->recv_fragments[0].consumed && stream->recv_fragments[0].fin;
+}
+
+static bool utp_stream_is_writable(const utp_stream_t* stream)
+{
+    return stream != NULL && stream->used && utp_stream_local_can_send(stream) &&
+           !utp_stream_send_side_is_closed(stream) && !stream->reset && !stream->local_fin_queued &&
+           stream->send_buffer_length < UTP_STREAM_SEND_BUFFER_CAPACITY;
+}
+
+static void utp_stream_notify_readable(utp_stream_t* stream)
+{
+    if (stream == NULL || stream->read_cb == NULL || stream->notifying_readable ||
+        !utp_stream_has_readable_event(stream)) {
+        return;
+    }
+    stream->notifying_readable = true;
+    stream->read_cb(stream, stream->read_cb_data);
+    stream->notifying_readable = false;
+}
+
+static void utp_stream_notify_writable(utp_stream_t* stream)
+{
+    if (stream == NULL || stream->write_cb == NULL || stream->notifying_writable || !utp_stream_is_writable(stream)) {
+        return;
+    }
+    stream->notifying_writable = true;
+    stream->write_cb(stream, stream->write_cb_data);
+    stream->notifying_writable = false;
+}
+
+static void utp_stream_notify_closed(utp_stream_t* stream)
+{
+    if (stream == NULL || stream->closed_notified || !utp_stream_is_closed(stream) ||
+        stream->recv_buffered_bytes != 0u) {
+        return;
+    }
+    stream->closed_notified = true;
+    if (stream->close_cb != NULL) {
+        stream->close_cb(stream, stream->close_cb_data);
+    }
+}
+
+static void utp_stream_notify_reset(utp_stream_t* stream)
+{
+    if (stream == NULL || stream->reset_notified) {
+        return;
+    }
+    stream->reset_notified = true;
+    if (stream->reset_cb != NULL) {
+        stream->reset_cb(stream, stream->reset_error_code, stream->reset_cb_data);
+    }
+}
+
 static size_t utp_stream_send_index(const utp_stream_t* stream, size_t offset)
 {
     return (stream->send_buffer_start + offset) % UTP_STREAM_SEND_BUFFER_CAPACITY;
@@ -357,6 +421,14 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->send_ack_range_count             = 0u;
         stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
         stream->strict_wait_rounds               = 0u;
+        stream->read_cb                          = NULL;
+        stream->write_cb                         = NULL;
+        stream->close_cb                         = NULL;
+        stream->reset_cb                         = NULL;
+        stream->read_cb_data                     = NULL;
+        stream->write_cb_data                    = NULL;
+        stream->close_cb_data                    = NULL;
+        stream->reset_cb_data                    = NULL;
         stream->used                             = true;
         stream->local_fin_queued                 = false;
         stream->local_fin_sent                   = false;
@@ -364,6 +436,10 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
         stream->reset                            = false;
         stream->reset_by_peer                    = false;
         stream->stream_limit_released            = false;
+        stream->notifying_readable               = false;
+        stream->notifying_writable               = false;
+        stream->closed_notified                  = false;
+        stream->reset_notified                   = false;
     }
 }
 
@@ -390,15 +466,59 @@ utp_internal_error_t utp_stream_on_reset(utp_stream_t* stream, uint16_t error_co
     stream->local_fin_sent                = true;
     stream->peer_fin                      = true;
     stream->reset                         = true;
+    utp_stream_notify_reset(stream);
+    utp_stream_notify_closed(stream);
     return UTP_INTERNAL_ERROR_OK;
 }
 
 void utp_stream_cleanup(utp_stream_t* stream)
 {
     if (stream != NULL && stream->used) {
+        stream->read_cb       = NULL;
+        stream->write_cb      = NULL;
+        stream->close_cb      = NULL;
+        stream->reset_cb      = NULL;
+        stream->read_cb_data  = NULL;
+        stream->write_cb_data = NULL;
+        stream->close_cb_data = NULL;
+        stream->reset_cb_data = NULL;
         (void)utp_stream_on_reset(stream, 0u, false);
         stream->connection                = NULL;
         stream->connection_consumed_total = NULL;
+    }
+}
+
+void utp_stream_set_read_callback(utp_stream_t* stream, utp_stream_read_cb_t callback, void* user_data)
+{
+    if (stream != NULL && stream->used) {
+        stream->read_cb      = callback;
+        stream->read_cb_data = user_data;
+        utp_stream_notify_readable(stream);
+    }
+}
+
+void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t callback, void* user_data)
+{
+    if (stream != NULL && stream->used) {
+        stream->write_cb      = callback;
+        stream->write_cb_data = user_data;
+        utp_stream_notify_writable(stream);
+    }
+}
+
+void utp_stream_set_close_callback(utp_stream_t* stream, utp_stream_close_cb_t callback, void* user_data)
+{
+    if (stream != NULL && stream->used) {
+        stream->close_cb      = callback;
+        stream->close_cb_data = user_data;
+    }
+}
+
+void utp_stream_set_reset_callback(utp_stream_t* stream, utp_stream_reset_cb_t callback, void* user_data)
+{
+    if (stream != NULL && stream->used) {
+        stream->reset_cb      = callback;
+        stream->reset_cb_data = user_data;
     }
 }
 
@@ -655,6 +775,7 @@ utp_internal_error_t utp_stream_commit_built_frame(utp_stream_t* stream, uint32_
     stream->send_in_flight_bytes += data_size;
     if (fin) {
         stream->local_fin_sent = true;
+        utp_stream_notify_closed(stream);
     }
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -704,7 +825,14 @@ utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    utp_stream_release_acked_prefix(stream);
+    {
+        const size_t previous_length = stream->send_buffer_length;
+
+        utp_stream_release_acked_prefix(stream);
+        if (stream->send_buffer_length < previous_length) {
+            utp_stream_notify_writable(stream);
+        }
+    }
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -800,9 +928,11 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
         error = utp_stream_mark_fin(stream, original_end, account);
         if (error != UTP_INTERNAL_ERROR_OK) {
             utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
+            return error;
         }
-        return error;
     }
+    utp_stream_notify_readable(stream);
+    utp_stream_notify_closed(stream);
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -869,6 +999,7 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
             stream->recv_fragments[0].length == stream->recv_fragments[0].consumed && stream->recv_fragments[0].fin) {
             stream->peer_fin = true;
             utp_stream_remove_fragment(stream, 0u);
+            utp_stream_notify_closed(stream);
             return UTP_INTERNAL_ERROR_OK;
         }
         return stream->peer_fin ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -898,6 +1029,7 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
         }
         utp_stream_remove_fragment(stream, 0u);
     }
+    utp_stream_notify_closed(stream);
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -949,6 +1081,7 @@ utp_internal_error_t utp_stream_read_internal(utp_stream_t* stream, uint8_t* buf
     }
     *out_length = copied;
     *out_fin    = copied == 0u && stream->peer_fin;
+    utp_stream_notify_closed(stream);
     if (copied != 0u) {
         return UTP_INTERNAL_ERROR_OK;
     }

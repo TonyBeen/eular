@@ -57,6 +57,11 @@ typedef struct utp_stream_send_ack_range {
     uint64_t end;
 } utp_stream_send_ack_range_t;
 
+typedef utp_on_stream_readable_fn utp_stream_read_cb_t;
+typedef utp_on_stream_writable_fn utp_stream_write_cb_t;
+typedef utp_on_stream_closed_fn   utp_stream_close_cb_t;
+typedef utp_on_stream_reset_fn    utp_stream_reset_cb_t;
+
 struct utp_stream {
     // 仅由 Connection 创建的流会设置 hash_node 和 connection。
     utp_hash_node_t             hash_node;
@@ -86,6 +91,14 @@ struct utp_stream {
     uint8_t                     send_buffer[UTP_STREAM_SEND_BUFFER_CAPACITY];
     uint8_t                     priority;
     uint8_t                     strict_wait_rounds;
+    utp_stream_read_cb_t        read_cb;
+    utp_stream_write_cb_t       write_cb;
+    utp_stream_close_cb_t       close_cb;
+    utp_stream_reset_cb_t       reset_cb;
+    void*                       read_cb_data;
+    void*                       write_cb_data;
+    void*                       close_cb_data;
+    void*                       reset_cb_data;
     bool                        used;
     bool                        local_fin_queued;
     bool                        local_fin_sent;
@@ -93,6 +106,10 @@ struct utp_stream {
     bool                        reset;
     bool                        reset_by_peer;
     bool                        stream_limit_released;
+    bool                        notifying_readable;
+    bool                        notifying_writable;
+    bool                        closed_notified;
+    bool                        reset_notified;
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */
@@ -169,6 +186,14 @@ size_t               utp_stream_readable_bytes(const utp_stream_t* stream);
 size_t               utp_stream_send_in_flight_bytes(const utp_stream_t* stream);
 /** @brief 判断流是否完全关闭或被重置。 */
 bool                 utp_stream_is_closed(const utp_stream_t* stream);
+/** @brief 设置可读回调；已有连续数据或 FIN 时立即同步通知。 */
+void                 utp_stream_set_read_callback(utp_stream_t* stream, utp_stream_read_cb_t callback, void* user_data);
+/** @brief 设置可写回调；当前可写时立即同步通知。 */
+void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t callback, void* user_data);
+/** @brief 设置双向关闭回调。 */
+void utp_stream_set_close_callback(utp_stream_t* stream, utp_stream_close_cb_t callback, void* user_data);
+/** @brief 设置 RESET 回调。 */
+void utp_stream_set_reset_callback(utp_stream_t* stream, utp_stream_reset_cb_t callback, void* user_data);
 
 #ifdef __cplusplus
 }

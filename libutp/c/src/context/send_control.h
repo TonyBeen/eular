@@ -14,6 +14,24 @@
 extern "C" {
 #endif
 
+#define UTP_SEND_ATTEMPT_MAX_LEVEL 8u
+
+typedef struct utp_send_attempt_node {
+    struct utp_send_attempt_node* packet_next;
+    struct utp_send_attempt_node* packet_prev;
+    struct utp_send_attempt_node* free_next;
+    utp_packet_out_t*             packet;
+    uint64_t                      packet_number;
+    uint64_t                      sent_time_us;
+    struct utp_send_attempt_node* next[UTP_SEND_ATTEMPT_MAX_LEVEL];
+} utp_send_attempt_node_t;
+
+typedef struct utp_send_attempt_block {
+    struct utp_send_attempt_block* next;
+    size_t                         capacity;
+    utp_send_attempt_node_t*       nodes;
+} utp_send_attempt_block_t;
+
 // Connection 持有的发送状态；Packet I/O 和拥塞策略仍由连接层控制。
 typedef struct utp_send_control {
     utp_send_ledger_t           ledger;
@@ -24,6 +42,9 @@ typedef struct utp_send_control {
     struct utp_packet_out_tailq scheduled_packets;
     struct utp_packet_out_tailq lost_packets;
     struct utp_packet_out_tailq discarded_packets;
+    utp_send_attempt_block_t*   attempt_blocks;
+    utp_send_attempt_node_t*    attempt_head[UTP_SEND_ATTEMPT_MAX_LEVEL];
+    utp_send_attempt_node_t*    attempt_free;
     uint64_t                    largest_acked_packet_number;
     uint64_t                    largest_acked_sent_time_us;
     uint64_t                    last_sent_time_us;
@@ -35,6 +56,10 @@ typedef struct utp_send_control {
     size_t                      scheduled_packet_limit;
     size_t                      lost_packet_count;
     size_t                      discarded_packet_count;
+    size_t                      attempt_count;
+    size_t                      attempt_capacity;
+    size_t                      attempt_block_size;
+    uint8_t                     attempt_level;
     uint32_t                    reorder_threshold;
     uint32_t                    consecutive_rto_count;
     uint32_t                    handshake_retransmission_count;
@@ -48,7 +73,10 @@ typedef struct utp_send_control {
 
 typedef struct utp_send_control_ack_result {
     utp_send_ledger_ack_result_t ledger;
+    uint64_t                     rtt_acknowledged_packet_number;
+    uint64_t                     rtt_acknowledged_sent_time_us;
     uint64_t                     rtt_sample_us;
+    bool                         rtt_acknowledged_current_attempt;
     bool                         rtt_sample_valid;
 } utp_send_control_ack_result_t;
 
@@ -64,6 +92,10 @@ utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t p
                                            uint64_t peer_max_ack_delay_us);
 void                 utp_send_control_cleanup(utp_send_control_t* control);
 utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control, utp_packet_out_t* packet);
+/** @brief 为下一次实际发送预留历史索引，避免发送后丢失迟到 ACK 的映射。 */
+bool                 utp_send_control_can_record_attempt(utp_send_control_t* control, const utp_packet_out_t* packet);
+/** @brief 删除 PacketOut 的所有历史发送尝试索引，释放前必须调用。 */
+void                 utp_send_control_forget_packet_attempts(utp_send_control_t* control, utp_packet_out_t* packet);
 utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t* control, uint64_t* packet_number);
 // pending 阶段已经使用的包号属于同一发送方向；晋升后从 next_packet_number 继续分配。
 utp_internal_error_t utp_send_control_adopt_next_packet_number(utp_send_control_t* control,
@@ -126,6 +158,8 @@ uint64_t             utp_send_control_scheduled_bytes(const utp_send_control_t* 
 size_t               utp_send_control_lost_packet_count(const utp_send_control_t* control);
 size_t               utp_send_control_discarded_packet_count(const utp_send_control_t* control);
 uint64_t             utp_send_control_srtt(const utp_send_control_t* control);
+/** @brief 返回当前拥塞控制器给出的 pacing 带宽估计，单位 bytes/s。 */
+uint64_t             utp_send_control_bandwidth_estimate(const utp_send_control_t* control);
 
 #ifdef __cplusplus
 }

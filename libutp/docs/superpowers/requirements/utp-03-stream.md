@@ -211,6 +211,11 @@
 - `OnClosed void()` — 双向完全关闭且接收缓冲排空，仅回调一次。
 - `OnReset void(uint16_t errorCode)` — 收到/发生 RESET，仅回调一次。
 
+> C 版实现状态：已提供 `utp_stream_set_on_readable()`、`utp_stream_set_on_writable()`、
+> `utp_stream_set_on_closed()` 和 `utp_stream_set_on_reset()`。可读、可写回调具有重入保护；
+> 注册可读/可写回调时若状态已满足，会同步通知一次。关闭、重置只对之后发生的状态变化通知，
+> 且各自最多一次；流清理期间会先解除回调，避免析构路径回调应用。
+
 内部（`friend ConnectionImpl`）：`onFrame`、`onReset`、`onConnectionWritable`、`onPacketAcked`、`hasPendingSendWork`、`shouldDeferSend`、`coalesceDelayRemainingUs`（`stream_impl.h:82-112`）。
 
 ---

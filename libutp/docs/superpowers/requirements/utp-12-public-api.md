@@ -313,13 +313,28 @@ C 版已将下表中标为“支持”的参数下沉至 `utp_context_options_t`
 > Context 事件循环线程同步触发；后者在注册时若恢复状态已缓存，会立即通知一次，回调内通过
 > `utp_connection_export_session_token()` 导出本地加密恢复状态。
 
+> C 版已提供只读查询：`utp_connection_stream_count()`、
+> `utp_connection_creatable_stream_count()`、`utp_connection_get_statistic()` 和
+> `utp_connection_get_description()`。统计快照的 RTT/RttVar 单位为 us，带宽单位为 bytes/s；
+> 字节和带宽使用 `uint64_t`，避免 C++ `uint32_t` 返回值截断。`tx_bytes` 包括所有成功写入
+> UDP 的数据报，`rtx_bytes` 是其中 PacketOut 已有发送尝试时再次成功写出的字节；排队失败、
+> pacing 等待和丢弃包均不计入。描述中的 `remote_host` 为 NUL 结尾的 IPv4/IPv6 文本。
+> C 版调度器只支持 Strict 与 DRR，故统计仅包含这两种模式可精确维护的选流、aging、模式切换
+> 和 DRR deficit 指标，不暴露 C++ DISABLED 模式及其轮次统计。
+
 ### 7.4 Stream 级回调
 | 回调 | 签名 | 语义 | 位置 |
 |---|---|---|---|
 | `OnReadable` | `void()` | 接收缓冲区可读 | `stream.h:66,183` |
 | `OnWritable` | `void()` | 发送缓冲区可写 | `stream.h:67,189` |
 | `OnClosed` | `void()` | 流双向完全关闭 | `stream.h:68,195` |
-| `OnReset` | `void(uint16_t)` | 收到对端 RESET_STREAM（携带错误码） | `stream.h:69,201` |
+| `OnReset` | `void(uint16_t)` | 本地或对端 RESET_STREAM（携带错误码） | `stream.h:69,201` |
+
+> C 版已提供 `utp_stream_set_on_readable()`、`utp_stream_set_on_writable()`、
+> `utp_stream_set_on_closed()` 和 `utp_stream_set_on_reset()`。回调均在 Context
+> 事件循环线程同步触发：可读回调在注册时已有连续数据或连续 FIN 时立即触发；可写回调在注册时
+> 有发送缓冲空间时立即触发，并在 ACK 释放连续发送缓冲前缀后再次触发；关闭和重置回调各最多
+> 触发一次。`utp_stream_cleanup()` 不会触发用户回调。
 
 ### 7.5 全局日志回调
 - `utp_log_callback_t = void(*)(int32_t level, const char* msg, int32_t size)`，C 风格函数指针。`logger.h:35`

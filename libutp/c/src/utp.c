@@ -63,6 +63,27 @@ utp_status_t utp_connection_export_session_token(const utp_connection_t* connect
                                                  : utp_internal_error_to_status(error);
 }
 
+int32_t utp_connection_stream_count(const utp_connection_t* connection, utp_stream_type_t type)
+{
+    return utp_connection_stream_count_internal(connection, type);
+}
+
+int32_t utp_connection_creatable_stream_count(const utp_connection_t* connection, utp_stream_type_t type)
+{
+    return utp_connection_creatable_stream_count_internal(connection, type);
+}
+
+utp_status_t utp_connection_get_statistic(const utp_connection_t* connection, utp_connection_statistic_t* out_statistic)
+{
+    return utp_internal_error_to_status(utp_connection_get_statistic_internal(connection, out_statistic));
+}
+
+utp_status_t utp_connection_get_description(const utp_connection_t*       connection,
+                                            utp_connection_description_t* out_description)
+{
+    return utp_internal_error_to_status(utp_connection_get_description_internal(connection, out_description));
+}
+
 uint32_t utp_stream_id(const utp_stream_t* stream)
 {
     return stream == NULL || !stream->used ? UINT32_MAX : stream->stream_id;
@@ -135,6 +156,26 @@ utp_status_t utp_stream_commit_read_view(utp_stream_t* stream, uint64_t offset, 
 bool utp_stream_reset_by_peer(const utp_stream_t* stream)
 {
     return stream != NULL && stream->used && stream->reset && stream->reset_by_peer;
+}
+
+void utp_stream_set_on_readable(utp_stream_t* stream, utp_on_stream_readable_fn callback, void* user_data)
+{
+    utp_stream_set_read_callback(stream, callback, user_data);
+}
+
+void utp_stream_set_on_writable(utp_stream_t* stream, utp_on_stream_writable_fn callback, void* user_data)
+{
+    utp_stream_set_write_callback(stream, callback, user_data);
+}
+
+void utp_stream_set_on_closed(utp_stream_t* stream, utp_on_stream_closed_fn callback, void* user_data)
+{
+    utp_stream_set_close_callback(stream, callback, user_data);
+}
+
+void utp_stream_set_on_reset(utp_stream_t* stream, utp_on_stream_reset_fn callback, void* user_data)
+{
+    utp_stream_set_reset_callback(stream, callback, user_data);
 }
 
 utp_status_t utp_stream_set_priority(utp_stream_t* stream, uint8_t priority)

@@ -15,10 +15,9 @@
 extern "C" {
 #endif
 
-#define UTP_PACKET_OUT_MAX_FRAMES   8u
-#define UTP_PACKET_OUT_MAX_SLICES   8u
-#define UTP_PACKET_OUT_MAX_ATTEMPTS 4u
-#define UTP_PACKET_OUT_MAX_BUCKETS  8u
+#define UTP_PACKET_OUT_MAX_FRAMES  8u
+#define UTP_PACKET_OUT_MAX_SLICES  8u
+#define UTP_PACKET_OUT_MAX_BUCKETS 8u
 
 #define UTP_PO_HELLO             0x0001u
 #define UTP_PO_ENCRYPTED         0x0002u
@@ -47,10 +46,7 @@ extern "C" {
 #define UTP_PACKET_OUT_SLICE_RAW_OFFSET 0u
 #define UTP_PACKET_OUT_SLICE_EXTERNAL   1u
 
-typedef struct utp_packet_out_attempt {
-    uint64_t packet_number;
-    uint64_t sent_time_us;
-} utp_packet_out_attempt_t;
+struct utp_send_attempt_node;
 
 typedef struct utp_frame_meta_info {
     void*    owner;
@@ -75,46 +71,47 @@ TAILQ_HEAD(utp_packet_out_tailq, utp_packet_out);
 typedef struct utp_packet_out {
     TAILQ_ENTRY(utp_packet_out) po_next;
 
-    uint64_t                 sent_time_us;
-    uint64_t                 packet_number;
-    uint64_t                 ack_number;
-    struct utp_packet_out*   loss_chain;
+    uint64_t                      sent_time_us;
+    uint64_t                      packet_number;
+    uint64_t                      ack_number;
+    struct utp_packet_out*        loss_chain;
 
-    uint32_t                 frame_types;
-    uint16_t                 po_flags;
-    uint16_t                 local_flags;
+    uint32_t                      frame_types;
+    uint16_t                      po_flags;
+    uint16_t                      local_flags;
 
-    uint16_t                 data_size;
-    uint16_t                 encrypt_data_size;
-    uint16_t                 alloc_size;
-    uint8_t                  packet_type;
-    uint8_t                  slice_count;
-    uint8_t                  frame_meta_count;
-    uint32_t                 stream_data_size;
-    uint32_t                 path_validation_generation;
-    uint16_t                 transient_ack_size;
-    uint16_t                 control_prefix_size;
+    uint16_t                      data_size;
+    uint16_t                      encrypt_data_size;
+    uint16_t                      alloc_size;
+    uint8_t                       packet_type;
+    uint8_t                       slice_count;
+    uint8_t                       frame_meta_count;
+    uint32_t                      stream_data_size;
+    uint32_t                      path_validation_generation;
+    uint16_t                      transient_ack_size;
+    uint16_t                      control_prefix_size;
     // 半加密 0-RTT 中保持明文的 SESSION_TOKEN payload 长度。
-    uint16_t                 early_plaintext_prefix_size;
-    uint32_t                 stream_id;
-    uint64_t                 stream_offset;
+    uint16_t                      early_plaintext_prefix_size;
+    uint32_t                      stream_id;
+    uint64_t                      stream_offset;
 
-    utp_packet_out_slice_t   slices[UTP_PACKET_OUT_MAX_SLICES];
-    utp_frame_meta_info_t    frame_meta[UTP_PACKET_OUT_MAX_FRAMES];
-    utp_packet_out_attempt_t attempts[UTP_PACKET_OUT_MAX_ATTEMPTS];
-    uint16_t                 attempt_count;
+    utp_packet_out_slice_t        slices[UTP_PACKET_OUT_MAX_SLICES];
+    utp_frame_meta_info_t         frame_meta[UTP_PACKET_OUT_MAX_FRAMES];
+    // 发送控制器持有的历史发送尝试链；每个包号都可被迟到 ACK 直接定位。
+    struct utp_send_attempt_node* attempts;
+    uint32_t                      attempt_count;
 
-    utp_bw_packet_state_t    bw_packet_state;
-    void*                    bw_state;
+    utp_bw_packet_state_t         bw_packet_state;
+    void*                         bw_state;
 
-    uint8_t*                 raw_data;
-    uint8_t*                 encrypt_data;
-    utp_address_t            destination;
-    bool                     has_destination;
+    uint8_t*                      raw_data;
+    uint8_t*                      encrypt_data;
+    utp_address_t                 destination;
+    bool                          has_destination;
 
     /* 池记账字段:acquire 时记录该对象缓冲区来自哪个桶,release 时用于 O(1) 归还,
        不属于协议/发送语义,不出现在 docs 的字段表里。 */
-    size_t                   bucket_index;
+    size_t                        bucket_index;
 } utp_packet_out_t;
 
 typedef struct utp_packet_out_bucket_config {
@@ -153,8 +150,6 @@ utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t* pool, ui
                                                  utp_packet_out_t** out);
 void                 utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_t* pkt);
 
-bool utp_packet_out_add_send_attempt(utp_packet_out_t* pkt, uint64_t packet_number, uint64_t sent_time_us);
-void utp_packet_out_clear_send_attempts(utp_packet_out_t* pkt);
 utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t* pkt, uint16_t prefix_length);
 utp_internal_error_t utp_packet_out_flatten(const utp_packet_out_t* pkt, uint8_t* buffer, size_t capacity,
                                             size_t* out_length);

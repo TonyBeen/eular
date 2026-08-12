@@ -27,6 +27,7 @@ struct CongestionTrace {
     uint32_t ack_calls      = 0u;
     uint32_t begin_calls    = 0u;
     uint32_t end_calls      = 0u;
+    bool     ack_open       = false;
 };
 
 uint64_t trace_cwnd(void* state) { return static_cast<CongestionTrace*>(state)->cwnd; }
@@ -47,16 +48,27 @@ void trace_begin(void* state, uint64_t, uint64_t inflight_bytes)
     auto* trace = static_cast<CongestionTrace*>(state);
 
     trace->begin_inflight = inflight_bytes;
+    trace->ack_open       = true;
     ++trace->begin_calls;
 }
 
 void trace_ack(void* state, utp_congestion_packet_info_t* packet, uint64_t, int32_t)
 {
+    auto* trace = static_cast<CongestionTrace*>(state);
+
     REQUIRE(packet != nullptr);
-    ++static_cast<CongestionTrace*>(state)->ack_calls;
+    REQUIRE(trace->ack_open);
+    ++trace->ack_calls;
 }
 
-void                       trace_end(void* state, uint64_t) { ++static_cast<CongestionTrace*>(state)->end_calls; }
+void trace_end(void* state, uint64_t)
+{
+    auto* trace = static_cast<CongestionTrace*>(state);
+
+    REQUIRE(trace->ack_open);
+    trace->ack_open = false;
+    ++trace->end_calls;
+}
 
 const utp_congestion_ops_t kTraceCongestionOps = {
     nullptr, trace_cwnd, trace_rate, trace_begin, trace_sent, trace_ack, nullptr, nullptr, trace_end, nullptr, nullptr,
@@ -92,6 +104,29 @@ TEST_CASE("send control applies congestion admission and transaction callbacks",
     REQUIRE(trace.begin_inflight == 100u);
     REQUIRE(trace.ack_calls == 1u);
     REQUIRE(trace.end_calls == 1u);
+    REQUIRE_FALSE(trace.ack_open);
+    utp_send_control_cleanup(&control);
+}
+
+TEST_CASE("send control grows historical attempt indexes for repeated retransmissions", "[send_control][ack]")
+{
+    utp_send_control_t control = {};
+    utp_packet_out_t   packet  = make_packet(1u, 100u);
+
+    packet.frame_types = UINT32_C(0x01);
+    REQUIRE(utp_send_control_init(&control, 1u, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
+    for (uint64_t packet_number = 1u; packet_number <= 20u; ++packet_number) {
+        packet.packet_number = packet_number;
+        packet.sent_time_us  = packet_number * 100u;
+        REQUIRE(utp_send_control_on_packet_sent(&control, &packet) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_send_control_on_retransmission_timeout(&control) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_send_control_next_lost(&control) == &packet);
+    }
+    REQUIRE(packet.attempt_count == 20u);
+    REQUIRE(control.attempt_capacity >= 20u);
+
+    utp_send_control_forget_packet_attempts(&control, &packet);
+    REQUIRE(packet.attempt_count == 0u);
     utp_send_control_cleanup(&control);
 }
 
@@ -110,7 +145,6 @@ TEST_CASE("send control records sent packets and applies an ACK", "[send_control
     REQUIRE(utp_send_control_on_packet_sent(&control, &first) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_on_packet_sent(&control, &second) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(first.attempt_count == 1u);
-    REQUIRE(first.attempts[0].packet_number == 1u);
     REQUIRE(utp_send_control_largest_sent(&control) == 2u);
     REQUIRE(utp_send_control_unacked_packet_count(&control) == 2u);
 
@@ -310,7 +344,7 @@ TEST_CASE("send control does not track a sent packet without TRACK_ON_SEND", "[s
     packet.sent_time_us = 50u;
     REQUIRE(utp_send_control_on_packet_sent(&control, &packet) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_unacked_packet_count(&control) == 0u);
-    REQUIRE(packet.attempt_count == 1u);
+    REQUIRE(packet.attempt_count == 0u);
     utp_send_control_cleanup(&control);
 }
 

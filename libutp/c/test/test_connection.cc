@@ -78,6 +78,121 @@ void send_encrypted_to_peer(utp_connection_t* sender, utp_connection_t* receiver
 
 }  // namespace
 
+TEST_CASE("connection query APIs report streams statistics and description", "[connection][query]")
+{
+    const utp_address_t          peer        = loopback_address(14001u);
+    const uint8_t                stream_data = UINT8_C(0xa5);
+    utp_connection_t             connection  = {};
+    utp_packet_out_t*            packet      = nullptr;
+    uint32_t                     stream_id   = UINT32_MAX;
+    uint64_t                     deadline;
+    utp_connection_statistic_t   statistic   = {};
+    utp_connection_description_t description = {};
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 201u, 202u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+
+    REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_ALL) == 0);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL) == 64);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL) == 32);
+    REQUIRE(utp_connection_create_stream(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) == UTP_STATUS_OK);
+    REQUIRE(stream_id == 0u);
+    REQUIRE(utp_connection_create_stream(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL, &stream_id) == UTP_STATUS_OK);
+    REQUIRE(stream_id == UTP_STREAM_UNIDIRECTIONAL);
+    REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL) == 1);
+    REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL) == 1);
+    REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_ALL) == 2);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL) == 63);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL) == 31);
+    REQUIRE(utp_connection_stream_count(&connection, static_cast<utp_stream_type_t>(2u)) == -1);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_ALL) == -1);
+
+    {
+        utp_stream_t* stream = utp_connection_get_stream(&connection, 0u);
+
+        REQUIRE(stream != nullptr);
+        // 保持流对象在哈希表中，模拟尚有 PacketOut 引用而不能回收的已关闭流。
+        stream->local_fin_queued = true;
+        stream->local_fin_sent   = true;
+        stream->peer_fin         = true;
+        REQUIRE(utp_stream_is_closed(stream));
+        REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL) == 0);
+        REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL) == 1);
+        REQUIRE(utp_connection_stream_count(&connection, UTP_STREAM_TYPE_ALL) == 1);
+        stream->local_fin_queued = false;
+        stream->local_fin_sent   = false;
+        stream->peer_fin         = false;
+    }
+
+    REQUIRE(utp_connection_get_description(&connection, &description) == UTP_STATUS_OK);
+    REQUIRE(description.local_cid == 201u);
+    REQUIRE(description.peer_cid == 202u);
+    REQUIRE(std::strcmp(description.remote_host, "127.0.0.1") == 0);
+    REQUIRE(description.remote_port == 14001u);
+    REQUIRE(utp_connection_get_statistic(&connection, &statistic) == UTP_STATUS_OK);
+    REQUIRE(statistic.pmtu == UTP_MTU_DEFAULT_BASE);
+    REQUIRE(statistic.tx_bytes == 0u);
+    REQUIRE(statistic.rtx_bytes == 0u);
+
+    {
+        const uint8_t                                    ping     = UTP_FRAME_TYPE_PING;
+        const utp_packet_header_t                        header   = {202u, 201u, 1u, 1u, UTP_PACKET_TYPE_CTRL, 0u};
+        std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> incoming = {};
+
+        REQUIRE(utp_proto_encode_header(incoming.data(), UTP_PACKET_HEADER_SIZE, &header) == UTP_INTERNAL_ERROR_OK);
+        incoming[UTP_PACKET_HEADER_SIZE] = ping;
+        REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer,
+                                                  UINT64_C(900000)) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_connection_get_statistic(&connection, &statistic) == UTP_STATUS_OK);
+        REQUIRE(statistic.rx_bytes == incoming.size());
+        REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
+        REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer,
+                                                  UINT64_C(900001)) == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_connection_get_statistic(&connection, &statistic) == UTP_STATUS_OK);
+        REQUIRE(statistic.rx_bytes == incoming.size());
+        REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
+    }
+
+    REQUIRE(utp_connection_get_stream(&connection, 0u) != nullptr);
+    REQUIRE(utp_stream_write_internal(utp_connection_get_stream(&connection, 0u), &stream_data, sizeof(stream_data)) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, UINT64_C(1000000)) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_get_statistic(&connection, &statistic) == UTP_STATUS_OK);
+    REQUIRE(statistic.tx_bytes > UTP_PACKET_HEADER_SIZE);
+    REQUIRE(statistic.rtx_bytes == 0u);
+
+    deadline = utp_connection_retransmission_deadline(&connection);
+    REQUIRE(deadline != 0u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, deadline + 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_get_statistic(&connection, &statistic) == UTP_STATUS_OK);
+    REQUIRE(statistic.rtx_bytes > UTP_PACKET_HEADER_SIZE);
+    REQUIRE(statistic.tx_bytes == UINT64_C(2) * statistic.rtx_bytes);
+
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection description formats IPv6 peers", "[connection][query]")
+{
+    utp_address_t                peer        = {};
+    utp_connection_t             connection  = {};
+    utp_connection_description_t description = {};
+
+    REQUIRE(utp_address_parse(&peer, "2001:db8::10", 14002u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 203u, 204u, &peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_get_description(&connection, &description) == UTP_STATUS_OK);
+    REQUIRE(std::strcmp(description.remote_host, "2001:db8::10") == 0);
+    REQUIRE(description.remote_port == 14002u);
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("active connection binds a peer CID and replies to a Handshake without waiting for an ACK",
           "[connection][handshake]")
 {
@@ -318,6 +433,50 @@ TEST_CASE("connection retransmission timeout resends a tracked handshake packet 
     REQUIRE(utp_connection_on_packet_sent(&active, packet, deadline + 1u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_send_control_unacked_packet_count(&active.send_control) == 1u);
     REQUIRE(utp_connection_retransmission_deadline(&active) > deadline + 1u);
+
+    utp_connection_cleanup(&active);
+}
+
+TEST_CASE("a delayed ACK for an original packet confirms its retransmission", "[connection][ack][retransmission]")
+{
+    const std::array<uint8_t, UTP_FRAME_VERSION_SIZE>                       version   = version_frame();
+    const utp_address_t                                                     peer      = loopback_address(10010u);
+    utp_ack_range_t                                                         ranges[]  = {{1u, 1u}};
+    const utp_ack_info_t                                                    ack       = {1u, 0u, ranges, 1u, 1u};
+    std::array<uint8_t, UTP_ACK_FRAME_HEADER_SIZE>                          ack_frame = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_ACK_FRAME_HEADER_SIZE> wire      = {};
+    const utp_packet_header_t header = {99u, 55u, 1u, UTP_ACK_FRAME_HEADER_SIZE, UTP_PACKET_TYPE_CTRL, 0u};
+    utp_connection_t          active = {};
+    utp_packet_out_t*         packet;
+    size_t                    ack_length = 0u;
+    uint64_t                  deadline;
+
+    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 55u, 99u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(&active, UTP_PACKET_TYPE_INITIAL, version.data(), version.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 1u);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    deadline = utp_connection_retransmission_deadline(&active);
+    REQUIRE(deadline > 100u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&active, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&active);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 2u);
+    REQUIRE(utp_connection_on_packet_sent(&active, packet, deadline + 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_unacked_packet_count(&active.send_control) == 1u);
+
+    REQUIRE(utp_ack_encode(ack_frame.data(), ack_frame.size(), &ack, 0u, &ack_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(wire.data(), wire.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(wire.data() + UTP_PACKET_HEADER_SIZE, ack_frame.data(), ack_length);
+    REQUIRE(utp_connection_on_packet_received(&active, wire.data(), UTP_PACKET_HEADER_SIZE + ack_length, &peer,
+                                              deadline + 2u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_unacked_packet_count(&active.send_control) == 0u);
+    REQUIRE(utp_send_control_lost_packet_count(&active.send_control) == 0u);
+    REQUIRE(utp_send_control_srtt(&active.send_control) == 0u);
+    REQUIRE(utp_connection_next_packet_to_send(&active) == nullptr);
 
     utp_connection_cleanup(&active);
 }
