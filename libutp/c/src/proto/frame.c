@@ -20,9 +20,6 @@ utp_internal_error_t utp_frame_measure(const uint8_t* frame, size_t available, u
     size_t               variable_length;
     utp_internal_error_t error;
 
-    if (frame == NULL || frame_type == NULL || frame_length == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (available == 0u) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -133,9 +130,6 @@ utp_internal_error_t utp_frame_scan(const uint8_t* payload, size_t payload_lengt
     size_t   offset = 0u;
     uint32_t types  = 0u;
 
-    if (frame_types == NULL || (payload == NULL && payload_length != 0u)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     while (offset < payload_length) {
         size_t               frame_length;
         uint8_t              frame_type;
@@ -157,9 +151,6 @@ utp_internal_error_t utp_packet_view_decode(utp_packet_view_t* view, const uint8
     utp_packet_view_t    decoded;
     utp_internal_error_t error;
 
-    if (view == NULL || packet == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     error = utp_proto_decode_header(&decoded.header, packet, packet_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -185,10 +176,7 @@ utp_internal_error_t utp_packet_view_next_frame(const utp_packet_view_t* view, s
     uint8_t              type;
     utp_internal_error_t error;
 
-    if (view == NULL || offset == NULL || frame_type == NULL || frame_data == NULL || frame_length == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    if (view->payload == NULL || *offset >= view->payload_length) {
+    if (*offset >= view->payload_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     data  = view->payload + *offset;
@@ -209,8 +197,7 @@ utp_internal_error_t utp_frame_path_encode(uint8_t* buffer, size_t capacity, uin
     size_t               index;
     utp_internal_error_t error;
 
-    if (buffer == NULL || path == NULL ||
-        (type != UTP_FRAME_TYPE_PATH_CHALLENGE && type != UTP_FRAME_TYPE_PATH_RESPONSE)) {
+    if (type != UTP_FRAME_TYPE_PATH_CHALLENGE && type != UTP_FRAME_TYPE_PATH_RESPONSE) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (capacity < UTP_FRAME_PATH_SIZE) {
@@ -242,8 +229,7 @@ utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t
     size_t               index;
     utp_internal_error_t error;
 
-    if (path == NULL || buffer == NULL ||
-        (expected_type != UTP_FRAME_TYPE_PATH_CHALLENGE && expected_type != UTP_FRAME_TYPE_PATH_RESPONSE)) {
+    if (expected_type != UTP_FRAME_TYPE_PATH_CHALLENGE && expected_type != UTP_FRAME_TYPE_PATH_RESPONSE) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (length < UTP_FRAME_PATH_SIZE) {
@@ -276,7 +262,7 @@ utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, c
     utp_internal_error_t error;
     size_t               index;
 
-    if (buffer == NULL || crypto == NULL || crypto->crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256) {
+    if (crypto->crypto_type > UTP_FRAME_CRYPTO_TYPE_AES_GCM_256) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (capacity < UTP_FRAME_CRYPTO_SIZE) {
@@ -307,9 +293,6 @@ utp_internal_error_t utp_frame_crypto_decode(utp_frame_crypto_t* crypto, const u
     size_t               index;
     utp_internal_error_t error;
 
-    if (crypto == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_CRYPTO_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -344,9 +327,6 @@ utp_internal_error_t utp_frame_version_encode(uint8_t* buffer, size_t capacity, 
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || version == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_VERSION_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -368,9 +348,6 @@ utp_internal_error_t utp_frame_version_decode(utp_frame_version_t* version, cons
     uint8_t              type;
     utp_internal_error_t error;
 
-    if (version == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_VERSION_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -399,9 +376,6 @@ utp_internal_error_t utp_frame_handshake_done_encode(uint8_t* buffer, size_t cap
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || done == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_HANDSHAKE_DONE_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -424,9 +398,6 @@ utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t*
     uint8_t                    type;
     utp_internal_error_t       error;
 
-    if (done == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_HANDSHAKE_DONE_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -455,9 +426,6 @@ utp_internal_error_t utp_frame_handshake_delay_encode(uint8_t* buffer, size_t ca
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || delay == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_HANDSHAKE_DELAY_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -479,9 +447,6 @@ utp_internal_error_t utp_frame_handshake_delay_decode(utp_frame_handshake_delay_
     uint8_t                     type;
     utp_internal_error_t        error;
 
-    if (delay == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_HANDSHAKE_DELAY_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -507,7 +472,7 @@ utp_internal_error_t utp_frame_stream_encode(uint8_t* buffer, size_t capacity, c
     size_t               frame_length;
     utp_internal_error_t error;
 
-    if (buffer == NULL || stream == NULL || (stream->data_length != 0u && stream->data == NULL)) {
+    if (stream->data_length != 0u && stream->data == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     frame_length = UTP_FRAME_STREAM_HEADER_SIZE + (size_t)stream->data_length;
@@ -531,9 +496,6 @@ utp_internal_error_t utp_frame_stream_header_encode(uint8_t* buffer, size_t capa
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -568,9 +530,6 @@ utp_internal_error_t utp_frame_stream_decode(utp_frame_stream_t* stream, const u
     size_t               frame_length;
     utp_internal_error_t error;
 
-    if (stream == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -617,7 +576,7 @@ utp_internal_error_t utp_frame_session_token_encode(uint8_t* buffer, size_t capa
     size_t               index;
     utp_internal_error_t error;
 
-    if (buffer == NULL || token == NULL || (token->payload_length != 0u && token->payload == NULL)) {
+    if (token->payload_length != 0u && token->payload == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (capacity < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)token->payload_length) {
@@ -647,7 +606,7 @@ utp_internal_error_t utp_frame_session_token_decode(utp_frame_session_token_t* t
     uint8_t                   type;
     utp_internal_error_t      error;
 
-    if (token == NULL || buffer == NULL || length < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE) {
+    if (length < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_SESSION_TOKEN_HEADER_SIZE);
@@ -681,9 +640,6 @@ utp_internal_error_t utp_frame_padding_encode(uint8_t* buffer, size_t capacity, 
     size_t               index;
     utp_internal_error_t error;
 
-    if (buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < frame_length) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -716,9 +672,6 @@ utp_internal_error_t utp_frame_padding_decode(uint16_t* padding_length, const ui
     size_t               frame_length;
     utp_internal_error_t error;
 
-    if (padding_length == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_PADDING_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -753,7 +706,7 @@ utp_internal_error_t utp_frame_connection_close_encode(uint8_t* buffer, size_t c
     size_t               index;
     utp_internal_error_t error;
 
-    if (buffer == NULL || close == NULL || (close->reason_length != 0u && close->reason == NULL)) {
+    if (close->reason_length != 0u && close->reason == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     frame_length = UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE + (size_t)close->reason_length;
@@ -794,9 +747,6 @@ utp_internal_error_t utp_frame_connection_close_decode(utp_frame_connection_clos
     size_t                       frame_length;
     utp_internal_error_t         error;
 
-    if (close == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -834,9 +784,6 @@ utp_internal_error_t utp_frame_reset_stream_encode(uint8_t* buffer, size_t capac
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || reset == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_RESET_STREAM_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -867,9 +814,6 @@ utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* res
     uint8_t                  type;
     utp_internal_error_t     error;
 
-    if (reset == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_RESET_STREAM_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -906,9 +850,6 @@ utp_internal_error_t utp_frame_stop_sending_encode(uint8_t* buffer, size_t capac
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || stop == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_FRAME_STOP_SENDING_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -932,9 +873,6 @@ utp_internal_error_t utp_frame_stop_sending_decode(utp_frame_stop_sending_t* sto
     uint8_t                  type;
     utp_internal_error_t     error;
 
-    if (stop == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_FRAME_STOP_SENDING_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -964,9 +902,8 @@ static utp_internal_error_t utp_frame_streams_limit_encode(uint8_t* buffer, size
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || limit == NULL ||
-        (type != UTP_FRAME_TYPE_STREAMS_BLOCKED && type != UTP_FRAME_TYPE_MAX_STREAMS) ||
-        limit->stream_type > UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL) {
+    /* type 由本文件的固定帧包装函数传入。 */
+    if (limit->stream_type > UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (capacity < UTP_FRAME_STREAMS_LIMIT_SIZE) {
@@ -995,10 +932,7 @@ static utp_internal_error_t utp_frame_streams_limit_decode(utp_frame_streams_lim
     uint8_t                   type;
     utp_internal_error_t      error;
 
-    if (limit == NULL || buffer == NULL ||
-        (expected_type != UTP_FRAME_TYPE_STREAMS_BLOCKED && expected_type != UTP_FRAME_TYPE_MAX_STREAMS)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    /* expected_type 由本文件的固定帧包装函数传入。 */
     if (length < UTP_FRAME_STREAMS_LIMIT_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -1058,9 +992,6 @@ static utp_internal_error_t utp_frame_u64_encode(uint8_t* buffer, size_t capacit
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < frame_size) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -1083,9 +1014,6 @@ static utp_internal_error_t utp_frame_u64_decode(uint64_t* value, const uint8_t*
     uint64_t             decoded_value;
     utp_internal_error_t error;
 
-    if (value == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < frame_size) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -1114,9 +1042,6 @@ static utp_internal_error_t utp_frame_u32_u64_encode(uint8_t* buffer, size_t cap
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < frame_size) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -1144,9 +1069,6 @@ static utp_internal_error_t utp_frame_u32_u64_decode(uint32_t* first, uint64_t* 
     uint64_t             decoded_second;
     utp_internal_error_t error;
 
-    if (first == NULL || second == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < frame_size) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -1176,18 +1098,12 @@ static utp_internal_error_t utp_frame_u32_u64_decode(uint32_t* first, uint64_t* 
 
 utp_internal_error_t utp_frame_max_data_encode(uint8_t* buffer, size_t capacity, const utp_frame_max_data_t* max_data)
 {
-    if (max_data == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u64_encode(buffer, capacity, UTP_FRAME_TYPE_MAX_DATA, max_data->maximum_data,
                                 UTP_FRAME_MAX_DATA_SIZE);
 }
 
 utp_internal_error_t utp_frame_max_data_decode(utp_frame_max_data_t* max_data, const uint8_t* buffer, size_t length)
 {
-    if (max_data == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u64_decode(&max_data->maximum_data, buffer, length, UTP_FRAME_TYPE_MAX_DATA,
                                 UTP_FRAME_MAX_DATA_SIZE);
 }
@@ -1195,9 +1111,6 @@ utp_internal_error_t utp_frame_max_data_decode(utp_frame_max_data_t* max_data, c
 utp_internal_error_t utp_frame_max_stream_data_encode(uint8_t* buffer, size_t capacity,
                                                       const utp_frame_max_stream_data_t* max_stream_data)
 {
-    if (max_stream_data == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u32_u64_encode(buffer, capacity, UTP_FRAME_TYPE_MAX_STREAM_DATA, max_stream_data->stream_id,
                                     max_stream_data->maximum_stream_data, UTP_FRAME_MAX_STREAM_DATA_SIZE);
 }
@@ -1205,9 +1118,6 @@ utp_internal_error_t utp_frame_max_stream_data_encode(uint8_t* buffer, size_t ca
 utp_internal_error_t utp_frame_max_stream_data_decode(utp_frame_max_stream_data_t* max_stream_data,
                                                       const uint8_t* buffer, size_t length)
 {
-    if (max_stream_data == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u32_u64_decode(&max_stream_data->stream_id, &max_stream_data->maximum_stream_data, buffer, length,
                                     UTP_FRAME_TYPE_MAX_STREAM_DATA, UTP_FRAME_MAX_STREAM_DATA_SIZE);
 }
@@ -1215,9 +1125,6 @@ utp_internal_error_t utp_frame_max_stream_data_decode(utp_frame_max_stream_data_
 utp_internal_error_t utp_frame_data_blocked_encode(uint8_t* buffer, size_t capacity,
                                                    const utp_frame_data_blocked_t* blocked)
 {
-    if (blocked == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u64_encode(buffer, capacity, UTP_FRAME_TYPE_DATA_BLOCKED, blocked->data_limit,
                                 UTP_FRAME_DATA_BLOCKED_SIZE);
 }
@@ -1225,9 +1132,6 @@ utp_internal_error_t utp_frame_data_blocked_encode(uint8_t* buffer, size_t capac
 utp_internal_error_t utp_frame_data_blocked_decode(utp_frame_data_blocked_t* blocked, const uint8_t* buffer,
                                                    size_t length)
 {
-    if (blocked == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u64_decode(&blocked->data_limit, buffer, length, UTP_FRAME_TYPE_DATA_BLOCKED,
                                 UTP_FRAME_DATA_BLOCKED_SIZE);
 }
@@ -1235,9 +1139,6 @@ utp_internal_error_t utp_frame_data_blocked_decode(utp_frame_data_blocked_t* blo
 utp_internal_error_t utp_frame_stream_data_blocked_encode(uint8_t* buffer, size_t capacity,
                                                           const utp_frame_stream_data_blocked_t* blocked)
 {
-    if (blocked == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u32_u64_encode(buffer, capacity, UTP_FRAME_TYPE_STREAM_DATA_BLOCKED, blocked->stream_id,
                                     blocked->stream_data_limit, UTP_FRAME_STREAM_DATA_BLOCKED_SIZE);
 }
@@ -1245,9 +1146,6 @@ utp_internal_error_t utp_frame_stream_data_blocked_encode(uint8_t* buffer, size_
 utp_internal_error_t utp_frame_stream_data_blocked_decode(utp_frame_stream_data_blocked_t* blocked,
                                                           const uint8_t* buffer, size_t length)
 {
-    if (blocked == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     return utp_frame_u32_u64_decode(&blocked->stream_id, &blocked->stream_data_limit, buffer, length,
                                     UTP_FRAME_TYPE_STREAM_DATA_BLOCKED, UTP_FRAME_STREAM_DATA_BLOCKED_SIZE);
 }
@@ -1261,7 +1159,7 @@ utp_internal_error_t utp_frame_ack_frequency_encode(uint8_t* buffer, size_t capa
     uint32_t             delay;
     utp_internal_error_t error;
 
-    if (buffer == NULL || frequency == NULL || capacity < UTP_FRAME_ACK_FREQUENCY_SIZE) {
+    if (capacity < UTP_FRAME_ACK_FREQUENCY_SIZE) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     threshold = frequency->ack_eliciting_threshold == 0u ? 5u : frequency->ack_eliciting_threshold;
@@ -1285,8 +1183,7 @@ utp_internal_error_t utp_frame_ack_frequency_decode(utp_frame_ack_frequency_t* f
     uint8_t              type;
     utp_internal_error_t error;
 
-    if (frequency == NULL || buffer == NULL || length != UTP_FRAME_ACK_FREQUENCY_SIZE)
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    if (length != UTP_FRAME_ACK_FREQUENCY_SIZE) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     error = utp_wire_reader_init(&reader, buffer, length);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &type);
     if (error == UTP_INTERNAL_ERROR_OK && type != UTP_FRAME_TYPE_ACK_FREQUENCY) return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -1312,7 +1209,7 @@ utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t c
     utp_wire_writer_t    writer;
     utp_internal_error_t error;
 
-    if (buffer == NULL || params == NULL || capacity < UTP_FRAME_TRANSPORT_PARAMS_SIZE ||
+    if (capacity < UTP_FRAME_TRANSPORT_PARAMS_SIZE ||
         (params->flags & (uint16_t)~UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS) != 0u ||
         params->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ||
         params->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
@@ -1340,8 +1237,7 @@ utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_param
     uint8_t              type;
     utp_internal_error_t error;
 
-    if (params == NULL || buffer == NULL || length != UTP_FRAME_TRANSPORT_PARAMS_SIZE)
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    if (length != UTP_FRAME_TRANSPORT_PARAMS_SIZE) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     error = utp_wire_reader_init(&reader, buffer, length);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &type);
     if (error == UTP_INTERNAL_ERROR_OK && type != UTP_FRAME_TYPE_TRANSPORT_PARAMS) return UTP_INTERNAL_ERROR_PROTOCOL;

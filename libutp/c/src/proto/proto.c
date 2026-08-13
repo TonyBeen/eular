@@ -4,9 +4,6 @@
 
 static utp_internal_error_t utp_proto_validate_header(const utp_packet_header_t* header)
 {
-    if (header == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (header->packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -15,9 +12,6 @@ static utp_internal_error_t utp_proto_validate_header(const utp_packet_header_t*
 
 utp_internal_error_t utp_proto_encode_header(uint8_t* buffer, size_t capacity, const utp_packet_header_t* header)
 {
-    if (buffer == NULL || header == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (capacity < UTP_PACKET_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -55,9 +49,6 @@ utp_internal_error_t utp_proto_encode_header(uint8_t* buffer, size_t capacity, c
 
 utp_internal_error_t utp_proto_decode_header(utp_packet_header_t* header, const uint8_t* buffer, size_t length)
 {
-    if (header == NULL || buffer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (length < UTP_PACKET_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }

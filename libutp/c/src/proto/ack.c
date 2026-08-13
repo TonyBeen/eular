@@ -9,7 +9,7 @@
 utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t* ack, const utp_receive_history_t* history,
                                                   uint64_t now, size_t max_ranges)
 {
-    if (ack == NULL || history == NULL || max_ranges == 0u) {
+    if (max_ranges == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (max_ranges > UTP_ACK_MAX_RANGES) {
@@ -47,7 +47,7 @@ utp_internal_error_t utp_ack_from_receive_history(utp_ack_info_t* ack, const utp
 
 static utp_internal_error_t utp_ack_range_length(const utp_ack_range_t* range, uint32_t* length)
 {
-    if (range == NULL || length == NULL || range->low > range->high || range->high > UTP_PACKET_NUMBER_MAX) {
+    if (range->low > range->high || range->high > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     uint64_t difference = range->high - range->low;
@@ -62,7 +62,7 @@ static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t* 
 {
     uint32_t range_length;
 
-    if (ack == NULL || ack->range_count > UTP_ACK_MAX_RANGES || ack->range_count > ack->range_capacity) {
+    if (ack->range_count > UTP_ACK_MAX_RANGES || ack->range_count > ack->range_capacity) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (ack->range_count == 0u) {
@@ -86,7 +86,7 @@ static utp_internal_error_t utp_ack_validate_encode_input(const utp_ack_info_t* 
 utp_internal_error_t utp_ack_encode(uint8_t* buffer, size_t capacity, const utp_ack_info_t* ack,
                                     uint8_t ack_delay_exponent, size_t* encoded_length)
 {
-    if (buffer == NULL || ack == NULL || encoded_length == NULL || ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT) {
+    if (ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     utp_internal_error_t error = utp_ack_validate_encode_input(ack);
@@ -163,8 +163,7 @@ utp_internal_error_t utp_ack_decode(utp_ack_info_t* ack, const uint8_t* frame, s
     uint32_t gaps[UTP_ACK_MAX_RANGES - 1u];
     uint32_t range_lengths[UTP_ACK_MAX_RANGES - 1u];
 
-    if (ack == NULL || frame == NULL || consumed == NULL || ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT ||
-        ack->ranges == NULL) {
+    if (ack_delay_exponent > UTP_ACK_MAX_DELAY_EXPONENT) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (frame_length < UTP_ACK_FRAME_HEADER_SIZE) {

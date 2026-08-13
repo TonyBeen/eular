@@ -22,9 +22,6 @@ typedef struct utp_wire_writer {
 
 static inline utp_internal_error_t utp_wire_reader_init(utp_wire_reader_t* reader, const uint8_t* buffer, size_t length)
 {
-    if (reader == NULL || (buffer == NULL && length != 0u)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     reader->cursor    = buffer;
     reader->remaining = length;
     return UTP_INTERNAL_ERROR_OK;
@@ -32,9 +29,6 @@ static inline utp_internal_error_t utp_wire_reader_init(utp_wire_reader_t* reade
 
 static inline utp_internal_error_t utp_wire_writer_init(utp_wire_writer_t* writer, uint8_t* buffer, size_t capacity)
 {
-    if (writer == NULL || (buffer == NULL && capacity != 0u)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     writer->cursor    = buffer;
     writer->remaining = capacity;
     return UTP_INTERNAL_ERROR_OK;
@@ -42,8 +36,8 @@ static inline utp_internal_error_t utp_wire_writer_init(utp_wire_writer_t* write
 
 static inline utp_internal_error_t utp_wire_write_u8(utp_wire_writer_t* writer, uint8_t value)
 {
-    if (writer == NULL || writer->remaining < 1u) {
-        return writer == NULL ? UTP_INTERNAL_ERROR_INVALID_ARGUMENT : UTP_INTERNAL_ERROR_OVERFLOW;
+    if (writer->remaining < 1u) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     writer->cursor[0]  = value;
     writer->cursor    += 1u;
@@ -53,8 +47,8 @@ static inline utp_internal_error_t utp_wire_write_u8(utp_wire_writer_t* writer, 
 
 static inline utp_internal_error_t utp_wire_write_u16(utp_wire_writer_t* writer, uint16_t value)
 {
-    if (writer == NULL || writer->remaining < 2u) {
-        return writer == NULL ? UTP_INTERNAL_ERROR_INVALID_ARGUMENT : UTP_INTERNAL_ERROR_OVERFLOW;
+    if (writer->remaining < 2u) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     writer->cursor[0]  = (uint8_t)(value >> 8u);
     writer->cursor[1]  = (uint8_t)value;
@@ -65,8 +59,8 @@ static inline utp_internal_error_t utp_wire_write_u16(utp_wire_writer_t* writer,
 
 static inline utp_internal_error_t utp_wire_write_u32(utp_wire_writer_t* writer, uint32_t value)
 {
-    if (writer == NULL || writer->remaining < 4u) {
-        return writer == NULL ? UTP_INTERNAL_ERROR_INVALID_ARGUMENT : UTP_INTERNAL_ERROR_OVERFLOW;
+    if (writer->remaining < 4u) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     writer->cursor[0]  = (uint8_t)(value >> 24u);
     writer->cursor[1]  = (uint8_t)(value >> 16u);
@@ -79,8 +73,8 @@ static inline utp_internal_error_t utp_wire_write_u32(utp_wire_writer_t* writer,
 
 static inline utp_internal_error_t utp_wire_write_u64(utp_wire_writer_t* writer, uint64_t value)
 {
-    if (writer == NULL || writer->remaining < 8u) {
-        return writer == NULL ? UTP_INTERNAL_ERROR_INVALID_ARGUMENT : UTP_INTERNAL_ERROR_OVERFLOW;
+    if (writer->remaining < 8u) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     writer->cursor[0]  = (uint8_t)(value >> 56u);
     writer->cursor[1]  = (uint8_t)(value >> 48u);
@@ -97,9 +91,6 @@ static inline utp_internal_error_t utp_wire_write_u64(utp_wire_writer_t* writer,
 
 static inline utp_internal_error_t utp_wire_read_u8(utp_wire_reader_t* reader, uint8_t* value)
 {
-    if (reader == NULL || value == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (reader->remaining < 1u) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -111,9 +102,6 @@ static inline utp_internal_error_t utp_wire_read_u8(utp_wire_reader_t* reader, u
 
 static inline utp_internal_error_t utp_wire_read_u16(utp_wire_reader_t* reader, uint16_t* value)
 {
-    if (reader == NULL || value == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (reader->remaining < 2u) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -125,9 +113,6 @@ static inline utp_internal_error_t utp_wire_read_u16(utp_wire_reader_t* reader, 
 
 static inline utp_internal_error_t utp_wire_read_u32(utp_wire_reader_t* reader, uint32_t* value)
 {
-    if (reader == NULL || value == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (reader->remaining < 4u) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -140,9 +125,6 @@ static inline utp_internal_error_t utp_wire_read_u32(utp_wire_reader_t* reader, 
 
 static inline utp_internal_error_t utp_wire_read_u64(utp_wire_reader_t* reader, uint64_t* value)
 {
-    if (reader == NULL || value == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     if (reader->remaining < 8u) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
