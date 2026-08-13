@@ -602,6 +602,33 @@ TEST_CASE("stream send and receive paths enforce stream-level flow-control limit
     }
 }
 
+TEST_CASE("stream rejects malformed peer frame fields as protocol errors", "[stream][protocol]")
+{
+    utp_packet_in_pool_t pool   = {};
+    utp_packet_in_t*     packet = nullptr;
+    utp_stream_t         stream = {};
+    utp_frame_stream_t   frame  = {};
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&stream, 0u);
+    REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
+
+    frame.flags       = UINT8_C(0x80);
+    frame.stream_id   = 0u;
+    frame.offset      = 0u;
+    frame.data        = reinterpret_cast<const uint8_t*>("x");
+    frame.data_length = 1u;
+    REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_PROTOCOL);
+
+    frame.flags       = UTP_STREAM_FLAG_NONE;
+    frame.data        = nullptr;
+    frame.data_length = 0u;
+    REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_PROTOCOL);
+
+    utp_packet_in_release(packet);
+    utp_packet_in_pool_cleanup(&pool);
+}
+
 TEST_CASE("stream rejects excessive receive gap without copying packet data", "[stream][flow]")
 {
     utp_packet_in_pool_t pool    = {};

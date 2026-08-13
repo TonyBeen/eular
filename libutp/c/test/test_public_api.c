@@ -27,6 +27,7 @@ typedef struct public_api_probe {
     uint16_t              last_peer_error_code;
     size_t                last_reason_length;
     bool                  last_peer_initiated;
+    bool                  connection_was_connected_on_error;
     utp_encryption_mode_t expected_encryption;
     utp_context_t*        context;
     utp_connection_t*     connected_connection;
@@ -124,10 +125,11 @@ static void test_on_connection_error(utp_connection_t* connection, const utp_con
     assert(info != NULL);
     assert(info->reason != NULL || info->reason_length == 0u);
     ++probe->connection_error_count;
-    probe->last_connection_status = info->status;
-    probe->last_peer_error_code   = info->peer_error_code;
-    probe->last_reason_length     = info->reason_length;
-    probe->last_peer_initiated    = info->peer_initiated;
+    probe->last_connection_status            = info->status;
+    probe->last_peer_error_code              = info->peer_error_code;
+    probe->last_reason_length                = info->reason_length;
+    probe->last_peer_initiated               = info->peer_initiated;
+    probe->connection_was_connected_on_error = utp_connection_is_connected(connection);
 }
 
 static void test_on_connect_error(utp_status_t status, const char* message, const utp_connect_attempt_info_t* attempt,
@@ -822,6 +824,7 @@ int main(void)
         assert(server_probe.last_peer_error_code == 0u);
         assert(server_probe.last_reason_length != 0u);
         assert(!server_probe.last_peer_initiated);
+        assert(!server_probe.connection_was_connected_on_error);
 
         utp_context_destroy(client);
         utp_context_destroy(server);

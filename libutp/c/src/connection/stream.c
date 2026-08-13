@@ -938,11 +938,13 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
     uint64_t             inserted_offsets[UTP_STREAM_RECV_FRAGMENT_LIMIT];
     utp_internal_error_t error;
 
-    if (stream == NULL || frame == NULL || !stream->used || frame->stream_id != stream->stream_id ||
-        (frame->flags & (uint8_t)~UTP_STREAM_FLAG_FIN) != 0u ||
+    if (stream == NULL || frame == NULL || !stream->used) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (frame->stream_id != stream->stream_id || (frame->flags & (uint8_t)~UTP_STREAM_FLAG_FIN) != 0u ||
         (frame->data_length == 0u && (frame->flags & UTP_STREAM_FLAG_FIN) == 0u) ||
         (frame->data == NULL && frame->data_length != 0u) || (frame->data_length != 0u && packet == NULL)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     if (!utp_stream_local_can_receive(stream)) {
         return UTP_INTERNAL_ERROR_PROTOCOL;

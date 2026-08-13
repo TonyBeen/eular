@@ -280,6 +280,8 @@ utp_internal_error_t utp_connection_queue_zero_rtt_response(utp_connection_t* co
                                                             size_t payload_length, bool encrypted);
 /** @brief 排入单独成包的 CONNECTION_CLOSE，并关闭本端普通发送。 */
 utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, uint16_t error_code);
+/** @brief 因对端协议错误立即封锁连接；无法构造关闭包时直接进入 draining。 */
+void utp_connection_close_on_protocol_error(utp_connection_t* connection, uint16_t error_code, uint64_t now_us);
 /** @brief 为 Context 同步销毁构造专用 CONNECTION_CLOSE，不进入发送队列。 */
 utp_internal_error_t utp_connection_prepare_destroy_close(utp_connection_t* connection);
 /** @brief 返回当前可发送包，必要时为重传包分配新包号。 */

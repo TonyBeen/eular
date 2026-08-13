@@ -695,13 +695,14 @@ static utp_internal_error_t utp_context_close_on_peer_protocol_error(utp_context
 
     utp_context_log_ids(context, UTP_LOG_LEVEL_WARNING, "peer protocol error", slot->connection.local_cid,
                         slot->connection.peer_cid);
-    // 先锁定回调只触发一次，再进入严格关闭状态；后续重复错误只会沿用同一个 close 包。
+    // 回调期间连接必须已不可用，防止用户继续排入业务数据。
+    utp_connection_close_on_protocol_error(&slot->connection, close_code, utp_context_now_us());
     utp_context_report_connection_error(context, slot, status, 0u, (const uint8_t*)reason, strlen(reason), false);
-    close_error = utp_connection_queue_close(&slot->connection, close_code);
-    if (close_error != UTP_INTERNAL_ERROR_OK) {
-        return close_error;
+    if (utp_connection_state(&slot->connection) == UTP_CONNECTION_STATE_DRAINING) {
+        return UTP_INTERNAL_ERROR_OK;
     }
-    return utp_context_flush_connection(context, slot);
+    close_error = utp_context_flush_connection(context, slot);
+    return close_error;
 }
 
 static utp_context_pending_slot_t* utp_context_find_pending_slot(utp_context_t* context, uint32_t local_cid)

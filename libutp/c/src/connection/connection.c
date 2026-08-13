@@ -3403,6 +3403,18 @@ utp_internal_error_t utp_connection_queue_close(utp_connection_t* connection, ui
     return utp_connection_prepare_close_packet(connection, error_code, true);
 }
 
+void utp_connection_close_on_protocol_error(utp_connection_t* connection, uint16_t error_code, uint64_t now_us)
+{
+    if (connection == NULL || connection->state == UTP_CONNECTION_STATE_CLOSED ||
+        connection->state == UTP_CONNECTION_STATE_DRAINING || connection->state == UTP_CONNECTION_STATE_CLOSING) {
+        return;
+    }
+    // 关闭包使用连接内专用存储；构造失败时也必须先停止本地业务收发。
+    if (utp_connection_prepare_close_packet(connection, error_code, true) != UTP_INTERNAL_ERROR_OK) {
+        utp_connection_enter_draining(connection, now_us);
+    }
+}
+
 utp_internal_error_t utp_connection_prepare_destroy_close(utp_connection_t* connection)
 {
     if (connection == NULL || connection->local_cid == 0u || connection->peer_cid == 0u ||
