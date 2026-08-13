@@ -14,26 +14,28 @@ extern "C" {
 #define UTP_FRAME_BIT(type) (UINT32_C(1) << (type))
 
 /* 固定长度帧及可变长度帧固定头部的线上尺寸。 */
-#define UTP_FRAME_PATH_SIZE                                           9u
-#define UTP_FRAME_VERSION_SIZE                                        5u
-#define UTP_FRAME_HANDSHAKE_DONE_SIZE                                 9u
-#define UTP_FRAME_STREAM_HEADER_SIZE                                  16u
-#define UTP_FRAME_PADDING_HEADER_SIZE                                 3u
-#define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE                        5u
-#define UTP_FRAME_RESET_STREAM_SIZE                                   15u
-#define UTP_FRAME_STOP_SENDING_SIZE                                   7u
-#define UTP_FRAME_STREAMS_LIMIT_SIZE                                  4u
-#define UTP_FRAME_CRYPTO_SIZE                                         35u
-#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE                           10u
-#define UTP_FRAME_ACK_FREQUENCY_SIZE                                  7u
-#define UTP_FRAME_TRANSPORT_PARAMS_SIZE                               38u
-#define UTP_FRAME_HANDSHAKE_DELAY_SIZE                                5u
-#define UTP_FRAME_MAX_DATA_SIZE                                       9u
-#define UTP_FRAME_MAX_STREAM_DATA_SIZE                                13u
-#define UTP_FRAME_DATA_BLOCKED_SIZE                                   9u
-#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE                            13u
-#define UTP_STREAM_FLAG_NONE                                          0x00u
-#define UTP_STREAM_FLAG_FIN                                           0x01u
+#define UTP_FRAME_PATH_SIZE                    9u
+#define UTP_FRAME_VERSION_SIZE                 5u
+#define UTP_FRAME_HANDSHAKE_DONE_SIZE          9u
+#define UTP_FRAME_STREAM_HEADER_SIZE           16u
+#define UTP_FRAME_PADDING_HEADER_SIZE          3u
+#define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE 5u
+#define UTP_FRAME_RESET_STREAM_SIZE            15u
+#define UTP_FRAME_STOP_SENDING_SIZE            7u
+#define UTP_FRAME_STREAMS_LIMIT_SIZE           4u
+#define UTP_FRAME_CRYPTO_SIZE                  35u
+#define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    10u
+#define UTP_FRAME_ACK_FREQUENCY_SIZE           7u
+#define UTP_FRAME_TRANSPORT_PARAMS_SIZE        38u
+#define UTP_FRAME_HANDSHAKE_DELAY_SIZE         5u
+#define UTP_FRAME_MAX_DATA_SIZE                9u
+#define UTP_FRAME_MAX_STREAM_DATA_SIZE         13u
+#define UTP_FRAME_DATA_BLOCKED_SIZE            9u
+#define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE     13u
+#define UTP_STREAM_FLAG_NONE                   0x00u
+#define UTP_STREAM_FLAG_FIN                    0x01u
+// STOP_SENDING 专用错误码：本端不再消费该流，请对端停止发送并回送 RESET_STREAM。
+#define UTP_PROTOCOL_STOP_SENDING_CANCELLED                           UINT16_C(1)
 #define UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT                    UINT16_C(1) << 0u
 #define UTP_TRANSPORT_PARAMS_FLAG_HANDSHAKE_TIMEOUT                   UINT16_C(1) << 1u
 #define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI            UINT16_C(1) << 2u

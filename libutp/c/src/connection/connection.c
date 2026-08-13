@@ -4799,7 +4799,8 @@ utp_internal_error_t utp_stream_shutdown_internal(utp_stream_t* stream, utp_stre
         } else if (stream->local_read_shutdown || stream->peer_fin) {
             read_error = UTP_INTERNAL_ERROR_CLOSED;
         } else {
-            read_error = utp_connection_queue_stop_sending(connection, stream->stream_id, UTP_STREAM_ERROR_CANCELLED);
+            read_error =
+                utp_connection_queue_stop_sending(connection, stream->stream_id, UTP_PROTOCOL_STOP_SENDING_CANCELLED);
             if (read_error == UTP_INTERNAL_ERROR_OK) {
                 read_error = utp_stream_shutdown_read_internal(stream);
             }

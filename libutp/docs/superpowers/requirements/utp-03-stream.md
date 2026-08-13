@@ -112,7 +112,7 @@
 
 ### 3.5 关闭 / 重置
 
-C 版以 `utp_stream_shutdown(stream, how)` 统一半关闭接口：`WRITE` 在已排队数据之后发送 FIN；`READ` 立即丢弃本地接收缓存并可靠发送 `STOP_SENDING(stream_id, UTP_STREAM_ERROR_CANCELLED)`；`BOTH` 组合两者。读关闭后，已经接收以及后续在途 STREAM 字节仍须通过流级、连接级流控校验，并从连接接收窗口退休，允许其他流继续使用 `MAX_DATA`；这些数据不再缓存或交付应用，也不再为该流发送 `MAX_STREAM_DATA`。
+C 版以 `utp_stream_shutdown(stream, how)` 统一半关闭接口：`WRITE` 在已排队数据之后发送 FIN；`READ` 立即丢弃本地接收缓存并可靠发送 `STOP_SENDING(stream_id, UTP_PROTOCOL_STOP_SENDING_CANCELLED)`；`BOTH` 组合两者。`UTP_PROTOCOL_STOP_SENDING_CANCELLED` 是内部帧协议错误码，不属于公开 API。读关闭后，已经接收以及后续在途 STREAM 字节仍须通过流级、连接级流控校验，并从连接接收窗口退休，允许其他流继续使用 `MAX_DATA`；这些数据不再缓存或交付应用，也不再为该流发送 `MAX_STREAM_DATA`。
 
 `utp_stream_reset(error_code)` 只异常中止**本地写方向**：按该流已经成功写入 UDP 的最大偏移发送可靠 `RESET_STREAM`，尚在 scheduled 队列且未实际发送的 STREAM 字节必须取消并从连接发送流控账本回退；已发送但未确认或已判丢的数据不回退，只停止重传。后续写接口返回 `CANCELLED`，读方向保持可用。收到 `RESET_STREAM` 则只关闭本地读方向并释放接收重组缓存，后续读接口返回 `CANCELLED`；收到 `STOP_SENDING` 时必须停止本地写并回送 `RESET_STREAM`。迟到 ACK 按幂等方式回收。
 

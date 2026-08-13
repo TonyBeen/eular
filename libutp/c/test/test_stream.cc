@@ -181,7 +181,7 @@ void on_incoming_terminal(utp_connection_t* connection, utp_stream_t* stream, vo
     probe->read_cancelled =
         utp_stream_read(stream, &byte, sizeof(byte), &length) == UTP_STATUS_CANCELLED && length == 0u;
     utp_stream_set_on_closed(stream, on_incoming_terminal_closed, probe);
-    REQUIRE(utp_stream_reset(stream, UTP_STREAM_ERROR_CANCELLED) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_reset(stream, UTP_PROTOCOL_STOP_SENDING_CANCELLED) == UTP_STATUS_OK);
 }
 
 void on_incoming_stopped(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
@@ -1127,7 +1127,7 @@ TEST_CASE("connection commits STOP_SENDING before incoming stream callback", "[s
     utp_connection_t               passive                              = {};
     incoming_terminal_probe        probe                                = {};
     uint8_t                        payload[UTP_FRAME_STOP_SENDING_SIZE] = {};
-    const utp_frame_stop_sending_t stop                                 = {UTP_STREAM_ERROR_CANCELLED, 1u};
+    const utp_frame_stop_sending_t stop                                 = {UTP_PROTOCOL_STOP_SENDING_CANCELLED, 1u};
 
     REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 151u, 152u, &passive_address, 8u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
@@ -1280,7 +1280,7 @@ TEST_CASE("stream shutdown read sends STOP_SENDING and peer replies RESET_STREAM
     REQUIRE(frame_type == UTP_FRAME_TYPE_STOP_SENDING);
     REQUIRE(utp_frame_stop_sending_decode(&stop, frame_data, frame_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stop.stream_id == stream_id);
-    REQUIRE(stop.error_code == UTP_STREAM_ERROR_CANCELLED);
+    REQUIRE(stop.error_code == UTP_PROTOCOL_STOP_SENDING_CANCELLED);
     REQUIRE(utp_packet_in_pool_acquire(&receive_pool, &wire) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_packet_out_flatten(packet, wire->data, wire->capacity, &wire_length) == UTP_INTERNAL_ERROR_OK);
     wire->length = static_cast<uint16_t>(wire_length);

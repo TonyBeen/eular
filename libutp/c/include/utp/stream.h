@@ -23,7 +23,6 @@ typedef void (*utp_on_stream_closed_fn)(utp_stream_t* stream, void* user_data);
 #define UTP_STREAM_PRIORITY_HIGHEST 0u
 #define UTP_STREAM_PRIORITY_LOWEST  7u
 #define UTP_STREAM_PRIORITY_DEFAULT 4u
-#define UTP_STREAM_ERROR_CANCELLED  UINT16_C(1)
 
 typedef enum utp_stream_shutdown {
     UTP_STREAM_SHUTDOWN_READ  = 0,  // 关闭本地读方向，并请求对端停止发送
