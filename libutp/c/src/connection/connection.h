@@ -333,6 +333,10 @@ utp_internal_error_t utp_connection_on_retransmission_timeout(utp_connection_t* 
 uint64_t             utp_connection_retransmission_deadline(const utp_connection_t* connection);
 /** @brief 返回本端关闭等待截止时间，未关闭时为零。 */
 uint64_t             utp_connection_close_deadline(const utp_connection_t* connection);
+/** @brief 返回本端 CONNECTION_CLOSE 重传截止时间，当前无需重传时为零。 */
+uint64_t             utp_connection_close_retransmission_deadline(const utp_connection_t* connection);
+/** @brief 处理 CONNECTION_CLOSE 重传超时，重新构造专用关闭包。 */
+utp_internal_error_t utp_connection_on_close_retransmission_timeout(utp_connection_t* connection, uint64_t now_us);
 /** @brief 返回保活探测截止时间，未启用时为零。 */
 uint64_t             utp_connection_keepalive_deadline(const utp_connection_t* connection);
 /** @brief 处理保活超时并排队 PING，连续失败时进入 draining。 */

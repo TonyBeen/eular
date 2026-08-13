@@ -546,6 +546,27 @@ static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_co
     return NULL;
 }
 
+/** @brief 查找已晋升连接对应的对端 CID，用于过滤迟到的重复 Initial。 */
+static bool utp_context_has_connection_peer_cid(const utp_context_t* context, const utp_address_t* peer,
+                                                uint32_t peer_cid)
+{
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
+
+    if (context == NULL || peer == NULL || peer_cid == 0u) {
+        return false;
+    }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
+
+        if (slot->connection.peer_cid == peer_cid && utp_address_equal(&slot->connection.peer, peer)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** @brief 查找可响应重复加密 0-RTT 的短期握手缓存，匹配必须同时绑定来源和完整 token payload。 */
 static utp_context_connection_slot_t* utp_context_find_zero_rtt_response(
     utp_context_t* context, const utp_address_t* peer,
@@ -1438,10 +1459,14 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     }
     payload          = context->encrypt_send_buffer;
     payload_capacity = sizeof(context->encrypt_send_buffer);
-    error            = utp_context_alloc_cid(context, &local_cid);
-    if (error == UTP_INTERNAL_ERROR_OK && slot->connection.local_cid != 0u) {
+    if (slot->connection.local_cid != 0u) {
+        // 同一主动 attempt 的 Initial 重试必须沿用 CID，服务端才能命中既有 pending 而不重复回调 accept。
+        local_cid = slot->connection.local_cid;
         utp_context_unregister_connection_slot(context, slot);
         utp_connection_cleanup(&slot->connection);
+        error = UTP_INTERNAL_ERROR_OK;
+    } else {
+        error = utp_context_alloc_cid(context, &local_cid);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_ACTIVE, local_cid, 0u, peer,
@@ -1601,9 +1626,9 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     return error;
 }
 
-/** @brief 0-RTT 显式重试沿用同一 attempt，并为重排包分配新包号和 AEAD nonce。 */
-static utp_internal_error_t utp_context_retry_zero_rtt_attempt(utp_context_t*                 context,
-                                                               utp_context_connection_slot_t* slot, uint64_t now_us)
+/** @brief 重试同一主动握手；保留 CID、临时密钥和发送账本，仅重新发送未确认的握手包。 */
+static utp_internal_error_t utp_context_retry_connect_attempt(utp_context_t*                 context,
+                                                              utp_context_connection_slot_t* slot, uint64_t now_us)
 {
     utp_internal_error_t error = UTP_INTERNAL_ERROR_OK;
 
@@ -1695,6 +1720,7 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         const utp_connection_t*              connection = &slot->connection;
 
         if (connection->state == UTP_CONNECTION_STATE_CLOSING || connection->state == UTP_CONNECTION_STATE_DRAINING) {
+            utp_context_take_deadline(&deadline, utp_connection_close_retransmission_deadline(connection));
             utp_context_take_deadline(&deadline, utp_connection_close_deadline(connection));
             if (slot->connect_pending && !utp_connection_is_connected(connection)) {
                 utp_context_take_deadline(&deadline, now_us);
@@ -2039,6 +2065,10 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
             }
             return error;
         }
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    // 服务端 HANDSHAKE 丢失时，客户端会重传 Initial；若连接已晋升，不能再次交给应用 accept。
+    if (utp_context_has_connection_peer_cid(context, peer, view->header.scid)) {
         return UTP_INTERNAL_ERROR_OK;
     }
     slot = utp_context_alloc_pending_slot(context);
@@ -2799,13 +2829,8 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
                 utp_context_fail_pending_connect(context, slot, UTP_STATUS_CANCELLED,
                                                  "connection closed during handshake");
             } else if (slot->connect_retries_remaining > 0) {
-                const utp_address_t peer     = slot->connection.peer;
-                const bool          zero_rtt = slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
-                                      slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE;
-
                 --slot->connect_retries_remaining;
-                error = zero_rtt ? utp_context_retry_zero_rtt_attempt(context, slot, now_us)
-                                 : utp_context_start_connect_attempt(context, slot, &peer, now_us);
+                error = utp_context_retry_connect_attempt(context, slot, now_us);
                 if (error != UTP_INTERNAL_ERROR_OK && slot->used) {
                     utp_context_fail_pending_connect(context, slot, utp_internal_error_to_status(error),
                                                      "connect retry failed");
@@ -2819,6 +2844,13 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
             utp_connection_close_deadline(&slot->connection) <= now_us) {
             utp_context_release_connection_slot(context, slot);
             continue;
+        }
+        error = utp_connection_on_close_retransmission_timeout(&slot->connection, now_us);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_context_flush_connection(context, slot);
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
         }
         error = utp_connection_on_keepalive_timeout(&slot->connection, now_us);
         if (error == UTP_INTERNAL_ERROR_TIMEOUT) {

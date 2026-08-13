@@ -94,15 +94,17 @@ function(utp_c_configure_cpp_test target)
 endfunction()
 
 if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
+    find_package(Threads REQUIRED)
     add_executable(utp_c_api_test test/test_core.c)
     utp_c_configure_c_test(utp_c_api_test)
     add_executable(utp_c_public_api_test test/test_public_api.c)
     utp_c_configure_c_test(utp_c_public_api_test)
     target_include_directories(utp_c_public_api_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
-    foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming stream connection congestion minmax bw_sampler bbr mtu)
+    foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming stream connection congestion minmax bw_sampler bbr mtu transport_integration)
         add_executable(utp_c_${test_name}_test test/test_${test_name}.cc)
         utp_c_configure_cpp_test(utp_c_${test_name}_test)
     endforeach()
+    target_link_libraries(utp_c_transport_integration_test PRIVATE Threads::Threads)
 endif()
 
 if(UTP_C_BUILD_BENCHMARKS)
@@ -113,7 +115,7 @@ endif()
 set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c ${UTP_C_HEADERS} ${UTP_C_SOURCES}
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_packet_in.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc
-    test/test_stream.cc test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc test/test_mtu.cc)
+    test/test_stream.cc test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc test/test_mtu.cc test/test_transport_integration.cc)
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
     HINTS "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"

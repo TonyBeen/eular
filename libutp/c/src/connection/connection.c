@@ -3735,12 +3735,15 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
         if (connection->peer_close_received) {
             utp_connection_enter_draining(connection, now_us);
         } else {
-            connection->state                      = UTP_CONNECTION_STATE_CLOSING;
-            connection->close_pending              = false;
-            connection->close_pto_us               = utp_connection_close_pto(connection);
-            connection->close_deadline_us          = now_us > UINT64_MAX - 3u * connection->close_pto_us
-                                                         ? UINT64_MAX
-                                                         : now_us + 3u * connection->close_pto_us;
+            connection->state         = UTP_CONNECTION_STATE_CLOSING;
+            connection->close_pending = false;
+            connection->close_pto_us  = utp_connection_close_pto(connection);
+            // 关闭窗口由首次写出的 CLOSE 确定；重发不得无限延后资源释放。
+            if (connection->close_deadline_us == 0u) {
+                connection->close_deadline_us = now_us > UINT64_MAX - 3u * connection->close_pto_us
+                                                    ? UINT64_MAX
+                                                    : now_us + 3u * connection->close_pto_us;
+            }
             connection->retransmission_deadline_us = 0u;
             utp_send_control_set_connected(&connection->send_control, false);
         }
@@ -4616,6 +4619,35 @@ uint64_t utp_connection_retransmission_deadline(const utp_connection_t* connecti
 uint64_t utp_connection_close_deadline(const utp_connection_t* connection)
 {
     return connection == NULL ? 0u : connection->close_deadline_us;
+}
+
+uint64_t utp_connection_close_retransmission_deadline(const utp_connection_t* connection)
+{
+    uint64_t deadline;
+
+    if (connection == NULL || connection->state != UTP_CONNECTION_STATE_CLOSING || !connection->local_close_started ||
+        connection->peer_close_received || connection->close_pending || connection->close_last_sent_us == 0u ||
+        connection->close_pto_us == 0u) {
+        return 0u;
+    }
+    deadline = utp_connection_add_deadline(connection->close_last_sent_us, connection->close_pto_us);
+    if (connection->close_deadline_us != 0u && deadline >= connection->close_deadline_us) {
+        return 0u;
+    }
+    return deadline;
+}
+
+utp_internal_error_t utp_connection_on_close_retransmission_timeout(utp_connection_t* connection, uint64_t now_us)
+{
+    const uint64_t deadline = utp_connection_close_retransmission_deadline(connection);
+
+    if (connection == NULL || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (deadline == 0u || deadline > now_us) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    return utp_connection_rearm_local_close_packet(connection);
 }
 
 uint64_t utp_connection_keepalive_deadline(const utp_connection_t* connection)
