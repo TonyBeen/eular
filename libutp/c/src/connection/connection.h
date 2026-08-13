@@ -34,6 +34,7 @@ extern "C" {
 #define UTP_CONNECTION_KEEPALIVE_MAX_PROBES             3u
 #define UTP_CONNECTION_SESSION_TOKEN_SIZE               UTP_CRYPTO_LOCAL_RESUMPTION_STATE_MAX_SIZE
 #define UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY 4096u
+#define UTP_CONNECTION_STREAM_TERMINAL_INITIAL_CAPACITY 8u
 
 typedef enum utp_connection_role { UTP_CONNECTION_ROLE_ACTIVE = 0, UTP_CONNECTION_ROLE_PASSIVE } utp_connection_role_t;
 
@@ -91,6 +92,13 @@ typedef struct utp_connection_stream_terminal {
     bool                                   stop_sending_received : 1;  // 是否处理过对端 STOP_SENDING
 } utp_connection_stream_terminal_t;
 
+typedef struct utp_terminal_block {
+    struct utp_terminal_block*        next;      // 更早分配的终态槽位块
+    utp_connection_stream_terminal_t* slots;     // 本块终态槽位数组所有权
+    uint32_t                          capacity;  // 本块槽位总数
+    uint32_t                          count;     // 本块已使用槽位数
+} utp_terminal_block_t;
+
 typedef utp_on_session_token_ready_fn utp_session_token_cb_t;
 
 // Connection 私有的传输状态；CID 解复用和 UDP I/O 由 Context 负责。
@@ -117,7 +125,8 @@ typedef struct utp_connection {
     utp_hash_table_t                  control_slots;                             // 合并可靠控制帧槽位
     utp_hash_table_t                  pending_peer_max_stream_data;              // 未创建流的额度缓存
     utp_hash_table_t                  stream_terminals;                          // 已回收流的有界终态索引
-    utp_connection_stream_terminal_t* stream_terminal_slots;                     // 终态槽位数组所有权
+    utp_terminal_block_t*             terminal_blocks;                           // 终态槽位分块所有权
+    utp_terminal_block_t*             terminal_current_block;                    // 当前可分配终态槽位块
     utp_connection_stream_terminal_t* stream_terminal_oldest;                    // LRU 最旧终态
     utp_connection_stream_terminal_t* stream_terminal_newest;                    // LRU 最新终态
     utp_address_t                     peer;                                      // 当前已验证对端地址
@@ -125,7 +134,8 @@ typedef struct utp_connection {
     uint32_t                          local_cid;                                 // 本端连接 ID
     uint32_t                          peer_cid;                                  // 对端连接 ID
     uint32_t                          next_stream_id[UTP_STREAM_TYPES];          // 各流类型下一个本端 ID
-    uint32_t                          stream_terminal_capacity;                  // 终态槽位容量
+    uint32_t                          stream_terminal_capacity;                  // 终态槽位配置上限
+    uint32_t                          stream_terminal_allocated;                 // 已实际分配终态槽位数
     uint32_t                          stream_terminal_count;                     // 已用终态槽位数
     uint64_t                          peer_max_data;                             // 对端通告的连接级发送额度
     uint64_t                          peer_initial_max_stream_data_bidi_local;   // 本端双向流发送额度

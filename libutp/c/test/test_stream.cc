@@ -1494,11 +1494,46 @@ TEST_CASE("connection stream terminal table evicts and reuses its oldest slot", 
         stream->peer_reset        = true;
     }
     REQUIRE(connection.stream_terminal_count == 2u);
+    REQUIRE(connection.stream_terminal_allocated == 2u);
     REQUIRE(utp_hash_table_count(&connection.stream_terminals) == 2u);
     REQUIRE(connection.stream_terminal_oldest != nullptr);
     REQUIRE(connection.stream_terminal_newest != nullptr);
     REQUIRE(connection.stream_terminal_oldest->stream_id == 4u);
     REQUIRE(connection.stream_terminal_newest->stream_id == 8u);
+
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection stream terminal table grows from small blocks", "[stream][terminal]")
+{
+    const utp_address_t passive_address = loopback_address(13052u);
+    utp_connection_t    connection      = {};
+    utp_stream_t*       stream;
+    uint32_t            stream_id = UINT32_MAX;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 203u, 204u, &passive_address, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    REQUIRE(connection.stream_terminal_allocated == 0u);
+
+    for (uint32_t index = 0u; index < 9u; ++index) {
+        REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+        stream = utp_connection_find_stream_internal(&connection, stream_id);
+        REQUIRE(stream != nullptr);
+        stream->local_write_reset = true;
+        stream->peer_reset        = true;
+    }
+    REQUIRE(connection.stream_terminal_count == 8u);
+    REQUIRE(connection.stream_terminal_allocated == 8u);
+
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&connection, stream_id);
+    REQUIRE(stream != nullptr);
+    stream->local_write_reset = true;
+    stream->peer_reset        = true;
+    REQUIRE(connection.stream_terminal_count == 9u);
+    REQUIRE(connection.stream_terminal_allocated == 16u);
 
     utp_connection_cleanup(&connection);
 }

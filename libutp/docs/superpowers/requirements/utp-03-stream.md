@@ -120,7 +120,7 @@ FIN 与 RESET_STREAM 共用接收侧最终偏移。首次 FIN/RESET 保存 `peer
 
 `on_closed` 仅在本地可读、可写方向均已结束且接收缓存排空时触发一次；不再提供单独的 reset 回调。
 
-四种 Stream ID 分别以 4 为步长单调递增，Connection 生命周期内不得复用。UDP 允许乱序，不能仅凭 `stream_id < max_seen` 判定迟到帧；C 版为已回收流维护有界终态哈希表和 LRU，默认每连接 4096 条，可通过 `stream_terminal_capacity` 配置，容量满时淘汰最旧记录并原地复用槽位。终态记录用于幂等处理迟到的 STREAM、RESET_STREAM 和 STOP_SENDING，不能再次触发 `on_incoming_stream`。
+四种 Stream ID 分别以 4 为步长单调递增，Connection 生命周期内不得复用。UDP 允许乱序，不能仅凭 `stream_id < max_seen` 判定迟到帧；C 版为已回收流维护有界终态哈希表和 LRU，默认每连接最多保留 4096 条，可通过 `stream_terminal_capacity` 配置。终态槽位从 8 条起按需倍增分块申请，避免低流量连接预占全部容量；满时淘汰最旧记录并原地复用槽位。终态记录用于幂等处理迟到的 STREAM、RESET_STREAM 和 STOP_SENDING，不能再次触发 `on_incoming_stream`。
 
 首次收到会创建流的 STREAM、RESET_STREAM 或 STOP_SENDING 时，协议状态必须先提交，再调用 `on_incoming_stream`；用户可在该回调中立即注册状态回调或执行读写。因该首帧产生的 readable、writable、closed 通知在 `on_incoming_stream` 返回后触发，避免用户漏掉边沿。
 

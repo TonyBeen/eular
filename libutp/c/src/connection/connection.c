@@ -1022,6 +1022,72 @@ static utp_connection_stream_terminal_t* utp_connection_find_stream_terminal(utp
     return terminal;
 }
 
+/** @brief 释放终态槽位分块；节点均已由终态哈希表摘除或即将清理。 */
+static void utp_connection_cleanup_stream_terminal_blocks(utp_connection_t* connection)
+{
+    utp_terminal_block_t* block;
+
+    if (connection == NULL) {
+        return;
+    }
+    block = connection->terminal_blocks;
+    while (block != NULL) {
+        utp_terminal_block_t* next = block->next;
+
+        utp_allocator_free(NULL, block->slots);
+        utp_allocator_free(NULL, block);
+        block = next;
+    }
+    connection->terminal_blocks           = NULL;
+    connection->terminal_current_block    = NULL;
+    connection->stream_terminal_allocated = 0u;
+}
+
+/** @brief 返回一个地址稳定的空终态槽位，按需以倍增块扩容至配置上限。 */
+static utp_internal_error_t utp_connection_acquire_stream_terminal_slot(utp_connection_t*                  connection,
+                                                                        utp_connection_stream_terminal_t** out_terminal)
+{
+    utp_terminal_block_t* block;
+    uint32_t              remaining;
+    uint32_t              block_capacity;
+
+    if (connection == NULL || out_terminal == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    block = connection->terminal_current_block;
+    if (block == NULL || block->count == block->capacity) {
+        if (connection->stream_terminal_allocated >= connection->stream_terminal_capacity) {
+            return UTP_INTERNAL_ERROR_STATE;
+        }
+        remaining      = connection->stream_terminal_capacity - connection->stream_terminal_allocated;
+        block_capacity = connection->stream_terminal_allocated == 0u ? UTP_CONNECTION_STREAM_TERMINAL_INITIAL_CAPACITY
+                                                                     : connection->stream_terminal_allocated;
+        if (block_capacity > remaining) {
+            block_capacity = remaining;
+        }
+        if ((size_t)block_capacity > SIZE_MAX / sizeof(*block->slots)) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        block = utp_allocator_alloc(NULL, sizeof(*block));
+        if (block == NULL) {
+            return UTP_INTERNAL_ERROR_NOMEM;
+        }
+        block->slots = utp_allocator_alloc(NULL, (size_t)block_capacity * sizeof(*block->slots));
+        if (block->slots == NULL) {
+            utp_allocator_free(NULL, block);
+            return UTP_INTERNAL_ERROR_NOMEM;
+        }
+        block->next                            = connection->terminal_blocks;
+        block->capacity                        = block_capacity;
+        block->count                           = 0u;
+        connection->terminal_blocks            = block;
+        connection->terminal_current_block     = block;
+        connection->stream_terminal_allocated += block_capacity;
+    }
+    *out_terminal = &block->slots[block->count];
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static utp_internal_error_t utp_connection_record_stream_terminal(utp_connection_t*   connection,
                                                                   const utp_stream_t* stream)
 {
@@ -1034,18 +1100,11 @@ static utp_internal_error_t utp_connection_record_stream_terminal(utp_connection
     }
     terminal = utp_connection_find_stream_terminal(connection, stream->stream_id);
     if (terminal == NULL) {
-        if (connection->stream_terminal_slots == NULL) {
-            if ((size_t)connection->stream_terminal_capacity > SIZE_MAX / sizeof(*terminal)) {
-                return UTP_INTERNAL_ERROR_OVERFLOW;
-            }
-            connection->stream_terminal_slots = utp_allocator_alloc(
-                NULL, (size_t)connection->stream_terminal_capacity * sizeof(*connection->stream_terminal_slots));
-            if (connection->stream_terminal_slots == NULL) {
-                return UTP_INTERNAL_ERROR_NOMEM;
-            }
-        }
         if (connection->stream_terminal_count < connection->stream_terminal_capacity) {
-            terminal = &connection->stream_terminal_slots[connection->stream_terminal_count];
+            error = utp_connection_acquire_stream_terminal_slot(connection, &terminal);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
             new_slot = true;
         } else {
             terminal = connection->stream_terminal_oldest;
@@ -1063,6 +1122,7 @@ static utp_internal_error_t utp_connection_record_stream_terminal(utp_connection
             return error;
         }
         if (new_slot) {
+            ++connection->terminal_current_block->count;
             terminal->older = connection->stream_terminal_newest;
             terminal->newer = NULL;
             if (connection->stream_terminal_newest != NULL) {
@@ -2552,10 +2612,12 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->on_incoming_stream_user_data    = NULL;
     connection->session_token_cb                = NULL;
     connection->session_token_cb_data           = NULL;
-    connection->stream_terminal_slots           = NULL;
+    connection->terminal_blocks                 = NULL;
+    connection->terminal_current_block          = NULL;
     connection->stream_terminal_oldest          = NULL;
     connection->stream_terminal_newest          = NULL;
     connection->stream_terminal_capacity        = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
+    connection->stream_terminal_allocated       = 0u;
     connection->stream_terminal_count           = 0u;
     connection->rx_bytes                        = 0u;
     connection->tx_bytes                        = 0u;
@@ -2702,6 +2764,7 @@ utp_internal_error_t utp_connection_set_stream_terminal_capacity(utp_connection_
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
+    utp_connection_cleanup_stream_terminal_blocks(connection);
     error = utp_hash_table_init(&connection->stream_terminals, NULL, capacity);
     if (error == UTP_INTERNAL_ERROR_OK) {
         connection->stream_terminal_capacity = capacity;
@@ -3159,12 +3222,11 @@ void utp_connection_cleanup(utp_connection_t* connection)
     utp_hash_table_cleanup(&connection->pending_peer_max_stream_data,
                            utp_connection_cleanup_pending_max_stream_data_node, NULL);
     utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
-    utp_allocator_free(NULL, connection->stream_terminal_slots);
+    utp_connection_cleanup_stream_terminal_blocks(connection);
     for (index = 0u; index < UTP_STREAM_TYPES; ++index) {
         connection->next_stream_id[index] = 0u;
     }
     connection->context                                                 = NULL;
-    connection->stream_terminal_slots                                   = NULL;
     connection->stream_terminal_oldest                                  = NULL;
     connection->stream_terminal_newest                                  = NULL;
     connection->stream_terminal_capacity                                = 0u;
