@@ -11,14 +11,14 @@ extern "C" {
 #define UTP_PACER_BURST_TOKENS 10u
 
 typedef struct utp_pacer {
-    uint64_t next_scheduled_time_us;  // 下一包最早可调度时刻
-    uint64_t last_delayed_time_us;    // 最近一次被节流的时刻
-    uint64_t now_us;                  // 当前 pacer tick 时间
-    uint32_t clock_granularity_us;    // 调度时钟粒度
-    uint32_t burst_tokens;            // 剩余突发发送额度
-    uint32_t scheduled_count;         // 当前 tick 已调度包数
-    bool     last_schedule_delayed;   // 最近一次调度是否被延后
-    bool     delayed_on_tick_in;      // 本 tick 开始时是否仍处于延后状态
+    uint64_t next_scheduled_time_us;     // 下一包最早可调度时刻
+    uint64_t last_delayed_time_us;       // 最近一次被节流的时刻
+    uint64_t now_us;                     // 当前 pacer tick 时间
+    uint32_t clock_granularity_us;       // 调度时钟粒度
+    uint32_t burst_tokens;               // 剩余突发发送额度
+    uint32_t scheduled_count;            // 当前 tick 已调度包数
+    bool     last_schedule_delayed : 1;  // 最近一次调度是否被延后
+    bool     delayed_on_tick_in : 1;     // 本 tick 开始时是否仍处于延后状态
 } utp_pacer_t;
 
 void     utp_pacer_init(utp_pacer_t* pacer, uint32_t clock_granularity_us);

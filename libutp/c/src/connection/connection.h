@@ -68,9 +68,9 @@ typedef struct utp_connection_control_slot {
     uint32_t        in_flight_generation;  // 当前飞行帧代次
     uint16_t        error_code;            // RESET_STREAM 或 STOP_SENDING 错误码
     uint8_t         frame_type;            // 控制帧类型
-    bool            pending;               // 是否待构造发送
-    bool            queued;                // 是否已有排队包承载本代次
-    bool            in_flight;             // 是否已有飞行包承载本代次
+    bool            pending : 1;           // 是否待构造发送
+    bool            queued : 1;            // 是否已有排队包承载本代次
+    bool            in_flight : 1;         // 是否已有飞行包承载本代次
 } utp_connection_control_slot_t;
 
 typedef struct utp_connection_pending_max_stream_data {
@@ -80,15 +80,15 @@ typedef struct utp_connection_pending_max_stream_data {
 } utp_connection_pending_max_stream_data_t;
 
 typedef struct utp_connection_stream_terminal {
-    utp_hash_node_t                        node;                   // 按流 ID 索引的终态节点
-    struct utp_connection_stream_terminal* older;                  // LRU 中更旧的记录
-    struct utp_connection_stream_terminal* newer;                  // LRU 中更新的记录
-    uint64_t                               peer_final_size;        // 对端最终偏移
-    uint32_t                               stream_id;              // 已退休流 ID
-    bool                                   peer_final_size_known;  // 是否可校验迟到终止帧
-    bool                                   peer_reset;             // 对端是否以 RESET 结束写方向
-    bool                                   local_write_reset;      // 本地写方向是否以 RESET 结束
-    bool                                   stop_sending_received;  // 是否处理过对端 STOP_SENDING
+    utp_hash_node_t                        node;                       // 按流 ID 索引的终态节点
+    struct utp_connection_stream_terminal* older;                      // LRU 中更旧的记录
+    struct utp_connection_stream_terminal* newer;                      // LRU 中更新的记录
+    uint64_t                               peer_final_size;            // 对端最终偏移
+    uint32_t                               stream_id;                  // 已退休流 ID
+    bool                                   peer_final_size_known : 1;  // 是否可校验迟到终止帧
+    bool                                   peer_reset : 1;             // 对端是否以 RESET 结束写方向
+    bool                                   local_write_reset : 1;      // 本地写方向是否以 RESET 结束
+    bool                                   stop_sending_received : 1;  // 是否处理过对端 STOP_SENDING
 } utp_connection_stream_terminal_t;
 
 typedef utp_on_session_token_ready_fn utp_session_token_cb_t;
@@ -180,37 +180,37 @@ typedef struct utp_connection {
     uint8_t                           peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // 对端临时公钥
     uint8_t                           session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];     // 导出给客户端的恢复状态
     uint8_t close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];  // CLOSE 内联缓冲
-    uint8_t stream_scheduler_mode;                                  // Strict 或 DRR 调度模式
-    utp_congestion_algorithm_t   congestion_algorithm;              // 当前拥塞控制算法
-    uint8_t                      crypto_type;                       // 协商的加密套件
-    uint8_t                      peer_ack_delay_exponent;           // 对端 ACK 延迟指数
-    utp_frame_transport_params_t peer_transport_params;             // 已解析对端传输参数
-    utp_frame_ack_frequency_t    peer_ack_frequency;                // 已解析对端 ACK 策略
-    uint32_t                     stream_scheduler_cursor;           // 流调度轮转游标
-    uint8_t                      path_challenge_retry_count;        // 路径挑战已重试次数
-    uint16_t                     keepalive_missed_probes;           // 连续未响应保活数
-    uint16_t                     keepalive_probes;                  // 允许连续未响应探测数
-    uint32_t                     ack_loss_count;                    // ACK 策略窗口中的丢失计数
-    uint8_t                      ack_profile_current;               // 当前 ACK 策略档位
-    uint8_t                      ack_profile_candidate;             // 候选 ACK 策略档位
-    uint64_t                     session_token_expires_at_seconds;  // 恢复状态绝对过期时间
-    uint16_t                     session_token_size;                // 当前恢复状态长度
-    bool                         close_pending;                     // CLOSE 包是否待发送
-    bool                         udp_write_pending;                 // socket 写事件是否已注册
-    bool                         local_close_started;               // 是否已由本端开始关闭
-    bool                         peer_close_received;               // 是否已接收对端 CLOSE
-    bool                         path_challenge_pending;            // 路径挑战包是否正在飞行
-    bool                         crypto_configured;                 // 是否配置加密
-    bool                         crypto_ready;                      // 1-RTT AEAD 是否就绪
-    bool                         zero_rtt_encrypted;                // 当前 0-RTT 是否使用 early AEAD
-    bool                         session_token_issued;              // 是否已向对端签发恢复票据
-    bool                         peer_transport_params_received;    // 是否已收到对端传输参数
-    bool                         peer_ack_frequency_received;       // 是否已收到对端 ACK 策略
-    bool                         keepalive_enabled;                 // 是否启用保活
-    const uint8_t*               peer_close_reason;                 // 对端 CLOSE 原包原因视图
-    utp_connection_role_t        role;                              // 主动或被动角色
-    utp_connection_state_t       state;                             // 连接生命周期状态
-    utp_connection_path_state_t  path_state;                        // 路径验证状态
+    uint8_t stream_scheduler_mode;                                    // Strict 或 DRR 调度模式
+    utp_congestion_algorithm_t   congestion_algorithm;                // 当前拥塞控制算法
+    uint8_t                      crypto_type;                         // 协商的加密套件
+    uint8_t                      peer_ack_delay_exponent;             // 对端 ACK 延迟指数
+    utp_frame_transport_params_t peer_transport_params;               // 已解析对端传输参数
+    utp_frame_ack_frequency_t    peer_ack_frequency;                  // 已解析对端 ACK 策略
+    uint32_t                     stream_scheduler_cursor;             // 流调度轮转游标
+    uint8_t                      path_challenge_retry_count;          // 路径挑战已重试次数
+    uint16_t                     keepalive_missed_probes;             // 连续未响应保活数
+    uint16_t                     keepalive_probes;                    // 允许连续未响应探测数
+    uint32_t                     ack_loss_count;                      // ACK 策略窗口中的丢失计数
+    uint8_t                      ack_profile_current;                 // 当前 ACK 策略档位
+    uint8_t                      ack_profile_candidate;               // 候选 ACK 策略档位
+    uint64_t                     session_token_expires_at_seconds;    // 恢复状态绝对过期时间
+    uint16_t                     session_token_size;                  // 当前恢复状态长度
+    bool                         close_pending : 1;                   // CLOSE 包是否待发送
+    bool                         udp_write_pending : 1;               // socket 写事件是否已注册
+    bool                         local_close_started : 1;             // 是否已由本端开始关闭
+    bool                         peer_close_received : 1;             // 是否已接收对端 CLOSE
+    bool                         path_challenge_pending : 1;          // 路径挑战包是否正在飞行
+    bool                         crypto_configured : 1;               // 是否配置加密
+    bool                         crypto_ready : 1;                    // 1-RTT AEAD 是否就绪
+    bool                         zero_rtt_encrypted : 1;              // 当前 0-RTT 是否使用 early AEAD
+    bool                         session_token_issued : 1;            // 是否已向对端签发恢复票据
+    bool                         peer_transport_params_received : 1;  // 是否已收到对端传输参数
+    bool                         peer_ack_frequency_received : 1;     // 是否已收到对端 ACK 策略
+    bool                         keepalive_enabled : 1;               // 是否启用保活
+    const uint8_t*               peer_close_reason;                   // 对端 CLOSE 原包原因视图
+    utp_connection_role_t        role;                                // 主动或被动角色
+    utp_connection_state_t       state;                               // 连接生命周期状态
+    utp_connection_path_state_t  path_state;                          // 路径验证状态
 } utp_connection_t;
 
 /** @brief 初始化连接运行状态及其有界发送、接收资源。 */

@@ -27,12 +27,12 @@ typedef struct utp_event_loop {
 } utp_event_loop_t;
 
 typedef struct utp_event {
-    struct event          native_event;  // 内嵌 libevent 事件对象
-    utp_event_callback_fn callback;      // 协议事件回调
-    void*                 user_data;     // 回调用户数据
-    bool                  initialized;   // 是否已初始化 native_event
-    bool                  active;        // 是否已加入事件循环
-    bool                  timer;         // 是否为定时器事件
+    struct event          native_event;     // 内嵌 libevent 事件对象
+    utp_event_callback_fn callback;         // 协议事件回调
+    void*                 user_data;        // 回调用户数据
+    bool                  initialized : 1;  // 是否已初始化 native_event
+    bool                  active : 1;       // 是否已加入事件循环
+    bool                  timer : 1;        // 是否为定时器事件
 } utp_event_t;
 
 // 借用 native_base、logger 和 tag；event_base 的创建、调度与销毁仍由调用方负责。

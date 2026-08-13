@@ -50,14 +50,14 @@ typedef struct utp_pending_incoming {
     uint8_t                      handshake_max_retries;                 // 最大握手重试次数
     utp_frame_transport_params_t peer_transport_params;                 // 对端传输参数
     utp_frame_ack_frequency_t    peer_ack_frequency;                    // 对端 ACK 策略
-    bool                         crypto_configured;                     // 是否请求加密握手
-    bool                         crypto_ready;                          // AEAD 是否已完成派生
-    bool                         accepted;                              // 应用是否已接受连接
-    bool                         handshake_sent;                        // 是否至少发送过一次响应
+    bool                         crypto_configured : 1;                 // 是否请求加密握手
+    bool                         crypto_ready : 1;                      // AEAD 是否已完成派生
+    bool                         accepted : 1;                          // 应用是否已接受连接
+    bool                         handshake_sent : 1;                    // 是否至少发送过一次响应
     // UDP 暂不可写时保留首个或重传 HANDSHAKE，等待 writable 事件原包号重建发送。
-    bool                         handshake_write_pending;         // UDP 不可写时待重发握手
-    bool                         peer_transport_params_received;  // 是否收齐对端传输参数
-    bool                         peer_ack_frequency_received;     // 是否收齐对端 ACK 策略
+    bool                         handshake_write_pending : 1;         // UDP 不可写时待重发握手
+    bool                         peer_transport_params_received : 1;  // 是否收齐对端传输参数
+    bool                         peer_ack_frequency_received : 1;     // 是否收齐对端 ACK 策略
 } utp_pending_incoming_t;
 
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,

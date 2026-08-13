@@ -64,20 +64,20 @@ typedef struct utp_send_control {
     uint32_t                    consecutive_rto_count;                     // 连续 RTO 次数
     uint32_t                    handshake_retransmission_count;            // 握手重传次数
     uint32_t                    tlp_count;                                 // Tail Loss Probe 次数
-    bool                        connected;                                 // 是否进入普通可靠发送阶段
-    bool                        loss_pending;                              // 是否待执行丢失检测
-    bool                        pacing_enabled;                            // 是否启用 pacer
-    bool                        was_quiet;                                 // 上次发送前是否空闲
-    bool                        app_limited;                               // 当前是否应用数据受限
+    bool                        connected : 1;                             // 是否进入普通可靠发送阶段
+    bool                        loss_pending : 1;                          // 是否待执行丢失检测
+    bool                        pacing_enabled : 1;                        // 是否启用 pacer
+    bool                        was_quiet : 1;                             // 上次发送前是否空闲
+    bool                        app_limited : 1;                           // 当前是否应用数据受限
 } utp_send_control_t;
 
 typedef struct utp_send_control_ack_result {
-    utp_send_ledger_ack_result_t ledger;                            // 账本确认结果
-    uint64_t                     rtt_acknowledged_packet_number;    // RTT 采样对应包号
-    uint64_t                     rtt_acknowledged_sent_time_us;     // RTT 采样对应发送时刻
-    uint64_t                     rtt_sample_us;                     // 计算出的 RTT 样本
-    bool                         rtt_acknowledged_current_attempt;  // 是否确认最新重传尝试
-    bool                         rtt_sample_valid;                  // RTT 样本是否有效
+    utp_send_ledger_ack_result_t ledger;                                // 账本确认结果
+    uint64_t                     rtt_acknowledged_packet_number;        // RTT 采样对应包号
+    uint64_t                     rtt_acknowledged_sent_time_us;         // RTT 采样对应发送时刻
+    uint64_t                     rtt_sample_us;                         // 计算出的 RTT 样本
+    bool                         rtt_acknowledged_current_attempt : 1;  // 是否确认最新重传尝试
+    bool                         rtt_sample_valid : 1;                  // RTT 样本是否有效
 } utp_send_control_ack_result_t;
 
 typedef enum utp_send_control_retransmission_mode {

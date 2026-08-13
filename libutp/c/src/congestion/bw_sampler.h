@@ -18,8 +18,8 @@ typedef struct utp_bw_packet_state {
     uint64_t packet_number;          // 此包包号
     uint64_t sent_time_us;           // 此包发送时刻
     uint32_t packet_size;            // 此包长度
-    bool     app_limited;            // 发送时是否受应用数据限制
-    bool     valid;                  // 是否已写入有效采样快照
+    bool     app_limited : 1;        // 发送时是否受应用数据限制
+    bool     valid : 1;              // 是否已写入有效采样快照
 } utp_bw_packet_state_t;
 
 typedef struct utp_bw_sample {

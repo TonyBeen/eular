@@ -70,15 +70,15 @@ typedef struct utp_bbr {
     double                   configured_cwnd_gain;                     // 用户配置 cwnd 增益
     double                   startup_growth_target;                    // 用户配置增长阈值
     double                   pacing_gains[UTP_BBR_PACING_GAIN_COUNT];  // pacing 增益周期
-    bool                     in_ack;                                   // 是否正在 ACK 批处理
-    bool                     last_sample_app_limited;                  // 最近采样是否应用受限
-    bool                     has_non_app_limited_sample;               // 是否已有非应用受限采样
-    bool                     full_bandwidth_reached;                   // 是否已退出 STARTUP
-    bool                     probe_rtt_round_passed;                   // PROBE_RTT 是否经过完整轮次
-    bool                     ack_has_losses;                           // 当前 ACK 批次是否含丢失
-    bool                     ack_has_sample;                           // 当前 ACK 批次是否有带宽样本
-    bool                     app_limited_since_last_probe;             // 上次探测后是否应用受限
-    bool                     min_rtt_expired_in_ack;                   // 当前 ACK 是否发现 min RTT 过期
+    bool                     in_ack : 1;                               // 是否正在 ACK 批处理
+    bool                     last_sample_app_limited : 1;              // 最近采样是否应用受限
+    bool                     has_non_app_limited_sample : 1;           // 是否已有非应用受限采样
+    bool                     full_bandwidth_reached : 1;               // 是否已退出 STARTUP
+    bool                     probe_rtt_round_passed : 1;               // PROBE_RTT 是否经过完整轮次
+    bool                     ack_has_losses : 1;                       // 当前 ACK 批次是否含丢失
+    bool                     ack_has_sample : 1;                       // 当前 ACK 批次是否有带宽样本
+    bool                     app_limited_since_last_probe : 1;         // 上次探测后是否应用受限
+    bool                     min_rtt_expired_in_ack : 1;               // 当前 ACK 是否发现 min RTT 过期
     utp_bbr_recovery_state_t recovery_state;                           // BBR 恢复子状态
     utp_bbr_mode_t           mode;                                     // BBR 主状态机阶段
 } utp_bbr_t;

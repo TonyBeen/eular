@@ -65,9 +65,9 @@ typedef struct utp_mtu_discovery {
     uint8_t               probe_retries;                  // 额外探测重试次数
     uint8_t               probe_retry_count;              // 当前探测已重试次数
     uint8_t               family;                         // 当前路径地址族
-    bool                  enabled;                        // 是否启用探测
-    bool                  has_in_flight_probe;            // 是否有等待确认的探测包
-    bool                  retry_pending;                  // 是否待重新压入探测包
+    bool                  enabled : 1;                    // 是否启用探测
+    bool                  has_in_flight_probe : 1;        // 是否有等待确认的探测包
+    bool                  retry_pending : 1;              // 是否待重新压入探测包
     utp_mtu_probe_phase_t probe_phase;                    // 阶梯、二分或黑洞恢复阶段
 } utp_mtu_discovery_t;
 

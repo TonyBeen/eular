@@ -48,8 +48,8 @@ typedef struct utp_stream_recv_fragment {
     size_t           memory_cost;                // 对连接级内存预算的计费字节数
     size_t           length;                     // 分片总长度
     size_t           consumed;                   // 已被应用消费的前缀长度
-    bool             fin;                        // 分片末尾是否带 FIN
-    bool             accounted;                  // 是否已计入连接级资源计数
+    bool             fin : 1;                    // 分片末尾是否带 FIN
+    bool             accounted : 1;              // 是否已计入连接级资源计数
 } utp_stream_recv_fragment_t;
 
 typedef struct utp_stream_send_ack_range {
@@ -98,21 +98,21 @@ struct utp_stream {
     void*                       read_cb_data;                                      // 可读回调用户数据
     void*                       write_cb_data;                                     // 可写回调用户数据
     void*                       close_cb_data;                                     // 关闭回调用户数据
-    bool                        used;                                              // 是否已初始化为有效流
-    bool                        local_fin_queued;                                  // 本端 FIN 已请求发送
-    bool                        local_fin_sent;                                    // 本端 FIN 已构造发送
-    bool                        local_fin_transmitted;                             // 本端 FIN 已实际写入 UDP
-    bool                        peer_fin;                                          // 已接收到对端 FIN
-    bool                        local_read_shutdown;                               // 本地已停止读取
-    bool                        local_write_reset;                                 // 本地写方向已被 RESET 终止
-    bool                        peer_reset;                                        // 对端已 RESET 其写方向
-    bool                        peer_stop_sending_received;                        // 是否收到过对端 STOP_SENDING
-    bool                        peer_final_size_known;                             // 对端最终偏移是否已经确定
-    bool                        stream_limit_released;                             // 对端流额度是否已归还
-    bool                        notifying_readable;                                // 正在执行可读回调，防止重入
-    bool                        notifying_writable;                                // 正在执行可写回调，防止重入
-    bool                        closed_notified;                                   // 关闭回调是否已通知
-    bool                        defer_user_notifications;                          // incoming 回调前暂缓状态通知
+    bool                        used : 1;                                          // 是否已初始化为有效流
+    bool                        local_fin_queued : 1;                              // 本端 FIN 已请求发送
+    bool                        local_fin_sent : 1;                                // 本端 FIN 已构造发送
+    bool                        local_fin_transmitted : 1;                         // 本端 FIN 已实际写入 UDP
+    bool                        peer_fin : 1;                                      // 已接收到对端 FIN
+    bool                        local_read_shutdown : 1;                           // 本地已停止读取
+    bool                        local_write_reset : 1;                             // 本地写方向已被 RESET 终止
+    bool                        peer_reset : 1;                                    // 对端已 RESET 其写方向
+    bool                        peer_stop_sending_received : 1;                    // 是否收到过对端 STOP_SENDING
+    bool                        peer_final_size_known : 1;                         // 对端最终偏移是否已经确定
+    bool                        stream_limit_released : 1;                         // 对端流额度是否已归还
+    bool                        notifying_readable : 1;                            // 正在执行可读回调，防止重入
+    bool                        notifying_writable : 1;                            // 正在执行可写回调，防止重入
+    bool                        closed_notified : 1;                               // 关闭回调是否已通知
+    bool                        defer_user_notifications : 1;                      // incoming 回调前暂缓状态通知
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */

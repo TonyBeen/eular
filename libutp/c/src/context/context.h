@@ -54,17 +54,17 @@ typedef struct utp_context_connection_slot {
     int8_t                     connect_retries_remaining;                                        // 主动连接剩余重试次数
     uint8_t                    zero_rtt_response_retries;                                        // 0-RTT 响应已重试次数
     uint8_t                    zero_rtt_encryption_mode;                                         // 票据指定加密模式
-    bool                       zero_rtt_early_fin;                                               // 早期流数据是否带 FIN
-    bool                       zero_rtt_awaiting_accept;   // 是否等待 on_new_connection 决策
-    bool                       zero_rtt_accepted;          // 应用是否已接受 0-RTT
-    bool                       zero_rtt_response_active;   // 是否维护 0-RTT 响应重传状态
-    bool                       zero_rtt_response_queued;   // HANDSHAKE_DONE 是否已排队
-    bool                       zero_rtt_response_sent;     // HANDSHAKE_DONE 是否已实际发送
-    bool                       zero_rtt_early_delivered;   // 是否已将早数据投递给流
-    bool                       used;                       // 槽位是否正在使用
-    bool                       connected_reported;         // 是否已调用 on_connected
-    bool                       connection_error_reported;  // 是否已调用 connection error 回调
-    bool                       connect_pending;            // 是否有主动连接等待完成
+    bool                       zero_rtt_early_fin : 1;                                           // 早期流数据是否带 FIN
+    bool                       zero_rtt_awaiting_accept : 1;   // 是否等待 on_new_connection 决策
+    bool                       zero_rtt_accepted : 1;          // 应用是否已接受 0-RTT
+    bool                       zero_rtt_response_active : 1;   // 是否维护 0-RTT 响应重传状态
+    bool                       zero_rtt_response_queued : 1;   // HANDSHAKE_DONE 是否已排队
+    bool                       zero_rtt_response_sent : 1;     // HANDSHAKE_DONE 是否已实际发送
+    bool                       zero_rtt_early_delivered : 1;   // 是否已将早数据投递给流
+    bool                       used : 1;                       // 槽位是否正在使用
+    bool                       connected_reported : 1;         // 是否已调用 on_connected
+    bool                       connection_error_reported : 1;  // 是否已调用 connection error 回调
+    bool                       connect_pending : 1;            // 是否有主动连接等待完成
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
@@ -73,8 +73,8 @@ typedef struct utp_context_pending_slot {
     TAILQ_ENTRY(utp_context_pending_slot) free_next;                       // 空闲 pending 槽位链表节点
     utp_pending_incoming_t pending;                                        // 未接受被动握手状态
     uint8_t                storage[UTP_CONTEXT_PENDING_STORAGE_CAPACITY];  // 入站包有界缓存
-    bool                   used;                                           // 槽位是否正在使用
-    bool                   queued;                                         // 是否已进入 pending 哈希表
+    bool                   used : 1;                                       // 槽位是否正在使用
+    bool                   queued : 1;                                     // 是否已进入 pending 哈希表
 } utp_context_pending_slot_t;
 TAILQ_HEAD(utp_context_pending_slot_tailq, utp_context_pending_slot);
 
@@ -112,21 +112,21 @@ struct utp_context {
     uint8_t                                  handshake_max_retries;                // 被动握手最大重试次数
     utp_context_pending_slot_t*              callback_accept_pending;              // 当前回调可接受的 pending 槽位
     utp_context_connection_slot_t*           callback_accept_zero_rtt;             // 当前回调可接受的 0-RTT 槽位
-    bool                                     callback_accept_requested;            // on_new_connection 是否调用 accept
-    bool                                     resumption_key_explicit;              // 根密钥是否由用户设置
-    bool                                     resumption_keys_ready;                // 恢复工作密钥是否就绪
-    bool                                     default_resumption_key_warning_logged;  // 默认根密钥警告是否已输出
-    bool                                     enable_keepalive;                       // 是否为新连接启用保活
-    utp_on_connected_fn                      on_connected;                           // 主动连接成功回调
-    void*                                    on_connected_user_data;                 // 成功回调用户数据
-    utp_on_connect_error_fn                  on_connect_error;                       // 主动连接失败回调
-    void*                                    on_connect_error_user_data;             // 失败回调用户数据
-    utp_on_new_connection_fn                 on_new_connection;                      // 被动连接决策回调
-    void*                                    on_new_connection_user_data;            // 决策回调用户数据
-    utp_on_connection_error_fn               on_connection_error;                    // 被动关闭或致命错误回调
-    void*                                    on_connection_error_user_data;          // 关闭回调用户数据
-    utp_logger_t                             logger;                                 // Context 日志器
-    utp_log_tag_t                            tag;                                    // Context 日志标签
+    bool                                     callback_accept_requested : 1;        // on_new_connection 是否调用 accept
+    bool                                     resumption_key_explicit : 1;          // 根密钥是否由用户设置
+    bool                                     resumption_keys_ready : 1;            // 恢复工作密钥是否就绪
+    bool                                     default_resumption_key_warning_logged : 1;  // 默认根密钥警告是否已输出
+    bool                                     enable_keepalive : 1;                       // 是否为新连接启用保活
+    utp_on_connected_fn                      on_connected;                               // 主动连接成功回调
+    void*                                    on_connected_user_data;                     // 成功回调用户数据
+    utp_on_connect_error_fn                  on_connect_error;                           // 主动连接失败回调
+    void*                                    on_connect_error_user_data;                 // 失败回调用户数据
+    utp_on_new_connection_fn                 on_new_connection;                          // 被动连接决策回调
+    void*                                    on_new_connection_user_data;                // 决策回调用户数据
+    utp_on_connection_error_fn               on_connection_error;                        // 被动关闭或致命错误回调
+    void*                                    on_connection_error_user_data;              // 关闭回调用户数据
+    utp_logger_t                             logger;                                     // Context 日志器
+    utp_log_tag_t                            tag;                                        // Context 日志标签
 };
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
