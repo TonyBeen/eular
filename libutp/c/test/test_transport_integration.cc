@@ -1377,6 +1377,65 @@ TEST_CASE("relay drops the first STREAM packet and PTO retransmission delivers i
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("CUBIC shrinks its congestion window after an end-to-end STREAM loss", "[transport][integration][congestion]")
+{
+    transport_pair                      pair           = {};
+    utp_context_options_t               client_options = UTP_CONTEXT_OPTIONS_INIT;
+    const relay_rule                    rule           = {relay_direction::client_to_server,
+                                                          relay_action::drop,
+                                                          UTP_PACKET_TYPE_CTRL,
+                                                          UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM),
+                                                          true,
+                                                          0u,
+                                                          false,
+                                                          false};
+    const std::array<uint8_t, 12>       payload        = {'c', 'u', 'b', 'i', 'c', '-', 'l', 'o', 's', 's', '!', '!'};
+    std::array<uint8_t, payload.size()> received       = {};
+    utp_connection_statistic_t          statistic      = {};
+    uint64_t                            initial_cwnd   = 0u;
+    uint32_t                            stream_id      = UINT32_MAX;
+    utp_stream_t*                       stream;
+    size_t                              received_length = 0u;
+
+    client_options.cc_algorithm        = UTP_CONGESTION_CUBIC;
+    client_options.cubic_init_cwnd_mss = 8u;
+    client_options.cubic_min_cwnd_mss  = 4u;
+    client_options.enable_dplpmtud     = false;
+    transport_pair_init_with_options(&pair, rule, UTP_ENCRYPTION_NONE, &client_options, nullptr);
+    transport_pair_connect(&pair);
+    initial_cwnd = pair.client_probe.connection->cubic_congestion.cwnd;
+    REQUIRE(pair.client_probe.connection->cubic_congestion.initial_cwnd == UINT64_C(8) * UTP_CUBIC_DEFAULT_MSS);
+    REQUIRE(initial_cwnd > pair.client_probe.connection->cubic_congestion.minimum_cwnd);
+
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write(stream, payload.data(), payload.size()) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair, &payload] {
+        return pair.relay.rule.hits == 1u && pair.relay.forwarded_stream_packets >= 1u &&
+               pair.server_probe.incoming_stream != nullptr &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == payload.size();
+    });
+
+    REQUIRE(utp_connection_get_statistic(pair.client_probe.connection, &statistic) == UTP_STATUS_OK);
+    REQUIRE(statistic.rtx_bytes > 0u);
+    REQUIRE(pair.client_probe.connection->cubic_congestion.cwnd < initial_cwnd);
+    REQUIRE(pair.client_probe.connection->cubic_congestion.cwnd >=
+            pair.client_probe.connection->cubic_congestion.minimum_cwnd);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == payload.size());
+    REQUIRE(received == payload);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_CLOSED);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("relay drops the first ACK and a retransmitted STREAM is acknowledged", "[transport][integration]")
 {
     transport_pair   pair    = {};
