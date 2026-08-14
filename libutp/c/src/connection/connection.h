@@ -35,6 +35,7 @@ extern "C" {
 #define UTP_CONNECTION_SESSION_TOKEN_SIZE               UTP_CRYPTO_LOCAL_RESUMPTION_STATE_MAX_SIZE
 #define UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY 4096u
 #define UTP_CONNECTION_STREAM_TERMINAL_INITIAL_CAPACITY 8u
+#define UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY  (16u * 1024u)
 
 typedef enum utp_connection_role { UTP_CONNECTION_ROLE_ACTIVE = 0, UTP_CONNECTION_ROLE_PASSIVE } utp_connection_role_t;
 
@@ -99,96 +100,107 @@ typedef struct utp_terminal_block {
     uint32_t                          count;     // 本块已使用槽位数
 } utp_terminal_block_t;
 
+typedef struct utp_connection_candidate_packet {
+    struct utp_connection_candidate_packet* next;            // 下一条候选路径缓存报文
+    utp_packet_in_t*                        packet;          // 已解密 PacketIn，持有一个引用
+    uint64_t                                received_at_us;  // 原始接收时刻
+    size_t                                  wire_size;       // 解密前 UDP 数据报长度
+} utp_connection_candidate_packet_t;
+
 typedef utp_on_session_token_ready_fn utp_session_token_cb_t;
 
 // Connection 私有的传输状态；CID 解复用和 UDP I/O 由 Context 负责。
 typedef struct utp_connection {
-    struct utp_context*               context;                                   // 所属 Context，不拥有
-    utp_on_incoming_stream_fn         on_incoming_stream;                        // 对端新流回调
-    void*                             on_incoming_stream_user_data;              // 新流回调用户数据
-    utp_session_token_cb_t            session_token_cb;                          // 恢复票据就绪回调
-    void*                             session_token_cb_data;                     // 恢复票据回调用户数据
-    utp_send_control_t                send_control;                              // 发送、确认和重传状态
-    utp_receive_history_t             receive_history;                           // 已认证接收包号历史
-    utp_ack_scheduler_t               ack_scheduler;                             // ACK 调度状态
-    utp_packet_out_pool_t             packet_pool;                               // 有界 PacketOut 对象池
-    utp_mtu_discovery_t               mtu_discovery;                             // 路径 MTU 发现状态
-    utp_bbr_t                         bbr_congestion;                            // BBR 算法状态
-    utp_cubic_t                       cubic_congestion;                          // CUBIC 算法状态
-    utp_crypto_key_pair_t             crypto_key_pair;                           // 本端握手临时密钥对
-    utp_crypto_aead_t                 tx_aead;                                   // 1-RTT 发送 AEAD
-    utp_crypto_aead_t                 rx_aead;                                   // 1-RTT 接收 AEAD
-    utp_crypto_aead_t                 early_tx_aead;                             // 0-RTT 发送 AEAD
-    utp_crypto_aead_t                 early_rx_aead;                             // 0-RTT 接收 AEAD
-    utp_packet_out_t                  close_packet;                              // 专用 CONNECTION_CLOSE 包
-    utp_hash_table_t                  streams;                                   // 所有存活或待回收流
-    utp_hash_table_t                  control_slots;                             // 合并可靠控制帧槽位
-    utp_hash_table_t                  pending_peer_max_stream_data;              // 未创建流的额度缓存
-    utp_hash_table_t                  stream_terminals;                          // 已回收流的有界终态索引
-    utp_terminal_block_t*             terminal_blocks;                           // 终态槽位分块所有权
-    utp_terminal_block_t*             terminal_current_block;                    // 当前可分配终态槽位块
-    utp_connection_stream_terminal_t* stream_terminal_oldest;                    // LRU 最旧终态
-    utp_connection_stream_terminal_t* stream_terminal_newest;                    // LRU 最新终态
-    utp_address_t                     peer;                                      // 当前已验证对端地址
-    utp_address_t                     candidate_peer;                            // 正在验证的候选地址
-    uint32_t                          local_cid;                                 // 本端连接 ID
-    uint32_t                          peer_cid;                                  // 对端连接 ID
-    uint32_t                          next_stream_id[UTP_STREAM_TYPES];          // 各流类型下一个本端 ID
-    uint32_t                          stream_terminal_capacity;                  // 终态槽位配置上限
-    uint32_t                          stream_terminal_allocated;                 // 已实际分配终态槽位数
-    uint32_t                          stream_terminal_count;                     // 已用终态槽位数
-    uint64_t                          peer_max_data;                             // 对端通告的连接级发送额度
-    uint64_t                          peer_initial_max_stream_data_bidi_local;   // 本端双向流发送额度
-    uint64_t                          peer_initial_max_stream_data_bidi_remote;  // 对端双向流发送额度
-    utp_frame_transport_params_t      local_transport_params;                    // 本端握手通告传输参数
-    utp_frame_ack_frequency_t         local_ack_frequency;                       // 本端握手通告 ACK 策略
-    uint64_t                          local_max_data_advertised;                 // 本端通告连接接收额度
-    uint64_t                          stream_data_sent_total;                    // 已排队发送的流数据偏移总额
-    uint64_t                          local_stream_data_received_total;          // 接收流数据最大偏移累计
-    uint64_t                          local_stream_data_consumed_total;          // 应用已消费流数据累计
-    uint64_t                          last_max_data_sent_us;                     // 最近 MAX_DATA 发送时刻
-    uint64_t                          last_data_blocked_sent_us;                 // 最近 DATA_BLOCKED 发送时刻
-    uint16_t                          packet_capacity;                           // PacketOut 初始包容量
-    size_t                            recv_reassembly_memory_bytes;              // 所有流重组内存计费
-    size_t                            recv_reassembly_fragment_count;            // 所有流重组分片计数
-    uint64_t                          rx_bytes;                                  // 已认证且非重复接收字节数
-    uint64_t                          tx_bytes;                                  // 实际发送字节数
-    uint64_t                          rtx_bytes;                                 // 实际重传字节数
-    uint64_t                          scheduler_select_total;                    // 流调度总选择次数
-    uint64_t                          scheduler_select_strict;                   // Strict 选择次数
-    uint64_t                          scheduler_select_drr;                      // DRR 选择次数
-    uint64_t                          scheduler_strict_aging_promoted;           // Strict 老化提升次数
-    uint64_t                          scheduler_mode_switches;                   // 调度模式切换次数
-    uint64_t                          scheduler_drr_refills;                     // DRR 配额补充次数
-    uint64_t                          scheduler_drr_consumes;                    // DRR 配额消耗次数
-    uint64_t                          peer_handshake_packet_number;              // 已接收对端握手包号
-    uint64_t                          peer_handshake_received_us;                // 对端握手接收时刻
-    uint64_t                          retransmission_deadline_us;                // 普通数据重传截止时刻
-    uint64_t                          close_deadline_us;                         // draining 结束时刻
-    uint64_t                          close_last_sent_us;                        // 最近 CLOSE 发送时刻
-    uint64_t                          close_pto_us;                              // CLOSE 重发 PTO
-    uint64_t                          keepalive_deadline_us;                     // 保活探测截止时刻
-    uint64_t                          last_peer_activity_us;                     // 最近有效对端活动时刻
-    uint64_t                          path_challenge_deadline_us;                // 路径验证超时截止时刻
-    uint64_t                          ack_profile_candidate_since_us;            // 候选 ACK 策略起始时刻
-    uint64_t                          ack_profile_last_sent_us;                  // 最近 ACK_FREQUENCY 发送时刻
-    uint64_t                          ack_profile_baseline_srtt_us;              // 策略评估 RTT 基线
-    uint64_t                          ack_loss_window_start_us;                  // ACK 丢失窗口开始时刻
-    uint64_t                          last_ack_frequency_apply_us;               // 最近应用对端 ACK 策略时刻
-    uint64_t                          candidate_rx_bytes;                        // 候选路径已认证接收字节数
-    uint64_t                          candidate_tx_bytes;                        // 候选路径已实际发送字节数
-    uint64_t                          candidate_queued_bytes;                    // 候选路径已排队字节数
-    uint32_t                          path_validation_generation;                // 当前路径验证代次
-    uint16_t                          close_error_code;                          // 本端关闭错误码
-    uint16_t                          peer_close_error_code;                     // 对端关闭错误码
-    uint16_t                          peer_close_reason_length;                  // 对端关闭原因长度
-    uint32_t                          keepalive_interval_ms;                     // 保活间隔
-    uint32_t                          keepalive_timeout_ms;                      // 单次保活超时
-    uint16_t                          local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];  // 本端允许对端创建流数
-    uint16_t                          peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];   // 对端允许本端创建流数
-    uint8_t                           path_challenge[8];                                    // 当前路径挑战随机值
-    uint8_t                           peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // 对端临时公钥
-    uint8_t                           session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];     // 导出给客户端的恢复状态
+    struct utp_context*                context;                                   // 所属 Context，不拥有
+    utp_on_incoming_stream_fn          on_incoming_stream;                        // 对端新流回调
+    void*                              on_incoming_stream_user_data;              // 新流回调用户数据
+    utp_session_token_cb_t             session_token_cb;                          // 恢复票据就绪回调
+    void*                              session_token_cb_data;                     // 恢复票据回调用户数据
+    utp_send_control_t                 send_control;                              // 发送、确认和重传状态
+    utp_receive_history_t              receive_history;                           // 已认证接收包号历史
+    utp_ack_scheduler_t                ack_scheduler;                             // ACK 调度状态
+    utp_packet_out_pool_t              packet_pool;                               // 有界 PacketOut 对象池
+    utp_mtu_discovery_t                mtu_discovery;                             // 路径 MTU 发现状态
+    utp_bbr_t                          bbr_congestion;                            // BBR 算法状态
+    utp_cubic_t                        cubic_congestion;                          // CUBIC 算法状态
+    utp_crypto_key_pair_t              crypto_key_pair;                           // 本端握手临时密钥对
+    utp_crypto_aead_t                  tx_aead;                                   // 1-RTT 发送 AEAD
+    utp_crypto_aead_t                  rx_aead;                                   // 1-RTT 接收 AEAD
+    utp_crypto_aead_t                  early_tx_aead;                             // 0-RTT 发送 AEAD
+    utp_crypto_aead_t                  early_rx_aead;                             // 0-RTT 接收 AEAD
+    utp_packet_out_t                   close_packet;                              // 专用 CONNECTION_CLOSE 包
+    utp_hash_table_t                   streams;                                   // 所有存活或待回收流
+    utp_hash_table_t                   control_slots;                             // 合并可靠控制帧槽位
+    utp_hash_table_t                   pending_peer_max_stream_data;              // 未创建流的额度缓存
+    utp_hash_table_t                   stream_terminals;                          // 已回收流的有界终态索引
+    utp_terminal_block_t*              terminal_blocks;                           // 终态槽位分块所有权
+    utp_terminal_block_t*              terminal_current_block;                    // 当前可分配终态槽位块
+    utp_connection_candidate_packet_t* candidate_packet_head;                     // 候选路径缓存 FIFO 队首
+    utp_connection_candidate_packet_t* candidate_packet_tail;                     // 候选路径缓存 FIFO 队尾
+    utp_connection_stream_terminal_t*  stream_terminal_oldest;                    // LRU 最旧终态
+    utp_connection_stream_terminal_t*  stream_terminal_newest;                    // LRU 最新终态
+    utp_address_t                      peer;                                      // 当前已验证对端地址
+    utp_address_t                      candidate_peer;                            // 正在验证的候选地址
+    uint32_t                           local_cid;                                 // 本端连接 ID
+    uint32_t                           peer_cid;                                  // 对端连接 ID
+    uint32_t                           next_stream_id[UTP_STREAM_TYPES];          // 各流类型下一个本端 ID
+    uint32_t                           stream_terminal_capacity;                  // 终态槽位配置上限
+    uint32_t                           stream_terminal_allocated;                 // 已实际分配终态槽位数
+    uint32_t                           stream_terminal_count;                     // 已用终态槽位数
+    uint32_t                           path_validation_buffer_capacity;           // 候选路径缓存最大字节数
+    uint64_t                           peer_max_data;                             // 对端通告的连接级发送额度
+    uint64_t                           peer_initial_max_stream_data_bidi_local;   // 本端双向流发送额度
+    uint64_t                           peer_initial_max_stream_data_bidi_remote;  // 对端双向流发送额度
+    utp_frame_transport_params_t       local_transport_params;                    // 本端握手通告传输参数
+    utp_frame_ack_frequency_t          local_ack_frequency;                       // 本端握手通告 ACK 策略
+    uint64_t                           local_max_data_advertised;                 // 本端通告连接接收额度
+    uint64_t                           stream_data_sent_total;                    // 已排队发送的流数据偏移总额
+    uint64_t                           local_stream_data_received_total;          // 接收流数据最大偏移累计
+    uint64_t                           local_stream_data_consumed_total;          // 应用已消费流数据累计
+    uint64_t                           last_max_data_sent_us;                     // 最近 MAX_DATA 发送时刻
+    uint64_t                           last_data_blocked_sent_us;                 // 最近 DATA_BLOCKED 发送时刻
+    uint16_t                           packet_capacity;                           // PacketOut 初始包容量
+    size_t                             recv_reassembly_memory_bytes;              // 所有流重组内存计费
+    size_t                             recv_reassembly_fragment_count;            // 所有流重组分片计数
+    size_t                             candidate_packet_bytes;                    // 候选路径缓存已占用线长
+    uint64_t                           rx_bytes;                                  // 已认证且非重复接收字节数
+    uint64_t                           tx_bytes;                                  // 实际发送字节数
+    uint64_t                           rtx_bytes;                                 // 实际重传字节数
+    uint64_t                           scheduler_select_total;                    // 流调度总选择次数
+    uint64_t                           scheduler_select_strict;                   // Strict 选择次数
+    uint64_t                           scheduler_select_drr;                      // DRR 选择次数
+    uint64_t                           scheduler_strict_aging_promoted;           // Strict 老化提升次数
+    uint64_t                           scheduler_mode_switches;                   // 调度模式切换次数
+    uint64_t                           scheduler_drr_refills;                     // DRR 配额补充次数
+    uint64_t                           scheduler_drr_consumes;                    // DRR 配额消耗次数
+    uint64_t                           peer_handshake_packet_number;              // 已接收对端握手包号
+    uint64_t                           peer_handshake_received_us;                // 对端握手接收时刻
+    uint64_t                           retransmission_deadline_us;                // 普通数据重传截止时刻
+    uint64_t                           close_deadline_us;                         // draining 结束时刻
+    uint64_t                           close_last_sent_us;                        // 最近 CLOSE 发送时刻
+    uint64_t                           close_pto_us;                              // CLOSE 重发 PTO
+    uint64_t                           keepalive_deadline_us;                     // 保活探测截止时刻
+    uint64_t                           last_peer_activity_us;                     // 最近有效对端活动时刻
+    uint64_t                           path_challenge_deadline_us;                // 路径验证超时截止时刻
+    uint64_t                           ack_profile_candidate_since_us;            // 候选 ACK 策略起始时刻
+    uint64_t                           ack_profile_last_sent_us;                  // 最近 ACK_FREQUENCY 发送时刻
+    uint64_t                           ack_profile_baseline_srtt_us;              // 策略评估 RTT 基线
+    uint64_t                           ack_loss_window_start_us;                  // ACK 丢失窗口开始时刻
+    uint64_t                           last_ack_frequency_apply_us;               // 最近应用对端 ACK 策略时刻
+    uint64_t                           candidate_rx_bytes;                        // 候选路径已认证接收字节数
+    uint64_t                           candidate_tx_bytes;                        // 候选路径已实际发送字节数
+    uint64_t                           candidate_queued_bytes;                    // 候选路径已排队字节数
+    uint32_t                           path_validation_generation;                // 当前路径验证代次
+    uint16_t                           close_error_code;                          // 本端关闭错误码
+    uint16_t                           peer_close_error_code;                     // 对端关闭错误码
+    uint16_t                           peer_close_reason_length;                  // 对端关闭原因长度
+    uint32_t                           keepalive_interval_ms;                     // 保活间隔
+    uint32_t                           keepalive_timeout_ms;                      // 单次保活超时
+    uint16_t                           local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];  // 本端允许对端创建流数
+    uint16_t                           peer_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];   // 对端允许本端创建流数
+    uint8_t                            path_challenge[8];                                    // 当前路径挑战随机值
+    uint8_t                            peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // 对端临时公钥
+    uint8_t                            session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];     // 导出给客户端的恢复状态
     uint8_t close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];  // CLOSE 内联缓冲
     uint8_t stream_scheduler_mode;                                    // Strict 或 DRR 调度模式
     utp_congestion_algorithm_t   congestion_algorithm;                // 当前拥塞控制算法
@@ -233,6 +245,7 @@ void                 utp_connection_cleanup(utp_connection_t* connection);
 void                 utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config);
 /** @brief 设置有界流终态表容量；仅允许在创建流之前调用。 */
 utp_internal_error_t utp_connection_set_stream_terminal_capacity(utp_connection_t* connection, uint32_t capacity);
+void utp_connection_set_path_validation_buffer_capacity(utp_connection_t* connection, uint32_t capacity);
 /** @brief 重置并选择连接使用的拥塞控制算法；仅允许在任何数据包入队前调用。 */
 utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
                                                              utp_congestion_algorithm_t algorithm,

@@ -543,9 +543,116 @@ static bool utp_connection_candidate_can_queue(const utp_connection_t* connectio
            (uint64_t)packet_length <= limit - connection->candidate_tx_bytes - connection->candidate_queued_bytes;
 }
 
+/** @brief 释放尚未验证的候选路径报文引用。 */
+static void utp_connection_clear_candidate_packets(utp_connection_t* connection)
+{
+    utp_connection_candidate_packet_t* entry;
+
+    if (connection == NULL) {
+        return;
+    }
+    entry = connection->candidate_packet_head;
+    while (entry != NULL) {
+        utp_connection_candidate_packet_t* next = entry->next;
+
+        utp_packet_in_release(entry->packet);
+        utp_allocator_free(NULL, entry);
+        entry = next;
+    }
+    connection->candidate_packet_head  = NULL;
+    connection->candidate_packet_tail  = NULL;
+    connection->candidate_packet_bytes = 0u;
+}
+
+/** @brief 判断候选路径数据报是否包含需在验证后回放的非路径帧。 */
+static bool utp_connection_candidate_packet_needs_buffer(const utp_packet_view_t* view)
+{
+    size_t offset = 0u;
+
+    while (offset < view->payload_length) {
+        const uint8_t* frame;
+        uint8_t        frame_type;
+        size_t         frame_length;
+
+        if (utp_packet_view_next_frame(view, &offset, &frame_type, &frame, &frame_length) != UTP_INTERNAL_ERROR_OK) {
+            return false;
+        }
+        (void)frame;
+        (void)frame_length;
+        if (frame_type != UTP_FRAME_TYPE_PATH_CHALLENGE && frame_type != UTP_FRAME_TYPE_PATH_RESPONSE &&
+            frame_type != UTP_FRAME_TYPE_CONNECTION_CLOSE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief 以 PacketIn 引用保存候选路径报文，容量不足时保留更早的报文。 */
+static void utp_connection_cache_candidate_packet(utp_connection_t* connection, utp_packet_in_t* packet,
+                                                  size_t wire_size, uint64_t now_us)
+{
+    utp_connection_candidate_packet_t* entry;
+
+    if (connection == NULL || packet == NULL || wire_size == 0u || now_us == 0u ||
+        connection->path_validation_buffer_capacity == 0u || wire_size > connection->path_validation_buffer_capacity ||
+        wire_size > connection->path_validation_buffer_capacity - connection->candidate_packet_bytes) {
+        return;
+    }
+    entry = utp_allocator_alloc(NULL, sizeof(*entry));
+    if (entry == NULL || !utp_packet_in_ref(packet)) {
+        utp_allocator_free(NULL, entry);
+        return;
+    }
+    entry->next           = NULL;
+    entry->packet         = packet;
+    entry->received_at_us = now_us;
+    entry->wire_size      = wire_size;
+    if (connection->candidate_packet_tail != NULL) {
+        connection->candidate_packet_tail->next = entry;
+    } else {
+        connection->candidate_packet_head = entry;
+    }
+    connection->candidate_packet_tail   = entry;
+    connection->candidate_packet_bytes += wire_size;
+}
+
+/** @brief 候选路径验证成功后按原接收顺序重放缓存的已认证报文。 */
+static utp_internal_error_t utp_connection_replay_candidate_packets(utp_connection_t*    connection,
+                                                                    const utp_address_t* peer)
+{
+    utp_connection_candidate_packet_t* entry;
+
+    if (connection == NULL || peer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    entry                              = connection->candidate_packet_head;
+    connection->candidate_packet_head  = NULL;
+    connection->candidate_packet_tail  = NULL;
+    connection->candidate_packet_bytes = 0u;
+    while (entry != NULL) {
+        utp_connection_candidate_packet_t* next  = entry->next;
+        utp_internal_error_t               error = utp_connection_on_plaintext_packet_in_received(
+            connection, entry->packet, entry->wire_size, peer, entry->received_at_us);
+
+        utp_packet_in_release(entry->packet);
+        utp_allocator_free(NULL, entry);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            while ((entry = next) != NULL) {
+                next = entry->next;
+                utp_packet_in_release(entry->packet);
+                utp_allocator_free(NULL, entry);
+            }
+            return error;
+        }
+        entry = next;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static void utp_connection_begin_path_validation(utp_connection_t* connection, const utp_address_t* peer,
                                                  size_t received_length)
 {
+    utp_connection_clear_candidate_packets(connection);
     if (connection->path_validation_generation == UINT32_MAX) {
         connection->path_validation_generation = 1u;
     } else {
@@ -1231,8 +1338,8 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
         stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
                                                          : connection->peer_initial_max_stream_data_bidi_local;
         stream->local_max_stream_data_advertised =
-            locally_initiated ? connection->local_transport_params.initial_max_stream_data_bidi_remote
-                              : connection->local_transport_params.initial_max_stream_data_bidi_local;
+            locally_initiated ? connection->local_transport_params.initial_max_stream_data_bidi_local
+                              : connection->local_transport_params.initial_max_stream_data_bidi_remote;
     }
     utp_hash_node_init(&stream->hash_node);
     stream->connection                = connection;
@@ -1767,8 +1874,8 @@ static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connec
                 (stream->stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u
                     ? UTP_STREAM_DEFAULT_FLOW_WINDOW
                     : (utp_connection_stream_is_peer_initiated(connection, stream->stream_id)
-                           ? connection->local_transport_params.initial_max_stream_data_bidi_local
-                           : connection->local_transport_params.initial_max_stream_data_bidi_remote),
+                           ? connection->local_transport_params.initial_max_stream_data_bidi_remote
+                           : connection->local_transport_params.initial_max_stream_data_bidi_local),
                 stream->recv_offset, stream->local_max_stream_data_advertised, stream->last_max_stream_data_sent_us,
                 now_us, &target)) {
             utp_internal_error_t error =
@@ -2304,6 +2411,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
         if (max_data_length > connection->peer_max_data - connection->stream_data_sent_total) {
             max_data_length = (size_t)(connection->peer_max_data - connection->stream_data_sent_total);
         }
+        if (max_data_length > stream->peer_max_stream_data - stream->next_send_offset) {
+            max_data_length = (size_t)(stream->peer_max_stream_data - stream->next_send_offset);
+        }
         if (connection->stream_scheduler_mode == 1u && max_data_length > stream->drr_deficit) {
             max_data_length = stream->drr_deficit;
         }
@@ -2614,11 +2724,14 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->session_token_cb_data           = NULL;
     connection->terminal_blocks                 = NULL;
     connection->terminal_current_block          = NULL;
+    connection->candidate_packet_head           = NULL;
+    connection->candidate_packet_tail           = NULL;
     connection->stream_terminal_oldest          = NULL;
     connection->stream_terminal_newest          = NULL;
     connection->stream_terminal_capacity        = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
     connection->stream_terminal_allocated       = 0u;
     connection->stream_terminal_count           = 0u;
+    connection->path_validation_buffer_capacity = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
     connection->rx_bytes                        = 0u;
     connection->tx_bytes                        = 0u;
     connection->rtx_bytes                       = 0u;
@@ -2649,6 +2762,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->candidate_rx_bytes              = 0u;
     connection->candidate_tx_bytes              = 0u;
     connection->candidate_queued_bytes          = 0u;
+    connection->candidate_packet_bytes          = 0u;
     connection->path_validation_generation      = 0u;
     connection->path_challenge_retry_count      = 0u;
     connection->keepalive_missed_probes         = 0u;
@@ -2770,6 +2884,13 @@ utp_internal_error_t utp_connection_set_stream_terminal_capacity(utp_connection_
         connection->stream_terminal_capacity = capacity;
     }
     return error;
+}
+
+void utp_connection_set_path_validation_buffer_capacity(utp_connection_t* connection, uint32_t capacity)
+{
+    if (connection != NULL && connection->candidate_packet_head == NULL) {
+        connection->path_validation_buffer_capacity = capacity;
+    }
 }
 
 utp_internal_error_t utp_connection_set_congestion_algorithm(utp_connection_t*          connection,
@@ -3223,6 +3344,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
                            utp_connection_cleanup_pending_max_stream_data_node, NULL);
     utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
     utp_connection_cleanup_stream_terminal_blocks(connection);
+    utp_connection_clear_candidate_packets(connection);
     for (index = 0u; index < UTP_STREAM_TYPES; ++index) {
         connection->next_stream_id[index] = 0u;
     }
@@ -3231,6 +3353,8 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->stream_terminal_newest                                  = NULL;
     connection->stream_terminal_capacity                                = 0u;
     connection->stream_terminal_count                                   = 0u;
+    connection->path_validation_buffer_capacity                         = 0u;
+    connection->candidate_packet_bytes                                  = 0u;
     connection->on_incoming_stream                                      = NULL;
     connection->on_incoming_stream_user_data                            = NULL;
     connection->session_token_cb                                        = NULL;
@@ -3858,6 +3982,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     bool                 handshake_done;
     bool                 ack_progress;
     bool                 candidate_path;
+    bool                 candidate_packet_buffered;
     bool                 peer_close;
     bool                 has_handshake_delay;
     bool                 transport_params_seen;
@@ -3958,6 +4083,11 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
         if (error != UTP_INTERNAL_ERROR_OK && error != UTP_INTERNAL_ERROR_STATE) {
             return error;
         }
+    }
+    candidate_packet_buffered =
+        candidate_path && packet_in != NULL && utp_connection_candidate_packet_needs_buffer(&view);
+    if (candidate_packet_buffered) {
+        utp_connection_cache_candidate_packet(connection, packet_in, wire_packet_length, now_us);
     }
     largest_before        = utp_receive_history_largest(&connection->receive_history);
     offset                = 0u;
@@ -4391,6 +4521,19 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
             }
         }
     }
+    if (candidate_path) {
+        if (connection->path_state == UTP_CONNECTION_PATH_STATE_VALIDATED &&
+            utp_address_equal(&connection->peer, peer)) {
+            return utp_connection_replay_candidate_packets(connection, peer);
+        }
+        if (peer_close) {
+            error = utp_connection_prepare_close_packet(connection, connection->peer_close_error_code, false);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                utp_connection_enter_draining(connection, now_us);
+            }
+        }
+        return UTP_INTERNAL_ERROR_OK;
+    }
     if (!candidate_path) {
         // 仅在整包处理成功后提交包号；本地资源不足等可恢复错误必须允许同包号重试。
         error = utp_receive_history_insert(&connection->receive_history, view.header.packet_number, now_us);
@@ -4780,6 +4923,7 @@ utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t*
     connection->path_challenge_pending     = false;
     connection->path_challenge_deadline_us = 0u;
     if (connection->path_challenge_retry_count >= UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES) {
+        utp_connection_clear_candidate_packets(connection);
         connection->candidate_peer         = connection->peer;
         connection->candidate_rx_bytes     = 0u;
         connection->candidate_tx_bytes     = 0u;

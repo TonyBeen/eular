@@ -68,7 +68,7 @@
 
 ### 连接层迁移流程（`connection_impl.cpp`）
 1. 收包 `onReceive`：非 active 路径且非 closing → `detectPeerAddressChange`；若返回 true → `notePathValidationStarted()` + `maybeSendPathChallenge()`（`connection_impl.cpp:668-674`）。
-2. candidate 路径（`fromCandidatePath`）在验证成功前只处理 PathChallenge/PathResponse/ConnectionClose，其余帧跳过（`connection_impl.cpp:677-678`、`:737-740`）。业务数据仍走 active 路径（active 不切换）。
+2. candidate 路径（`fromCandidatePath`）在验证成功前只处理 PathChallenge/PathResponse/ConnectionClose，其余帧跳过（`connection_impl.cpp:677-678`、`:737-740`）。业务数据仍走 active 路径（active 不切换）。C 实现对已认证的非白名单 PacketIn 额外保留零拷贝引用，验证成功后按接收顺序重放；缓存期间不执行业务帧副作用。
 3. 收 PathChallenge → `handlePathChallengeFrame`：原样回显生成 PathResponse 发回 `fromAddress`（`connection_impl.cpp:2984-3001`）。被动响应不改变本端状态。
 4. 收 PathResponse → `handlePathResponseFrame`：仅当 `needPathValidation()` 且 `fromAddress == candidate` 才处理；`onPathResponse` 成功后 **才** 将 `m_peerAddress` 切到 candidate，通知 `m_mtuDiscovery.onPathValidated`，停验证定时器，`notePathValidationSucceeded()`（`connection_impl.cpp:3003-3025`）。
 5. 验证超时 `onPathValidationTimeout`：`onTimeout` 若 → `kPathFailed`，则 `notePathValidationFailed()` 并 `bindPeerAddress(m_peerAddress)` 回退到 active 路径、停定时器（不关连接）；否则若仍需验证且无在途 → 重发 challenge（`connection_impl.cpp:3027-3044`）。
@@ -102,6 +102,7 @@
 | anti-amplification 附加信用(字节) | `kPathValidationSendCredit` | **256** | `connection_impl.cpp:77` |
 | anti-amplification 倍率 | 字面量 `3` | 3 | `connection_impl.cpp:2943` |
 | 路径迁移模式 | `Config::path_migration_mode` | `kPathMigrationConservative`(0) | `include/utp/config.h:81` |
+| C 候选路径缓存上限 | `utp_context_options_t::path_validation_buffer_capacity` | 16 KiB，`0` 禁用 | C 实现；已认证 PacketIn 零拷贝 FIFO |
 
 **注意（重要）**：`NetworkPath` 的超时与重试并非来自独立的路径验证配置，而是构造时被接到 keepalive 配置：
 `m_networkPath(ctx->config()->keepalive_timeout, ctx->config()->keepalive_probes)`（`connection_impl.cpp:339-341`）。

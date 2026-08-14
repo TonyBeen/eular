@@ -60,6 +60,7 @@ typedef struct utp_context_options {
     uint32_t                    zero_rtt_token_max_lifetime_seconds;  // 会话票据最大有效期(秒)
     uint32_t                    zero_rtt_replay_cache_capacity;       // Context 级抗重放缓存容量，0 时采用默认值
     uint32_t                    stream_terminal_capacity;             // 每连接流终态记录上限，0 时采用 4096
+    uint32_t                    path_validation_buffer_capacity;      // 每连接候选路径缓存上限(bytes)，0 时禁用
 
     // 被动握手响应的超时与重试配置
     uint16_t                    handshake_timeout;      // 首轮握手超时(ms)，0 时采用 800
@@ -120,6 +121,7 @@ typedef struct utp_context_options {
         600u,                                       /* zero_rtt_token_max_lifetime_seconds: 票据最长有效期 */     \
         4096u,                                      /* zero_rtt_replay_cache_capacity: 抗重放缓存容量 */          \
         4096u,                                      /* stream_terminal_capacity: 每连接流终态容量 */              \
+        16u * 1024u,                                /* path_validation_buffer_capacity: 候选路径缓存上限 */       \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
         true,                                       /* enable_keepalive: 启用保活 */                              \

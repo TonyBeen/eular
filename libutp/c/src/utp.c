@@ -106,7 +106,10 @@ utp_status_t utp_stream_read(utp_stream_t* stream, void* buffer, size_t capacity
     utp_internal_error_t error;
 
     error = utp_stream_read_internal(stream, buffer, capacity, out_length, &fin);
-    return utp_internal_error_to_status(error);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return utp_internal_error_to_status(error);
+    }
+    return utp_public_flush_connection(stream->connection);
 }
 
 utp_status_t utp_stream_shutdown(utp_stream_t* stream, utp_stream_shutdown_t how)
@@ -153,7 +156,12 @@ utp_status_t utp_stream_acquire_read_view(utp_stream_t* stream, utp_stream_read_
 
 utp_status_t utp_stream_commit_read_view(utp_stream_t* stream, uint64_t offset, size_t length)
 {
-    return utp_internal_error_to_status(utp_stream_commit_read_view_internal(stream, offset, length));
+    const utp_internal_error_t error = utp_stream_commit_read_view_internal(stream, offset, length);
+
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return utp_internal_error_to_status(error);
+    }
+    return utp_public_flush_connection(stream->connection);
 }
 
 void utp_stream_set_on_readable(utp_stream_t* stream, utp_on_stream_readable_fn callback, void* user_data)

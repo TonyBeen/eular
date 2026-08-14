@@ -61,6 +61,9 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_set_stream_terminal_capacity(connection, context->stream_terminal_capacity);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        utp_connection_set_path_validation_buffer_capacity(connection, context->path_validation_buffer_capacity);
+    }
     return error;
 }
 
@@ -3024,6 +3027,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->stream_terminal_capacity            = options->stream_terminal_capacity == 0u
                                                        ? UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY
                                                        : options->stream_terminal_capacity;
+    context->path_validation_buffer_capacity     = options->path_validation_buffer_capacity;
     context->handshake_timeout_ms                = options->handshake_timeout == 0u ? 800u : options->handshake_timeout;
     context->handshake_max_retries               = options->handshake_max_retries;
     context->local_transport_params.flags        = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;

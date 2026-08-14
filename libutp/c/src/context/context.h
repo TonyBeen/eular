@@ -103,6 +103,7 @@ struct utp_context {
     uint32_t                                 zero_rtt_token_max_lifetime_seconds;  // 票据最大有效期
     uint32_t                                 zero_rtt_replay_cache_capacity;       // 抗重放表容量
     uint32_t                                 stream_terminal_capacity;             // 新连接流终态表容量
+    uint32_t                                 path_validation_buffer_capacity;      // 新连接候选路径缓存上限(bytes)
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔
