@@ -20,6 +20,7 @@ extern "C" {
 #define UTP_FRAME_STREAM_HEADER_SIZE           16u
 #define UTP_FRAME_PADDING_HEADER_SIZE          3u
 #define UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE 5u
+#define UTP_FRAME_PING_SIZE                    1u
 #define UTP_FRAME_RESET_STREAM_SIZE            15u
 #define UTP_FRAME_STOP_SENDING_SIZE            7u
 #define UTP_FRAME_STREAMS_LIMIT_SIZE           4u

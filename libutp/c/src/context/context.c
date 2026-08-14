@@ -624,6 +624,7 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
     slot->zero_rtt_amplification_tx_bytes = 0u;
     slot->connect_retries_remaining       = 0;
     slot->zero_rtt_response_retries       = 0u;
+    slot->zero_rtt_early_data             = NULL;
     slot->zero_rtt_early_data_size        = 0u;
     slot->zero_rtt_expires_at_seconds     = 0u;
     slot->zero_rtt_early_fin              = false;
@@ -678,6 +679,8 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
             utp_packet_in_release(slot->zero_rtt_early_packet);
             slot->zero_rtt_early_packet = NULL;
         }
+        utp_allocator_free(NULL, slot->zero_rtt_early_data);
+        slot->zero_rtt_early_data = NULL;
         utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
         slot->zero_rtt_early_wire_size        = 0u;
         slot->zero_rtt_request_packet_number  = 0u;
@@ -1300,6 +1303,10 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
         slot->connected_reported  = true;
         utp_context_log_ids(context, UTP_LOG_LEVEL_INFO, "connection established", slot->connection.local_cid,
                             slot->connection.peer_cid);
+        // 握手已完成，不再需要保存用于构造 0-RTT 重传的应用数据。
+        utp_allocator_free(NULL, slot->zero_rtt_early_data);
+        slot->zero_rtt_early_data      = NULL;
+        slot->zero_rtt_early_data_size = 0u;
         if (context->on_connected != NULL) {
             context->on_connected(&slot->connection, context->on_connected_user_data);
         }
@@ -1520,12 +1527,14 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
                     utp_mtu_packet_size_from_mtu(slot->connection.mtu_discovery.mtu_min, slot->connection.peer.family);
                 const size_t fixed_length = UTP_PACKET_HEADER_SIZE + UTP_CRYPTO_AEAD_TAG_SIZE + payload_length;
 
-                if (target_size < fixed_length + UTP_FRAME_STREAM_HEADER_SIZE) {
+                if (target_size < fixed_length + UTP_FRAME_STREAM_HEADER_SIZE + UTP_FRAME_PING_SIZE) {
                     error = UTP_INTERNAL_ERROR_LIMIT;
                 } else {
                     early_data_length = slot->zero_rtt_early_data_size;
-                    if (early_data_length > (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE) {
-                        early_data_length = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
+                    if (early_data_length >
+                        (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE - UTP_FRAME_PING_SIZE) {
+                        early_data_length =
+                            (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE - UTP_FRAME_PING_SIZE;
                     }
                     error = utp_connection_reserve_zero_rtt_stream(&slot->connection, slot->zero_rtt_early_data,
                                                                    slot->zero_rtt_early_data_size, early_data_length,
@@ -3341,9 +3350,6 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         (options->early_data == NULL && options->early_data_size != 0u)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
-    if (options->early_data_size > UTP_CONTEXT_ZERO_RTT_EARLY_DATA_MAX) {
-        return UTP_STATUS_OVERFLOW;
-    }
     if (!utp_udp_socket_is_open(&context->udp_socket)) {
         return UTP_STATUS_SOCKET_NOT_BOUND;
     }
@@ -3378,6 +3384,26 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         utp_crypto_secure_clear(state_payload, state_payload_length);
         return utp_internal_error_to_status(error);
     }
+    {
+        const uint16_t target_size = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
+        size_t         fixed_length =
+            UTP_PACKET_HEADER_SIZE + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        size_t first_data_capacity;
+
+        if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
+            fixed_length += UTP_CRYPTO_AEAD_TAG_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_VERSION_SIZE +
+                            UTP_FRAME_TRANSPORT_PARAMS_SIZE + UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_FRAME_PING_SIZE;
+        }
+        if ((size_t)target_size < fixed_length + UTP_FRAME_STREAM_HEADER_SIZE) {
+            utp_crypto_secure_clear(state_payload, state_payload_length);
+            return UTP_STATUS_OVERFLOW;
+        }
+        first_data_capacity = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
+        if (options->early_data_size > first_data_capacity + UTP_STREAM_SEND_BUFFER_CAPACITY) {
+            utp_crypto_secure_clear(state_payload, state_payload_length);
+            return UTP_STATUS_OVERFLOW;
+        }
+    }
     utp_context_connection_slot_t* existing = utp_context_find_connection_by_peer(context, &peer);
     if (existing != NULL) {
         utp_crypto_secure_clear(state_payload, state_payload_length);
@@ -3411,6 +3437,11 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
     slot->zero_rtt_expires_at_seconds = expires_at_seconds;
     slot->zero_rtt_encryption_mode    = encryption_mode;
     if (options->early_data_size != 0u) {
+        slot->zero_rtt_early_data = utp_allocator_alloc(NULL, options->early_data_size);
+        if (slot->zero_rtt_early_data == NULL) {
+            utp_context_release_connection_slot(context, slot);
+            return UTP_STATUS_NOMEM;
+        }
         memcpy(slot->zero_rtt_early_data, options->early_data, options->early_data_size);
     }
     slot->zero_rtt_early_data_size  = options->early_data_size;

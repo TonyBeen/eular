@@ -22,9 +22,6 @@
 #define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE         32u
 #define UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE \
     (UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE + UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE)
-#define UTP_CONTEXT_ZERO_RTT_EARLY_DATA_MAX                                                \
-    (UTP_PACKET_MTU_FLOOR - UTP_PACKET_HEADER_SIZE - UTP_FRAME_SESSION_TOKEN_HEADER_SIZE - \
-     UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE - UTP_FRAME_STREAM_HEADER_SIZE)
 
 typedef struct utp_context_zero_rtt_replay_entry {
     utp_hash_node_t node;                                       // 按重放键索引的哈希节点
@@ -48,13 +45,13 @@ typedef struct utp_context_connection_slot {
     uint64_t                   zero_rtt_amplification_tx_bytes;  // 0-RTT 防放大已发送字节
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
-    uint8_t                    zero_rtt_early_data[UTP_CONTEXT_ZERO_RTT_EARLY_DATA_MAX];         // 缓存早期流数据
-    size_t                     zero_rtt_early_data_size;                                         // 缓存早期数据长度
-    uint64_t                   zero_rtt_expires_at_seconds;                                      // 票据绝对过期时间
-    int8_t                     connect_retries_remaining;                                        // 主动连接剩余重试次数
-    uint8_t                    zero_rtt_response_retries;                                        // 0-RTT 响应已重试次数
-    uint8_t                    zero_rtt_encryption_mode;                                         // 票据指定加密模式
-    bool                       zero_rtt_early_fin : 1;                                           // 早期流数据是否带 FIN
+    uint8_t*                   zero_rtt_early_data;            // 主动 0-RTT 重传期间持有的早期流数据
+    size_t                     zero_rtt_early_data_size;       // 缓存早期数据长度
+    uint64_t                   zero_rtt_expires_at_seconds;    // 票据绝对过期时间
+    int8_t                     connect_retries_remaining;      // 主动连接剩余重试次数
+    uint8_t                    zero_rtt_response_retries;      // 0-RTT 响应已重试次数
+    uint8_t                    zero_rtt_encryption_mode;       // 票据指定加密模式
+    bool                       zero_rtt_early_fin : 1;         // 早期流数据是否带 FIN
     bool                       zero_rtt_awaiting_accept : 1;   // 是否等待 on_new_connection 决策
     bool                       zero_rtt_accepted : 1;          // 应用是否已接受 0-RTT
     bool                       zero_rtt_response_active : 1;   // 是否维护 0-RTT 响应重传状态

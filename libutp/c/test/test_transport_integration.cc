@@ -158,6 +158,7 @@ struct endpoint_probe {
     utp_stream_t*     incoming_stream   = nullptr;
     int32_t           new_connections   = 0;
     int32_t           connected         = 0;
+    int32_t           connect_errors    = 0;
     int32_t           connection_errors = 0;
 };
 
@@ -258,6 +259,17 @@ static void on_connection_error(utp_connection_t* connection, const utp_connecti
     REQUIRE(connection != nullptr);
     REQUIRE(info != nullptr);
     ++probe->connection_errors;
+}
+
+static void on_connect_error(utp_status_t status, const char* message, const utp_connect_attempt_info_t* attempt,
+                             void* user_data)
+{
+    auto* probe = static_cast<endpoint_probe*>(user_data);
+
+    REQUIRE(status != UTP_STATUS_OK);
+    REQUIRE(message != nullptr);
+    REQUIRE(attempt != nullptr);
+    ++probe->connect_errors;
 }
 
 static bool relay_packet_matches(const udp_relay& relay, relay_direction direction, const uint8_t* packet,
@@ -689,6 +701,105 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     REQUIRE(received == early_data);
     REQUIRE(utp_stream_read(stream, received.data(), received.size(), &received_length) == UTP_STATUS_CLOSED);
     REQUIRE(early_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    utp_context_destroy(early_client);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("encrypted 0-RTT continues early stream data after the first packet", "[transport][integration][0rtt]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    std::array<uint8_t, 4096u>             early_data    = {};
+    session_token_probe                    token         = {};
+    endpoint_probe                         early_probe   = {};
+    utp_context_options_t                  early_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_0rtt_options_t             early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*                         early_client  = nullptr;
+    utp_stream_t*                          stream;
+    std::array<uint8_t, early_data.size()> received        = {};
+    size_t                                 received_length = 0u;
+
+    std::iota(early_data.begin(), early_data.end(), static_cast<uint8_t>(0u));
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_AES_GCM_128);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_session_token_ready(pair.client_probe.connection, on_session_token_ready, &token);
+    drive_until(pair.event_base, [&token] { return token.ready_count == 1; });
+    REQUIRE(token.length > 0u);
+
+    early_options.event_base = pair.event_base;
+    early_options.context_id = 5004u;
+    REQUIRE(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connected(early_client, on_connected, &early_probe);
+    utp_context_set_on_connection_error(early_client, on_connection_error, &early_probe);
+    early_connect.address            = "127.0.0.1";
+    early_connect.port               = pair.relay.address.port;
+    early_connect.timeout_ms         = 10u;
+    early_connect.retries            = 3;
+    early_connect.session_token      = token.token.data();
+    early_connect.session_token_size = token.length;
+    early_connect.early_data         = early_data.data();
+    early_connect.early_data_size    = early_data.size();
+    early_connect.early_fin          = true;
+    REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
+    drive_until(pair.event_base,
+                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connection != nullptr; });
+    stream = utp_connection_get_stream(pair.server_probe.connection, 0u);
+    REQUIRE(stream != nullptr);
+    drive_until(pair.event_base,
+                [stream, &early_data] { return utp_stream_readable_bytes(stream) == early_data.size(); });
+    REQUIRE(utp_stream_read(stream, received.data(), received.size(), &received_length) == UTP_STATUS_OK);
+    REQUIRE(received_length == early_data.size());
+    REQUIRE(received == early_data);
+    REQUIRE(utp_stream_read(stream, received.data(), received.size(), &received_length) == UTP_STATUS_CLOSED);
+    REQUIRE(early_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    utp_context_destroy(early_client);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("encrypted 0-RTT rejects a corrupted early ciphertext before accepting", "[transport][integration][0rtt]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const relay_rule corrupt_early = {
+        relay_direction::client_to_server, relay_action::corrupt, UTP_PACKET_TYPE_0RTT, 0u, true, 0u, false, false};
+    const std::array<uint8_t, 6u> early_data    = {'a', 'u', 't', 'h', '!', '!'};
+    session_token_probe           token         = {};
+    endpoint_probe                early_probe   = {};
+    utp_context_options_t         early_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_0rtt_options_t    early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*                early_client  = nullptr;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_AES_GCM_128);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_session_token_ready(pair.client_probe.connection, on_session_token_ready, &token);
+    drive_until(pair.event_base, [&token] { return token.ready_count == 1; });
+    REQUIRE(token.length > 0u);
+
+    early_options.event_base = pair.event_base;
+    early_options.context_id = 5005u;
+    REQUIRE(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connected(early_client, on_connected, &early_probe);
+    utp_context_set_on_connect_error(early_client, on_connect_error, &early_probe);
+    pair.relay.rule                  = corrupt_early;
+    early_connect.address            = "127.0.0.1";
+    early_connect.port               = pair.relay.address.port;
+    early_connect.timeout_ms         = 10u;
+    early_connect.retries            = 0;
+    early_connect.session_token      = token.token.data();
+    early_connect.session_token_size = token.length;
+    early_connect.early_data         = early_data.data();
+    early_connect.early_data_size    = early_data.size();
+    early_connect.early_fin          = true;
+    REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&early_probe] { return early_probe.connect_errors == 1; });
+    REQUIRE(pair.relay.rule.hits == 1u);
+    REQUIRE(early_probe.connected == 0);
+    REQUIRE(pair.server_probe.new_connections == 1);
     REQUIRE(pair.server_probe.connection_errors == 0);
     utp_context_destroy(early_client);
     transport_pair_cleanup(&pair);
