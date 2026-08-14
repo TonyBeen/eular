@@ -984,6 +984,62 @@ TEST_CASE("candidate path cache retains early packets and releases them after va
     utp_packet_in_pool_cleanup(&packet_pool);
 }
 
+TEST_CASE("candidate path cleanup returns cached PacketIn capacity to the pool", "[connection][path][resource]")
+{
+    const utp_address_t           active_peer    = loopback_address(10021u);
+    const utp_address_t           candidate_peer = loopback_address(10022u);
+    const std::array<uint8_t, 8u> stream_data    = {'p', 'o', 'o', 'l', '-', 'h', 'o', 'l'};
+    std::array<uint8_t, UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> payload     = {};
+    utp_packet_in_pool_t                                                   packet_pool = {};
+    utp_packet_in_t*                                                       packet      = nullptr;
+    utp_packet_in_t*                                                       reused      = nullptr;
+    utp_connection_t                                                       connection  = {};
+    utp_packet_out_t*                                                      challenge;
+    utp_packet_header_t                                                    header;
+    uint64_t                                                               deadline;
+    uint8_t                                                                attempt;
+
+    {
+        const utp_frame_stream_t frame = {UTP_STREAM_FLAG_NONE, 0u, 0u, stream_data.data(),
+                                          (uint16_t)stream_data.size()};
+
+        REQUIRE(utp_frame_stream_encode(payload.data(), payload.size(), &frame) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(utp_packet_in_pool_init(&packet_pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &active_peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    packet->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + payload.size());
+    header         = {11u, 77u, 1u, (uint16_t)payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
+    REQUIRE(utp_proto_encode_header(packet->data, packet->length, &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(packet->data + UTP_PACKET_HEADER_SIZE, payload.data(), payload.size());
+    utp_connection_set_path_validation_buffer_capacity(&connection, packet->length);
+    REQUIRE(utp_connection_on_plaintext_packet_in_received(&connection, packet, packet->length, &candidate_peer,
+                                                           100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet->ref_count == 2u);
+    utp_packet_in_release(packet);
+    REQUIRE(packet->ref_count == 1u);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &reused) == UTP_INTERNAL_ERROR_LIMIT);
+    REQUIRE(reused == nullptr);
+
+    for (attempt = 0u; attempt < 3u; ++attempt) {
+        challenge = utp_connection_next_packet_to_send(&connection);
+        REQUIRE(challenge != nullptr);
+        REQUIRE(utp_connection_on_packet_sent(&connection, challenge, 101u + attempt) == UTP_INTERNAL_ERROR_OK);
+        deadline = utp_connection_path_validation_deadline(&connection);
+        REQUIRE(deadline != 0u);
+        REQUIRE(utp_connection_on_path_validation_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(connection.candidate_packet_head == nullptr);
+    REQUIRE_FALSE(packet->in_use);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &reused) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(reused == packet);
+    utp_packet_in_release(reused);
+    utp_connection_cleanup(&connection);
+    utp_packet_in_pool_cleanup(&packet_pool);
+}
+
 TEST_CASE("candidate path CONNECTION_CLOSE bypasses the cache and closes immediately", "[connection][path][close]")
 {
     const utp_address_t                active_peer    = loopback_address(10017u);
