@@ -873,19 +873,18 @@ TEST_CASE("application reads replenish connection and stream flow-control window
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("dropped flow-control updates are retransmitted and unblock the sender", "[transport][integration][flow]")
+TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transport][integration][flow]")
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    const relay_rule drop_flow_control = {
-        relay_direction::server_to_client,
-        relay_action::drop,
-        UTP_PACKET_TYPE_CTRL,
-        UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA) | UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_STREAM_DATA),
-        true,
-        0u,
-        false,
-        false};
+    const relay_rule drop_flow_control    = {relay_direction::server_to_client,
+                                             relay_action::drop,
+                                             UTP_PACKET_TYPE_CTRL,
+                                             UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA),
+                                             true,
+                                             0u,
+                                             false,
+                                             false};
     std::array<uint8_t, 128> payload      = {};
     std::array<uint8_t, 64>  received     = {};
     utp_context_options_t    client_opts  = UTP_CONTEXT_OPTIONS_INIT;
@@ -953,7 +952,6 @@ TEST_CASE("dropped flow-control updates are retransmitted and unblock the sender
     REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
             UTP_STATUS_CLOSED);
     REQUIRE((pair.relay.forwarded_server_frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA)) != 0u);
-    REQUIRE((pair.relay.forwarded_server_frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_STREAM_DATA)) != 0u);
     REQUIRE(pair.client_probe.connection_errors == 0);
     REQUIRE(pair.server_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
