@@ -788,6 +788,92 @@ TEST_CASE("application reads replenish connection and stream flow-control window
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("dropped flow-control updates are retransmitted and unblock the sender", "[transport][integration][flow]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const relay_rule drop_flow_control = {
+        relay_direction::server_to_client,
+        relay_action::drop,
+        UTP_PACKET_TYPE_CTRL,
+        UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA) | UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_STREAM_DATA),
+        true,
+        0u,
+        false,
+        false};
+    std::array<uint8_t, 128> payload      = {};
+    std::array<uint8_t, 64>  received     = {};
+    utp_context_options_t    client_opts  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t    server_opts  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t    connect_opts = UTP_CONNECT_OPTIONS_INIT;
+    uint16_t                 server_port  = 0u;
+    uint32_t                 stream_id    = UINT32_MAX;
+    utp_stream_t*            stream;
+    size_t                   received_length = 0u;
+
+    for (size_t index = 0u; index < payload.size(); ++index) {
+        payload[index] = static_cast<uint8_t>(index);
+    }
+    pair.event_base = event_base_new();
+    REQUIRE(pair.event_base != nullptr);
+    client_opts.event_base                          = pair.event_base;
+    client_opts.context_id                          = 5201u;
+    server_opts.event_base                          = pair.event_base;
+    server_opts.context_id                          = 5202u;
+    server_opts.initial_max_data                    = 96u;
+    server_opts.initial_max_stream_data_bidi_remote = 64u;
+    REQUIRE(utp_context_create(&client_opts, &pair.client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_create(&server_opts, &pair.server) == UTP_STATUS_OK);
+    pair.server_probe.context = pair.server;
+    REQUIRE(utp_context_bind(pair.client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(pair.server, "127.0.0.1", 0u, nullptr, &server_port) == UTP_STATUS_OK);
+    relay_init(&pair.relay, pair.event_base, server_port);
+    pair.relay.rule = no_rule;
+    utp_context_set_on_connected(pair.client, on_connected, &pair.client_probe);
+    utp_context_set_on_connected(pair.server, on_connected, &pair.server_probe);
+    utp_context_set_on_new_connection(pair.server, on_new_connection, &pair.server_probe);
+    utp_context_set_on_connection_error(pair.client, on_connection_error, &pair.client_probe);
+    utp_context_set_on_connection_error(pair.server, on_connection_error, &pair.server_probe);
+    connect_opts.address    = "127.0.0.1";
+    connect_opts.port       = pair.relay.address.port;
+    connect_opts.timeout_ms = 10u;
+    connect_opts.retries    = 3;
+    REQUIRE(utp_context_connect(pair.client, &connect_opts) == UTP_STATUS_OK);
+    transport_pair_connect(&pair);
+    pair.relay.rule = drop_flow_control;
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write(stream, payload.data(), payload.size()) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair, &received] {
+        return pair.server_probe.incoming_stream != nullptr &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == received.size();
+    });
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == received.size());
+    REQUIRE(std::equal(received.begin(), received.end(), payload.begin()));
+    drive_until(pair.event_base, [&pair] { return pair.relay.rule.hits == 1u; });
+    drive_until(pair.event_base, [&pair, &received] {
+        return utp_stream_readable_bytes(pair.server_probe.incoming_stream) == received.size();
+    });
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == received.size());
+    REQUIRE(
+        std::equal(received.begin(), received.end(), payload.begin() + static_cast<std::ptrdiff_t>(received.size())));
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_CLOSED);
+    REQUIRE((pair.relay.forwarded_server_frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA)) != 0u);
+    REQUIRE((pair.relay.forwarded_server_frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_STREAM_DATA)) != 0u);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("STOP_SENDING cancels a peer unidirectional sender and receives RESET_STREAM",
           "[transport][integration][stream]")
 {
