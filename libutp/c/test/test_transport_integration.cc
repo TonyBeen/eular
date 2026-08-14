@@ -1032,6 +1032,34 @@ TEST_CASE("RESET_STREAM aborts local writes but preserves the bidirectional read
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("an invalid frame closes the receiving connection with a protocol error",
+          "[transport][integration][protocol]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> packet = {};
+    utp_packet_header_t                              header;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    header = {pair.client_probe.connection->local_cid,
+              pair.server_probe.connection->local_cid,
+              pair.client_probe.connection->send_control.current_packet_number + UINT64_C(100),
+              1u,
+              UTP_PACKET_TYPE_CTRL,
+              0u};
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    packet[UTP_PACKET_HEADER_SIZE] = UINT8_MAX;
+    relay_forward(&pair.relay, packet.data(), packet.size(), &pair.relay.server);
+    drive_until(pair.event_base, [&pair] {
+        return pair.server_probe.connection_errors == 1 && pair.client_probe.connection_errors == 1;
+    });
+    REQUIRE((utp_connection_state(pair.server_probe.connection) == UTP_CONNECTION_STATE_CLOSING ||
+             utp_connection_state(pair.server_probe.connection) == UTP_CONNECTION_STATE_DRAINING));
+    REQUIRE(pair.client_probe.connection_errors == 1);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("relay drops the first CONNECTION_CLOSE and the close is retransmitted", "[transport][integration]")
 {
     transport_pair   pair = {};
