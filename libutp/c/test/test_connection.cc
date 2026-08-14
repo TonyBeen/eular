@@ -984,6 +984,109 @@ TEST_CASE("candidate path cache retains early packets and releases them after va
     utp_packet_in_pool_cleanup(&packet_pool);
 }
 
+TEST_CASE("candidate path CONNECTION_CLOSE bypasses the cache and closes immediately", "[connection][path][close]")
+{
+    const utp_address_t                active_peer    = loopback_address(10017u);
+    const utp_address_t                candidate_peer = loopback_address(10018u);
+    const std::array<uint8_t, 6u>      reason         = {'c', 'l', 'o', 's', 'e', '!'};
+    const utp_frame_connection_close_t close          = {UINT16_C(42), reason.data(), (uint16_t)reason.size()};
+    std::array<uint8_t, UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE + reason.size()> payload     = {};
+    utp_packet_in_pool_t                                                        packet_pool = {};
+    utp_packet_in_t*                                                            packet      = nullptr;
+    utp_connection_t                                                            connection  = {};
+    utp_packet_out_t*                                                           response;
+    utp_packet_header_t                                                         header;
+
+    REQUIRE(utp_frame_connection_close_encode(payload.data(), payload.size(), &close) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&packet_pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &active_peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    packet->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + payload.size());
+    header         = {11u, 77u, 1u, (uint16_t)payload.size(), UTP_PACKET_TYPE_CONNECTION_CLOSE, 0u};
+    REQUIRE(utp_proto_encode_header(packet->data, packet->length, &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(packet->data + UTP_PACKET_HEADER_SIZE, payload.data(), payload.size());
+    REQUIRE(utp_connection_on_plaintext_packet_in_received(&connection, packet, packet->length, &candidate_peer,
+                                                           100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.peer_close_received);
+    REQUIRE(connection.peer_close_error_code == close.error_code);
+    REQUIRE(connection.candidate_packet_head == nullptr);
+    REQUIRE(connection.candidate_packet_bytes == 0u);
+    REQUIRE(utp_connection_state(&connection) == UTP_CONNECTION_STATE_CLOSING);
+    REQUIRE(connection.close_pending);
+    utp_packet_in_release(packet);
+    REQUIRE_FALSE(packet->in_use);
+    response = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(response == &connection.close_packet);
+    REQUIRE(response->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE);
+    utp_connection_cleanup(&connection);
+    utp_packet_in_pool_cleanup(&packet_pool);
+}
+
+TEST_CASE("candidate PATH_CHALLENGE bypasses the cache and queues its response", "[connection][path]")
+{
+    const utp_address_t    active_peer    = loopback_address(10019u);
+    const utp_address_t    candidate_peer = loopback_address(10020u);
+    const utp_frame_path_t challenge_data = {{UINT8_C(0x91), UINT8_C(0x82), UINT8_C(0x73), UINT8_C(0x64), UINT8_C(0x55),
+                                              UINT8_C(0x46), UINT8_C(0x37), UINT8_C(0x28)}};
+    std::array<uint8_t, UTP_FRAME_PATH_SIZE> payload     = {};
+    utp_packet_in_pool_t                     packet_pool = {};
+    utp_packet_in_t*                         packet      = nullptr;
+    utp_connection_t                         connection  = {};
+    utp_packet_out_t*                        outbound;
+    utp_packet_header_t                      header;
+    utp_packet_view_t                        view = {};
+    const uint8_t*                           frame;
+    uint8_t                                  frame_type;
+    size_t                                   frame_length;
+    size_t                                   offset        = 0u;
+    utp_frame_path_t                         response_data = {};
+
+    REQUIRE(utp_frame_path_encode(payload.data(), payload.size(), UTP_FRAME_TYPE_PATH_CHALLENGE, &challenge_data) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_init(&packet_pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &active_peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    packet->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + payload.size());
+    header         = {11u, 77u, 1u, (uint16_t)payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
+    REQUIRE(utp_proto_encode_header(packet->data, packet->length, &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(packet->data + UTP_PACKET_HEADER_SIZE, payload.data(), payload.size());
+    REQUIRE(utp_connection_on_plaintext_packet_in_received(&connection, packet, packet->length, &candidate_peer,
+                                                           100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.path_state == UTP_CONNECTION_PATH_STATE_VALIDATING);
+    REQUIRE(connection.candidate_packet_head == nullptr);
+    utp_packet_in_release(packet);
+    REQUIRE_FALSE(packet->in_use);
+
+    outbound = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(outbound != nullptr);
+    REQUIRE(outbound->has_destination);
+    REQUIRE(utp_address_equal(&outbound->destination, &candidate_peer));
+    REQUIRE(utp_packet_view_decode(&view, outbound->raw_data, outbound->data_size) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_PATH_CHALLENGE);
+    REQUIRE(utp_connection_on_packet_sent(&connection, outbound, 101u) == UTP_INTERNAL_ERROR_OK);
+
+    outbound = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(outbound != nullptr);
+    REQUIRE(outbound->has_destination);
+    REQUIRE(utp_address_equal(&outbound->destination, &candidate_peer));
+    offset = 0u;
+    REQUIRE(utp_packet_view_decode(&view, outbound->raw_data, outbound->data_size) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_PATH_RESPONSE);
+    REQUIRE(utp_frame_path_decode(&response_data, frame, frame_length, UTP_FRAME_TYPE_PATH_RESPONSE) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(response_data.data, challenge_data.data, sizeof(response_data.data)) == 0);
+    utp_connection_cleanup(&connection);
+    utp_packet_in_pool_cleanup(&packet_pool);
+}
+
 TEST_CASE("connection retries candidate path validation three times then keeps the active path", "[connection][path]")
 {
     const utp_address_t           active_peer    = loopback_address(10015u);
