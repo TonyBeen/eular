@@ -80,6 +80,7 @@ struct udp_relay {
     uint64_t                                    target_packet_number          = 0u;
     bool                                        held_replayed_after_successor = false;
     bool                                        migration_enabled             = false;
+    bool                                        held_manual                   = false;  // 是否仅允许测试显式释放持有包
 };
 
 static bool relay_acknowledges_packet(const uint8_t* packet, size_t packet_length, uint64_t packet_number)
@@ -377,6 +378,7 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
                 relay->held_packet_number = header.packet_number;
                 relay->held_destination   = *destination;
                 relay->held_valid         = true;
+                relay->held_manual = (relay->rule.required_frames & UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE)) != 0u;
                 continue;
             }
             if (relay->rule.action == relay_action::corrupt) {
@@ -389,7 +391,7 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
             relay_forward_from(send_socket, packet.data(), packet_length, destination);
             continue;
         }
-        if (relay->held_valid && relay->held_stream_id == UINT32_MAX &&
+        if (relay->held_valid && !relay->held_manual && relay->held_stream_id == UINT32_MAX &&
             direction == relay_direction::client_to_server) {
             // 加密包无法识别分片偏移；同轮先转发后继包再释放首包，使接收端观察到确定的乱序。
             relay_forward_from(send_socket, packet.data(), packet_length, destination);
@@ -398,7 +400,7 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
             relay->held_replayed_after_successor = true;
             continue;
         }
-        if (relay->held_valid && relay->held_stream_id != UINT32_MAX &&
+        if (relay->held_valid && !relay->held_manual && relay->held_stream_id != UINT32_MAX &&
             direction == relay_direction::client_to_server) {
             uint32_t stream_id;
             uint64_t stream_offset;
@@ -488,7 +490,8 @@ static void relay_release_held(udp_relay* relay)
 {
     REQUIRE(relay->held_valid);
     relay_forward(relay, relay->held.data(), relay->held_length, &relay->held_destination);
-    relay->held_valid = false;
+    relay->held_valid  = false;
+    relay->held_manual = false;
 }
 
 static void relay_cleanup(udp_relay* relay)
@@ -524,21 +527,30 @@ static void drive_for(struct event_base* event_base, std::chrono::milliseconds d
     }
 }
 
-static void transport_pair_init(transport_pair* pair, relay_rule rule, utp_encryption_mode_t encryption)
+/** @brief 使用调用方提供的 Context 选项初始化回环传输对。 */
+static void transport_pair_init_with_options(transport_pair* pair, relay_rule rule, utp_encryption_mode_t encryption,
+                                             const utp_context_options_t* client_options,
+                                             const utp_context_options_t* server_options)
 {
-    utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t client_opts     = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t server_opts     = UTP_CONTEXT_OPTIONS_INIT;
     utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
     uint16_t              server_port     = 0u;
 
+    if (client_options != nullptr) {
+        client_opts = *client_options;
+    }
+    if (server_options != nullptr) {
+        server_opts = *server_options;
+    }
     pair->event_base = event_base_new();
     REQUIRE(pair->event_base != nullptr);
-    client_options.event_base = pair->event_base;
-    client_options.context_id = 5001u;
-    server_options.event_base = pair->event_base;
-    server_options.context_id = 5002u;
-    REQUIRE(utp_context_create(&client_options, &pair->client) == UTP_STATUS_OK);
-    REQUIRE(utp_context_create(&server_options, &pair->server) == UTP_STATUS_OK);
+    client_opts.event_base = pair->event_base;
+    client_opts.context_id = client_opts.context_id == 0u ? 5001u : client_opts.context_id;
+    server_opts.event_base = pair->event_base;
+    server_opts.context_id = server_opts.context_id == 0u ? 5002u : server_opts.context_id;
+    REQUIRE(utp_context_create(&client_opts, &pair->client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_create(&server_opts, &pair->server) == UTP_STATUS_OK);
     pair->server_probe.context = pair->server;
     REQUIRE(utp_context_bind(pair->client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
     REQUIRE(utp_context_bind(pair->server, "127.0.0.1", 0u, nullptr, &server_port) == UTP_STATUS_OK);
@@ -555,6 +567,11 @@ static void transport_pair_init(transport_pair* pair, relay_rule rule, utp_encry
     connect_options.retries    = 3;
     connect_options.encryption = encryption;
     REQUIRE(utp_context_connect(pair->client, &connect_options) == UTP_STATUS_OK);
+}
+
+static void transport_pair_init(transport_pair* pair, relay_rule rule, utp_encryption_mode_t encryption)
+{
+    transport_pair_init_with_options(pair, rule, encryption, nullptr, nullptr);
 }
 
 static void transport_pair_connect(transport_pair* pair)
@@ -712,6 +729,74 @@ TEST_CASE("path migration validates the new address and replays the buffered STR
             UTP_STATUS_OK);
     REQUIRE(received_length == payload.size());
     REQUIRE(received == payload);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_CLOSED);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("path validation preserves cached packets within its configured capacity", "[transport][integration][path]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const relay_rule hold_path_response           = {relay_direction::client_to_server,
+                                                     relay_action::hold,
+                                                     UTP_PACKET_TYPE_CTRL,
+                                                     UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE),
+                                                     true,
+                                                     0u,
+                                                     false,
+                                                     false};
+    const std::array<uint8_t, 32>     first       = {'c', 'a', 'c', 'h', 'e', '-', 'f', 'i', 'r', 's', 't'};
+    const std::array<uint8_t, 32>     second      = {'c', 'a', 'c', 'h', 'e', '-', 's', 'e', 'c', 'o', 'n', 'd'};
+    std::array<uint8_t, first.size()> received    = {};
+    utp_context_options_t             server_opts = UTP_CONTEXT_OPTIONS_INIT;
+    uint32_t                          stream_id   = UINT32_MAX;
+    utp_stream_t*                     stream;
+    size_t                            cached_bytes;
+    size_t                            received_length = 0u;
+
+    server_opts.context_id                      = 5302u;
+    server_opts.path_validation_buffer_capacity = 96u;
+    transport_pair_init_with_options(&pair, no_rule, UTP_ENCRYPTION_NONE, nullptr, &server_opts);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    relay_enable_migration(&pair.relay);
+    pair.relay.rule = hold_path_response;
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write(stream, first.data(), first.size()) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair] {
+        return pair.relay.held_valid && pair.server_probe.connection->candidate_packet_head != nullptr;
+    });
+    cached_bytes = pair.server_probe.connection->candidate_packet_bytes;
+    REQUIRE(cached_bytes != 0u);
+    REQUIRE(cached_bytes <= server_opts.path_validation_buffer_capacity);
+    REQUIRE(utp_stream_write(stream, second.data(), second.size()) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
+    drive_for(pair.event_base, std::chrono::milliseconds(20));
+    REQUIRE(pair.server_probe.connection->candidate_packet_bytes == cached_bytes);
+    relay_release_held(&pair.relay);
+    drive_until(pair.event_base, [&pair, &first] {
+        return pair.server_probe.incoming_stream != nullptr &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == first.size();
+    });
+    REQUIRE(pair.server_probe.connection->candidate_packet_head == nullptr);
+    REQUIRE(pair.server_probe.connection->candidate_packet_bytes == 0u);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == first.size());
+    REQUIRE(received == first);
+    drive_until(pair.event_base, [&pair, &second] {
+        return utp_stream_readable_bytes(pair.server_probe.incoming_stream) == second.size();
+    });
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == second.size());
+    REQUIRE(received == second);
     REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
             UTP_STATUS_CLOSED);
     REQUIRE(pair.client_probe.connection_errors == 0);

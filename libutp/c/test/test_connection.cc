@@ -9,6 +9,7 @@
 extern "C" {
 #include "connection/connection.h"
 #include "proto/ack.h"
+#include "proto/packet_in.h"
 }
 
 namespace {
@@ -905,6 +906,82 @@ TEST_CASE("connection validates a candidate address before migration", "[connect
     REQUIRE(utp_connection_on_packet_received(&connection, response_packet.data(), response_packet.size(),
                                               &candidate_peer, 300u) == UTP_INTERNAL_ERROR_PROTOCOL);
     utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("candidate path cache retains early packets and releases them after validation timeout", "[connection][path]")
+{
+    const utp_address_t            active_peer    = loopback_address(10015u);
+    const utp_address_t            candidate_peer = loopback_address(10016u);
+    const std::array<uint8_t, 16u> first_data     = {'c', 'a', 'c', 'h', 'e', '-', 'f', 'i', 'r', 's', 't'};
+    const std::array<uint8_t, 16u> second_data    = {'c', 'a', 'c', 'h', 'e', '-', 's', 'e', 'c', 'o', 'n', 'd'};
+    std::array<uint8_t, UTP_FRAME_STREAM_HEADER_SIZE + first_data.size()>  first_payload  = {};
+    std::array<uint8_t, UTP_FRAME_STREAM_HEADER_SIZE + second_data.size()> second_payload = {};
+    utp_packet_in_pool_t                                                   packet_pool    = {};
+    utp_packet_in_t*                                                       first_packet   = nullptr;
+    utp_packet_in_t*                                                       second_packet  = nullptr;
+    utp_connection_t                                                       connection     = {};
+    utp_packet_out_t*                                                      challenge;
+    utp_packet_header_t                                                    header;
+    uint64_t                                                               deadline;
+    uint8_t                                                                attempt;
+
+    {
+        const utp_frame_stream_t first_frame  = {UTP_STREAM_FLAG_NONE, 0u, 0u, first_data.data(),
+                                                 (uint16_t)first_data.size()};
+        const utp_frame_stream_t second_frame = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)first_data.size(),
+                                                 second_data.data(), (uint16_t)second_data.size()};
+
+        REQUIRE(utp_frame_stream_encode(first_payload.data(), first_payload.size(), &first_frame) ==
+                UTP_INTERNAL_ERROR_OK);
+        REQUIRE(utp_frame_stream_encode(second_payload.data(), second_payload.size(), &second_frame) ==
+                UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(utp_packet_in_pool_init(&packet_pool, nullptr, 2u, 128u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &first_packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_in_pool_acquire(&packet_pool, &second_packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &active_peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    first_packet->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + first_payload.size());
+    header               = {11u, 77u, 1u, (uint16_t)first_payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
+    REQUIRE(utp_proto_encode_header(first_packet->data, first_packet->length, &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(first_packet->data + UTP_PACKET_HEADER_SIZE, first_payload.data(), first_payload.size());
+    utp_connection_set_path_validation_buffer_capacity(&connection, first_packet->length);
+    REQUIRE(utp_connection_on_plaintext_packet_in_received(&connection, first_packet, first_packet->length,
+                                                           &candidate_peer, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.candidate_packet_head != nullptr);
+    REQUIRE(connection.candidate_packet_bytes == first_packet->length);
+    REQUIRE(first_packet->ref_count == 2u);
+    utp_packet_in_release(first_packet);
+    REQUIRE(first_packet->in_use);
+    REQUIRE(first_packet->ref_count == 1u);
+
+    second_packet->length = (uint16_t)(UTP_PACKET_HEADER_SIZE + second_payload.size());
+    header                = {11u, 77u, 2u, (uint16_t)second_payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
+    REQUIRE(utp_proto_encode_header(second_packet->data, second_packet->length, &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(second_packet->data + UTP_PACKET_HEADER_SIZE, second_payload.data(), second_payload.size());
+    REQUIRE(utp_connection_on_plaintext_packet_in_received(&connection, second_packet, second_packet->length,
+                                                           &candidate_peer, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.candidate_packet_bytes == first_packet->length);
+    REQUIRE(second_packet->ref_count == 1u);
+    utp_packet_in_release(second_packet);
+    REQUIRE_FALSE(second_packet->in_use);
+
+    for (attempt = 0u; attempt < 3u; ++attempt) {
+        challenge = utp_connection_next_packet_to_send(&connection);
+        REQUIRE(challenge != nullptr);
+        REQUIRE(utp_connection_on_packet_sent(&connection, challenge, 201u + attempt) == UTP_INTERNAL_ERROR_OK);
+        deadline = utp_connection_path_validation_deadline(&connection);
+        REQUIRE(deadline != 0u);
+        REQUIRE(utp_connection_on_path_validation_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(connection.path_state == UTP_CONNECTION_PATH_STATE_VALIDATED);
+    REQUIRE(utp_address_equal(&connection.peer, &active_peer));
+    REQUIRE(connection.candidate_packet_head == nullptr);
+    REQUIRE(connection.candidate_packet_tail == nullptr);
+    REQUIRE(connection.candidate_packet_bytes == 0u);
+    REQUIRE_FALSE(first_packet->in_use);
+    utp_connection_cleanup(&connection);
+    utp_packet_in_pool_cleanup(&packet_pool);
 }
 
 TEST_CASE("connection retries candidate path validation three times then keeps the active path", "[connection][path]")
