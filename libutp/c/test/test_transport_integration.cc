@@ -805,6 +805,37 @@ TEST_CASE("encrypted 0-RTT rejects a corrupted early ciphertext before accepting
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("path MTU probes reach the configured ceiling over UDP", "[transport][integration][mtu]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    utp_context_options_t      client_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t      server_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connection_statistic_t client_statistic = {};
+    utp_connection_statistic_t server_statistic = {};
+
+    client_options.mtu_min            = 1280u;
+    client_options.mtu_base           = 1400u;
+    client_options.mtu_max            = 1450u;
+    client_options.mtu_probe_timeout  = 10u;
+    client_options.mtu_probe_interval = 1u;
+    server_options.mtu_min            = 1280u;
+    server_options.mtu_base           = 1400u;
+    server_options.mtu_max            = 1450u;
+    server_options.mtu_probe_timeout  = 10u;
+    server_options.mtu_probe_interval = 1u;
+    transport_pair_init_with_options(&pair, no_rule, UTP_ENCRYPTION_NONE, &client_options, &server_options);
+    transport_pair_connect(&pair);
+    drive_until(pair.event_base, [&pair, &client_statistic, &server_statistic] {
+        REQUIRE(utp_connection_get_statistic(pair.client_probe.connection, &client_statistic) == UTP_STATUS_OK);
+        REQUIRE(utp_connection_get_statistic(pair.server_probe.connection, &server_statistic) == UTP_STATUS_OK);
+        return client_statistic.pmtu == 1450u && server_statistic.pmtu == 1450u;
+    });
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("path migration validates the new address and replays the buffered STREAM", "[transport][integration][path]")
 {
     transport_pair   pair    = {};
@@ -1236,6 +1267,47 @@ TEST_CASE("macOS send hook retries one EAGAIN without data loss", "[transport][i
                utp_stream_readable_bytes(pair.server_probe.incoming_stream) == payload.size();
     });
     REQUIRE(utp_test_send_hook_remaining() == 0u);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][integration][socket][mtu]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const std::array<uint8_t, 8> payload    = {'m', 't', 'u', '-', 'f', 'a', 'i', 'l'};
+    utp_mtu_config_t             mtu_config = UTP_MTU_CONFIG_INIT;
+    utp_connection_t*            connection;
+    uint32_t                     stream_id = UINT32_MAX;
+    utp_stream_t*                stream;
+    utp_internal_error_t         error;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    connection                        = pair.client_probe.connection;
+    mtu_config.mtu_min                = 1280u;
+    mtu_config.mtu_base               = 1400u;
+    mtu_config.mtu_max                = 1450u;
+    mtu_config.probe_retries          = 0u;
+    mtu_config.probe_interval_seconds = 1u;
+    utp_mtu_discovery_init(&connection->mtu_discovery, &mtu_config, connection->peer.family);
+    REQUIRE(utp_test_send_hook_configure((int32_t)pair.client->udp_socket.native_handle, EMSGSIZE, 1u));
+    error = utp_context_flush_public_connection(pair.client, connection);
+    REQUIRE(utp_internal_error_to_errno(error) == EMSGSIZE);
+    REQUIRE(utp_test_send_hook_remaining() == 0u);
+    REQUIRE(connection->mtu_discovery.search_high_mtu == 1449u);
+    REQUIRE(utp_mtu_discovery_next_probe_mtu(&connection->mtu_discovery) == 1425u);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    REQUIRE(utp_connection_create_stream(connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) == UTP_STATUS_OK);
+    stream = utp_connection_get_stream(connection, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write(stream, payload.data(), payload.size()) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair, &payload] {
+        return pair.server_probe.incoming_stream != nullptr &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == payload.size();
+    });
     REQUIRE(pair.client_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
