@@ -672,7 +672,7 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     REQUIRE(token.length > 0u);
 
     early_options.event_base = pair.event_base;
-    early_options.context_id = 5003u;
+    early_options.context_id = 6003u;
     REQUIRE(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
     REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
     utp_context_set_on_connected(early_client, on_connected, &early_probe);

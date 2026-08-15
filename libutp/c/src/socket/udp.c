@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "socket/udp.h"
 
 #include <limits.h>
@@ -517,7 +521,11 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
         message.msg_name       = &storage;
         message.msg_namelen    = (socklen_t)storage_length;
         message.msg_iov        = iov;
-        message.msg_iovlen     = (int)slice_count;
+#if defined(__linux__)
+        message.msg_iovlen = (size_t)slice_count;
+#else
+        message.msg_iovlen = (int)slice_count;
+#endif
         message.msg_control    = NULL;
         message.msg_controllen = 0u;
         message.msg_flags      = 0;

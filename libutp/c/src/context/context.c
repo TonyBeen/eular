@@ -1015,6 +1015,14 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
             utp_send_control_pacer_tick_out(&connection->send_control);
             return UTP_INTERNAL_ERROR_OK;
         }
+        if (slot->zero_rtt_response_active && slot->zero_rtt_response_sent &&
+            (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) == 0u) {
+            // 客户端尚未用 1-RTT CTRL 证实收到 HANDSHAKE；业务包和新票据必须留在队列，
+            // 避免客户端在尚未获知对端 CID 时把它们视为协议错误。
+            (void)utp_send_control_reschedule_packet(&connection->send_control, packet);
+            utp_send_control_pacer_tick_out(&connection->send_control);
+            return UTP_INTERNAL_ERROR_OK;
+        }
         error = utp_context_send_packet(context, connection,
                                         packet->has_destination ? &packet->destination : &connection->peer, packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1646,6 +1654,13 @@ static utp_internal_error_t utp_context_retry_connect_attempt(utp_context_t*    
 
     if (context == NULL || slot == NULL || now_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
+        slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
+        // 0-RTT 重试必须带回 SESSION_TOKEN，不能复用普通发送账本中的裸包。
+        const utp_address_t peer = slot->connection.peer;
+
+        return utp_context_start_connect_attempt(context, slot, &peer, now_us);
     }
     if (utp_send_control_unacked_packet_count(&slot->connection.send_control) != 0u) {
         error = utp_connection_on_retransmission_timeout(&slot->connection, now_us);

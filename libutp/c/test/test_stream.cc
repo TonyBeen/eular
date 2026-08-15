@@ -1077,9 +1077,9 @@ TEST_CASE("connection stream reset sends RESET_STREAM and peer records reset", "
     }
 
     utp_packet_in_release(wire);
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection commits RESET state before incoming stream callback", "[stream][reset][callback]")
@@ -1113,9 +1113,9 @@ TEST_CASE("connection commits RESET state before incoming stream callback", "[st
     REQUIRE(probe.read_cancelled);
     REQUIRE(probe.closed_count == 1);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection commits STOP_SENDING before incoming stream callback", "[stream][shutdown][callback]")
@@ -1146,9 +1146,9 @@ TEST_CASE("connection commits STOP_SENDING before incoming stream callback", "[s
     REQUIRE(probe.incoming_count == 1);
     REQUIRE(probe.write_cancelled);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection defers writable notification until incoming callback returns", "[stream][callback]")
@@ -1180,9 +1180,9 @@ TEST_CASE("connection defers writable notification until incoming callback retur
     REQUIRE(probe.writable_count == 1);
     REQUIRE_FALSE(probe.writable_during_incoming);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection validates RESET final size and retires skipped receive bytes", "[stream][reset][flow]")
@@ -1231,9 +1231,9 @@ TEST_CASE("connection validates RESET final size and retires skipped receive byt
     REQUIRE(transfer_control_payload(&passive, &active, &passive_address, payload, sizeof(payload), 500u,
                                      &receive_pool) == UTP_INTERNAL_ERROR_PROTOCOL);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("stream shutdown read sends STOP_SENDING and peer replies RESET_STREAM", "[stream][shutdown]")
@@ -1298,9 +1298,9 @@ TEST_CASE("stream shutdown read sends STOP_SENDING and peer replies RESET_STREAM
     (void)first_packet_frame(packet, &frame_type, &frame_length);
     REQUIRE(frame_type == UTP_FRAME_TYPE_RESET_STREAM);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection does not retransmit old STREAM data after local stream reset", "[stream][reset]")
@@ -1468,9 +1468,9 @@ TEST_CASE("shutdown read retires buffered and later in-flight bytes", "[stream][
     REQUIRE(passive.local_stream_data_received_total == 5u);
     REQUIRE(passive.local_stream_data_consumed_total == 5u);
 
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection stream terminal table evicts and reuses its oldest slot", "[stream][terminal]")
@@ -1699,9 +1699,9 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
     REQUIRE(utp_connection_find_stream_internal(&passive, stream_id) != nullptr);
 
     utp_packet_in_release(wire);
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection send path respects peer MAX_DATA", "[stream][flow]")
@@ -1847,9 +1847,9 @@ TEST_CASE("connection rejects STREAM data beyond local connection receive window
     REQUIRE(passive.local_stream_data_received_total == 0u);
 
     utp_packet_in_release(wire);
-    utp_packet_in_pool_cleanup(&receive_pool);
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+    utp_packet_in_pool_cleanup(&receive_pool);
 }
 
 TEST_CASE("connection sends MAX_DATA and MAX_STREAM_DATA after application consumes stream bytes", "[stream][flow]")

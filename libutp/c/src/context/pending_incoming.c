@@ -300,8 +300,8 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
         view.header.scid != pending->peer_cid) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    uint64_t ack_packet_number;
-    uint32_t handshake_delay_us;
+    uint64_t ack_packet_number = 0u;
+    uint32_t handshake_delay_us = 0u;
     bool     has_handshake_done;
     bool     has_handshake_delay;
     error = utp_pending_incoming_find_handshake_done(&view, &ack_packet_number, &handshake_delay_us,

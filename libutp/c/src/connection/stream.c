@@ -741,7 +741,7 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
     if (capacity <= UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    size_t         contiguous_length;
+    size_t         contiguous_length = 0u;
     const uint8_t* data        = utp_stream_unsent_data(stream, &contiguous_length);
     size_t         data_length = contiguous_length;
     if (data_length > capacity - UTP_FRAME_STREAM_HEADER_SIZE) {
@@ -804,7 +804,7 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     // 只编码 STREAM header，payload 直接引用环形发送缓冲，交给 PacketOut 的 slice 发送。
-    size_t         contiguous_length;
+    size_t         contiguous_length = 0u;
     const uint8_t* data          = utp_stream_unsent_data(stream, &contiguous_length);
     size_t         data_length   = contiguous_length;
     size_t         unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;

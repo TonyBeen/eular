@@ -1009,8 +1009,14 @@ static uint32_t utp_connection_peer_stream_initiator_bit(const utp_connection_t*
 
 static uint8_t utp_connection_stream_type_from_id(uint32_t stream_id)
 {
-    return (stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u ? UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL
-                                                         : UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL;
+    return (uint8_t)((stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u ? UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL
+                                                                   : UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL);
+}
+
+/** @brief 判断元素数量与元素大小相乘是否会溢出 size_t。 */
+static bool utp_connection_allocation_size_overflows(uint32_t count, size_t element_size)
+{
+    return count != 0u && element_size > SIZE_MAX / (size_t)count;
 }
 
 static uint64_t utp_connection_hash_u32(uint32_t value) { return (uint64_t)value * UINT64_C(11400714819323198485); }
@@ -1172,7 +1178,7 @@ static utp_internal_error_t utp_connection_acquire_stream_terminal_slot(utp_conn
         if (block_capacity > remaining) {
             block_capacity = remaining;
         }
-        if ((size_t)block_capacity > SIZE_MAX / sizeof(*block->slots)) {
+        if (utp_connection_allocation_size_overflows(block_capacity, sizeof(*block->slots))) {
             return UTP_INTERNAL_ERROR_OVERFLOW;
         }
         block = utp_allocator_alloc(NULL, sizeof(*block));
@@ -2795,6 +2801,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->local_ack_frequency                                     = (utp_frame_ack_frequency_t){25u, 2u, 3u};
     connection->crypto_configured                                       = false;
     connection->crypto_ready                                            = false;
+    connection->zero_rtt_encrypted                                      = false;
     connection->session_token_issued                                    = false;
     connection->peer_transport_params_received                          = false;
     connection->peer_ack_frequency_received                             = false;
@@ -2874,7 +2881,7 @@ utp_internal_error_t utp_connection_set_stream_terminal_capacity(utp_connection_
         utp_hash_table_count(&connection->streams) != 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if ((size_t)capacity > SIZE_MAX / sizeof(utp_connection_stream_terminal_t)) {
+    if (utp_connection_allocation_size_overflows(capacity, sizeof(utp_connection_stream_terminal_t))) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
