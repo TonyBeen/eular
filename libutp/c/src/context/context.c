@@ -26,6 +26,8 @@ static void utp_context_report_connection_error(utp_context_t* context, utp_cont
 static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
                                              const utp_connect_attempt_info_t* attempt);
 static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot);
+static utp_internal_error_t utp_context_flush_connection_at(utp_context_t*                 context,
+                                                            utp_context_connection_slot_t* slot, uint64_t now_us);
 static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, uint64_t now_us);
 static void                 utp_context_on_udp_writable(uint32_t events, void* user_data);
 static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot);
@@ -991,7 +993,8 @@ static bool utp_context_zero_rtt_amplification_allows(const utp_context_connecti
            packet_size <= limit - slot->zero_rtt_amplification_tx_bytes;
 }
 
-static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
+static utp_internal_error_t utp_context_flush_connection_at(utp_context_t*                 context,
+                                                            utp_context_connection_slot_t* slot, uint64_t now_us)
 {
     utp_connection_t* connection;
 
@@ -999,9 +1002,9 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     connection = &slot->connection;
-    utp_send_control_pacer_tick_in(&connection->send_control, utp_context_now_us());
+    utp_send_control_pacer_tick_in(&connection->send_control, now_us);
     for (;;) {
-        utp_packet_out_t*    packet = utp_connection_next_packet_to_send_at(connection, utp_context_now_us());
+        utp_packet_out_t*    packet = utp_connection_next_packet_to_send_at(connection, now_us);
         utp_internal_error_t error;
 
         if (packet == NULL) {
@@ -1027,7 +1030,7 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
                                         packet->has_destination ? &packet->destination : &connection->peer, packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
             const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
-            const uint64_t sent_at_us        = utp_context_now_us();
+            const uint64_t sent_at_us        = now_us;
             const uint64_t packet_size =
                 (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
 
@@ -1075,7 +1078,7 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
             const bool close_packet = utp_connection_is_close_packet(connection, packet);
 
             if (!close_packet) {
-                utp_connection_on_packet_send_error(connection, packet, error, utp_context_now_us());
+                utp_connection_on_packet_send_error(connection, packet, error, now_us);
                 utp_connection_on_packet_abandoned(connection, packet);
                 utp_send_control_forget_packet_attempts(&connection->send_control, packet);
                 utp_packet_out_pool_release(&connection->packet_pool, packet);
@@ -1096,10 +1099,16 @@ static utp_internal_error_t utp_context_flush_connection(utp_context_t* context,
     }
 }
 
+static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    return utp_context_flush_connection_at(context, slot, utp_context_now_us());
+}
+
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection)
 {
     utp_context_connection_slot_t* slot;
     utp_internal_error_t           error;
+    uint64_t                       now_us;
 
     if (context == NULL || connection == NULL || connection->context != context) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -1108,11 +1117,12 @@ utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context,
     if (slot == NULL || &slot->connection != connection) {
         return UTP_INTERNAL_ERROR_NOT_FOUND;
     }
-    error = utp_context_flush_connection(context, slot);
+    now_us = utp_context_now_us();
+    error  = utp_context_flush_connection_at(context, slot, now_us);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return utp_context_refresh_timer(context, utp_context_now_us());
+    return utp_context_refresh_timer(context, now_us);
 }
 
 static utp_internal_error_t utp_context_encode_version_frame(uint8_t* buffer, size_t capacity, size_t* out_length)
@@ -1930,12 +1940,10 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
                                                              utp_context_connection_slot_t* slot,
                                                              const utp_packet_header_t* header, uint8_t* packet,
                                                              size_t packet_length, utp_packet_in_t* packet_in,
-                                                             const utp_address_t* peer)
+                                                             const utp_address_t* peer, uint64_t now_us)
 {
     utp_internal_error_t error;
-    uint64_t             now_us;
 
-    now_us = utp_context_now_us();
     if (!slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
         (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
          slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
@@ -2694,7 +2702,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
 }
 
 static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, uint8_t* packet, size_t packet_length,
-                                                        utp_packet_in_t* packet_in, const utp_address_t* peer)
+                                                        utp_packet_in_t* packet_in, const utp_address_t* peer,
+                                                        uint64_t now_us)
 {
     utp_packet_header_t  header;
     utp_internal_error_t error = utp_proto_decode_header(&header, packet, packet_length);
@@ -2706,7 +2715,7 @@ static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, 
     utp_context_connection_slot_t* connection_slot = utp_context_find_connection_slot(context, header.dcid);
     if (connection_slot != NULL) {
         return utp_context_on_connection_packet(context, connection_slot, &header, packet, packet_length, packet_in,
-                                                peer);
+                                                peer, now_us);
     }
     utp_context_pending_slot_t* pending_slot = utp_context_find_pending_slot(context, header.dcid);
     if (pending_slot != NULL) {
@@ -2736,6 +2745,7 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
         utp_address_t        peer;
         utp_packet_in_t*     packet_in = NULL;
         utp_internal_error_t error;
+        uint64_t             now_us = 0u;
 
         error = utp_packet_in_pool_acquire(&context->packet_in_pool, &packet_in);
         if (error == UTP_INTERNAL_ERROR_OK) {
@@ -2743,7 +2753,9 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
                                              &received_length, &peer);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 packet_in->length = (uint16_t)received_length;
-                error = utp_context_dispatch_packet(context, packet_in->data, packet_in->length, packet_in, &peer);
+                now_us            = utp_context_now_us();
+                error = utp_context_dispatch_packet(context, packet_in->data, packet_in->length, packet_in, &peer,
+                                                    now_us);
             }
             utp_packet_in_release(packet_in);
         }
@@ -2752,7 +2764,7 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
             return;
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_context_refresh_timer(context, utp_context_now_us());
+            error = utp_context_refresh_timer(context, now_us);
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
             utp_internal_log_error(&context->logger, &context->tag, error, "udp packet handling failed");
