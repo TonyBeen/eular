@@ -1358,7 +1358,8 @@ TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("macOS send hook reports ENOBUFS as a terminal local error", "[transport][integration][socket]")
+TEST_CASE("macOS send hook defers ENOBUFS terminal error until the Context scheduling boundary",
+          "[transport][integration][socket]")
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
@@ -1375,7 +1376,32 @@ TEST_CASE("macOS send hook reports ENOBUFS as a terminal local error", "[transpo
     REQUIRE(utp_test_send_hook_configure((int32_t)pair.client->udp_socket.native_handle, ENOBUFS, 1u));
     REQUIRE(utp_stream_write(stream, payload.data(), payload.size()) == UTP_STATUS_LIMIT);
     REQUIRE(utp_test_send_hook_remaining() == 0u);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    drive_until(pair.event_base, [&pair] { return pair.client_probe.connection_errors == 1; });
     REQUIRE(pair.client_probe.connection_errors == 1);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("macOS local close suppresses deferred ENOBUFS terminal error", "[transport][integration][socket]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const std::array<uint8_t, 8> payload   = {'n', 'o', 'b', 'u', 'f', 's'};
+    uint32_t                     stream_id = UINT32_MAX;
+    utp_stream_t*                stream;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_test_send_hook_configure((int32_t)pair.client->udp_socket.native_handle, ENOBUFS, 1u));
+    REQUIRE(utp_stream_write(stream, payload.data(), payload.size()) == UTP_STATUS_LIMIT);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    utp_connection_close(pair.client_probe.connection);
+    drive_for(pair.event_base, std::chrono::milliseconds(10));
+    REQUIRE(pair.client_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
 #endif

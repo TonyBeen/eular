@@ -2759,12 +2759,14 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->close_error_code                = 0u;
     connection->peer_close_error_code           = 0u;
     connection->peer_close_reason_length        = 0u;
+    connection->user_callback_depth             = 0u;
     connection->path_challenge_deadline_us      = 0u;
     connection->ack_profile_candidate_since_us  = 0u;
     connection->ack_profile_last_sent_us        = 0u;
     connection->ack_profile_baseline_srtt_us    = 0u;
     connection->ack_loss_window_start_us        = 0u;
     connection->last_ack_frequency_apply_us     = 0u;
+    connection->last_public_flush_us           = 0u;
     connection->candidate_rx_bytes              = 0u;
     connection->candidate_tx_bytes              = 0u;
     connection->candidate_queued_bytes          = 0u;
@@ -2805,6 +2807,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->session_token_issued                                    = false;
     connection->peer_transport_params_received                          = false;
     connection->peer_ack_frequency_received                             = false;
+    connection->public_flush_pending                                    = false;
     connection->keepalive_enabled                                       = true;
     connection->peer_close_reason                                       = NULL;
     connection->session_token_size                                      = 0u;
@@ -2864,6 +2867,24 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     }
     utp_send_control_set_connected(&connection->send_control, role == UTP_CONNECTION_ROLE_PASSIVE);
     return UTP_INTERNAL_ERROR_OK;
+}
+
+void utp_connection_enter_user_callback(utp_connection_t* connection)
+{
+    connection->user_callback_depth += 1u;
+}
+
+bool utp_connection_leave_user_callback(utp_connection_t* connection)
+{
+    if (connection->user_callback_depth == 0u) {
+        return false;
+    }
+    connection->user_callback_depth = (uint16_t)(connection->user_callback_depth - UINT16_C(1));
+    if (connection->user_callback_depth != 0u || !connection->public_flush_pending) {
+        return false;
+    }
+    connection->public_flush_pending = false;
+    return true;
 }
 
 void utp_connection_set_mtu_config(utp_connection_t* connection, const utp_mtu_config_t* config)

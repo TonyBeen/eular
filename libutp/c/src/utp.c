@@ -17,6 +17,10 @@ static utp_status_t utp_public_flush_connection(utp_connection_t* connection)
 
 void utp_connection_close(utp_connection_t* connection)
 {
+    if (connection != NULL && connection->context != NULL &&
+        utp_context_suppress_terminal_error(connection->context, connection)) {
+        return;
+    }
     if (utp_connection_queue_close(connection, 0u) == UTP_INTERNAL_ERROR_OK) {
         (void)utp_public_flush_connection(connection);
     }

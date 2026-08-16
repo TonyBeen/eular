@@ -187,6 +187,7 @@ typedef struct utp_connection {
     uint64_t                           ack_profile_baseline_srtt_us;              // 策略评估 RTT 基线
     uint64_t                           ack_loss_window_start_us;                  // ACK 丢失窗口开始时刻
     uint64_t                           last_ack_frequency_apply_us;               // 最近应用对端 ACK 策略时刻
+    uint64_t                           last_public_flush_us;                      // 最近公开发送使用的时刻
     uint64_t                           candidate_rx_bytes;                        // 候选路径已认证接收字节数
     uint64_t                           candidate_tx_bytes;                        // 候选路径已实际发送字节数
     uint64_t                           candidate_queued_bytes;                    // 候选路径已排队字节数
@@ -194,6 +195,7 @@ typedef struct utp_connection {
     uint16_t                           close_error_code;                          // 本端关闭错误码
     uint16_t                           peer_close_error_code;                     // 对端关闭错误码
     uint16_t                           peer_close_reason_length;                  // 对端关闭原因长度
+    uint16_t                           user_callback_depth;                       // 同一连接用户回调嵌套深度
     uint32_t                           keepalive_interval_ms;                     // 保活间隔
     uint32_t                           keepalive_timeout_ms;                      // 单次保活超时
     uint16_t                           local_max_streams[UTP_CONNECTION_STREAM_TYPE_COUNT];  // 本端允许对端创建流数
@@ -229,6 +231,7 @@ typedef struct utp_connection {
     bool                         peer_transport_params_received : 1;  // 是否已收到对端传输参数
     bool                         peer_ack_frequency_received : 1;     // 是否已收到对端 ACK 策略
     bool                         keepalive_enabled : 1;               // 是否启用保活
+    bool                         public_flush_pending : 1;            // 用户回调退出后需要执行公开发送
     const uint8_t*               peer_close_reason;                   // 对端 CLOSE 原包原因视图
     utp_connection_role_t        role;                                // 主动或被动角色
     utp_connection_state_t       state;                               // 连接生命周期状态
@@ -381,6 +384,11 @@ utp_stream_t*          utp_connection_find_stream_internal(utp_connection_t* con
 utp_internal_error_t   utp_stream_shutdown_internal(utp_stream_t* stream, utp_stream_shutdown_t how);
 /** @brief 异常中止本地写方向并可靠排入 RESET_STREAM。 */
 utp_internal_error_t   utp_stream_reset_internal(utp_stream_t* stream, uint16_t error_code);
+
+/** @brief 进入连接关联的同步用户回调，延后其中触发的公开发送。 */
+void                   utp_connection_enter_user_callback(utp_connection_t* connection);
+/** @brief 退出同步用户回调；返回 true 表示最外层回调需补做一次公开发送。 */
+bool                   utp_connection_leave_user_callback(utp_connection_t* connection);
 
 /** @brief 返回当前连接状态；空指针视为 CLOSED。 */
 utp_connection_state_t utp_connection_state(const utp_connection_t* connection);

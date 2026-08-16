@@ -32,6 +32,7 @@ typedef struct utp_context_zero_rtt_replay_entry {
 typedef struct utp_context_connection_slot {
     utp_hash_node_t node;                                        // 按本端 CID 索引的哈希节点
     TAILQ_ENTRY(utp_context_connection_slot) free_next;          // 空闲槽位链表节点
+    TAILQ_ENTRY(utp_context_connection_slot) terminal_error_next;  // 延迟终止事件链表节点
     utp_connection_t           connection;                       // 槽位持有的连接对象
     utp_connect_attempt_info_t connect_attempt;                  // 主动建连尝试描述
     uint64_t                   connect_deadline_us;              // 主动连接超时截止时刻
@@ -48,6 +49,9 @@ typedef struct utp_context_connection_slot {
     uint8_t*                   zero_rtt_early_data;            // 主动 0-RTT 重传期间持有的早期流数据
     size_t                     zero_rtt_early_data_size;       // 缓存早期数据长度
     uint64_t                   zero_rtt_expires_at_seconds;    // 票据绝对过期时间
+    utp_status_t               terminal_error_status;          // 待投递的本地终止错误
+    const char*                terminal_error_reason;          // 待投递错误原因，只借用静态字符串
+    size_t                     terminal_error_reason_length;   // 待投递错误原因长度
     int8_t                     connect_retries_remaining;      // 主动连接剩余重试次数
     uint8_t                    zero_rtt_response_retries;      // 0-RTT 响应已重试次数
     uint8_t                    zero_rtt_encryption_mode;       // 票据指定加密模式
@@ -62,6 +66,8 @@ typedef struct utp_context_connection_slot {
     bool                       connected_reported : 1;         // 是否已调用 on_connected
     bool                       connection_error_reported : 1;  // 是否已调用 connection error 回调
     bool                       connect_pending : 1;            // 是否有主动连接等待完成
+    bool                       terminal_error_queued : 1;      // 是否已进入延迟终止事件队列
+    bool                       terminal_error_suppressed : 1;  // 本地 close 是否取消该错误回调
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
@@ -85,6 +91,7 @@ struct utp_context {
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
     struct utp_context_connection_slot_tailq free_connection_slots;            // 空闲连接槽位
+    struct utp_context_connection_slot_tailq terminal_error_slots;             // 待调度边界投递的本地终止事件
     utp_hash_table_t                         pending_incoming;                 // 等待 accept 的被动握手表
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
@@ -128,5 +135,6 @@ struct utp_context {
 };
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
+bool utp_context_suppress_terminal_error(utp_context_t* context, utp_connection_t* connection);
 
 #endif  // EULAR_UTP_CONTEXT_CONTEXT_H

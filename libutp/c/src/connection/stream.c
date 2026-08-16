@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "connection/connection.h"
+#include "context/context.h"
 
 static bool utp_stream_send_side_is_closed(const utp_stream_t* stream)
 {
@@ -66,6 +67,25 @@ static bool utp_stream_is_writable(const utp_stream_t* stream)
            stream->send_buffer_length < UTP_STREAM_SEND_BUFFER_CAPACITY;
 }
 
+static void utp_stream_enter_user_callback(utp_stream_t* stream)
+{
+    if (stream->connection != NULL && stream->connection->context != NULL) {
+        utp_connection_enter_user_callback(stream->connection);
+    }
+}
+
+static void utp_stream_leave_user_callback(utp_stream_t* stream)
+{
+    utp_connection_t* const connection = stream->connection;
+
+    if (connection == NULL || connection->context == NULL) {
+        return;
+    }
+    if (utp_connection_leave_user_callback(connection)) {
+        (void)utp_context_flush_public_connection(connection->context, connection);
+    }
+}
+
 static void utp_stream_notify_readable(utp_stream_t* stream)
 {
     if (stream == NULL || stream->defer_user_notifications || stream->read_cb == NULL || stream->notifying_readable ||
@@ -73,8 +93,10 @@ static void utp_stream_notify_readable(utp_stream_t* stream)
         return;
     }
     stream->notifying_readable = true;
+    utp_stream_enter_user_callback(stream);
     stream->read_cb(stream, stream->read_cb_data);
     stream->notifying_readable = false;
+    utp_stream_leave_user_callback(stream);
 }
 
 static void utp_stream_notify_writable(utp_stream_t* stream)
@@ -84,8 +106,10 @@ static void utp_stream_notify_writable(utp_stream_t* stream)
         return;
     }
     stream->notifying_writable = true;
+    utp_stream_enter_user_callback(stream);
     stream->write_cb(stream, stream->write_cb_data);
     stream->notifying_writable = false;
+    utp_stream_leave_user_callback(stream);
 }
 
 static void utp_stream_notify_closed(utp_stream_t* stream)
@@ -96,7 +120,9 @@ static void utp_stream_notify_closed(utp_stream_t* stream)
     }
     stream->closed_notified = true;
     if (stream->close_cb != NULL) {
+        utp_stream_enter_user_callback(stream);
         stream->close_cb(stream, stream->close_cb_data);
+        utp_stream_leave_user_callback(stream);
     }
 }
 
