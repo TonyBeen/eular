@@ -111,7 +111,10 @@ typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const u
 const char*  utp_version(void);
 /** @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。 */
 utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
-/** @brief 同步销毁 Context 管理的连接和流；已建立连接仅尽力发送一次 CONNECTION_CLOSE。 */
+/**
+ * @brief 同步销毁 Context 管理的连接和流；已建立连接仅尽力发送一次 CONNECTION_CLOSE。
+ * @note 本调用是调用者主动终止，不会触发连接、流或建连失败回调；调用者负责释放关联的上层资源。
+ */
 void         utp_context_destroy(utp_context_t* context);
 /** @brief 绑定 UDP 地址及可选网卡，空 @p ifname 表示不绑定特定网卡。 */
 utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,

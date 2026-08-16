@@ -107,6 +107,7 @@ int main(int argc, char **argv)
     uint32_t sendCount = 5;
     size_t msgLen = 16;
     uint64_t totalBytes = 0;
+    std::string encryptionMode = "none";
     bool silent = false;
 
     CLI::App app("UTP echo client example");
@@ -117,9 +118,22 @@ int main(int argc, char **argv)
     app.add_option("--count", sendCount, "Number of messages to send")->check(CLI::Range(1, 200000));
     app.add_option("--length", msgLen, "Length of each message")->check(CLI::Range(16, 16384));
     app.add_option("--total-bytes", totalBytes, "Total bytes to send; if > 0, overrides --count")->check(CLI::Range(static_cast<uint64_t>(0), static_cast<uint64_t>(4294967296ULL)));
+    app.add_option("--encryption", encryptionMode, "Encryption mode: none, aes128, aes256");
     app.add_flag("--quiet", silent, "Suppress all client output");
     app.add_flag("--silent", silent, "Alias for --quiet");
     CLI11_PARSE(app, argc, argv);
+
+    eular::utp::Context::EncryptionMode encryption;
+    if (encryptionMode == "none") {
+        encryption = eular::utp::Context::kEncryptionNone;
+    } else if (encryptionMode == "aes128") {
+        encryption = eular::utp::Context::kEncryptionAesGcm128;
+    } else if (encryptionMode == "aes256") {
+        encryption = eular::utp::Context::kEncryptionAesGcm256;
+    } else {
+        std::cerr << "[client] unsupported encryption mode: " << encryptionMode << "\n";
+        return 2;
+    }
 
     std::signal(SIGINT, [](int) { std::exit(0); });
     std::signal(SIGTERM, [](int) { std::exit(0); });
@@ -578,7 +592,7 @@ int main(int argc, char **argv)
     info.ip = serverIp;
     info.port = serverPort;
     info.timeout = 3000;
-    info.encrypted = eular::utp::Context::kEncryptionNone;
+    info.encrypted = encryption;
     const int32_t connectStatus = ctx.connect(info);
     if (connectStatus != UTP_ERR_OK) {
         if (!silent) {

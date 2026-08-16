@@ -6,6 +6,7 @@ include(CTest)
 
 option(UTP_C_BUILD_TESTS "Build libutp C migration tests" ON)
 option(UTP_C_BUILD_BENCHMARKS "Build libutp C migration benchmarks" OFF)
+option(UTP_C_BUILD_EXAMPLES "Build libutp C examples" OFF)
 option(UTP_C_ENABLE_FORMAT_CHECK "Run the clang-format gate during the default build" OFF)
 option(UTP_C_ENABLE_SANITIZERS "Instrument libutp C and its tests with AddressSanitizer and UBSan" OFF)
 option(UTP_C_BUILD_FUZZERS "Build libFuzzer targets for packet-facing parsers" OFF)
@@ -170,7 +171,12 @@ if(UTP_C_BUILD_BENCHMARKS)
     utp_c_configure_c_test(utp_c_container_benchmark)
 endif()
 
-set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c ${UTP_C_HEADERS} ${UTP_C_SOURCES}
+if(UTP_C_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
+set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
+    ${UTP_C_SOURCES}
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_packet_in.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc
     test/test_stream.cc test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc test/test_mtu.cc test/test_parser_fuzz.cc
