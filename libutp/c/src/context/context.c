@@ -1956,6 +1956,10 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
             return error == UTP_INTERNAL_ERROR_AUTH || error == UTP_INTERNAL_ERROR_CRYPTO ? UTP_INTERNAL_ERROR_OK
                                                                                           : error;
         }
+        error = utp_connection_queue_ack(&slot->connection, now_us);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
         error = utp_context_complete_connected_side_effects(context, slot);
         if (error == UTP_INTERNAL_ERROR_OK) {
             utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
@@ -2001,6 +2005,14 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN &&
         slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
         error = utp_context_send_handshake_done(context, slot);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    if (slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
+         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) && header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+        error = utp_connection_queue_ack(&slot->connection, now_us);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }

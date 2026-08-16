@@ -105,7 +105,7 @@ elseif(MSVC)
 endif()
 
 function(utp_c_configure_c_test target)
-    target_link_libraries(${target} PRIVATE utp_c)
+    target_link_libraries(${target} PRIVATE utp_c event_core)
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     if(UTP_C_SANITIZER_FLAGS)
         target_compile_options(${target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
@@ -121,7 +121,7 @@ function(utp_c_configure_c_test target)
 endfunction()
 
 function(utp_c_configure_cpp_test target)
-    target_link_libraries(${target} PRIVATE utp_c)
+    target_link_libraries(${target} PRIVATE utp_c event_core)
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
         "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
     if(UTP_C_SANITIZER_FLAGS)

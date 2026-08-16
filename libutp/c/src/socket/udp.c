@@ -521,11 +521,8 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
         message.msg_name       = &storage;
         message.msg_namelen    = (socklen_t)storage_length;
         message.msg_iov        = iov;
-#if defined(__linux__)
-        message.msg_iovlen = (size_t)slice_count;
-#else
+        // glibc 使用 size_t，musl 与部分 BSD 使用 int；统一从受限的 8 个 slice 转换。
         message.msg_iovlen = (int)slice_count;
-#endif
         message.msg_control    = NULL;
         message.msg_controllen = 0u;
         message.msg_flags      = 0;

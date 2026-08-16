@@ -51,6 +51,12 @@ struct relay_rule {
     bool            drop_stream_ack_until_retransmission;  // 是否持续丢弃目标 ACK，直到 STREAM 重传
 };
 
+struct relay_client_route {
+    uint32_t      cid     = 0u;  // 客户端发送连接 ID
+    utp_address_t address = {};  // 对应的 UDP 源地址
+    bool          used    = false;  // 路由槽位是否有效
+};
+
 struct udp_relay {
     struct event_base*                          event_base                    = nullptr;
     utp_event_loop_t                            event_loop                    = {};
@@ -61,7 +67,7 @@ struct udp_relay {
     utp_address_t                               address                       = {};
     utp_address_t                               migration_address             = {};
     utp_address_t                               server                        = {};
-    utp_address_t                               client                        = {};
+    std::array<relay_client_route, 4u>          client_routes                 = {};
     relay_rule                                  rule                          = {};
     std::array<uint8_t, kRelayDatagramCapacity> held                          = {};
     size_t                                      held_length                   = 0u;
@@ -69,7 +75,6 @@ struct udp_relay {
     utp_address_t                               held_destination              = {};
     uint32_t                                    held_stream_id                = UINT32_MAX;
     uint64_t                                    held_stream_offset            = 0u;
-    bool                                        client_known                  = false;
     bool                                        held_valid                    = false;
     uint32_t                                    forwarded_stream_packets      = 0u;
     uint64_t                                    stream_packet_number          = 0u;
@@ -82,6 +87,38 @@ struct udp_relay {
     bool                                        migration_enabled             = false;
     bool                                        held_manual                   = false;  // 是否仅允许测试显式释放持有包
 };
+
+/** @brief 记录客户端连接 ID 与 UDP 地址的对应关系，供服务端报文准确回送。 */
+static void relay_remember_client(udp_relay* relay, uint32_t cid, const utp_address_t* address)
+{
+    relay_client_route* available = nullptr;
+
+    REQUIRE(cid != 0u);
+    for (auto& route : relay->client_routes) {
+        if (route.used && route.cid == cid) {
+            route.address = *address;
+            return;
+        }
+        if (!route.used && available == nullptr) {
+            available = &route;
+        }
+    }
+    REQUIRE(available != nullptr);
+    available->cid     = cid;
+    available->address = *address;
+    available->used    = true;
+}
+
+/** @brief 根据服务端报文的目标连接 ID 查找应回送的客户端地址。 */
+static const utp_address_t* relay_find_client(const udp_relay* relay, uint32_t cid)
+{
+    for (const auto& route : relay->client_routes) {
+        if (route.used && route.cid == cid) {
+            return &route.address;
+        }
+    }
+    return nullptr;
+}
 
 static bool relay_acknowledges_packet(const uint8_t* packet, size_t packet_length, uint64_t packet_number)
 {
@@ -344,14 +381,21 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
         const utp_address_t*  destination;
         bool                  target_stream_ack;
 
+        {
+            utp_packet_header_t header = {};
+
+            REQUIRE(utp_proto_decode_header(&header, packet.data(), packet_length) == UTP_INTERNAL_ERROR_OK);
+            if (direction == relay_direction::client_to_server) {
+                relay_remember_client(relay, header.scid, &source);
+            } else {
+                destination = relay_find_client(relay, header.dcid);
+                REQUIRE(destination != nullptr);
+            }
+        }
         if (direction == relay_direction::client_to_server) {
-            relay->client       = source;
-            relay->client_known = true;
             destination         = &relay->server;
             send_socket         = relay->migration_enabled ? &relay->migration_socket : &relay->socket;
         } else {
-            REQUIRE(relay->client_known);
-            destination = &relay->client;
             // 服务端发往候选 relay 的验证报文，必须经原 relay 返回，避免客户端也误判路径迁移。
             send_socket = migration_socket ? &relay->socket : receive_socket;
         }
@@ -691,7 +735,8 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     drive_until(pair.event_base, [&pair] { return pair.relay.rule.hits == 1u; });
     drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
     drive_until(pair.event_base,
-                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connection != nullptr; });
+                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
+                                 pair.server_probe.connection != nullptr; });
     stream = utp_connection_get_stream(pair.server_probe.connection, 0u);
     REQUIRE(stream != nullptr);
     drive_until(pair.event_base,
@@ -745,7 +790,8 @@ TEST_CASE("encrypted 0-RTT continues early stream data after the first packet", 
     REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
     drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
     drive_until(pair.event_base,
-                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connection != nullptr; });
+                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
+                                 pair.server_probe.connection != nullptr; });
     stream = utp_connection_get_stream(pair.server_probe.connection, 0u);
     REQUIRE(stream != nullptr);
     drive_until(pair.event_base,
