@@ -85,6 +85,7 @@ set(UTP_C_HEADERS
 list(APPEND UTP_C_HEADERS src/connection/stream.h src/connection/connection.h src/mtu/mtu.h)
 add_library(utp_c STATIC ${UTP_C_SOURCES} ${UTP_C_HEADERS})
 add_library(eular::utp_c ALIAS utp_c)
+set_target_properties(utp_c PROPERTIES OUTPUT_NAME utp)
 target_link_libraries(utp_c PRIVATE event_core crypto)
 if(UTP_C_SANITIZER_FLAGS)
     target_compile_options(utp_c PRIVATE ${UTP_C_SANITIZER_FLAGS})
