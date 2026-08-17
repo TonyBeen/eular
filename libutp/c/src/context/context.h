@@ -14,7 +14,9 @@
 
 #define UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT   1024u
 #define UTP_CONTEXT_PACKET_LIMIT                     32u
-#define UTP_CONTEXT_PACKET_IN_LIMIT                  64u
+#define UTP_CONTEXT_PACKET_IN_GROW_CAPACITY          64u
+#define UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY         8u
+#define UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE       256u
 #define UTP_CONTEXT_PENDING_PACKET_LIMIT             16u
 #define UTP_CONTEXT_PENDING_STORAGE_CAPACITY         32768u
 #define UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY 4096u
@@ -82,7 +84,7 @@ struct utp_context {
     utp_event_t                              udp_write_event;                  // UDP 可写事件
     utp_event_t                              timer_event;                      // 协议定时器事件
     utp_udp_socket_t                         udp_socket;                       // Context 持有的 UDP socket
-    utp_packet_in_pool_t                     packet_in_pool;                   // 有界入站包对象池
+    utp_packet_in_pool_t                     packet_in_pool;                   // 入站包对象池
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
     utp_hash_table_t                         passive_connections_by_peer;      // 被动连接来源地址和对端 CID 表

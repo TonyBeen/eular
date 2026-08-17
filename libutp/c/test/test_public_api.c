@@ -616,14 +616,17 @@ int main(void)
         assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
         assert(many_context->pending_incoming_by_peer.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
         assert(many_context->packet_in_pool.buffer_capacity == many_options.mtu_max);
+        assert(many_context->packet_in_pool.max_free_capacity == UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE);
         utp_context_destroy(many_context);
 
         many_options.pending_incoming_limit = 2048u;
+        many_options.packet_in_max_free     = 512u;
         assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
         assert(utp_context_bind(many_context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
         assert(many_context->connections.max_entries == SIZE_MAX);
         assert(many_context->pending_incoming.max_entries == many_options.pending_incoming_limit);
         assert(many_context->pending_incoming_by_peer.max_entries == many_options.pending_incoming_limit);
+        assert(many_context->packet_in_pool.max_free_capacity == many_options.packet_in_max_free);
         connect.address = "127.0.0.1";
         for (uint32_t index = 0u; index < connection_count; ++index) {
             connect.port = (uint16_t)(10000u + index);

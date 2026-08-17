@@ -3110,11 +3110,17 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
-    context->packet_in_pool.allocator       = NULL;
-    context->packet_in_pool.packets         = NULL;
-    context->packet_in_pool.storage         = NULL;
-    context->packet_in_pool.packet_capacity = 0u;
-    context->packet_in_pool.buffer_capacity = 0u;
+    context->packet_in_pool.allocator         = NULL;
+    context->packet_in_pool.blocks            = NULL;
+    context->packet_in_pool.free_packets      = NULL;
+    context->packet_in_pool.packet_capacity   = 0u;
+    context->packet_in_pool.free_count        = 0u;
+    context->packet_in_pool.grow_capacity     = 0u;
+    context->packet_in_pool.block_capacity    = 0u;
+    context->packet_in_pool.max_free_capacity = 0u;
+    context->packet_in_pool.buffer_capacity   = 0u;
+    context->packet_in_pool.dynamic           = false;
+
     context->on_connected                   = NULL;
     context->on_connected_user_data         = NULL;
     context->on_connect_error               = NULL;
@@ -3260,8 +3266,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         const uint16_t packet_in_capacity =
             context->mtu_config.mtu_max < packet_in_minimum ? packet_in_minimum : context->mtu_config.mtu_max;
 
-        error =
-            utp_packet_in_pool_init(&context->packet_in_pool, NULL, UTP_CONTEXT_PACKET_IN_LIMIT, packet_in_capacity);
+        const uint32_t packet_in_max_free =
+            options->packet_in_max_free == 0u ? UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE : options->packet_in_max_free;
+
+        error = utp_packet_in_pool_init_dynamic(&context->packet_in_pool, NULL, UTP_CONTEXT_PACKET_IN_GROW_CAPACITY,
+                                                UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY, packet_in_max_free,
+                                                packet_in_capacity);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_internal_log_error(&context->logger, &context->tag, error, "context initialization failed");
