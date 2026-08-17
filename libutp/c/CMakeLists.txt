@@ -169,13 +169,15 @@ endif()
 if(UTP_C_BUILD_BENCHMARKS)
     add_executable(utp_c_container_benchmark benchmark/bench_containers.c)
     utp_c_configure_c_test(utp_c_container_benchmark)
+    add_executable(utp_c_concurrent_connection_benchmark benchmark/bench_concurrent_connections.c)
+    utp_c_configure_c_test(utp_c_concurrent_connection_benchmark)
 endif()
 
 if(UTP_C_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
+set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c benchmark/bench_concurrent_connections.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
     ${UTP_C_SOURCES}
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_packet_in.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc

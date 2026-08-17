@@ -31,6 +31,7 @@ typedef struct utp_context_zero_rtt_replay_entry {
 
 typedef struct utp_context_connection_slot {
     utp_hash_node_t node;                                        // 按本端 CID 索引的哈希节点
+    utp_hash_node_t peer_node;                                   // 被动连接按来源地址和对端 CID 索引的哈希节点
     TAILQ_ENTRY(utp_context_connection_slot) free_next;          // 空闲槽位链表节点
     utp_connection_t           connection;                       // 槽位持有的连接对象
     utp_connect_attempt_info_t connect_attempt;                  // 主动建连尝试描述
@@ -67,6 +68,7 @@ TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
 typedef struct utp_context_pending_slot {
     utp_hash_node_t node;                                                  // 按待处理本端 CID 索引的哈希节点
+    utp_hash_node_t peer_node;                                             // 按来源地址和对端 CID 索引的哈希节点
     TAILQ_ENTRY(utp_context_pending_slot) free_next;                       // 空闲 pending 槽位链表节点
     utp_pending_incoming_t pending;                                        // 未接受被动握手状态
     uint8_t                storage[UTP_CONTEXT_PENDING_STORAGE_CAPACITY];  // 入站包有界缓存
@@ -84,8 +86,10 @@ struct utp_context {
     utp_packet_in_pool_t                     packet_in_pool;                   // 有界入站包对象池
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
+    utp_hash_table_t                         passive_connections_by_peer;      // 被动连接来源地址和对端 CID 表
     struct utp_context_connection_slot_tailq free_connection_slots;            // 空闲连接槽位
     utp_hash_table_t                         pending_incoming;                 // 等待 accept 的被动握手表
+    utp_hash_table_t                         pending_incoming_by_peer;         // pending 来源地址和对端 CID 表
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
     utp_stream_scheduler_mode_t              stream_scheduler_mode;            // 新连接默认流调度策略

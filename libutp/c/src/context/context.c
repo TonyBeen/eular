@@ -20,6 +20,11 @@ typedef struct utp_context_replay {
     uint64_t             now_us;      // 重放使用的接收时刻
 } utp_context_replay_t;
 
+typedef struct utp_context_peer_index_key {
+    const utp_address_t* peer;      // 来源地址，不拥有
+    uint32_t             peer_cid;  // 对端连接 ID
+} utp_context_peer_index_key_t;
+
 static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
                                                 utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
                                                 size_t reason_length, bool peer_initiated);
@@ -190,6 +195,14 @@ static utp_context_connection_slot_t* utp_context_connection_slot_from_node(utp_
                : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
 }
 
+/** @brief 从来源地址和对端 CID 哈希节点取得被动连接槽位。 */
+static utp_context_connection_slot_t* utp_context_connection_slot_from_peer_node(utp_hash_node_t* node)
+{
+    return node == NULL
+               ? NULL
+               : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, peer_node));
+}
+
 /** @brief 按本地 CID 比较 Connection 槽位。 */
 static bool utp_context_connection_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
 {
@@ -200,11 +213,32 @@ static bool utp_context_connection_slot_matches(const utp_hash_node_t* node, con
     return key != NULL && slot->connection.local_cid == *(const uint32_t*)key;
 }
 
+/** @brief 按来源地址和对端 CID 比较被动连接槽位。 */
+static bool utp_context_connection_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_connection_slot_t* slot;
+    const utp_context_peer_index_key_t*  peer_key = key;
+
+    (void)user_data;
+    slot = (const utp_context_connection_slot_t*)((const uint8_t*)node -
+                                                  offsetof(utp_context_connection_slot_t, peer_node));
+    return peer_key != NULL && peer_key->peer != NULL && slot->connection.peer_cid == peer_key->peer_cid &&
+           utp_address_equal(&slot->connection.peer, peer_key->peer);
+}
+
 /** @brief 从哈希节点取得动态 pending 槽位。 */
 static utp_context_pending_slot_t* utp_context_pending_slot_from_node(utp_hash_node_t* node)
 {
     return node == NULL ? NULL
                         : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
+}
+
+/** @brief 从来源地址和对端 CID 哈希节点取得 pending 槽位。 */
+static utp_context_pending_slot_t* utp_context_pending_slot_from_peer_node(utp_hash_node_t* node)
+{
+    return node == NULL
+               ? NULL
+               : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, peer_node));
 }
 
 /** @brief 按本地 CID 比较 pending 槽位。 */
@@ -215,6 +249,41 @@ static bool utp_context_pending_slot_matches(const utp_hash_node_t* node, const 
     (void)user_data;
     slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
     return key != NULL && slot->pending.local_cid == *(const uint32_t*)key;
+}
+
+/** @brief 按来源地址和对端 CID 比较 pending 槽位。 */
+static bool utp_context_pending_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_pending_slot_t*   slot;
+    const utp_context_peer_index_key_t* peer_key = key;
+
+    (void)user_data;
+    slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, peer_node));
+    return peer_key != NULL && peer_key->peer != NULL && slot->pending.peer_cid == peer_key->peer_cid &&
+           utp_address_equal(&slot->pending.peer, peer_key->peer);
+}
+
+/** @brief 为来源地址和对端 CID 生成稳定的 64 位哈希。 */
+static uint64_t utp_context_peer_index_hash(const utp_address_t* peer, uint32_t peer_cid)
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    size_t   address_length;
+    size_t   index;
+
+    address_length  = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
+    hash           ^= peer->family;
+    hash           *= UINT64_C(1099511628211);
+    hash           ^= peer->port;
+    hash           *= UINT64_C(1099511628211);
+    hash           ^= peer->scope_id;
+    hash           *= UINT64_C(1099511628211);
+    for (index = 0u; index < address_length; ++index) {
+        hash ^= peer->address[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    hash ^= peer_cid;
+    hash *= UINT64_C(1099511628211);
+    return hash;
 }
 
 /** @brief 使所有已缓存的恢复凭证失效，根密钥替换后不得继续导出或使用旧状态。 */
@@ -549,25 +618,20 @@ static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_co
     return NULL;
 }
 
-/** @brief 查找已晋升连接对应的对端 CID，用于过滤迟到的重复 Initial。 */
-static bool utp_context_has_connection_peer_cid(const utp_context_t* context, const utp_address_t* peer,
-                                                uint32_t peer_cid)
+/** @brief 按来源地址和对端 CID 查找已晋升的被动连接。 */
+static utp_context_connection_slot_t* utp_context_find_passive_connection_by_peer(utp_context_t*       context,
+                                                                                  const utp_address_t* peer,
+                                                                                  uint32_t             peer_cid)
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
+    const utp_context_peer_index_key_t key = {peer, peer_cid};
+    utp_hash_node_t*                   node;
 
     if (context == NULL || peer == NULL || peer_cid == 0u) {
-        return false;
+        return NULL;
     }
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
-        const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
-
-        if (slot->connection.peer_cid == peer_cid && utp_address_equal(&slot->connection.peer, peer)) {
-            return true;
-        }
-    }
-    return false;
+    node = utp_hash_table_find(&context->passive_connections_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
+                               utp_context_connection_peer_slot_matches, NULL);
+    return utp_context_connection_slot_from_peer_node(node);
 }
 
 /** @brief 查找可响应重复加密 0-RTT 的短期握手缓存，匹配必须同时绑定来源和完整 token payload。 */
@@ -611,6 +675,7 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
         }
     }
     utp_hash_node_init(&slot->node);
+    utp_hash_node_init(&slot->peer_node);
     slot->connection.local_cid            = 0u;
     slot->connection.peer_cid             = 0u;
     slot->connect_deadline_us             = 0u;
@@ -646,18 +711,37 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
 static utp_internal_error_t utp_context_register_connection_slot(utp_context_t*                 context,
                                                                  utp_context_connection_slot_t* slot)
 {
-    const uint32_t local_cid = slot == NULL ? 0u : slot->connection.local_cid;
+    const uint32_t       local_cid = slot == NULL ? 0u : slot->connection.local_cid;
+    utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL) {
+    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL ||
+        (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->peer_node.table != NULL)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    return utp_hash_table_insert(&context->connections, &slot->node, local_cid, &local_cid,
-                                 utp_context_connection_slot_matches, NULL);
+    error = utp_hash_table_insert(&context->connections, &slot->node, local_cid, &local_cid,
+                                  utp_context_connection_slot_matches, NULL);
+    if (error != UTP_INTERNAL_ERROR_OK || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE) {
+        return error;
+    }
+    {
+        const utp_context_peer_index_key_t key = {&slot->connection.peer, slot->connection.peer_cid};
+
+        error = utp_hash_table_insert(&context->passive_connections_by_peer, &slot->peer_node,
+                                      utp_context_peer_index_hash(key.peer, key.peer_cid), &key,
+                                      utp_context_connection_peer_slot_matches, NULL);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        (void)utp_hash_table_remove(&context->connections, &slot->node);
+    }
+    return error;
 }
 
 /** @brief 从 CID 哈希表摘除 Connection，但保留槽位供重试重新初始化。 */
 static void utp_context_unregister_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
+    if (context != NULL && slot != NULL && slot->peer_node.table == &context->passive_connections_by_peer) {
+        (void)utp_hash_table_remove(&context->passive_connections_by_peer, &slot->peer_node);
+    }
     if (context != NULL && slot != NULL && slot->node.table == &context->connections) {
         (void)utp_hash_table_remove(&context->connections, &slot->node);
     }
@@ -747,21 +831,15 @@ static utp_context_pending_slot_t* utp_context_find_pending_slot(utp_context_t* 
 static utp_context_pending_slot_t* utp_context_find_pending_by_peer(utp_context_t* context, uint32_t peer_cid,
                                                                     const utp_address_t* peer)
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
+    const utp_context_peer_index_key_t key = {peer, peer_cid};
+    utp_hash_node_t*                   node;
 
-    if (context == NULL || peer == NULL) {
+    if (context == NULL || peer == NULL || peer_cid == 0u) {
         return NULL;
     }
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
-        utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
-
-        if (slot->pending.peer_cid == peer_cid && utp_address_equal(&slot->pending.peer, peer)) {
-            return slot;
-        }
-    }
-    return NULL;
+    node = utp_hash_table_find(&context->pending_incoming_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
+                               utp_context_pending_peer_slot_matches, NULL);
+    return utp_context_pending_slot_from_peer_node(node);
 }
 
 static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t* context)
@@ -781,6 +859,7 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
         }
     }
     utp_hash_node_init(&slot->node);
+    utp_hash_node_init(&slot->peer_node);
     slot->pending.local_cid = 0u;
     slot->used              = true;
     slot->queued            = false;
@@ -790,18 +869,37 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
 /** @brief 将 pending 注册到 CID 哈希表并计入 1024 项容量。 */
 static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
-    const uint32_t local_cid = slot == NULL ? 0u : slot->pending.local_cid;
+    const uint32_t       local_cid = slot == NULL ? 0u : slot->pending.local_cid;
+    utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL) {
+    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL ||
+        slot->peer_node.table != NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    return utp_hash_table_insert(&context->pending_incoming, &slot->node, local_cid, &local_cid,
-                                 utp_context_pending_slot_matches, NULL);
+    error = utp_hash_table_insert(&context->pending_incoming, &slot->node, local_cid, &local_cid,
+                                  utp_context_pending_slot_matches, NULL);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    {
+        const utp_context_peer_index_key_t key = {&slot->pending.peer, slot->pending.peer_cid};
+
+        error = utp_hash_table_insert(&context->pending_incoming_by_peer, &slot->peer_node,
+                                      utp_context_peer_index_hash(key.peer, key.peer_cid), &key,
+                                      utp_context_pending_peer_slot_matches, NULL);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
+    }
+    return error;
 }
 
 static void utp_context_release_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
     if (context != NULL && slot != NULL && slot->used) {
+        if (slot->peer_node.table == &context->pending_incoming_by_peer) {
+            (void)utp_hash_table_remove(&context->pending_incoming_by_peer, &slot->peer_node);
+        }
         if (slot->node.table == &context->pending_incoming) {
             (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
         }
@@ -2011,7 +2109,8 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     }
     if (slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
         (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
-         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) && header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE) {
         error = utp_connection_queue_ack(&slot->connection, now_us);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
@@ -2106,8 +2205,8 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         }
         return UTP_INTERNAL_ERROR_OK;
     }
-    // 服务端 HANDSHAKE 丢失时，客户端会重传 Initial；若连接已晋升，不能再次交给应用 accept。
-    if (utp_context_has_connection_peer_cid(context, peer, view->header.scid)) {
+    // 服务端 HANDSHAKE 丢失时，客户端会重传 Initial；已晋升的同一来源地址和 SCID 不得再次交给应用 accept。
+    if (utp_context_find_passive_connection_by_peer(context, peer, view->header.scid) != NULL) {
         return UTP_INTERNAL_ERROR_OK;
     }
     slot = utp_context_alloc_pending_slot(context);
@@ -3000,9 +3099,11 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (context == NULL) {
         return UTP_STATUS_NOMEM;
     }
-    context->connections      = (utp_hash_table_t){0};
-    context->pending_incoming = (utp_hash_table_t){0};
-    context->zero_rtt_replay  = (utp_hash_table_t){0};
+    context->connections                 = (utp_hash_table_t){0};
+    context->passive_connections_by_peer = (utp_hash_table_t){0};
+    context->pending_incoming            = (utp_hash_table_t){0};
+    context->pending_incoming_by_peer    = (utp_hash_table_t){0};
+    context->zero_rtt_replay             = (utp_hash_table_t){0};
     TAILQ_INIT(&context->free_connection_slots);
     TAILQ_INIT(&context->free_pending_slots);
     utp_event_init(&context->udp_event);
@@ -3114,7 +3215,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_crypto_default_resumption_key(context->resumption_root_key);
     utp_internal_error_t error = utp_hash_table_init(&context->connections, NULL, SIZE_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->passive_connections_by_peer, NULL, SIZE_MAX);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&context->pending_incoming, NULL, UTP_CONTEXT_MAX_PENDING_INCOMING);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->pending_incoming_by_peer, NULL, UTP_CONTEXT_MAX_PENDING_INCOMING);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&context->zero_rtt_replay, NULL, context->zero_rtt_replay_cache_capacity);
@@ -3131,7 +3238,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     int32_t fragment_length = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -3152,7 +3261,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         utp_internal_log_error(&context->logger, &context->tag, error, "context initialization failed");
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -3187,7 +3298,9 @@ void utp_context_destroy(utp_context_t* context)
             utp_context_release_pending_slot(context, utp_context_pending_slot_from_node(node));
         }
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
+        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
         while (!TAILQ_EMPTY(&context->free_connection_slots)) {
             utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->free_connection_slots);
 
