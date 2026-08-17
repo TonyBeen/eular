@@ -140,7 +140,10 @@ typedef struct utp_connection {
     utp_connection_stream_terminal_t*  stream_terminal_oldest;                    // LRU 最旧终态
     utp_connection_stream_terminal_t*  stream_terminal_newest;                    // LRU 最新终态
     utp_address_t                      peer;                                      // 当前已验证对端地址
+    utp_address_t                      local;                                     // 当前已验证路径的本地目的地址
     utp_address_t                      candidate_peer;                            // 正在验证的候选地址
+    utp_address_t                      candidate_local;                           // 候选路径报文的本地目的地址
+    utp_address_t                      received_local;                            // 当前接收数据报的本地目的地址
     uint32_t                           local_cid;                                 // 本端连接 ID
     uint32_t                           peer_cid;                                  // 对端连接 ID
     uint32_t                           next_stream_id[UTP_STREAM_TYPES];          // 各流类型下一个本端 ID
@@ -328,6 +331,8 @@ utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connect
 /** @brief 处理 PacketIn 承载的接收包，使流重组可借用包内数据。 */
 utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* connection, utp_packet_in_t* packet,
                                                           const utp_address_t* peer, uint64_t now_us);
+/** @brief 设置当前待处理数据报的本地目的地址，仅由 Context 收包分发路径调用。 */
+void                 utp_connection_set_received_local(utp_connection_t* connection, const utp_address_t* local);
 /** @brief 处理已经在 pending 阶段完成解密的 PacketIn。 */
 utp_internal_error_t utp_connection_on_plaintext_packet_in_received(utp_connection_t* connection,
                                                                     utp_packet_in_t* packet, size_t wire_packet_length,

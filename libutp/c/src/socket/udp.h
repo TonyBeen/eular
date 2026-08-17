@@ -21,6 +21,7 @@ typedef struct utp_udp_send_slice {
 
 typedef struct utp_udp_socket {
     uintptr_t native_handle;   // 平台 UDP socket 句柄
+    uint16_t  local_port;      // bind 后的本地端口，供目的地址元数据补全
     bool      winsock_active;  // 是否由本对象初始化 Winsock
 } utp_udp_socket_t;
 
@@ -32,10 +33,19 @@ utp_internal_error_t utp_udp_socket_bind(utp_udp_socket_t* udp_socket, const utp
                                          const char* ifname, utp_address_t* local);
 utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const void* data, size_t data_length,
                                             const utp_address_t* peer, size_t* sent_length);
+utp_internal_error_t utp_udp_socket_send_from_to(utp_udp_socket_t* udp_socket, const void* data, size_t data_length,
+                                                 const utp_address_t* peer, const utp_address_t* local,
+                                                 size_t* sent_length);
 utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket, const utp_udp_send_slice_t* slices,
                                                    size_t slice_count, const utp_address_t* peer, size_t* sent_length);
+utp_internal_error_t utp_udp_socket_send_from_to_slices(utp_udp_socket_t* udp_socket,
+                                                        const utp_udp_send_slice_t* slices, size_t slice_count,
+                                                        const utp_address_t* peer, const utp_address_t* local,
+                                                        size_t* sent_length);
 utp_internal_error_t utp_udp_socket_recv_from(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
                                               size_t* received_length, utp_address_t* peer);
+utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
+                                                 size_t* received_length, utp_address_t* peer, utp_address_t* local);
 
 #ifdef __cplusplus
 }

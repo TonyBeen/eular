@@ -61,6 +61,7 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     pending->peer                                 = *peer;
+    pending->local                                = (utp_address_t){0};
     pending->storage                              = storage;
     pending->storage_capacity                     = storage_capacity;
     pending->storage_length                       = 0u;
@@ -95,12 +96,20 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     return UTP_INTERNAL_ERROR_OK;
 }
 
+void utp_pending_incoming_set_local(utp_pending_incoming_t* pending, const utp_address_t* local)
+{
+    if (pending != NULL && local != NULL) {
+        pending->local = *local;
+    }
+}
+
 void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
 {
     if (pending != NULL) {
         utp_crypto_aead_cleanup(&pending->tx_aead);
         utp_crypto_aead_cleanup(&pending->rx_aead);
         utp_crypto_key_pair_clear(&pending->crypto_key_pair);
+        pending->local                                = (utp_address_t){0};
         pending->storage                              = NULL;
         pending->storage_capacity                     = 0u;
         pending->storage_length                       = 0u;
