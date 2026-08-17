@@ -32,13 +32,12 @@ typedef struct utp_udp_send_slice {
 } utp_udp_send_slice_t;
 
 typedef struct utp_udp_socket {
-    uintptr_t native_handle;   // 平台 UDP socket 句柄
+    uintptr_t native_handle;  // 平台 UDP socket 句柄
 #if defined(_WIN32)
     LPFN_WSARECVMSG wsa_recv_msg;
     LPFN_WSASENDMSG wsa_send_msg;
 #endif
-    uint16_t  local_port;      // bind 后的本地端口，供目的地址元数据补全
-    bool      winsock_active;  // 是否由本对象初始化 Winsock
+    uint16_t local_port;  // bind 后的本地端口，供目的地址元数据补全
 } utp_udp_socket_t;
 
 void                 utp_udp_socket_init(utp_udp_socket_t* udp_socket);
@@ -54,7 +53,7 @@ utp_internal_error_t utp_udp_socket_send_from_to(utp_udp_socket_t* udp_socket, c
                                                  size_t* sent_length);
 utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket, const utp_udp_send_slice_t* slices,
                                                    size_t slice_count, const utp_address_t* peer, size_t* sent_length);
-utp_internal_error_t utp_udp_socket_send_from_to_slices(utp_udp_socket_t* udp_socket,
+utp_internal_error_t utp_udp_socket_send_from_to_slices(utp_udp_socket_t*           udp_socket,
                                                         const utp_udp_send_slice_t* slices, size_t slice_count,
                                                         const utp_address_t* peer, const utp_address_t* local,
                                                         size_t* sent_length);

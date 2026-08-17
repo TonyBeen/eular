@@ -12,8 +12,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <winsock2.h>
-#include <mswsock.h>
 #include <ws2tcpip.h>
+#include <mswsock.h>
 #include <iphlpapi.h>
 #else
 #include <errno.h>
@@ -107,8 +107,7 @@ static bool utp_udp_socket_interface_index_from_name(const char* ifname, uint32_
 }
 
 static utp_internal_error_t utp_udp_socket_set_windows_pktinfo(WSAMSG* message, utp_udp_socket_control_t* control,
-                                                               const utp_address_t* peer,
-                                                               const utp_address_t* local)
+                                                               const utp_address_t* peer, const utp_address_t* local)
 {
     WSACMSGHDR* cmsg;
 
@@ -337,8 +336,8 @@ static utp_internal_error_t utp_udp_socket_bind_interface(utp_udp_socket_t* udp_
     }
 #if defined(_WIN32)
     {
-        uint32_t       interface_index;
-        SOCKET         native_handle;
+        uint32_t interface_index;
+        SOCKET   native_handle;
 
         if (!utp_udp_socket_interface_index_from_name(ifname, &interface_index) || interface_index == 0u) {
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -486,13 +485,12 @@ static utp_internal_error_t utp_udp_socket_enable_dont_fragment(utp_udp_socket_t
 void utp_udp_socket_init(utp_udp_socket_t* udp_socket)
 {
     if (udp_socket != NULL) {
-        udp_socket->native_handle  = UTP_UDP_SOCKET_INVALID;
+        udp_socket->native_handle = UTP_UDP_SOCKET_INVALID;
 #if defined(_WIN32)
-        udp_socket->wsa_recv_msg   = NULL;
-        udp_socket->wsa_send_msg   = NULL;
+        udp_socket->wsa_recv_msg = NULL;
+        udp_socket->wsa_send_msg = NULL;
 #endif
-        udp_socket->local_port     = 0u;
-        udp_socket->winsock_active = false;
+        udp_socket->local_port = 0u;
     }
 }
 
@@ -508,9 +506,6 @@ void utp_udp_socket_close(utp_udp_socket_t* udp_socket)
     }
 #if defined(_WIN32)
     (void)closesocket((SOCKET)udp_socket->native_handle);
-    if (udp_socket->winsock_active) {
-        (void)WSACleanup();
-    }
 #else
     (void)close((int)udp_socket->native_handle);
 #endif
@@ -533,24 +528,17 @@ utp_internal_error_t utp_udp_socket_open(utp_udp_socket_t* udp_socket, uint8_t a
     }
 #if defined(_WIN32)
     {
-        WSADATA data;
-        SOCKET  native_handle;
-        BOOL    reuse_address = TRUE;
-        u_long  nonblocking   = 1u;
+        SOCKET native_handle;
+        BOOL   reuse_address = TRUE;
+        u_long nonblocking   = 1u;
 
-        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
-            return UTP_INTERNAL_ERROR_IO;
-        }
-        udp_socket->winsock_active = true;
-        native_handle              = socket(native_family, SOCK_DGRAM, IPPROTO_UDP);
+        native_handle = socket(native_family, SOCK_DGRAM, IPPROTO_UDP);
         if (native_handle == INVALID_SOCKET || ioctlsocket(native_handle, FIONBIO, &nonblocking) != 0 ||
             setsockopt(native_handle, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse_address,
                        (int)sizeof(reuse_address)) != 0) {
             if (native_handle != INVALID_SOCKET) {
                 (void)closesocket(native_handle);
             }
-            (void)WSACleanup();
-            udp_socket->winsock_active = false;
             return UTP_INTERNAL_ERROR_IO;
         }
         udp_socket->native_handle = (uintptr_t)native_handle;
@@ -678,9 +666,9 @@ utp_internal_error_t utp_udp_socket_send_from_to(utp_udp_socket_t* udp_socket, c
             return UTP_INTERNAL_ERROR_LIMIT;
         }
         if (utp_udp_socket_source_is_usable(local, peer)) {
-            WSABUF                  buf;
-            WSAMSG                  message = {0};
-            DWORD                   bytes_sent = 0u;
+            WSABUF                   buf;
+            WSAMSG                   message    = {0};
+            DWORD                    bytes_sent = 0u;
             utp_udp_socket_control_t control;
 
             error = utp_udp_socket_load_extension_functions(udp_socket);
@@ -984,9 +972,9 @@ utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, v
     {
         SOCKET                   native_handle = (SOCKET)udp_socket->native_handle;
         WSABUF                   buf;
-        WSAMSG                   message = {0};
+        WSAMSG                   message        = {0};
         DWORD                    bytes_received = 0u;
-        utp_udp_socket_control_t control = {0};
+        utp_udp_socket_control_t control        = {0};
         utp_internal_error_t     error;
 
         if (capacity > (size_t)ULONG_MAX) {
@@ -997,14 +985,14 @@ utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, v
             return error;
         }
         memset(&storage, 0, sizeof(storage));
-        buf.buf                 = (CHAR*)data;
-        buf.len                 = (ULONG)capacity;
-        message.name            = (struct sockaddr*)&storage;
-        message.namelen         = (INT)sizeof(storage);
-        message.lpBuffers       = &buf;
-        message.dwBufferCount   = 1u;
-        message.Control.buf     = (CHAR*)control.bytes;
-        message.Control.len     = (ULONG)sizeof(control.bytes);
+        buf.buf               = (CHAR*)data;
+        buf.len               = (ULONG)capacity;
+        message.name          = (struct sockaddr*)&storage;
+        message.namelen       = (INT)sizeof(storage);
+        message.lpBuffers     = &buf;
+        message.dwBufferCount = 1u;
+        message.Control.buf   = (CHAR*)control.bytes;
+        message.Control.len   = (ULONG)sizeof(control.bytes);
         if (udp_socket->wsa_recv_msg(native_handle, &message, &bytes_received, NULL, NULL) == SOCKET_ERROR) {
             return utp_udp_socket_error_from_wsa(WSAGetLastError());
         }
@@ -1028,8 +1016,7 @@ utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, v
         if (local != NULL) {
             bool found_local = false;
 
-            for (WSACMSGHDR* cmsg = WSA_CMSG_FIRSTHDR(&message); cmsg != NULL;
-                 cmsg             = WSA_CMSG_NXTHDR(&message, cmsg)) {
+            for (WSACMSGHDR* cmsg = WSA_CMSG_FIRSTHDR(&message); cmsg != NULL; cmsg = WSA_CMSG_NXTHDR(&message, cmsg)) {
 #if defined(IP_PKTINFO)
                 if (parsed_peer.family == UTP_ADDRESS_FAMILY_IPV4 && cmsg->cmsg_level == IPPROTO_IP &&
                     cmsg->cmsg_type == IP_PKTINFO) {

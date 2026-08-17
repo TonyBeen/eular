@@ -99,7 +99,8 @@ ICMP 错误：`ee_type/ee_code/ee_info`（各为 vector）、`data/len`、`peer_
 - macOS/Linux 在 UDP bind 成功后分别启用 IPv4 `IP_PKTINFO` 与 IPv6 `IPV6_RECVPKTINFO`；收包统一使用 `recvmsg`，从 cmsg 提取每个包实际到达的本地地址、接口索引和已绑定端口。
 - 每个已认证入站包将该地址写入 connection；被动握手 pending 状态也保留它。因此普通包、握手重传、0-RTT 响应和 destroy 的 best-effort close 都使用同一地址作为 `sendmsg` 的源地址。
 - IPv4 发送使用 `IP_PKTINFO.ipi_spec_dst`，IPv6 使用 `IPV6_PKTINFO.ipi6_addr` 和接口索引。目的地址未知或为 unspecified 时不附带 cmsg，交给内核正常选路。
-- Windows 暂使用原 `recvfrom`/`sendto` 路径，尚未接入 `WSARecvMsg`/`WSASendMsg` 的本地地址元数据；此限制不得影响 macOS/Linux 行为。
+- Windows 使用运行期获取的 `WSARecvMsg`/`WSASendMsg` 处理本地地址元数据；IPv4/IPv6 分别通过 `IP_PKTINFO`/`IPV6_PKTINFO` 提取和指定本地地址与接口索引。
+- Windows 的 Winsock 生命周期由调用方管理：C 库不得调用 `WSAStartup` 或 `WSACleanup`。调用方未初始化 Winsock 时，`utp_context_bind` 必须返回 socket 打开失败。
 - 后续 Linux `recvmmsg` 必须保留每个 datagram 独立的 cmsg 缓冲和 local 地址，并在批量派发前完成上述传递，不能退化为 socket 绑定地址。
 
 ---
