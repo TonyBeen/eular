@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #if defined(__APPLE__)
 #include <cerrno>
 #endif

@@ -7,6 +7,18 @@
 #include "socket/address.h"
 #include "util/error.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#include <winsock2.h>
+#include <mswsock.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +33,10 @@ typedef struct utp_udp_send_slice {
 
 typedef struct utp_udp_socket {
     uintptr_t native_handle;   // 平台 UDP socket 句柄
+#if defined(_WIN32)
+    LPFN_WSARECVMSG wsa_recv_msg;
+    LPFN_WSASENDMSG wsa_send_msg;
+#endif
     uint16_t  local_port;      // bind 后的本地端口，供目的地址元数据补全
     bool      winsock_active;  // 是否由本对象初始化 Winsock
 } utp_udp_socket_t;
