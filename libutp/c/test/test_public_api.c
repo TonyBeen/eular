@@ -154,15 +154,6 @@ static void pump_event_loop(struct event_base* event_base, int32_t iterations)
     }
 }
 
-static void pump_event_loop_blocking(struct event_base* event_base, int32_t iterations)
-{
-    int32_t index;
-
-    for (index = 0; index < iterations; ++index) {
-        assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
-    }
-}
-
 static void test_encrypted_connection(struct event_base* event_base, utp_encryption_mode_t encryption,
                                       uint64_t client_context_id, uint64_t server_context_id)
 {
@@ -617,13 +608,20 @@ int main(void)
         utp_context_t*        many_context     = NULL;
         static const uint32_t connection_count = 33u;
 
-        many_options.event_base = event_base;
-        many_options.context_id = 72u;
+        many_options.event_base             = event_base;
+        many_options.context_id             = 72u;
+        many_options.pending_incoming_limit = 0u;
+        assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
+        assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
+        assert(many_context->pending_incoming_by_peer.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
+        utp_context_destroy(many_context);
+
+        many_options.pending_incoming_limit = 2048u;
         assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
         assert(utp_context_bind(many_context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
         assert(many_context->connections.max_entries == SIZE_MAX);
-        assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_MAX_PENDING_INCOMING);
-        assert(UTP_CONTEXT_MAX_PENDING_INCOMING == 1024u);
+        assert(many_context->pending_incoming.max_entries == many_options.pending_incoming_limit);
+        assert(many_context->pending_incoming_by_peer.max_entries == many_options.pending_incoming_limit);
         connect.address = "127.0.0.1";
         for (uint32_t index = 0u; index < connection_count; ++index) {
             connect.port = (uint16_t)(10000u + index);
@@ -856,7 +854,10 @@ int main(void)
         connect_options.timeout_ms = 1u;
         connect_options.retries    = 1;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
-        pump_event_loop_blocking(event_base, 4);
+        // 两次 1ms deadline 会与 server 的 UDP 读事件交错；不能依赖 Context 内部扫描耗时凑够轮次。
+        for (int32_t retry = 0; retry < 16 && client_probe.connect_error_count == 0; ++retry) {
+            assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+        }
         assert(client_probe.connect_error_count == 1);
         assert(client_probe.last_connect_status == UTP_STATUS_TIMEOUT);
         assert(client_probe.last_connect_timeout_ms == 1u);

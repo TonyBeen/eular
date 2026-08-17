@@ -846,7 +846,7 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
 {
     utp_context_pending_slot_t* slot;
 
-    if (context == NULL || utp_hash_table_count(&context->pending_incoming) >= UTP_CONTEXT_MAX_PENDING_INCOMING) {
+    if (context == NULL || utp_hash_table_count(&context->pending_incoming) >= context->pending_incoming.max_entries) {
         return NULL;
     }
     slot = TAILQ_FIRST(&context->free_pending_slots);
@@ -866,7 +866,7 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
     return slot;
 }
 
-/** @brief 将 pending 注册到 CID 哈希表并计入 1024 项容量。 */
+/** @brief 将 pending 注册到 CID 哈希表并计入配置的容量。 */
 static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
     const uint32_t       local_cid = slot == NULL ? 0u : slot->pending.local_cid;
@@ -3218,10 +3218,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         error = utp_hash_table_init(&context->passive_connections_by_peer, NULL, SIZE_MAX);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_hash_table_init(&context->pending_incoming, NULL, UTP_CONTEXT_MAX_PENDING_INCOMING);
+        error = utp_hash_table_init(&context->pending_incoming, NULL,
+                                    options->pending_incoming_limit == 0u ? UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT
+                                                                          : options->pending_incoming_limit);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_hash_table_init(&context->pending_incoming_by_peer, NULL, UTP_CONTEXT_MAX_PENDING_INCOMING);
+        error = utp_hash_table_init(&context->pending_incoming_by_peer, NULL, context->pending_incoming.max_entries);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&context->zero_rtt_replay, NULL, context->zero_rtt_replay_cache_capacity);

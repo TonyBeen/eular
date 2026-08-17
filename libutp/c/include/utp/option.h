@@ -63,8 +63,9 @@ typedef struct utp_context_options {
     uint32_t                    path_validation_buffer_capacity;      // 每连接候选路径缓存上限(bytes)，0 时禁用
 
     // 被动握手响应的超时与重试配置
-    uint16_t                    handshake_timeout;      // 首轮握手超时(ms)，0 时采用 800
-    uint8_t                     handshake_max_retries;  // 被动握手响应的最大重试次数
+    uint16_t                    handshake_timeout;       // 首轮握手超时(ms)，0 时采用 800
+    uint8_t                     handshake_max_retries;   // 被动握手响应的最大重试次数
+    uint32_t                    pending_incoming_limit;  // 全局未完成被动握手上限，0 时采用 1024
 
     // 保活与 ACK 调度配置
     bool                        enable_keepalive;     // 是否启用空闲 Ping 探测
@@ -124,6 +125,7 @@ typedef struct utp_context_options {
         16u * 1024u,                                /* path_validation_buffer_capacity: 候选路径缓存上限 */       \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
+        1024u,                                      /* pending_incoming_limit: 全局未完成被动握手上限 */          \
         true,                                       /* enable_keepalive: 启用保活 */                              \
         0u,                                         /* keepalive_interval: 0 表示自动推算 */                      \
         1500u,                                      /* keepalive_timeout: 单次保活超时(ms) */                     \

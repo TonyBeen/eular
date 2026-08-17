@@ -12,7 +12,7 @@
 #include "util/hash.h"
 #include "util/log.h"
 
-#define UTP_CONTEXT_MAX_PENDING_INCOMING             1024u
+#define UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT   1024u
 #define UTP_CONTEXT_PACKET_LIMIT                     32u
 #define UTP_CONTEXT_PACKET_IN_LIMIT                  64u
 #define UTP_CONTEXT_PACKET_IN_CAPACITY               65535u
