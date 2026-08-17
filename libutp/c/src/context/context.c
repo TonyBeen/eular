@@ -3256,8 +3256,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         error = utp_event_loop_init(&context->event_loop, options->event_base, &context->logger, &context->tag);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_packet_in_pool_init(&context->packet_in_pool, NULL, UTP_CONTEXT_PACKET_IN_LIMIT,
-                                        UTP_CONTEXT_PACKET_IN_CAPACITY);
+        const uint16_t packet_in_minimum = utp_mtu_normalize(context->mtu_config.mtu_min, UTP_ADDRESS_FAMILY_IPV6);
+        const uint16_t packet_in_capacity =
+            context->mtu_config.mtu_max < packet_in_minimum ? packet_in_minimum : context->mtu_config.mtu_max;
+
+        error =
+            utp_packet_in_pool_init(&context->packet_in_pool, NULL, UTP_CONTEXT_PACKET_IN_LIMIT, packet_in_capacity);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_internal_log_error(&context->logger, &context->tag, error, "context initialization failed");

@@ -610,10 +610,12 @@ int main(void)
 
         many_options.event_base             = event_base;
         many_options.context_id             = 72u;
+        many_options.mtu_max                = 1450u;
         many_options.pending_incoming_limit = 0u;
         assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
         assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
         assert(many_context->pending_incoming_by_peer.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
+        assert(many_context->packet_in_pool.buffer_capacity == many_options.mtu_max);
         utp_context_destroy(many_context);
 
         many_options.pending_incoming_limit = 2048u;
