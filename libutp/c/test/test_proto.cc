@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -340,6 +341,86 @@ TEST_CASE("udp socket sends a datagram and reports its peer", "[udp]")
     utp_udp_socket_close(&receiver);
     utp_udp_socket_close(&sender);
 }
+
+#if defined(__APPLE__) || defined(__linux__)
+static void test_udp_socket_reply_from_received_local(const char* loopback_text, size_t address_length)
+{
+    const std::array<uint8_t, 4>        request         = {'p', 'i', 'n', 'g'};
+    const std::array<uint8_t, 4>        response        = {'p', 'o', 'n', 'g'};
+    std::array<uint8_t, request.size()> received        = {};
+    utp_address_t                       loopback        = {};
+    utp_address_t                       sender_local    = {};
+    utp_address_t                       receiver_local  = {};
+    utp_address_t                       request_peer    = {};
+    utp_address_t                       request_local   = {};
+    utp_address_t                       response_peer   = {};
+    utp_address_t                       response_local  = {};
+    utp_udp_socket_t                    sender          = {};
+    utp_udp_socket_t                    receiver        = {};
+    utp_internal_error_t                receive_error   = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    size_t                              sent_length     = 0u;
+    size_t                              received_length = 0u;
+
+    REQUIRE(utp_address_parse(&loopback, loopback_text, 0u) == UTP_INTERNAL_ERROR_OK);
+    utp_udp_socket_init(&sender);
+    utp_udp_socket_init(&receiver);
+    REQUIRE(utp_udp_socket_open(&sender, loopback.family) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_open(&receiver, loopback.family) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_send_to(&sender, request.data(), request.size(), &receiver_local, &sent_length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sent_length == request.size());
+
+    for (size_t attempt = 0u; attempt < 1000u; ++attempt) {
+        receive_error = utp_udp_socket_recv_from_ex(&receiver, received.data(), received.size(), &received_length,
+                                                    &request_peer, &request_local);
+        if (receive_error == UTP_INTERNAL_ERROR_OK) {
+            break;
+        }
+        REQUIRE(receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    }
+    REQUIRE(receive_error == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(received_length == request.size());
+    REQUIRE(std::memcmp(received.data(), request.data(), request.size()) == 0);
+    REQUIRE(utp_address_equal(&request_peer, &sender_local));
+    REQUIRE(request_local.family == receiver_local.family);
+    REQUIRE(request_local.port == receiver_local.port);
+    REQUIRE(std::memcmp(request_local.address, receiver_local.address, address_length) == 0);
+
+    REQUIRE(utp_udp_socket_send_from_to(&receiver, response.data(), response.size(), &request_peer, &request_local,
+                                        &sent_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sent_length == response.size());
+    for (size_t attempt = 0u; attempt < 1000u; ++attempt) {
+        receive_error = utp_udp_socket_recv_from_ex(&sender, received.data(), received.size(), &received_length,
+                                                    &response_peer, &response_local);
+        if (receive_error == UTP_INTERNAL_ERROR_OK) {
+            break;
+        }
+        REQUIRE(receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    }
+    REQUIRE(receive_error == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(received_length == response.size());
+    REQUIRE(std::memcmp(received.data(), response.data(), response.size()) == 0);
+    REQUIRE(utp_address_equal(&response_peer, &receiver_local));
+    REQUIRE(response_local.family == sender_local.family);
+    REQUIRE(response_local.port == sender_local.port);
+    REQUIRE(std::memcmp(response_local.address, sender_local.address, address_length) == 0);
+
+    utp_udp_socket_close(&receiver);
+    utp_udp_socket_close(&sender);
+}
+
+TEST_CASE("udp socket preserves an IPv4 local address for a reply", "[udp]")
+{
+    test_udp_socket_reply_from_received_local("127.0.0.1", 4u);
+}
+
+TEST_CASE("udp socket preserves an IPv6 local address for a reply", "[udp]")
+{
+    test_udp_socket_reply_from_received_local("::1", 16u);
+}
+#endif
 
 TEST_CASE("udp socket sends a datagram from slices", "[udp]")
 {

@@ -94,6 +94,9 @@ endif()
 if(UNIX AND NOT APPLE)
     target_link_libraries(utp_c PRIVATE m)
 endif()
+if(WIN32)
+    target_link_libraries(utp_c PRIVATE ws2_32 iphlpapi)
+endif()
 target_compile_features(utp_c PUBLIC c_std_11)
 target_include_directories(utp_c PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
@@ -102,7 +105,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(utp_c PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
         -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
 elseif(MSVC)
-    target_compile_options(utp_c PRIVATE /W4 /WX)
+    target_compile_options(utp_c PRIVATE /utf-8 /W4 /WX)
 endif()
 
 function(utp_c_configure_c_test target)
@@ -116,7 +119,7 @@ function(utp_c_configure_c_test target)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
             -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -UNDEBUG)
     elseif(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /WX /UNDEBUG)
+        target_compile_options(${target} PRIVATE /utf-8 /W4 /WX /UNDEBUG)
     endif()
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
@@ -132,7 +135,7 @@ function(utp_c_configure_cpp_test target)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2 -UNDEBUG)
     elseif(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /WX /UNDEBUG)
+        target_compile_options(${target} PRIVATE /utf-8 /W4 /WX /EHsc /UNDEBUG)
     endif()
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
@@ -169,13 +172,15 @@ endif()
 if(UTP_C_BUILD_BENCHMARKS)
     add_executable(utp_c_container_benchmark benchmark/bench_containers.c)
     utp_c_configure_c_test(utp_c_container_benchmark)
+    add_executable(utp_c_concurrent_connection_benchmark benchmark/bench_concurrent_connections.c)
+    utp_c_configure_c_test(utp_c_concurrent_connection_benchmark)
 endif()
 
 if(UTP_C_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
+set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c benchmark/bench_concurrent_connections.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
     ${UTP_C_SOURCES}
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_packet_in.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc

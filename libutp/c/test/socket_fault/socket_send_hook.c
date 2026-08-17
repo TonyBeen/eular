@@ -25,13 +25,26 @@ static int utp_test_send_hook_should_fail(int socket)
 static ssize_t utp_test_sendto(int socket, const void* data, size_t length, int flags, const struct sockaddr* address,
                                socklen_t address_length)
 {
-    return utp_test_send_hook_should_fail(socket) ? -1
-                                                  : g_real_sendto(socket, data, length, flags, address, address_length);
+    if (utp_test_send_hook_should_fail(socket)) {
+        return -1;
+    }
+    if (g_real_sendto == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return g_real_sendto(socket, data, length, flags, address, address_length);
 }
 
 static ssize_t utp_test_sendmsg(int socket, const struct msghdr* message, int flags)
 {
-    return utp_test_send_hook_should_fail(socket) ? -1 : g_real_sendmsg(socket, message, flags);
+    if (utp_test_send_hook_should_fail(socket)) {
+        return -1;
+    }
+    if (g_real_sendmsg == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return g_real_sendmsg(socket, message, flags);
 }
 
 bool utp_test_send_hook_configure(int32_t native_socket, int32_t system_error, uint32_t count)
@@ -40,8 +53,7 @@ bool utp_test_send_hook_configure(int32_t native_socket, int32_t system_error, u
         struct rebinding bindings[] = {{"sendto", (void*)utp_test_sendto, (void**)&g_real_sendto},
                                        {"sendmsg", (void*)utp_test_sendmsg, (void**)&g_real_sendmsg}};
 
-        if (rebind_symbols(bindings, sizeof(bindings) / sizeof(bindings[0])) != 0 || g_real_sendto == NULL ||
-            g_real_sendmsg == NULL) {
+        if (rebind_symbols(bindings, sizeof(bindings) / sizeof(bindings[0])) != 0 || g_real_sendmsg == NULL) {
             return false;
         }
         g_rebound = 1;

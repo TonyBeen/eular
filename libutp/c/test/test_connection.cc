@@ -846,11 +846,13 @@ TEST_CASE("connection fixes its congestion algorithm before the first packet is 
 
 TEST_CASE("connection validates a candidate address before migration", "[connection][path]")
 {
-    const utp_address_t                                                    expected_peer  = loopback_address(10005u);
-    const utp_address_t                                                    candidate_peer = loopback_address(10006u);
-    const std::array<uint8_t, 1u>                                          stream_data    = {'x'};
-    std::array<uint8_t, UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> payload        = {};
-    utp_connection_t                                                       connection     = {};
+    const utp_address_t                                                    expected_peer   = loopback_address(10005u);
+    const utp_address_t                                                    candidate_peer  = loopback_address(10006u);
+    const utp_address_t                                                    active_local    = loopback_address(11005u);
+    const utp_address_t                                                    candidate_local = loopback_address(11006u);
+    const std::array<uint8_t, 1u>                                          stream_data     = {'x'};
+    std::array<uint8_t, UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> payload         = {};
+    utp_connection_t                                                       connection      = {};
     utp_packet_header_t header = {11u, 77u, 1u, (uint16_t)payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + payload.size()> packet         = {};
     std::array<uint8_t, UTP_FRAME_PATH_SIZE>                     response       = {};
@@ -864,6 +866,7 @@ TEST_CASE("connection validates a candidate address before migration", "[connect
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &expected_peer, 2u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
+    connection.local = active_local;
     {
         const utp_frame_stream_t stream = {UTP_STREAM_FLAG_NONE, 0u, 0u, stream_data.data(),
                                            (uint16_t)stream_data.size()};
@@ -872,9 +875,12 @@ TEST_CASE("connection validates a candidate address before migration", "[connect
     }
     REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
     std::memcpy(packet.data() + UTP_PACKET_HEADER_SIZE, payload.data(), payload.size());
+    utp_connection_set_received_local(&connection, &candidate_local);
     REQUIRE(utp_connection_on_packet_received(&connection, packet.data(), packet.size(), &candidate_peer, 100u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_address_equal(&connection.peer, &expected_peer));
+    REQUIRE(utp_address_equal(&connection.local, &active_local));
+    REQUIRE(utp_address_equal(&connection.candidate_local, &candidate_local));
     REQUIRE(connection.path_state == UTP_CONNECTION_PATH_STATE_VALIDATING);
     REQUIRE(utp_connection_find_stream_internal(&connection, 0u) == nullptr);
 
@@ -896,9 +902,11 @@ TEST_CASE("connection validates a candidate address before migration", "[connect
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_PATH_SIZE> response_packet = {};
     REQUIRE(utp_proto_encode_header(response_packet.data(), response_packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
     std::memcpy(response_packet.data() + UTP_PACKET_HEADER_SIZE, response.data(), response.size());
+    utp_connection_set_received_local(&connection, &candidate_local);
     REQUIRE(utp_connection_on_packet_received(&connection, response_packet.data(), response_packet.size(),
                                               &candidate_peer, 200u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_address_equal(&connection.peer, &candidate_peer));
+    REQUIRE(utp_address_equal(&connection.local, &candidate_local));
     REQUIRE(connection.path_state == UTP_CONNECTION_PATH_STATE_VALIDATED);
 
     header.dcid = 78u;

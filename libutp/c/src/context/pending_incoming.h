@@ -26,6 +26,7 @@ typedef utp_internal_error_t (*utp_pending_incoming_replay_fn)(const uint8_t* pa
 // 因此接收热路径不需要动态分配，晋升后也能按实际 UDP 字节数记账。
 typedef struct utp_pending_incoming {
     utp_address_t                peer;                                  // 发起方地址
+    utp_address_t                local;                                 // 收包目的本地地址
     uint8_t*                     storage;                               // Context 提供的缓存存储，不拥有
     size_t                       storage_capacity;                      // 缓存存储容量
     size_t                       storage_length;                        // 已缓存字节数
@@ -63,6 +64,7 @@ typedef struct utp_pending_incoming {
 utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, uint32_t local_cid, uint32_t peer_cid,
                                                const utp_address_t* peer, uint8_t* storage, size_t storage_capacity,
                                                size_t packet_limit);
+void                 utp_pending_incoming_set_local(utp_pending_incoming_t* pending, const utp_address_t* local);
 void                 utp_pending_incoming_reset(utp_pending_incoming_t* pending);
 utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t* pending);
 /** @brief 设置被动握手响应的基础超时和最大重传次数。 */

@@ -13,6 +13,8 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mswsock.h>
+#include <iphlpapi.h>
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -27,7 +29,145 @@
 #include <sys/uio.h>
 #endif
 
-#if !defined(_WIN32)
+static bool utp_udp_socket_source_is_usable(const utp_address_t* local, const utp_address_t* peer);
+
+#if defined(_WIN32)
+#define UTP_UDP_SOCKET_CONTROL_CAPACITY WSA_CMSG_SPACE(sizeof(IN6_PKTINFO))
+
+typedef union utp_udp_socket_control {
+    WSACMSGHDR alignment;
+    uint8_t    bytes[UTP_UDP_SOCKET_CONTROL_CAPACITY];
+} utp_udp_socket_control_t;
+
+static utp_internal_error_t utp_udp_socket_error_from_wsa(int32_t system_error)
+{
+    if (system_error == WSAEWOULDBLOCK) {
+        return UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    }
+    if (system_error == WSAENOBUFS) {
+        return UTP_INTERNAL_ERROR_NOBUFS;
+    }
+    if (system_error == WSAEMSGSIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    return UTP_INTERNAL_ERROR_IO;
+}
+
+static utp_internal_error_t utp_udp_socket_load_extension_functions(utp_udp_socket_t* udp_socket)
+{
+    SOCKET native_handle;
+    DWORD  bytes_returned = 0u;
+
+    if (!utp_udp_socket_is_open(udp_socket)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (udp_socket->wsa_recv_msg != NULL && udp_socket->wsa_send_msg != NULL) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    native_handle = (SOCKET)udp_socket->native_handle;
+    if (udp_socket->wsa_recv_msg == NULL) {
+        GUID            guid = WSAID_WSARECVMSG;
+        LPFN_WSARECVMSG fn   = NULL;
+
+        if (WSAIoctl(native_handle, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, (DWORD)sizeof(guid), &fn,
+                     (DWORD)sizeof(fn), &bytes_returned, NULL, NULL) == SOCKET_ERROR ||
+            fn == NULL) {
+            return UTP_INTERNAL_ERROR_UNSUPPORTED;
+        }
+        udp_socket->wsa_recv_msg = fn;
+    }
+    if (udp_socket->wsa_send_msg == NULL) {
+        GUID            guid = WSAID_WSASENDMSG;
+        LPFN_WSASENDMSG fn   = NULL;
+
+        if (WSAIoctl(native_handle, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, (DWORD)sizeof(guid), &fn,
+                     (DWORD)sizeof(fn), &bytes_returned, NULL, NULL) == SOCKET_ERROR ||
+            fn == NULL) {
+            return UTP_INTERNAL_ERROR_UNSUPPORTED;
+        }
+        udp_socket->wsa_send_msg = fn;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static bool utp_udp_socket_interface_index_from_name(const char* ifname, uint32_t* out_index)
+{
+    NET_LUID    luid;
+    NET_IFINDEX interface_index = 0u;
+
+    if (ifname == NULL || out_index == NULL) {
+        return false;
+    }
+    if (ConvertInterfaceNameToLuidA(ifname, &luid) != NO_ERROR ||
+        ConvertInterfaceLuidToIndex(&luid, &interface_index) != NO_ERROR) {
+        return false;
+    }
+    *out_index = (uint32_t)interface_index;
+    return true;
+}
+
+static utp_internal_error_t utp_udp_socket_set_windows_pktinfo(WSAMSG* message, utp_udp_socket_control_t* control,
+                                                               const utp_address_t* peer, const utp_address_t* local)
+{
+    WSACMSGHDR* cmsg;
+
+    if (message == NULL || control == NULL || !utp_udp_socket_source_is_usable(local, peer)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    memset(control, 0, sizeof(*control));
+    message->Control.buf = (CHAR*)control->bytes;
+    if (peer->family == UTP_ADDRESS_FAMILY_IPV4) {
+#if defined(IP_PKTINFO)
+        IN_PKTINFO* info;
+
+        message->Control.len = (ULONG)WSA_CMSG_SPACE(sizeof(*info));
+        cmsg                 = WSA_CMSG_FIRSTHDR(message);
+        if (cmsg == NULL) {
+            return UTP_INTERNAL_ERROR_UNSUPPORTED;
+        }
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type  = IP_PKTINFO;
+        cmsg->cmsg_len   = WSA_CMSG_LEN(sizeof(*info));
+        info             = (IN_PKTINFO*)WSA_CMSG_DATA(cmsg);
+        memset(info, 0, sizeof(*info));
+        info->ipi_ifindex = (ULONG)local->scope_id;
+        memcpy(&info->ipi_addr, local->address, 4u);
+        return UTP_INTERNAL_ERROR_OK;
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    if (peer->family == UTP_ADDRESS_FAMILY_IPV6) {
+#if defined(IPV6_PKTINFO)
+        IN6_PKTINFO* info;
+
+        message->Control.len = (ULONG)WSA_CMSG_SPACE(sizeof(*info));
+        cmsg                 = WSA_CMSG_FIRSTHDR(message);
+        if (cmsg == NULL) {
+            return UTP_INTERNAL_ERROR_UNSUPPORTED;
+        }
+        cmsg->cmsg_level = IPPROTO_IPV6;
+        cmsg->cmsg_type  = IPV6_PKTINFO;
+        cmsg->cmsg_len   = WSA_CMSG_LEN(sizeof(*info));
+        info             = (IN6_PKTINFO*)WSA_CMSG_DATA(cmsg);
+        memset(info, 0, sizeof(*info));
+        memcpy(&info->ipi6_addr, local->address, 16u);
+        info->ipi6_ifindex = (ULONG)local->scope_id;
+        return UTP_INTERNAL_ERROR_OK;
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+}
+#else
+#define UTP_UDP_SOCKET_CONTROL_CAPACITY CMSG_SPACE(sizeof(struct in6_pktinfo))
+
+typedef union utp_udp_socket_control {
+    struct cmsghdr alignment;                               // 保证 cmsg 头与数据的自然对齐
+    uint8_t        bytes[UTP_UDP_SOCKET_CONTROL_CAPACITY];  // 单个 IPv6 pktinfo 控制消息
+} utp_udp_socket_control_t;
+
 static bool utp_udp_socket_is_would_block_error(int32_t system_error)
 {
     if (system_error == EAGAIN) {
@@ -40,9 +180,132 @@ static bool utp_udp_socket_is_would_block_error(int32_t system_error)
 #endif
     return false;
 }
+
+static bool utp_udp_socket_align_control_length(size_t length, size_t* aligned_length)
+{
+    const size_t alignment = sizeof(size_t);
+
+    if (aligned_length == NULL || length > SIZE_MAX - (alignment - 1u)) {
+        return false;
+    }
+    *aligned_length = (length + alignment - 1u) & ~(alignment - 1u);
+    return true;
+}
+
+/** @brief 遍历控制消息，避免 musl 的 CMSG_NXTHDR 在严格符号转换检查下触发告警。 */
+static struct cmsghdr* utp_udp_socket_next_control(const struct msghdr* message, const struct cmsghdr* current)
+{
+    const uint8_t* control;
+    const uint8_t* current_bytes;
+    const uint8_t* end;
+    size_t         aligned_length;
+
+    if (message == NULL || current == NULL || message->msg_control == NULL || current->cmsg_len < CMSG_LEN(0u)) {
+        return NULL;
+    }
+    control       = (const uint8_t*)message->msg_control;
+    current_bytes = (const uint8_t*)current;
+    end           = control + message->msg_controllen;
+    if (current_bytes < control || current_bytes > end) {
+        return NULL;
+    }
+    if (!utp_udp_socket_align_control_length((size_t)current->cmsg_len, &aligned_length) ||
+        aligned_length > (size_t)(end - current_bytes) ||
+        sizeof(struct cmsghdr) > (size_t)(end - (current_bytes + aligned_length))) {
+        return NULL;
+    }
+    return (struct cmsghdr*)(void*)(current_bytes + aligned_length);
+}
 #endif
 
 static bool utp_udp_socket_ifname_empty(const char* ifname) { return ifname == NULL || ifname[0] == '\0'; }
+
+static bool utp_udp_socket_source_is_usable(const utp_address_t* local, const utp_address_t* peer)
+{
+    size_t length;
+
+    if (local == NULL || peer == NULL || local->family != peer->family) {
+        return false;
+    }
+    length = local->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : local->family == UTP_ADDRESS_FAMILY_IPV6 ? 16u : 0u;
+    if (length == 0u) {
+        return false;
+    }
+    for (size_t index = 0u; index < length; ++index) {
+        if (local->address[index] != 0u) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static utp_internal_error_t utp_udp_socket_enable_packet_info(utp_udp_socket_t* udp_socket, uint8_t address_family)
+{
+#if defined(_WIN32)
+    BOOL                 enabled = TRUE;
+    SOCKET               native_handle;
+    utp_internal_error_t error;
+
+    if (!utp_udp_socket_is_open(udp_socket)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_udp_socket_load_extension_functions(udp_socket);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    native_handle = (SOCKET)udp_socket->native_handle;
+    if (address_family == UTP_ADDRESS_FAMILY_IPV4) {
+#if defined(IP_PKTINFO)
+        return setsockopt(native_handle, IPPROTO_IP, IP_PKTINFO, (const char*)&enabled, (int)sizeof(enabled)) == 0
+                   ? UTP_INTERNAL_ERROR_OK
+                   : UTP_INTERNAL_ERROR_IO;
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    if (address_family == UTP_ADDRESS_FAMILY_IPV6) {
+#if defined(IPV6_PKTINFO)
+        return setsockopt(native_handle, IPPROTO_IPV6, IPV6_PKTINFO, (const char*)&enabled, (int)sizeof(enabled)) == 0
+                   ? UTP_INTERNAL_ERROR_OK
+                   : UTP_INTERNAL_ERROR_IO;
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+#else
+    const int enabled = 1;
+    int       native_handle;
+
+    if (!utp_udp_socket_is_open(udp_socket)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    native_handle = (int)udp_socket->native_handle;
+    if (address_family == UTP_ADDRESS_FAMILY_IPV4) {
+#if defined(__APPLE__) && defined(IP_PKTINFO)
+        return setsockopt(native_handle, IPPROTO_IP, IP_PKTINFO, &enabled, (socklen_t)sizeof(enabled)) == 0
+                   ? UTP_INTERNAL_ERROR_OK
+                   : utp_internal_error_from_errno(errno);
+#elif defined(IP_PKTINFO)
+        return setsockopt(native_handle, IPPROTO_IP, IP_PKTINFO, &enabled, (socklen_t)sizeof(enabled)) == 0
+                   ? UTP_INTERNAL_ERROR_OK
+                   : utp_internal_error_from_errno(errno);
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    if (address_family == UTP_ADDRESS_FAMILY_IPV6) {
+#if defined(IPV6_RECVPKTINFO)
+        return setsockopt(native_handle, IPPROTO_IPV6, IPV6_RECVPKTINFO, &enabled, (socklen_t)sizeof(enabled)) == 0
+                   ? UTP_INTERNAL_ERROR_OK
+                   : utp_internal_error_from_errno(errno);
+#else
+        return UTP_INTERNAL_ERROR_UNSUPPORTED;
+#endif
+    }
+    return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+#endif
+}
 
 static utp_internal_error_t utp_udp_socket_validate_slices(const utp_udp_send_slice_t* slices, size_t slice_count,
                                                            size_t* total_length)
@@ -73,10 +336,10 @@ static utp_internal_error_t utp_udp_socket_bind_interface(utp_udp_socket_t* udp_
     }
 #if defined(_WIN32)
     {
-        const uint32_t interface_index = (uint32_t)if_nametoindex(ifname);
-        SOCKET         native_handle;
+        uint32_t interface_index;
+        SOCKET   native_handle;
 
-        if (interface_index == 0u) {
+        if (!utp_udp_socket_interface_index_from_name(ifname, &interface_index) || interface_index == 0u) {
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
         }
         native_handle = (SOCKET)udp_socket->native_handle;
@@ -222,8 +485,12 @@ static utp_internal_error_t utp_udp_socket_enable_dont_fragment(utp_udp_socket_t
 void utp_udp_socket_init(utp_udp_socket_t* udp_socket)
 {
     if (udp_socket != NULL) {
-        udp_socket->native_handle  = UTP_UDP_SOCKET_INVALID;
-        udp_socket->winsock_active = false;
+        udp_socket->native_handle = UTP_UDP_SOCKET_INVALID;
+#if defined(_WIN32)
+        udp_socket->wsa_recv_msg = NULL;
+        udp_socket->wsa_send_msg = NULL;
+#endif
+        udp_socket->local_port = 0u;
     }
 }
 
@@ -239,9 +506,6 @@ void utp_udp_socket_close(utp_udp_socket_t* udp_socket)
     }
 #if defined(_WIN32)
     (void)closesocket((SOCKET)udp_socket->native_handle);
-    if (udp_socket->winsock_active) {
-        (void)WSACleanup();
-    }
 #else
     (void)close((int)udp_socket->native_handle);
 #endif
@@ -264,24 +528,17 @@ utp_internal_error_t utp_udp_socket_open(utp_udp_socket_t* udp_socket, uint8_t a
     }
 #if defined(_WIN32)
     {
-        WSADATA data;
-        SOCKET  native_handle;
-        BOOL    reuse_address = TRUE;
-        u_long  nonblocking   = 1u;
+        SOCKET native_handle;
+        BOOL   reuse_address = TRUE;
+        u_long nonblocking   = 1u;
 
-        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
-            return UTP_INTERNAL_ERROR_IO;
-        }
-        udp_socket->winsock_active = true;
-        native_handle              = socket(native_family, SOCK_DGRAM, IPPROTO_UDP);
+        native_handle = socket(native_family, SOCK_DGRAM, IPPROTO_UDP);
         if (native_handle == INVALID_SOCKET || ioctlsocket(native_handle, FIONBIO, &nonblocking) != 0 ||
             setsockopt(native_handle, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse_address,
                        (int)sizeof(reuse_address)) != 0) {
             if (native_handle != INVALID_SOCKET) {
                 (void)closesocket(native_handle);
             }
-            (void)WSACleanup();
-            udp_socket->winsock_active = false;
             return UTP_INTERNAL_ERROR_IO;
         }
         udp_socket->native_handle = (uintptr_t)native_handle;
@@ -373,11 +630,17 @@ utp_internal_error_t utp_udp_socket_bind(utp_udp_socket_t* udp_socket, const utp
         storage_length = (size_t)actual_length;
     }
 #endif
-    return utp_address_from_sockaddr(local, (const struct sockaddr*)&storage, storage_length);
+    error = utp_address_from_sockaddr(local, (const struct sockaddr*)&storage, storage_length);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        udp_socket->local_port = local->port;
+        error                  = utp_udp_socket_enable_packet_info(udp_socket, requested->family);
+    }
+    return error;
 }
 
-utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const void* data, size_t data_length,
-                                            const utp_address_t* peer, size_t* sent_length)
+utp_internal_error_t utp_udp_socket_send_from_to(utp_udp_socket_t* udp_socket, const void* data, size_t data_length,
+                                                 const utp_address_t* peer, const utp_address_t* local,
+                                                 size_t* sent_length)
 {
     struct sockaddr_storage storage;
     size_t                  storage_length;
@@ -397,23 +660,44 @@ utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const 
 #if defined(_WIN32)
     {
         SOCKET native_handle = (SOCKET)udp_socket->native_handle;
-        int    written;
+        int    written       = 0;
 
         if (data_length > (size_t)INT_MAX) {
             return UTP_INTERNAL_ERROR_LIMIT;
         }
+        if (utp_udp_socket_source_is_usable(local, peer)) {
+            WSABUF                   buf;
+            WSAMSG                   message    = {0};
+            DWORD                    bytes_sent = 0u;
+            utp_udp_socket_control_t control;
+
+            error = utp_udp_socket_load_extension_functions(udp_socket);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            buf.buf               = (CHAR*)data;
+            buf.len               = (ULONG)data_length;
+            message.name          = (struct sockaddr*)&storage;
+            message.namelen       = (INT)storage_length;
+            message.lpBuffers     = &buf;
+            message.dwBufferCount = 1u;
+            error                 = utp_udp_socket_set_windows_pktinfo(&message, &control, peer, local);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            if (udp_socket->wsa_send_msg(native_handle, &message, 0u, &bytes_sent, NULL, NULL) == SOCKET_ERROR) {
+                return utp_udp_socket_error_from_wsa(WSAGetLastError());
+            }
+            if ((size_t)bytes_sent != data_length) {
+                return UTP_INTERNAL_ERROR_IO;
+            }
+            *sent_length = (size_t)bytes_sent;
+            return UTP_INTERNAL_ERROR_OK;
+        }
         written = sendto(native_handle, (const char*)data, (int)data_length, 0, (const struct sockaddr*)&storage,
                          (int)storage_length);
         if (written == SOCKET_ERROR) {
-            int32_t system_error = WSAGetLastError();
-
-            if (system_error == WSAEWOULDBLOCK) {
-                return UTP_INTERNAL_ERROR_WOULD_BLOCK;
-            }
-            if (system_error == WSAENOBUFS) {
-                return UTP_INTERNAL_ERROR_NOBUFS;
-            }
-            return system_error == WSAEMSGSIZE ? UTP_INTERNAL_ERROR_OVERFLOW : UTP_INTERNAL_ERROR_IO;
+            return utp_udp_socket_error_from_wsa(WSAGetLastError());
         }
         if ((size_t)written != data_length) {
             return UTP_INTERNAL_ERROR_IO;
@@ -422,9 +706,60 @@ utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const 
     }
 #else
     {
-        int     native_handle = (int)udp_socket->native_handle;
-        ssize_t written =
-            sendto(native_handle, data, data_length, 0, (const struct sockaddr*)&storage, (socklen_t)storage_length);
+        struct iovec             iov;
+        struct msghdr            message       = {0};
+        utp_udp_socket_control_t control       = {0};
+        int                      native_handle = (int)udp_socket->native_handle;
+        ssize_t                  written;
+
+        iov.iov_base        = (void*)data;
+        iov.iov_len         = data_length;
+        message.msg_name    = &storage;
+        message.msg_namelen = (socklen_t)storage_length;
+        message.msg_iov     = &iov;
+        message.msg_iovlen  = 1u;
+        if (utp_udp_socket_source_is_usable(local, peer)) {
+            struct cmsghdr* cmsg;
+
+            message.msg_control    = control.bytes;
+            message.msg_controllen = sizeof(control.bytes);
+            cmsg                   = CMSG_FIRSTHDR(&message);
+            cmsg->cmsg_level       = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IPPROTO_IP : IPPROTO_IPV6;
+#if defined(__APPLE__)
+            cmsg->cmsg_type = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IP_PKTINFO : IPV6_PKTINFO;
+            if (peer->family == UTP_ADDRESS_FAMILY_IPV4) {
+                struct in_pktinfo* info = (struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len    = CMSG_LEN(sizeof(*info));
+                info->ipi_ifindex = local->scope_id;
+                memcpy(&info->ipi_spec_dst, local->address, 4u);
+            } else {
+                struct in6_pktinfo* info = (struct in6_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len = CMSG_LEN(sizeof(*info));
+                memcpy(&info->ipi6_addr, local->address, 16u);
+                info->ipi6_ifindex = local->scope_id;
+            }
+#else
+            cmsg->cmsg_type = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IP_PKTINFO : IPV6_PKTINFO;
+            if (peer->family == UTP_ADDRESS_FAMILY_IPV4) {
+                struct in_pktinfo* info = (struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len    = CMSG_LEN(sizeof(*info));
+                info->ipi_ifindex = (int)local->scope_id;
+                memcpy(&info->ipi_spec_dst, local->address, 4u);
+            } else {
+                struct in6_pktinfo* info = (struct in6_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len = CMSG_LEN(sizeof(*info));
+                memcpy(&info->ipi6_addr, local->address, 16u);
+                info->ipi6_ifindex = local->scope_id;
+            }
+#endif
+            message.msg_controllen = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? CMSG_SPACE(sizeof(struct in_pktinfo))
+                                                                             : CMSG_SPACE(sizeof(struct in6_pktinfo));
+        }
+        written = sendmsg(native_handle, &message, 0);
 
         if (written < 0) {
             int32_t system_error = errno;
@@ -444,8 +779,16 @@ utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const 
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket, const utp_udp_send_slice_t* slices,
-                                                   size_t slice_count, const utp_address_t* peer, size_t* sent_length)
+utp_internal_error_t utp_udp_socket_send_to(utp_udp_socket_t* udp_socket, const void* data, size_t data_length,
+                                            const utp_address_t* peer, size_t* sent_length)
+{
+    return utp_udp_socket_send_from_to(udp_socket, data, data_length, peer, NULL, sent_length);
+}
+
+utp_internal_error_t utp_udp_socket_send_from_to_slices(utp_udp_socket_t*           udp_socket,
+                                                        const utp_udp_send_slice_t* slices, size_t slice_count,
+                                                        const utp_address_t* peer, const utp_address_t* local,
+                                                        size_t* sent_length)
 {
     struct sockaddr_storage storage;
     size_t                  storage_length;
@@ -463,7 +806,7 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
         return error;
     }
     if (slice_count == 1u) {
-        return utp_udp_socket_send_to(udp_socket, slices[0].data, slices[0].length, peer, sent_length);
+        return utp_udp_socket_send_from_to(udp_socket, slices[0].data, slices[0].length, peer, local, sent_length);
     }
     error = utp_address_to_sockaddr(peer, &storage, &storage_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -486,17 +829,34 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
             bufs[index].buf = (CHAR*)slices[index].data;
             bufs[index].len = (ULONG)slices[index].length;
         }
+        if (utp_udp_socket_source_is_usable(local, peer)) {
+            WSAMSG                   message = {0};
+            utp_udp_socket_control_t control;
+
+            error = utp_udp_socket_load_extension_functions(udp_socket);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            message.name          = (struct sockaddr*)&storage;
+            message.namelen       = (INT)storage_length;
+            message.lpBuffers     = bufs;
+            message.dwBufferCount = (DWORD)slice_count;
+            error                 = utp_udp_socket_set_windows_pktinfo(&message, &control, peer, local);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            if (udp_socket->wsa_send_msg(native_handle, &message, 0u, &bytes_sent, NULL, NULL) == SOCKET_ERROR) {
+                return utp_udp_socket_error_from_wsa(WSAGetLastError());
+            }
+            if ((size_t)bytes_sent != total_length) {
+                return UTP_INTERNAL_ERROR_IO;
+            }
+            *sent_length = (size_t)bytes_sent;
+            return UTP_INTERNAL_ERROR_OK;
+        }
         if (WSASendTo(native_handle, bufs, (DWORD)slice_count, &bytes_sent, 0, (const struct sockaddr*)&storage,
                       (int)storage_length, NULL, NULL) == SOCKET_ERROR) {
-            int32_t system_error = WSAGetLastError();
-
-            if (system_error == WSAEWOULDBLOCK) {
-                return UTP_INTERNAL_ERROR_WOULD_BLOCK;
-            }
-            if (system_error == WSAENOBUFS) {
-                return UTP_INTERNAL_ERROR_NOBUFS;
-            }
-            return system_error == WSAEMSGSIZE ? UTP_INTERNAL_ERROR_OVERFLOW : UTP_INTERNAL_ERROR_IO;
+            return utp_udp_socket_error_from_wsa(WSAGetLastError());
         }
         if ((size_t)bytes_sent != total_length) {
             return UTP_INTERNAL_ERROR_IO;
@@ -505,11 +865,12 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
     }
 #else
     {
-        struct iovec  iov[UTP_UDP_SOCKET_MAX_SEND_SLICES];
-        struct msghdr message;
-        int           native_handle = (int)udp_socket->native_handle;
-        ssize_t       written;
-        size_t        index;
+        struct iovec             iov[UTP_UDP_SOCKET_MAX_SEND_SLICES];
+        struct msghdr            message       = {0};
+        utp_udp_socket_control_t control       = {0};
+        int                      native_handle = (int)udp_socket->native_handle;
+        ssize_t                  written;
+        size_t                   index;
 
         if (total_length > (size_t)SSIZE_MAX) {
             return UTP_INTERNAL_ERROR_LIMIT;
@@ -527,10 +888,48 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
 #else
         message.msg_iovlen = (int)slice_count;
 #endif
-        message.msg_control    = NULL;
-        message.msg_controllen = 0u;
-        message.msg_flags      = 0;
-        written                = sendmsg(native_handle, &message, 0);
+        if (utp_udp_socket_source_is_usable(local, peer)) {
+            struct cmsghdr* cmsg;
+
+            message.msg_control    = control.bytes;
+            message.msg_controllen = sizeof(control.bytes);
+            cmsg                   = CMSG_FIRSTHDR(&message);
+            cmsg->cmsg_level       = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IPPROTO_IP : IPPROTO_IPV6;
+#if defined(__APPLE__)
+            cmsg->cmsg_type = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IP_PKTINFO : IPV6_PKTINFO;
+            if (peer->family == UTP_ADDRESS_FAMILY_IPV4) {
+                struct in_pktinfo* info = (struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len    = CMSG_LEN(sizeof(*info));
+                info->ipi_ifindex = local->scope_id;
+                memcpy(&info->ipi_spec_dst, local->address, 4u);
+            } else {
+                struct in6_pktinfo* info = (struct in6_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len = CMSG_LEN(sizeof(*info));
+                memcpy(&info->ipi6_addr, local->address, 16u);
+                info->ipi6_ifindex = local->scope_id;
+            }
+#else
+            cmsg->cmsg_type = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? IP_PKTINFO : IPV6_PKTINFO;
+            if (peer->family == UTP_ADDRESS_FAMILY_IPV4) {
+                struct in_pktinfo* info = (struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len    = CMSG_LEN(sizeof(*info));
+                info->ipi_ifindex = (int)local->scope_id;
+                memcpy(&info->ipi_spec_dst, local->address, 4u);
+            } else {
+                struct in6_pktinfo* info = (struct in6_pktinfo*)CMSG_DATA(cmsg);
+
+                cmsg->cmsg_len = CMSG_LEN(sizeof(*info));
+                memcpy(&info->ipi6_addr, local->address, 16u);
+                info->ipi6_ifindex = local->scope_id;
+            }
+#endif
+            message.msg_controllen = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? CMSG_SPACE(sizeof(struct in_pktinfo))
+                                                                             : CMSG_SPACE(sizeof(struct in6_pktinfo));
+        }
+        written = sendmsg(native_handle, &message, 0);
         if (written < 0) {
             int32_t system_error = errno;
 
@@ -549,11 +948,18 @@ utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket,
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_udp_socket_recv_from(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
-                                              size_t* received_length, utp_address_t* peer)
+utp_internal_error_t utp_udp_socket_send_to_slices(utp_udp_socket_t* udp_socket, const utp_udp_send_slice_t* slices,
+                                                   size_t slice_count, const utp_address_t* peer, size_t* sent_length)
+{
+    return utp_udp_socket_send_from_to_slices(udp_socket, slices, slice_count, peer, NULL, sent_length);
+}
+
+utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
+                                                 size_t* received_length, utp_address_t* peer, utp_address_t* local)
 {
     struct sockaddr_storage storage;
     utp_address_t           parsed_peer;
+    utp_address_t           parsed_local = {0};
 
     if (received_length != NULL) {
         *received_length = 0u;
@@ -564,60 +970,173 @@ utp_internal_error_t utp_udp_socket_recv_from(utp_udp_socket_t* udp_socket, void
     }
 #if defined(_WIN32)
     {
-        SOCKET native_handle  = (SOCKET)udp_socket->native_handle;
-        int    storage_length = (int)sizeof(storage);
-        int    received;
+        SOCKET                   native_handle = (SOCKET)udp_socket->native_handle;
+        WSABUF                   buf;
+        WSAMSG                   message        = {0};
+        DWORD                    bytes_received = 0u;
+        utp_udp_socket_control_t control        = {0};
+        utp_internal_error_t     error;
 
-        if (capacity > (size_t)INT_MAX) {
+        if (capacity > (size_t)ULONG_MAX) {
             return UTP_INTERNAL_ERROR_LIMIT;
         }
-        received = recvfrom(native_handle, (char*)data, (int)capacity, 0, (struct sockaddr*)&storage, &storage_length);
-        if (received == SOCKET_ERROR) {
-            int32_t system_error = WSAGetLastError();
-
-            if (system_error == WSAEWOULDBLOCK) {
-                return UTP_INTERNAL_ERROR_WOULD_BLOCK;
-            }
-            return system_error == WSAEMSGSIZE ? UTP_INTERNAL_ERROR_OVERFLOW : UTP_INTERNAL_ERROR_IO;
+        error = utp_udp_socket_load_extension_functions(udp_socket);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
         }
-        if (utp_address_from_sockaddr(&parsed_peer, (const struct sockaddr*)&storage, (size_t)storage_length) !=
+        memset(&storage, 0, sizeof(storage));
+        buf.buf               = (CHAR*)data;
+        buf.len               = (ULONG)capacity;
+        message.name          = (struct sockaddr*)&storage;
+        message.namelen       = (INT)sizeof(storage);
+        message.lpBuffers     = &buf;
+        message.dwBufferCount = 1u;
+        message.Control.buf   = (CHAR*)control.bytes;
+        message.Control.len   = (ULONG)sizeof(control.bytes);
+        if (udp_socket->wsa_recv_msg(native_handle, &message, &bytes_received, NULL, NULL) == SOCKET_ERROR) {
+            return utp_udp_socket_error_from_wsa(WSAGetLastError());
+        }
+#if defined(MSG_TRUNC)
+        if ((message.dwFlags & MSG_TRUNC) != 0u) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+#endif
+#if defined(MSG_CTRUNC)
+        if ((message.dwFlags & MSG_CTRUNC) != 0u) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+#endif
+        if (bytes_received > UINT16_MAX) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        if (utp_address_from_sockaddr(&parsed_peer, (const struct sockaddr*)&storage, (size_t)message.namelen) !=
             UTP_INTERNAL_ERROR_OK) {
             return UTP_INTERNAL_ERROR_IO;
         }
-        *received_length = (size_t)received;
+        if (local != NULL) {
+            bool found_local = false;
+
+            for (WSACMSGHDR* cmsg = WSA_CMSG_FIRSTHDR(&message); cmsg != NULL; cmsg = WSA_CMSG_NXTHDR(&message, cmsg)) {
+#if defined(IP_PKTINFO)
+                if (parsed_peer.family == UTP_ADDRESS_FAMILY_IPV4 && cmsg->cmsg_level == IPPROTO_IP &&
+                    cmsg->cmsg_type == IP_PKTINFO) {
+                    const IN_PKTINFO* info;
+
+                    if (cmsg->cmsg_len < WSA_CMSG_LEN(sizeof(*info))) {
+                        return UTP_INTERNAL_ERROR_OVERFLOW;
+                    }
+                    info                  = (const IN_PKTINFO*)WSA_CMSG_DATA(cmsg);
+                    parsed_local.family   = UTP_ADDRESS_FAMILY_IPV4;
+                    parsed_local.port     = udp_socket->local_port;
+                    parsed_local.scope_id = (uint32_t)info->ipi_ifindex;
+                    memcpy(parsed_local.address, &info->ipi_addr, 4u);
+                    found_local = true;
+                    break;
+                }
+#endif
+#if defined(IPV6_PKTINFO)
+                if (parsed_peer.family == UTP_ADDRESS_FAMILY_IPV6 && cmsg->cmsg_level == IPPROTO_IPV6 &&
+                    cmsg->cmsg_type == IPV6_PKTINFO) {
+                    const IN6_PKTINFO* info;
+
+                    if (cmsg->cmsg_len < WSA_CMSG_LEN(sizeof(*info))) {
+                        return UTP_INTERNAL_ERROR_OVERFLOW;
+                    }
+                    info                  = (const IN6_PKTINFO*)WSA_CMSG_DATA(cmsg);
+                    parsed_local.family   = UTP_ADDRESS_FAMILY_IPV6;
+                    parsed_local.port     = udp_socket->local_port;
+                    parsed_local.scope_id = (uint32_t)info->ipi6_ifindex;
+                    memcpy(parsed_local.address, &info->ipi6_addr, 16u);
+                    found_local = true;
+                    break;
+                }
+#endif
+            }
+            if (!found_local || !utp_udp_socket_source_is_usable(&parsed_local, &parsed_peer)) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+        }
+        *received_length = (size_t)bytes_received;
     }
 #else
     {
-        int           native_handle = (int)udp_socket->native_handle;
-        struct iovec  iov;
-        struct msghdr message;
-        ssize_t       received;
+        int                      native_handle = (int)udp_socket->native_handle;
+        struct iovec             iov;
+        struct msghdr            message = {0};
+        utp_udp_socket_control_t control = {0};
+        ssize_t                  received;
 
         memset(&storage, 0, sizeof(storage));
-        memset(&message, 0, sizeof(message));
-        iov.iov_base        = data;
-        iov.iov_len         = capacity;
-        message.msg_name    = &storage;
-        message.msg_namelen = (socklen_t)sizeof(storage);
-        message.msg_iov     = &iov;
-        message.msg_iovlen  = 1u;
-        received            = recvmsg(native_handle, &message, 0);
+        iov.iov_base           = data;
+        iov.iov_len            = capacity;
+        message.msg_name       = &storage;
+        message.msg_namelen    = (socklen_t)sizeof(storage);
+        message.msg_iov        = &iov;
+        message.msg_iovlen     = 1u;
+        message.msg_control    = control.bytes;
+        message.msg_controllen = sizeof(control.bytes);
+        received               = recvmsg(native_handle, &message, 0);
         if (received < 0) {
             int32_t system_error = errno;
 
             return utp_udp_socket_is_would_block_error(system_error) ? UTP_INTERNAL_ERROR_WOULD_BLOCK
                                                                      : utp_internal_error_from_errno(system_error);
         }
-        if ((message.msg_flags & MSG_TRUNC) != 0) {
+        if ((message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0) {
             return UTP_INTERNAL_ERROR_OVERFLOW;
         }
         if (utp_address_from_sockaddr(&parsed_peer, (const struct sockaddr*)&storage, (size_t)message.msg_namelen) !=
             UTP_INTERNAL_ERROR_OK) {
             return UTP_INTERNAL_ERROR_IO;
         }
+        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&message); cmsg != NULL;
+             cmsg                 = utp_udp_socket_next_control(&message, cmsg)) {
+            if (parsed_peer.family == UTP_ADDRESS_FAMILY_IPV4 && cmsg->cmsg_level == IPPROTO_IP) {
+#if defined(__APPLE__) && defined(IP_PKTINFO)
+                if (cmsg->cmsg_type == IP_PKTINFO && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct in_pktinfo))) {
+                    const struct in_pktinfo* info = (const struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                    parsed_local.family   = UTP_ADDRESS_FAMILY_IPV4;
+                    parsed_local.port     = udp_socket->local_port;
+                    parsed_local.scope_id = info->ipi_ifindex;
+                    memcpy(parsed_local.address, &info->ipi_addr, 4u);
+                    break;
+                }
+#elif defined(IP_PKTINFO)
+                if (cmsg->cmsg_type == IP_PKTINFO && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct in_pktinfo))) {
+                    const struct in_pktinfo* info = (const struct in_pktinfo*)CMSG_DATA(cmsg);
+
+                    parsed_local.family   = UTP_ADDRESS_FAMILY_IPV4;
+                    parsed_local.port     = udp_socket->local_port;
+                    parsed_local.scope_id = (uint32_t)info->ipi_ifindex;
+                    memcpy(parsed_local.address, &info->ipi_addr, 4u);
+                    break;
+                }
+#endif
+            }
+            if (parsed_peer.family == UTP_ADDRESS_FAMILY_IPV6 && cmsg->cmsg_level == IPPROTO_IPV6 &&
+                cmsg->cmsg_type == IPV6_PKTINFO && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct in6_pktinfo))) {
+                const struct in6_pktinfo* info = (const struct in6_pktinfo*)CMSG_DATA(cmsg);
+
+                parsed_local.family   = UTP_ADDRESS_FAMILY_IPV6;
+                parsed_local.port     = udp_socket->local_port;
+                parsed_local.scope_id = info->ipi6_ifindex;
+                memcpy(parsed_local.address, &info->ipi6_addr, 16u);
+                break;
+            }
+        }
         *received_length = (size_t)received;
     }
 #endif
     *peer = parsed_peer;
+    if (local != NULL) {
+        *local = parsed_local;
+    }
     return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_udp_socket_recv_from(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
+                                              size_t* received_length, utp_address_t* peer)
+{
+    return utp_udp_socket_recv_from_ex(udp_socket, data, capacity, received_length, peer, NULL);
 }

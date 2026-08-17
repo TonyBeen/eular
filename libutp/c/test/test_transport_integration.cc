@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #if defined(__APPLE__)
 #include <cerrno>
 #endif
@@ -52,8 +53,8 @@ struct relay_rule {
 };
 
 struct relay_client_route {
-    uint32_t      cid     = 0u;  // 客户端发送连接 ID
-    utp_address_t address = {};  // 对应的 UDP 源地址
+    uint32_t      cid     = 0u;     // 客户端发送连接 ID
+    utp_address_t address = {};     // 对应的 UDP 源地址
     bool          used    = false;  // 路由槽位是否有效
 };
 
@@ -393,8 +394,8 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
             }
         }
         if (direction == relay_direction::client_to_server) {
-            destination         = &relay->server;
-            send_socket         = relay->migration_enabled ? &relay->migration_socket : &relay->socket;
+            destination = &relay->server;
+            send_socket = relay->migration_enabled ? &relay->migration_socket : &relay->socket;
         } else {
             // 服务端发往候选 relay 的验证报文，必须经原 relay 返回，避免客户端也误判路径迁移。
             send_socket = migration_socket ? &relay->socket : receive_socket;
@@ -693,6 +694,58 @@ TEST_CASE("encrypted handshake retransmission keeps the same accept decision", "
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("late duplicate INITIAL is not accepted after passive promotion", "[transport][integration]")
+{
+    transport_pair   pair = {};
+    const relay_rule rule = {
+        relay_direction::client_to_server, relay_action::hold, UTP_PACKET_TYPE_INITIAL, 0u, true, 0u, false, false};
+
+    transport_pair_init(&pair, rule, UTP_ENCRYPTION_NONE);
+    drive_until(pair.event_base, [&pair] { return pair.relay.held_valid; });
+    relay_release_held(&pair.relay);
+    transport_pair_connect(&pair);
+    relay_forward(&pair.relay, pair.relay.held.data(), pair.relay.held_length, &pair.relay.held_destination);
+    drive_for(pair.event_base, std::chrono::milliseconds(20));
+    REQUIRE(pair.server_probe.new_connections == 1);
+    REQUIRE(pair.server_probe.connected == 1);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("same relay address with distinct SCIDs creates distinct passive connections", "[transport][integration]")
+{
+    transport_pair        pair           = {};
+    endpoint_probe        second_probe   = {};
+    utp_context_options_t second_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t second_connect = UTP_CONNECT_OPTIONS_INIT;
+    utp_context_t*        second_client  = nullptr;
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    second_options.event_base = pair.event_base;
+    second_options.context_id = 5003u;
+    REQUIRE(utp_context_create(&second_options, &second_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(second_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connected(second_client, on_connected, &second_probe);
+    utp_context_set_on_connect_error(second_client, on_connect_error, &second_probe);
+    utp_context_set_on_connection_error(second_client, on_connection_error, &second_probe);
+    second_connect.address    = "127.0.0.1";
+    second_connect.port       = pair.relay.address.port;
+    second_connect.timeout_ms = 10u;
+    second_connect.retries    = 3;
+    second_connect.encryption = UTP_ENCRYPTION_NONE;
+    REQUIRE(utp_context_connect(second_client, &second_connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair, &second_probe] {
+        return pair.client_probe.connected == 1 && second_probe.connected == 1 && pair.server_probe.connected == 2;
+    });
+    REQUIRE(pair.server_probe.new_connections == 2);
+    REQUIRE(pair.client_probe.connect_errors == 0);
+    REQUIRE(second_probe.connect_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    utp_context_destroy(second_client);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[transport][integration][0rtt]")
 {
     transport_pair   pair    = {};
@@ -734,9 +787,10 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
     drive_until(pair.event_base, [&pair] { return pair.relay.rule.hits == 1u; });
     drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
-    drive_until(pair.event_base,
-                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
-                                 pair.server_probe.connection != nullptr; });
+    drive_until(pair.event_base, [&pair] {
+        return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
+               pair.server_probe.connection != nullptr;
+    });
     stream = utp_connection_get_stream(pair.server_probe.connection, 0u);
     REQUIRE(stream != nullptr);
     drive_until(pair.event_base,
@@ -789,9 +843,10 @@ TEST_CASE("encrypted 0-RTT continues early stream data after the first packet", 
     early_connect.early_fin          = true;
     REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
     drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
-    drive_until(pair.event_base,
-                [&pair] { return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
-                                 pair.server_probe.connection != nullptr; });
+    drive_until(pair.event_base, [&pair] {
+        return pair.server_probe.new_connections == 2 && pair.server_probe.connected == 2 &&
+               pair.server_probe.connection != nullptr;
+    });
     stream = utp_connection_get_stream(pair.server_probe.connection, 0u);
     REQUIRE(stream != nullptr);
     drive_until(pair.event_base,

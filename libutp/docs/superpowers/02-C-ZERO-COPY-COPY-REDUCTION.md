@@ -73,6 +73,8 @@ STREAM 组包处的大块 payload copy 已删除；仍保留 packet header / str
 
 当前状态：正式 UDP 收包路径已接入 PacketIn 池和 refcnt；`utp_connection_on_packet_in_received()` 将 PacketIn 传入 STREAM 解码路径，recv fragment 只保存 packet 引用、data pointer 和 length，数据消费或 stream/connection cleanup 时释放。有数据的 raw STREAM frame 会被拒绝，避免保存无生命周期指针；pending replay 会先从 context PacketIn 池借包包装完整 wire image，再交给 connection。
 
+PacketIn 池采用稳定分块分配：每次增长 64 项，拆为 8 个、每块 8 项的独立 allocation，因此扩容不会移动被 STREAM 重组等路径持有的 PacketIn。已借出项没有总数上限；`utp_context_options_t::packet_in_max_free` 仅限制归还后的空闲缓存，默认 256。超过该水位时只回收完整空闲块，不拆分仍有借用项的块；因此在碎片化借用时，空闲数可暂时略高于配置值。内部批量借用接口会先预留整批 PacketIn，供 Linux `recvmmsg` 接入时使用。
+
 内部 read view 已完成：
 
 - `utp_stream_acquire_read_view()` 借出当前连续首片的只读视图。

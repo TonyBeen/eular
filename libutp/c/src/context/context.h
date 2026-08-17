@@ -12,10 +12,11 @@
 #include "util/hash.h"
 #include "util/log.h"
 
-#define UTP_CONTEXT_MAX_PENDING_INCOMING             1024u
+#define UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT   1024u
 #define UTP_CONTEXT_PACKET_LIMIT                     32u
-#define UTP_CONTEXT_PACKET_IN_LIMIT                  64u
-#define UTP_CONTEXT_PACKET_IN_CAPACITY               65535u
+#define UTP_CONTEXT_PACKET_IN_GROW_CAPACITY          64u
+#define UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY         8u
+#define UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE       256u
 #define UTP_CONTEXT_PENDING_PACKET_LIMIT             16u
 #define UTP_CONTEXT_PENDING_STORAGE_CAPACITY         32768u
 #define UTP_CONTEXT_ZERO_RTT_REPLAY_DEFAULT_CAPACITY 4096u
@@ -31,6 +32,7 @@ typedef struct utp_context_zero_rtt_replay_entry {
 
 typedef struct utp_context_connection_slot {
     utp_hash_node_t node;                                        // 按本端 CID 索引的哈希节点
+    utp_hash_node_t peer_node;                                   // 被动连接按来源地址和对端 CID 索引的哈希节点
     TAILQ_ENTRY(utp_context_connection_slot) free_next;          // 空闲槽位链表节点
     TAILQ_ENTRY(utp_context_connection_slot) terminal_error_next;  // 延迟终止事件链表节点
     utp_connection_t           connection;                       // 槽位持有的连接对象
@@ -73,6 +75,7 @@ TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
 typedef struct utp_context_pending_slot {
     utp_hash_node_t node;                                                  // 按待处理本端 CID 索引的哈希节点
+    utp_hash_node_t peer_node;                                             // 按来源地址和对端 CID 索引的哈希节点
     TAILQ_ENTRY(utp_context_pending_slot) free_next;                       // 空闲 pending 槽位链表节点
     utp_pending_incoming_t pending;                                        // 未接受被动握手状态
     uint8_t                storage[UTP_CONTEXT_PENDING_STORAGE_CAPACITY];  // 入站包有界缓存
@@ -87,12 +90,14 @@ struct utp_context {
     utp_event_t                              udp_write_event;                  // UDP 可写事件
     utp_event_t                              timer_event;                      // 协议定时器事件
     utp_udp_socket_t                         udp_socket;                       // Context 持有的 UDP socket
-    utp_packet_in_pool_t                     packet_in_pool;                   // 有界入站包对象池
+    utp_packet_in_pool_t                     packet_in_pool;                   // 入站包对象池
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
+    utp_hash_table_t                         passive_connections_by_peer;      // 被动连接来源地址和对端 CID 表
     struct utp_context_connection_slot_tailq free_connection_slots;            // 空闲连接槽位
     struct utp_context_connection_slot_tailq terminal_error_slots;             // 待调度边界投递的本地终止事件
     utp_hash_table_t                         pending_incoming;                 // 等待 accept 的被动握手表
+    utp_hash_table_t                         pending_incoming_by_peer;         // pending 来源地址和对端 CID 表
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
     utp_stream_scheduler_mode_t              stream_scheduler_mode;            // 新连接默认流调度策略

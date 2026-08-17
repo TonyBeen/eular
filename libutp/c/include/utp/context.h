@@ -116,7 +116,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
  * @note 本调用是调用者主动终止，不会触发连接、流或建连失败回调；调用者负责释放关联的上层资源。
  */
 void         utp_context_destroy(utp_context_t* context);
-/** @brief 绑定 UDP 地址及可选网卡，空 @p ifname 表示不绑定特定网卡。 */
+/** @brief 绑定 UDP 地址及可选网卡，空 @p ifname 表示不绑定特定网卡；Windows 调用方须先初始化 Winsock。 */
 utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,
                               uint16_t* out_port);
 /** @brief 动态设置日志回调和最低输出级别；非线程安全，NULL 回调会关闭日志输出。 */

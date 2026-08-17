@@ -650,7 +650,7 @@ static utp_internal_error_t utp_connection_replay_candidate_packets(utp_connecti
 }
 
 static void utp_connection_begin_path_validation(utp_connection_t* connection, const utp_address_t* peer,
-                                                 size_t received_length)
+                                                 const utp_address_t* local, size_t received_length)
 {
     utp_connection_clear_candidate_packets(connection);
     if (connection->path_validation_generation == UINT32_MAX) {
@@ -659,6 +659,7 @@ static void utp_connection_begin_path_validation(utp_connection_t* connection, c
         ++connection->path_validation_generation;
     }
     connection->candidate_peer             = *peer;
+    connection->candidate_local            = local == NULL ? (utp_address_t){0} : *local;
     connection->candidate_rx_bytes         = (uint64_t)received_length;
     connection->candidate_tx_bytes         = 0u;
     connection->candidate_queued_bytes     = 0u;
@@ -787,6 +788,7 @@ static utp_internal_error_t utp_connection_handle_path_response(utp_connection_t
         return UTP_INTERNAL_ERROR_OK;
     }
     connection->peer                       = connection->candidate_peer;
+    connection->local                      = connection->candidate_local;
     connection->path_challenge_deadline_us = 0u;
     connection->path_challenge_retry_count = 0u;
     connection->path_challenge_pending     = false;
@@ -2840,7 +2842,10 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         return error;
     }
     connection->peer                                     = *peer;
+    connection->local                                    = (utp_address_t){0};
     connection->candidate_peer                           = *peer;
+    connection->candidate_local                          = (utp_address_t){0};
+    connection->received_local                           = (utp_address_t){0};
     connection->local_cid                                = local_cid;
     connection->peer_cid                                 = peer_cid;
     connection->peer_max_data                            = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
@@ -3420,6 +3425,8 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->candidate_rx_bytes                                      = 0u;
     connection->candidate_tx_bytes                                      = 0u;
     connection->candidate_queued_bytes                                  = 0u;
+    connection->candidate_local                                         = (utp_address_t){0};
+    connection->received_local                                          = (utp_address_t){0};
     connection->path_validation_generation                              = 0u;
     connection->path_challenge_retry_count                              = 0u;
     connection->keepalive_missed_probes                                 = 0u;
@@ -3997,11 +4004,9 @@ void utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_
     }
 }
 
-static utp_internal_error_t utp_connection_on_packet_received_internal(utp_connection_t* connection,
-                                                                       const uint8_t* packet, size_t packet_length,
-                                                                       size_t               wire_packet_length,
-                                                                       utp_packet_in_t*     packet_in,
-                                                                       const utp_address_t* peer, uint64_t now_us)
+static utp_internal_error_t utp_connection_on_packet_received_internal(
+    utp_connection_t* connection, const uint8_t* packet, size_t packet_length, size_t wire_packet_length,
+    utp_packet_in_t* packet_in, const utp_address_t* peer, const utp_address_t* local, uint64_t now_us)
 {
     utp_packet_view_t    view;
     utp_internal_error_t error;
@@ -4101,7 +4106,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(utp_conne
     if (candidate_path) {
         if (connection->path_state != UTP_CONNECTION_PATH_STATE_VALIDATING ||
             !utp_address_equal(&connection->candidate_peer, peer)) {
-            utp_connection_begin_path_validation(connection, peer, wire_packet_length);
+            utp_connection_begin_path_validation(connection, peer, local, wire_packet_length);
         } else if ((uint64_t)wire_packet_length > UINT64_MAX - connection->candidate_rx_bytes) {
             return UTP_INTERNAL_ERROR_OVERFLOW;
         } else {
@@ -4674,6 +4679,13 @@ static utp_internal_error_t utp_connection_decrypt_packet(utp_connection_t* conn
     return error;
 }
 
+void utp_connection_set_received_local(utp_connection_t* connection, const utp_address_t* local)
+{
+    if (connection != NULL) {
+        connection->received_local = local == NULL ? (utp_address_t){0} : *local;
+    }
+}
+
 utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connection, uint8_t* packet,
                                                        size_t packet_length, const utp_address_t* peer, uint64_t now_us)
 {
@@ -4684,7 +4696,7 @@ utp_internal_error_t utp_connection_on_packet_received(utp_connection_t* connect
         return error;
     }
     return utp_connection_on_packet_received_internal(connection, packet, packet_length, wire_packet_length, NULL, peer,
-                                                      now_us);
+                                                      &connection->received_local, now_us);
 }
 
 utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* connection, utp_packet_in_t* packet,
@@ -4705,7 +4717,7 @@ utp_internal_error_t utp_connection_on_packet_in_received(utp_connection_t* conn
     }
     packet->length = (uint16_t)packet_length;
     return utp_connection_on_packet_received_internal(connection, packet->data, packet->length, wire_packet_length,
-                                                      packet, peer, now_us);
+                                                      packet, peer, &connection->received_local, now_us);
 }
 
 utp_internal_error_t utp_connection_on_plaintext_packet_in_received(utp_connection_t* connection,
@@ -4716,7 +4728,7 @@ utp_internal_error_t utp_connection_on_plaintext_packet_in_received(utp_connecti
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     return utp_connection_on_packet_received_internal(connection, packet->data, packet->length, wire_packet_length,
-                                                      packet, peer, now_us);
+                                                      packet, peer, NULL, now_us);
 }
 
 utp_internal_error_t utp_connection_queue_ack(utp_connection_t* connection, uint64_t now_us)
@@ -4953,6 +4965,7 @@ utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t*
     if (connection->path_challenge_retry_count >= UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES) {
         utp_connection_clear_candidate_packets(connection);
         connection->candidate_peer         = connection->peer;
+        connection->candidate_local        = (utp_address_t){0};
         connection->candidate_rx_bytes     = 0u;
         connection->candidate_tx_bytes     = 0u;
         connection->candidate_queued_bytes = 0u;
@@ -5315,7 +5328,7 @@ utp_internal_error_t utp_connection_on_zero_rtt_handshake(utp_connection_t* conn
     if (error == UTP_INTERNAL_ERROR_OK) {
         *packet_length = UTP_PACKET_HEADER_SIZE + plaintext_length;
         error = utp_connection_on_packet_received_internal(connection, packet, *packet_length, wire_packet_length, NULL,
-                                                           peer, now_us);
+                                                           peer, NULL, now_us);
     }
     return error;
 }
