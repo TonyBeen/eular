@@ -33,6 +33,7 @@ extern "C" {
 #include "socket_batch_hook.h"
 #endif
 #include "util/error.h"
+#include "util/time.h"
 }
 
 namespace {
@@ -1490,6 +1491,59 @@ TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix",
     REQUIRE(pair.server_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
+
+TEST_CASE("Linux recvmmsg preserves later datagrams after a truncated datagram", "[transport][integration][socket]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const uint8_t    ping    = UTP_FRAME_TYPE_PING;
+    std::array<uint8_t, kRelayDatagramCapacity> first_packet    = {};
+    std::array<uint8_t, kRelayDatagramCapacity> second_packet   = {};
+    std::array<uint8_t, kRelayDatagramCapacity> first_received  = {};
+    std::array<uint8_t, kRelayDatagramCapacity> second_received = {};
+    utp_udp_receive_message_t                   messages[2]     = {};
+    utp_packet_out_t*                           packet;
+    size_t                                      first_packet_length;
+    size_t                                      second_packet_length;
+    size_t                                      received_count = 0u;
+    const uint64_t                              sent_at_us     = utp_clock_now_us(nullptr);
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(pair.client_probe.connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_encode_packet_wire(pair.client_probe.connection, packet, first_packet.data(),
+                                              first_packet.size(), &first_packet_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(pair.client_probe.connection, packet, sent_at_us) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(pair.client_probe.connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_encode_packet_wire(pair.client_probe.connection, packet, second_packet.data(),
+                                              second_packet.size(), &second_packet_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(pair.client_probe.connection, packet, sent_at_us + 1u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_batch_hook_configure_truncated_receive((int32_t)pair.server->udp_socket.native_handle));
+    relay_forward_from(&pair.relay.socket, first_packet.data(), first_packet_length, &pair.relay.server);
+    relay_forward_from(&pair.relay.socket, second_packet.data(), second_packet_length, &pair.relay.server);
+    messages[0].data     = first_received.data();
+    messages[0].capacity = first_received.size();
+    messages[1].data     = second_received.data();
+    messages[1].capacity = second_received.size();
+    REQUIRE(utp_udp_socket_receive_messages(&pair.server->udp_socket, messages, 2u, &received_count) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_batch_hook_truncated_receive_count() == 1u);
+    REQUIRE(received_count == 2u);
+    REQUIRE(messages[0].error == UTP_INTERNAL_ERROR_OVERFLOW);
+    REQUIRE(messages[1].error == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(messages[1].received_length == second_packet_length);
+    REQUIRE(std::equal(second_packet.begin(), second_packet.begin() + static_cast<std::ptrdiff_t>(second_packet_length),
+                       second_received.begin()));
+    transport_pair_cleanup(&pair);
+}
+
 #endif
 
 TEST_CASE("relay drops the first STREAM packet and PTO retransmission delivers it once", "[transport][integration]")

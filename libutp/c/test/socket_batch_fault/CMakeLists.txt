@@ -4,3 +4,4 @@ target_link_libraries(utp_c_socket_batch_hook PRIVATE dl)
 
 target_include_directories(utp_c_transport_integration_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(utp_c_transport_integration_test PRIVATE utp_c_socket_batch_hook)
+target_link_options(utp_c_transport_integration_test PRIVATE "-Wl,--wrap=sendmmsg" "-Wl,--wrap=recvmmsg")
