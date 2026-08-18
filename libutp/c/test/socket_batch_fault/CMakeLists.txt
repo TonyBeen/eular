@@ -1,0 +1,6 @@
+add_library(utp_c_socket_batch_hook SHARED socket_batch_hook.c)
+target_include_directories(utp_c_socket_batch_hook PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(utp_c_socket_batch_hook PRIVATE dl)
+
+target_include_directories(utp_c_transport_integration_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(utp_c_transport_integration_test PRIVATE utp_c_socket_batch_hook)

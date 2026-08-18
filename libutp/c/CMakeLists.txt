@@ -154,6 +154,8 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     target_link_libraries(utp_c_transport_integration_test PRIVATE Threads::Threads)
     if(APPLE)
         add_subdirectory(test/socket_fault)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_subdirectory(test/socket_batch_fault)
     endif()
 endif()
 
@@ -185,7 +187,8 @@ set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c benchmark/bench_concurrent
     test/test_core.c test/test_public_api.c test/test_crypto.cc test/test_proto.cc test/test_receive_history.cc
     test/test_packet_out.cc test/test_packet_in.cc test/test_send_ledger.cc test/test_send_control.cc test/test_pending_incoming.cc test/test_congestion.cc test/test_minmax.cc
     test/test_stream.cc test/test_connection.cc test/test_bw_sampler.cc test/test_bbr.cc test/test_mtu.cc test/test_parser_fuzz.cc
-    test/test_transport_integration.cc test/fuzz/packet_parser_fuzz.cc)
+    test/test_transport_integration.cc test/fuzz/packet_parser_fuzz.cc test/socket_batch_fault/socket_batch_hook.c
+    test/socket_batch_fault/socket_batch_hook.h)
 list(TRANSFORM UTP_C_FORMAT_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 find_program(CLANG_FORMAT_EXECUTABLE NAMES clang-format
     HINTS "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"

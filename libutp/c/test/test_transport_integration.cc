@@ -18,7 +18,7 @@ extern "C" {
 #include <utp/context.h>
 
 #include "connection/connection.h"
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 #include "context/context.h"
 #endif
 #include "context/event_loop.h"
@@ -29,6 +29,8 @@ extern "C" {
 #include "socket/udp.h"
 #if defined(__APPLE__)
 #include "socket_send_hook.h"
+#elif defined(__linux__)
+#include "socket_batch_hook.h"
 #endif
 #include "util/error.h"
 }
@@ -1457,6 +1459,35 @@ TEST_CASE("macOS local close suppresses deferred ENOBUFS terminal error", "[tran
     utp_connection_close(pair.client_probe.connection);
     drive_for(pair.event_base, std::chrono::milliseconds(10));
     REQUIRE(pair.client_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+#endif
+
+#if defined(__linux__)
+TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix", "[transport][integration][socket]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const uint8_t    ping    = UTP_FRAME_TYPE_PING;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_batch_hook_configure_partial_send((int32_t)pair.client->udp_socket.native_handle, 1u));
+    REQUIRE(utp_context_flush_public_connection(pair.client, pair.client_probe.connection) == UTP_INTERNAL_ERROR_OK);
+    drive_until(pair.event_base, [&pair] {
+        return utp_test_batch_hook_intercept_count() == 1u &&
+               utp_send_control_scheduled_packet_count(&pair.client_probe.connection->send_control) == 0u &&
+               utp_send_control_unacked_packet_count(&pair.client_probe.connection->send_control) == 0u;
+    });
+    REQUIRE(utp_test_batch_hook_last_request_count() == 3u);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
 #endif
