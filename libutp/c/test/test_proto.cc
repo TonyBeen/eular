@@ -468,7 +468,7 @@ TEST_CASE("udp socket sends a datagram from slices", "[udp]")
     utp_udp_socket_close(&sender);
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && defined(UTP_HAVE_SENDMMSG) && defined(UTP_HAVE_RECVMMSG)
 static void test_udp_socket_batch(const char* loopback_text, size_t address_length)
 {
     const std::array<uint8_t, 3>          first  = {UINT8_C(0x11), UINT8_C(0x12), UINT8_C(0x13)};

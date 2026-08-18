@@ -29,7 +29,7 @@ extern "C" {
 #include "socket/udp.h"
 #if defined(__APPLE__)
 #include "socket_send_hook.h"
-#elif defined(__linux__)
+#elif defined(__linux__) && (defined(UTP_HAVE_SENDMMSG) || defined(UTP_HAVE_RECVMMSG))
 #include "socket_batch_hook.h"
 #endif
 #include "util/error.h"
@@ -1464,7 +1464,7 @@ TEST_CASE("macOS local close suppresses deferred ENOBUFS terminal error", "[tran
 }
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) && defined(UTP_HAVE_SENDMMSG)
 TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix", "[transport][integration][socket]")
 {
     transport_pair   pair    = {};
@@ -1491,7 +1491,9 @@ TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix",
     REQUIRE(pair.server_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
+#endif
 
+#if defined(__linux__) && defined(UTP_HAVE_RECVMMSG)
 TEST_CASE("Linux recvmmsg preserves later datagrams after a truncated datagram", "[transport][integration][socket]")
 {
     transport_pair   pair    = {};

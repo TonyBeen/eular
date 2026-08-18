@@ -1229,7 +1229,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t*      
             utp_send_control_pacer_tick_out(&connection->send_control);
             return UTP_INTERNAL_ERROR_OK;
         }
-#if defined(__linux__)
+#if defined(UTP_HAVE_SENDMMSG)
         if ((packet->po_flags & UTP_PO_ENCRYPTED) == 0u && !utp_connection_is_close_packet(connection, packet)) {
             utp_packet_out_t*      packets[UTP_UDP_SOCKET_BATCH_SIZE];
             utp_udp_send_message_t messages[UTP_UDP_SOCKET_BATCH_SIZE];
@@ -3098,7 +3098,7 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
     if ((events & UTP_EVENT_READABLE) == 0u || context == NULL) {
         return;
     }
-#if defined(__linux__)
+#if defined(UTP_HAVE_RECVMMSG)
     for (;;) {
         utp_packet_in_t*          packet_ins[UTP_UDP_SOCKET_BATCH_SIZE] = {NULL};
         utp_udp_receive_message_t messages[UTP_UDP_SOCKET_BATCH_SIZE];

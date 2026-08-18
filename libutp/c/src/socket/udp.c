@@ -970,7 +970,7 @@ utp_internal_error_t utp_udp_socket_send_messages(utp_udp_socket_t* udp_socket, 
         message_count > UTP_UDP_SOCKET_BATCH_SIZE || out_sent_count == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-#if defined(__linux__)
+#if defined(UTP_HAVE_SENDMMSG)
     {
         struct mmsghdr                 native_messages[UTP_UDP_SOCKET_BATCH_SIZE];
         struct sockaddr_storage        destinations[UTP_UDP_SOCKET_BATCH_SIZE]                           = {{0}};
@@ -1076,7 +1076,7 @@ utp_internal_error_t utp_udp_socket_receive_messages(utp_udp_socket_t* udp_socke
         message_count > UTP_UDP_SOCKET_BATCH_SIZE || out_received_count == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-#if defined(__linux__)
+#if defined(UTP_HAVE_RECVMMSG)
     {
         struct mmsghdr                 native_messages[UTP_UDP_SOCKET_BATCH_SIZE];
         struct sockaddr_storage        sources[UTP_UDP_SOCKET_BATCH_SIZE] = {{0}};

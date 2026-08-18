@@ -8,15 +8,20 @@
 
 #include <sys/socket.h>
 
+#if defined(UTP_HAVE_SENDMMSG)
 static int32_t  g_socket = -1;
 static uint32_t g_partial_send_count;
 static uint32_t g_intercept_count;
 static uint32_t g_last_request_count;
+static int (*g_real_sendmmsg)(int, struct mmsghdr*, unsigned int, int);
+#endif
+#if defined(UTP_HAVE_RECVMMSG)
 static int32_t  g_receive_socket = -1;
 static uint32_t g_truncated_receive_count;
-static int (*g_real_sendmmsg)(int, struct mmsghdr*, unsigned int, int);
 static int (*g_real_recvmmsg)(int, struct mmsghdr*, unsigned int, int, struct timespec*);
+#endif
 
+#if defined(UTP_HAVE_SENDMMSG)
 static bool utp_test_batch_hook_load_sendmmsg(void)
 {
     void* symbol;
@@ -31,7 +36,9 @@ static bool utp_test_batch_hook_load_sendmmsg(void)
     memcpy(&g_real_sendmmsg, &symbol, sizeof(g_real_sendmmsg));
     return g_real_sendmmsg != NULL;
 }
+#endif
 
+#if defined(UTP_HAVE_RECVMMSG)
 static bool utp_test_batch_hook_load_recvmmsg(void)
 {
     void* symbol;
@@ -46,7 +53,9 @@ static bool utp_test_batch_hook_load_recvmmsg(void)
     memcpy(&g_real_recvmmsg, &symbol, sizeof(g_real_recvmmsg));
     return g_real_recvmmsg != NULL;
 }
+#endif
 
+#if defined(UTP_HAVE_SENDMMSG)
 int __wrap_sendmmsg(int socket, struct mmsghdr* messages, unsigned int message_count, int flags)
 {
     if (!utp_test_batch_hook_load_sendmmsg()) {
@@ -61,7 +70,9 @@ int __wrap_sendmmsg(int socket, struct mmsghdr* messages, unsigned int message_c
     }
     return g_real_sendmmsg(socket, messages, message_count, flags);
 }
+#endif
 
+#if defined(UTP_HAVE_RECVMMSG)
 int __wrap_recvmmsg(int socket, struct mmsghdr* messages, unsigned int message_count, int flags,
                     struct timespec* timeout)
 {
@@ -81,7 +92,9 @@ int __wrap_recvmmsg(int socket, struct mmsghdr* messages, unsigned int message_c
     }
     return received_count;
 }
+#endif
 
+#if defined(UTP_HAVE_SENDMMSG)
 bool utp_test_batch_hook_configure_partial_send(int32_t native_socket, uint32_t sent_count)
 {
     if (native_socket < 0 || sent_count == 0u || !utp_test_batch_hook_load_sendmmsg()) {
@@ -97,7 +110,9 @@ bool utp_test_batch_hook_configure_partial_send(int32_t native_socket, uint32_t 
 uint32_t utp_test_batch_hook_intercept_count(void) { return g_intercept_count; }
 
 uint32_t utp_test_batch_hook_last_request_count(void) { return g_last_request_count; }
+#endif
 
+#if defined(UTP_HAVE_RECVMMSG)
 bool     utp_test_batch_hook_configure_truncated_receive(int32_t native_socket)
 {
     if (native_socket < 0 || !utp_test_batch_hook_load_recvmmsg()) {
@@ -109,3 +124,4 @@ bool     utp_test_batch_hook_configure_truncated_receive(int32_t native_socket)
 }
 
 uint32_t utp_test_batch_hook_truncated_receive_count(void) { return g_truncated_receive_count; }
+#endif
