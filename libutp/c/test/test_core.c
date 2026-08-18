@@ -126,7 +126,7 @@ static uint32_t random_next(uint32_t* state)
 
 static void test_version_and_status(void)
 {
-    assert(strcmp(utp_version(), "1.0.1") == 0);
+    assert(strcmp(utp_version(), "1.6.0") == 0);
     assert(strcmp(utp_version(), UTP_VERSION_STRING) == 0);
     assert(UTP_STATUS_INVALID_ARGUMENT == -1);
     assert(UTP_STATUS_NOMEM == -2);
