@@ -24,12 +24,30 @@ extern "C" {
 #endif
 
 #define UTP_UDP_SOCKET_INVALID         UINTPTR_MAX
+#define UTP_UDP_SOCKET_BATCH_SIZE      16u
 #define UTP_UDP_SOCKET_MAX_SEND_SLICES 8u
 
 typedef struct utp_udp_send_slice {
     const void* data;    // 借用的发送数据
     size_t      length;  // 数据长度
 } utp_udp_send_slice_t;
+
+typedef struct utp_udp_send_message {
+    const utp_udp_send_slice_t* slices;       // 借用的发送片段数组
+    const utp_address_t*        peer;         // 目标地址，不拥有
+    const utp_address_t*        local;        // 指定源地址，可为空且不拥有
+    size_t                      slice_count;  // 发送片段数量
+    size_t                      sent_length;  // 实际发送长度
+} utp_udp_send_message_t;
+
+typedef struct utp_udp_receive_message {
+    void*                data;             // 借用的接收缓冲区
+    size_t               capacity;         // 接收缓冲区容量
+    size_t               received_length;  // 实际接收长度
+    utp_address_t        peer;             // 解析后的来源地址
+    utp_address_t        local;            // 解析后的本地目的地址
+    utp_internal_error_t error;            // 当前 datagram 的解析结果
+} utp_udp_receive_message_t;
 
 typedef struct utp_udp_socket {
     uintptr_t native_handle;  // 平台 UDP socket 句柄
@@ -57,10 +75,14 @@ utp_internal_error_t utp_udp_socket_send_from_to_slices(utp_udp_socket_t*       
                                                         const utp_udp_send_slice_t* slices, size_t slice_count,
                                                         const utp_address_t* peer, const utp_address_t* local,
                                                         size_t* sent_length);
+utp_internal_error_t utp_udp_socket_send_messages(utp_udp_socket_t* udp_socket, utp_udp_send_message_t* messages,
+                                                  size_t message_count, size_t* out_sent_count);
 utp_internal_error_t utp_udp_socket_recv_from(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
                                               size_t* received_length, utp_address_t* peer);
 utp_internal_error_t utp_udp_socket_recv_from_ex(utp_udp_socket_t* udp_socket, void* data, size_t capacity,
                                                  size_t* received_length, utp_address_t* peer, utp_address_t* local);
+utp_internal_error_t utp_udp_socket_receive_messages(utp_udp_socket_t* udp_socket, utp_udp_receive_message_t* messages,
+                                                     size_t message_count, size_t* out_received_count);
 
 #ifdef __cplusplus
 }

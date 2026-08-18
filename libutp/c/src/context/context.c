@@ -938,7 +938,7 @@ static utp_internal_error_t utp_context_resolve_packet_slice(const utp_packet_ou
                                                              const utp_packet_out_slice_t* slice,
                                                              utp_udp_send_slice_t*         out_slice)
 {
-    if (packet == NULL || slice == NULL || out_slice == NULL || slice->length == 0u) {
+    if (slice->length == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     out_slice->length = slice->length;
@@ -958,6 +958,66 @@ static utp_internal_error_t utp_context_resolve_packet_slice(const utp_packet_ou
         return UTP_INTERNAL_ERROR_OK;
     }
     return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+}
+
+/** @brief 将未加密 PacketOut 映射为可供 sendmmsg 使用的零拷贝消息。 */
+static utp_internal_error_t utp_context_prepare_packet_send_message(const utp_connection_t* connection,
+                                                                    const utp_packet_out_t* packet,
+                                                                    utp_udp_send_slice_t*   slices,
+                                                                    utp_udp_send_message_t* message)
+{
+    size_t total_length = 0u;
+
+    message->peer = packet->has_destination ? &packet->destination : &connection->peer;
+    message->local =
+        (packet->po_flags & UTP_PO_PATH_VALIDATION) != 0u ? &connection->candidate_local : &connection->local;
+    message->slices = slices;
+    if (packet->slice_count == 0u) {
+        slices[0].data       = packet->raw_data;
+        slices[0].length     = packet->data_size;
+        message->slice_count = 1u;
+        message->sent_length = 0u;
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (packet->slice_count > UTP_PACKET_OUT_MAX_SLICES) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    for (uint8_t index = 0u; index < packet->slice_count; ++index) {
+        utp_internal_error_t error = utp_context_resolve_packet_slice(packet, &packet->slices[index], &slices[index]);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        if (slices[index].length > SIZE_MAX - total_length) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        total_length += slices[index].length;
+    }
+    if (total_length != packet->data_size) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    message->slice_count = packet->slice_count;
+    message->sent_length = 0u;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 完成实际发送后的协议记账。 */
+static utp_internal_error_t utp_context_complete_packet_send(utp_context_t*                 context,
+                                                             utp_context_connection_slot_t* slot,
+                                                             utp_packet_out_t* packet, uint64_t sent_at_us)
+{
+    const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
+    const uint64_t packet_size =
+        (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
+    utp_internal_error_t error = utp_connection_on_packet_sent(&slot->connection, packet, sent_at_us);
+
+    if (error == UTP_INTERNAL_ERROR_OK && slot->zero_rtt_response_active) {
+        slot->zero_rtt_amplification_tx_bytes += packet_size;
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && zero_rtt_response) {
+        error = utp_context_complete_zero_rtt_response(context, slot, sent_at_us);
+    }
+    return error;
 }
 
 static utp_internal_error_t utp_context_send_packet(utp_context_t* context, const utp_connection_t* connection,
@@ -980,31 +1040,17 @@ static utp_internal_error_t utp_context_send_packet(utp_context_t* context, cons
         }
         return utp_context_send_raw(context, peer, local, context->encrypt_send_buffer, wire_length);
     }
-    if (packet->slice_count == 0u) {
-        return utp_context_send_raw(context, peer, local, packet->raw_data, packet->data_size);
-    }
-    if (packet->slice_count > UTP_PACKET_OUT_MAX_SLICES) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    utp_udp_send_slice_t slices[UTP_PACKET_OUT_MAX_SLICES];
-    size_t               sent_length  = 0u;
-    size_t               total_length = 0u;
-    for (uint8_t index = 0u; index < packet->slice_count; ++index) {
-        utp_internal_error_t error = utp_context_resolve_packet_slice(packet, &packet->slices[index], &slices[index]);
+    utp_udp_send_slice_t   slices[UTP_PACKET_OUT_MAX_SLICES];
+    utp_udp_send_message_t message;
+    utp_internal_error_t   error = utp_context_prepare_packet_send_message(connection, packet, slices, &message);
 
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-        if (slices[index].length > SIZE_MAX - total_length) {
-            return UTP_INTERNAL_ERROR_OVERFLOW;
-        }
-        total_length += slices[index].length;
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
     }
-    if (total_length != packet->data_size) {
-        return UTP_INTERNAL_ERROR_PROTOCOL;
-    }
-    return utp_udp_socket_send_from_to_slices(&context->udp_socket, slices, packet->slice_count, peer, local,
-                                              &sent_length);
+    message.peer  = peer;
+    message.local = local;
+    return utp_udp_socket_send_from_to_slices(&context->udp_socket, message.slices, message.slice_count, message.peer,
+                                              message.local, &message.sent_length);
 }
 
 static void utp_context_send_destroy_close(utp_context_t* context, utp_context_connection_slot_t* slot)
@@ -1183,21 +1229,119 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t*      
             utp_send_control_pacer_tick_out(&connection->send_control);
             return UTP_INTERNAL_ERROR_OK;
         }
+#if defined(__linux__)
+        if ((packet->po_flags & UTP_PO_ENCRYPTED) == 0u && !utp_connection_is_close_packet(connection, packet)) {
+            utp_packet_out_t*      packets[UTP_UDP_SOCKET_BATCH_SIZE];
+            utp_udp_send_message_t messages[UTP_UDP_SOCKET_BATCH_SIZE];
+            utp_udp_send_slice_t   slices[UTP_UDP_SOCKET_BATCH_SIZE][UTP_PACKET_OUT_MAX_SLICES];
+            size_t                 packet_count    = 0u;
+            size_t                 sent_count      = 0u;
+            size_t                 completed_count = 0u;
+
+            for (;;) {
+                error = utp_context_prepare_packet_send_message(connection, packet, slices[packet_count],
+                                                                &messages[packet_count]);
+                if (error != UTP_INTERNAL_ERROR_OK) {
+                    (void)utp_send_control_reschedule_packet(&connection->send_control, packet);
+                    break;
+                }
+                packets[packet_count] = packet;
+                ++packet_count;
+                if (packet_count == UTP_UDP_SOCKET_BATCH_SIZE) {
+                    break;
+                }
+                packet = utp_connection_next_packet_to_send_at(connection, now_us);
+                if (packet == NULL) {
+                    break;
+                }
+                if (!utp_context_zero_rtt_amplification_allows(slot, packet) ||
+                    (slot->zero_rtt_response_active && slot->zero_rtt_response_sent &&
+                     (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) == 0u) ||
+                    (packet->po_flags & UTP_PO_ENCRYPTED) != 0u || utp_connection_is_close_packet(connection, packet)) {
+                    error = utp_send_control_reschedule_packet(&connection->send_control, packet);
+                    if (error != UTP_INTERNAL_ERROR_OK) {
+                        break;
+                    }
+                    error = UTP_INTERNAL_ERROR_OK;
+                    break;
+                }
+            }
+            if (packet_count != 0u && error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_udp_socket_send_messages(&context->udp_socket, messages, packet_count, &sent_count);
+            }
+            while (completed_count < sent_count && error == UTP_INTERNAL_ERROR_OK) {
+                error = utp_context_complete_packet_send(context, slot, packets[completed_count], now_us);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    ++completed_count;
+                }
+            }
+            if (error != UTP_INTERNAL_ERROR_OK && completed_count < sent_count) {
+                for (size_t index = packet_count; index > sent_count; --index) {
+                    const utp_internal_error_t reschedule_error =
+                        utp_send_control_reschedule_packet(&connection->send_control, packets[index - 1u]);
+
+                    if (reschedule_error != UTP_INTERNAL_ERROR_OK) {
+                        break;
+                    }
+                }
+                utp_send_control_pacer_tick_out(&connection->send_control);
+                return error;
+            }
+            if (error == UTP_INTERNAL_ERROR_OK && sent_count == packet_count) {
+                continue;
+            }
+            if (error == UTP_INTERNAL_ERROR_OK || error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                for (size_t index = packet_count; index > sent_count; --index) {
+                    error = utp_send_control_reschedule_packet(&connection->send_control, packets[index - 1u]);
+                    if (error != UTP_INTERNAL_ERROR_OK) {
+                        break;
+                    }
+                }
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    if (!connection->udp_write_pending) {
+                        utp_context_log_ids(context, UTP_LOG_LEVEL_DEBUG, "udp batch send blocked, packets rescheduled",
+                                            connection->local_cid, connection->peer_cid);
+                    }
+                    connection->udp_write_pending = true;
+                    error                         = utp_context_enable_udp_write_event(context);
+                }
+                utp_send_control_pacer_tick_out(&connection->send_control);
+                if (error == UTP_INTERNAL_ERROR_OK) {
+                    return UTP_INTERNAL_ERROR_OK;
+                }
+                utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
+                return error;
+            }
+            if (sent_count < packet_count) {
+                utp_packet_out_t* failed_packet = packets[sent_count];
+
+                utp_connection_on_packet_send_error(connection, failed_packet, error, now_us);
+                utp_connection_on_packet_abandoned(connection, failed_packet);
+                utp_send_control_forget_packet_attempts(&connection->send_control, failed_packet);
+                utp_packet_out_pool_release(&connection->packet_pool, failed_packet);
+                if (error != UTP_INTERNAL_ERROR_NOBUFS) {
+                    for (size_t index = packet_count; index > sent_count + 1u; --index) {
+                        const utp_internal_error_t reschedule_error =
+                            utp_send_control_reschedule_packet(&connection->send_control, packets[index - 1u]);
+
+                        if (reschedule_error != UTP_INTERNAL_ERROR_OK) {
+                            error = reschedule_error;
+                            break;
+                        }
+                    }
+                }
+            }
+            utp_send_control_pacer_tick_out(&connection->send_control);
+            if (error == UTP_INTERNAL_ERROR_NOBUFS) {
+                utp_context_report_terminal_send_error(context, slot, error, "udp send ENOBUFS");
+            }
+            return error;
+        }
+#endif
         error = utp_context_send_packet(context, connection,
                                         packet->has_destination ? &packet->destination : &connection->peer, packet);
         if (error == UTP_INTERNAL_ERROR_OK) {
-            const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
-            const uint64_t sent_at_us        = now_us;
-            const uint64_t packet_size =
-                (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
-
-            error = utp_connection_on_packet_sent(connection, packet, sent_at_us);
-            if (error == UTP_INTERNAL_ERROR_OK && slot->zero_rtt_response_active) {
-                slot->zero_rtt_amplification_tx_bytes += packet_size;
-            }
-            if (error == UTP_INTERNAL_ERROR_OK && zero_rtt_response) {
-                error = utp_context_complete_zero_rtt_response(context, slot, sent_at_us);
-            }
+            error = utp_context_complete_packet_send(context, slot, packet, now_us);
         } else if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
             // 暂时不可写时保留 PacketOut 所有权，由一次性 writable 事件继续发送。
             if (utp_connection_is_close_packet(connection, packet)) {
@@ -2954,6 +3098,67 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
     if ((events & UTP_EVENT_READABLE) == 0u || context == NULL) {
         return;
     }
+#if defined(__linux__)
+    for (;;) {
+        utp_packet_in_t*          packet_ins[UTP_UDP_SOCKET_BATCH_SIZE] = {NULL};
+        utp_udp_receive_message_t messages[UTP_UDP_SOCKET_BATCH_SIZE];
+        size_t                    received_count = 0u;
+        utp_internal_error_t      error;
+
+        error = utp_packet_in_pool_acquire_many(&context->packet_in_pool, packet_ins, UTP_UDP_SOCKET_BATCH_SIZE);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            for (size_t index = 0u; index < UTP_UDP_SOCKET_BATCH_SIZE; ++index) {
+                messages[index].data     = packet_ins[index]->data;
+                messages[index].capacity = packet_ins[index]->capacity;
+            }
+            error = utp_udp_socket_receive_messages(&context->udp_socket, messages, UTP_UDP_SOCKET_BATCH_SIZE,
+                                                    &received_count);
+        }
+        if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            for (size_t index = 0u; index < UTP_UDP_SOCKET_BATCH_SIZE; ++index) {
+                utp_packet_in_release(packet_ins[index]);
+            }
+            return;
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            for (size_t index = 0u; index < UTP_UDP_SOCKET_BATCH_SIZE; ++index) {
+                utp_packet_in_release(packet_ins[index]);
+            }
+            utp_internal_log_error(&context->logger, &context->tag, error, "udp batch receive failed");
+            return;
+        }
+        if (received_count == 0u) {
+            for (size_t index = 0u; index < UTP_UDP_SOCKET_BATCH_SIZE; ++index) {
+                utp_packet_in_release(packet_ins[index]);
+            }
+            return;
+        }
+        for (size_t index = 0u; index < received_count; ++index) {
+            uint64_t now_us = utp_context_now_us();
+
+            if (messages[index].error == UTP_INTERNAL_ERROR_OK) {
+                packet_ins[index]->length = (uint16_t)messages[index].received_length;
+                error = utp_context_dispatch_packet(context, packet_ins[index]->data, packet_ins[index]->length,
+                                                    packet_ins[index], &messages[index].peer, &messages[index].local,
+                                                    now_us);
+            } else {
+                error = messages[index].error;
+            }
+            utp_packet_in_release(packet_ins[index]);
+            utp_context_drain_terminal_errors(context);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                utp_internal_log_error(&context->logger, &context->tag, error, "udp packet handling failed");
+            }
+            error = utp_context_refresh_timer(context, now_us);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                utp_internal_log_error(&context->logger, &context->tag, error, "context timer refresh failed");
+            }
+        }
+        for (size_t index = received_count; index < UTP_UDP_SOCKET_BATCH_SIZE; ++index) {
+            utp_packet_in_release(packet_ins[index]);
+        }
+    }
+#else
     for (;;) {
         size_t               received_length = 0u;
         utp_address_t        peer;
@@ -2994,6 +3199,7 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
             return;
         }
     }
+#endif
 }
 
 static void utp_context_on_udp_writable(uint32_t events, void* user_data)

@@ -468,6 +468,93 @@ TEST_CASE("udp socket sends a datagram from slices", "[udp]")
     utp_udp_socket_close(&sender);
 }
 
+#if defined(__linux__)
+static void test_udp_socket_batch(const char* loopback_text, size_t address_length)
+{
+    const std::array<uint8_t, 3>          first  = {UINT8_C(0x11), UINT8_C(0x12), UINT8_C(0x13)};
+    const std::array<uint8_t, 2>          second = {UINT8_C(0x21), UINT8_C(0x22)};
+    const std::array<uint8_t, 4>          third  = {UINT8_C(0x31), UINT8_C(0x32), UINT8_C(0x33), UINT8_C(0x34)};
+    const std::array<size_t, 3>           expected_lengths = {first.size(), second.size(), third.size()};
+    const utp_udp_send_slice_t            first_slice      = {first.data(), first.size()};
+    const utp_udp_send_slice_t            second_slice     = {second.data(), second.size()};
+    const utp_udp_send_slice_t            third_slice      = {third.data(), third.size()};
+    std::array<std::array<uint8_t, 8>, 3> received         = {};
+    utp_udp_send_message_t                sends[3]         = {};
+    utp_address_t                         loopback         = {};
+    utp_address_t                         sender_local     = {};
+    utp_address_t                         receiver_local   = {};
+    utp_udp_socket_t                      sender           = {};
+    utp_udp_socket_t                      receiver         = {};
+    size_t                                sent_count       = 0u;
+    size_t                                received_total   = 0u;
+
+    sends[0].slices      = &first_slice;
+    sends[0].peer        = &receiver_local;
+    sends[0].slice_count = 1u;
+    sends[1].slices      = &second_slice;
+    sends[1].peer        = &receiver_local;
+    sends[1].slice_count = 1u;
+    sends[2].slices      = &third_slice;
+    sends[2].peer        = &receiver_local;
+    sends[2].slice_count = 1u;
+    REQUIRE(utp_address_parse(&loopback, loopback_text, 0u) == UTP_INTERNAL_ERROR_OK);
+    utp_udp_socket_init(&sender);
+    utp_udp_socket_init(&receiver);
+    REQUIRE(utp_udp_socket_open(&sender, loopback.family) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_open(&receiver, loopback.family) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&sender, &loopback, nullptr, &sender_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_bind(&receiver, &loopback, nullptr, &receiver_local) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_udp_socket_send_messages(&sender, sends, 3u, &sent_count) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(sent_count == 3u);
+    REQUIRE(sends[0].sent_length == first.size());
+    REQUIRE(sends[1].sent_length == second.size());
+    REQUIRE(sends[2].sent_length == third.size());
+
+    for (size_t attempt = 0u; attempt < 1000u && received_total < received.size(); ++attempt) {
+        utp_udp_receive_message_t messages[3] = {};
+        size_t                    received_count;
+        utp_internal_error_t      error;
+
+        for (size_t index = 0u; index < received.size() - received_total; ++index) {
+            messages[index].data     = received[received_total + index].data();
+            messages[index].capacity = received[received_total + index].size();
+        }
+        error = utp_udp_socket_receive_messages(&receiver, messages, received.size() - received_total, &received_count);
+        if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            continue;
+        }
+        REQUIRE(error == UTP_INTERNAL_ERROR_OK);
+        REQUIRE(received_count > 0u);
+        for (size_t index = 0u; index < received_count; ++index) {
+            REQUIRE(messages[index].error == UTP_INTERNAL_ERROR_OK);
+            REQUIRE(messages[index].received_length == expected_lengths[received_total + index]);
+            REQUIRE(utp_address_equal(&messages[index].peer, &sender_local));
+            REQUIRE(messages[index].local.family == receiver_local.family);
+            REQUIRE(messages[index].local.port == receiver_local.port);
+            REQUIRE(std::memcmp(messages[index].local.address, receiver_local.address, address_length) == 0);
+        }
+        received_total += received_count;
+    }
+    REQUIRE(received_total == received.size());
+    REQUIRE(std::memcmp(received[0].data(), first.data(), first.size()) == 0);
+    REQUIRE(std::memcmp(received[1].data(), second.data(), second.size()) == 0);
+    REQUIRE(std::memcmp(received[2].data(), third.data(), third.size()) == 0);
+
+    utp_udp_socket_close(&receiver);
+    utp_udp_socket_close(&sender);
+}
+
+TEST_CASE("udp socket batches IPv4 datagrams with independent local addresses", "[udp]")
+{
+    test_udp_socket_batch("127.0.0.1", 4u);
+}
+
+TEST_CASE("udp socket batches IPv6 datagrams with independent local addresses", "[udp]")
+{
+    test_udp_socket_batch("::1", 16u);
+}
+#endif
+
 TEST_CASE("udp socket rejects a datagram that exceeds receive capacity", "[udp]")
 {
     const std::array<uint8_t, 6> payload = {'o', 'v', 'e', 'r', 'f', 'l'};
