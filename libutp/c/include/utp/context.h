@@ -13,11 +13,6 @@
 extern "C" {
 #endif
 
-#define UTP_VERSION_MAJOR  1u
-#define UTP_VERSION_MINOR  6u
-#define UTP_VERSION_PATCH  0u
-#define UTP_VERSION_STRING "1.6.0"
-
 // 对外只暴露不透明句柄，对象内存均由对应的上级对象管理。
 typedef struct utp_context    utp_context_t;
 typedef struct utp_connection utp_connection_t;

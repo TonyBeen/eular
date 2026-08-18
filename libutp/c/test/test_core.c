@@ -15,6 +15,7 @@
 #include "util/log.h"
 #include "util/range_set.h"
 #include "util/ring.h"
+#include "utp_version.h"
 
 typedef struct fail_allocator {
     size_t calls;
@@ -126,8 +127,7 @@ static uint32_t random_next(uint32_t* state)
 
 static void test_version_and_status(void)
 {
-    assert(strcmp(utp_version(), "1.6.0") == 0);
-    assert(strcmp(utp_version(), UTP_VERSION_STRING) == 0);
+    assert(strcmp(utp_version(), UTP_INTERNAL_VERSION_STRING) == 0);
     assert(UTP_STATUS_INVALID_ARGUMENT == -1);
     assert(UTP_STATUS_NOMEM == -2);
     assert(strcmp(utp_status_string(UTP_STATUS_NOMEM), "no_memory") == 0);

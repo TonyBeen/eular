@@ -1,0 +1,5 @@
+set(UTP_C_VERSION_MAJOR 1 CACHE STRING "libutp C major version")
+set(UTP_C_VERSION_MINOR 6 CACHE STRING "libutp C minor version")
+set(UTP_C_VERSION_PATCH 0 CACHE STRING "libutp C patch version")
+
+set(UTP_C_VERSION_STRING "${UTP_C_VERSION_MAJOR}.${UTP_C_VERSION_MINOR}.${UTP_C_VERSION_PATCH}")

@@ -4,8 +4,9 @@
 #include "connection/stream.h"
 #include "context/context.h"
 #include "util/error.h"
+#include "utp_version.h"
 
-const char*         utp_version(void) { return UTP_VERSION_STRING; }
+const char*         utp_version(void) { return UTP_INTERNAL_VERSION_STRING; }
 
 static utp_status_t utp_public_flush_connection(utp_connection_t* connection)
 {

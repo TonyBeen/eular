@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(libutp_c VERSION 1.6.0 LANGUAGES C CXX)
+include(cmake/configure_version.cmake)
+
+project(libutp_c VERSION ${UTP_C_VERSION_STRING} LANGUAGES C CXX)
+
+set(UTP_C_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${UTP_C_GENERATED_INCLUDE_DIR}")
+configure_file(cmake/utp_version.h.in "${UTP_C_GENERATED_INCLUDE_DIR}/utp_version.h" @ONLY NEWLINE_STYLE LF)
 
 include(CTest)
 include(CheckSymbolExists)
@@ -116,7 +122,8 @@ if(WIN32)
 endif()
 target_compile_features(utp_c PUBLIC c_std_11)
 target_include_directories(utp_c PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-    "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
+    "$<INSTALL_INTERFACE:include>" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../3rd"
+    "${UTP_C_GENERATED_INCLUDE_DIR}")
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(utp_c PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
@@ -162,6 +169,7 @@ if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
     find_package(Threads REQUIRED)
     add_executable(utp_c_api_test test/test_core.c)
     utp_c_configure_c_test(utp_c_api_test)
+    target_include_directories(utp_c_api_test PRIVATE "${UTP_C_GENERATED_INCLUDE_DIR}")
     add_executable(utp_c_public_api_test test/test_public_api.c)
     utp_c_configure_c_test(utp_c_public_api_test)
     target_include_directories(utp_c_public_api_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
