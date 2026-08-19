@@ -4,6 +4,10 @@
 - 状态:主体定稿(12 条边界 + 评审 H1–H5 处理完;见 §14/§15)
 - 范围:libutp(现有传输,cpp/)+ NTRS(rendezvous/中继服务)的**明文 + 无身份加密**快可达核心(身份/抗主动 MITM 归 crypto spec)
 
+> 实施补充：NAT 服务与打洞服务的部署边界、Context 显式 NAT 探测与节点注册，以
+> [`2026-08-18-libutp-ntrs-service-requirements.md`](2026-08-18-libutp-ntrs-service-requirements.md) 为准；
+> 与本文旧表述冲突时，补充需求优先。
+
 ---
 
 ## 1. 目标与范围

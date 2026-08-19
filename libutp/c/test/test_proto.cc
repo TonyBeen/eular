@@ -185,14 +185,14 @@ TEST_CASE("udp socket enables address reuse without reuse port", "[udp]")
     utp_udp_socket_close(&socket);
 }
 
-TEST_CASE("udp socket enables IPv6-only mode for a specific IPv6 bind", "[udp]")
+TEST_CASE("udp socket enables IPv6-only mode for any IPv6 bind", "[udp]")
 {
     utp_address_t    requested = {};
     utp_address_t    local     = {};
     utp_udp_socket_t socket    = {};
     int              ipv6_only = 0;
 
-    REQUIRE(utp_address_parse(&requested, "::1", 0u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_address_parse(&requested, "::", 0u) == UTP_INTERNAL_ERROR_OK);
     utp_udp_socket_init(&socket);
     REQUIRE(utp_udp_socket_open(&socket, UTP_ADDRESS_FAMILY_IPV6) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_udp_socket_bind(&socket, &requested, nullptr, &local) == UTP_INTERNAL_ERROR_OK);

@@ -603,7 +603,7 @@ utp_internal_error_t utp_udp_socket_bind(utp_udp_socket_t* udp_socket, const utp
         int    actual_length = (int)sizeof(storage);
         SOCKET native_handle = (SOCKET)udp_socket->native_handle;
 
-        if (requested->family == UTP_ADDRESS_FAMILY_IPV6 && !utp_address_is_unspecified_ipv6(requested)) {
+        if (requested->family == UTP_ADDRESS_FAMILY_IPV6) {
             BOOL ipv6_only = TRUE;
 
             if (setsockopt(native_handle, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&ipv6_only, (int)sizeof(ipv6_only)) !=
@@ -622,7 +622,7 @@ utp_internal_error_t utp_udp_socket_bind(utp_udp_socket_t* udp_socket, const utp
         socklen_t actual_length = (socklen_t)sizeof(storage);
         int       native_handle = (int)udp_socket->native_handle;
 
-        if (requested->family == UTP_ADDRESS_FAMILY_IPV6 && !utp_address_is_unspecified_ipv6(requested)) {
+        if (requested->family == UTP_ADDRESS_FAMILY_IPV6) {
             int ipv6_only = 1;
 
             if (setsockopt(native_handle, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6_only, (socklen_t)sizeof(ipv6_only)) < 0) {

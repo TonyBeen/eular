@@ -46,6 +46,7 @@
 | **需求基线** | `docs/superpowers/requirements/utp-00-index.md` | 12 需求索引 + 依赖图 + 决策收口 |
 | | `requirements/utp-01..12-*.md` | 各模块行为蓝图(cpp=ground truth,行号可查) |
 | **打洞设计** | `specs/2026-07-24-libutp-ntrs-fast-connect-design.md` | punch/fast-connect 16 节定稿 |
+| **NTRS 服务拆分** | `specs/2026-08-18-libutp-ntrs-service-requirements.md` | NAT 服务与打洞服务隔离、Context 显式探测和注册 |
 | **NTRS 认证** | `specs/2026-07-27-libutp-ntrs-auth-design.md` | node↔home-NtrsA 自签 Ed25519 单向认证 |
 | **C 工程规范** | `c/STYLE.md` / `c/ERRORS.md` / `c/README.md` | 强制约束 + 迁移顺序 + 容器策略 |
 | **C 数据拷贝策略** | `docs/superpowers/02-C-ZERO-COPY-COPY-REDUCTION.md` | `memcpy/memset` 使用边界、零拷贝演进顺序、当前可删项 |
@@ -80,7 +81,7 @@
 | 期 | 内容 | 覆盖迁移步 | 依赖 | 验收 |
 |---|---|---|---|---|
 | **P0** | **C 传输核心**(明文可靠传输):proto → 地址/时间 → crypto 封装 → socket/事件循环/拥塞/MTU → stream/connection/context;直连 Initial/Handshake 建连、流可靠性、ACK、流控、keepalive、路径验证 | 2→3→4→5 | 现有容器 | 直连回环收发 + 与 cpp 行为对等测试;ASan/UBSan 绿 |
-| **P1** | **punch 明文可达**:CONNECT 包类型(0x06)+ FrameConnect + RendezvousClient + RendezvousPending + ConnectAttempt + 方向判定 + 抗放大按候选地址 + demux;NTRS 服务端(keepalive/注册/srflx/转发/限速) | 加于 5 之上 | P0 | NAT 组合矩阵 + 成功率/P99 回归(§13) |
+| **P1** | **punch 明文可达**:先实现 NAT 服务与打洞服务隔离、Context 显式探测/注册，再实现 CONNECT 包类型(0x06)+ FrameConnect + RendezvousClient + RendezvousPending + ConnectAttempt + 方向判定 + 抗放大按候选地址 + demux;打洞服务端(节点注册/保活/srflx/转发/限速) | 加于 5 之上 | P0 | NAT 组合矩阵 + 成功率/P99 回归(§13) |
 | **P2** | **NTRS 认证**:node↔home-NtrsA 自签 Ed25519 单向认证(NodeCertificate + 签名握手 + 双向 Finished + 根轮换) | 叠于 P0 crypto + P1 NTRS | P0,P1 | 信任根/MITM/Finished/降级/轮换/DNS 投毒 用例(auth spec §9) |
 | **P3** | **punch 加密 + 0-RTT**:加密握手叠加打洞、统一 `connect0Rtt`(加密/非加密)、加密 0-RTT 放行、抗重放覆盖双路 | 叠于 P0 crypto | P0,P1 | 0-RTT 命中/降级/拒绝重放/加密门控(§13) |
 

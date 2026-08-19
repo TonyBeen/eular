@@ -112,7 +112,9 @@ ICMP 错误：`ee_type/ee_code/ee_info`（各为 vector）、`data/len`、`peer_
 - **MUST** socket 设为非阻塞（`SetNonBlock`，`udp.cpp:217`）；所有收发把 `EAGAIN/EWOULDBLOCK`（Windows `WSAEWOULDBLOCK`）当作"无数据/暂不可写"返回 0，而非错误（`udp.cpp:118,173,304,349,401,444,561`）。
 - **MUST** 设置不分片，避免 PMTU 发现失效（`SetDontFragment`，`udp.cpp:230`，注释 `udp.cpp:229`）——Linux 用 `IP_MTU_DISCOVER=IP_PMTUDISC_DO`（`util.cpp:52`）。
 - C++ 历史实现没有在 macOS 设置 DF（`util.cpp:54-60`）。C 实现显式启用 Darwin 的 RFC 3542 socket 选项：IPv4 使用 `IP_DONTFRAG`，IPv6 使用 `IPV6_DONTFRAG`，两者均已在 macOS UDP socket 验证可用；不得以 C++ 的旧 no-op 作为 C 端行为边界。
-- **MUST** 绑定 IPv6 且非 `AnyIPv6` 时设 `IPV6_V6ONLY`；绑定 `::`（Any）时保持双栈（`udp.cpp:238-242`，注释 `udp.cpp:238`）。
+- C 实现 **MUST** 在任何 IPv6 bind 前设 `IPV6_V6ONLY=1`，包括 `::`。libutp 不支持双栈
+  socket，IPv6 Context 必须拒绝 IPv4 数据报；需要 IPv4 与 IPv6 时，调用方创建两个独立
+  Context。不得沿用 C++ 绑定 `::` 时保持双栈的历史行为。
 - **MUST** 分片发送时跳过空分片（data==null 或 len==0），全空则返回 0（`udp.cpp:84-93,136-147`）。
 - 单包分片数 **MUST NOT** 超过 `kMaxMsgSlices=4`，循环以 `i < slice_count && i < kMaxMsgSlices` 硬截断（`udp.cpp:83,136,521`）。
 - 发送 **MUST NOT** 挂 `msg_control`（批量 sendmmsg 显式置 `msg_control=nullptr, controllen=0`，`udp.cpp:544-545`）。

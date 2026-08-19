@@ -44,6 +44,11 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t*      
 static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t*                 context,
                                                                    utp_context_connection_slot_t* slot,
                                                                    uint64_t                       now_us);
+static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* context, uint64_t now_us);
+static utp_internal_error_t utp_context_retry_nat_probe_send(utp_context_t* context, uint64_t now_us);
+static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* context, const utp_packet_header_t* header,
+                                                             const uint8_t* payload, size_t payload_length,
+                                                             const utp_address_t* peer, uint64_t now_us);
 /** @brief 将 Context 固定配置应用至新建连接，所有建连路径必须调用。 */
 static utp_internal_error_t utp_context_configure_connection(utp_context_t* context, utp_connection_t* connection)
 {
@@ -1140,6 +1145,9 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
     if (context == NULL) {
         return false;
     }
+    if (context->nat_probe.write_pending) {
+        return true;
+    }
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -1176,6 +1184,426 @@ static void utp_context_disable_udp_write_event_if_idle(utp_context_t* context)
     if (context != NULL && !utp_context_has_pending_udp_write(context)) {
         utp_event_remove(&context->udp_write_event);
     }
+}
+
+static bool utp_context_address_same_ip(const utp_address_t* left, const utp_address_t* right)
+{
+    size_t address_length;
+
+    if (left->family != right->family) {
+        return false;
+    }
+    if (left->family == UTP_ADDRESS_FAMILY_IPV4) {
+        address_length = 4u;
+    } else if (left->family == UTP_ADDRESS_FAMILY_IPV6) {
+        address_length = 16u;
+    } else {
+        return false;
+    }
+    return memcmp(left->address, right->address, address_length) == 0;
+}
+
+static bool utp_context_endpoint_equal_address(const utp_endpoint_t* endpoint, const utp_address_t* address)
+{
+    const size_t address_length = address->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
+
+    return endpoint->family == address->family && endpoint->port == address->port &&
+           endpoint->scope_id == address->scope_id && memcmp(endpoint->address, address->address, address_length) == 0;
+}
+
+static bool utp_context_endpoint_equal(const utp_endpoint_t* left, const utp_endpoint_t* right)
+{
+    size_t address_length;
+
+    if (left->family != right->family || left->port != right->port || left->scope_id != right->scope_id) {
+        return false;
+    }
+    address_length = left->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
+    return memcmp(left->address, right->address, address_length) == 0;
+}
+
+/** @brief 比较两个公开 endpoint 的地址部分，不比较端口。 */
+static bool utp_context_endpoint_same_ip(const utp_endpoint_t* left, const utp_endpoint_t* right)
+{
+    size_t address_length;
+
+    if (left->family != right->family) {
+        return false;
+    }
+    if (left->family == UTP_ADDRESS_FAMILY_IPV4) {
+        address_length = 4u;
+    } else if (left->family == UTP_ADDRESS_FAMILY_IPV6) {
+        address_length = 16u;
+    } else {
+        return false;
+    }
+    return memcmp(left->address, right->address, address_length) == 0;
+}
+
+static void utp_context_nat_clear_records(utp_nat_probe_task_t* task)
+{
+    for (uint8_t index = 0u; index < UTP_NAT_PROBE_MAX_IN_FLIGHT; ++index) {
+        task->records[index] = (utp_nat_probe_record_t){0};
+    }
+    task->record_count     = 0u;
+    task->batch_sent_count = 0u;
+    task->write_pending    = false;
+}
+
+static void utp_context_nat_add_port_sample(utp_nat_probe_result_t* result, uint16_t port)
+{
+    for (uint8_t index = 0u; index < result->port_sample_count; ++index) {
+        if (result->port_samples[index] == port) {
+            return;
+        }
+    }
+    if (result->port_sample_count < UTP_NAT_PORT_SAMPLE_CAPACITY) {
+        result->port_samples[result->port_sample_count] = port;
+        ++result->port_sample_count;
+    }
+}
+
+static void utp_context_nat_update_classification(utp_context_t* context)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+
+    if (task->primary_response_count == 0u) {
+        task->result.nat_class = UTP_NAT_CLASS_UDP_BLOCKED;
+    } else if (context->bound_address.family == UTP_ADDRESS_FAMILY_IPV6) {
+        if (!task->alternate_valid || task->secondary_response_count == 0u) {
+            task->result.nat_class = UTP_NAT_CLASS_UNKNOWN;
+        } else if (task->change_port_succeeded || task->change_ip_succeeded) {
+            task->result.nat_class = UTP_NAT_CLASS_OPEN_PUBLIC;
+        } else {
+            task->result.nat_class = UTP_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL;
+        }
+    } else if (!task->alternate_valid || task->secondary_response_count == 0u) {
+        task->result.nat_class = UTP_NAT_CLASS_UNKNOWN;
+    } else if (task->primary_mapping_changed || task->secondary_mapping_changed ||
+               !utp_context_endpoint_same_ip(&task->result.primary_mapped_endpoint,
+                                              &task->result.secondary_mapped_endpoint)) {
+        task->result.nat_class = UTP_NAT_CLASS_SYMMETRIC_MULTI_LINE;
+    } else if (!utp_context_endpoint_equal(&task->result.primary_mapped_endpoint,
+                                           &task->result.secondary_mapped_endpoint)) {
+        task->result.nat_class = UTP_NAT_CLASS_SYMMETRIC;
+    } else if (task->change_port_succeeded && task->change_ip_succeeded) {
+        task->result.nat_class = UTP_NAT_CLASS_FULL_CONE;
+    } else if (task->change_port_succeeded) {
+        task->result.nat_class = UTP_NAT_CLASS_IP_RESTRICTED;
+    } else {
+        task->result.nat_class = UTP_NAT_CLASS_PORT_RESTRICTED;
+    }
+    if (task->result.primary_mapped_endpoint.family == context->bound_address.family &&
+        utp_context_endpoint_equal_address(&task->result.primary_mapped_endpoint, &context->bound_address) &&
+        !task->primary_mapping_changed) {
+        task->result.nat_class = task->change_port_succeeded || task->change_ip_succeeded
+                                     ? UTP_NAT_CLASS_OPEN_PUBLIC
+                                     : UTP_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL;
+    }
+}
+
+static void utp_context_finish_nat_probe(utp_context_t* context, utp_status_t status, uint64_t now_us)
+{
+    utp_nat_probe_task_t*  task = &context->nat_probe;
+    utp_on_nat_probe_fn    callback;
+    void*                   user_data;
+    utp_nat_probe_result_t  result;
+
+    if (!task->active) {
+        return;
+    }
+    callback  = task->callback;
+    user_data = task->user_data;
+    if (status == UTP_STATUS_OK) {
+        utp_context_nat_update_classification(context);
+        task->result.probe_time_us = now_us;
+        task->result.expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_NAT_RESULT_LIFETIME_US
+                                         ? UINT64_MAX
+                                         : now_us + UTP_CONTEXT_NAT_RESULT_LIFETIME_US;
+        context->nat_result       = task->result;
+        context->nat_result_valid = true;
+        result                    = task->result;
+    }
+    utp_nat_probe_task_reset(task);
+    utp_context_disable_udp_write_event_if_idle(context);
+    if (callback != NULL) {
+        callback(context, status, status == UTP_STATUS_OK ? &result : NULL, user_data);
+    }
+}
+
+static uint64_t utp_context_nat_round_deadline(const utp_nat_probe_task_t* task)
+{
+    const uint64_t total_us = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
+    uint64_t       elapsed_us;
+
+    if (task->round == 1u) {
+        elapsed_us = total_us / UINT64_C(6);
+    } else if (task->round == 2u) {
+        elapsed_us = total_us / UINT64_C(2);
+    } else {
+        elapsed_us = total_us;
+    }
+    return task->phase_started_us > UINT64_MAX - elapsed_us ? UINT64_MAX : task->phase_started_us + elapsed_us;
+}
+
+static utp_internal_error_t utp_context_send_nat_probe_batch(utp_context_t* context, uint64_t now_us)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+    const utp_address_t*  target;
+
+    if (!task->active || task->batch_sent_count >= UTP_NAT_PROBE_BATCH_SIZE) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    target = task->phase == UTP_NAT_PROBE_PHASE_PROBE2 ? &task->alternate_endpoint : &task->primary_endpoint;
+    while (task->batch_sent_count < UTP_NAT_PROBE_BATCH_SIZE) {
+        uint8_t              packet[UTP_NAT_PROBE_PACKET_SIZE];
+        uint8_t              token[UTP_NAT_PROBE_TOKEN_SIZE];
+        uint64_t             packet_number;
+        utp_internal_error_t error;
+
+        if (task->record_count >= UTP_NAT_PROBE_MAX_IN_FLIGHT || context->next_nat_probe_packet_number == 0u ||
+            context->next_nat_probe_packet_number > UTP_PACKET_NUMBER_MAX) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        error = utp_crypto_random_bytes(token, sizeof(token));
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        packet_number = context->next_nat_probe_packet_number;
+        error = utp_nat_probe_encode_request(packet, packet_number, utp_nat_probe_request_message_type(task->phase),
+                                             task->phase, token);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_context_send_raw(context, target, NULL, packet, sizeof(packet));
+        }
+        if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            task->write_pending     = true;
+            task->round_deadline_us = task->phase_deadline_us;
+            return utp_context_enable_udp_write_event(context);
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        task->records[task->record_count].packet_number = packet_number;
+        task->records[task->record_count].sent_at_us    = now_us;
+        for (size_t index = 0u; index < sizeof(token); ++index) {
+            task->records[task->record_count].token[index] = token[index];
+        }
+        task->records[task->record_count].used     = true;
+        task->records[task->record_count].consumed = false;
+        ++task->record_count;
+        ++task->batch_sent_count;
+        ++context->next_nat_probe_packet_number;
+    }
+    task->write_pending     = false;
+    task->batch_sent_count  = 0u;
+    ++task->round;
+    task->round_deadline_us = utp_context_nat_round_deadline(task);
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 开始一个 NAT 探测阶段，并立即发送该阶段的首轮两个请求。 */
+static utp_internal_error_t utp_context_start_nat_phase(utp_context_t* context, uint8_t phase, uint64_t now_us)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+    const uint64_t        timeout_us = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
+
+    task->phase            = phase;
+    task->phase_started_us = now_us;
+    task->phase_deadline_us = now_us > UINT64_MAX - timeout_us ? UINT64_MAX : now_us + timeout_us;
+    task->round_deadline_us = 0u;
+    task->round            = 0u;
+    utp_context_nat_clear_records(task);
+    return utp_context_send_nat_probe_batch(context, now_us);
+}
+
+/** @brief 根据当前阶段已获得的证据进入下一阶段或结束探测。 */
+static utp_internal_error_t utp_context_advance_nat_probe(utp_context_t* context, uint64_t now_us)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+
+    if (task->phase == UTP_NAT_PROBE_PHASE_PROBE1) {
+        if (task->primary_response_count == 0u || !task->alternate_valid) {
+            utp_context_finish_nat_probe(context, UTP_STATUS_OK, now_us);
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        return utp_context_start_nat_phase(context, UTP_NAT_PROBE_PHASE_CHANGE_PORT, now_us);
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_CHANGE_PORT) {
+        return utp_context_start_nat_phase(context, UTP_NAT_PROBE_PHASE_CHANGE_IP, now_us);
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_CHANGE_IP) {
+        return utp_context_start_nat_phase(context, UTP_NAT_PROBE_PHASE_PROBE2, now_us);
+    }
+    utp_context_finish_nat_probe(context, UTP_STATUS_OK, now_us);
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 处理 NAT 探测中的不可恢复本地错误，并交付一次失败回调。 */
+static void utp_context_fail_nat_probe(utp_context_t* context, utp_internal_error_t error, uint64_t now_us)
+{
+    utp_context_finish_nat_probe(context, utp_internal_error_to_status(error), now_us);
+}
+
+/** @brief 在当前阶段按 UTP 包号查找尚可消费的探测记录。 */
+static utp_nat_probe_record_t* utp_context_find_nat_probe_record(utp_nat_probe_task_t* task, uint64_t packet_number)
+{
+    for (uint8_t index = 0u; index < task->record_count; ++index) {
+        utp_nat_probe_record_t* record = &task->records[index];
+
+        if (record->used && !record->consumed && record->packet_number == packet_number) {
+            return record;
+        }
+    }
+    return NULL;
+}
+
+/** @brief 判断响应来源是否符合发起阶段的 NAT 服务协同计划。 */
+static bool utp_context_nat_response_source_is_valid(const utp_nat_probe_task_t* task, const utp_address_t* peer,
+                                                     const utp_nat_probe_response_t* response)
+{
+    if (!utp_address_equal(peer, &response->origin)) {
+        return false;
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_PROBE1) {
+        return utp_address_equal(peer, &task->primary_endpoint);
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_PROBE2) {
+        return utp_address_equal(peer, &task->alternate_endpoint);
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_CHANGE_PORT) {
+        return utp_context_address_same_ip(peer, &task->primary_endpoint) && peer->port != task->primary_endpoint.port;
+    }
+    return task->phase == UTP_NAT_PROBE_PHASE_CHANGE_IP && utp_address_equal(peer, &task->alternate_endpoint);
+}
+
+/** @brief 消费一条通过认证和来源校验的 NAT 探测响应。 */
+static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* context, const utp_packet_header_t* header,
+                                                             const uint8_t* payload, size_t payload_length,
+                                                             const utp_address_t* peer, uint64_t now_us)
+{
+    utp_nat_probe_task_t*    task = &context->nat_probe;
+    utp_nat_probe_response_t response;
+    utp_nat_probe_record_t*  record;
+    utp_internal_error_t     error;
+    uint64_t                 rtt_us;
+
+    if (header->type != UTP_PACKET_TYPE_NAT_PROBE || header->scid != 0u || header->dcid != 0u ||
+        header->packet_number == 0u || header->reserve != 0u ||
+        payload_length > UTP_NAT_PROBE_PACKET_SIZE - UTP_PACKET_HEADER_SIZE) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (!task->active) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    error = utp_nat_probe_decode_response(payload, payload_length, &response);
+    if (error != UTP_INTERNAL_ERROR_OK || response.mapped.family != context->bound_address.family ||
+        response.origin.family != context->bound_address.family) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (response.phase != task->phase || response.message_type != utp_nat_probe_response_message_type(task->phase)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    record = utp_context_find_nat_probe_record(task, header->packet_number);
+    if (record == NULL || response.token_length != sizeof(record->token) ||
+        memcmp(response.token, record->token, sizeof(record->token)) != 0 ||
+        !utp_context_nat_response_source_is_valid(task, peer, &response)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    record->consumed = true;
+    rtt_us = now_us > record->sent_at_us ? now_us - record->sent_at_us : 0u;
+    if (task->phase == UTP_NAT_PROBE_PHASE_PROBE1) {
+        if (task->primary_response_count == 0u) {
+            utp_context_endpoint_from_address(&task->result.primary_mapped_endpoint, &response.mapped);
+        } else if (!utp_context_endpoint_equal_address(&task->result.primary_mapped_endpoint, &response.mapped)) {
+            task->primary_mapping_changed = true;
+        }
+        ++task->primary_response_count;
+        task->primary_rtt_sum_us += rtt_us;
+        task->result.primary_rtt_ms = (int32_t)(task->primary_rtt_sum_us / task->primary_response_count / UINT64_C(1000));
+        utp_context_nat_add_port_sample(&task->result, response.mapped.port);
+        if (!task->alternate_valid && response.has_alternate && response.alternate.family == task->primary_endpoint.family &&
+            !utp_context_address_same_ip(&response.alternate, &task->primary_endpoint)) {
+            task->alternate_endpoint = response.alternate;
+            task->alternate_valid    = true;
+        }
+        if (task->primary_response_count >= UTP_NAT_PROBE_MAX_ROUNDS) {
+            error = utp_context_advance_nat_probe(context, now_us);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                utp_context_fail_nat_probe(context, error, now_us);
+            }
+        }
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_PROBE2) {
+        if (task->secondary_response_count == 0u) {
+            utp_context_endpoint_from_address(&task->result.secondary_mapped_endpoint, &response.mapped);
+        } else if (!utp_context_endpoint_equal_address(&task->result.secondary_mapped_endpoint, &response.mapped)) {
+            task->secondary_mapping_changed = true;
+        }
+        ++task->secondary_response_count;
+        task->secondary_rtt_sum_us += rtt_us;
+        task->result.secondary_rtt_ms =
+            (int32_t)(task->secondary_rtt_sum_us / task->secondary_response_count / UINT64_C(1000));
+        utp_context_nat_add_port_sample(&task->result, response.mapped.port);
+        if (task->secondary_response_count >= UTP_NAT_PROBE_MAX_ROUNDS) {
+            utp_context_finish_nat_probe(context, UTP_STATUS_OK, now_us);
+        }
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (task->phase == UTP_NAT_PROBE_PHASE_CHANGE_PORT) {
+        task->change_port_succeeded = true;
+    } else {
+        task->change_ip_succeeded = true;
+    }
+    error = utp_context_advance_nat_probe(context, now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_fail_nat_probe(context, error, now_us);
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 推进 NAT 探测的重发轮次及阶段总超时。 */
+static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* context, uint64_t now_us)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_internal_error_t  error;
+
+    if (context->nat_result_valid && context->nat_result.expires_at_us <= now_us) {
+        context->nat_result_valid = false;
+    }
+    if (!task->active) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (task->phase_deadline_us <= now_us) {
+        error = utp_context_advance_nat_probe(context, now_us);
+    } else if (!task->write_pending && task->round_deadline_us <= now_us && task->round < UTP_NAT_PROBE_MAX_ROUNDS) {
+        error = utp_context_send_nat_probe_batch(context, now_us);
+    } else {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_fail_nat_probe(context, error, now_us);
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 在 UDP 重新可写后继续当前 NAT 探测轮次的未发送请求。 */
+static utp_internal_error_t utp_context_retry_nat_probe_send(utp_context_t* context, uint64_t now_us)
+{
+    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_internal_error_t  error;
+
+    if (!task->active || !task->write_pending) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (task->phase_deadline_us <= now_us) {
+        return utp_context_process_nat_probe_timer(context, now_us);
+    }
+    error = utp_context_send_nat_probe_batch(context, now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_fail_nat_probe(context, error, now_us);
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 /** @brief 在收到首个有效 1-RTT 包前，将 0-RTT 路径发送量限制为已认证接收量的三倍。 */
@@ -2067,6 +2495,13 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
 
     if (!TAILQ_EMPTY(&context->terminal_error_slots)) {
         return now_us;
+    }
+    if (context->nat_probe.active) {
+        utp_context_take_deadline(&deadline, context->nat_probe.phase_deadline_us);
+        utp_context_take_deadline(&deadline, context->nat_probe.round_deadline_us);
+    }
+    if (context->nat_result_valid) {
+        utp_context_take_deadline(&deadline, context->nat_result.expires_at_us);
     }
     // Context 只注册一个 timer，每次从全部连接和握手项中选取最近期限。
     utp_hash_iter_init(&iter);
@@ -3070,6 +3505,10 @@ static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, 
         header.packet_number == 0u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    if (header.type == UTP_PACKET_TYPE_NAT_PROBE) {
+        return utp_context_on_nat_probe_packet(context, &header, packet + UTP_PACKET_HEADER_SIZE, header.payload_length,
+                                               peer, now_us);
+    }
     utp_context_connection_slot_t* connection_slot = utp_context_find_connection_slot(context, header.dcid);
     if (connection_slot != NULL) {
         return utp_context_on_connection_packet(context, connection_slot, &header, packet, packet_length, packet_in,
@@ -3210,6 +3649,13 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
 
     if ((events & UTP_EVENT_WRITABLE) == 0u || context == NULL) {
         return;
+    }
+    {
+        const utp_internal_error_t error = utp_context_retry_nat_probe_send(context, utp_context_now_us());
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_internal_log_error(&context->logger, &context->tag, error, "nat probe writable retry failed");
+        }
     }
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
@@ -3429,6 +3875,9 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_process_pending_timers(context, now_us);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_process_nat_probe_timer(context, now_us);
+    }
     utp_context_drain_terminal_errors(context);
     {
         const utp_internal_error_t refresh_error = utp_context_refresh_timer(context, utp_context_now_us());
@@ -3473,6 +3922,11 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
     utp_udp_socket_init(&context->udp_socket);
+    context->bound_address                = (utp_address_t){0};
+    context->next_nat_probe_packet_number = 1u;
+    utp_nat_probe_task_reset(&context->nat_probe);
+    context->nat_result       = (utp_nat_probe_result_t){0};
+    context->nat_result_valid = false;
     context->packet_in_pool.allocator         = NULL;
     context->packet_in_pool.blocks            = NULL;
     context->packet_in_pool.free_packets      = NULL;
@@ -3665,6 +4119,7 @@ void utp_context_destroy(utp_context_t* context)
         utp_event_remove(&context->timer_event);
         utp_event_remove(&context->udp_write_event);
         utp_event_remove(&context->udp_event);
+        utp_nat_probe_task_reset(&context->nat_probe);
         utp_hash_iter_init(&iter);
         while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
             utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -3738,8 +4193,71 @@ utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint1
     if (out_port != NULL) {
         *out_port = local.port;
     }
+    context->bound_address = local;
     utp_context_log(context, UTP_LOG_LEVEL_INFO, "udp socket bound");
     return UTP_STATUS_OK;
+}
+
+utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_options_t* options,
+                                   utp_on_nat_probe_fn callback, void* user_data)
+{
+    utp_address_t        endpoint;
+    utp_internal_error_t error;
+    uint64_t             now_us;
+
+    if (context == NULL || options == NULL || callback == NULL || options->nat_service_address == NULL ||
+        options->nat_service_port == 0u) {
+        return UTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (!utp_udp_socket_is_open(&context->udp_socket)) {
+        return UTP_STATUS_SOCKET_NOT_BOUND;
+    }
+    if (context->nat_probe.active) {
+        return UTP_STATUS_IN_PROGRESS;
+    }
+    error = utp_address_parse(&endpoint, options->nat_service_address, options->nat_service_port);
+    if (error != UTP_INTERNAL_ERROR_OK || endpoint.family != context->bound_address.family) {
+        return UTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (options->phase_timeout_ms != 0u && options->phase_timeout_ms < UTP_NAT_PROBE_MIN_TIMEOUT) {
+        return UTP_STATUS_INVALID_ARGUMENT;
+    }
+    utp_nat_probe_task_reset(&context->nat_probe);
+    context->nat_probe.primary_endpoint    = endpoint;
+    context->nat_probe.callback            = callback;
+    context->nat_probe.user_data           = user_data;
+    context->nat_probe.phase_timeout_ms    = options->phase_timeout_ms == 0u ? UTP_NAT_PROBE_DEFAULT_TIMEOUT
+                                                                              : options->phase_timeout_ms;
+    context->nat_probe.result.address_family = context->bound_address.family;
+    context->nat_probe.active                = true;
+    now_us                                   = utp_context_now_us();
+    error                                    = utp_context_start_nat_phase(context, UTP_NAT_PROBE_PHASE_PROBE1, now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_fail_nat_probe(context, error, now_us);
+    }
+    error = utp_context_refresh_timer(context, now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return utp_internal_error_to_status(error);
+    }
+    return UTP_STATUS_OK;
+}
+
+utp_status_t utp_context_cancel_nat_probe(utp_context_t* context)
+{
+    utp_internal_error_t error;
+    uint64_t             now_us;
+
+    if (context == NULL) {
+        return UTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (!context->nat_probe.active) {
+        return UTP_STATUS_NOT_FOUND;
+    }
+    now_us = utp_context_now_us();
+    utp_nat_probe_task_reset(&context->nat_probe);
+    utp_context_disable_udp_write_event_if_idle(context);
+    error = utp_context_refresh_timer(context, now_us);
+    return error == UTP_INTERNAL_ERROR_OK ? UTP_STATUS_OK : utp_internal_error_to_status(error);
 }
 
 void utp_context_set_logger(utp_context_t* context, utp_log_sink_fn callback, utp_log_level_t level)

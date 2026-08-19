@@ -7,6 +7,7 @@
 #include "context/event_loop.h"
 #include "context/pending_incoming.h"
 #include "mtu/mtu.h"
+#include "nat/nat.h"
 #include "proto/packet_in.h"
 #include "socket/udp.h"
 #include "util/hash.h"
@@ -23,6 +24,7 @@
 #define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE         32u
 #define UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE \
     (UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE + UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE)
+#define UTP_CONTEXT_NAT_RESULT_LIFETIME_US UINT64_C(300000000)
 
 typedef struct utp_context_zero_rtt_replay_entry {
     utp_hash_node_t node;                                       // 按重放键索引的哈希节点
@@ -90,6 +92,7 @@ struct utp_context {
     utp_event_t                              udp_write_event;                  // UDP 可写事件
     utp_event_t                              timer_event;                      // 协议定时器事件
     utp_udp_socket_t                         udp_socket;                       // Context 持有的 UDP socket
+    utp_address_t                            bound_address;                    // bind 成功后的本地地址与地址族
     utp_packet_in_pool_t                     packet_in_pool;                   // 入站包对象池
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
@@ -100,6 +103,7 @@ struct utp_context {
     utp_hash_table_t                         pending_incoming_by_peer;         // pending 来源地址和对端 CID 表
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
+    uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
     utp_stream_scheduler_mode_t              stream_scheduler_mode;            // 新连接默认流调度策略
     utp_congestion_algorithm_t               cc_algorithm;                     // 新连接默认拥塞算法
     uint32_t                                 clock_granularity_us;             // pacer 时钟粒度
@@ -113,6 +117,8 @@ struct utp_context {
     uint32_t                                 zero_rtt_replay_cache_capacity;       // 抗重放表容量
     uint32_t                                 stream_terminal_capacity;             // 新连接流终态表容量
     uint32_t                                 path_validation_buffer_capacity;      // 新连接候选路径缓存上限(bytes)
+    utp_nat_probe_task_t                     nat_probe;                           // 当前 NAT 探测任务
+    utp_nat_probe_result_t                   nat_result;                          // 最近一次完成的 NAT 探测缓存
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔
@@ -127,6 +133,7 @@ struct utp_context {
     bool                                     resumption_keys_ready : 1;            // 恢复工作密钥是否就绪
     bool                                     default_resumption_key_warning_logged : 1;  // 默认根密钥警告是否已输出
     bool                                     enable_keepalive : 1;                       // 是否为新连接启用保活
+    bool                                     nat_result_valid : 1;                      // nat_result 是否仍可用于注册
     utp_on_connected_fn                      on_connected;                               // 主动连接成功回调
     void*                                    on_connected_user_data;                     // 成功回调用户数据
     utp_on_connect_error_fn                  on_connect_error;                           // 主动连接失败回调
