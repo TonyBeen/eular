@@ -58,6 +58,7 @@ target_include_directories(utp_ntrs_service_core PRIVATE "${UTP_NTRS_BORINGSSL_R
 find_package(Threads REQUIRED)
 add_library(utp_ntrs_service_runtime INTERFACE)
 target_link_libraries(utp_ntrs_service_runtime INTERFACE event_core event_pthreads Threads::Threads)
+target_link_libraries(utp_ntrs_service_core PUBLIC utp_ntrs_service_runtime)
 
 add_library(utp_ntrs_node_udp STATIC src/udp_probe.c)
 target_compile_features(utp_ntrs_node_udp PUBLIC c_std_11)
