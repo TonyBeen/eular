@@ -35,21 +35,21 @@ typedef struct utp_nat_probe_options {
 
 /** @brief NAT 探测的只读结果视图，仅在回调期间有效。 */
 typedef struct utp_nat_probe_result {
-    utp_endpoint_t  primary_mapped_endpoint;                      // 主探测端点观察到的公网映射
-    utp_endpoint_t  secondary_mapped_endpoint;                    // 辅助探测端点观察到的公网映射；无结果时 family 为 0
-    uint64_t        probe_time_us;                                // 本次探测完成的单调时钟时刻
-    uint64_t        expires_at_us;                                // NAT 结果的单调时钟失效时刻
-    int32_t         primary_rtt_ms;                               // 主探测端点平均 RTT；无成功响应时为 -1
-    int32_t         secondary_rtt_ms;                             // 辅助探测端点平均 RTT；无成功响应时为 -1
-    uint16_t        port_samples[UTP_NAT_PORT_SAMPLE_CAPACITY];   // 去重后的公网映射端口样本
-    uint8_t         address_family;                               // 本次 Context bind 的地址族
-    uint8_t         port_sample_count;                            // port_samples 中有效项数量
-    utp_nat_class_t nat_class;                                    // 最终 NAT 分类
+    utp_endpoint_t  primary_mapped_endpoint;                     // 主探测端点观察到的公网映射
+    utp_endpoint_t  secondary_mapped_endpoint;                   // 辅助探测端点观察到的公网映射；无结果时 family 为 0
+    uint64_t        probe_time_us;                               // 本次探测完成的单调时钟时刻
+    uint64_t        expires_at_us;                               // NAT 结果的单调时钟失效时刻
+    int32_t         primary_rtt_ms;                              // 主探测端点平均 RTT；无成功响应时为 -1
+    int32_t         secondary_rtt_ms;                            // 辅助探测端点平均 RTT；无成功响应时为 -1
+    uint16_t        port_samples[UTP_NAT_PORT_SAMPLE_CAPACITY];  // 去重后的公网映射端口样本
+    uint8_t         address_family;                              // 本次 Context bind 的地址族
+    uint8_t         port_sample_count;                           // port_samples 中有效项数量
+    utp_nat_class_t nat_class;                                   // 最终 NAT 分类
 } utp_nat_probe_result_t;
 
 /** @brief NAT 探测完成回调；失败时 @p result 为 NULL。 */
-typedef void (*utp_on_nat_probe_fn)(utp_context_t* context, utp_status_t status,
-                                    const utp_nat_probe_result_t* result, void* user_data);
+typedef void (*utp_on_nat_probe_fn)(utp_context_t* context, utp_status_t status, const utp_nat_probe_result_t* result,
+                                    void* user_data);
 
 /** @brief 启动异步 NAT 探测；同一 Context 同时仅允许一个任务。 */
 utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_options_t* options,

@@ -26,11 +26,11 @@ static utp_internal_error_t utp_nat_probe_write_tlv(utp_wire_writer_t* writer, u
 
 static utp_internal_error_t utp_nat_probe_decode_endpoint(const uint8_t* value, size_t length, utp_address_t* endpoint)
 {
-    utp_wire_reader_t reader;
-    uint8_t           family;
-    uint8_t           reserved;
-    size_t            address_length;
-    utp_address_t     decoded = {0};
+    utp_wire_reader_t    reader;
+    uint8_t              family;
+    uint8_t              reserved;
+    size_t               address_length;
+    utp_address_t        decoded = {0};
     utp_internal_error_t error;
 
     if (value == NULL || endpoint == NULL) {
@@ -72,7 +72,7 @@ static utp_internal_error_t utp_nat_probe_decode_endpoint(const uint8_t* value, 
 
 void utp_nat_probe_task_reset(utp_nat_probe_task_t* task)
 {
-    *task = (utp_nat_probe_task_t){0};
+    *task                         = (utp_nat_probe_task_t){0};
     task->result.primary_rtt_ms   = -1;
     task->result.secondary_rtt_ms = -1;
 }
@@ -92,15 +92,18 @@ uint8_t utp_nat_probe_response_message_type(uint8_t phase)
 }
 
 utp_internal_error_t utp_nat_probe_encode_request(uint8_t packet[UTP_NAT_PROBE_PACKET_SIZE], uint64_t packet_number,
-                                                   uint8_t message_type, uint8_t phase,
-                                                   const uint8_t token[UTP_NAT_PROBE_TOKEN_SIZE])
+                                                  uint8_t message_type, uint8_t phase,
+                                                  const uint8_t token[UTP_NAT_PROBE_TOKEN_SIZE])
 {
-    const utp_packet_header_t header = {0u, 0u, packet_number,
+    const utp_packet_header_t header = {0u,
+                                        0u,
+                                        packet_number,
                                         (uint16_t)(UTP_NAT_PROBE_PACKET_SIZE - UTP_PACKET_HEADER_SIZE),
-                                        UTP_PACKET_TYPE_NAT_PROBE, 0u};
-    utp_wire_writer_t    writer;
-    utp_internal_error_t error;
-    size_t               padding_length;
+                                        UTP_PACKET_TYPE_NAT_PROBE,
+                                        0u};
+    utp_wire_writer_t         writer;
+    utp_internal_error_t      error;
+    size_t                    padding_length;
 
     if (packet_number == 0u || token == NULL || message_type != utp_nat_probe_request_message_type(phase) ||
         phase < UTP_NAT_PROBE_PHASE_PROBE1 || phase > UTP_NAT_PROBE_PHASE_PROBE2) {
@@ -131,25 +134,26 @@ utp_internal_error_t utp_nat_probe_encode_request(uint8_t packet[UTP_NAT_PROBE_P
         return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_OVERFLOW : error;
     }
     padding_length = writer.remaining - 4u;
-    error = utp_wire_write_u16(&writer, UTP_NAT_PROBE_TLV_PADDING);
+    error          = utp_wire_write_u16(&writer, UTP_NAT_PROBE_TLV_PADDING);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u16(&writer, (uint16_t)padding_length);
     }
     for (size_t index = 0u; error == UTP_INTERNAL_ERROR_OK && index < padding_length; ++index) {
         error = utp_wire_write_u8(&writer, 0u);
     }
-    return error == UTP_INTERNAL_ERROR_OK && writer.remaining == 0u ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_OVERFLOW;
+    return error == UTP_INTERNAL_ERROR_OK && writer.remaining == 0u ? UTP_INTERNAL_ERROR_OK
+                                                                    : UTP_INTERNAL_ERROR_OVERFLOW;
 }
 
 utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_t payload_length,
-                                                    utp_nat_probe_response_t* response)
+                                                   utp_nat_probe_response_t* response)
 {
-    utp_wire_reader_t     reader;
-    utp_nat_probe_response_t decoded = {0};
-    bool                  has_token = false;
-    bool                  has_mapped = false;
-    bool                  has_origin = false;
-    utp_internal_error_t  error;
+    utp_wire_reader_t        reader;
+    utp_nat_probe_response_t decoded    = {0};
+    bool                     has_token  = false;
+    bool                     has_mapped = false;
+    bool                     has_origin = false;
+    utp_internal_error_t     error;
 
     if (payload == NULL || response == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -176,8 +180,8 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
         }
     }
     while (error == UTP_INTERNAL_ERROR_OK && reader.remaining != 0u) {
-        uint16_t type;
-        uint16_t length;
+        uint16_t       type;
+        uint16_t       length;
         const uint8_t* value;
 
         error = utp_wire_read_u16(&reader, &type);
@@ -187,8 +191,8 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
         if (error != UTP_INTERNAL_ERROR_OK || reader.remaining < (size_t)length) {
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
-        value         = reader.cursor;
-        reader.cursor += length;
+        value             = reader.cursor;
+        reader.cursor    += length;
         reader.remaining -= length;
         if (type == UTP_NAT_PROBE_TLV_PROBE_TOKEN && !has_token && length == UTP_NAT_PROBE_TOKEN_SIZE) {
             decoded.token        = value;
@@ -200,7 +204,8 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
         } else if (type == UTP_NAT_PROBE_TLV_ORIGIN_ADDR && !has_origin) {
             error      = utp_nat_probe_decode_endpoint(value, length, &decoded.origin);
             has_origin = error == UTP_INTERNAL_ERROR_OK;
-        } else if (type == UTP_NAT_PROBE_TLV_ALTERNATE_PROBE_ENDPOINT && !decoded.has_alternate) {
+        } else if (type == UTP_NAT_PROBE_TLV_ALTERNATE_PROBE_ENDPOINT && !decoded.has_alternate &&
+                   decoded.phase == UTP_NAT_PROBE_PHASE_PROBE1) {
             error                 = utp_nat_probe_decode_endpoint(value, length, &decoded.alternate);
             decoded.has_alternate = error == UTP_INTERNAL_ERROR_OK;
         } else {
