@@ -349,9 +349,10 @@ Context 销毁期间不调用 NAT 探测回调。销毁流程只取消定时器�
 ### 3.6 NAT 服务 Hub 与 Node 协同
 
 NAT 服务采用独立的 Hub + Node 拓扑。Hub 仅承担 Node 注册、健康状态、协同节点分配和
-成员信息下发；它绝不处于客户端 `CHANGE_IP` 的实时转发路径。所有 Node 到 Hub、Node 到
-Node 的控制连接均使用 TCP + TLS；首期 TLS 只提供通信加密，允许自签名证书，不在协议层
-校验证书链、主机名或 Node 身份。
+成员信息下发；它绝不处于客户端 `CHANGE_IP` 的实时转发路径。Node 到 Hub、Node 到 Node 的
+控制连接使用 TCP；Hub 与每个 Node 均同时配置 `--cert FILE --key FILE` 时，在 TCP 上启用 TLS
+1.3，否则使用明文 TCP，便于本地部署和抓包测试。只提供其中一个参数属于配置错误。首期 TLS
+只提供通信加密，允许自签名证书，不在协议层校验证书链、主机名或 Node 身份。
 
 每个 Node 在对外服务前必须已监听以下端点，并通过常驻 Hub 控制连接注册：
 
@@ -363,7 +364,7 @@ node_id, boot_id, load, heartbeat_interval
 - `probe_endpoint` 是客户端发往 `PROBE1`、`CHANGE_IP` 和 `PROBE2` 的 UDP endpoint。
 - `change_port_endpoint` 与同族 `probe_endpoint` 必须使用相同公网 IP、不同 UDP port，仅用于
   本机完成 `CHANGE_PORT` 回包。
-- `control_endpoint` 是其他 Node 建立 TCP + TLS 协同连接的 endpoint；它可以是 Node 间可路由的
+- `control_endpoint` 是其他 Node 建立 TCP 或 TCP + TLS 协同连接的 endpoint；它可以是 Node 间可路由的
   私网地址，不能由客户端 NAT 探测使用。
 - Node 的 UDP `probe_endpoint` 与 `change_port_endpoint` 可以各自以 `SO_REUSEPORT` 绑定多个 socket；
   每个 socket 归属一个独立 libevent event loop 线程。客户端探测请求没有跨包服务端状态，worker 必须在
@@ -375,7 +376,7 @@ node_id, boot_id, load, heartbeat_interval
   `--source-rate` 与 `--source-burst` 覆盖。超过额度的报文静默丢弃，不创建亲和记录、不同步协同请求。
 - Hub 接受注册后回复 `NODE_REGISTER_OK` 或 `NODE_REGISTER_REJECT`，成功后单独发送该 Node 当前
   地址族的 `NODE_ASSIGNMENT`。描述包含 `node_id`、`boot_id`、`probe_endpoint` 和
-  `control_endpoint`。TLS 握手后的第一条应用层消息必须为 `NODE_REGISTER`；先收到其他消息或任意
+  `control_endpoint`。TLS 完成或明文 TCP 已连接后的第一条应用层消息必须为 `NODE_REGISTER`；先收到其他消息或任意
   非协议数据均关闭该 Hub 控制连接。
 - Hub 以 `node_id + boot_id` 标识一个 Node 实例。相同 `node_id` 的新 `boot_id` 替换旧实例，Hub
   关闭旧 Hub 控制连接。Node 的 Hub 控制连接断开或心跳超时后，Hub 只从成员表清理该实例，既不向其他
@@ -388,14 +389,14 @@ Hub 对每个 Node、每个地址族独立分配至多两个协同 Node：`prima
 其他 Node 的主动重排。每个地址族的 `assignment_version` 单调递增，Node 只接受更大的版本。
 
 Node 收到 assignment 后，以 `node_id + boot_id` 作为连接复用键，为 primary 与 backup 异步建立
-或复用 Node 间 TCP + TLS 长连接。禁止以 IP:port 作为实例身份键。assignment 不再引用某个 Node
+或复用 Node 间 TCP 或 TCP + TLS 长连接。禁止以 IP:port 作为实例身份键。assignment 不再引用某个 Node
 不构成关闭既有链路的理由，因为对端仍可能将本 Node 作为协同方；链路仅因自身失效、duplicate 或后续
 空闲回收策略关闭。双方同时拨号时，连接建立后
 先交换 `NODE_LINK_HELLO(node_id, boot_id, initiator_node_id, initiator_nonce)`；同一对实例存在多条
 连接时，双方按 `(initiator_node_id, initiator_nonce)` 的字典序保留唯一一条，另一条发送
 `NODE_LINK_DUPLICATE` 后关闭。因 duplicate 关闭不得触发重连或向 Hub 报告节点失效。
 
-Node 选择 primary 并且对应 Node 间 TLS 链路已经激活后，将 `client_observed_ip:port -> primary node
+Node 选择 primary 并且对应 Node 间控制链路已经激活后，将 `client_observed_ip:port -> primary node
 instance + probe_endpoint` 保存 30 秒。`PROBE1_RSP` 仅下发该 primary 的 `ALTERNATE_PROBE_ENDPOINT`；
 链路未激活、失效或 assignment 更新期间不得下发该 endpoint。当收到 `CHANGE_IP` 时，Node
 只能经已经保存的对应 primary 长连接发送一次 `NAT_FORWARD_FILTER_RESPONSE`；该消息至少携带
@@ -418,13 +419,13 @@ Hub 对每个 Node、每地址族保存至多两个未过期失效实例，排�
 定时 sweep 到期后才恢复正常候选选择。
 
 所有 TCP 控制消息使用有界长度前缀、版本和消息类型。未知类型、非法长度、状态不允许的消息或
-任意非协议数据均直接关闭对应 TCP 连接。由于首期未认证 Node 身份，该 TLS 设计只能防御被动监听；
-Hub 与 Node 的强身份认证将在后续 NTRS 认证专项中叠加。
+任意非协议数据均直接关闭对应 TCP 连接。TLS 启用时，由于首期未认证 Node 身份，该设计只能防御
+被动监听；明文模式仅用于测试或受信网络。Hub 与 Node 的强身份认证将在后续 NTRS 认证专项中叠加。
 
 ### 3.7 Hub 与 Node 控制线格式
 
 首期 Hub 控制连接与 Node 间控制连接复用一套二进制前缀。所有整数均为网络字节序，任何保留字段
-必须为零，且一个 TLS record 中可以携带任意数量的完整或部分消息，接收端必须按长度前缀累积解析：
+必须为零，且一次 TCP 读取或 TLS record 中可以携带任意数量的完整或部分消息，接收端必须按长度前缀累积解析：
 
 ```text
 control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
@@ -452,12 +453,12 @@ control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
   assignment_version:u64 | requester_instance:32 | failed_primary:32 | failed_backup:32`。`failed_roles`
   bit0/bit1 分别表示 primary/backup，未置位角色的对应实例必须全零。
 - `NODE_LINK_HELLO` payload 固定为 64 字节：`sender_instance:32 | initiator_node_id:16 |
-  initiator_nonce:16`。出站连接在 TLS 完成后立即发送；入站连接收到并校验后使用同一组 initiator
+  initiator_nonce:16`。出站连接在 TLS 完成或明文 TCP 已连接后立即发送；入站连接收到并校验后使用同一组 initiator
   字段回送。`initiator_node_id` 与 `initiator_nonce` 均不得全零。
 - `NAT_FORWARD_FILTER_RESPONSE` payload 固定为 83 字节：`forward_id:u64 | target_instance:32 |
   client_endpoint:19 | packet_number:u64 | token:12 | phase:u8 | reserved:3`。`target_instance` 必须等于
   接收 Node 的当前实例，`packet_number` 和 `forward_id` 均不得为零，`phase` 首期固定为 `CHANGE_IP`，
-  保留字段必须为零。该消息只在已激活的 Node 间 TLS 链路上传输；协同 Node 对 `forward_id` 做短期去重，
+  保留字段必须为零。该消息只在已激活的 Node 间控制链路上传输；协同 Node 对 `forward_id` 做短期去重，
   然后以自身 probe endpoint 构造并发送一个带原 `packet_number/token/phase` 的 UTP NAT `FILTER_RSP`。
 
 ---

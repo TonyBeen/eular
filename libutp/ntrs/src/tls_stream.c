@@ -17,10 +17,10 @@ struct utp_ntrs_tls_stream {
   struct evbuffer *plaintext;         // 等待 SSL_write 的完整明文
   utp_ntrs_tls_callbacks_t callbacks; // 上层连接回调
   void *user_data;                    // 上层连接
-  bool server;                        // 服务端握手角色
-  bool tcp_connected;
-  bool handshake_complete;
-  bool closed;
+  bool encrypted : 1;                 // 是否通过 TLS 1.3 加密控制流
+  bool tcp_connected : 1;             // TCP 三次握手是否完成
+  bool handshake_complete : 1;        // TLS 握手或明文 TCP 就绪
+  bool closed : 1;                    // 是否已通知上层关闭
 };
 
 static bool utp_ntrs_tls_stream_flush_encrypted(utp_ntrs_tls_stream_t *stream) {
@@ -44,6 +44,15 @@ static void utp_ntrs_tls_stream_notify_closed(utp_ntrs_tls_stream_t *stream) {
     stream->closed = true;
     if (stream->callbacks.closed != NULL) {
       stream->callbacks.closed(stream->user_data);
+    }
+  }
+}
+
+static void utp_ntrs_tls_stream_notify_ready(utp_ntrs_tls_stream_t *stream) {
+  if (!stream->handshake_complete) {
+    stream->handshake_complete = true;
+    if (stream->callbacks.ready != NULL) {
+      stream->callbacks.ready(stream->user_data);
     }
   }
 }
@@ -80,14 +89,15 @@ static bool utp_ntrs_tls_stream_drive(utp_ntrs_tls_stream_t *stream) {
   if (!stream->tcp_connected || stream->closed) {
     return !stream->closed;
   }
+  if (!stream->encrypted) {
+    utp_ntrs_tls_stream_notify_ready(stream);
+    return !stream->closed;
+  }
   if (!stream->handshake_complete) {
     const int32_t result = SSL_do_handshake(stream->ssl);
 
     if (result == 1) {
-      stream->handshake_complete = true;
-      if (stream->callbacks.ready != NULL) {
-        stream->callbacks.ready(stream->user_data);
-      }
+      utp_ntrs_tls_stream_notify_ready(stream);
     } else {
       const int32_t error = SSL_get_error(stream->ssl, result);
 
@@ -134,10 +144,19 @@ static void utp_ntrs_tls_stream_on_read(struct bufferevent *transport,
     uint8_t buffer[UTP_NTRS_TLS_IO_BUFFER_SIZE];
     const int32_t read_length = evbuffer_remove(input, buffer, sizeof(buffer));
 
-    if (read_length <= 0 || BIO_write(SSL_get_rbio(stream->ssl), buffer,
-                                      read_length) != read_length) {
+    if (read_length <= 0 ||
+        (stream->encrypted &&
+         BIO_write(SSL_get_rbio(stream->ssl), buffer, read_length) !=
+             read_length)) {
       utp_ntrs_tls_stream_notify_closed(stream);
       return;
+    }
+    if (!stream->encrypted && stream->callbacks.plaintext != NULL) {
+      stream->callbacks.plaintext(stream->user_data, buffer,
+                                  (size_t)read_length);
+      if (stream->closed) {
+        return;
+      }
     }
     if (!utp_ntrs_tls_stream_drive(stream)) {
       utp_ntrs_tls_stream_notify_closed(stream);
@@ -218,26 +237,34 @@ utp_ntrs_tls_stream_new(struct event_base *base, int32_t fd, SSL_CTX *context,
   if (stream == NULL) {
     return NULL;
   }
-  stream->ssl = SSL_new(context);
-  stream->plaintext = evbuffer_new();
   stream->transport = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
-  if (stream->ssl == NULL || stream->plaintext == NULL ||
-      stream->transport == NULL || (read_bio = BIO_new(BIO_s_mem())) == NULL ||
-      (write_bio = BIO_new(BIO_s_mem())) == NULL) {
-    BIO_free(read_bio);
-    BIO_free(write_bio);
+  if (stream->transport == NULL) {
     utp_ntrs_tls_stream_free(stream);
     return NULL;
   }
   stream->callbacks = *callbacks;
   stream->user_data = user_data;
-  stream->server = server;
-  SSL_set_mode(stream->ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-  SSL_set_bio(stream->ssl, read_bio, write_bio);
+  stream->encrypted = context != NULL;
+  if (stream->encrypted) {
+    stream->ssl = SSL_new(context);
+    stream->plaintext = evbuffer_new();
+    if (stream->ssl == NULL || stream->plaintext == NULL ||
+        (read_bio = BIO_new(BIO_s_mem())) == NULL ||
+        (write_bio = BIO_new(BIO_s_mem())) == NULL) {
+      BIO_free(read_bio);
+      BIO_free(write_bio);
+      utp_ntrs_tls_stream_free(stream);
+      return NULL;
+    }
+    SSL_set_mode(stream->ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    SSL_set_bio(stream->ssl, read_bio, write_bio);
+  }
   if (server) {
     stream->tcp_connected = true;
-    SSL_set_accept_state(stream->ssl);
-  } else {
+    if (stream->encrypted) {
+      SSL_set_accept_state(stream->ssl);
+    }
+  } else if (stream->encrypted) {
     SSL_set_connect_state(stream->ssl);
   }
   bufferevent_setcb(stream->transport, utp_ntrs_tls_stream_on_read,
@@ -253,9 +280,15 @@ utp_ntrs_tls_stream_new(struct event_base *base, int32_t fd, SSL_CTX *context,
 
 void utp_ntrs_tls_stream_free(utp_ntrs_tls_stream_t *stream) {
   if (stream != NULL) {
-    bufferevent_free(stream->transport);
-    SSL_free(stream->ssl);
-    evbuffer_free(stream->plaintext);
+    if (stream->transport != NULL) {
+      bufferevent_free(stream->transport);
+    }
+    if (stream->ssl != NULL) {
+      SSL_free(stream->ssl);
+    }
+    if (stream->plaintext != NULL) {
+      evbuffer_free(stream->plaintext);
+    }
     free(stream);
   }
 }
@@ -267,6 +300,10 @@ bool utp_ntrs_tls_stream_connected(utp_ntrs_tls_stream_t *stream) {
 
 bool utp_ntrs_tls_stream_send(utp_ntrs_tls_stream_t *stream,
                               const uint8_t *data, size_t length) {
+  if (!stream->encrypted) {
+    return !stream->closed &&
+           bufferevent_write(stream->transport, data, length) == 0;
+  }
   if (stream->closed || length > (size_t)INT32_MAX ||
       evbuffer_add(stream->plaintext, data, length) != 0) {
     return false;

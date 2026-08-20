@@ -119,8 +119,17 @@ endif()
 
 if(BUILD_TESTING AND UTP_NTRS_BUILD_TESTS)
     add_executable(utp_ntrs_service_test test/test_service.c)
-    target_link_libraries(utp_ntrs_service_test PRIVATE utp_ntrs_node_udp)
+    target_link_libraries(utp_ntrs_service_test PRIVATE
+        utp_ntrs_service_runtime
+        -Wl,--start-group
+        $<TARGET_FILE:utp_ntrs_node_udp>
+        $<TARGET_FILE:utp_ntrs_service_core>
+        ssl
+        crypto
+        -Wl,--end-group)
+    add_dependencies(utp_ntrs_service_test utp_ntrs_node_udp utp_ntrs_service_core)
     target_include_directories(utp_ntrs_service_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/../c/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/../c/include")

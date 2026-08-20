@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 
 #include "proto/proto.h"
+#include "tls_stream.h"
 #include "udp_probe.h"
 
 static utp_ntrs_endpoint_t test_endpoint(uint8_t family, uint16_t port,
@@ -206,6 +207,62 @@ static void test_control_stream(void) {
   assert(!utp_ntrs_control_stream_feed(&stream, message,
                                        UTP_NTRS_CONTROL_HEADER_SIZE,
                                        test_control_stream_message, &callback));
+}
+
+typedef struct test_plain_stream_callback {
+  uint8_t received[16]; // 接收的明文 TCP 数据
+  size_t length;        // 接收字节数
+  uint32_t ready_count; // 已触发的就绪回调数
+} test_plain_stream_callback_t;
+
+static void test_plain_stream_ready(void *user_data) {
+  ++((test_plain_stream_callback_t *)user_data)->ready_count;
+}
+
+static void test_plain_stream_data(void *user_data, const uint8_t *data,
+                                   size_t length) {
+  test_plain_stream_callback_t *const callback = user_data;
+
+  assert(length <= sizeof(callback->received));
+  (void)memcpy(callback->received, data, length);
+  callback->length = length;
+}
+
+static void test_plain_tcp_stream(void) {
+  const uint8_t message[] = {1u, 2u, 3u, 4u};
+  const utp_ntrs_tls_callbacks_t callbacks = {
+      .ready = test_plain_stream_ready,
+      .plaintext = test_plain_stream_data,
+  };
+  int32_t sockets[2];
+  struct event_base *base;
+  utp_ntrs_tls_stream_t *server;
+  utp_ntrs_tls_stream_t *client;
+  test_plain_stream_callback_t server_callback = {0};
+  test_plain_stream_callback_t client_callback = {0};
+  int32_t index;
+
+  assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+  assert((base = event_base_new()) != NULL);
+  assert((server = utp_ntrs_tls_stream_new(base, sockets[0], NULL, true,
+                                           &callbacks, &server_callback)) !=
+         NULL);
+  assert(server_callback.ready_count == 1u);
+  assert((client = utp_ntrs_tls_stream_new(base, sockets[1], NULL, false,
+                                           &callbacks, &client_callback)) !=
+         NULL);
+  assert(client_callback.ready_count == 0u);
+  assert(utp_ntrs_tls_stream_connected(client));
+  assert(client_callback.ready_count == 1u);
+  assert(utp_ntrs_tls_stream_send(client, message, sizeof(message)));
+  for (index = 0; index < 4 && server_callback.length == 0u; ++index) {
+    assert(event_base_loop(base, EVLOOP_ONCE) == 0);
+  }
+  assert(server_callback.length == sizeof(message));
+  assert(memcmp(server_callback.received, message, sizeof(message)) == 0);
+  utp_ntrs_tls_stream_free(client);
+  utp_ntrs_tls_stream_free(server);
+  event_base_free(base);
 }
 
 static void test_hub_assignment(void) {
@@ -842,6 +899,7 @@ static void test_udp_worker_change_ip_forward(void) {
 int main(void) {
   test_control_codec();
   test_control_stream();
+  test_plain_tcp_stream();
   test_hub_assignment();
   test_hub_reregistration_preserves_healthy_assignment();
   test_hub_replacement_and_exclusion();

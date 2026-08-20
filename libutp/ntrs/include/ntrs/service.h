@@ -120,7 +120,7 @@ typedef struct utp_ntrs_assignment_request {
     uint8_t                  failed_roles;        // UTP_NTRS_ASSIGNMENT_ROLE_*
 } utp_ntrs_assignment_request_t;
 
-/** @brief Node 间 TLS 链路的首条消息；发起标识用于双向拨号去重。 */
+/** @brief Node 间控制链路的首条消息；发起标识用于双向拨号去重。 */
 typedef struct utp_ntrs_node_link_hello {
     utp_ntrs_node_instance_t instance;                                   // 发送 HELLO 的 Node 实例
     uint8_t                  initiator_node_id[UTP_NTRS_NODE_ID_SIZE];   // 建立该 TCP 连接的发起 Node

@@ -27,14 +27,14 @@ typedef struct nat_detect_node {
   struct event *reconnect_event;             // Hub 断线重连定时器
   struct event *heartbeat_event;             // Hub 心跳定时器
   struct event *peer_tick_event;             // Node 间链路保活定时器
-  SSL_CTX *hub_tls_context;                  // Hub 客户端 TLS 上下文
-  SSL_CTX *peer_server_tls_context;          // Node 入站 TLS 上下文
-  utp_ntrs_tls_stream_t *hub_stream;         // 当前 Hub TLS 连接
+  SSL_CTX *hub_tls_context;                  // Hub 客户端 TLS 上下文，空指针表示明文 TCP
+  SSL_CTX *peer_server_tls_context;          // Node 入站 TLS 上下文，空指针表示明文 TCP
+  utp_ntrs_tls_stream_t *hub_stream;         // 当前 Hub 控制连接
   utp_ntrs_control_stream_t control;         // Hub 控制消息重组状态
   utp_ntrs_node_registration_t registration; // 本 Node 的固定注册信息
   utp_ntrs_endpoint_t hub_endpoint;          // Hub TCP endpoint
   utp_ntrs_udp_server_t *udp_server;         // UDP NAT 探测 worker
-  utp_ntrs_peer_manager_t *peers;            // Node 间 TLS 链路管理器
+  utp_ntrs_peer_manager_t *peers;            // Node 间控制链路管理器
   utp_ntrs_assignment_t assignments[2];      // IPv4、IPv6 当前 assignment
   nat_detect_node_forward_dedup_t
       forward_dedup[UTP_NTRS_FORWARD_DEDUP_CAPACITY]; // 协同回包短期去重表
@@ -343,7 +343,7 @@ static void nat_detect_node_on_ready(void *user_data) {
     return;
   }
   (void)fprintf(stderr,
-                "nat_detect_node event=hub_tls_ready registration_sent\n");
+                "nat_detect_node event=hub_control_ready registration_sent\n");
 }
 
 static void nat_detect_node_on_message(void *user_data, uint8_t type,
@@ -547,7 +547,7 @@ static void nat_detect_node_usage(const char *program) {
   (void)fprintf(stderr,
                 "Usage: %s --hub IP:PORT --node-id HEX32 --probe IP:PORT "
                 "--change-port IP:PORT --control IP:PORT "
-                "--cert FILE --key FILE [--boot-id HEX32] [--load N] "
+                "[--cert FILE --key FILE] [--boot-id HEX32] [--load N] "
                 "[--heartbeat-ms N] [--workers N] [--source-rate N] "
                 "[--source-burst N]\n",
                 program);
@@ -629,8 +629,8 @@ int main(int argc, char **argv) {
     }
   }
   if (index != argc || hub == NULL || node_id == NULL || probe == NULL ||
-      change_port == NULL || control == NULL || certificate == NULL ||
-      private_key == NULL ||
+      change_port == NULL || control == NULL ||
+      ((certificate == NULL) != (private_key == NULL)) ||
       !utp_ntrs_hex_decode(node_id, node.registration.instance.node_id,
                            UTP_NTRS_NODE_ID_SIZE) ||
       (boot_id != NULL &&
@@ -669,10 +669,13 @@ int main(int argc, char **argv) {
     node.registration.ipv6.family = (uint8_t)AF_INET6;
     node.registration.ipv4 = (utp_ntrs_node_family_t){0};
   }
-  if ((node.base = event_base_new()) == NULL ||
-      (node.hub_tls_context = utp_ntrs_tls_client_context_new()) == NULL ||
-      (node.peer_server_tls_context =
-           utp_ntrs_tls_server_context_new(certificate, private_key)) == NULL) {
+  if ((node.base = event_base_new()) == NULL) {
+    goto cleanup;
+  }
+  if (certificate != NULL &&
+      ((node.hub_tls_context = utp_ntrs_tls_client_context_new()) == NULL ||
+       (node.peer_server_tls_context =
+            utp_ntrs_tls_server_context_new(certificate, private_key)) == NULL)) {
     goto cleanup;
   }
   udp_options.main_base = node.base;
@@ -707,7 +710,7 @@ int main(int argc, char **argv) {
     (void)fprintf(
         stderr,
         "nat_detect_node event=starting node=%s hub=%s probe=%s change_port=%u "
-        "control=%s workers=%u\n",
+        "control=%s workers=%u transport=%s\n",
         nat_detect_node_instance(&node.registration.instance, local),
         utp_ntrs_endpoint_format(&node.hub_endpoint, hub_endpoint,
                                  sizeof(hub_endpoint)),
@@ -716,7 +719,7 @@ int main(int argc, char **argv) {
         (uint32_t)family->change_port_endpoint.port,
         utp_ntrs_endpoint_format(&family->control_endpoint, control_endpoint,
                                  sizeof(control_endpoint)),
-        (uint32_t)workers);
+        (uint32_t)workers, node.hub_tls_context != NULL ? "tls" : "tcp");
   }
   utp_ntrs_control_stream_init(&node.control);
   heartbeat_period.tv_sec = (int32_t)(node.registration.heartbeat_ms / 1000u);

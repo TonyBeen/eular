@@ -418,7 +418,8 @@ static void nat_detect_hub_on_signal(evutil_socket_t fd, int16_t events,
 }
 
 static void nat_detect_hub_usage(const char *program) {
-  (void)fprintf(stderr, "Usage: %s --listen IP:PORT --cert FILE --key FILE\n",
+  (void)fprintf(stderr,
+                "Usage: %s --listen IP:PORT [--cert FILE --key FILE]\n",
                 program);
 }
 
@@ -448,22 +449,27 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
   }
-  if (index != argc || listen == NULL || certificate == NULL ||
-      private_key == NULL || !utp_ntrs_endpoint_parse(listen, &endpoint) ||
+  if (index != argc || listen == NULL ||
+      ((certificate == NULL) != (private_key == NULL)) ||
+      !utp_ntrs_endpoint_parse(listen, &endpoint) ||
       !utp_ntrs_endpoint_to_sockaddr(&endpoint, &address, &address_length) ||
-      (service.base = event_base_new()) == NULL ||
+      (service.base = event_base_new()) == NULL) {
+    nat_detect_hub_usage(argv[0]);
+    goto cleanup;
+  }
+  if (certificate != NULL &&
       (service.tls =
            utp_ntrs_tls_server_context_new(certificate, private_key)) == NULL) {
-    nat_detect_hub_usage(argv[0]);
     goto cleanup;
   }
   utp_ntrs_hub_init(&service.hub);
   {
     char endpoint_text[INET6_ADDRSTRLEN + 8u];
 
-    (void)fprintf(stderr, "nat_detect_hub event=starting listen=%s\n",
+    (void)fprintf(stderr, "nat_detect_hub event=starting listen=%s transport=%s\n",
                   utp_ntrs_endpoint_format(&endpoint, endpoint_text,
-                                           sizeof(endpoint_text)));
+                                           sizeof(endpoint_text)),
+                  service.tls != NULL ? "tls" : "tcp");
   }
   service.listener = evconnlistener_new_bind(
       service.base, nat_detect_hub_on_accept, &service,

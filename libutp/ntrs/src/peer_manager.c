@@ -16,8 +16,8 @@ typedef struct utp_ntrs_peer utp_ntrs_peer_t;
 struct utp_ntrs_peer_manager {
   struct event_base *base;             // Node 主 event loop
   struct evconnlistener *listener;     // control_endpoint 监听器
-  SSL_CTX *client_tls;                 // 出站 TLS 配置
-  SSL_CTX *server_tls;                 // 入站 TLS 配置
+  SSL_CTX *client_tls;                 // 出站 TLS 配置，空指针表示明文 TCP
+  SSL_CTX *server_tls;                 // 入站 TLS 配置，空指针表示明文 TCP
   utp_ntrs_node_instance_t local;      // 本 Node 实例
   utp_ntrs_peer_active_fn on_active;   // 链路激活通知
   utp_ntrs_peer_failed_fn on_failed;   // 链路失效通知
@@ -29,7 +29,7 @@ struct utp_ntrs_peer_manager {
 struct utp_ntrs_peer {
   utp_ntrs_peer_manager_t *manager;         // 所属管理器
   utp_ntrs_peer_t *next;                    // 连接链表
-  utp_ntrs_tls_stream_t *tls;               // Node 间 TLS 流
+  utp_ntrs_tls_stream_t *tls;               // Node 间控制流
   utp_ntrs_control_stream_t control;        // 控制流重组状态
   utp_ntrs_node_instance_t expected_remote; // 出站连接的预期对端
   utp_ntrs_node_instance_t remote;          // HELLO 校验后的对端

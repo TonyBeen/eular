@@ -17,11 +17,11 @@ typedef void (*utp_ntrs_peer_active_fn)(void *user_data,
 typedef void (*utp_ntrs_peer_forward_fn)(
     void *user_data, const utp_ntrs_forward_filter_response_t *forward);
 
-/** @brief Node 间 TLS 链路管理器的启动参数。 */
+/** @brief Node 间控制链路管理器的启动参数。 */
 typedef struct utp_ntrs_peer_manager_options {
   event_base *base;                    // Node 所在 libevent loop
-  SSL_CTX *client_tls;                 // 出站 TLS 上下文
-  SSL_CTX *server_tls;                 // 入站 TLS 上下文
+  SSL_CTX *client_tls;                 // 出站 TLS 上下文，空指针表示明文 TCP
+  SSL_CTX *server_tls;                 // 入站 TLS 上下文，空指针表示明文 TCP
   utp_ntrs_node_instance_t local;      // 本 Node 实例
   utp_ntrs_endpoint_t listen;          // control_endpoint
   utp_ntrs_peer_active_fn on_active;   // 唯一保留链路已可用的通知
@@ -30,12 +30,12 @@ typedef struct utp_ntrs_peer_manager_options {
   void *user_data;                     // 回调上下文
 } utp_ntrs_peer_manager_options_t;
 
-/** @brief 启动 control_endpoint 的 TCP+TLS 监听。 */
+/** @brief 启动 control_endpoint 的 TCP 或 TCP+TLS 监听。 */
 utp_ntrs_peer_manager_t *
 utp_ntrs_peer_manager_start(const utp_ntrs_peer_manager_options_t *options);
 /** @brief 停止监听并同步释放全部 Node 间连接。 */
 void utp_ntrs_peer_manager_stop(utp_ntrs_peer_manager_t *manager);
-/** @brief 确保到指定 Node 实例的 TLS 链路存在；已有连接或拨号中的连接会复用。
+/** @brief 确保到指定 Node 实例的控制链路存在；已有连接或拨号中的连接会复用。
  */
 bool utp_ntrs_peer_manager_connect(utp_ntrs_peer_manager_t *manager,
                                    const utp_ntrs_node_instance_t *remote,
