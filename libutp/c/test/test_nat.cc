@@ -461,6 +461,9 @@ TEST_CASE("nat probe completes all phases with a responsive service", "[nat][con
     REQUIRE(callback.status == UTP_STATUS_OK);
     REQUIRE(callback.has_result);
     REQUIRE(callback.result.nat_class == UTP_NAT_CLASS_FULL_CONE);
+    REQUIRE(callback.result.address_family == 4u);
+    REQUIRE(callback.result.primary_mapped_endpoint.family == 4u);
+    REQUIRE(callback.result.secondary_mapped_endpoint.family == 4u);
     REQUIRE(callback.result.primary_mapped_endpoint.port == local_port);
     REQUIRE(callback.result.secondary_mapped_endpoint.port == local_port);
     REQUIRE(callback.result.primary_rtt_ms >= 0);

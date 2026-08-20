@@ -42,7 +42,7 @@ typedef struct utp_nat_probe_result {
     int32_t         primary_rtt_ms;                              // 主探测端点平均 RTT；无成功响应时为 -1
     int32_t         secondary_rtt_ms;                            // 辅助探测端点平均 RTT；无成功响应时为 -1
     uint16_t        port_samples[UTP_NAT_PORT_SAMPLE_CAPACITY];  // 去重后的公网映射端口样本
-    uint8_t         address_family;                              // 本次 Context bind 的地址族
+    uint8_t         address_family;                              // 本次 Context bind 的地址族，IPv4 为 4，IPv6 为 6
     uint8_t         port_sample_count;                           // port_samples 中有效项数量
     utp_nat_class_t nat_class;                                   // 最终 NAT 分类
 } utp_nat_probe_result_t;

@@ -33,7 +33,7 @@ typedef enum utp_connect_attempt_type {
 } utp_connect_attempt_type_t;
 
 typedef struct utp_endpoint {
-    uint8_t  family;       // 地址族，AF_INET 或 AF_INET6
+    uint8_t  family;       // IP 地址族，IPv4 为 4，IPv6 为 6
     uint16_t port;         // 主机字节序端口号
     uint32_t scope_id;     // IPv6 scope 标识，IPv4 时为 0
     uint8_t  address[16];  // 网络字节序地址，IPv4 使用前 4 字节
