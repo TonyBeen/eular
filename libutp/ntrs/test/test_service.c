@@ -47,6 +47,12 @@ static void test_service_endpoint_resolution(void) {
   assert(utp_ntrs_endpoint_resolve("localhost:24000", &endpoint));
   assert(endpoint.port == 24000u);
   assert(endpoint.family == (uint8_t)AF_INET);
+  assert(utp_ntrs_endpoint_resolve_for_family("[::1]:24000", AF_INET6,
+                                               &endpoint));
+  assert(endpoint.family == (uint8_t)AF_INET6);
+  assert(endpoint.port == 24000u);
+  assert(!utp_ntrs_endpoint_resolve_for_family("127.0.0.1:24000", AF_INET6,
+                                                &endpoint));
   assert(utp_ntrs_endpoint_from_sockaddr(&endpoint,
                                          (const struct sockaddr *)&source,
                                          (socklen_t)sizeof(source)));

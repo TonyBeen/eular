@@ -80,18 +80,26 @@ bool utp_ntrs_endpoint_parse(const char *text, utp_ntrs_endpoint_t *endpoint) {
   return true;
 }
 
-bool utp_ntrs_endpoint_resolve(const char *text, utp_ntrs_endpoint_t *endpoint) {
-  struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+bool utp_ntrs_endpoint_resolve_for_family(const char *text, int32_t family,
+                                          utp_ntrs_endpoint_t *endpoint) {
+  struct addrinfo hints = {.ai_socktype = SOCK_STREAM};
   struct addrinfo *addresses;
-  struct addrinfo *result = NULL;
+  struct addrinfo *result;
   const char *separator;
   char host[256];
   char service[6];
   size_t host_length;
   uint16_t port;
-  bool resolved = false;
+  utp_ntrs_endpoint_t parsed;
 
-  if (utp_ntrs_endpoint_parse(text, endpoint)) {
+  if ((family != AF_INET && family != AF_INET6) || text == NULL || endpoint == NULL) {
+    return false;
+  }
+  if (utp_ntrs_endpoint_parse(text, &parsed)) {
+    if (parsed.family != (uint8_t)family) {
+      return false;
+    }
+    *endpoint = parsed;
     return true;
   }
   separator = strrchr(text, ':');
@@ -111,13 +119,12 @@ bool utp_ntrs_endpoint_resolve(const char *text, utp_ntrs_endpoint_t *endpoint) 
   }
   (void)memcpy(host, text, host_length);
   host[host_length] = '\0';
-  if (getaddrinfo(host, service, &hints, &result) != 0) {
+  hints.ai_family = family;
+  if (getaddrinfo(host, service, &hints, &addresses) != 0) {
     return false;
   }
-  addresses = result;
-  /* 默认 Node endpoint 是 IPv4，域名同时返回 A/AAAA 时优先使用 A 记录。 */
   for (result = addresses; result != NULL; result = result->ai_next) {
-    if (result->ai_family == AF_INET) {
+    if (family == AF_INET && result->ai_family == AF_INET) {
       const struct sockaddr_in *const address =
           (const struct sockaddr_in *)result->ai_addr;
 
@@ -127,27 +134,33 @@ bool utp_ntrs_endpoint_resolve(const char *text, utp_ntrs_endpoint_t *endpoint) 
       };
       (void)memcpy(endpoint->address, &address->sin_addr,
                    sizeof(address->sin_addr));
-      resolved = true;
-      break;
+      freeaddrinfo(addresses);
+      return true;
     }
-  }
-  for (result = addresses; result != NULL && !resolved;
-       result = result->ai_next) {
-    if (result->ai_family == AF_INET6) {
+    if (family == AF_INET6 && result->ai_family == AF_INET6) {
       const struct sockaddr_in6 *const address =
           (const struct sockaddr_in6 *)result->ai_addr;
 
+      if (IN6_IS_ADDR_V4MAPPED(&address->sin6_addr)) {
+        continue;
+      }
       *endpoint = (utp_ntrs_endpoint_t){
           .family = (uint8_t)AF_INET6,
           .port = ntohs(address->sin6_port),
       };
       (void)memcpy(endpoint->address, &address->sin6_addr,
                    sizeof(address->sin6_addr));
-      resolved = true;
+      freeaddrinfo(addresses);
+      return true;
     }
   }
   freeaddrinfo(addresses);
-  return resolved;
+  return false;
+}
+
+bool utp_ntrs_endpoint_resolve(const char *text, utp_ntrs_endpoint_t *endpoint) {
+  return utp_ntrs_endpoint_resolve_for_family(text, AF_INET, endpoint) ||
+         utp_ntrs_endpoint_resolve_for_family(text, AF_INET6, endpoint);
 }
 
 bool utp_ntrs_endpoint_from_sockaddr(utp_ntrs_endpoint_t *endpoint,

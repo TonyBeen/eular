@@ -68,6 +68,7 @@ typedef struct nat_detect_node_options {
     uint32_t    workers;         // UDP worker 数
     uint32_t    source_rate;     // 单源请求限速
     uint32_t    source_burst;    // 单源突发上限
+    bool        use_ipv6;        // 是否强制 IPv6 服务实例
 } nat_detect_node_options_t;
 
 static void        nat_detect_node_disconnect(nat_detect_node_t* node);
@@ -551,6 +552,7 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
     const uint32_t                  workers          = options->workers;
     const uint32_t                  source_rate      = options->source_rate;
     const uint32_t                  source_burst     = options->source_burst;
+    const int32_t                   address_family   = options->use_ipv6 ? AF_INET6 : AF_INET;
     int32_t                         result           = EXIT_FAILURE;
 
     node.registration.load         = options->load;
@@ -560,10 +562,12 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
         (boot_id != NULL && !utp_ntrs_hex_decode(boot_id, node.registration.instance.boot_id, UTP_NTRS_BOOT_ID_SIZE)) ||
         (boot_id == NULL &&
          getrandom(node.registration.instance.boot_id, UTP_NTRS_BOOT_ID_SIZE, 0u) != (ssize_t)UTP_NTRS_BOOT_ID_SIZE) ||
-        !utp_ntrs_endpoint_resolve(hub, &node.hub_endpoint) ||
+        !utp_ntrs_endpoint_resolve_for_family(hub, address_family, &node.hub_endpoint) ||
         !utp_ntrs_endpoint_parse(probe, &udp_options.probe_endpoint) ||
         !utp_ntrs_endpoint_parse(change_port, &udp_options.change_port_endpoint) ||
         !utp_ntrs_endpoint_parse(control, &node.registration.ipv4.control_endpoint) ||
+        node.hub_endpoint.family != (uint8_t)address_family ||
+        udp_options.probe_endpoint.family != (uint8_t)address_family ||
         node.hub_endpoint.family != udp_options.probe_endpoint.family ||
         udp_options.probe_endpoint.family != udp_options.change_port_endpoint.family ||
         udp_options.probe_endpoint.family != node.registration.ipv4.control_endpoint.family) {
@@ -703,9 +707,9 @@ int main(int argc, char** argv)
     CLI::App    cli{"NTRS NAT detection node"};
     std::string hub;
     std::string node_id;
-    std::string probe       = "0.0.0.0:24001";
-    std::string change_port = "0.0.0.0:24002";
-    std::string control     = "0.0.0.0:24003";
+    std::string probe;
+    std::string change_port;
+    std::string control;
     std::string interface_name;
     std::string certificate;
     std::string private_key;
@@ -715,6 +719,7 @@ int main(int argc, char** argv)
     uint32_t    workers      = 1u;
     uint32_t    source_rate  = 0u;
     uint32_t    source_burst = 0u;
+    bool        use_ipv6     = false;
 
     cli.add_option("-H,--hub", hub, "Hub endpoint")->required();
     cli.add_option("-n,--node-id", node_id, "Stable node name")->required();
@@ -730,7 +735,18 @@ int main(int argc, char** argv)
     cli.add_option("-w,--workers", workers, "UDP SO_REUSEPORT worker count");
     cli.add_option("-r,--source-rate", source_rate, "Per-source request rate limit");
     cli.add_option("-B,--source-burst", source_burst, "Per-source request burst limit");
+    cli.add_flag("-6", use_ipv6, "Use IPv6 only and resolve the Hub with AAAA records");
     CLI11_PARSE(cli, argc, argv);
+
+    if (probe.empty()) {
+        probe = use_ipv6 ? "[::]:24001" : "0.0.0.0:24001";
+    }
+    if (change_port.empty()) {
+        change_port = use_ipv6 ? "[::]:24002" : "0.0.0.0:24002";
+    }
+    if (control.empty()) {
+        control = use_ipv6 ? "[::]:24003" : "0.0.0.0:24003";
+    }
 
     const nat_detect_node_options_t options = {
         .hub            = hub.c_str(),
@@ -747,6 +763,7 @@ int main(int argc, char** argv)
         .workers        = workers,
         .source_rate    = source_rate,
         .source_burst   = source_burst,
+        .use_ipv6       = use_ipv6,
     };
 
     utp_ntrs_app_log_init("nat_detect_node");

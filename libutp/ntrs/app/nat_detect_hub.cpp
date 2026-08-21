@@ -450,7 +450,7 @@ static struct evconnlistener* nat_detect_hub_listener_new(struct event_base* bas
 }
 
 static int32_t nat_detect_hub_run(const char* listen, const char* interface_name, const char* certificate,
-                                  const char* private_key)
+                                  const char* private_key, bool use_ipv6)
 {
     nat_detect_hub_service_t service = {};
     utp_ntrs_endpoint_t      endpoint;
@@ -461,7 +461,8 @@ static int32_t nat_detect_hub_run(const char* listen, const char* interface_name
     struct timeval           sweep_interval = {.tv_sec = 1, .tv_usec = 0};
     int32_t                  result         = EXIT_FAILURE;
 
-    if (((certificate == NULL) != (private_key == NULL)) || !utp_ntrs_endpoint_resolve(listen, &endpoint) ||
+    if (((certificate == NULL) != (private_key == NULL)) ||
+        !utp_ntrs_endpoint_resolve_for_family(listen, use_ipv6 ? AF_INET6 : AF_INET, &endpoint) ||
         !utp_ntrs_endpoint_to_sockaddr(&endpoint, &address, &address_length) ||
         (service.base = event_base_new()) == NULL) {
         goto cleanup;
@@ -518,19 +519,25 @@ cleanup:
 int main(int argc, char** argv)
 {
     CLI::App    cli{"NTRS NAT detection hub"};
-    std::string listen = "0.0.0.0:24000";
+    std::string listen;
     std::string interface_name;
     std::string certificate;
     std::string private_key;
+    bool        use_ipv6 = false;
 
     cli.add_option("-l,--listen", listen, "TCP listen endpoint");
     cli.add_option("-i,--interface", interface_name, "Bind all service sockets to this interface");
     cli.add_option("-c,--cert", certificate, "TLS certificate file");
     cli.add_option("-k,--key", private_key, "TLS private key file");
+    cli.add_flag("-6", use_ipv6, "Use IPv6 only and resolve hostnames with AAAA records");
     CLI11_PARSE(cli, argc, argv);
+
+    if (listen.empty()) {
+        listen = use_ipv6 ? "[::]:24000" : "0.0.0.0:24000";
+    }
 
     utp_ntrs_app_log_init("nat_detect_hub");
     return nat_detect_hub_run(listen.c_str(), interface_name.empty() ? NULL : interface_name.c_str(),
                               certificate.empty() ? NULL : certificate.c_str(),
-                              private_key.empty() ? NULL : private_key.c_str());
+                              private_key.empty() ? NULL : private_key.c_str(), use_ipv6);
 }

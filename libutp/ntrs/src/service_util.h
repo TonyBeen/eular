@@ -18,6 +18,8 @@ extern "C" {
 bool utp_ntrs_endpoint_parse(const char* text, utp_ntrs_endpoint_t* endpoint);
 /** @brief 解析数字 endpoint 或将 "host:port" 解析为一个数字 endpoint。 */
 bool utp_ntrs_endpoint_resolve(const char* text, utp_ntrs_endpoint_t* endpoint);
+/** @brief 解析指定地址族的数字 endpoint 或主机名；地址族只允许 AF_INET、AF_INET6。 */
+bool utp_ntrs_endpoint_resolve_for_family(const char* text, int32_t family, utp_ntrs_endpoint_t* endpoint);
 /** @brief 将 sockaddr 转为 endpoint。 */
 bool utp_ntrs_endpoint_from_sockaddr(utp_ntrs_endpoint_t* endpoint, const struct sockaddr* address, socklen_t length);
 /** @brief 将 socket 限制在指定 Linux 网卡；空指针表示不限制。 */

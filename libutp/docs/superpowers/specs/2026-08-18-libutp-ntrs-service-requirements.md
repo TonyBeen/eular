@@ -389,16 +389,18 @@ node_id, boot_id, load, heartbeat_interval
 - Hub 和 Node 都支持 `--interface NAME`。在 Linux 上它通过 `SO_BINDTODEVICE` 约束全部服务 socket：
   Hub 的 TCP 监听，及 Node 的 UDP probe/change-port、Node control TCP 监听、Node 到 Hub 和 Node
   到 Node 的所有主动 TCP 连接。多线部署必须指定与预期公网出口相同的网卡。
-- Hub 默认监听 `0.0.0.0:24000`；Node 默认监听 `0.0.0.0:24001`（probe）、`0.0.0.0:24002`
-  （change-port）和 `0.0.0.0:24003`（control）。Node 注册包中的 endpoint 地址仅用于保留线格式，
-  Node 只提供这三个服务端口，不能声明自身公网服务 IP。
+- Hub、Node 默认是 IPv4 实例：Hub 监听 `0.0.0.0:24000`；Node 监听 `0.0.0.0:24001`（probe）、
+  `0.0.0.0:24002`（change-port）和 `0.0.0.0:24003`（control）。`-6` 创建独立 IPv6 实例：Hub
+  默认监听 `[::]:24000`，Node 默认监听 `[::]:24001`、`[::]:24002`、`[::]:24003`。IPv4、IPv6 实例
+  可在同一主机使用相同端口号；IPv6 socket 必须 `IPV6_V6ONLY`，地址族隔离不依赖 `SO_REUSEPORT`。
+  Node 注册包中的 endpoint 地址仅用于保留线格式，Node 只提供这三个服务端口，不能声明自身公网服务 IP。
 - Hub 必须以 `accept()` 获得的 Node 控制 TCP 连接源地址为准，覆盖该 Node 注册中
   `public_endpoint`、`probe_endpoint`、`change_port_endpoint` 和 `control_endpoint` 的 IP，端口保持 Node
   注册值。Hub 下发 assignment 时只能使用该观测地址；这避免 Node 伪造服务地址，也能匹配绑定网卡后的实际出口。
 - `nat_detect_hub --listen` 与 `nat_detect_node --hub` 均接受 `HOST:PORT` 或 `[HOST]:PORT`，在服务启动期
-  同步解析为一个 IPv4 或 IPv6 地址，名称同时返回 A/AAAA 时优先 A 记录；Node 的三个本地监听 endpoint
-  仍必须为数字 IP，且必须与 Hub 控制连接使用相同地址族。`node_id` 命令行参数接受非空名称，服务端将其
-  SHA-256 的前 16 字节写入固定长度协议字段，避免改变线格式。
+  同步解析为一个数字地址。默认 IPv4 实例只选择 A 记录，`-6` 实例只选择 AAAA 记录，不能回退到异族地址。
+  Node 的三个本地监听 endpoint 仍必须为数字 IP，且必须与 Hub 控制连接使用相同地址族。`node_id` 命令行
+  参数接受非空名称，服务端将其 SHA-256 的前 16 字节写入固定长度协议字段，避免改变线格式。
 - Hub 以 `node_id + boot_id` 标识一个 Node 实例。相同 `node_id` 的新 `boot_id` 替换旧实例，Hub
   关闭旧 Hub 控制连接。Node 的 Hub 控制连接断开或心跳超时后，Hub 只从成员表清理该实例，既不向其他
   Node 广播下线，也不主动改写已有 assignment；该实例之后不能再被新分配。
