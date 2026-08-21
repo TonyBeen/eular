@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <string>
 
@@ -9,20 +10,16 @@
 #include <event2/bufferevent.h>
 #include <event2/event.h>
 #include <event2/util.h>
-extern "C" {
 #include <ntrs/service.h>
+#include <openssl/sha.h>
+#include <sys/random.h>
+#include <sys/socket.h>
+#include <utils/CLI11.hpp>
 
 #include "app_log.h"
 #include "peer_manager.h"
 #include "service_util.h"
 #include "tls_stream.h"
-}
-#include <unistd.h>
-
-#include <openssl/sha.h>
-#include <sys/random.h>
-#include <sys/socket.h>
-#include <utils/CLI11.hpp>
 
 #define fprintf(stream, ...) UTP_NTRS_APP_LOG(stream, __VA_ARGS__)
 

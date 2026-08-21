@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <string>
 
@@ -9,17 +10,13 @@
 #include <event2/listener.h>
 #include <event2/util.h>
 #include <netinet/in.h>
-extern "C" {
 #include <ntrs/service.h>
+#include <sys/socket.h>
+#include <utils/CLI11.hpp>
 
 #include "app_log.h"
 #include "service_util.h"
 #include "tls_stream.h"
-}
-#include <unistd.h>
-
-#include <sys/socket.h>
-#include <utils/CLI11.hpp>
 
 #define fprintf(stream, ...) UTP_NTRS_APP_LOG(stream, __VA_ARGS__)
 
