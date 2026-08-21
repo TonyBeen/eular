@@ -367,17 +367,20 @@ static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char*
         goto cleanup;
     }
 #endif
-    status = utp_context_probe_nat(app.context, &probe_options, ntrsc_on_probe_complete, &app);
-    if (status != UTP_STATUS_OK) {
-        (void)fprintf(stderr, "ntrsc event=probe_start_failed status=%s\n", utp_status_string(status));
-        goto cleanup;
-    }
     (void)fprintf(stdout,
                   "ntrsc event=probe_started bind_address=%s bind_port=%" PRIu16
                   " nat_address=%s resolved_address=%s nat_port=%" PRIu16 " phase_timeout_ms=%" PRIu32 "\n",
                   bind_address, local_port, nat_address, nat_numeric_address, nat_port,
                   probe_options.phase_timeout_ms == 0u ? 3000u : probe_options.phase_timeout_ms);
-    (void)event_base_dispatch(app.base);
+    status = utp_context_probe_nat(app.context, &probe_options, ntrsc_on_probe_complete, &app);
+    if (status != UTP_STATUS_OK) {
+        (void)fprintf(stderr, "ntrsc event=probe_start_failed status=%s\n", utp_status_string(status));
+        goto cleanup;
+    }
+    // 本地发送错误可在启动调用内同步交付回调，此时尚未进入 libevent loop。
+    if (!app.completed) {
+        (void)event_base_dispatch(app.base);
+    }
 
 cleanup:
 #if !defined(_WIN32)

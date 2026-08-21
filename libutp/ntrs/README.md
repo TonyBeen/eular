@@ -24,6 +24,8 @@ musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 ../build/ntrs-linux/nat_detect_node --hub hub.example.com:24000 --node-id node-a --interface eth0
 ```
 
+`--node-id` 是 Node 在线上唯一的可读标识，长度为 1 至 128 字节；它直接写入控制协议并出现在服务日志中。
+
 `--interface` 在 Linux 上通过 `SO_BINDTODEVICE` 绑定所有服务 socket；多线部署应指定它。Hub 从
 Node 控制连接的源地址确定 Node 的服务 IP，因此 Node 只配置本地监听端口，不能上报或覆盖公网 IP。
 

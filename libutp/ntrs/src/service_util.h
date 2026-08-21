@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define UTP_NTRS_NODE_INSTANCE_TEXT_SIZE 66u
+#define UTP_NTRS_NODE_INSTANCE_TEXT_SIZE (UTP_NTRS_NODE_ID_SIZE + UTP_NTRS_BOOT_ID_SIZE * 2u + 2u)
 
 /** @brief 解析仅允许数字 IP 的 "IPv4:port" 或 "[IPv6]:port" endpoint。 */
 bool utp_ntrs_endpoint_parse(const char* text, utp_ntrs_endpoint_t* endpoint);
@@ -31,7 +31,7 @@ bool utp_ntrs_endpoint_to_sockaddr(const utp_ntrs_endpoint_t* endpoint, struct s
 const char* utp_ntrs_endpoint_format(const utp_ntrs_endpoint_t* endpoint, char* buffer, size_t capacity);
 /** @brief 解析固定长度的十六进制字节串。 */
 bool        utp_ntrs_hex_decode(const char* text, uint8_t* output, size_t output_length);
-/** @brief 将 Node 实例输出为 "node_id:boot_id" 十六进制文本。 */
+/** @brief 将 Node 实例输出为 "node-id:boot-id"，其中 boot-id 使用十六进制。 */
 const char* utp_ntrs_node_instance_format(const utp_ntrs_node_instance_t* instance, char* buffer, size_t capacity);
 /** @brief 当前 Unix 单调毫秒时间。 */
 uint64_t    utp_ntrs_now_ms(void);

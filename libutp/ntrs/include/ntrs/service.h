@@ -9,10 +9,10 @@
 extern "C" {
 #endif
 
-#define UTP_NTRS_CONTROL_VERSION          1u
+#define UTP_NTRS_CONTROL_VERSION          2u
 #define UTP_NTRS_CONTROL_HEADER_SIZE      8u
 #define UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE 4096u
-#define UTP_NTRS_NODE_ID_SIZE             16u
+#define UTP_NTRS_NODE_ID_SIZE             128u
 #define UTP_NTRS_BOOT_ID_SIZE             16u
 #define UTP_NTRS_LINK_NONCE_SIZE          16u
 #define UTP_NTRS_MAX_EXCLUDED_NODES       2u
@@ -44,9 +44,9 @@ typedef struct utp_ntrs_endpoint {
     uint8_t  address[16];  // IPv4 仅使用前 4 字节
 } utp_ntrs_endpoint_t;
 
-/** @brief Node 实例标识；node_id 相同而 boot_id 不同代表重启后的新实例。 */
+/** @brief Node 实例标识；node_id 为零填充的最多 128 字节文本，boot_id 不同代表重启后的新实例。 */
 typedef struct utp_ntrs_node_instance {
-    uint8_t node_id[UTP_NTRS_NODE_ID_SIZE];  // 稳定 Node 标识
+    uint8_t node_id[UTP_NTRS_NODE_ID_SIZE];  // 稳定 Node 文本标识，在线上必须唯一
     uint8_t boot_id[UTP_NTRS_BOOT_ID_SIZE];  // 本次启动随机标识
 } utp_ntrs_node_instance_t;
 
@@ -109,7 +109,7 @@ typedef struct utp_ntrs_control_header {
     uint8_t  type;            // utp_ntrs_control_type_t
 } utp_ntrs_control_header_t;
 
-/** @brief Node 心跳；线格式为 instance:32 | load:u32。 */
+/** @brief Node 心跳；线格式为 instance:144 | load:u32。 */
 typedef struct utp_ntrs_node_heartbeat {
     utp_ntrs_node_instance_t instance;  // 发送心跳的当前 Node 实例
     uint32_t                 load;      // 当前负载

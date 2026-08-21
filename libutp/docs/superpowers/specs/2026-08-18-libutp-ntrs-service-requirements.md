@@ -400,7 +400,8 @@ node_id, boot_id, load, heartbeat_interval
 - `nat_detect_hub --listen` 与 `nat_detect_node --hub` 均接受 `HOST:PORT` 或 `[HOST]:PORT`，在服务启动期
   同步解析为一个数字地址。默认 IPv4 实例只选择 A 记录，`-6` 实例只选择 AAAA 记录，不能回退到异族地址。
   Node 的三个本地监听 endpoint 仍必须为数字 IP，且必须与 Hub 控制连接使用相同地址族。`node_id` 命令行
-  参数接受非空名称，服务端将其 SHA-256 的前 16 字节写入固定长度协议字段，避免改变线格式。
+  参数是线上唯一的可读文本标识，长度为 1 至 128 字节；服务端将其直接写入固定长度协议字段，未使用的
+  字节必须为零，禁止哈希或截断。
 - Hub 以 `node_id + boot_id` 标识一个 Node 实例。相同 `node_id` 的新 `boot_id` 替换旧实例，Hub
   关闭旧 Hub 控制连接。Node 的 Hub 控制连接断开或心跳超时后，Hub 只从成员表清理该实例，既不向其他
   Node 广播下线，也不主动改写已有 assignment；该实例之后不能再被新分配。
@@ -454,31 +455,32 @@ Hub 对每个 Node、每地址族保存至多两个未过期失效实例，排�
 control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
 ```
 
-- `version = 1`，`payload_length` 不含 8 字节头，完整消息上限固定为 4096 字节。
+- `version = 2`，`payload_length` 不含 8 字节头，完整消息上限固定为 4096 字节。版本 1 的 16 字节
+  `node_id` 线格式不再兼容。
 - 首期 type：`NODE_REGISTER=1`、`NODE_REGISTER_OK=2`、`NODE_REGISTER_REJECT=3`、
   `NODE_ASSIGNMENT=4`、`NODE_ASSIGNMENT_REQUEST=5`、`NODE_HEARTBEAT=6`、
   `NODE_LINK_HELLO=7`、`NODE_LINK_DUPLICATE=8`、`NODE_LINK_PING=9`、`NODE_LINK_PONG=10`、
   `NAT_FORWARD_FILTER_RESPONSE=11`。未定义 type 必须断开连接。
-- `node_id`、`boot_id` 均为固定 16 字节；`initiator_nonce` 固定 16 字节。Node instance 线格式始终
-  为 `node_id | boot_id`，不能以地址替代。
+- `node_id` 为零填充的 1 至 128 字节文本，`boot_id` 为固定 16 字节；`initiator_nonce` 固定 16 字节。Node
+  instance 线格式始终为 `node_id | boot_id`，不能以地址替代。
 - endpoint 固定为 `family:u8 | port:u16 | address:16 bytes`。IPv4 仅使用 address 前 4 字节，剩余
   12 字节必须为零；公网 IP endpoint 的 `port=0`。地址族只允许 IPv4 或 IPv6。
-- `NODE_REGISTER` payload 固定为 200 字节：`instance:32 | load:u32 | heartbeat_ms:u32 | ipv4_family:80 |
+- `NODE_REGISTER` payload 固定为 312 字节：`instance:144 | load:u32 | heartbeat_ms:u32 | ipv4_family:80 |
   ipv6_family:80`。family 段为 `valid:u8 | family:u8 | reserved:u16 | public | probe | change_port |
   control`，四个 endpoint 均为上述固定格式。`valid=0` 时其余 79 字节必须为零；`valid=1` 时四个
   endpoint 均须同族，public/probe/change_port 必须同 IP，且 probe 与 change_port 端口不同。
-- `NODE_ASSIGNMENT` payload 固定为 152 字节：`family:u8 | flags:u8 | reserved:u16 | version:u64 |
-  primary:70 | backup:70`。flags bit0/bit1 分别表示主/备存在；peer 段为 `instance:32 | probe:19 |
+- `NODE_ASSIGNMENT` payload 固定为 376 字节：`family:u8 | flags:u8 | reserved:u16 | version:u64 |
+  primary:182 | backup:182`。flags bit0/bit1 分别表示主/备存在；peer 段为 `instance:144 | probe:19 |
   control:19`。不存在的 peer 段必须全零。Hub 只在目标 Node 的当前 `boot_id` 匹配时接受 heartbeat、
   assignment request 或其他有状态控制消息。
-- `NODE_HEARTBEAT` payload 固定为 36 字节：`instance:32 | load:u32`。
-- `NODE_ASSIGNMENT_REQUEST` payload 固定为 108 字节：`family:u8 | failed_roles:u8 | reserved:u16 |
-  assignment_version:u64 | requester_instance:32 | failed_primary:32 | failed_backup:32`。`failed_roles`
+- `NODE_HEARTBEAT` payload 固定为 148 字节：`instance:144 | load:u32`。
+- `NODE_ASSIGNMENT_REQUEST` payload 固定为 444 字节：`family:u8 | failed_roles:u8 | reserved:u16 |
+  assignment_version:u64 | requester_instance:144 | failed_primary:144 | failed_backup:144`。`failed_roles`
   bit0/bit1 分别表示 primary/backup，未置位角色的对应实例必须全零。
-- `NODE_LINK_HELLO` payload 固定为 64 字节：`sender_instance:32 | initiator_node_id:16 |
+- `NODE_LINK_HELLO` payload 固定为 288 字节：`sender_instance:144 | initiator_node_id:128 |
   initiator_nonce:16`。出站连接在 TLS 完成或明文 TCP 已连接后立即发送；入站连接收到并校验后使用同一组 initiator
   字段回送。`initiator_node_id` 与 `initiator_nonce` 均不得全零。
-- `NAT_FORWARD_FILTER_RESPONSE` payload 固定为 83 字节：`forward_id:u64 | target_instance:32 |
+- `NAT_FORWARD_FILTER_RESPONSE` payload 固定为 195 字节：`forward_id:u64 | target_instance:144 |
   client_endpoint:19 | packet_number:u64 | token:12 | phase:u8 | reserved:3`。`target_instance` 必须等于
   接收 Node 的当前实例，`packet_number` 和 `forward_id` 均不得为零，`phase` 首期固定为 `CHANGE_IP`，
   保留字段必须为零。该消息只在已激活的 Node 间控制链路上传输；协同 Node 对 `forward_id` 做短期去重，

@@ -142,7 +142,7 @@ static bool nat_detect_hub_session_send(nat_detect_hub_session_t* session, const
 static bool nat_detect_hub_session_send_assignment(nat_detect_hub_session_t* session, uint8_t family)
 {
     utp_ntrs_assignment_t assignment;
-    uint8_t               message[UTP_NTRS_CONTROL_HEADER_SIZE + 152u];
+    uint8_t               message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
     const bool            family_valid =
         family == (uint8_t)AF_INET ? session->registration.ipv4.valid : session->registration.ipv6.valid;
     const size_t length =
@@ -286,7 +286,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
     if (type == UTP_NTRS_CONTROL_NODE_ASSIGNMENT_REQUEST) {
         utp_ntrs_assignment_request_t request;
         utp_ntrs_assignment_t         assignment;
-        uint8_t                       response[UTP_NTRS_CONTROL_HEADER_SIZE + 152u];
+        uint8_t                       response[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
         size_t                        response_length;
 
         if (!utp_ntrs_control_decode_assignment_request(message, length, &request) ||

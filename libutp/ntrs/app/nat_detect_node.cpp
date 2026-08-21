@@ -11,7 +11,6 @@
 #include <event2/event.h>
 #include <event2/util.h>
 #include <ntrs/service.h>
-#include <openssl/sha.h>
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <utils/CLI11.hpp>
@@ -92,7 +91,7 @@ static bool nat_detect_node_send_assignment_request(nat_detect_node_t* node, uin
 {
     const utp_ntrs_assignment_t* const assignment = &node->assignments[slot];
     utp_ntrs_assignment_request_t      request    = {};
-    uint8_t                            message[UTP_NTRS_CONTROL_HEADER_SIZE + 108u];
+    uint8_t                            message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
     size_t                             length;
 
     if (!node->registered || assignment->version == 0u || failed_roles == 0u) {
@@ -326,7 +325,7 @@ static bool nat_detect_node_send(nat_detect_node_t* node, const uint8_t* message
 static void nat_detect_node_on_ready(void* user_data)
 {
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
-    uint8_t                  message[UTP_NTRS_CONTROL_HEADER_SIZE + 200u];
+    uint8_t                  message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
     const size_t length = utp_ntrs_control_encode_registration(message, sizeof(message), &node->registration);
 
     if (length == 0u || !nat_detect_node_send(node, message, length)) {
@@ -500,7 +499,7 @@ static void nat_detect_node_on_heartbeat(evutil_socket_t fd, int16_t events, voi
         .instance = node->registration.instance,
         .load     = node->registration.load,
     };
-    uint8_t message[UTP_NTRS_CONTROL_HEADER_SIZE + 36u];
+    uint8_t message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
     size_t  length;
 
     (void)fd;
@@ -557,8 +556,9 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
 
     node.registration.load         = options->load;
     node.registration.heartbeat_ms = options->heartbeat_ms;
-    if (hub == NULL || node_id == NULL || node_id[0] == '\0' || workers == 0u || workers > UINT16_MAX ||
-        node.registration.heartbeat_ms == 0u || ((certificate == NULL) != (private_key == NULL)) ||
+    if (hub == NULL || node_id == NULL || node_id[0] == '\0' || strlen(node_id) > UTP_NTRS_NODE_ID_SIZE ||
+        workers == 0u || workers > UINT16_MAX || node.registration.heartbeat_ms == 0u ||
+        ((certificate == NULL) != (private_key == NULL)) ||
         (boot_id != NULL && !utp_ntrs_hex_decode(boot_id, node.registration.instance.boot_id, UTP_NTRS_BOOT_ID_SIZE)) ||
         (boot_id == NULL &&
          getrandom(node.registration.instance.boot_id, UTP_NTRS_BOOT_ID_SIZE, 0u) != (ssize_t)UTP_NTRS_BOOT_ID_SIZE) ||
@@ -573,14 +573,7 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
         udp_options.probe_endpoint.family != node.registration.ipv4.control_endpoint.family) {
         return EXIT_FAILURE;
     }
-    {
-        uint8_t digest[SHA256_DIGEST_LENGTH];
-
-        if (SHA256((const uint8_t*)node_id, strlen(node_id), digest) == NULL) {
-            return EXIT_FAILURE;
-        }
-        (void)memcpy(node.registration.instance.node_id, digest, UTP_NTRS_NODE_ID_SIZE);
-    }
+    (void)memcpy(node.registration.instance.node_id, node_id, strlen(node_id));
     node.interface_name                     = interface_name;
     node.node_name                          = node_id;
     udp_options.worker_count                = (uint16_t)workers;
@@ -722,7 +715,7 @@ int main(int argc, char** argv)
     bool        use_ipv6     = false;
 
     cli.add_option("-H,--hub", hub, "Hub endpoint")->required();
-    cli.add_option("-n,--node-id", node_id, "Stable node name")->required();
+    cli.add_option("-n,--node-id", node_id, "Stable node ID (1-128 bytes)")->required();
     cli.add_option("-p,--probe", probe, "UDP probe listen endpoint");
     cli.add_option("-q,--change-port", change_port, "UDP alternate-port listen endpoint");
     cli.add_option("-C,--control", control, "Node control listen endpoint");
