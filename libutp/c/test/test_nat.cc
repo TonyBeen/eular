@@ -51,10 +51,11 @@ struct test_nat_server_socket {
 };
 
 struct test_nat_server {
-    event_base*                            base      = nullptr;
-    std::array<test_nat_server_socket, 3u> sockets   = {};
-    std::array<event*, 3u>                 events    = {};
-    std::array<utp_address_t, 3u>          endpoints = {};
+    event_base*                            base            = nullptr;
+    std::array<test_nat_server_socket, 3u> sockets         = {};
+    std::array<event*, 3u>                 events          = {};
+    std::array<utp_address_t, 3u>          endpoints       = {};
+    utp_address_t                          mapped_endpoint = {};
 };
 
 enum : uint8_t {
@@ -139,10 +140,8 @@ static bool test_nat_server_build_response(const test_nat_server& server, const 
 
     header.packet_number = request_header.packet_number;
     header.type          = UTP_PACKET_TYPE_NAT_PROBE;
-    mapped.address[0]    = 198u;
-    mapped.address[1]    = 51u;
-    mapped.address[2]    = 100u;
-    mapped.address[3]    = 9u;
+    mapped               = server.mapped_endpoint;
+    mapped.port          = client.port;
     if (utp_wire_writer_init(&writer, response + UTP_PACKET_HEADER_SIZE,
                              UTP_NAT_PROBE_PACKET_SIZE - UTP_PACKET_HEADER_SIZE) != UTP_INTERNAL_ERROR_OK ||
         utp_wire_write_u8(&writer, UTP_NAT_PROBE_VERSION) != UTP_INTERNAL_ERROR_OK ||
@@ -227,7 +226,12 @@ static bool test_nat_server_start(test_nat_server* server, event_base* base)
 {
     const std::array<uint8_t, 3u> octets = {1u, 1u, 2u};
 
-    server->base = base;
+    server->base                       = base;
+    server->mapped_endpoint.family     = UTP_ADDRESS_FAMILY_IPV4;
+    server->mapped_endpoint.address[0] = 198u;
+    server->mapped_endpoint.address[1] = 51u;
+    server->mapped_endpoint.address[2] = 100u;
+    server->mapped_endpoint.address[3] = 9u;
     for (size_t index = 0u; index < server->sockets.size(); ++index) {
         server->sockets[index].server = server;
         server->sockets[index].fd     = test_nat_server_open_socket(octets[index], &server->endpoints[index]);
@@ -469,6 +473,40 @@ TEST_CASE("nat probe completes all phases with a responsive service", "[nat][con
     REQUIRE(callback.result.primary_rtt_ms >= 0);
     REQUIRE(callback.result.secondary_rtt_ms >= 0);
     REQUIRE(callback.result.port_sample_count == 1u);
+    utp_context_destroy(context);
+    test_nat_server_stop(&server);
+    event_base_free(event_base);
+}
+
+TEST_CASE("wildcard bound public endpoint is classified as open public", "[nat][context]")
+{
+    event_base*             event_base      = event_base_new();
+    utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
+    utp_context_t*          context         = nullptr;
+    test_nat_probe_callback callback        = {};
+    test_nat_server         server          = {};
+
+    REQUIRE(event_base != nullptr);
+    REQUIRE(test_nat_server_start(&server, event_base));
+    server.mapped_endpoint.address[0] = 127u;
+    server.mapped_endpoint.address[1] = 0u;
+    server.mapped_endpoint.address[2] = 0u;
+    server.mapped_endpoint.address[3] = 1u;
+    context_options.event_base        = event_base;
+    REQUIRE(utp_context_create(&context_options, &context) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(context, "0.0.0.0", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    probe_options.nat_service_address = "127.0.0.1";
+    probe_options.nat_service_port    = server.endpoints[TEST_NAT_SERVER_PRIMARY].port;
+    probe_options.phase_timeout_ms    = 60u;
+    REQUIRE(utp_context_probe_nat(context, &probe_options, test_nat_probe_complete, &callback) == UTP_STATUS_OK);
+    for (uint8_t index = 0u; index < 64u && callback.calls == 0u; ++index) {
+        REQUIRE(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+    }
+    REQUIRE(callback.calls == 1u);
+    REQUIRE(callback.status == UTP_STATUS_OK);
+    REQUIRE(callback.has_result);
+    REQUIRE(callback.result.nat_class == UTP_NAT_CLASS_OPEN_PUBLIC);
     utp_context_destroy(context);
     test_nat_server_stop(&server);
     event_base_free(event_base);

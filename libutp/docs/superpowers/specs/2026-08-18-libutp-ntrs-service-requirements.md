@@ -98,6 +98,9 @@ IDLE -> PROBING -> IDLE
 - 当前探测以 Context 已 bind socket 的地址族为准：绑定 IPv4 只探测 IPv4，绑定 IPv6 只探测
   IPv6。libutp 不支持双栈 bind，所有 IPv6 socket 均必须设置 `IPV6_V6ONLY=1` 并拒绝 IPv4
   数据报；调用方需要双栈时创建两个独立 Context。两个 Context 的 NAT 记录彼此独立。
+- 示例客户端 `ntrsc -6` 强制从 NAT 服务域名选择 AAAA 记录并绑定 `::`；默认仅选择 A 记录并绑定
+  `0.0.0.0`。NTRS Node 的 IPv6 UDP 探测使用独立 IPv6-only socket，Hub、Node 的控制连接、
+  `probe`、`change_port`、`control` endpoint 必须同族。
 - NAT 记录过期后不得继续用于打洞方向早失败、候选优先级或端口预测；使用过期记录时等价于 `UNKNOWN`。
 
 NAT 服务内部可使用协调器向多个探测节点下发计划，Context 只参与 UTP 承载的 NAT 探测并接收结果。Context 不向打洞服务提交探测原始观测，也不伪造 NAT 分类过程。
@@ -225,9 +228,10 @@ t = T       : 阶段结束
 - 主、辅映射一致且各阶段内只有一个映射时，映射行为为 endpoint-independent；不同目标映射
   不同则为对端相关映射；同阶段出现多个映射，或两个公网 IP 不同，归类
   `SYMMETRIC_MULTI_LINE`。
-- 映射稳定时，`CHANGE_PORT` 和 `CHANGE_IP` 均成功为 `FULL_CONE`；仅换端口成功为
+- 映射稳定且不等于本机实际本地地址时，`CHANGE_PORT` 和 `CHANGE_IP` 均成功为 `FULL_CONE`；仅换端口成功为
   `IP_RESTRICTED`；两个过滤阶段均无成功证据为 `PORT_RESTRICTED`。映射对端相关或不稳定
-  为 `SYMMETRIC`。本地地址与映射完全一致且映射稳定时为 `OPEN_PUBLIC`。
+  为 `SYMMETRIC`。本地地址与映射完全一致且映射稳定时为 `OPEN_PUBLIC`。显式绑定具体 IP 时使用该
+  bind 地址；绑定 `0.0.0.0` 或 `::` 时，使用首个合法 `PROBE1` 响应 pktinfo 提供的实际本地目的地址。
 
 IPv6 不得套用 IPv4 NAT44 分类。首期仅记录该地址族 UDP 是否可达，以及可选的换端口、换
 IP 过滤证据；对外可将可达结果表示为 `OPEN_PUBLIC`、受过滤结果表示为

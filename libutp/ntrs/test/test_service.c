@@ -593,6 +593,23 @@ static uint16_t test_allocate_loopback_port(void) {
   return ntohs(address.sin_port);
 }
 
+static uint16_t test_allocate_ipv6_loopback_port(void) {
+  struct sockaddr_in6 address = {
+      .sin6_family = AF_INET6,
+      .sin6_addr = IN6ADDR_LOOPBACK_INIT,
+  };
+  socklen_t address_length = (socklen_t)sizeof(address);
+  const int32_t socket_fd = socket(AF_INET6, SOCK_DGRAM, 0);
+
+  assert(socket_fd >= 0);
+  assert(bind(socket_fd, (const struct sockaddr *)&address, address_length) ==
+         0);
+  assert(getsockname(socket_fd, (struct sockaddr *)&address, &address_length) ==
+         0);
+  assert(close(socket_fd) == 0);
+  return ntohs(address.sin6_port);
+}
+
 static void test_udp_worker_round_trip(void) {
   const uint16_t probe_port = test_allocate_loopback_port();
   const uint16_t change_port = test_allocate_loopback_port();
@@ -626,6 +643,45 @@ static void test_udp_worker_round_trip(void) {
   assert(sendto(client_fd, request, sizeof(request), 0,
                 (const struct sockaddr *)&destination,
                 sizeof(destination)) == (ssize_t)sizeof(request));
+  poll_fd = (struct pollfd){
+      .fd = client_fd,
+      .events = POLLIN,
+  };
+  assert(poll(&poll_fd, 1u, 1000) == 1);
+  assert(recvfrom(client_fd, response, sizeof(response), 0, NULL, NULL) > 0);
+  assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 2u);
+  utp_ntrs_udp_server_stop(server);
+  assert(close(client_fd) == 0);
+}
+
+static void test_udp_worker_ipv6_round_trip(void) {
+  const uint16_t probe_port = test_allocate_ipv6_loopback_port();
+  const uint16_t change_port = test_allocate_ipv6_loopback_port();
+  utp_ntrs_udp_server_options_t options = {
+      .probe_endpoint = test_endpoint((uint8_t)AF_INET6, probe_port, 1u),
+      .change_port_endpoint =
+          test_endpoint((uint8_t)AF_INET6, change_port, 1u),
+  };
+  const struct sockaddr_in6 destination = {
+      .sin6_family = AF_INET6,
+      .sin6_port = htons(probe_port),
+      .sin6_addr = IN6ADDR_LOOPBACK_INIT,
+  };
+  struct pollfd poll_fd;
+  uint8_t request[128] = {0};
+  uint8_t response[128] = {0};
+  const int32_t client_fd = socket(AF_INET6, SOCK_DGRAM, 0);
+  utp_ntrs_udp_server_t *server;
+
+  options.probe_endpoint.address[15] = 1u;
+  options.change_port_endpoint.address[15] = 1u;
+  server = utp_ntrs_udp_server_start(&options);
+  assert(server != NULL);
+  assert(client_fd >= 0);
+  test_probe_request(request, 337u, 1u, 1u);
+  assert(sendto(client_fd, request, sizeof(request), 0,
+                (const struct sockaddr *)&destination,
+                (socklen_t)sizeof(destination)) == (ssize_t)sizeof(request));
   poll_fd = (struct pollfd){
       .fd = client_fd,
       .events = POLLIN,
@@ -954,6 +1010,7 @@ int main(void) {
   test_link_deduplication();
   test_udp_probe_handler();
   test_udp_worker_round_trip();
+  test_udp_worker_ipv6_round_trip();
   test_udp_worker_change_port();
   test_udp_worker_source_rate_limit();
   test_udp_worker_source_rate_refill();

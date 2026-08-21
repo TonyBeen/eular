@@ -68,6 +68,7 @@ typedef struct utp_nat_probe_response {
 typedef struct utp_nat_probe_task {
     utp_address_t          primary_endpoint;                      // 本次调用解析得到的主 NAT endpoint
     utp_address_t          alternate_endpoint;                    // PROBE1 响应下发的辅助 endpoint
+    utp_address_t          primary_local;                         // 首个合法 PROBE1 响应实际送达的本地地址
     utp_nat_probe_result_t result;                                // 回调前构造的结果快照
     utp_on_nat_probe_fn    callback;                              // 用户完成回调
     void*                  user_data;                             // 用户回调数据
@@ -91,6 +92,7 @@ typedef struct utp_nat_probe_task {
     bool                   change_ip_succeeded : 1;               // 异 IP 过滤成功
     bool                   primary_mapping_changed : 1;           // 主探测阶段出现不同映射
     bool                   secondary_mapping_changed : 1;         // 辅探测阶段出现不同映射
+    bool                   primary_local_valid : 1;               // primary_local 是否来自有效 pktinfo
     bool                   write_pending : 1;                     // 当前轮次等待 UDP 可写后续发
 } utp_nat_probe_task_t;
 

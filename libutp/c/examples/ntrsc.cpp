@@ -267,32 +267,32 @@ static bool ntrsc_address_is_ipv6(const char* address)
     return inet_pton(AF_INET6, address, &parsed) == 1;
 }
 
-/** @brief 将 NAT 服务主机名解析为一个数字 IP；双栈名称优先使用 IPv4。 */
-static bool ntrsc_resolve_nat_address(const char* input, char output[INET6_ADDRSTRLEN])
+/** @brief 将 NAT 服务主机名解析为指定地址族的数字 IP。 */
+static bool ntrsc_resolve_nat_address(const char* input, int32_t family, char output[INET6_ADDRSTRLEN])
 {
     struct evutil_addrinfo  hints     = {};
     struct evutil_addrinfo* addresses = NULL;
     struct evutil_addrinfo* current;
 
-    hints.ai_family   = AF_UNSPEC;
+    hints.ai_family   = family;
     hints.ai_socktype = SOCK_DGRAM;
     if (evutil_getaddrinfo(input, NULL, &hints, &addresses) != 0) {
         return false;
     }
     for (current = addresses; current != NULL; current = current->ai_next) {
-        if (current->ai_family == AF_INET &&
+        if (family == AF_INET && current->ai_family == AF_INET &&
             inet_ntop(AF_INET, &((const struct sockaddr_in*)current->ai_addr)->sin_addr, output, INET6_ADDRSTRLEN) !=
                 NULL) {
             evutil_freeaddrinfo(addresses);
             return true;
         }
-    }
-    for (current = addresses; current != NULL; current = current->ai_next) {
-        if (current->ai_family == AF_INET6 &&
-            inet_ntop(AF_INET6, &((const struct sockaddr_in6*)current->ai_addr)->sin6_addr, output, INET6_ADDRSTRLEN) !=
-                NULL) {
-            evutil_freeaddrinfo(addresses);
-            return true;
+        if (family == AF_INET6 && current->ai_family == AF_INET6) {
+            const struct in6_addr* address = &((const struct sockaddr_in6*)current->ai_addr)->sin6_addr;
+
+            if (!IN6_IS_ADDR_V4MAPPED(address) && inet_ntop(AF_INET6, address, output, INET6_ADDRSTRLEN) != NULL) {
+                evutil_freeaddrinfo(addresses);
+                return true;
+            }
         }
     }
     evutil_freeaddrinfo(addresses);
@@ -300,7 +300,7 @@ static bool ntrsc_resolve_nat_address(const char* input, char output[INET6_ADDRS
 }
 
 static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char* bind_address, uint16_t bind_port,
-                         const char* interface_name, uint32_t phase_timeout_ms, bool verbose)
+                         const char* interface_name, uint32_t phase_timeout_ms, bool verbose, bool use_ipv6)
 {
     ntrsc_app_t             app             = {};
     utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
@@ -324,12 +324,17 @@ static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char*
     }
     winsock_started = true;
 #endif
-    if (!ntrsc_resolve_nat_address(nat_address, nat_numeric_address)) {
-        (void)fprintf(stderr, "ntrsc event=nat_address_resolve_failed address=%s\n", nat_address);
+    if (!ntrsc_resolve_nat_address(nat_address, use_ipv6 ? AF_INET6 : AF_INET, nat_numeric_address)) {
+        (void)fprintf(stderr, "ntrsc event=nat_address_resolve_failed address=%s family=%s\n", nat_address,
+                      use_ipv6 ? "ipv6" : "ipv4");
         goto cleanup;
     }
     if (bind_address == NULL) {
-        bind_address = ntrsc_address_is_ipv6(nat_numeric_address) ? "::" : "0.0.0.0";
+        bind_address = use_ipv6 ? "::" : "0.0.0.0";
+    } else if (ntrsc_address_is_ipv6(bind_address) != use_ipv6) {
+        (void)fprintf(stderr, "ntrsc event=bind_address_family_mismatch address=%s family=%s\n", bind_address,
+                      use_ipv6 ? "ipv6" : "ipv4");
+        goto cleanup;
     }
     app.exit_code = EXIT_FAILURE;
     app.base      = event_base_new();
@@ -407,6 +412,7 @@ int main(int argc, char** argv)
     std::string interface_name;
     uint32_t    phase_timeout_ms = 0u;
     bool        verbose          = false;
+    bool        use_ipv6         = false;
 
     cli.add_option("-a,--nat-address", nat_address, "NAT Node probe hostname or IP")->required();
     cli.add_option("-p,--nat-port", nat_port, "NAT Node probe UDP port")->required();
@@ -414,9 +420,10 @@ int main(int argc, char** argv)
     cli.add_option("-P,--bind-port", bind_port, "Local bind UDP port");
     cli.add_option("-i,--interface", interface_name, "Bind UDP socket to this interface");
     cli.add_option("-t,--phase-timeout-ms", phase_timeout_ms, "Per-phase timeout in milliseconds");
+    cli.add_flag("-6", use_ipv6, "Use IPv6 only and resolve the NAT service with AAAA records");
     cli.add_flag("-v", verbose, "Print the complete NAT probe process");
     CLI11_PARSE(cli, argc, argv);
 
     return ntrsc_run(nat_address.c_str(), nat_port, bind_address.empty() ? NULL : bind_address.c_str(), bind_port,
-                     interface_name.empty() ? NULL : interface_name.c_str(), phase_timeout_ms, verbose);
+                     interface_name.empty() ? NULL : interface_name.c_str(), phase_timeout_ms, verbose, use_ipv6);
 }
