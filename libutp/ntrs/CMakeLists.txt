@@ -80,7 +80,7 @@ elseif(MSVC)
 endif()
 
 if(UTP_NTRS_BUILD_SERVICES)
-    add_executable(nat_detect_hub app/nat_detect_hub.c)
+    add_executable(nat_detect_hub app/nat_detect_hub.cpp app/app_log.c)
     target_link_libraries(nat_detect_hub PRIVATE
         utp_ntrs_service_core
         utp_ntrs_service_runtime
@@ -89,14 +89,17 @@ if(UTP_NTRS_BUILD_SERVICES)
         crypto
         -Wl,--end-group)
     target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_compile_features(nat_detect_hub PRIVATE cxx_std_20)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_hub PRIVATE
-            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
+        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
     elseif(MSVC)
         target_compile_options(nat_detect_hub PRIVATE /utf-8 /W4 /WX)
     endif()
 
-    add_executable(nat_detect_node app/nat_detect_node.c)
+    add_executable(nat_detect_node app/nat_detect_node.cpp app/app_log.c)
     target_link_libraries(nat_detect_node PRIVATE
         utp_ntrs_service_runtime
         -Wl,--start-group
@@ -108,10 +111,13 @@ if(UTP_NTRS_BUILD_SERVICES)
     add_dependencies(nat_detect_node utp_ntrs_node_udp utp_ntrs_service_core)
     target_include_directories(nat_detect_node PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_compile_features(nat_detect_node PRIVATE cxx_std_20)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_node PRIVATE
-            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
+        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
     elseif(MSVC)
         target_compile_options(nat_detect_node PRIVATE /utf-8 /W4 /WX)
     endif()

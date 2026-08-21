@@ -8,7 +8,7 @@ set(UTP_C_EXAMPLES
 
 add_executable(utp_c_echo_server echo_server.c)
 add_executable(utp_c_echo_client echo_client.c)
-add_executable(ntrsc ntrsc.c)
+add_executable(ntrsc ntrsc.cpp)
 
 foreach(example_target IN LISTS UTP_C_EXAMPLES)
     target_link_libraries(${example_target} PRIVATE utp_c event_core Threads::Threads)
@@ -19,9 +19,20 @@ foreach(example_target IN LISTS UTP_C_EXAMPLES)
         target_link_options(${example_target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
     endif()
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
-            -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
+        if(example_target STREQUAL "ntrsc")
+            target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
+                -Wformat=2)
+            # C 日志桥接到 C++ 时需要透传受控的可变格式串。
+            set_source_files_properties(ntrsc.cpp PROPERTIES
+                COMPILE_OPTIONS "-Wno-format-nonliteral")
+        else()
+            target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
+                -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
+        endif()
     elseif(MSVC)
         target_compile_options(${example_target} PRIVATE /W4 /WX)
     endif()
 endforeach()
+
+target_include_directories(ntrsc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
+target_compile_features(ntrsc PRIVATE cxx_std_11)

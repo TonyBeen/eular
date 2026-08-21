@@ -1,4 +1,7 @@
-#include <errno.h>
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include <inttypes.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -7,15 +10,92 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <chrono>
+#include <cinttypes>
+#include <cstdarg>
+#include <string>
+
 #if defined(_WIN32)
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <netdb.h>
+
 #include <arpa/inet.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#elif defined(__linux__)
+#include <unistd.h>
+
+#include <sys/syscall.h>
+#endif
 #endif
 
 #include <event2/event.h>
+#include <event2/util.h>
+#include <utils/CLI11.hpp>
 #include <utp/utp.h>
+
+static uint64_t ntrsc_kernel_thread_id()
+{
+#if defined(_WIN32)
+    return static_cast<uint64_t>(GetCurrentThreadId());
+#elif defined(__APPLE__)
+    uint64_t thread_id = 0u;
+
+    (void)pthread_threadid_np(nullptr, &thread_id);
+    return thread_id;
+#elif defined(__linux__)
+    return static_cast<uint64_t>(syscall(SYS_gettid));
+#else
+    return 0u;
+#endif
+}
+
+static int32_t ntrsc_log_printf(FILE* stream, const char* source, int32_t line, const char* format, ...)
+{
+    char        message[1024];
+    std::string content;
+    va_list     arguments;
+    const auto  now     = std::chrono::system_clock::now();
+    const auto  seconds = std::chrono::system_clock::to_time_t(now);
+    const auto  milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    std::tm     local_time = {};
+    const char* level      = "I";
+    const char* file_name;
+    int32_t     written;
+
+    va_start(arguments, format);
+    written = std::vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    if (written < 0) return written;
+    message[std::strcspn(message, "\r\n")] = '\0';
+    content                                = message;
+    if (content.compare(0u, 12u, "ntrsc event=") == 0) content.erase(0u, 12u);
+    if (content.find("level=debug") != std::string::npos)
+        level = "D";
+    else if (content.find("level=warning") != std::string::npos)
+        level = "W";
+    else if (content.find("level=error") != std::string::npos || content.find("failed") != std::string::npos)
+        level = "E";
+    const std::string::size_type message_offset = content.find("message=");
+    if (message_offset != std::string::npos) content.erase(0u, message_offset + 8u);
+#if defined(_WIN32)
+    (void)localtime_s(&local_time, &seconds);
+#else
+    (void)localtime_r(&seconds, &local_time);
+#endif
+    file_name = std::strrchr(source, '/');
+    return static_cast<int32_t>(std::fprintf(
+        stream, "%04d-%02d-%02d %02d:%02d:%02d.%03lld %5" PRIu64 " %s ntrsc: %s    %s:%" PRId32 "\n",
+        local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday, local_time.tm_hour, local_time.tm_min,
+        local_time.tm_sec, static_cast<long long>(milliseconds), ntrsc_kernel_thread_id(), level, content.c_str(),
+        file_name == nullptr ? source : file_name + 1, line));
+}
+
+#define fprintf(stream, ...) ntrsc_log_printf(stream, __FILE__, __LINE__, __VA_ARGS__)
 
 typedef struct ntrsc_app {
     struct event_base* base;  // 调用方持有的 libevent loop
@@ -27,81 +107,6 @@ typedef struct ntrsc_app {
     bool           completed;  // 是否收到 NAT 探测完成回调
     int32_t        exit_code;  // 进程最终退出码
 } ntrsc_app_t;
-
-static void ntrsc_usage(const char* program)
-{
-    (void)fprintf(stderr,
-                  "Usage: %s --nat-address IP --nat-port PORT [--bind-address IP] [--bind-port PORT]\n"
-                  "          [--interface NAME] [--phase-timeout-ms MS] [--log-level LEVEL]\n"
-                  "\n"
-                  "  --nat-address IP       NAT Node probe endpoint literal IP (required)\n"
-                  "  --nat-port PORT        NAT Node probe UDP port (required)\n"
-                  "  --bind-address IP      Local bind IP; defaults to 0.0.0.0 or :: by NAT address family\n"
-                  "  --bind-port PORT       Local UDP port; defaults to 0\n"
-                  "  --interface NAME       Bind the UDP socket to a network interface\n"
-                  "  --phase-timeout-ms MS  Per-phase probe timeout; defaults to 3000\n"
-                  "  --log-level LEVEL      debug, info, warning, error, or silence (default)\n",
-                  program);
-}
-
-static bool ntrsc_parse_u16(const char* text, uint16_t* out_value)
-{
-    char*         end = NULL;
-    unsigned long value;
-
-    if (text == NULL || out_value == NULL || *text == '\0') {
-        return false;
-    }
-    errno = 0;
-    value = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value > UINT16_MAX) {
-        return false;
-    }
-    *out_value = (uint16_t)value;
-    return true;
-}
-
-static bool ntrsc_parse_u32(const char* text, uint32_t* out_value)
-{
-    char*              end = NULL;
-    unsigned long long value;
-
-    if (text == NULL || out_value == NULL || *text == '\0') {
-        return false;
-    }
-    errno = 0;
-    value = strtoull(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value > UINT32_MAX) {
-        return false;
-    }
-    *out_value = (uint32_t)value;
-    return true;
-}
-
-static bool ntrsc_parse_log_level(const char* text, utp_log_level_t* out_level)
-{
-    if (strcmp(text, "debug") == 0) {
-        *out_level = UTP_LOG_LEVEL_DEBUG;
-        return true;
-    }
-    if (strcmp(text, "info") == 0) {
-        *out_level = UTP_LOG_LEVEL_INFO;
-        return true;
-    }
-    if (strcmp(text, "warning") == 0) {
-        *out_level = UTP_LOG_LEVEL_WARNING;
-        return true;
-    }
-    if (strcmp(text, "error") == 0) {
-        *out_level = UTP_LOG_LEVEL_ERROR;
-        return true;
-    }
-    if (strcmp(text, "silence") == 0) {
-        *out_level = UTP_LOG_LEVEL_SILENCE;
-        return true;
-    }
-    return false;
-}
 
 static const char* ntrsc_log_level_name(utp_log_level_t level)
 {
@@ -187,22 +192,30 @@ static const char* ntrsc_endpoint_format(const utp_endpoint_t* endpoint, char ou
 
 static void ntrsc_print_port_samples(const utp_nat_probe_result_t* result)
 {
+    char    values[UTP_NAT_PORT_SAMPLE_CAPACITY * 6u + 1u] = {0};
+    size_t  offset                                         = 0u;
     uint8_t index;
 
-    (void)fputs("ntrsc event=port_samples values=", stdout);
     if (result->port_sample_count == 0u) {
-        (void)fputs("none", stdout);
+        (void)fprintf(stdout, "port samples: none\n");
+        return;
     }
     for (index = 0u; index < result->port_sample_count; ++index) {
-        (void)fprintf(stdout, "%s%" PRIu16, index == 0u ? "" : ",", result->port_samples[index]);
+        const int32_t written = snprintf(values + offset, sizeof(values) - offset, "%s%" PRIu16, index == 0u ? "" : ",",
+                                         result->port_samples[index]);
+
+        if (written < 0 || (size_t)written >= sizeof(values) - offset) {
+            return;
+        }
+        offset += (size_t)written;
     }
-    (void)fputc('\n', stdout);
+    (void)fprintf(stdout, "port samples: %s\n", values);
 }
 
 static void ntrsc_on_probe_complete(utp_context_t* context, utp_status_t status, const utp_nat_probe_result_t* result,
                                     void* user_data)
 {
-    ntrsc_app_t* app = user_data;
+    ntrsc_app_t* app = static_cast<ntrsc_app_t*>(user_data);
 
     (void)context;
     app->completed = true;
@@ -234,7 +247,7 @@ static void ntrsc_on_probe_complete(utp_context_t* context, utp_status_t status,
 #if !defined(_WIN32)
 static void ntrsc_on_signal(evutil_socket_t fd, int16_t events, void* user_data)
 {
-    ntrsc_app_t* app = user_data;
+    ntrsc_app_t* app = static_cast<ntrsc_app_t*>(user_data);
 
     (void)fd;
     (void)events;
@@ -254,72 +267,56 @@ static bool ntrsc_address_is_ipv6(const char* address)
     return inet_pton(AF_INET6, address, &parsed) == 1;
 }
 
-int main(int argc, char** argv)
+/** @brief 将 NAT 服务主机名解析为一个数字 IP；双栈名称优先使用 IPv4。 */
+static bool ntrsc_resolve_nat_address(const char* input, char output[INET6_ADDRSTRLEN])
 {
-    ntrsc_app_t             app             = {0};
+    struct evutil_addrinfo  hints     = {};
+    struct evutil_addrinfo* addresses = NULL;
+    struct evutil_addrinfo* current;
+
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (evutil_getaddrinfo(input, NULL, &hints, &addresses) != 0) {
+        return false;
+    }
+    for (current = addresses; current != NULL; current = current->ai_next) {
+        if (current->ai_family == AF_INET &&
+            inet_ntop(AF_INET, &((const struct sockaddr_in*)current->ai_addr)->sin_addr, output, INET6_ADDRSTRLEN) !=
+                NULL) {
+            evutil_freeaddrinfo(addresses);
+            return true;
+        }
+    }
+    for (current = addresses; current != NULL; current = current->ai_next) {
+        if (current->ai_family == AF_INET6 &&
+            inet_ntop(AF_INET6, &((const struct sockaddr_in6*)current->ai_addr)->sin6_addr, output, INET6_ADDRSTRLEN) !=
+                NULL) {
+            evutil_freeaddrinfo(addresses);
+            return true;
+        }
+    }
+    evutil_freeaddrinfo(addresses);
+    return false;
+}
+
+static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char* bind_address, uint16_t bind_port,
+                         const char* interface_name, uint32_t phase_timeout_ms, bool verbose)
+{
+    ntrsc_app_t             app             = {};
     utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
     utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
-    const char*             nat_address     = NULL;
-    const char*             bind_address    = NULL;
-    const char*             interface_name  = NULL;
-    uint16_t                nat_port        = 0u;
-    uint16_t                bind_port       = 0u;
-    uint16_t                local_port      = 0u;
-    utp_log_level_t         log_level       = UTP_LOG_LEVEL_SILENCE;
-    int32_t                 index;
+    char                    nat_numeric_address[INET6_ADDRSTRLEN];
+    uint16_t                local_port = 0u;
     utp_status_t            status;
 #if defined(_WIN32)
     WSADATA winsock_data;
     bool    winsock_started = false;
 #endif
 
-    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
-        ntrsc_usage(argv[0]);
-        return EXIT_SUCCESS;
-    }
-    for (index = 1; index < argc; index += 2) {
-        if (index + 1 >= argc) {
-            ntrsc_usage(argv[0]);
-            return EXIT_FAILURE;
-        }
-        if (strcmp(argv[index], "--nat-address") == 0) {
-            nat_address = argv[index + 1];
-        } else if (strcmp(argv[index], "--nat-port") == 0) {
-            if (!ntrsc_parse_u16(argv[index + 1], &nat_port) || nat_port == 0u) {
-                ntrsc_usage(argv[0]);
-                return EXIT_FAILURE;
-            }
-        } else if (strcmp(argv[index], "--bind-address") == 0) {
-            bind_address = argv[index + 1];
-        } else if (strcmp(argv[index], "--bind-port") == 0) {
-            if (!ntrsc_parse_u16(argv[index + 1], &bind_port)) {
-                ntrsc_usage(argv[0]);
-                return EXIT_FAILURE;
-            }
-        } else if (strcmp(argv[index], "--interface") == 0) {
-            interface_name = argv[index + 1];
-        } else if (strcmp(argv[index], "--phase-timeout-ms") == 0) {
-            if (!ntrsc_parse_u32(argv[index + 1], &probe_options.phase_timeout_ms)) {
-                ntrsc_usage(argv[0]);
-                return EXIT_FAILURE;
-            }
-        } else if (strcmp(argv[index], "--log-level") == 0) {
-            if (!ntrsc_parse_log_level(argv[index + 1], &log_level)) {
-                ntrsc_usage(argv[0]);
-                return EXIT_FAILURE;
-            }
-        } else {
-            ntrsc_usage(argv[0]);
-            return EXIT_FAILURE;
-        }
-    }
     if (nat_address == NULL || nat_port == 0u) {
-        ntrsc_usage(argv[0]);
         return EXIT_FAILURE;
     }
-    if (bind_address == NULL) {
-        bind_address = ntrsc_address_is_ipv6(nat_address) ? "::" : "0.0.0.0";
-    }
+    probe_options.phase_timeout_ms = phase_timeout_ms;
 #if defined(_WIN32)
     if (WSAStartup(MAKEWORD(2, 2), &winsock_data) != 0) {
         (void)fprintf(stderr, "ntrsc event=winsock_start_failed\n");
@@ -327,6 +324,13 @@ int main(int argc, char** argv)
     }
     winsock_started = true;
 #endif
+    if (!ntrsc_resolve_nat_address(nat_address, nat_numeric_address)) {
+        (void)fprintf(stderr, "ntrsc event=nat_address_resolve_failed address=%s\n", nat_address);
+        goto cleanup;
+    }
+    if (bind_address == NULL) {
+        bind_address = ntrsc_address_is_ipv6(nat_numeric_address) ? "::" : "0.0.0.0";
+    }
     app.exit_code = EXIT_FAILURE;
     app.base      = event_base_new();
     if (app.base == NULL) {
@@ -334,8 +338,8 @@ int main(int argc, char** argv)
         goto cleanup;
     }
     context_options.event_base = app.base;
-    context_options.log_sink   = log_level == UTP_LOG_LEVEL_SILENCE ? NULL : ntrsc_log_sink;
-    context_options.log_level  = log_level;
+    context_options.log_sink   = verbose ? ntrsc_log_sink : NULL;
+    context_options.log_level  = verbose ? UTP_LOG_LEVEL_DEBUG : UTP_LOG_LEVEL_SILENCE;
     status                     = utp_context_create(&context_options, &app.context);
     if (status != UTP_STATUS_OK) {
         (void)fprintf(stderr, "ntrsc event=context_create_failed status=%s\n", utp_status_string(status));
@@ -347,7 +351,7 @@ int main(int argc, char** argv)
                       bind_port, utp_status_string(status));
         goto cleanup;
     }
-    probe_options.nat_service_address = nat_address;
+    probe_options.nat_service_address = nat_numeric_address;
     probe_options.nat_service_port    = nat_port;
 #if !defined(_WIN32)
     app.signal_int  = evsignal_new(app.base, SIGINT, ntrsc_on_signal, &app);
@@ -364,9 +368,10 @@ int main(int argc, char** argv)
         goto cleanup;
     }
     (void)fprintf(stdout,
-                  "ntrsc event=probe_started bind_address=%s bind_port=%" PRIu16 " nat_address=%s nat_port=%" PRIu16
-                  " phase_timeout_ms=%" PRIu32 "\n",
-                  bind_address, local_port, nat_address, nat_port, probe_options.phase_timeout_ms);
+                  "ntrsc event=probe_started bind_address=%s bind_port=%" PRIu16
+                  " nat_address=%s resolved_address=%s nat_port=%" PRIu16 " phase_timeout_ms=%" PRIu32 "\n",
+                  bind_address, local_port, nat_address, nat_numeric_address, nat_port,
+                  probe_options.phase_timeout_ms == 0u ? 3000u : probe_options.phase_timeout_ms);
     (void)event_base_dispatch(app.base);
 
 cleanup:
@@ -390,4 +395,28 @@ cleanup:
     }
 #endif
     return app.exit_code;
+}
+
+int main(int argc, char** argv)
+{
+    CLI::App    cli{"libutp NAT detection client"};
+    std::string nat_address;
+    uint16_t    nat_port = 0u;
+    std::string bind_address;
+    uint16_t    bind_port = 0u;
+    std::string interface_name;
+    uint32_t    phase_timeout_ms = 0u;
+    bool        verbose          = false;
+
+    cli.add_option("-a,--nat-address", nat_address, "NAT Node probe hostname or IP")->required();
+    cli.add_option("-p,--nat-port", nat_port, "NAT Node probe UDP port")->required();
+    cli.add_option("-b,--bind-address", bind_address, "Local bind IP");
+    cli.add_option("-P,--bind-port", bind_port, "Local bind UDP port");
+    cli.add_option("-i,--interface", interface_name, "Bind UDP socket to this interface");
+    cli.add_option("-t,--phase-timeout-ms", phase_timeout_ms, "Per-phase timeout in milliseconds");
+    cli.add_flag("-v", verbose, "Print the complete NAT probe process");
+    CLI11_PARSE(cli, argc, argv);
+
+    return ntrsc_run(nat_address.c_str(), nat_port, bind_address.empty() ? NULL : bind_address.c_str(), bind_port,
+                     interface_name.empty() ? NULL : interface_name.c_str(), phase_timeout_ms, verbose);
 }

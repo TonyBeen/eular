@@ -625,6 +625,8 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
         uint8_t                     response[UTP_NTRS_NAT_PACKET_SIZE];
         utp_ntrs_endpoint_t         client_endpoint;
         utp_ntrs_endpoint_t         alternate_endpoint;
+        utp_ntrs_endpoint_t         public_probe_endpoint;
+        utp_ntrs_endpoint_t         public_change_port_endpoint;
         utp_ntrs_node_instance_t    primary_instance;
         utp_ntrs_probe_request_t    decoded;
         utp_ntrs_udp_reply_socket_t reply_socket;
@@ -649,8 +651,10 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
             continue;
         }
         (void)pthread_rwlock_rdlock(&worker->server->alternate_lock);
-        alternate_endpoint = worker->options.alternate_probe_endpoint;
-        primary_instance   = worker->options.primary_instance;
+        alternate_endpoint           = worker->options.alternate_probe_endpoint;
+        public_probe_endpoint        = worker->options.public_probe_endpoint;
+        public_change_port_endpoint  = worker->options.public_change_port_endpoint;
+        primary_instance             = worker->options.primary_instance;
         (void)pthread_rwlock_unlock(&worker->server->alternate_lock);
         if (!utp_ntrs_endpoint_from_sockaddr(&client_endpoint, (const struct sockaddr*)&client_address,
                                              message.msg_namelen) ||
@@ -677,7 +681,7 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
             continue;
         }
         if (!utp_ntrs_udp_handle_probe_request(request, (size_t)received, &client_endpoint,
-                                               &worker->options.probe_endpoint, &worker->options.change_port_endpoint,
+                                               &public_probe_endpoint, &public_change_port_endpoint,
                                                &alternate_endpoint, response, sizeof(response), &response_length,
                                                &reply_socket)) {
             continue;
@@ -813,6 +817,12 @@ utp_ntrs_udp_server_t* utp_ntrs_udp_server_start(const utp_ntrs_udp_server_optio
             .probe_fd       = -1,
             .change_port_fd = -1,
         };
+        if (worker->options.public_probe_endpoint.family == 0u) {
+            worker->options.public_probe_endpoint = worker->options.probe_endpoint;
+        }
+        if (worker->options.public_change_port_endpoint.family == 0u) {
+            worker->options.public_change_port_endpoint = worker->options.change_port_endpoint;
+        }
         worker->base           = event_base_new();
         worker->affinities     = calloc(UTP_NTRS_AFFINITY_CAPACITY, sizeof(*worker->affinities));
         worker->probe_fd       = utp_ntrs_udp_create_socket(&options->probe_endpoint, options->interface_name);
@@ -907,19 +917,44 @@ void utp_ntrs_udp_server_set_primary(utp_ntrs_udp_server_t* server, const utp_nt
     (void)pthread_rwlock_unlock(&server->alternate_lock);
 }
 
+void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server,
+                                              const utp_ntrs_endpoint_t* probe_endpoint,
+                                              const utp_ntrs_endpoint_t* change_port_endpoint)
+{
+    uint16_t index;
+
+    if (server == NULL || probe_endpoint == NULL || change_port_endpoint == NULL ||
+        probe_endpoint->family != change_port_endpoint->family || probe_endpoint->port == 0u ||
+        change_port_endpoint->port == 0u || probe_endpoint->port == change_port_endpoint->port ||
+        !utp_ntrs_endpoint_same_ip(probe_endpoint, change_port_endpoint)) {
+        return;
+    }
+    (void)pthread_rwlock_wrlock(&server->alternate_lock);
+    for (index = 0u; index < server->worker_count; ++index) {
+        server->workers[index].options.public_probe_endpoint       = *probe_endpoint;
+        server->workers[index].options.public_change_port_endpoint = *change_port_endpoint;
+    }
+    (void)pthread_rwlock_unlock(&server->alternate_lock);
+}
+
 bool utp_ntrs_udp_server_send_filter_response(utp_ntrs_udp_server_t*                    server,
                                               const utp_ntrs_forward_filter_response_t* forward)
 {
     struct sockaddr_storage client_address;
     socklen_t               client_length;
     uint8_t                 response[UTP_NTRS_NAT_PACKET_SIZE];
+    utp_ntrs_endpoint_t     public_probe_endpoint;
     size_t                  response_length;
 
-    if (server == NULL || forward == NULL || server->worker_count == 0u ||
-        forward->client.family != server->workers[0].options.probe_endpoint.family ||
+    if (server == NULL || forward == NULL || server->worker_count == 0u) {
+        return false;
+    }
+    (void)pthread_rwlock_rdlock(&server->alternate_lock);
+    public_probe_endpoint = server->workers[0].options.public_probe_endpoint;
+    (void)pthread_rwlock_unlock(&server->alternate_lock);
+    if (forward->client.family != public_probe_endpoint.family ||
         !utp_ntrs_endpoint_to_sockaddr(&forward->client, &client_address, &client_length) ||
-        !utp_ntrs_build_filter_response(forward, &server->workers[0].options.probe_endpoint, response,
-                                        &response_length)) {
+        !utp_ntrs_build_filter_response(forward, &public_probe_endpoint, response, &response_length)) {
         return false;
     }
     return sendto(server->workers[0].probe_fd, response, response_length, 0, (const struct sockaddr*)&client_address,

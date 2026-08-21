@@ -6,6 +6,7 @@
 #define UTP_NTRS_ENDPOINT_WIRE_SIZE 19u
 #define UTP_NTRS_FAMILY_WIRE_SIZE 80u
 #define UTP_NTRS_REGISTRATION_PAYLOAD_SIZE 200u
+#define UTP_NTRS_REGISTRATION_OK_PAYLOAD_SIZE UTP_NTRS_ENDPOINT_WIRE_SIZE
 #define UTP_NTRS_ASSIGNMENT_PAYLOAD_SIZE 152u
 #define UTP_NTRS_HEARTBEAT_PAYLOAD_SIZE 36u
 #define UTP_NTRS_ASSIGNMENT_REQUEST_PAYLOAD_SIZE 108u
@@ -247,6 +248,39 @@ bool utp_ntrs_control_decode_registration(
          utp_ntrs_decode_family(payload + 40u + UTP_NTRS_FAMILY_WIRE_SIZE,
                                 &registration->ipv6) &&
          (registration->ipv4.valid || registration->ipv6.valid);
+}
+
+size_t utp_ntrs_control_encode_registration_ok(
+    uint8_t *data, size_t capacity,
+    const utp_ntrs_registration_ok_t *registration_ok) {
+  if (registration_ok == NULL || registration_ok->public_endpoint.port != 0u ||
+      !utp_ntrs_family_valid(registration_ok->public_endpoint.family) ||
+      utp_ntrs_control_encode_header(data, capacity,
+                                     UTP_NTRS_CONTROL_NODE_REGISTER_OK,
+                                     UTP_NTRS_REGISTRATION_OK_PAYLOAD_SIZE) ==
+          0u) {
+    return 0u;
+  }
+  utp_ntrs_encode_endpoint(data + UTP_NTRS_CONTROL_HEADER_SIZE,
+                           &registration_ok->public_endpoint);
+  return UTP_NTRS_CONTROL_HEADER_SIZE + UTP_NTRS_REGISTRATION_OK_PAYLOAD_SIZE;
+}
+
+bool utp_ntrs_control_decode_registration_ok(
+    const uint8_t *data, size_t length,
+    utp_ntrs_registration_ok_t *registration_ok) {
+  utp_ntrs_control_header_t header;
+
+  if (registration_ok == NULL ||
+      !utp_ntrs_control_decode_header(data, length, &header) ||
+      header.type != UTP_NTRS_CONTROL_NODE_REGISTER_OK ||
+      header.payload_length != UTP_NTRS_REGISTRATION_OK_PAYLOAD_SIZE ||
+      !utp_ntrs_decode_endpoint(data + UTP_NTRS_CONTROL_HEADER_SIZE,
+                                &registration_ok->public_endpoint) ||
+      registration_ok->public_endpoint.port != 0u) {
+    return false;
+  }
+  return true;
 }
 
 size_t

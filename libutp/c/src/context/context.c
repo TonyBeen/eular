@@ -464,6 +464,64 @@ static void utp_context_log_close(utp_context_t* context, const utp_context_conn
     utp_context_log(context, level, message);
 }
 
+/** @brief 返回 NAT 探测阶段的稳定英文标识，用于诊断日志。 */
+static const char* utp_context_nat_phase_name(uint8_t phase)
+{
+    switch (phase) {
+    case UTP_NAT_PROBE_PHASE_PROBE1:
+        return "probe1";
+    case UTP_NAT_PROBE_PHASE_CHANGE_PORT:
+        return "change_port";
+    case UTP_NAT_PROBE_PHASE_CHANGE_IP:
+        return "change_ip";
+    case UTP_NAT_PROBE_PHASE_PROBE2:
+        return "probe2";
+    default:
+        return "unknown";
+    }
+}
+
+/** @brief 输出单个 NAT endpoint；仅在 debug 日志启用时执行格式化。 */
+static void utp_context_log_nat_endpoint(utp_context_t* context, const char* event, uint8_t phase,
+                                         const utp_address_t* endpoint, uint64_t packet_number, uint64_t rtt_us)
+{
+    char address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+    char message[256];
+
+    if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
+        return;
+    }
+    if (utp_address_format(endpoint, address, sizeof(address)) != UTP_INTERNAL_ERROR_OK) {
+        return;
+    }
+    (void)snprintf(message, sizeof(message),
+                   "nat probe %s: phase=%s, endpoint=%s:%" PRIu16 ", packet_number=%" PRIu64 ", rtt_us=%" PRIu64, event,
+                   utp_context_nat_phase_name(phase), address, endpoint->port, packet_number, rtt_us);
+    utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+}
+
+/** @brief 输出已通过关联校验的 NAT 响应详情。 */
+static void utp_context_log_nat_response(utp_context_t* context, uint8_t phase, const utp_address_t* peer,
+                                         const utp_nat_probe_response_t* response, uint64_t packet_number,
+                                         uint64_t rtt_us)
+{
+    char peer_address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+    char mapped_address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+    char message[320];
+
+    if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG) ||
+        utp_address_format(peer, peer_address, sizeof(peer_address)) != UTP_INTERNAL_ERROR_OK ||
+        utp_address_format(&response->mapped, mapped_address, sizeof(mapped_address)) != UTP_INTERNAL_ERROR_OK) {
+        return;
+    }
+    (void)snprintf(message, sizeof(message),
+                   "nat probe response accepted: phase=%s, peer=%s:%" PRIu16 ", mapped=%s:%" PRIu16
+                   ", packet_number=%" PRIu64 ", rtt_us=%" PRIu64 ", alternate=%u",
+                   utp_context_nat_phase_name(phase), peer_address, peer->port, mapped_address, response->mapped.port,
+                   packet_number, rtt_us, response->has_alternate ? 1u : 0u);
+    utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+}
+
 static uint64_t utp_context_now_us(void)
 {
     uint64_t now_us = utp_clock_now_us(NULL);
@@ -1336,6 +1394,17 @@ static void utp_context_finish_nat_probe(utp_context_t* context, utp_status_t st
     user_data = task->user_data;
     if (status == UTP_STATUS_OK) {
         utp_context_nat_update_classification(context);
+        if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
+            char message[256];
+
+            (void)snprintf(message, sizeof(message),
+                           "nat probe completed: primary_responses=%" PRIu8 ", secondary_responses=%" PRIu8
+                           ", change_port=%u, change_ip=%u, class=%u",
+                           task->primary_response_count, task->secondary_response_count,
+                           task->change_port_succeeded ? 1u : 0u, task->change_ip_succeeded ? 1u : 0u,
+                           (uint32_t)task->result.nat_class);
+            utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+        }
         task->result.probe_time_us = now_us;
         task->result.expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_NAT_RESULT_LIFETIME_US
                                          ? UINT64_MAX
@@ -1403,6 +1472,7 @@ static utp_internal_error_t utp_context_send_nat_probe_batch(utp_context_t* cont
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
+        utp_context_log_nat_endpoint(context, "request sent", task->phase, target, packet_number, 0u);
         task->records[task->record_count].packet_number = packet_number;
         task->records[task->record_count].sent_at_us    = now_us;
         for (size_t index = 0u; index < sizeof(token); ++index) {
@@ -1433,6 +1503,13 @@ static utp_internal_error_t utp_context_start_nat_phase(utp_context_t* context, 
     task->round_deadline_us = 0u;
     task->round             = 0u;
     utp_context_nat_clear_records(task);
+    if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
+        char message[192];
+
+        (void)snprintf(message, sizeof(message), "nat probe phase started: phase=%s, timeout_ms=%" PRIu32,
+                       utp_context_nat_phase_name(phase), task->phase_timeout_ms);
+        utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+    }
     return utp_context_send_nat_probe_batch(context, now_us);
 }
 
@@ -1531,6 +1608,7 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
     }
     record->consumed = true;
     rtt_us           = now_us > record->sent_at_us ? now_us - record->sent_at_us : 0u;
+    utp_context_log_nat_response(context, task->phase, peer, &response, header->packet_number, rtt_us);
     if (task->phase == UTP_NAT_PROBE_PHASE_PROBE1) {
         if (task->primary_response_count == 0u) {
             utp_context_endpoint_from_address(&task->result.primary_mapped_endpoint, &response.mapped);
@@ -1607,6 +1685,16 @@ static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* c
         if (task->round == 0u) {
             utp_context_fail_nat_probe(context, UTP_INTERNAL_ERROR_IO, now_us);
             return UTP_INTERNAL_ERROR_OK;
+        }
+        if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
+            char message[192];
+
+            (void)snprintf(message, sizeof(message),
+                           "nat probe phase timed out: phase=%s, sent_rounds=%" PRIu8 ", responses=%" PRIu8,
+                           utp_context_nat_phase_name(task->phase), task->round,
+                           task->phase == UTP_NAT_PROBE_PHASE_PROBE2 ? task->secondary_response_count
+                                                                     : task->primary_response_count);
+            utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
         }
         error = utp_context_advance_nat_probe(context, now_us);
     } else if (!task->write_pending && task->round_deadline_us <= now_us && task->round < UTP_NAT_PROBE_MAX_ROUNDS) {

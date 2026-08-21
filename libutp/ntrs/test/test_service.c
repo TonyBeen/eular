@@ -234,6 +234,26 @@ static void test_control_stream(void) {
                                        test_control_stream_message, &callback));
 }
 
+static void test_registration_ok(void) {
+  const utp_ntrs_registration_ok_t expected = {
+      .public_endpoint = {
+          .family = AF_INET,
+          .address = {203u, 0u, 113u, 9u},
+      },
+  };
+  utp_ntrs_registration_ok_t decoded = {0};
+  uint8_t message[UTP_NTRS_CONTROL_HEADER_SIZE + 19u] = {0};
+  size_t length;
+
+  length = utp_ntrs_control_encode_registration_ok(message, sizeof(message),
+                                                    &expected);
+  assert(length == sizeof(message));
+  assert(utp_ntrs_control_decode_registration_ok(message, length, &decoded));
+  assert(memcmp(&expected, &decoded, sizeof(expected)) == 0);
+  message[UTP_NTRS_CONTROL_HEADER_SIZE + 1u] = 1u;
+  assert(!utp_ntrs_control_decode_registration_ok(message, length, &decoded));
+}
+
 typedef struct test_plain_stream_callback {
   uint8_t received[16]; // 接收的明文 TCP 数据
   size_t length;        // 接收字节数
@@ -925,6 +945,7 @@ int main(void) {
   test_service_endpoint_resolution();
   test_control_codec();
   test_control_stream();
+  test_registration_ok();
   test_plain_tcp_stream();
   test_hub_assignment();
   test_hub_reregistration_preserves_healthy_assignment();

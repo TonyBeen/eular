@@ -69,6 +69,11 @@ typedef struct utp_ntrs_node_registration {
     uint32_t                 heartbeat_ms;  // Hub 心跳周期
 } utp_ntrs_node_registration_t;
 
+/** @brief Hub 在注册成功时回传的 Node 对外地址，仅携带地址，port 必须为 0。 */
+typedef struct utp_ntrs_registration_ok {
+    utp_ntrs_endpoint_t public_endpoint;  // Hub 从 Node 控制连接观察到的公网地址
+} utp_ntrs_registration_ok_t;
+
 /** @brief Hub 对一个地址族下发的主备协同 Node。 */
 typedef struct utp_ntrs_assignment {
     utp_ntrs_node_instance_t primary;          // 主协同 Node 实例
@@ -150,8 +155,10 @@ typedef struct utp_ntrs_control_stream {
 
 /** @brief Linux Node UDP worker 的监听配置。 */
 typedef struct utp_ntrs_udp_server_options {
-    utp_ntrs_endpoint_t      probe_endpoint;            // PROBE1、CHANGE_IP、PROBE2 的监听 endpoint
-    utp_ntrs_endpoint_t      change_port_endpoint;      // CHANGE_PORT 回包使用的同 IP 不同端口 endpoint
+    utp_ntrs_endpoint_t      probe_endpoint;            // PROBE1、CHANGE_IP、PROBE2 的本地监听 endpoint
+    utp_ntrs_endpoint_t      change_port_endpoint;      // CHANGE_PORT 的本地监听 endpoint
+    utp_ntrs_endpoint_t      public_probe_endpoint;     // 回包 ORIGIN_ADDR 使用的公网 probe endpoint
+    utp_ntrs_endpoint_t      public_change_port_endpoint;  // 回包 ORIGIN_ADDR 使用的公网 change-port endpoint
     utp_ntrs_endpoint_t      alternate_probe_endpoint;  // 当前 primary Node 的 probe endpoint；无
                                                         // primary 时 family 为 0
     utp_ntrs_node_instance_t primary_instance;          // alternate endpoint 对应的 Node
@@ -176,6 +183,12 @@ size_t utp_ntrs_control_encode_registration(uint8_t* data, size_t capacity,
 /** @brief 解码严格的 NODE_REGISTER 消息。 */
 bool   utp_ntrs_control_decode_registration(const uint8_t* data, size_t length,
                                             utp_ntrs_node_registration_t* registration);
+/** @brief 编码 NODE_REGISTER_OK 消息，携带 Hub 观察到的 Node 公网地址。 */
+size_t utp_ntrs_control_encode_registration_ok(uint8_t* data, size_t capacity,
+                                               const utp_ntrs_registration_ok_t* registration_ok);
+/** @brief 解码严格的 NODE_REGISTER_OK 消息。 */
+bool   utp_ntrs_control_decode_registration_ok(const uint8_t* data, size_t length,
+                                               utp_ntrs_registration_ok_t* registration_ok);
 /** @brief 编码 NODE_ASSIGNMENT 消息，返回完整长度；失败返回 0。 */
 size_t utp_ntrs_control_encode_assignment(uint8_t* data, size_t capacity, const utp_ntrs_assignment_t* assignment);
 /** @brief 解码严格的 NODE_ASSIGNMENT 消息。 */
@@ -244,6 +257,10 @@ void                   utp_ntrs_udp_server_stop(utp_ntrs_udp_server_t* server);
  * endpoint。 */
 void utp_ntrs_udp_server_set_primary(utp_ntrs_udp_server_t* server, const utp_ntrs_node_instance_t* primary_instance,
                                      const utp_ntrs_endpoint_t* primary_endpoint);
+/** @brief 原子更新回包公告 endpoint；监听 socket 不受影响。 */
+void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server,
+                                              const utp_ntrs_endpoint_t* probe_endpoint,
+                                              const utp_ntrs_endpoint_t* change_port_endpoint);
 /** @brief 由协同 Node 从自身 probe socket 直接发送一次 FILTER_RSP。 */
 bool utp_ntrs_udp_server_send_filter_response(utp_ntrs_udp_server_t*                    server,
                                               const utp_ntrs_forward_filter_response_t* forward);
