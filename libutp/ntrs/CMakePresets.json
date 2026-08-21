@@ -1,0 +1,53 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "ntrs-linux",
+      "displayName": "NTRS Linux",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/../build/ntrs-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "UTP_NTRS_BUILD_SERVICES": "ON",
+        "UTP_NTRS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "ntrs-musl",
+      "displayName": "NTRS musl",
+      "inherits": "ntrs-linux",
+      "binaryDir": "${sourceDir}/../build/ntrs-musl",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../cmake/musl-toolchain.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ntrs-linux",
+      "configurePreset": "ntrs-linux",
+      "jobs": 8
+    },
+    {
+      "name": "ntrs-musl",
+      "configurePreset": "ntrs-musl",
+      "jobs": 8
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ntrs-linux",
+      "configurePreset": "ntrs-linux",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ntrs-musl",
+      "configurePreset": "ntrs-musl",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

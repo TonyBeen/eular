@@ -15,6 +15,7 @@
 #include <sys/uio.h>
 
 #include "proto/proto.h"
+#include "service_util.h"
 
 #define UTP_NTRS_NAT_PACKET_SIZE            128u
 #define UTP_NTRS_UTP_PACKET_TYPE_NAT_PROBE  0x07u
@@ -128,62 +129,6 @@ static void utp_ntrs_write_u16(uint8_t* data, uint16_t value)
 {
     data[0] = (uint8_t)(value >> 8u);
     data[1] = (uint8_t)value;
-}
-
-static bool utp_ntrs_endpoint_to_sockaddr(const utp_ntrs_endpoint_t* endpoint, struct sockaddr_storage* storage,
-                                          socklen_t* storage_length)
-{
-    if (endpoint->family == (uint8_t)AF_INET) {
-        struct sockaddr_in address = {
-            .sin_family = AF_INET,
-            .sin_port   = htons(endpoint->port),
-        };
-
-        (void)memcpy(&address.sin_addr, endpoint->address, 4u);
-        *storage = (struct sockaddr_storage){0};
-        (void)memcpy(storage, &address, sizeof(address));
-        *storage_length = (socklen_t)sizeof(address);
-        return true;
-    }
-    if (endpoint->family == (uint8_t)AF_INET6) {
-        struct sockaddr_in6 address = {
-            .sin6_family = AF_INET6,
-            .sin6_port   = htons(endpoint->port),
-        };
-
-        (void)memcpy(&address.sin6_addr, endpoint->address, sizeof(endpoint->address));
-        *storage = (struct sockaddr_storage){0};
-        (void)memcpy(storage, &address, sizeof(address));
-        *storage_length = (socklen_t)sizeof(address);
-        return true;
-    }
-    return false;
-}
-
-static bool utp_ntrs_endpoint_from_sockaddr(utp_ntrs_endpoint_t* endpoint, const struct sockaddr* address,
-                                            socklen_t address_length)
-{
-    if (address->sa_family == AF_INET && address_length >= (socklen_t)sizeof(struct sockaddr_in)) {
-        const struct sockaddr_in* const ipv4 = (const struct sockaddr_in*)address;
-
-        *endpoint = (utp_ntrs_endpoint_t){
-            .family = (uint8_t)AF_INET,
-            .port   = ntohs(ipv4->sin_port),
-        };
-        (void)memcpy(endpoint->address, &ipv4->sin_addr, 4u);
-        return true;
-    }
-    if (address->sa_family == AF_INET6 && address_length >= (socklen_t)sizeof(struct sockaddr_in6)) {
-        const struct sockaddr_in6* const ipv6 = (const struct sockaddr_in6*)address;
-
-        *endpoint = (utp_ntrs_endpoint_t){
-            .family = (uint8_t)AF_INET6,
-            .port   = ntohs(ipv6->sin6_port),
-        };
-        (void)memcpy(endpoint->address, &ipv6->sin6_addr, sizeof(endpoint->address));
-        return true;
-    }
-    return false;
 }
 
 static bool utp_ntrs_endpoint_same_ip(const utp_ntrs_endpoint_t* left, const utp_ntrs_endpoint_t* right)
@@ -507,7 +452,7 @@ bool utp_ntrs_udp_handle_probe_request(const uint8_t* request, size_t request_le
     return utp_proto_encode_header(response, response_capacity, &response_header) == UTP_INTERNAL_ERROR_OK;
 }
 
-static int32_t utp_ntrs_udp_create_socket(const utp_ntrs_endpoint_t* endpoint)
+static int32_t utp_ntrs_udp_create_socket(const utp_ntrs_endpoint_t* endpoint, const char* interface_name)
 {
     struct sockaddr_storage address;
     socklen_t               address_length;
@@ -516,6 +461,7 @@ static int32_t utp_ntrs_udp_create_socket(const utp_ntrs_endpoint_t* endpoint)
     const int32_t           enabled = 1;
 
     if (fd < 0 || endpoint->port == 0u || !utp_ntrs_endpoint_to_sockaddr(endpoint, &address, &address_length) ||
+        !utp_ntrs_socket_bind_interface(fd, interface_name) ||
         (family == AF_INET6 && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &enabled, (socklen_t)sizeof(enabled)) != 0) ||
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enabled, (socklen_t)sizeof(enabled)) != 0 ||
         setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &enabled, (socklen_t)sizeof(enabled)) != 0 ||
@@ -869,8 +815,8 @@ utp_ntrs_udp_server_t* utp_ntrs_udp_server_start(const utp_ntrs_udp_server_optio
         };
         worker->base           = event_base_new();
         worker->affinities     = calloc(UTP_NTRS_AFFINITY_CAPACITY, sizeof(*worker->affinities));
-        worker->probe_fd       = utp_ntrs_udp_create_socket(&options->probe_endpoint);
-        worker->change_port_fd = utp_ntrs_udp_create_socket(&options->change_port_endpoint);
+        worker->probe_fd       = utp_ntrs_udp_create_socket(&options->probe_endpoint, options->interface_name);
+        worker->change_port_fd = utp_ntrs_udp_create_socket(&options->change_port_endpoint, options->interface_name);
         worker->probe_context  = (utp_ntrs_udp_socket_context_t){
             .worker      = worker,
             .socket_kind = UTP_NTRS_UDP_REPLY_PROBE,

@@ -158,6 +158,7 @@ typedef struct utp_ntrs_udp_server_options {
     struct event_base*       main_base;                 // Node 主 libevent loop；NULL 时禁用 CHANGE_IP 转发
     utp_ntrs_udp_forward_fn  on_forward;                // worker 向主 loop 投递 CHANGE_IP 请求
     void*                    user_data;                 // on_forward 回调上下文
+    const char*              interface_name;            // 绑定的 Linux 网卡；空指针表示不限制
     uint16_t                 worker_count;              // SO_REUSEPORT worker 数；0 时使用 1
     uint32_t                 source_rate_per_second;    // 单源 IP 每秒最大请求数；0 时使用默认值
     uint32_t                 source_burst;              // 单源 IP 突发请求数；0 时使用默认值

@@ -6,7 +6,11 @@
 #include <event2/bufferevent.h>
 #include <event2/event.h>
 #include <event2/listener.h>
+#include <event2/util.h>
+#include <netinet/in.h>
 #include <sys/random.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "service_util.h"
 #include "tls_stream.h"
@@ -19,6 +23,7 @@ struct utp_ntrs_peer_manager {
   SSL_CTX *client_tls;                 // 出站 TLS 配置，空指针表示明文 TCP
   SSL_CTX *server_tls;                 // 入站 TLS 配置，空指针表示明文 TCP
   utp_ntrs_node_instance_t local;      // 本 Node 实例
+  const char *interface_name;           // 指定的 Linux 网卡
   utp_ntrs_peer_active_fn on_active;   // 链路激活通知
   utp_ntrs_peer_failed_fn on_failed;   // 链路失效通知
   utp_ntrs_peer_forward_fn on_forward; // 接收 CHANGE_IP 转发请求
@@ -307,6 +312,9 @@ static utp_ntrs_peer_t *utp_ntrs_peer_new(utp_ntrs_peer_manager_t *manager,
   };
 
   if (peer == NULL) {
+    if (fd >= 0) {
+      evutil_closesocket(fd);
+    }
     return NULL;
   }
   peer->manager = manager;
@@ -337,8 +345,39 @@ static void utp_ntrs_peer_on_accept(struct evconnlistener *listener,
   (void)listener;
   (void)address;
   (void)address_length;
-  if (utp_ntrs_peer_new(manager, (int32_t)fd, false) == NULL) {
-    evutil_closesocket(fd);
+  (void)utp_ntrs_peer_new(manager, (int32_t)fd, false);
+}
+
+/** @brief 创建已绑定指定网卡的 Node control 监听 socket。 */
+static struct evconnlistener *utp_ntrs_peer_listener_new(
+    struct event_base *base, const utp_ntrs_endpoint_t *endpoint,
+    const struct sockaddr_storage *address, socklen_t address_length,
+    const char *interface_name, void *user_data) {
+  const int32_t fd = socket(endpoint->family, SOCK_STREAM, 0);
+  const int32_t enabled = 1;
+
+  if (fd < 0 || !utp_ntrs_socket_bind_interface(fd, interface_name) ||
+      setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) !=
+          0 ||
+      (endpoint->family == (uint8_t)AF_INET6 &&
+       setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &enabled,
+                  sizeof(enabled)) != 0) ||
+      bind(fd, (const struct sockaddr *)address, address_length) != 0 ||
+      evutil_make_socket_nonblocking(fd) != 0) {
+    if (fd >= 0) {
+      (void)close(fd);
+    }
+    return NULL;
+  }
+  {
+    struct evconnlistener *const listener = evconnlistener_new(
+        base, utp_ntrs_peer_on_accept, user_data,
+        LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1, fd);
+
+    if (listener == NULL) {
+      (void)close(fd);
+    }
+    return listener;
   }
 }
 
@@ -357,14 +396,14 @@ utp_ntrs_peer_manager_start(const utp_ntrs_peer_manager_options_t *options) {
   manager->client_tls = options->client_tls;
   manager->server_tls = options->server_tls;
   manager->local = options->local;
+  manager->interface_name = options->interface_name;
   manager->on_active = options->on_active;
   manager->on_failed = options->on_failed;
   manager->on_forward = options->on_forward;
   manager->user_data = options->user_data;
-  manager->listener = evconnlistener_new_bind(
-      manager->base, utp_ntrs_peer_on_accept, manager,
-      LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
-      (const struct sockaddr *)&address, (int32_t)address_length);
+  manager->listener = utp_ntrs_peer_listener_new(
+      manager->base, &options->listen, &address, address_length,
+      manager->interface_name, manager);
   if (manager->listener == NULL) {
     free(manager);
     return NULL;
@@ -390,6 +429,7 @@ bool utp_ntrs_peer_manager_connect(utp_ntrs_peer_manager_t *manager,
   utp_ntrs_peer_t *peer;
   struct sockaddr_storage address;
   socklen_t address_length;
+  int32_t fd;
 
   for (peer = manager->peers; peer != NULL; peer = peer->next) {
     if (!peer->close_scheduled && utp_ntrs_peer_matches(peer, remote)) {
@@ -399,8 +439,19 @@ bool utp_ntrs_peer_manager_connect(utp_ntrs_peer_manager_t *manager,
       return true;
     }
   }
-  if (!utp_ntrs_endpoint_to_sockaddr(endpoint, &address, &address_length) ||
-      (peer = utp_ntrs_peer_new(manager, -1, true)) == NULL) {
+  if (!utp_ntrs_endpoint_to_sockaddr(endpoint, &address, &address_length)) {
+    return false;
+  }
+  fd = socket(endpoint->family, SOCK_STREAM, 0);
+  if (fd < 0 || !utp_ntrs_socket_bind_interface(fd, manager->interface_name) ||
+      evutil_make_socket_nonblocking(fd) != 0) {
+    if (fd >= 0) {
+      (void)close(fd);
+    }
+    return false;
+  }
+  peer = utp_ntrs_peer_new(manager, fd, true);
+  if (peer == NULL) {
     return false;
   }
   peer->expected_remote = *remote;

@@ -7,8 +7,12 @@
 #include <arpa/inet.h>
 #include <event2/bufferevent.h>
 #include <event2/event.h>
+#include <event2/util.h>
 #include <ntrs/service.h>
+#include <openssl/sha.h>
 #include <sys/random.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "peer_manager.h"
 #include "service_util.h"
@@ -33,6 +37,8 @@ typedef struct nat_detect_node {
   utp_ntrs_control_stream_t control;         // Hub 控制消息重组状态
   utp_ntrs_node_registration_t registration; // 本 Node 的固定注册信息
   utp_ntrs_endpoint_t hub_endpoint;          // Hub TCP endpoint
+  const char *interface_name;                 // 指定的 Linux 出口网卡
+  const char *node_name;                      // 操作员可读的 Node 名称
   utp_ntrs_udp_server_t *udp_server;         // UDP NAT 探测 worker
   utp_ntrs_peer_manager_t *peers;            // Node 间控制链路管理器
   utp_ntrs_assignment_t assignments[2];      // IPv4、IPv6 当前 assignment
@@ -458,6 +464,7 @@ static void nat_detect_node_on_closed(void *user_data) {
 static void nat_detect_node_connect(nat_detect_node_t *node) {
   struct sockaddr_storage address;
   socklen_t address_length;
+  int32_t fd;
   const utp_ntrs_tls_callbacks_t callbacks = {
       .ready = nat_detect_node_on_ready,
       .plaintext = nat_detect_node_on_plaintext,
@@ -469,6 +476,15 @@ static void nat_detect_node_connect(nat_detect_node_t *node) {
                                      &address_length)) {
     return;
   }
+  fd = socket(node->hub_endpoint.family, SOCK_STREAM, 0);
+  if (fd < 0 || !utp_ntrs_socket_bind_interface(fd, node->interface_name) ||
+      evutil_make_socket_nonblocking(fd) != 0) {
+    if (fd >= 0) {
+      (void)close(fd);
+    }
+    (void)fprintf(stderr, "nat_detect_node event=hub_socket_create_failed\n");
+    return;
+  }
   {
     char endpoint[64];
 
@@ -477,7 +493,7 @@ static void nat_detect_node_connect(nat_detect_node_t *node) {
                                            sizeof(endpoint)));
   }
   node->hub_stream = utp_ntrs_tls_stream_new(
-      node->base, -1, node->hub_tls_context, false, &callbacks, node);
+      node->base, fd, node->hub_tls_context, false, &callbacks, node);
   if (node->hub_stream == NULL ||
       bufferevent_socket_connect(
           utp_ntrs_tls_stream_transport(node->hub_stream),
@@ -545,8 +561,9 @@ static bool nat_detect_node_parse_u32(const char *text, uint32_t *value) {
 
 static void nat_detect_node_usage(const char *program) {
   (void)fprintf(stderr,
-                "Usage: %s --hub IP:PORT --node-id HEX32 --probe IP:PORT "
-                "--change-port IP:PORT --control IP:PORT "
+                "Usage: %s --hub HOST:PORT --node-id NAME "
+                "[--probe IP:PORT] [--change-port IP:PORT] "
+                "[--control IP:PORT] [--interface NAME] "
                 "[--cert FILE --key FILE] [--boot-id HEX32] [--load N] "
                 "[--heartbeat-ms N] [--workers N] [--source-rate N] "
                 "[--source-burst N]\n",
@@ -563,9 +580,10 @@ int main(int argc, char **argv) {
   const char *node_id = NULL;
   const char *boot_id = NULL;
   const char *hub = NULL;
-  const char *probe = NULL;
-  const char *change_port = NULL;
-  const char *control = NULL;
+  const char *probe = "0.0.0.0:24001";
+  const char *change_port = "0.0.0.0:24002";
+  const char *control = "0.0.0.0:24003";
+  const char *interface_name = NULL;
   const char *certificate = NULL;
   const char *private_key = NULL;
   uint32_t workers = 1u;
@@ -588,6 +606,8 @@ int main(int argc, char **argv) {
       change_port = argv[index + 1];
     } else if (strcmp(argv[index], "--control") == 0) {
       control = argv[index + 1];
+    } else if (strcmp(argv[index], "--interface") == 0) {
+      interface_name = argv[index + 1];
     } else if (strcmp(argv[index], "--cert") == 0) {
       certificate = argv[index + 1];
     } else if (strcmp(argv[index], "--key") == 0) {
@@ -628,23 +648,21 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
   }
-  if (index != argc || hub == NULL || node_id == NULL || probe == NULL ||
-      change_port == NULL || control == NULL ||
+  if (index != argc || hub == NULL || node_id == NULL || node_id[0] == '\0' ||
       ((certificate == NULL) != (private_key == NULL)) ||
-      !utp_ntrs_hex_decode(node_id, node.registration.instance.node_id,
-                           UTP_NTRS_NODE_ID_SIZE) ||
       (boot_id != NULL &&
        !utp_ntrs_hex_decode(boot_id, node.registration.instance.boot_id,
                             UTP_NTRS_BOOT_ID_SIZE)) ||
       (boot_id == NULL &&
        getrandom(node.registration.instance.boot_id, UTP_NTRS_BOOT_ID_SIZE,
                  0u) != (ssize_t)UTP_NTRS_BOOT_ID_SIZE) ||
-      !utp_ntrs_endpoint_parse(hub, &node.hub_endpoint) ||
+      !utp_ntrs_endpoint_resolve(hub, &node.hub_endpoint) ||
       !utp_ntrs_endpoint_parse(probe, &udp_options.probe_endpoint) ||
       !utp_ntrs_endpoint_parse(change_port,
                                &udp_options.change_port_endpoint) ||
       !utp_ntrs_endpoint_parse(control,
                                &node.registration.ipv4.control_endpoint) ||
+      node.hub_endpoint.family != udp_options.probe_endpoint.family ||
       udp_options.probe_endpoint.family !=
           udp_options.change_port_endpoint.family ||
       udp_options.probe_endpoint.family !=
@@ -652,9 +670,21 @@ int main(int argc, char **argv) {
     nat_detect_node_usage(argv[0]);
     return EXIT_FAILURE;
   }
+  {
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+
+    if (SHA256((const uint8_t *)node_id, strlen(node_id), digest) == NULL) {
+      return EXIT_FAILURE;
+    }
+    (void)memcpy(node.registration.instance.node_id, digest,
+                 UTP_NTRS_NODE_ID_SIZE);
+  }
+  node.interface_name = interface_name;
+  node.node_name = node_id;
   udp_options.worker_count = (uint16_t)workers;
   udp_options.source_rate_per_second = source_rate;
   udp_options.source_burst = source_burst;
+  udp_options.interface_name = interface_name;
   node.registration.ipv4 = (utp_ntrs_node_family_t){
       .public_endpoint = udp_options.probe_endpoint,
       .probe_endpoint = udp_options.probe_endpoint,
@@ -691,6 +721,7 @@ int main(int argc, char **argv) {
                .listen = node.registration.ipv4.valid
                              ? node.registration.ipv4.control_endpoint
                              : node.registration.ipv6.control_endpoint,
+               .interface_name = node.interface_name,
                .on_active = nat_detect_node_on_peer_active,
                .on_failed = nat_detect_node_on_peer_failed,
                .on_forward = nat_detect_node_on_peer_forward,
@@ -709,9 +740,9 @@ int main(int argc, char **argv) {
 
     (void)fprintf(
         stderr,
-        "nat_detect_node event=starting node=%s hub=%s probe=%s change_port=%u "
-        "control=%s workers=%u transport=%s\n",
-        nat_detect_node_instance(&node.registration.instance, local),
+        "nat_detect_node event=starting node_name=%s node=%s hub=%s probe=%s change_port=%u "
+        "control=%s workers=%u transport=%s interface=%s\n",
+        node.node_name, nat_detect_node_instance(&node.registration.instance, local),
         utp_ntrs_endpoint_format(&node.hub_endpoint, hub_endpoint,
                                  sizeof(hub_endpoint)),
         utp_ntrs_endpoint_format(&family->probe_endpoint, probe_endpoint,
@@ -719,7 +750,8 @@ int main(int argc, char **argv) {
         (uint32_t)family->change_port_endpoint.port,
         utp_ntrs_endpoint_format(&family->control_endpoint, control_endpoint,
                                  sizeof(control_endpoint)),
-        (uint32_t)workers, node.hub_tls_context != NULL ? "tls" : "tcp");
+        (uint32_t)workers, node.hub_tls_context != NULL ? "tls" : "tcp",
+        node.interface_name != NULL ? node.interface_name : "any");
   }
   utp_ntrs_control_stream_init(&node.control);
   heartbeat_period.tv_sec = (int32_t)(node.registration.heartbeat_ms / 1000u);

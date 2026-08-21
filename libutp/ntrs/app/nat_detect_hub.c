@@ -5,7 +5,11 @@
 
 #include <event2/event.h>
 #include <event2/listener.h>
+#include <event2/util.h>
+#include <netinet/in.h>
 #include <ntrs/service.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "service_util.h"
 #include "tls_stream.h"
@@ -17,6 +21,7 @@ typedef struct nat_detect_hub_session {
   struct nat_detect_hub_session *next;       // Hub 连接链表
   utp_ntrs_tls_stream_t *tls;                // Hub TLS 控制连接
   utp_ntrs_control_stream_t control;         // 控制消息重组状态
+  utp_ntrs_endpoint_t peer_endpoint;         // Hub 从 TCP 连接观察到的 Node 地址
   utp_ntrs_node_registration_t registration; // 首次注册后的 Node 信息
   bool registered;                           // 是否已写入 Hub 成员表
   bool owns_registration;                    // 是否持有当前成员表记录
@@ -35,6 +40,36 @@ struct nat_detect_hub_service {
 static void nat_detect_hub_session_destroy(nat_detect_hub_session_t *session);
 static void
 nat_detect_hub_session_schedule_close(nat_detect_hub_session_t *session);
+
+/** @brief 用控制连接的源地址覆盖 Node 自报的服务 IP，仅信任其监听端口。 */
+static bool nat_detect_hub_registration_apply_peer_endpoint(
+    utp_ntrs_node_registration_t *registration,
+    const utp_ntrs_endpoint_t *peer_endpoint) {
+  utp_ntrs_node_family_t *families[] = {&registration->ipv4,
+                                        &registration->ipv6};
+  uint32_t index;
+
+  for (index = 0u; index < sizeof(families) / sizeof(families[0]); ++index) {
+    utp_ntrs_node_family_t *const family = families[index];
+
+    if (!family->valid) {
+      continue;
+    }
+    if (family->family != peer_endpoint->family) {
+      return false;
+    }
+    (void)memcpy(family->public_endpoint.address, peer_endpoint->address,
+                 sizeof(family->public_endpoint.address));
+    (void)memcpy(family->probe_endpoint.address, peer_endpoint->address,
+                 sizeof(family->probe_endpoint.address));
+    (void)memcpy(family->change_port_endpoint.address,
+                 peer_endpoint->address,
+                 sizeof(family->change_port_endpoint.address));
+    (void)memcpy(family->control_endpoint.address, peer_endpoint->address,
+                 sizeof(family->control_endpoint.address));
+  }
+  return true;
+}
 
 static const char *
 nat_detect_hub_session_instance(const nat_detect_hub_session_t *session,
@@ -202,6 +237,8 @@ static void nat_detect_hub_session_on_message(void *user_data, uint8_t type,
 
     if (type != UTP_NTRS_CONTROL_NODE_REGISTER ||
         !utp_ntrs_control_decode_registration(message, length, &registration) ||
+        !nat_detect_hub_registration_apply_peer_endpoint(
+            &registration, &session->peer_endpoint) ||
         !utp_ntrs_hub_register(&session->service->hub, &registration,
                                utp_ntrs_now_ms(), &replaced)) {
       uint8_t reject[UTP_NTRS_CONTROL_HEADER_SIZE];
@@ -221,11 +258,15 @@ static void nat_detect_hub_session_on_message(void *user_data, uint8_t type,
     session->owns_registration = true;
     {
       char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+      char peer[64];
 
-      (void)fprintf(
-          stderr, "nat_detect_hub event=node_registered node=%s replaced=%u\n",
-          nat_detect_hub_session_instance(session, instance),
-          replaced ? 1u : 0u);
+      (void)fprintf(stderr,
+                    "nat_detect_hub event=node_registered node=%s peer=%s "
+                    "replaced=%u\n",
+                    nat_detect_hub_session_instance(session, instance),
+                    utp_ntrs_endpoint_format(&session->peer_endpoint, peer,
+                                             sizeof(peer)),
+                    replaced ? 1u : 0u);
     }
     {
       uint8_t accepted[UTP_NTRS_CONTROL_HEADER_SIZE];
@@ -365,10 +406,11 @@ static void nat_detect_hub_on_accept(struct evconnlistener *listener,
   };
 
   (void)listener;
-  (void)address;
-  (void)address_length;
-  if (session == NULL) {
+  if (session == NULL ||
+      !utp_ntrs_endpoint_from_sockaddr(&session->peer_endpoint, address,
+                                       (socklen_t)address_length)) {
     evutil_closesocket(fd);
+    free(session);
     return;
   }
   session->service = service;
@@ -417,9 +459,42 @@ static void nat_detect_hub_on_signal(evutil_socket_t fd, int16_t events,
   (void)event_base_loopbreak(user_data);
 }
 
+static struct evconnlistener *nat_detect_hub_listener_new(
+    struct event_base *base, const utp_ntrs_endpoint_t *endpoint,
+    const struct sockaddr_storage *address, socklen_t address_length,
+    const char *interface_name, void *user_data) {
+  const int32_t fd = socket(endpoint->family, SOCK_STREAM, 0);
+  const int32_t enabled = 1;
+
+  if (fd < 0 || !utp_ntrs_socket_bind_interface(fd, interface_name) ||
+      setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) !=
+          0 ||
+      (endpoint->family == (uint8_t)AF_INET6 &&
+       setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &enabled,
+                  sizeof(enabled)) != 0) ||
+      bind(fd, (const struct sockaddr *)address, address_length) != 0 ||
+      evutil_make_socket_nonblocking(fd) != 0) {
+    if (fd >= 0) {
+      (void)close(fd);
+    }
+    return NULL;
+  }
+  {
+    struct evconnlistener *const listener = evconnlistener_new(
+        base, nat_detect_hub_on_accept, user_data,
+        LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1, fd);
+
+    if (listener == NULL) {
+      (void)close(fd);
+    }
+    return listener;
+  }
+}
+
 static void nat_detect_hub_usage(const char *program) {
   (void)fprintf(stderr,
-                "Usage: %s --listen IP:PORT [--cert FILE --key FILE]\n",
+                "Usage: %s [--listen HOST:PORT] [--interface NAME] "
+                "[--cert FILE --key FILE]\n",
                 program);
 }
 
@@ -433,13 +508,16 @@ int main(int argc, char **argv) {
   struct timeval sweep_interval = {.tv_sec = 1, .tv_usec = 0};
   const char *certificate = NULL;
   const char *private_key = NULL;
-  const char *listen = NULL;
+  const char *listen = "0.0.0.0:24000";
+  const char *interface_name = NULL;
   int32_t index;
   int32_t result = EXIT_FAILURE;
 
   for (index = 1; index + 1 < argc; index += 2) {
     if (strcmp(argv[index], "--listen") == 0) {
       listen = argv[index + 1];
+    } else if (strcmp(argv[index], "--interface") == 0) {
+      interface_name = argv[index + 1];
     } else if (strcmp(argv[index], "--cert") == 0) {
       certificate = argv[index + 1];
     } else if (strcmp(argv[index], "--key") == 0) {
@@ -449,9 +527,9 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
   }
-  if (index != argc || listen == NULL ||
+  if (index != argc ||
       ((certificate == NULL) != (private_key == NULL)) ||
-      !utp_ntrs_endpoint_parse(listen, &endpoint) ||
+      !utp_ntrs_endpoint_resolve(listen, &endpoint) ||
       !utp_ntrs_endpoint_to_sockaddr(&endpoint, &address, &address_length) ||
       (service.base = event_base_new()) == NULL) {
     nat_detect_hub_usage(argv[0]);
@@ -466,15 +544,16 @@ int main(int argc, char **argv) {
   {
     char endpoint_text[INET6_ADDRSTRLEN + 8u];
 
-    (void)fprintf(stderr, "nat_detect_hub event=starting listen=%s transport=%s\n",
+    (void)fprintf(stderr,
+                  "nat_detect_hub event=starting listen=%s transport=%s interface=%s\n",
                   utp_ntrs_endpoint_format(&endpoint, endpoint_text,
                                            sizeof(endpoint_text)),
-                  service.tls != NULL ? "tls" : "tcp");
+                  service.tls != NULL ? "tls" : "tcp",
+                  interface_name != NULL ? interface_name : "any");
   }
-  service.listener = evconnlistener_new_bind(
-      service.base, nat_detect_hub_on_accept, &service,
-      LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
-      (const struct sockaddr *)&address, (int32_t)address_length);
+  service.listener = nat_detect_hub_listener_new(
+      service.base, &endpoint, &address, address_length, interface_name,
+      &service);
   service.sweep = event_new(service.base, -1, EV_PERSIST,
                             nat_detect_hub_on_sweep, &service);
   signal_int = evsignal_new(service.base, SIGINT, nat_detect_hub_on_signal,

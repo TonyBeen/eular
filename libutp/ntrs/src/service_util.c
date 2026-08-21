@@ -5,6 +5,8 @@
 #include <time.h>
 
 #include <arpa/inet.h>
+#include <net/if.h>
+#include <netdb.h>
 #include <netinet/in.h>
 
 static bool utp_ntrs_parse_port(const char *text, uint16_t *port) {
@@ -76,6 +78,108 @@ bool utp_ntrs_endpoint_parse(const char *text, utp_ntrs_endpoint_t *endpoint) {
   }
   endpoint->port = port;
   return true;
+}
+
+bool utp_ntrs_endpoint_resolve(const char *text, utp_ntrs_endpoint_t *endpoint) {
+  struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+  struct addrinfo *addresses;
+  struct addrinfo *result = NULL;
+  const char *separator;
+  char host[256];
+  char service[6];
+  size_t host_length;
+  uint16_t port;
+  bool resolved = false;
+
+  if (utp_ntrs_endpoint_parse(text, endpoint)) {
+    return true;
+  }
+  separator = strrchr(text, ':');
+  if (separator == NULL || separator == text || separator[1] == '\0' ||
+      !utp_ntrs_parse_port(separator + 1, &port)) {
+    return false;
+  }
+  host_length = (size_t)(separator - text);
+  if (text[0] == '[' && host_length > 2u && text[host_length - 1u] == ']') {
+    ++text;
+    host_length -= 2u;
+  }
+  if (host_length == 0u || host_length >= sizeof(host) ||
+      (size_t)snprintf(service, sizeof(service), "%u", (uint32_t)port) >=
+          sizeof(service)) {
+    return false;
+  }
+  (void)memcpy(host, text, host_length);
+  host[host_length] = '\0';
+  if (getaddrinfo(host, service, &hints, &result) != 0) {
+    return false;
+  }
+  addresses = result;
+  /* 默认 Node endpoint 是 IPv4，域名同时返回 A/AAAA 时优先使用 A 记录。 */
+  for (result = addresses; result != NULL; result = result->ai_next) {
+    if (result->ai_family == AF_INET) {
+      const struct sockaddr_in *const address =
+          (const struct sockaddr_in *)result->ai_addr;
+
+      *endpoint = (utp_ntrs_endpoint_t){
+          .family = (uint8_t)AF_INET,
+          .port = ntohs(address->sin_port),
+      };
+      (void)memcpy(endpoint->address, &address->sin_addr,
+                   sizeof(address->sin_addr));
+      resolved = true;
+      break;
+    }
+  }
+  for (result = addresses; result != NULL && !resolved;
+       result = result->ai_next) {
+    if (result->ai_family == AF_INET6) {
+      const struct sockaddr_in6 *const address =
+          (const struct sockaddr_in6 *)result->ai_addr;
+
+      *endpoint = (utp_ntrs_endpoint_t){
+          .family = (uint8_t)AF_INET6,
+          .port = ntohs(address->sin6_port),
+      };
+      (void)memcpy(endpoint->address, &address->sin6_addr,
+                   sizeof(address->sin6_addr));
+      resolved = true;
+    }
+  }
+  freeaddrinfo(addresses);
+  return resolved;
+}
+
+bool utp_ntrs_endpoint_from_sockaddr(utp_ntrs_endpoint_t *endpoint,
+                                     const struct sockaddr *address,
+                                     socklen_t length) {
+  *endpoint = (utp_ntrs_endpoint_t){0};
+  if (address->sa_family == AF_INET && length >= (socklen_t)sizeof(struct sockaddr_in)) {
+    const struct sockaddr_in *const ipv4 = (const struct sockaddr_in *)address;
+
+    endpoint->family = (uint8_t)AF_INET;
+    endpoint->port = ntohs(ipv4->sin_port);
+    (void)memcpy(endpoint->address, &ipv4->sin_addr, sizeof(ipv4->sin_addr));
+    return true;
+  }
+  if (address->sa_family == AF_INET6 && length >= (socklen_t)sizeof(struct sockaddr_in6)) {
+    const struct sockaddr_in6 *const ipv6 = (const struct sockaddr_in6 *)address;
+
+    endpoint->family = (uint8_t)AF_INET6;
+    endpoint->port = ntohs(ipv6->sin6_port);
+    (void)memcpy(endpoint->address, &ipv6->sin6_addr, sizeof(ipv6->sin6_addr));
+    return true;
+  }
+  return false;
+}
+
+bool utp_ntrs_socket_bind_interface(int32_t fd, const char *interface_name) {
+  const size_t length = interface_name != NULL ? strlen(interface_name) : 0u;
+
+  return interface_name == NULL ||
+         (length != 0u && length < (size_t)IFNAMSIZ &&
+          setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, interface_name,
+                     (socklen_t)(length + 1u)) == 0);
 }
 
 bool utp_ntrs_endpoint_to_sockaddr(const utp_ntrs_endpoint_t *endpoint,

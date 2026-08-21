@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 
 #include "proto/proto.h"
+#include "service_util.h"
 #include "tls_stream.h"
 #include "udp_probe.h"
 
@@ -30,6 +31,30 @@ static utp_ntrs_endpoint_t test_endpoint(uint8_t family, uint16_t port,
     endpoint.address[15] = last_octet;
   }
   return endpoint;
+}
+
+static void test_service_endpoint_resolution(void) {
+  const struct sockaddr_in source = {
+      .sin_family = AF_INET,
+      .sin_port = htons(24001u),
+      .sin_addr = {.s_addr = htonl(UINT32_C(0xc0000201))},
+  };
+  utp_ntrs_endpoint_t endpoint;
+
+  assert(utp_ntrs_endpoint_resolve("127.0.0.1:24000", &endpoint));
+  assert(endpoint.family == (uint8_t)AF_INET);
+  assert(endpoint.port == 24000u);
+  assert(utp_ntrs_endpoint_resolve("localhost:24000", &endpoint));
+  assert(endpoint.port == 24000u);
+  assert(endpoint.family == (uint8_t)AF_INET);
+  assert(utp_ntrs_endpoint_from_sockaddr(&endpoint,
+                                         (const struct sockaddr *)&source,
+                                         (socklen_t)sizeof(source)));
+  assert(endpoint.family == (uint8_t)AF_INET);
+  assert(endpoint.port == 24001u);
+  assert(endpoint.address[0] == 192u && endpoint.address[1] == 0u &&
+         endpoint.address[2] == 2u && endpoint.address[3] == 1u);
+  assert(utp_ntrs_socket_bind_interface(-1, NULL));
 }
 
 static utp_ntrs_node_registration_t
@@ -897,6 +922,7 @@ static void test_udp_worker_change_ip_forward(void) {
 }
 
 int main(void) {
+  test_service_endpoint_resolution();
   test_control_codec();
   test_control_stream();
   test_plain_tcp_stream();

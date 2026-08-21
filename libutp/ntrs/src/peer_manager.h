@@ -24,6 +24,7 @@ typedef struct utp_ntrs_peer_manager_options {
   SSL_CTX *server_tls;                 // 入站 TLS 上下文，空指针表示明文 TCP
   utp_ntrs_node_instance_t local;      // 本 Node 实例
   utp_ntrs_endpoint_t listen;          // control_endpoint
+  const char *interface_name;          // 绑定的 Linux 网卡；空指针表示不限制
   utp_ntrs_peer_active_fn on_active;   // 唯一保留链路已可用的通知
   utp_ntrs_peer_failed_fn on_failed;   // 已确认链路断开的通知
   utp_ntrs_peer_forward_fn on_forward; // 协同 Node 请求直接发送 FILTER_RSP

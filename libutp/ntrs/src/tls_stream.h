@@ -32,8 +32,9 @@ SSL_CTX *utp_ntrs_tls_client_context_new(void);
 void utp_ntrs_tls_context_free(SSL_CTX *context);
 
 /**
- * @brief 将一个已连接或连接中的 TCP fd 包装为非阻塞控制流。
+ * @brief 将一个已连接或连接中的 TCP fd 包装为非阻塞控制流并接管其所有权。
  * @param context 非空时使用 TLS 1.3；空指针时使用明文 TCP。
+ * @note 即使创建失败，也会关闭传入的有效 fd。
  */
 utp_ntrs_tls_stream_t *
 utp_ntrs_tls_stream_new(event_base *base, int32_t fd, SSL_CTX *context,

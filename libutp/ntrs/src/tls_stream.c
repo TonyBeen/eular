@@ -6,6 +6,7 @@
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/event.h>
+#include <event2/util.h>
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
@@ -235,10 +236,16 @@ utp_ntrs_tls_stream_new(struct event_base *base, int32_t fd, SSL_CTX *context,
   BIO *write_bio = NULL;
 
   if (stream == NULL) {
+    if (fd >= 0) {
+      evutil_closesocket(fd);
+    }
     return NULL;
   }
   stream->transport = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
   if (stream->transport == NULL) {
+    if (fd >= 0) {
+      evutil_closesocket(fd);
+    }
     utp_ntrs_tls_stream_free(stream);
     return NULL;
   }
