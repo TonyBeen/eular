@@ -13,7 +13,7 @@ extern "C" {
 
 /** @brief NAT 探测得出的映射与过滤分类。 */
 typedef enum utp_nat_class {
-    UTP_NAT_CLASS_UNKNOWN                   = 0,
+    UTP_NAT_CLASS_UNKNOWN                   = 0,  // 观测不足，包含完整探测预算内未收到合法响应
     UTP_NAT_CLASS_OPEN_PUBLIC               = 1,
     UTP_NAT_CLASS_OPEN_PUBLIC_WITH_FIREWALL = 2,
     UTP_NAT_CLASS_FULL_CONE                 = 3,
@@ -21,7 +21,7 @@ typedef enum utp_nat_class {
     UTP_NAT_CLASS_PORT_RESTRICTED           = 5,
     UTP_NAT_CLASS_SYMMETRIC                 = 6,
     UTP_NAT_CLASS_SYMMETRIC_MULTI_LINE      = 7,
-    UTP_NAT_CLASS_UDP_BLOCKED               = 8,
+    UTP_NAT_CLASS_UDP_BLOCKED               = 8,  // 兼容保留；当前探测不产出此值
 } utp_nat_class_t;
 
 /** @brief 单个 NAT 探测阶段的超时配置。 */

@@ -522,6 +522,23 @@ static void utp_context_log_nat_response(utp_context_t* context, uint8_t phase, 
     utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
 }
 
+/** @brief 输出已到达但未通过 NAT 探测关联校验的响应原因。 */
+static void utp_context_log_nat_response_rejected(utp_context_t* context, uint8_t phase, const utp_address_t* peer,
+                                                  uint64_t packet_number, const char* reason)
+{
+    char peer_address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+    char message[256];
+
+    if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG) ||
+        utp_address_format(peer, peer_address, sizeof(peer_address)) != UTP_INTERNAL_ERROR_OK) {
+        return;
+    }
+    (void)snprintf(message, sizeof(message),
+                   "nat probe response rejected: phase=%s, peer=%s:%" PRIu16 ", packet_number=%" PRIu64 ", reason=%s",
+                   utp_context_nat_phase_name(phase), peer_address, peer->port, packet_number, reason);
+    utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+}
+
 static uint64_t utp_context_now_us(void)
 {
     uint64_t now_us = utp_clock_now_us(NULL);
@@ -1346,7 +1363,8 @@ static void utp_context_nat_update_classification(utp_context_t* context)
     utp_nat_probe_task_t* task = &context->nat_probe;
 
     if (task->primary_response_count == 0u) {
-        task->result.nat_class = UTP_NAT_CLASS_UDP_BLOCKED;
+        // 无响应无法区分 UDP 被阻断、路径丢包或服务端故障，不能据此提前判定不可达。
+        task->result.nat_class = UTP_NAT_CLASS_UNKNOWN;
     } else if (context->bound_address.family == UTP_ADDRESS_FAMILY_IPV6) {
         if (!task->alternate_valid || task->secondary_response_count == 0u) {
             task->result.nat_class = UTP_NAT_CLASS_UNKNOWN;
@@ -1590,20 +1608,37 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
     if (header->type != UTP_PACKET_TYPE_NAT_PROBE || header->scid != 0u || header->dcid != 0u ||
         header->packet_number == 0u || header->reserve != 0u ||
         payload_length > UTP_NAT_PROBE_PACKET_SIZE - UTP_PACKET_HEADER_SIZE) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number, "invalid_header");
         return UTP_INTERNAL_ERROR_OK;
     }
     error = utp_nat_probe_decode_response(payload, payload_length, &response);
-    if (error != UTP_INTERNAL_ERROR_OK || response.mapped.family != context->bound_address.family ||
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number, "decode_failed");
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (response.mapped.family != context->bound_address.family ||
         response.origin.family != context->bound_address.family) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number,
+                                              "address_family_mismatch");
         return UTP_INTERNAL_ERROR_OK;
     }
     if (response.phase != task->phase || response.message_type != utp_nat_probe_response_message_type(task->phase)) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number, "phase_mismatch");
         return UTP_INTERNAL_ERROR_OK;
     }
     record = utp_context_find_nat_probe_record(task, header->packet_number);
-    if (record == NULL || response.token_length != sizeof(record->token) ||
-        memcmp(response.token, record->token, sizeof(record->token)) != 0 ||
-        !utp_context_nat_response_source_is_valid(task, peer, &response)) {
+    if (record == NULL) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number,
+                                              "packet_number_mismatch");
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (response.token_length != sizeof(record->token) ||
+        memcmp(response.token, record->token, sizeof(record->token)) != 0) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number, "token_mismatch");
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (!utp_context_nat_response_source_is_valid(task, peer, &response)) {
+        utp_context_log_nat_response_rejected(context, task->phase, peer, header->packet_number, "source_mismatch");
         return UTP_INTERNAL_ERROR_OK;
     }
     record->consumed = true;

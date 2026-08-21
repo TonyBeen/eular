@@ -82,7 +82,7 @@ Context 不在 bind、connect、注册时自动启动探测。
 IDLE -> PROBING -> IDLE
 ```
 
-一次正常完成的任务会留下有效 NAT 记录，分类可以是 `UNKNOWN` 或 `UDP_BLOCKED`；永久本地错误
+一次正常完成的任务会留下有效 NAT 记录，分类可以是 `UNKNOWN`；永久本地错误
 不会创建记录。记录本身只在到达 `expires_at` 时失效，任务回到 `IDLE` 不表示记录被清除。
 
 - `PROBING` 期间再次调用返回 `UTP_STATUS_IN_PROGRESS`，已有任务继续执行。
@@ -90,7 +90,7 @@ IDLE -> PROBING -> IDLE
   `UTP_STATUS_NOT_FOUND`。它不发送取消数据报，而是同步取消本地定时器和待发送项、释放任务并
   返回 `IDLE`；主动取消绝不调用原始 `utp_on_nat_probe_fn`。调用返回后可立刻发起新的探测。
 - 调用成功只表示任务已启动；最终状态通过一次 `utp_on_nat_probe_fn` 回调返回。
-- NAT 分类已完成时，即使分类为 `UNKNOWN` 或 `UDP_BLOCKED`，回调也必须返回 `UTP_STATUS_OK`
+- NAT 分类已完成时，即使分类为 `UNKNOWN`，回调也必须返回 `UTP_STATUS_OK`
   与结果视图。只有随机数、内存或永久 socket 错误等操作失败时才返回错误，且结果视图
   为空。结果视图仅在回调期间有效。
 - NAT 探测结果至少包含地址族、探测侧观测的公网映射 endpoint、NAT 类型、端口样本、探测时间和绝对失效时间。
@@ -218,9 +218,10 @@ t = T       : 阶段结束
 - 发送返回临时错误时保留该次发送预算并按定时器重试；永久本地发送错误、明确 ICMP
   不可达、纯超时必须分别记录为 `LOCAL_SEND_FAILED`、`ICMP_UNREACHABLE`、`NO_RESPONSE`
   诊断，不能混为一个超时错误。
-- 主端点在完整预算内没有任何合法响应时，结果为 `UDP_BLOCKED`；本地永久发送错误导致未能
+- 主端点在完整预算内没有任何合法响应时，结果为 `UNKNOWN`；无响应无法区分 UDP 被阻断、临时丢包、
+  路由异常或服务端故障。本地永久发送错误导致未能
   完成探测时回调失败，不创建可用于注册的 NAT 记录。辅助端点失败只使类型降级为
-  `UNKNOWN`，不能把主端点已经确认的可达性改写为 `UDP_BLOCKED`。
+  `UNKNOWN`，不能把主端点已经确认的可达性改写为不可达。
 - 主、辅映射一致且各阶段内只有一个映射时，映射行为为 endpoint-independent；不同目标映射
   不同则为对端相关映射；同阶段出现多个映射，或两个公网 IP 不同，归类
   `SYMMETRIC_MULTI_LINE`。
@@ -230,7 +231,7 @@ t = T       : 阶段结束
 
 IPv6 不得套用 IPv4 NAT44 分类。首期仅记录该地址族 UDP 是否可达，以及可选的换端口、换
 IP 过滤证据；对外可将可达结果表示为 `OPEN_PUBLIC`、受过滤结果表示为
-`OPEN_PUBLIC_WITH_FIREWALL`、完整预算无响应表示为 `UDP_BLOCKED`，其余情况为 `UNKNOWN`。
+`OPEN_PUBLIC_WITH_FIREWALL`，其余情况均表示为 `UNKNOWN`。
 NAT66/NPTv6 的映射分类以后单独定义。
 
 ### 3.4 Context 侧详细状态机
@@ -304,7 +305,7 @@ UTP `packet_number` 和随机 token，并在内核接受两个数据报后进入
 
 临时发送阻塞不得无限延长任务：任何阶段的总期限均为其配置的 `phase_timeout_ms`。总期限内
 一直无法向内核提交一个完整的两包轮次时，任务以本地 I/O 失败结束，而不是伪装成
-`UDP_BLOCKED`。永久发送错误映射为现有 socket 写错误；随机数失败映射为
+`UNKNOWN`。永久发送错误映射为现有 socket 写错误；随机数失败映射为
 `UTP_STATUS_RANDOM_GENERATION`。
 
 阶段完成判定如下：
@@ -313,8 +314,8 @@ UTP `packet_number` 和随机 token，并在内核接受两个数据报后进入
    后续响应仍计入成功数、RTT 和不同映射集合。首个合法 `ALTERNATE_PROBE_ENDPOINT` 只能在同地址族、非
    未指定地址、且与主端点具有不同公网 IP 时锁定为辅助端点；后续响应给出不同的
    `ALTERNATE_PROBE_ENDPOINT` 时，保留主映射观测但废弃辅助计划，最终按单端点降级，不能在多个候选间切换。
-2. `PROBE1` 没有任何合法响应时，任务仍正常完成，结果为 `UDP_BLOCKED`。这表示在当前
-   NAT 服务可达性假设下 UDP 探测不可达，不表示 Context socket 或普通 UTP 连接立即失效。
+2. `PROBE1` 没有任何合法响应时，任务仍正常完成，结果为 `UNKNOWN`。这表示当前探测没有取得
+   足够证据，不表示 Context socket 或普通 UTP 连接立即失效。
 3. 存在已锁定辅助端点时依次执行 `CHANGE_PORT`、`CHANGE_IP`。每个过滤阶段只需要一条
    完全匹配响应即记录成功并立即推进；耗尽最多 6 次发送只记录该过滤证据失败，不使整个任务失败。
 4. `PROBE2` 对锁定的辅助端点执行完整映射预算。其成功与否、映射集合和 `PROBE1` 的比较

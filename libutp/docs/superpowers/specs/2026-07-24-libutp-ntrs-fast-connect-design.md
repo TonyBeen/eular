@@ -242,7 +242,7 @@ NAT 探测输出对齐 **NTRS 的 9 个类型常量**(`NTRS_NAT_CLASS_*`,值 0�
 | `SYMMETRIC`(6) | **对称(同 IP)** | 端口不可预测但 IP 稳定 → 预测可行 |
 | `SYMMETRIC_CHANGE_LINE`(7) | **对称(多线)** | 端口+IP 都变 → 预测基本无效 |
 | `UNKNOWN`(0) | **按对称,best-effort** | 方向当 ACTIVE,永不早失败 |
-| `UDP_BLOCKED`(8) | **不可达** | 任一侧=8 → NtrsB 立即回失败 |
+| `UDP_BLOCKED`(8) | **兼容保留** | 当前 NAT 探测不产出；不得据此早失败 |
 
 **方向规则**:封闭度 `Open < IP限制 < 端口限制 < 对称 < 对称多线`;**更封闭一侧 = ACTIVE(先发 Initial)**,开放侧 PASSIVE。**平级(同封闭度,如 Open×Open、端口×端口)时:主叫方(调 `Connect` 的 A)= ACTIVE**,被叫 = PASSIVE——按连接发起方裁决,确定且无歧义。理由:对称对每个目标用不可预测端口,只有它先发才暴露该端口;开放侧从**收到包的源地址**回(§7),多数无需预测。
 
@@ -263,7 +263,7 @@ NAT 探测输出对齐 **NTRS 的 9 个类型常量**(`NTRS_NAT_CLASS_*`,值 0�
 - **✗ 早失败**:NtrsB 在 CONNECT 时直接回失败,连试都不试。
 
 **NtrsB 早失败逻辑**
-- **任一侧 `UDP_BLOCKED`(8)** → 立即回失败,独立错误码 `kUdpBlocked`(无 UDP 路径)。
+- `UDP_BLOCKED`(8) 是兼容保留值，当前流程不会产出，不能作为早失败依据。
 - **双方均确诊为对称(6/7)** → 若**公网 IP 不同** → 立即回失败(`kDoubleSymmetric`);若**公网 IP 相同** → 仍转发(可能同 LAN,靠 host-local §6.6 救)。
 - 含 `UNKNOWN` 的组合**一律不早失败**,best-effort 照打(两个 Unknown 很可能其实是锥型)。
 
@@ -517,7 +517,7 @@ NtrsB 按三键限速 + B 端 pending 上限:
 
 ## 13. 测试与验收
 
-- **NAT 组合矩阵(行为类,§6.3)**:Open / IP限制 / 端口限制 / 对称(同IP) / 对称多线 全组合。重点用例:对称×端口限制走**端口预测(P)**、对称多线×端口限制走 **best-effort(P弱)**、`UDP_BLOCKED` 任一侧走 **NtrsB 早失败(kUdpBlocked)**、双对称走**早失败(同公网IP留 host-local)**、`Unknown` 走 **best-effort 不早失败**。
+- **NAT 组合矩阵(行为类,§6.3)**:Open / IP限制 / 端口限制 / 对称(同IP) / 对称多线 全组合。重点用例:对称×端口限制走**端口预测(P)**、对称多线×端口限制走 **best-effort(P弱)**、双对称走**早失败(同公网IP留 host-local)**、`Unknown` 走 **best-effort 不早失败**。
 - **成功率 + P99**:netem(丢包/时延/重排)下打洞成功率与 P99 建连时间作回归门槛(复用 `cpp/test/scripts/netem_*`)。
 - **对称可达**:回观测源、提交 prflx 路由;预测外地址被正确归并。
 - **cid 归并/去重**:转发 CONNECT 与直连 Initial 归一条;0-RTT 直连+打洞双份不双交付;反向提升只回调一次。

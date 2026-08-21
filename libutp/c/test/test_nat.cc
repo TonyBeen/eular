@@ -401,7 +401,7 @@ TEST_CASE("nat probe response only permits alternate endpoint during probe1", "[
             UTP_INTERNAL_ERROR_PROTOCOL);
 }
 
-TEST_CASE("nat probe timeout returns a normal UDP blocked result", "[nat][context]")
+TEST_CASE("nat probe timeout returns a normal unknown result", "[nat][context]")
 {
     event_base*             event_base      = event_base_new();
     utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
@@ -427,7 +427,7 @@ TEST_CASE("nat probe timeout returns a normal UDP blocked result", "[nat][contex
     REQUIRE(callback.calls == 1u);
     REQUIRE(callback.status == UTP_STATUS_OK);
     REQUIRE(callback.has_result);
-    REQUIRE(callback.result.nat_class == UTP_NAT_CLASS_UDP_BLOCKED);
+    REQUIRE(callback.result.nat_class == UTP_NAT_CLASS_UNKNOWN);
     REQUIRE(utp_context_cancel_nat_probe(context) == UTP_STATUS_NOT_FOUND);
     utp_context_destroy(context);
     event_base_free(event_base);
