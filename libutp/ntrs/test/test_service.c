@@ -158,8 +158,8 @@ static void test_control_codec(void)
         .initiator_node_id = {6u},
         .initiator_nonce   = {7u},
     };
-    utp_ntrs_node_link_hello_t               decoded_hello = {0};
-    const utp_ntrs_forward_filter_response_t forward       = {
+    utp_ntrs_node_link_hello_t                decoded_hello = {0};
+    const utp_ntrs_forward_binding_response_t forward       = {
         .target = {.node_id = {8u}, .boot_id = {9u}},
         .client =
             {
@@ -170,11 +170,11 @@ static void test_control_codec(void)
         .forward_id    = UINT64_C(10),
         .packet_number = UINT64_C(11),
         .token         = {12u},
-        .phase         = 3u,
+        .step          = 1u,
     };
-    utp_ntrs_forward_filter_response_t decoded_forward = {0};
-    uint8_t                            message[512]    = {0};
-    size_t                             length;
+    utp_ntrs_forward_binding_response_t decoded_forward = {0};
+    uint8_t                             message[512]    = {0};
+    size_t                              length;
 
     length = utp_ntrs_control_encode_registration(message, sizeof(message), &registration);
     assert(length == 320u);
@@ -208,12 +208,12 @@ static void test_control_codec(void)
     assert(length == 296u);
     assert(utp_ntrs_control_decode_link_hello(message, length, &decoded_hello));
     assert(memcmp(&hello, &decoded_hello, sizeof(hello)) == 0);
-    length = utp_ntrs_control_encode_forward_filter_response(message, sizeof(message), &forward);
+    length = utp_ntrs_control_encode_forward_binding_response(message, sizeof(message), &forward);
     assert(length == 203u);
-    assert(utp_ntrs_control_decode_forward_filter_response(message, length, &decoded_forward));
+    assert(utp_ntrs_control_decode_forward_binding_response(message, length, &decoded_forward));
     assert(decoded_forward.forward_id == forward.forward_id);
     assert(decoded_forward.packet_number == forward.packet_number);
-    assert(decoded_forward.phase == forward.phase);
+    assert(decoded_forward.step == forward.step);
     assert(utp_ntrs_node_instance_equal(&decoded_forward.target, &forward.target));
     assert(decoded_forward.client.family == forward.client.family);
     assert(decoded_forward.client.port == forward.client.port);
@@ -516,7 +516,7 @@ static void test_write_u16(uint8_t* data, uint16_t value)
     data[1] = (uint8_t)value;
 }
 
-static void test_probe_request(uint8_t packet[128], uint64_t packet_number, uint8_t message_type, uint8_t phase)
+static void test_binding_request(uint8_t packet[128], uint64_t packet_number, uint8_t step)
 {
     const utp_packet_header_t header = {
         .packet_number  = packet_number,
@@ -527,10 +527,10 @@ static void test_probe_request(uint8_t packet[128], uint64_t packet_number, uint
     uint8_t        index;
 
     assert(utp_proto_encode_header(packet, 128u, &header) == UTP_INTERNAL_ERROR_OK);
-    payload[0] = 1u;
-    payload[1] = message_type;
-    payload[2] = phase;
-    payload[3] = 0u;
+    payload[0] = 2u;
+    payload[1] = 1u;
+    payload[2] = step;
+    payload[3] = step == 1u ? 3u : 1u;
     test_write_u16(payload + 4u, 1u);
     test_write_u16(payload + 6u, 12u);
     for (index = 0u; index < 12u; ++index) {
@@ -558,33 +558,37 @@ static uint16_t test_response_origin_port(const uint8_t* response, size_t respon
 
 static void test_udp_probe_handler(void)
 {
-    const utp_ntrs_endpoint_t   client          = test_endpoint((uint8_t)AF_INET, 40000u, 10u);
-    const utp_ntrs_endpoint_t   probe           = test_endpoint((uint8_t)AF_INET, 3478u, 20u);
-    const utp_ntrs_endpoint_t   change_port     = test_endpoint((uint8_t)AF_INET, 3479u, 20u);
-    const utp_ntrs_endpoint_t   alternate       = test_endpoint((uint8_t)AF_INET, 3478u, 30u);
-    utp_ntrs_udp_reply_socket_t reply_socket    = UTP_NTRS_UDP_REPLY_CHANGE_PORT;
-    utp_packet_header_t         response_header = {0};
-    uint8_t                     request[128]    = {0};
-    uint8_t                     response[128]   = {0};
-    size_t                      response_length = 0u;
+    const utp_ntrs_endpoint_t client          = test_endpoint((uint8_t)AF_INET, 40000u, 10u);
+    const utp_ntrs_endpoint_t probe           = test_endpoint((uint8_t)AF_INET, 3478u, 20u);
+    const utp_ntrs_endpoint_t change_port     = test_endpoint((uint8_t)AF_INET, 3479u, 20u);
+    const utp_ntrs_endpoint_t alternate       = test_endpoint((uint8_t)AF_INET, 3478u, 30u);
+    utp_packet_header_t       response_header = {0};
+    uint8_t                   request[128]    = {0};
+    uint8_t                   response[128]   = {0};
+    size_t                    response_length = 0u;
 
-    test_probe_request(request, 99u, 1u, 1u);
+    test_binding_request(request, 99u, 1u);
     assert(utp_ntrs_udp_handle_probe_request(request, sizeof(request), &client, &probe, &change_port, &alternate,
-                                             response, sizeof(response), &response_length, &reply_socket));
-    assert(reply_socket == UTP_NTRS_UDP_REPLY_PROBE);
+                                             response, sizeof(response), &response_length, UTP_NTRS_UDP_REPLY_PROBE));
     assert(utp_proto_decode_header(&response_header, response, response_length) == UTP_INTERNAL_ERROR_OK);
     assert(response_header.packet_number == 99u);
     assert(response_header.type == 0x07u);
     assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 2u);
-    test_probe_request(request, 100u, 3u, 2u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 2u] == 1u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 3u] == 0u);
+    assert(test_response_origin_port(response, response_length) == 3478u);
+    test_binding_request(request, 100u, 2u);
     assert(utp_ntrs_udp_handle_probe_request(request, sizeof(request), &client, &probe, &change_port, &alternate,
-                                             response, sizeof(response), &response_length, &reply_socket));
-    assert(reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT);
-    assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 4u);
+                                             response, sizeof(response), &response_length,
+                                             UTP_NTRS_UDP_REPLY_CHANGE_PORT));
+    assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 2u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 2u] == 2u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 3u] == 1u);
     assert(test_response_origin_port(response, response_length) == 3479u);
-    test_probe_request(request, 101u, 3u, 3u);
+    test_binding_request(request, 101u, 1u);
     assert(!utp_ntrs_udp_handle_probe_request(request, sizeof(request), &client, &probe, &change_port, &alternate,
-                                              response, sizeof(response), &response_length, &reply_socket));
+                                              response, sizeof(response), &response_length,
+                                              UTP_NTRS_UDP_REPLY_CHANGE_PORT));
 }
 
 static uint16_t test_allocate_loopback_port(void)
@@ -649,7 +653,7 @@ static void test_udp_worker_round_trip(void)
 
     assert(server != NULL);
     assert(client_fd >= 0);
-    test_probe_request(request, 333u, 1u, 1u);
+    test_binding_request(request, 333u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd = (struct pollfd){
@@ -687,7 +691,7 @@ static void test_udp_worker_ipv6_round_trip(void)
     server                                   = utp_ntrs_udp_server_start(&options);
     assert(server != NULL);
     assert(client_fd >= 0);
-    test_probe_request(request, 337u, 1u, 1u);
+    test_binding_request(request, 337u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination,
                   (socklen_t)sizeof(destination)) == (ssize_t)sizeof(request));
     poll_fd = (struct pollfd){
@@ -731,17 +735,30 @@ static void test_udp_worker_change_port(void)
     server                                  = utp_ntrs_udp_server_start(&options);
     assert(server != NULL);
     assert(client_fd >= 0);
-    test_probe_request(request, 334u, 3u, 2u);
+    test_binding_request(request, 334u, 2u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd = (struct pollfd){
         .fd     = client_fd,
         .events = POLLIN,
     };
-    assert(poll(&poll_fd, 1u, 1000) == 1);
-    assert(recvfrom(client_fd, response, sizeof(response), 0, (struct sockaddr*)&source, &source_length) > 0);
-    assert(ntohs(source.sin_port) == change_port);
-    assert(test_response_origin_port(response, sizeof(response)) == change_port);
+    {
+        bool saw_probe       = false;
+        bool saw_change_port = false;
+
+        for (uint8_t index = 0u; index < 2u; ++index) {
+            assert(poll(&poll_fd, 1u, 1000) == 1);
+            source_length = (socklen_t)sizeof(source);
+            assert(recvfrom(client_fd, response, sizeof(response), 0, (struct sockaddr*)&source, &source_length) > 0);
+            if (ntohs(source.sin_port) == probe_port) {
+                saw_probe = true;
+            } else if (ntohs(source.sin_port) == change_port) {
+                saw_change_port = true;
+                assert(test_response_origin_port(response, sizeof(response)) == change_port);
+            }
+        }
+        assert(saw_probe && saw_change_port);
+    }
     utp_ntrs_udp_server_stop(server);
     assert(close(client_fd) == 0);
 }
@@ -776,10 +793,10 @@ static void test_udp_worker_source_rate_limit(void)
     server                                  = utp_ntrs_udp_server_start(&options);
     assert(server != NULL);
     assert(client_fd >= 0);
-    test_probe_request(request, 340u, 1u, 1u);
+    test_binding_request(request, 340u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
-    test_probe_request(request, 341u, 1u, 1u);
+    test_binding_request(request, 341u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd = (struct pollfd){
@@ -825,7 +842,7 @@ static void test_udp_worker_source_rate_refill(void)
     server                                  = utp_ntrs_udp_server_start(&options);
     assert(server != NULL);
     assert(client_fd >= 0);
-    test_probe_request(request, 342u, 1u, 1u);
+    test_binding_request(request, 342u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd = (struct pollfd){
@@ -835,13 +852,13 @@ static void test_udp_worker_source_rate_refill(void)
     assert(poll(&poll_fd, 1u, 1000) == 1);
     assert(recvfrom(client_fd, response, sizeof(response), 0, NULL, NULL) > 0);
     assert(usleep(600000u) == 0);
-    test_probe_request(request, 343u, 1u, 1u);
+    test_binding_request(request, 343u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd.revents = 0;
     assert(poll(&poll_fd, 1u, 150) == 0);
     assert(usleep(500000u) == 0);
-    test_probe_request(request, 344u, 1u, 1u);
+    test_binding_request(request, 344u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
     poll_fd.revents = 0;
@@ -886,7 +903,7 @@ static void test_udp_worker_source_rate_shared_by_ip(void)
     for (index = 0u; index < 4u; ++index) {
         clients[index] = socket(AF_INET, SOCK_DGRAM, 0);
         assert(clients[index] >= 0);
-        test_probe_request(request, (uint64_t)(350u + index), 1u, 1u);
+        test_binding_request(request, (uint64_t)(350u + index), 1u);
         assert(sendto(clients[index], request, sizeof(request), 0, (const struct sockaddr*)&destination,
                       sizeof(destination)) == (ssize_t)sizeof(request));
         poll_fds[index] = (struct pollfd){
@@ -907,11 +924,11 @@ static void test_udp_worker_source_rate_shared_by_ip(void)
 }
 
 typedef struct test_forward_capture {
-    utp_ntrs_forward_filter_response_t forward;  // 主 loop 收到的转发请求
-    uint32_t                           calls;    // 回调次数
+    utp_ntrs_forward_binding_response_t forward;  // 主 loop 收到的转发请求
+    uint32_t                            calls;    // 回调次数
 } test_forward_capture_t;
 
-static void test_on_udp_forward(void* user_data, const utp_ntrs_forward_filter_response_t* forward)
+static void test_on_udp_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward)
 {
     test_forward_capture_t* const capture = user_data;
 
@@ -919,7 +936,7 @@ static void test_on_udp_forward(void* user_data, const utp_ntrs_forward_filter_r
     ++capture->calls;
 }
 
-static void test_udp_worker_change_ip_forward(void)
+static void test_udp_worker_combined_response_forward(void)
 {
     const uint16_t                 probe_port  = test_allocate_loopback_port();
     const uint16_t                 change_port = test_allocate_loopback_port();
@@ -964,25 +981,9 @@ static void test_udp_worker_change_ip_forward(void)
     assert(server != NULL);
     assert(client_fd >= 0);
     utp_ntrs_udp_server_set_primary(server, &primary, &alternate);
-    test_probe_request(request, 335u, 1u, 1u);
+    test_binding_request(request, 335u, 1u);
     assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
            (ssize_t)sizeof(request));
-    poll_fd = (struct pollfd){
-        .fd     = client_fd,
-        .events = POLLIN,
-    };
-    assert(poll(&poll_fd, 1u, 1000) == 1);
-    assert(recvfrom(client_fd, response, sizeof(response), 0, NULL, NULL) > 0);
-    test_probe_request(request, 336u, 3u, 3u);
-    assert(sendto(client_fd, request, sizeof(request), 0, (const struct sockaddr*)&destination, sizeof(destination)) ==
-           (ssize_t)sizeof(request));
-    assert(event_base_loop(base, EVLOOP_ONCE) == 0);
-    assert(capture.calls == 1u);
-    assert(capture.forward.forward_id != 0u);
-    assert(capture.forward.packet_number == 336u);
-    assert(capture.forward.phase == 3u);
-    assert(utp_ntrs_node_instance_equal(&capture.forward.target, &primary));
-    assert(utp_ntrs_udp_server_send_filter_response(server, &capture.forward));
     poll_fd = (struct pollfd){
         .fd     = client_fd,
         .events = POLLIN,
@@ -990,8 +991,28 @@ static void test_udp_worker_change_ip_forward(void)
     assert(poll(&poll_fd, 1u, 1000) == 1);
     assert(recvfrom(client_fd, response, sizeof(response), 0, (struct sockaddr*)&source, &source_length) > 0);
     assert(ntohs(source.sin_port) == probe_port);
-    assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 4u);
-    assert(response[UTP_PACKET_HEADER_SIZE + 2u] == 3u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 2u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 2u] == 1u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 3u] == 0u);
+    assert(event_base_loop(base, EVLOOP_ONCE) == 0);
+    assert(capture.calls == 1u);
+    assert(capture.forward.forward_id != 0u);
+    assert(capture.forward.packet_number == 335u);
+    assert(capture.forward.step == 1u);
+    assert(utp_ntrs_node_instance_equal(&capture.forward.target, &primary));
+    assert(utp_ntrs_udp_server_send_binding_response(server, &capture.forward));
+    poll_fd = (struct pollfd){
+        .fd     = client_fd,
+        .events = POLLIN,
+    };
+    assert(poll(&poll_fd, 1u, 1000) == 1);
+    assert(recvfrom(client_fd, response, sizeof(response), 0, (struct sockaddr*)&source, &source_length) > 0);
+    assert(ntohs(source.sin_port) == change_port);
+    assert(response[UTP_PACKET_HEADER_SIZE + 1u] == 2u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 2u] == 1u);
+    assert(response[UTP_PACKET_HEADER_SIZE + 3u] == 3u);
+    poll_fd.revents = 0;
+    assert(poll(&poll_fd, 1u, 100) == 0);
     utp_ntrs_udp_server_stop(server);
     assert(close(client_fd) == 0);
     event_base_free(base);
@@ -1018,7 +1039,7 @@ int main(void)
     test_udp_worker_source_rate_limit();
     test_udp_worker_source_rate_refill();
     test_udp_worker_source_rate_shared_by_ip();
-    test_udp_worker_change_ip_forward();
+    test_udp_worker_combined_response_forward();
     (void)puts("utp_ntrs_service_test: ok");
     return 0;
 }

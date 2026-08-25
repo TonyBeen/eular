@@ -14,14 +14,14 @@
 #define UTP_NTRS_ASSIGNMENT_REQUEST_PAYLOAD_SIZE (12u + UTP_NTRS_NODE_INSTANCE_WIRE_SIZE * 3u)
 #define UTP_NTRS_LINK_HELLO_PAYLOAD_SIZE \
     (UTP_NTRS_NODE_INSTANCE_WIRE_SIZE + UTP_NTRS_NODE_ID_SIZE + UTP_NTRS_LINK_NONCE_SIZE)
-#define UTP_NTRS_FORWARD_FILTER_RESPONSE_PAYLOAD_SIZE \
+#define UTP_NTRS_FORWARD_BINDING_RESPONSE_PAYLOAD_SIZE \
     (8u + UTP_NTRS_NODE_INSTANCE_WIRE_SIZE + UTP_NTRS_ENDPOINT_WIRE_SIZE + 8u + UTP_NTRS_FORWARD_TOKEN_SIZE + 4u)
-#define UTP_NTRS_NAT_PHASE_CHANGE_IP          3u
+#define UTP_NTRS_NAT_STEP_PRIMARY_BINDING     1u
 #define UTP_NTRS_FORWARD_TARGET_OFFSET        8u
 #define UTP_NTRS_FORWARD_CLIENT_OFFSET        (UTP_NTRS_FORWARD_TARGET_OFFSET + UTP_NTRS_NODE_INSTANCE_WIRE_SIZE)
 #define UTP_NTRS_FORWARD_PACKET_NUMBER_OFFSET (UTP_NTRS_FORWARD_CLIENT_OFFSET + UTP_NTRS_ENDPOINT_WIRE_SIZE)
 #define UTP_NTRS_FORWARD_TOKEN_OFFSET         (UTP_NTRS_FORWARD_PACKET_NUMBER_OFFSET + 8u)
-#define UTP_NTRS_FORWARD_PHASE_OFFSET         (UTP_NTRS_FORWARD_TOKEN_OFFSET + UTP_NTRS_FORWARD_TOKEN_SIZE)
+#define UTP_NTRS_FORWARD_STEP_OFFSET          (UTP_NTRS_FORWARD_TOKEN_OFFSET + UTP_NTRS_FORWARD_TOKEN_SIZE)
 
 _Static_assert(sizeof(utp_ntrs_node_instance_t) == UTP_NTRS_NODE_INSTANCE_WIRE_SIZE,
                "Node instance must not contain padding");
@@ -71,7 +71,7 @@ static uint64_t utp_ntrs_read_u64(const uint8_t* data)
 
 static bool utp_ntrs_control_type_valid(uint8_t type)
 {
-    return type >= UTP_NTRS_CONTROL_NODE_REGISTER && type <= UTP_NTRS_CONTROL_NAT_FORWARD_FILTER_RSP;
+    return type >= UTP_NTRS_CONTROL_NODE_REGISTER && type <= UTP_NTRS_CONTROL_NAT_FORWARD_BINDING_RESPONSE;
 }
 
 static bool utp_ntrs_family_valid(uint8_t family) { return family == (uint8_t)AF_INET || family == (uint8_t)AF_INET6; }
@@ -481,14 +481,14 @@ bool utp_ntrs_control_decode_link_hello(const uint8_t* data, size_t length, utp_
            utp_ntrs_bytes_nonzero(hello->initiator_nonce, sizeof(hello->initiator_nonce));
 }
 
-size_t utp_ntrs_control_encode_forward_filter_response(uint8_t* data, size_t capacity,
-                                                       const utp_ntrs_forward_filter_response_t* forward)
+size_t utp_ntrs_control_encode_forward_binding_response(uint8_t* data, size_t capacity,
+                                                        const utp_ntrs_forward_binding_response_t* forward)
 {
     uint8_t* payload;
 
-    if (capacity < UTP_NTRS_CONTROL_HEADER_SIZE + UTP_NTRS_FORWARD_FILTER_RESPONSE_PAYLOAD_SIZE ||
-        utp_ntrs_control_encode_header(data, capacity, UTP_NTRS_CONTROL_NAT_FORWARD_FILTER_RSP,
-                                       UTP_NTRS_FORWARD_FILTER_RESPONSE_PAYLOAD_SIZE) == 0u) {
+    if (capacity < UTP_NTRS_CONTROL_HEADER_SIZE + UTP_NTRS_FORWARD_BINDING_RESPONSE_PAYLOAD_SIZE ||
+        utp_ntrs_control_encode_header(data, capacity, UTP_NTRS_CONTROL_NAT_FORWARD_BINDING_RESPONSE,
+                                       UTP_NTRS_FORWARD_BINDING_RESPONSE_PAYLOAD_SIZE) == 0u) {
         return 0u;
     }
     payload = data + UTP_NTRS_CONTROL_HEADER_SIZE;
@@ -497,32 +497,32 @@ size_t utp_ntrs_control_encode_forward_filter_response(uint8_t* data, size_t cap
     utp_ntrs_encode_endpoint(payload + UTP_NTRS_FORWARD_CLIENT_OFFSET, &forward->client);
     utp_ntrs_write_u64(payload + UTP_NTRS_FORWARD_PACKET_NUMBER_OFFSET, forward->packet_number);
     (void)memcpy(payload + UTP_NTRS_FORWARD_TOKEN_OFFSET, forward->token, sizeof(forward->token));
-    payload[UTP_NTRS_FORWARD_PHASE_OFFSET]      = forward->phase;
-    payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 1u] = 0u;
-    payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 2u] = 0u;
-    payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 3u] = 0u;
-    return UTP_NTRS_CONTROL_HEADER_SIZE + UTP_NTRS_FORWARD_FILTER_RESPONSE_PAYLOAD_SIZE;
+    payload[UTP_NTRS_FORWARD_STEP_OFFSET]      = forward->step;
+    payload[UTP_NTRS_FORWARD_STEP_OFFSET + 1u] = 0u;
+    payload[UTP_NTRS_FORWARD_STEP_OFFSET + 2u] = 0u;
+    payload[UTP_NTRS_FORWARD_STEP_OFFSET + 3u] = 0u;
+    return UTP_NTRS_CONTROL_HEADER_SIZE + UTP_NTRS_FORWARD_BINDING_RESPONSE_PAYLOAD_SIZE;
 }
 
-bool utp_ntrs_control_decode_forward_filter_response(const uint8_t* data, size_t length,
-                                                     utp_ntrs_forward_filter_response_t* forward)
+bool utp_ntrs_control_decode_forward_binding_response(const uint8_t* data, size_t length,
+                                                      utp_ntrs_forward_binding_response_t* forward)
 {
     utp_ntrs_control_header_t header;
     const uint8_t*            payload;
 
     if (!utp_ntrs_control_decode_header(data, length, &header) ||
-        header.type != UTP_NTRS_CONTROL_NAT_FORWARD_FILTER_RSP ||
-        header.payload_length != UTP_NTRS_FORWARD_FILTER_RESPONSE_PAYLOAD_SIZE) {
+        header.type != UTP_NTRS_CONTROL_NAT_FORWARD_BINDING_RESPONSE ||
+        header.payload_length != UTP_NTRS_FORWARD_BINDING_RESPONSE_PAYLOAD_SIZE) {
         return false;
     }
     payload = data + UTP_NTRS_CONTROL_HEADER_SIZE;
     if (utp_ntrs_read_u64(payload) == 0u || utp_ntrs_read_u64(payload + UTP_NTRS_FORWARD_PACKET_NUMBER_OFFSET) == 0u ||
-        payload[UTP_NTRS_FORWARD_PHASE_OFFSET] != UTP_NTRS_NAT_PHASE_CHANGE_IP ||
-        payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 1u] != 0u || payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 2u] != 0u ||
-        payload[UTP_NTRS_FORWARD_PHASE_OFFSET + 3u] != 0u) {
+        payload[UTP_NTRS_FORWARD_STEP_OFFSET] != UTP_NTRS_NAT_STEP_PRIMARY_BINDING ||
+        payload[UTP_NTRS_FORWARD_STEP_OFFSET + 1u] != 0u || payload[UTP_NTRS_FORWARD_STEP_OFFSET + 2u] != 0u ||
+        payload[UTP_NTRS_FORWARD_STEP_OFFSET + 3u] != 0u) {
         return false;
     }
-    *forward            = (utp_ntrs_forward_filter_response_t){0};
+    *forward            = (utp_ntrs_forward_binding_response_t){0};
     forward->forward_id = utp_ntrs_read_u64(payload);
     (void)memcpy(&forward->target, payload + UTP_NTRS_FORWARD_TARGET_OFFSET, sizeof(forward->target));
     if (!utp_ntrs_node_instance_valid(&forward->target) ||
@@ -532,6 +532,6 @@ bool utp_ntrs_control_decode_forward_filter_response(const uint8_t* data, size_t
     }
     forward->packet_number = utp_ntrs_read_u64(payload + UTP_NTRS_FORWARD_PACKET_NUMBER_OFFSET);
     (void)memcpy(forward->token, payload + UTP_NTRS_FORWARD_TOKEN_OFFSET, sizeof(forward->token));
-    forward->phase = payload[UTP_NTRS_FORWARD_PHASE_OFFSET];
+    forward->step = payload[UTP_NTRS_FORWARD_STEP_OFFSET];
     return true;
 }

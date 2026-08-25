@@ -137,29 +137,32 @@ reserve = 0
 UTP payload 是无 magic 的私有 NTRS 探测帧：
 
 ```text
-probe_header = version:u8 | message_type:u8 | phase:u8 | flags:u8
+probe_header = version:u8 | message_type:u8 | step:u8 | change_flags:u8
 TLV          = type:u16 | length:u16 | value
 ```
 
-- `version` 首期固定为 `1`；没有 magic，UTP `type` 已完成第一层解复用。单个 NAT 探测包最大
+- `version` 固定为 `2`；没有 magic，UTP `type` 已完成第一层解复用。单个 NAT 探测包最大
   `2048` 字节，且不得超过 Context 的当前发送 MTU。
-- `message_type` 固定为：`PROBE_REQ = 1`、`PROBE_RSP = 2`、`FILTER_REQ = 3`、
-  `FILTER_RSP = 4`。`phase` 固定为：`PROBE1 = 1`、`CHANGE_PORT = 2`、`CHANGE_IP = 3`、
-  `PROBE2 = 4`。`flags` 首期必须为 `0`。
+- `message_type` 固定为：`BINDING_REQUEST = 1`、`BINDING_RESPONSE = 2`。
+- `step` 固定为：`PRIMARY_BINDING = 1`、`ALTERNATE_BINDING = 2`。
+- `change_flags` 是响应源切换要求及响应来源标识：`NONE = 0`、`CHANGE_PORT = 1`、
+  `CHANGE_IP = 2`、`CHANGE_IP | CHANGE_PORT = 3`。协议不单独发送只带 `CHANGE_IP` 的请求或响应。
 - `PROBE_TOKEN` 为 12 字节随机值；每个实际发送的数据报生成新 token，响应必须原样回显。
 - `PADDING` TLV 只允许出现在请求，value 必须全为零；Context 使用它精确填充到 128 字节，NAT
   服务解析后忽略其内容。首期 TLV 编号固定为：`PROBE_TOKEN = 1`、`MAPPED_ADDR = 6`、
   `ORIGIN_ADDR = 7`、`ALTERNATE_PROBE_ENDPOINT = 8`、`PADDING = 12`；未列出的编号保留。
 - `request_id`、私有 `sequence` 与 `timestamp_ms` 从线格式删除。Context 按 UTP
-  `packet_number` 直接定位当前阶段的发送记录，再校验 `message_type`、`phase`、`PROBE_TOKEN`
-  及预期源 endpoint，不能只按包号、token 或 phase 接受响应。
-- 正常响应必须携带 `MAPPED_ADDR` 和 `ORIGIN_ADDR`；首次 `PROBE1` 成功响应还应携带同地址族
-  的 `ALTERNATE_PROBE_ENDPOINT`，供后续 `PROBE2` 与 `CHANGE_IP` 使用。
+  `packet_number` 直接定位当前步骤的发送记录，再校验 `message_type`、`step`、`change_flags`、
+  `PROBE_TOKEN` 及预期源 endpoint。一个请求可产生多个响应，因此发送记录按响应来源维护
+  已接收位图，不能在收到第一包响应后整体作废。
+- 正常响应必须携带 `MAPPED_ADDR` 和 `ORIGIN_ADDR`。协同 Node 可用时，`PRIMARY_BINDING` 主响应携带
+  同地址族的 `ALTERNATE_PROBE_ENDPOINT`；组合响应必须携带该字段，其值为协同 Node 的主 Binding
+  endpoint。没有可用协同 Node 时允许主响应不携带该字段。
 - `MAPPED_ADDR` 是 NAT 服务观察到的 Context 公网映射，仅用于该次 NAT 结果，不能覆盖打洞
   服务从常驻控制连接观察到的公网 endpoint。
-- `ALTERNATE_PROBE_ENDPOINT` 是 NAT 服务集群的备用探测端点，包含 IP 与端口；它不是客户端
+- `ALTERNATE_PROBE_ENDPOINT` 是 NAT 服务集群的协同探测端点，包含 IP 与端口；它不是客户端
   映射、对端候选或打洞服务 endpoint。它必须与主 NAT 探测 endpoint 使用不同公网 IP，并同样受
-  NAT 服务与打洞服务 IP 隔离约束；它只用于 `CHANGE_IP` 与 `PROBE2`。
+  NAT 服务与打洞服务 IP 隔离约束；它用于校验组合响应来源并作为 `ALTERNATE_BINDING` 的目标。
 
 `PROBE_TOKEN` 仅用于关联异步请求和过滤陈旧响应，不是服务端身份认证，也不证明 NAT 结果
 真实可信。首期不在 NAT 探测私有帧引入旧 `probe_auth` HMAC；打洞服务认证仍由独立认证需求
@@ -169,31 +172,36 @@ TLV          = type:u16 | length:u16 | value
 这不是协议错误，也不拒绝注册；打洞服务始终以自己观察到的 `IP:port` 作为节点最终公网
 endpoint，Context 不得用 `MAPPED_ADDR` 覆盖它。
 
-旧 `ntrs` 通过已认证的 KCP 控制面 `NAT_PROBE_REQ/RSP` 预先下发 `probe1/probe2`。本次服务
-拆分不建立这条 NAT 控制连接，且 Context 只配置一个 NAT 服务 IP，因此必须改为由主 NAT
-端点的首个 `PROBE1_RSP` 携带 `ALTERNATE_PROBE_ENDPOINT`。NAT 服务集群负责确保该端点属于不同公网 IP；
+旧 `ntrs` 通过已认证的 KCP 控制面 `NAT_PROBE_REQ/RSP` 预先下发两个探测端点。本次服务
+拆分不建立这条 NAT 控制连接，且 Context 只配置一个 NAT 服务 IP，因此必须改为由
+`PRIMARY_BINDING` 响应携带 `ALTERNATE_PROBE_ENDPOINT`。NAT 服务集群负责确保该端点属于不同公网 IP；
 没有这个字段或字段不合法时，客户端只能完成单端点探测并按本节规定降级，不能回退到旧 KCP
 控制面请求端点。
 
 ### 3.2 IPv4 探测状态机
 
-IPv4 必须在同一 UDP socket 上按以下顺序探测。NAT 服务负责在 `CHANGE_IP` 阶段协调另一
-公网 IP 的节点发送响应，Context 不与 NAT 服务集群建立额外连接。
+IPv4 必须在同一 UDP socket 上按以下顺序探测。NAT 服务负责在 `PRIMARY_BINDING` 时协调另一
+公网 IP 的 Node 发送组合响应，Context 不与 NAT 服务集群建立额外连接。
 
 ```text
-PROBE1 -> CHANGE_PORT -> CHANGE_IP -> PROBE2 -> 完成
+PRIMARY_BINDING -> [证据足够则完成，否则] ALTERNATE_BINDING -> 完成
 ```
 
-1. `PROBE1`：向配置的 NAT 服务主端点发送 `PROBE_REQ`，记录所有匹配响应的
-   `MAPPED_ADDR`、RTT 和不同映射数量。首个有效响应提供 `ALTERNATE_PROBE_ENDPOINT`。
-2. `CHANGE_PORT`：仍向主端点发送 `FILTER_REQ`；服务端须从相同公网 IP 的不同 UDP 端口
-   返回 `FILTER_RSP`。仅当 UDP 源地址和 `ORIGIN_ADDR` 都等于这个预期的同 IP 异端口时，
-   才记录“允许换端口回包”。
-3. `CHANGE_IP`：仍由主端点触发 `FILTER_REQ`；NAT 服务集群从 `ALTERNATE_PROBE_ENDPOINT` 对应的不同
-   公网 IP 返回 `FILTER_RSP`。仅当 UDP 源地址和 `ORIGIN_ADDR` 都等于预期的 `ALTERNATE_PROBE_ENDPOINT`
-   时，才记录“允许换 IP 回包”。
-4. `PROBE2`：向 `ALTERNATE_PROBE_ENDPOINT` 发送 `PROBE_REQ`，记录第二组 `MAPPED_ADDR`、RTT 和不同
-   映射数量，并与 `PROBE1` 比较。
+1. `PRIMARY_BINDING`：Context 向配置的 NAT 服务主 endpoint 发送一份
+   `BINDING_REQUEST(change_flags = CHANGE_IP | CHANGE_PORT)`。同一请求的 `packet_number` 和
+   `PROBE_TOKEN` 应产生两种响应，而不是每个 change flag 各产生一种响应：
+   - 主响应：主 Node 从原 IP、原端口发送
+     `BINDING_RESPONSE(change_flags = NONE)`，提供主 `MAPPED_ADDR`。
+   - 组合响应：协同 Node 从不同 IP、不同端口发送
+     `BINDING_RESPONSE(change_flags = CHANGE_IP | CHANGE_PORT)`。其 `ORIGIN_ADDR` 必须等于实际
+     UDP 源 endpoint，并携带协同 Node 主 Binding endpoint 作为 `ALTERNATE_PROBE_ENDPOINT`。
+   两类响应均到达且主映射有效时，IPv4 可立即判定 `FULL_CONE`，不再执行第二步。
+2. `ALTERNATE_BINDING`：只有组合响应未到达且已取得合法协同 endpoint 时才执行。Context 向
+   `ALTERNATE_PROBE_ENDPOINT` 发送 `BINDING_REQUEST(change_flags = CHANGE_PORT)`；协同 Node 对同一
+   请求返回两种响应：主 Binding endpoint 返回 `NONE` 响应，用于取得第二组 `MAPPED_ADDR`；同 IP
+   的 change-port endpoint 返回 `CHANGE_PORT` 响应，用于验证地址限制型过滤。若第二组映射已足以
+   判定对称映射，或第二组映射与 `CHANGE_PORT` 响应均已收到，应立即完成；缺少 `CHANGE_PORT`
+   响应时必须等待该步骤总超时后才能判定端口限制型。
 
 每个阶段固定进行至多三轮发送；每轮向该阶段目标端点并发发送两个 NAT 探测包，故每阶段
 最多实际发送六包。阶段总时限为 `T = phase_timeout_ms`，三轮的等待窗口按 `1:2:3` 分配：
@@ -205,20 +213,22 @@ t = T / 2   : 发送第 3 轮两个包；等待 3T / 6
 t = T       : 阶段结束
 ```
 
-每轮中的两个包具有不同的 `packet_number` 和 `PROBE_TOKEN`。映射阶段目标仍为 3 次有效响应；
-达到目标后立即取消该阶段其余待匹配记录并进入下一阶段。过滤阶段收到一条完全匹配响应即可
-成功并立即推进。各轮已发送包的匹配记录均保留至阶段结束，第一轮响应即使在后续轮次到达，仍
+每轮中的两个包具有不同的 `packet_number` 和 `PROBE_TOKEN`。每个发送记录可分别接受该步骤允许的
+两种响应来源；同一来源的重复响应不重复计数。各轮已发送包的匹配记录均保留至步骤结束，第一轮响应即使在后续轮次到达，仍
 按其 `packet_number` 计入；只有阶段推进、阶段结束或取消时才统一失效。耗尽六包或到达 `T`
 后进入下一阶段并保留失败证据，不能因单包超时直接终止或判定 NAT 类型。
 
-没有合法 `ALTERNATE_PROBE_ENDPOINT` 时不得伪造 `PROBE2` 或 `CHANGE_IP`；已得到的 `PROBE1` 结果仍可
-完成回调，但 IPv4 分类必须降级为 `UNKNOWN`，除非本地地址与稳定映射完全一致而可判定为
-`OPEN_PUBLIC`。过滤探测不可用也同样只降低分类精度，不能覆盖有效的映射观测。
+没有合法 `ALTERNATE_PROBE_ENDPOINT` 时不得伪造 `ALTERNATE_BINDING`；已得到的主映射结果仍可
+完成回调，但 IPv4 分类必须降级为 `UNKNOWN`。若本地地址与稳定映射完全一致，可确认没有 NAT，
+但尚未取得过滤证据，结果为 `OPEN_PUBLIC_WITH_FIREWALL`；只有组合响应或辅助阶段的
+`CHANGE_PORT` 响应到达后，才可判定为 `OPEN_PUBLIC`。过滤探测不可用只降低分类精度，不能覆盖
+有效的映射观测。
 
 ### 3.3 匹配、失败和分类
 
-- `PROBE1`、`PROBE2` 响应的 UDP 源地址必须等于该阶段的目标端点；过滤响应按上节的变源
-  规则校验。仅有正确 token 而源地址错误的包必须丢弃。
+- `NONE` 响应的 UDP 源地址必须等于该步骤的目标 endpoint。`CHANGE_PORT` 响应必须来自目标的同
+  IP 异端口；组合响应必须来自与主 endpoint 不同 IP，且为所携带协同主 endpoint 的同 IP 异端口。
+  所有响应的 UDP 源地址必须等于 `ORIGIN_ADDR`。仅有正确 token 而源地址错误的包必须丢弃。
 - 发送返回临时错误时保留该次发送预算并按定时器重试；永久本地发送错误、明确 ICMP
   不可达、纯超时必须分别记录为 `LOCAL_SEND_FAILED`、`ICMP_UNREACHABLE`、`NO_RESPONSE`
   诊断，不能混为一个超时错误。
@@ -226,16 +236,17 @@ t = T       : 阶段结束
   路由异常或服务端故障。本地永久发送错误导致未能
   完成探测时回调失败，不创建可用于注册的 NAT 记录。辅助端点失败只使类型降级为
   `UNKNOWN`，不能把主端点已经确认的可达性改写为不可达。
-- 主、辅映射一致且各阶段内只有一个映射时，映射行为为 endpoint-independent；不同目标映射
-  不同则为对端相关映射；同阶段出现多个映射，或两个公网 IP 不同，归类
+- 主、辅映射一致且各步骤内只有一个映射时，映射行为为 endpoint-independent；不同目标映射
+  不同则为对端相关映射；同一步骤出现多个映射，或两个公网 IP 不同，归类
   `SYMMETRIC_MULTI_LINE`。
-- 映射稳定且不等于本机实际本地地址时，`CHANGE_PORT` 和 `CHANGE_IP` 均成功为 `FULL_CONE`；仅换端口成功为
-  `IP_RESTRICTED`；两个过滤阶段均无成功证据为 `PORT_RESTRICTED`。映射对端相关或不稳定
-  为 `SYMMETRIC`。本地地址与映射完全一致且映射稳定时为 `OPEN_PUBLIC`。显式绑定具体 IP 时使用该
-  bind 地址；绑定 `0.0.0.0` 或 `::` 时，使用首个合法 `PROBE1` 响应 pktinfo 提供的实际本地目的地址。
+- 映射稳定且不等于本机实际本地地址时，组合响应成功为 `FULL_CONE`；组合响应失败后，主、辅映射
+  一致且 `CHANGE_PORT` 成功为 `IP_RESTRICTED`，未收到 `CHANGE_PORT` 为 `PORT_RESTRICTED`。映射对端相关或不稳定
+  为 `SYMMETRIC`。本地地址与映射完全一致且映射稳定时，组合响应或 `CHANGE_PORT` 成功为
+  `OPEN_PUBLIC`，否则为 `OPEN_PUBLIC_WITH_FIREWALL`。显式绑定具体 IP 时使用该 bind 地址；绑定
+  `0.0.0.0` 或 `::` 时，使用首个合法主响应 pktinfo 提供的实际本地目的地址。
 
-IPv6 不得套用 IPv4 NAT44 分类。首期仅记录该地址族 UDP 是否可达，以及可选的换端口、换
-IP 过滤证据；对外可将可达结果表示为 `OPEN_PUBLIC`、受过滤结果表示为
+IPv6 不得套用 IPv4 NAT44 分类。首期仅记录该地址族 UDP 是否可达，以及可选的组合切换 IP 与端口
+响应证据；对外可将可达结果表示为 `OPEN_PUBLIC`、受过滤结果表示为
 `OPEN_PUBLIC_WITH_FIREWALL`，其余情况均表示为 `UNKNOWN`。
 NAT66/NPTv6 的映射分类以后单独定义。
 
@@ -253,16 +264,16 @@ IPv4、IPv6 时必须创建两个 Context，各自拥有以下独立任务和 NA
                                |
                   probe_nat()  |  校验已 bind 的地址族，固定主端点并建立阶段计划
                                v
-              +---------------+
-              |  PROBE1_SEND  |
-              +---------------+
+              +-----------------------+
+              | PRIMARY_BINDING_SEND  |
+              +-----------------------+
                       |
                       v
-              +---------------+
-              |  PROBE1_WAIT  |<---------------------+
-              +---------------+                      |
+              +-----------------------+
+              | PRIMARY_BINDING_WAIT  |<-------------+
+              +-----------------------+              |
                 |       |                             |
-         有效响应 |       +--超时且仍有预算---> PROBE1_SEND
+         有效响应 |       +--超时且仍有预算----------+
                 |                                     |
                 +--目标成功数/耗尽预算---------------+
                                |
@@ -270,13 +281,7 @@ IPv4、IPv6 时必须创建两个 Context，各自拥有以下独立任务和 NA
                       |                 |
                      是                 否
                       v                 v
-        CHANGE_PORT_SEND/WAIT        COMPLETE_RESULT
-                      |
-                      v
-        CHANGE_IP_SEND/WAIT
-                      |
-                      v
-          PROBE2_SEND/WAIT
+      ALTERNATE_BINDING_SEND/WAIT    COMPLETE_RESULT
                       |
                       v
                 COMPLETE_RESULT
@@ -297,7 +302,7 @@ UTP `packet_number` 和随机 token，并在内核接受两个数据报后进入
 
 | 当前状态 | 事件 | 动作 | 下一状态 |
 |---|---|---|---|
-| `IDLE` | `probe_nat()` | 校验 bind、NAT 服务 endpoint、地址族、选项和回调；固定主端点并清空本次临时观测 | `PROBE1_SEND` |
+| `IDLE` | `probe_nat()` | 校验 bind、NAT 服务 endpoint、地址族、选项和回调；固定主端点并清空本次临时观测 | `PRIMARY_BINDING_SEND` |
 | 任意 `*_SEND/*_WAIT` | `cancel_nat_probe()` | 取消定时器和待发送项，释放任务但不调用原回调 | `IDLE` |
 | 任意 `*_SEND` | 一轮的两个 UDP 包均发送成功 | 记录两条 `packet_number/token/sent_at`，启动本轮窗口定时器 | 对应 `*_WAIT` |
 | 任意 `*_SEND` | 临时发送阻塞 | 保持本次发送预算，按 Context 下一次可写调度或短定时器重试；阶段总期限仍受预算窗口限制 | 原状态 |
@@ -315,16 +320,17 @@ UTP `packet_number` 和随机 token，并在内核接受两个数据报后进入
 
 阶段完成判定如下：
 
-1. `PROBE1` 完成后，若至少收到一个合法响应，锁定首个合法 `MAPPED_ADDR` 作为主映射样本。
+1. `PRIMARY_BINDING` 收到首个合法主响应后，锁定其 `MAPPED_ADDR` 作为主映射样本。
    后续响应仍计入成功数、RTT 和不同映射集合。首个合法 `ALTERNATE_PROBE_ENDPOINT` 只能在同地址族、非
    未指定地址、且与主端点具有不同公网 IP 时锁定为辅助端点；后续响应给出不同的
    `ALTERNATE_PROBE_ENDPOINT` 时，保留主映射观测但废弃辅助计划，最终按单端点降级，不能在多个候选间切换。
-2. `PROBE1` 没有任何合法响应时，任务仍正常完成，结果为 `UNKNOWN`。这表示当前探测没有取得
+2. 同一步骤的合法主响应与组合响应均到达后立即完成；IPv4 分类为 `FULL_CONE`，本地地址与映射
+   一致时覆盖为 `OPEN_PUBLIC`。组合响应先到时保留证据，但必须等主响应提供主映射后才能完成。
+3. `PRIMARY_BINDING` 没有任何合法主响应时，任务仍正常完成，结果为 `UNKNOWN`。这表示当前探测没有取得
    足够证据，不表示 Context socket 或普通 UTP 连接立即失效。
-3. 存在已锁定辅助端点时依次执行 `CHANGE_PORT`、`CHANGE_IP`。每个过滤阶段只需要一条
-   完全匹配响应即记录成功并立即推进；耗尽最多 6 次发送只记录该过滤证据失败，不使整个任务失败。
-4. `PROBE2` 对锁定的辅助端点执行完整映射预算。其成功与否、映射集合和 `PROBE1` 的比较
-   决定 IPv4 最终分类；无有效响应时保留 `PROBE1` 可达性，最终分类为 `UNKNOWN`。
+4. 组合响应未到达但存在已锁定辅助端点时执行 `ALTERNATE_BINDING`。辅映射与主映射不同后立即
+   按映射差异完成；映射一致且 `CHANGE_PORT` 响应到达后立即完成；只有映射一致但缺少
+   `CHANGE_PORT` 响应时等待完整步骤超时。辅助主响应始终未到达时分类为 `UNKNOWN`。
 5. 计算最终 NAT 分类、端口样本、探测时间与绝对过期时间后，先原子替换同地址族的 Context
    NAT 缓存，再转换为 `COMPLETE_RESULT`。回调期间用户立刻发起注册时，读取到的必须是新缓存。
 
@@ -355,7 +361,7 @@ Context 销毁期间不调用 NAT 探测回调。销毁流程只取消定时器�
 ### 3.6 NAT 服务 Hub 与 Node 协同
 
 NAT 服务采用独立的 Hub + Node 拓扑。Hub 仅承担 Node 注册、健康状态、协同节点分配和
-成员信息下发；它绝不处于客户端 `CHANGE_IP` 的实时转发路径。Node 到 Hub、Node 到 Node 的
+成员信息下发；它绝不处于客户端组合 Binding 响应的实时转发路径。Node 到 Hub、Node 到 Node 的
 控制连接使用 TCP；Hub 与每个 Node 均同时配置 `--cert FILE --key FILE` 时，在 TCP 上启用 TLS
 1.3，否则使用明文 TCP，便于本地部署和抓包测试。只提供其中一个参数属于配置错误。首期 TLS
 只提供通信加密，允许自签名证书，不在协议层校验证书链、主机名或 Node 身份。
@@ -367,19 +373,19 @@ node_id, boot_id, load, heartbeat_interval
 每个地址族的 public_ip、probe_endpoint、change_port_endpoint、control_endpoint
 ```
 
-- `probe_endpoint` 是客户端发往 `PROBE1`、`CHANGE_IP` 和 `PROBE2` 的 UDP endpoint。
+- `probe_endpoint` 是客户端发送 `PRIMARY_BINDING` 和 `ALTERNATE_BINDING` 请求的 UDP endpoint。
 - `change_port_endpoint` 与同族 `probe_endpoint` 必须使用相同公网 IP、不同 UDP port，仅用于
-  本机完成 `CHANGE_PORT` 回包。
+  本机发送 `CHANGE_PORT` 或 `CHANGE_IP | CHANGE_PORT` 响应，不接收客户端 Binding 请求。
 - `control_endpoint` 是其他 Node 建立 TCP 或 TCP + TLS 协同连接的 endpoint；它可以是 Node 间可路由的
   私网地址，不能由客户端 NAT 探测使用。
 - Node 的 UDP `probe_endpoint` 与 `change_port_endpoint` 可以各自以 `SO_REUSEPORT` 绑定多个 socket；
   每个 socket 归属一个独立 libevent event loop 线程。客户端探测请求没有跨包服务端状态，worker 必须在
-  收到单包后完成严格校验、构造响应并立即发送，不能将 `PROBE1`、`CHANGE_PORT` 或 `PROBE2` 投递给其他
-  worker。`CHANGE_PORT` 的响应必须由处理该请求的同 worker `change_port_endpoint` socket 发送，确保内核
-  UDP 源端口与协议 `ORIGIN_ADDR` 一致。
+  收到单包后完成严格校验、构造本地响应并立即发送，不能将请求投递给其他 worker。
+  `CHANGE_PORT` 的响应必须由处理该请求的同 worker `change_port_endpoint` socket 发送，确保内核
+  UDP 源端口与协议 `ORIGIN_ADDR` 一致。只有跨 Node 的组合响应请求投递到 Node 主 loop。
 - Node 必须在解析 NAT 帧前按源 IP 限速，所有 UDP worker 共享同一组额度，不得按 `IP:port` 或单 worker
   计数。首期采用令牌桶，默认稳态额度为每源 IP `128` 包/秒、突发 `256` 包；Node 命令行可通过
-  `--source-rate` 与 `--source-burst` 覆盖。超过额度的报文静默丢弃，不创建亲和记录、不同步协同请求。
+  `--source-rate` 与 `--source-burst` 覆盖。超过额度的报文静默丢弃，不发送本地响应、不投递跨 Node 请求。
 - Hub 接受注册后回复 `NODE_REGISTER_OK` 或 `NODE_REGISTER_REJECT`，成功后单独发送该 Node 当前
   地址族的 `NODE_ASSIGNMENT`。描述包含 `node_id`、`boot_id`、`probe_endpoint` 和
   `control_endpoint`。TLS 完成或明文 TCP 已连接后的第一条应用层消息必须为 `NODE_REGISTER`；先收到其他消息或任意
@@ -421,22 +427,22 @@ Node 收到 assignment 后，以 `node_id + boot_id` 作为连接复用键，为
 连接时，双方按 `(initiator_node_id, initiator_nonce)` 的字典序保留唯一一条，另一条发送
 `NODE_LINK_DUPLICATE` 后关闭。因 duplicate 关闭不得触发重连或向 Hub 报告节点失效。
 
-Node 选择 primary 并且对应 Node 间控制链路已经激活后，将 `client_observed_ip:port -> primary node
-instance + probe_endpoint` 保存 30 秒。`PROBE1_RSP` 仅下发该 primary 的 `ALTERNATE_PROBE_ENDPOINT`；
-链路未激活、失效或 assignment 更新期间不得下发该 endpoint。当收到 `CHANGE_IP` 时，Node
-只能经已经保存的对应 primary 长连接发送一次 `NAT_FORWARD_FILTER_RESPONSE`；该消息至少携带
-`forward_id`、目标 Node instance、客户端 endpoint、UTP `packet_number`、12 字节 token 和 phase。
-协同 Node 使用自身的 `probe_endpoint` 直接向客户端发送一次 `FILTER_RSP`。`forward_id` 在短期表中
-去重。若 primary 连接失效，当前探测不得临时改用 backup，因为客户端仅接受先前下发的 primary
-endpoint；本轮静默失败，后续新 `PROBE1` 才可使用替换后的 primary。
+Node 选择 primary 且对应 Node 间控制链路已经激活后，收到每个 `PRIMARY_BINDING` 请求时使用同一份
+assignment 快照完成两项动作：从自身 `probe_endpoint` 发送主响应，并经 primary 长连接发送一次
+`NAT_FORWARD_BINDING_RESPONSE` 控制消息。消息携带 `forward_id`、目标 Node instance、客户端 endpoint、
+原 UTP `packet_number`、12 字节 token 和固定的 `PRIMARY_BINDING` step。协同 Node 对 `forward_id` 做
+短期去重，从自身 `change_port_endpoint` 向客户端发送一份
+`BINDING_RESPONSE(change_flags = CHANGE_IP | CHANGE_PORT)`，并在响应中将自身 `probe_endpoint` 作为
+`ALTERNATE_PROBE_ENDPOINT`。主 Node 不保存按客户端 endpoint 建立的亲和表；每个请求的本地响应与
+跨 Node 转发直接使用该次读取的同一 assignment。primary 链路未激活或已失效时，主 Node 仅发送不带
+可用协同计划的本地响应，不转发组合响应，也不得临时改用 backup。
 
 Node 间控制连接必须有 `PING/PONG`，建议间隔 10 秒，连续 3 次无响应判定链接失效。Hub 心跳与
 Node 间 PING/PONG 职责独立。Node 检测到 primary 或 backup 链接失效时，向 Hub 发送
 `NODE_ASSIGNMENT_REQUEST`，其中明确地址族、失效角色、当前 assignment 版本及对应失效实例。仅 backup
 失效时 Hub 保留 primary 并补 backup；primary 失效时可提升健康 backup 为 primary 后补 backup；两者失效时
 重新选择。请求版本落后于 Hub 当前版本，或失效实例不匹配当前 assignment 时，Hub 只回当前 assignment，
-不按陈旧视图重排。Hub 连接失效后，Node 不得为新的 `PROBE1` 下发协同 endpoint；已有 30 秒亲和记录可继续
-使用直至过期。
+不按陈旧视图重排。Hub 连接失效后，Node 不得为新的 `PRIMARY_BINDING` 下发协同 endpoint 或转发组合响应。
 
 Hub 对每个 Node、每地址族保存至多两个未过期失效实例，排除期为 30 秒。新的
 `NODE_ASSIGNMENT_REQUEST` 按实例合并并刷新其排除期，不得清除另一未过期实例；容量满时淘汰最早过期项。
@@ -456,12 +462,12 @@ Hub 对每个 Node、每地址族保存至多两个未过期失效实例，排�
 control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
 ```
 
-- `version = 2`，`payload_length` 不含 8 字节头，完整消息上限固定为 4096 字节。版本 1 的 16 字节
-  `node_id` 线格式不再兼容。
+- `version = 3`，`payload_length` 不含 8 字节头，完整消息上限固定为 4096 字节。版本 1 的 16 字节
+  `node_id` 以及版本 2 的旧 NAT 转发消息均不再兼容。
 - 首期 type：`NODE_REGISTER=1`、`NODE_REGISTER_OK=2`、`NODE_REGISTER_REJECT=3`、
   `NODE_ASSIGNMENT=4`、`NODE_ASSIGNMENT_REQUEST=5`、`NODE_HEARTBEAT=6`、
   `NODE_LINK_HELLO=7`、`NODE_LINK_DUPLICATE=8`、`NODE_LINK_PING=9`、`NODE_LINK_PONG=10`、
-  `NAT_FORWARD_FILTER_RESPONSE=11`。未定义 type 必须断开连接。
+  `NAT_FORWARD_BINDING_RESPONSE=11`。未定义 type 必须断开连接。
 - `node_id` 为零填充的 1 至 128 字节文本，`boot_id` 为固定 16 字节；`initiator_nonce` 固定 16 字节。Node
   instance 线格式始终为 `node_id | boot_id`，不能以地址替代。
 - endpoint 固定为 `family:u8 | port:u16 | address:16 bytes`。IPv4 仅使用 address 前 4 字节，剩余
@@ -481,11 +487,12 @@ control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
 - `NODE_LINK_HELLO` payload 固定为 288 字节：`sender_instance:144 | initiator_node_id:128 |
   initiator_nonce:16`。出站连接在 TLS 完成或明文 TCP 已连接后立即发送；入站连接收到并校验后使用同一组 initiator
   字段回送。`initiator_node_id` 与 `initiator_nonce` 均不得全零。
-- `NAT_FORWARD_FILTER_RESPONSE` payload 固定为 195 字节：`forward_id:u64 | target_instance:144 |
-  client_endpoint:19 | packet_number:u64 | token:12 | phase:u8 | reserved:3`。`target_instance` 必须等于
-  接收 Node 的当前实例，`packet_number` 和 `forward_id` 均不得为零，`phase` 首期固定为 `CHANGE_IP`，
-  保留字段必须为零。该消息只在已激活的 Node 间控制链路上传输；协同 Node 对 `forward_id` 做短期去重，
-  然后以自身 probe endpoint 构造并发送一个带原 `packet_number/token/phase` 的 UTP NAT `FILTER_RSP`。
+- `NAT_FORWARD_BINDING_RESPONSE` payload 固定为 195 字节：`forward_id:u64 | target_instance:144 |
+  client_endpoint:19 | packet_number:u64 | token:12 | step:u8 | reserved:3`。`target_instance` 必须等于
+  接收 Node 的当前实例，`packet_number` 和 `forward_id` 均不得为零，`step` 固定为
+  `PRIMARY_BINDING`，保留字段必须为零。该消息只在已激活的 Node 间控制链路上传输；协同 Node 对
+  `forward_id` 做短期去重，然后从自身 change-port endpoint 构造并发送带原
+  `packet_number/token/step` 的组合 `BINDING_RESPONSE`。
 
 ---
 

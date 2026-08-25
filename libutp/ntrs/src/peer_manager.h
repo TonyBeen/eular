@@ -16,7 +16,7 @@ typedef struct utp_ntrs_peer_manager utp_ntrs_peer_manager_t;
 
 typedef void (*utp_ntrs_peer_failed_fn)(void* user_data, const utp_ntrs_node_instance_t* remote);
 typedef void (*utp_ntrs_peer_active_fn)(void* user_data, const utp_ntrs_node_instance_t* remote);
-typedef void (*utp_ntrs_peer_forward_fn)(void* user_data, const utp_ntrs_forward_filter_response_t* forward);
+typedef void (*utp_ntrs_peer_forward_fn)(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
 
 /** @brief Node 间控制链路管理器的启动参数。 */
 typedef struct utp_ntrs_peer_manager_options {
@@ -28,7 +28,7 @@ typedef struct utp_ntrs_peer_manager_options {
     const char*              interface_name;  // 绑定的 Linux 网卡；空指针表示不限制
     utp_ntrs_peer_active_fn  on_active;       // 唯一保留链路已可用的通知
     utp_ntrs_peer_failed_fn  on_failed;       // 已确认链路断开的通知
-    utp_ntrs_peer_forward_fn on_forward;      // 协同 Node 请求直接发送 FILTER_RSP
+    utp_ntrs_peer_forward_fn on_forward;      // 协同 Node 请求直接发送组合 Binding 响应
     void*                    user_data;       // 回调上下文
 } utp_ntrs_peer_manager_options_t;
 
@@ -40,9 +40,9 @@ void                     utp_ntrs_peer_manager_stop(utp_ntrs_peer_manager_t* man
  */
 bool utp_ntrs_peer_manager_connect(utp_ntrs_peer_manager_t* manager, const utp_ntrs_node_instance_t* remote,
                                    const utp_ntrs_endpoint_t* endpoint);
-/** @brief 经已激活的目标 Node 链路发送一次 CHANGE_IP 转发请求。 */
+/** @brief 经已激活的目标 Node 链路发送一次组合 Binding 响应请求。 */
 bool utp_ntrs_peer_manager_send_forward(utp_ntrs_peer_manager_t* manager, const utp_ntrs_node_instance_t* target,
-                                        const utp_ntrs_forward_filter_response_t* forward);
+                                        const utp_ntrs_forward_binding_response_t* forward);
 /** @brief 执行一次 10 秒粒度的 PING/PONG 保活和失效检查。 */
 void utp_ntrs_peer_manager_tick(utp_ntrs_peer_manager_t* manager);
 

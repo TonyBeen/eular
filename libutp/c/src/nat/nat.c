@@ -77,23 +77,8 @@ void utp_nat_probe_task_reset(utp_nat_probe_task_t* task)
     task->result.secondary_rtt_ms = -1;
 }
 
-uint8_t utp_nat_probe_request_message_type(uint8_t phase)
-{
-    return phase == UTP_NAT_PROBE_PHASE_PROBE1 || phase == UTP_NAT_PROBE_PHASE_PROBE2
-               ? UTP_NAT_PROBE_MESSAGE_PROBE_REQ
-               : UTP_NAT_PROBE_MESSAGE_FILTER_REQ;
-}
-
-uint8_t utp_nat_probe_response_message_type(uint8_t phase)
-{
-    return phase == UTP_NAT_PROBE_PHASE_PROBE1 || phase == UTP_NAT_PROBE_PHASE_PROBE2
-               ? UTP_NAT_PROBE_MESSAGE_PROBE_RSP
-               : UTP_NAT_PROBE_MESSAGE_FILTER_RSP;
-}
-
 utp_internal_error_t utp_nat_probe_encode_request(uint8_t packet[UTP_NAT_PROBE_PACKET_SIZE], uint64_t packet_number,
-                                                  uint8_t message_type, uint8_t phase,
-                                                  const uint8_t token[UTP_NAT_PROBE_TOKEN_SIZE])
+                                                  uint8_t step, const uint8_t token[UTP_NAT_PROBE_TOKEN_SIZE])
 {
     const utp_packet_header_t header = {0u,
                                         0u,
@@ -105,8 +90,8 @@ utp_internal_error_t utp_nat_probe_encode_request(uint8_t packet[UTP_NAT_PROBE_P
     utp_internal_error_t      error;
     size_t                    padding_length;
 
-    if (packet_number == 0u || token == NULL || message_type != utp_nat_probe_request_message_type(phase) ||
-        phase < UTP_NAT_PROBE_PHASE_PROBE1 || phase > UTP_NAT_PROBE_PHASE_PROBE2) {
+    if (packet_number == 0u || token == NULL ||
+        (step != UTP_NAT_PROBE_STEP_PRIMARY_BINDING && step != UTP_NAT_PROBE_STEP_ALTERNATE_BINDING)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_proto_encode_header(packet, UTP_NAT_PROBE_PACKET_SIZE, &header);
@@ -119,13 +104,14 @@ utp_internal_error_t utp_nat_probe_encode_request(uint8_t packet[UTP_NAT_PROBE_P
         error = utp_wire_write_u8(&writer, UTP_NAT_PROBE_VERSION);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u8(&writer, message_type);
+        error = utp_wire_write_u8(&writer, UTP_NAT_PROBE_MESSAGE_BINDING_REQUEST);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u8(&writer, phase);
+        error = utp_wire_write_u8(&writer, step);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u8(&writer, 0u);
+        error = utp_wire_write_u8(&writer, step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING ? UTP_NAT_PROBE_CHANGE_BOTH
+                                                                                      : UTP_NAT_PROBE_CHANGE_PORT);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_nat_probe_write_tlv(&writer, UTP_NAT_PROBE_TLV_PROBE_TOKEN, token, UTP_NAT_PROBE_TOKEN_SIZE);
@@ -161,21 +147,26 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
     error = utp_wire_reader_init(&reader, payload, payload_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
         uint8_t version;
-        uint8_t flags;
-
         error = utp_wire_read_u8(&reader, &version);
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_wire_read_u8(&reader, &decoded.message_type);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_wire_read_u8(&reader, &decoded.phase);
+            error = utp_wire_read_u8(&reader, &decoded.step);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_wire_read_u8(&reader, &flags);
+            error = utp_wire_read_u8(&reader, &decoded.change_flags);
         }
-        if (error != UTP_INTERNAL_ERROR_OK || version != UTP_NAT_PROBE_VERSION || flags != 0u ||
-            decoded.phase < UTP_NAT_PROBE_PHASE_PROBE1 || decoded.phase > UTP_NAT_PROBE_PHASE_PROBE2 ||
-            decoded.message_type != utp_nat_probe_response_message_type(decoded.phase)) {
+        if (error != UTP_INTERNAL_ERROR_OK || version != UTP_NAT_PROBE_VERSION ||
+            decoded.message_type != UTP_NAT_PROBE_MESSAGE_BINDING_RESPONSE ||
+            (decoded.step != UTP_NAT_PROBE_STEP_PRIMARY_BINDING &&
+             decoded.step != UTP_NAT_PROBE_STEP_ALTERNATE_BINDING) ||
+            (decoded.change_flags != UTP_NAT_PROBE_CHANGE_NONE && decoded.change_flags != UTP_NAT_PROBE_CHANGE_PORT &&
+             decoded.change_flags != UTP_NAT_PROBE_CHANGE_BOTH) ||
+            (decoded.step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING && decoded.change_flags != UTP_NAT_PROBE_CHANGE_NONE &&
+             decoded.change_flags != UTP_NAT_PROBE_CHANGE_BOTH) ||
+            (decoded.step == UTP_NAT_PROBE_STEP_ALTERNATE_BINDING &&
+             decoded.change_flags != UTP_NAT_PROBE_CHANGE_NONE && decoded.change_flags != UTP_NAT_PROBE_CHANGE_PORT)) {
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
     }
@@ -205,7 +196,7 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
             error      = utp_nat_probe_decode_endpoint(value, length, &decoded.origin);
             has_origin = error == UTP_INTERNAL_ERROR_OK;
         } else if (type == UTP_NAT_PROBE_TLV_ALTERNATE_PROBE_ENDPOINT && !decoded.has_alternate &&
-                   decoded.phase == UTP_NAT_PROBE_PHASE_PROBE1) {
+                   decoded.step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING) {
             error                 = utp_nat_probe_decode_endpoint(value, length, &decoded.alternate);
             decoded.has_alternate = error == UTP_INTERNAL_ERROR_OK;
         } else {

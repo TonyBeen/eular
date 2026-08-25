@@ -26,7 +26,7 @@ struct utp_ntrs_peer_manager {
     const char*              interface_name;  // 指定的 Linux 网卡
     utp_ntrs_peer_active_fn  on_active;       // 链路激活通知
     utp_ntrs_peer_failed_fn  on_failed;       // 链路失效通知
-    utp_ntrs_peer_forward_fn on_forward;      // 接收 CHANGE_IP 转发请求
+    utp_ntrs_peer_forward_fn on_forward;      // 接收组合 Binding 响应请求
     void*                    user_data;       // Node 状态
     utp_ntrs_peer_t*         peers;           // 全部进行中或已建立的连接
 };
@@ -226,10 +226,10 @@ static void utp_ntrs_peer_on_message(void* user_data, uint8_t type, const uint8_
         utp_ntrs_peer_schedule_close(peer);
         return;
     }
-    if (type == UTP_NTRS_CONTROL_NAT_FORWARD_FILTER_RSP) {
-        utp_ntrs_forward_filter_response_t forward;
+    if (type == UTP_NTRS_CONTROL_NAT_FORWARD_BINDING_RESPONSE) {
+        utp_ntrs_forward_binding_response_t forward;
 
-        if (!peer->active || !utp_ntrs_control_decode_forward_filter_response(message, length, &forward) ||
+        if (!peer->active || !utp_ntrs_control_decode_forward_binding_response(message, length, &forward) ||
             !utp_ntrs_node_instance_equal(&forward.target, &peer->manager->local) ||
             peer->manager->on_forward == NULL) {
             utp_ntrs_peer_schedule_close(peer);
@@ -436,7 +436,7 @@ bool utp_ntrs_peer_manager_connect(utp_ntrs_peer_manager_t* manager, const utp_n
 }
 
 bool utp_ntrs_peer_manager_send_forward(utp_ntrs_peer_manager_t* manager, const utp_ntrs_node_instance_t* target,
-                                        const utp_ntrs_forward_filter_response_t* forward)
+                                        const utp_ntrs_forward_binding_response_t* forward)
 {
     utp_ntrs_peer_t* peer;
     uint8_t          message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
@@ -444,7 +444,7 @@ bool utp_ntrs_peer_manager_send_forward(utp_ntrs_peer_manager_t* manager, const 
 
     for (peer = manager->peers; peer != NULL; peer = peer->next) {
         if (peer->active && !peer->close_scheduled && utp_ntrs_node_instance_equal(&peer->remote, target)) {
-            length = utp_ntrs_control_encode_forward_filter_response(message, sizeof(message), forward);
+            length = utp_ntrs_control_encode_forward_binding_response(message, sizeof(message), forward);
             return length != 0u && utp_ntrs_peer_send(peer, message, length);
         }
     }

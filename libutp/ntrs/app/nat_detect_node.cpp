@@ -73,8 +73,8 @@ typedef struct nat_detect_node_options {
 static void        nat_detect_node_disconnect(nat_detect_node_t* node);
 static void        nat_detect_node_schedule_disconnect(nat_detect_node_t* node);
 static bool        nat_detect_node_send(nat_detect_node_t* node, const uint8_t* message, size_t length);
-static void        nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_filter_response_t* forward);
-static void        nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_forward_filter_response_t* forward);
+static void        nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
+static void        nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
 
 static const char* nat_detect_node_instance(const utp_ntrs_node_instance_t* instance,
                                             char                            text[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE])
@@ -219,7 +219,7 @@ static bool nat_detect_node_forward_seen(nat_detect_node_t* node, uint64_t forwa
     return false;
 }
 
-static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_filter_response_t* forward)
+static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward)
 {
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
 
@@ -227,7 +227,7 @@ static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forwa
         char target[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
 
         (void)fprintf(stderr,
-                      "nat_detect_node event=filter_forward_dropped target=%s "
+                      "nat_detect_node event=binding_response_forward_dropped target=%s "
                       "packet_number=%llu reason=peer_unavailable\n",
                       nat_detect_node_instance(&forward->target, target), (unsigned long long)forward->packet_number);
         return;
@@ -235,26 +235,26 @@ static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forwa
     {
         char target[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
 
-        (void)fprintf(stderr, "nat_detect_node event=filter_forwarded target=%s packet_number=%llu\n",
+        (void)fprintf(stderr, "nat_detect_node event=binding_response_forwarded target=%s packet_number=%llu\n",
                       nat_detect_node_instance(&forward->target, target), (unsigned long long)forward->packet_number);
     }
 }
 
-static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_forward_filter_response_t* forward)
+static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward)
 {
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
 
     if (nat_detect_node_forward_seen(node, forward->forward_id)) {
-        (void)fprintf(stderr, "nat_detect_node event=filter_forward_duplicate packet_number=%llu\n",
+        (void)fprintf(stderr, "nat_detect_node event=binding_response_forward_duplicate packet_number=%llu\n",
                       (unsigned long long)forward->packet_number);
         return;
     }
-    if (!utp_ntrs_udp_server_send_filter_response(node->udp_server, forward)) {
-        (void)fprintf(stderr, "nat_detect_node event=filter_response_failed packet_number=%llu\n",
+    if (!utp_ntrs_udp_server_send_binding_response(node->udp_server, forward)) {
+        (void)fprintf(stderr, "nat_detect_node event=binding_response_failed packet_number=%llu\n",
                       (unsigned long long)forward->packet_number);
         return;
     }
-    (void)fprintf(stderr, "nat_detect_node event=filter_response_sent packet_number=%llu\n",
+    (void)fprintf(stderr, "nat_detect_node event=binding_response_sent packet_number=%llu\n",
                   (unsigned long long)forward->packet_number);
 }
 

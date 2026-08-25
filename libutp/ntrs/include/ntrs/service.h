@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define UTP_NTRS_CONTROL_VERSION          2u
+#define UTP_NTRS_CONTROL_VERSION          3u
 #define UTP_NTRS_CONTROL_HEADER_SIZE      8u
 #define UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE 4096u
 #define UTP_NTRS_NODE_ID_SIZE             128u
@@ -24,17 +24,17 @@ extern "C" {
 
 /** @brief NTRS 服务控制面的消息类型。 */
 typedef enum utp_ntrs_control_type {
-    UTP_NTRS_CONTROL_NODE_REGISTER           = 1,
-    UTP_NTRS_CONTROL_NODE_REGISTER_OK        = 2,
-    UTP_NTRS_CONTROL_NODE_REGISTER_REJECT    = 3,
-    UTP_NTRS_CONTROL_NODE_ASSIGNMENT         = 4,
-    UTP_NTRS_CONTROL_NODE_ASSIGNMENT_REQUEST = 5,
-    UTP_NTRS_CONTROL_NODE_HEARTBEAT          = 6,
-    UTP_NTRS_CONTROL_NODE_LINK_HELLO         = 7,
-    UTP_NTRS_CONTROL_NODE_LINK_DUPLICATE     = 8,
-    UTP_NTRS_CONTROL_NODE_LINK_PING          = 9,
-    UTP_NTRS_CONTROL_NODE_LINK_PONG          = 10,
-    UTP_NTRS_CONTROL_NAT_FORWARD_FILTER_RSP  = 11,
+    UTP_NTRS_CONTROL_NODE_REGISTER                = 1,
+    UTP_NTRS_CONTROL_NODE_REGISTER_OK             = 2,
+    UTP_NTRS_CONTROL_NODE_REGISTER_REJECT         = 3,
+    UTP_NTRS_CONTROL_NODE_ASSIGNMENT              = 4,
+    UTP_NTRS_CONTROL_NODE_ASSIGNMENT_REQUEST      = 5,
+    UTP_NTRS_CONTROL_NODE_HEARTBEAT               = 6,
+    UTP_NTRS_CONTROL_NODE_LINK_HELLO              = 7,
+    UTP_NTRS_CONTROL_NODE_LINK_DUPLICATE          = 8,
+    UTP_NTRS_CONTROL_NODE_LINK_PING               = 9,
+    UTP_NTRS_CONTROL_NODE_LINK_PONG               = 10,
+    UTP_NTRS_CONTROL_NAT_FORWARD_BINDING_RESPONSE = 11,
 } utp_ntrs_control_type_t;
 
 /** @brief 服务端使用的二进制 IP endpoint；port 为主机字节序。 */
@@ -53,7 +53,7 @@ typedef struct utp_ntrs_node_instance {
 /** @brief 一个地址族上 Node 的对外服务信息。 */
 typedef struct utp_ntrs_node_family {
     utp_ntrs_endpoint_t public_endpoint;       // 公网 IP，port 必须为 0
-    utp_ntrs_endpoint_t probe_endpoint;        // 客户端 PROBE1/PROBE2 的 UDP endpoint
+    utp_ntrs_endpoint_t probe_endpoint;        // 客户端 Binding 请求的 UDP endpoint
     utp_ntrs_endpoint_t change_port_endpoint;  // 与 probe 同 IP、不同端口的 UDP endpoint
     utp_ntrs_endpoint_t control_endpoint;      // Node 间 TCP+TLS 控制 endpoint
     uint8_t             family;                // AF_INET 或 AF_INET6
@@ -132,19 +132,19 @@ typedef struct utp_ntrs_node_link_hello {
     uint8_t                  initiator_nonce[UTP_NTRS_LINK_NONCE_SIZE];  // 发起方为本连接生成的随机值
 } utp_ntrs_node_link_hello_t;
 
-/** @brief 主 Node 请求协同 Node 直接回送 CHANGE_IP 的 FILTER_RSP。 */
-typedef struct utp_ntrs_forward_filter_response {
+/** @brief 主 Node 请求协同 Node 直接回送 PRIMARY_BINDING 的 CHANGE_IP | CHANGE_PORT 响应。 */
+typedef struct utp_ntrs_forward_binding_response {
     utp_ntrs_node_instance_t target;                              // 必须等于接收 Node 的当前实例
     utp_ntrs_endpoint_t      client;                              // 客户端观察到的源 endpoint
     uint64_t                 forward_id;                          // 短期去重标识
     uint64_t                 packet_number;                       // 原 NAT 探测 UTP 包号
     uint8_t                  token[UTP_NTRS_FORWARD_TOKEN_SIZE];  // 原请求的 PROBE_TOKEN
-    uint8_t                  phase;                               // 当前固定为 CHANGE_IP
-} utp_ntrs_forward_filter_response_t;
+    uint8_t                  step;                                // 当前固定为 PRIMARY_BINDING
+} utp_ntrs_forward_binding_response_t;
 
 typedef void (*utp_ntrs_control_message_fn)(void* user_data, uint8_t type, const uint8_t* payload,
                                             uint32_t payload_length);
-typedef void (*utp_ntrs_udp_forward_fn)(void* user_data, const utp_ntrs_forward_filter_response_t* forward);
+typedef void (*utp_ntrs_udp_forward_fn)(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
 
 /** @brief TLS 控制流的有界消息重组器。 */
 typedef struct utp_ntrs_control_stream {
@@ -155,20 +155,20 @@ typedef struct utp_ntrs_control_stream {
 
 /** @brief Linux Node UDP worker 的监听配置。 */
 typedef struct utp_ntrs_udp_server_options {
-    utp_ntrs_endpoint_t      probe_endpoint;            // PROBE1、CHANGE_IP、PROBE2 的本地监听 endpoint
-    utp_ntrs_endpoint_t      change_port_endpoint;      // CHANGE_PORT 的本地监听 endpoint
-    utp_ntrs_endpoint_t      public_probe_endpoint;     // 回包 ORIGIN_ADDR 使用的公网 probe endpoint
+    utp_ntrs_endpoint_t      probe_endpoint;               // Binding 请求的本地监听 endpoint
+    utp_ntrs_endpoint_t      change_port_endpoint;         // CHANGE_PORT 响应的本地发送 endpoint
+    utp_ntrs_endpoint_t      public_probe_endpoint;        // 回包 ORIGIN_ADDR 使用的公网 probe endpoint
     utp_ntrs_endpoint_t      public_change_port_endpoint;  // 回包 ORIGIN_ADDR 使用的公网 change-port endpoint
-    utp_ntrs_endpoint_t      alternate_probe_endpoint;  // 当前 primary Node 的 probe endpoint；无
-                                                        // primary 时 family 为 0
-    utp_ntrs_node_instance_t primary_instance;          // alternate endpoint 对应的 Node
-    struct event_base*       main_base;                 // Node 主 libevent loop；NULL 时禁用 CHANGE_IP 转发
-    utp_ntrs_udp_forward_fn  on_forward;                // worker 向主 loop 投递 CHANGE_IP 请求
-    void*                    user_data;                 // on_forward 回调上下文
-    const char*              interface_name;            // 绑定的 Linux 网卡；空指针表示不限制
-    uint16_t                 worker_count;              // SO_REUSEPORT worker 数；0 时使用 1
-    uint32_t                 source_rate_per_second;    // 单源 IP 每秒最大请求数；0 时使用默认值
-    uint32_t                 source_burst;              // 单源 IP 突发请求数；0 时使用默认值
+    utp_ntrs_endpoint_t      alternate_probe_endpoint;     // 当前 primary Node 的 probe endpoint；无
+                                                           // primary 时 family 为 0
+    utp_ntrs_node_instance_t primary_instance;             // alternate endpoint 对应的 Node
+    struct event_base*       main_base;                    // Node 主 libevent loop；NULL 时禁用跨 Node 响应
+    utp_ntrs_udp_forward_fn  on_forward;                   // worker 向主 loop 投递组合 Binding 响应请求
+    void*                    user_data;                    // on_forward 回调上下文
+    const char*              interface_name;               // 绑定的 Linux 网卡；空指针表示不限制
+    uint16_t                 worker_count;                 // SO_REUSEPORT worker 数；0 时使用 1
+    uint32_t                 source_rate_per_second;       // 单源 IP 每秒最大请求数；0 时使用默认值
+    uint32_t                 source_burst;                 // 单源 IP 突发请求数；0 时使用默认值
 } utp_ntrs_udp_server_options_t;
 
 typedef struct utp_ntrs_udp_server utp_ntrs_udp_server_t;
@@ -207,12 +207,12 @@ bool   utp_ntrs_control_decode_assignment_request(const uint8_t* data, size_t le
 size_t utp_ntrs_control_encode_link_hello(uint8_t* data, size_t capacity, const utp_ntrs_node_link_hello_t* hello);
 /** @brief 解码严格的 NODE_LINK_HELLO 消息。 */
 bool   utp_ntrs_control_decode_link_hello(const uint8_t* data, size_t length, utp_ntrs_node_link_hello_t* hello);
-/** @brief 编码 NAT_FORWARD_FILTER_RESPONSE 消息，返回完整长度；失败返回 0。 */
-size_t utp_ntrs_control_encode_forward_filter_response(uint8_t* data, size_t capacity,
-                                                       const utp_ntrs_forward_filter_response_t* forward);
-/** @brief 解码严格的 NAT_FORWARD_FILTER_RESPONSE 消息。 */
-bool   utp_ntrs_control_decode_forward_filter_response(const uint8_t* data, size_t length,
-                                                       utp_ntrs_forward_filter_response_t* forward);
+/** @brief 编码 NAT_FORWARD_BINDING_RESPONSE 消息，返回完整长度；失败返回 0。 */
+size_t utp_ntrs_control_encode_forward_binding_response(uint8_t* data, size_t capacity,
+                                                        const utp_ntrs_forward_binding_response_t* forward);
+/** @brief 解码严格的 NAT_FORWARD_BINDING_RESPONSE 消息。 */
+bool   utp_ntrs_control_decode_forward_binding_response(const uint8_t* data, size_t length,
+                                                        utp_ntrs_forward_binding_response_t* forward);
 /** @brief 初始化 TLS 控制流重组状态。 */
 void   utp_ntrs_control_stream_init(utp_ntrs_control_stream_t* stream);
 /** @brief 喂入任意长度 TLS 明文字节；非法前缀返回 false。 */
@@ -258,12 +258,11 @@ void                   utp_ntrs_udp_server_stop(utp_ntrs_udp_server_t* server);
 void utp_ntrs_udp_server_set_primary(utp_ntrs_udp_server_t* server, const utp_ntrs_node_instance_t* primary_instance,
                                      const utp_ntrs_endpoint_t* primary_endpoint);
 /** @brief 原子更新回包公告 endpoint；监听 socket 不受影响。 */
-void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server,
-                                              const utp_ntrs_endpoint_t* probe_endpoint,
+void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server, const utp_ntrs_endpoint_t* probe_endpoint,
                                               const utp_ntrs_endpoint_t* change_port_endpoint);
-/** @brief 由协同 Node 从自身 probe socket 直接发送一次 FILTER_RSP。 */
-bool utp_ntrs_udp_server_send_filter_response(utp_ntrs_udp_server_t*                    server,
-                                              const utp_ntrs_forward_filter_response_t* forward);
+/** @brief 由协同 Node 从自身 change-port socket 发送一次 CHANGE_IP | CHANGE_PORT Binding 响应。 */
+bool utp_ntrs_udp_server_send_binding_response(utp_ntrs_udp_server_t*                     server,
+                                               const utp_ntrs_forward_binding_response_t* forward);
 
 #ifdef __cplusplus
 }

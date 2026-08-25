@@ -19,24 +19,22 @@
 
 #define UTP_NTRS_NAT_PACKET_SIZE            128u
 #define UTP_NTRS_UTP_PACKET_TYPE_NAT_PROBE  0x07u
-#define UTP_NTRS_NAT_PROBE_VERSION          1u
+#define UTP_NTRS_NAT_PROBE_VERSION          2u
 #define UTP_NTRS_NAT_PROBE_TOKEN_SIZE       12u
-#define UTP_NTRS_NAT_MESSAGE_PROBE_REQ      1u
-#define UTP_NTRS_NAT_MESSAGE_PROBE_RSP      2u
-#define UTP_NTRS_NAT_MESSAGE_FILTER_REQ     3u
-#define UTP_NTRS_NAT_MESSAGE_FILTER_RSP     4u
-#define UTP_NTRS_NAT_PHASE_PROBE1           1u
-#define UTP_NTRS_NAT_PHASE_CHANGE_PORT      2u
-#define UTP_NTRS_NAT_PHASE_CHANGE_IP        3u
-#define UTP_NTRS_NAT_PHASE_PROBE2           4u
+#define UTP_NTRS_NAT_MESSAGE_BINDING_REQ    1u
+#define UTP_NTRS_NAT_MESSAGE_BINDING_RSP    2u
+#define UTP_NTRS_NAT_STEP_PRIMARY_BINDING   1u
+#define UTP_NTRS_NAT_STEP_ALTERNATE_BINDING 2u
+#define UTP_NTRS_NAT_CHANGE_NONE            0u
+#define UTP_NTRS_NAT_CHANGE_PORT            (1u << 0u)
+#define UTP_NTRS_NAT_CHANGE_IP              (1u << 1u)
+#define UTP_NTRS_NAT_CHANGE_BOTH            (UTP_NTRS_NAT_CHANGE_PORT | UTP_NTRS_NAT_CHANGE_IP)
 #define UTP_NTRS_NAT_TLV_PROBE_TOKEN        1u
 #define UTP_NTRS_NAT_TLV_MAPPED_ADDR        6u
 #define UTP_NTRS_NAT_TLV_ORIGIN_ADDR        7u
 #define UTP_NTRS_NAT_TLV_ALTERNATE_ENDPOINT 8u
 #define UTP_NTRS_NAT_TLV_PADDING            12u
 #define UTP_NTRS_UDP_READ_BATCH             64u
-#define UTP_NTRS_AFFINITY_CAPACITY          1024u
-#define UTP_NTRS_AFFINITY_LIFETIME_MS       30000u
 #define UTP_NTRS_SOURCE_RATE_SHARD_COUNT    64u
 #define UTP_NTRS_SOURCE_RATE_SHARD_CAPACITY 64u
 #define UTP_NTRS_SOURCE_RATE_IDLE_MS        60000u
@@ -49,15 +47,9 @@ typedef struct utp_ntrs_udp_worker utp_ntrs_udp_worker_t;
 typedef struct utp_ntrs_probe_request {
     const uint8_t* token;          // 零拷贝请求 token
     uint64_t       packet_number;  // 请求 UTP 包号
-    uint8_t        phase;          // NAT 探测阶段
+    uint8_t        step;           // PRIMARY_BINDING 或 ALTERNATE_BINDING
+    uint8_t        change_flags;   // PRIMARY_BINDING 固定请求 CHANGE_PORT | CHANGE_IP
 } utp_ntrs_probe_request_t;
-
-typedef struct utp_ntrs_udp_affinity {
-    utp_ntrs_endpoint_t      client;         // 客户端源 endpoint
-    utp_ntrs_endpoint_t      primary_probe;  // 已下发的协同 probe endpoint
-    utp_ntrs_node_instance_t primary;        // 已下发的协同 Node 实例
-    uint64_t                 expires_at_ms;  // 亲和项失效时刻
-} utp_ntrs_udp_affinity_t;
 
 typedef struct utp_ntrs_source_rate_entry {
     uint8_t  family;          // AF_INET 或 AF_INET6
@@ -73,8 +65,8 @@ typedef struct utp_ntrs_source_rate_shard {
 } utp_ntrs_source_rate_shard_t;
 
 typedef struct utp_ntrs_udp_forward_item {
-    struct utp_ntrs_udp_forward_item*  next;     // 跨线程队列链表
-    utp_ntrs_forward_filter_response_t forward;  // 投递给主 loop 的请求
+    struct utp_ntrs_udp_forward_item*   next;     // 跨线程队列链表
+    utp_ntrs_forward_binding_response_t forward;  // 投递给主 loop 的请求
 } utp_ntrs_udp_forward_item_t;
 
 typedef struct utp_ntrs_udp_socket_context {
@@ -90,7 +82,6 @@ struct utp_ntrs_udp_worker {
     utp_ntrs_udp_socket_context_t probe_context;        // probe 事件参数
     utp_ntrs_udp_socket_context_t change_port_context;  // change-port 事件参数
     utp_ntrs_udp_server_options_t options;              // 只读 worker 配置副本
-    utp_ntrs_udp_affinity_t*      affinities;           // 本 worker 的客户端亲和表
     int32_t                       probe_fd;             // 绑定 probe endpoint 的 SO_REUSEPORT socket
     int32_t                       change_port_fd;       // 绑定 change-port endpoint 的 SO_REUSEPORT socket
     pthread_t                     thread;               // 独立事件循环线程
@@ -246,13 +237,11 @@ static bool utp_ntrs_write_probe_tlv(uint8_t** cursor, size_t* remaining, uint16
     return true;
 }
 
-static bool utp_ntrs_request_type_valid(uint8_t message_type, uint8_t phase)
+static bool utp_ntrs_request_type_valid(uint8_t message_type, uint8_t step, uint8_t change_flags)
 {
-    if (phase == UTP_NTRS_NAT_PHASE_PROBE1 || phase == UTP_NTRS_NAT_PHASE_PROBE2) {
-        return message_type == UTP_NTRS_NAT_MESSAGE_PROBE_REQ;
-    }
-    return (phase == UTP_NTRS_NAT_PHASE_CHANGE_PORT || phase == UTP_NTRS_NAT_PHASE_CHANGE_IP) &&
-           message_type == UTP_NTRS_NAT_MESSAGE_FILTER_REQ;
+    return message_type == UTP_NTRS_NAT_MESSAGE_BINDING_REQ &&
+           ((step == UTP_NTRS_NAT_STEP_PRIMARY_BINDING && change_flags == UTP_NTRS_NAT_CHANGE_BOTH) ||
+            (step == UTP_NTRS_NAT_STEP_ALTERNATE_BINDING && change_flags == UTP_NTRS_NAT_CHANGE_PORT));
 }
 
 static bool utp_ntrs_parse_probe_request(const uint8_t* request, size_t request_length,
@@ -271,8 +260,8 @@ static bool utp_ntrs_parse_probe_request(const uint8_t* request, size_t request_
         return false;
     }
     payload = request + UTP_PACKET_HEADER_SIZE;
-    if (header.payload_length < 4u || payload[0] != UTP_NTRS_NAT_PROBE_VERSION || payload[3] != 0u ||
-        !utp_ntrs_request_type_valid(payload[1], payload[2])) {
+    if (header.payload_length < 4u || payload[0] != UTP_NTRS_NAT_PROBE_VERSION ||
+        !utp_ntrs_request_type_valid(payload[1], payload[2], payload[3])) {
         return false;
     }
     for (offset = 4u; offset < header.payload_length;) {
@@ -306,7 +295,8 @@ static bool utp_ntrs_parse_probe_request(const uint8_t* request, size_t request_
     *decoded = (utp_ntrs_probe_request_t){
         .token         = token,
         .packet_number = header.packet_number,
-        .phase         = payload[2],
+        .step          = payload[2],
+        .change_flags  = payload[3],
     };
     return true;
 }
@@ -349,9 +339,33 @@ static bool utp_ntrs_write_mapped_and_origin(uint8_t** cursor, size_t* remaining
     return true;
 }
 
-static bool utp_ntrs_build_filter_response(const utp_ntrs_forward_filter_response_t* forward,
-                                           const utp_ntrs_endpoint_t*                origin,
-                                           uint8_t response[UTP_NTRS_NAT_PACKET_SIZE], size_t* response_length)
+static bool utp_ntrs_write_alternate_endpoint(uint8_t** cursor, size_t* remaining, const utp_ntrs_endpoint_t* alternate)
+{
+    uint8_t* length_cursor;
+    size_t   before;
+
+    if (*remaining < 4u) {
+        return false;
+    }
+    utp_ntrs_write_u16(*cursor, UTP_NTRS_NAT_TLV_ALTERNATE_ENDPOINT);
+    *cursor       += 2u;
+    *remaining    -= 2u;
+    length_cursor  = *cursor;
+    before         = *remaining - 2u;
+    *cursor       += 2u;
+    *remaining    -= 2u;
+    if (!utp_ntrs_write_probe_endpoint(cursor, remaining, alternate)) {
+        return false;
+    }
+    utp_ntrs_write_u16(length_cursor, (uint16_t)(before - *remaining));
+    return true;
+}
+
+static bool utp_ntrs_build_forwarded_binding_response(const utp_ntrs_forward_binding_response_t* forward,
+                                                      const utp_ntrs_endpoint_t*                 origin,
+                                                      const utp_ntrs_endpoint_t*                 alternate,
+                                                      uint8_t response[UTP_NTRS_NAT_PACKET_SIZE],
+                                                      size_t* response_length)
 {
     const utp_packet_header_t header = {
         .packet_number = forward->packet_number,
@@ -362,14 +376,15 @@ static bool utp_ntrs_build_filter_response(const utp_ntrs_forward_filter_respons
     size_t              remaining      = UTP_NTRS_NAT_PACKET_SIZE - UTP_PACKET_HEADER_SIZE;
 
     cursor[0]  = UTP_NTRS_NAT_PROBE_VERSION;
-    cursor[1]  = UTP_NTRS_NAT_MESSAGE_FILTER_RSP;
-    cursor[2]  = forward->phase;
-    cursor[3]  = 0u;
+    cursor[1]  = UTP_NTRS_NAT_MESSAGE_BINDING_RSP;
+    cursor[2]  = forward->step;
+    cursor[3]  = UTP_NTRS_NAT_CHANGE_BOTH;
     cursor    += 4u;
     remaining -= 4u;
     if (!utp_ntrs_write_probe_tlv(&cursor, &remaining, UTP_NTRS_NAT_TLV_PROBE_TOKEN, forward->token,
                                   UTP_NTRS_NAT_PROBE_TOKEN_SIZE) ||
-        !utp_ntrs_write_mapped_and_origin(&cursor, &remaining, &forward->client, origin)) {
+        !utp_ntrs_write_mapped_and_origin(&cursor, &remaining, &forward->client, origin) ||
+        !utp_ntrs_write_alternate_endpoint(&cursor, &remaining, alternate)) {
         return false;
     }
     *response_length              = (size_t)(cursor - response);
@@ -383,34 +398,30 @@ bool utp_ntrs_udp_handle_probe_request(const uint8_t* request, size_t request_le
                                        const utp_ntrs_endpoint_t* change_port_endpoint,
                                        const utp_ntrs_endpoint_t* alternate_probe_endpoint, uint8_t* response,
                                        size_t response_capacity, size_t* response_length,
-                                       utp_ntrs_udp_reply_socket_t* reply_socket)
+                                       utp_ntrs_udp_reply_socket_t reply_socket)
 {
     utp_packet_header_t      response_header;
     utp_ntrs_probe_request_t decoded;
-    uint8_t                  response_type;
     uint8_t*                 cursor;
     size_t                   remaining;
     utp_ntrs_endpoint_t      origin;
 
     if (!utp_ntrs_parse_probe_request(request, request_length, &decoded) ||
-        decoded.phase == UTP_NTRS_NAT_PHASE_CHANGE_IP) {
+        (reply_socket != UTP_NTRS_UDP_REPLY_PROBE && reply_socket != UTP_NTRS_UDP_REPLY_CHANGE_PORT) ||
+        (reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT && (decoded.step != UTP_NTRS_NAT_STEP_ALTERNATE_BINDING ||
+                                                            (decoded.change_flags & UTP_NTRS_NAT_CHANGE_PORT) == 0u))) {
         return false;
     }
-    *reply_socket =
-        decoded.phase == UTP_NTRS_NAT_PHASE_CHANGE_PORT ? UTP_NTRS_UDP_REPLY_CHANGE_PORT : UTP_NTRS_UDP_REPLY_PROBE;
-    origin        = *reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT ? *change_port_endpoint : *probe_endpoint;
-    response_type = decoded.phase == UTP_NTRS_NAT_PHASE_PROBE1 || decoded.phase == UTP_NTRS_NAT_PHASE_PROBE2
-                        ? UTP_NTRS_NAT_MESSAGE_PROBE_RSP
-                        : UTP_NTRS_NAT_MESSAGE_FILTER_RSP;
+    origin = reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT ? *change_port_endpoint : *probe_endpoint;
     if (response_capacity < UTP_PACKET_HEADER_SIZE + 4u) {
         return false;
     }
     cursor     = response + UTP_PACKET_HEADER_SIZE;
     remaining  = response_capacity - UTP_PACKET_HEADER_SIZE;
     cursor[0]  = UTP_NTRS_NAT_PROBE_VERSION;
-    cursor[1]  = response_type;
-    cursor[2]  = decoded.phase;
-    cursor[3]  = 0u;
+    cursor[1]  = UTP_NTRS_NAT_MESSAGE_BINDING_RSP;
+    cursor[2]  = decoded.step;
+    cursor[3]  = reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT ? UTP_NTRS_NAT_CHANGE_PORT : UTP_NTRS_NAT_CHANGE_NONE;
     cursor    += 4u;
     remaining -= 4u;
     if (!utp_ntrs_write_probe_tlv(&cursor, &remaining, UTP_NTRS_NAT_TLV_PROBE_TOKEN, decoded.token,
@@ -420,24 +431,11 @@ bool utp_ntrs_udp_handle_probe_request(const uint8_t* request, size_t request_le
     if (!utp_ntrs_write_mapped_and_origin(&cursor, &remaining, client_endpoint, &origin)) {
         return false;
     }
-    if (decoded.phase == UTP_NTRS_NAT_PHASE_PROBE1 && alternate_probe_endpoint->family == probe_endpoint->family &&
+    if (decoded.step == UTP_NTRS_NAT_STEP_PRIMARY_BINDING &&
+        alternate_probe_endpoint->family == probe_endpoint->family &&
         !utp_ntrs_endpoint_same_ip(alternate_probe_endpoint, probe_endpoint)) {
-        if (remaining < 4u) {
+        if (!utp_ntrs_write_alternate_endpoint(&cursor, &remaining, alternate_probe_endpoint)) {
             return false;
-        }
-        utp_ntrs_write_u16(cursor, UTP_NTRS_NAT_TLV_ALTERNATE_ENDPOINT);
-        cursor    += 2u;
-        remaining -= 2u;
-        {
-            uint8_t* const length_cursor = cursor;
-            const size_t   before        = remaining - 2u;
-
-            cursor    += 2u;
-            remaining -= 2u;
-            if (!utp_ntrs_write_probe_endpoint(&cursor, &remaining, alternate_probe_endpoint)) {
-                return false;
-            }
-            utp_ntrs_write_u16(length_cursor, (uint16_t)(before - remaining));
         }
     }
     *response_length = (size_t)(cursor - response);
@@ -482,11 +480,6 @@ static uint64_t utp_ntrs_udp_now_ms(void)
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
 }
 
-static bool utp_ntrs_endpoint_equal(const utp_ntrs_endpoint_t* left, const utp_ntrs_endpoint_t* right)
-{
-    return left->port == right->port && utp_ntrs_endpoint_same_ip(left, right);
-}
-
 static uint64_t utp_ntrs_forward_id(const utp_ntrs_probe_request_t* request, const utp_ntrs_endpoint_t* client)
 {
     uint64_t     value          = UINT64_C(1469598103934665603);
@@ -512,51 +505,6 @@ static uint64_t utp_ntrs_forward_id(const utp_ntrs_probe_request_t* request, con
         value *= UINT64_C(1099511628211);
     }
     return value == 0u ? UINT64_C(1) : value;
-}
-
-static void utp_ntrs_affinity_store(utp_ntrs_udp_worker_t* worker, const utp_ntrs_endpoint_t* client,
-                                    const utp_ntrs_node_instance_t* primary, const utp_ntrs_endpoint_t* primary_probe,
-                                    uint64_t now_ms)
-{
-    utp_ntrs_udp_affinity_t* slot = NULL;
-    uint32_t                 index;
-
-    for (index = 0u; index < UTP_NTRS_AFFINITY_CAPACITY; ++index) {
-        utp_ntrs_udp_affinity_t* const current = &worker->affinities[index];
-
-        if (current->expires_at_ms <= now_ms) {
-            slot = current;
-            break;
-        }
-        if (utp_ntrs_endpoint_equal(&current->client, client)) {
-            slot = current;
-            break;
-        }
-        if (slot == NULL || current->expires_at_ms < slot->expires_at_ms) {
-            slot = current;
-        }
-    }
-    *slot = (utp_ntrs_udp_affinity_t){
-        .client        = *client,
-        .primary_probe = *primary_probe,
-        .primary       = *primary,
-        .expires_at_ms = now_ms + UTP_NTRS_AFFINITY_LIFETIME_MS,
-    };
-}
-
-static const utp_ntrs_udp_affinity_t* utp_ntrs_affinity_find(const utp_ntrs_udp_worker_t* worker,
-                                                             const utp_ntrs_endpoint_t* client, uint64_t now_ms)
-{
-    uint32_t index;
-
-    for (index = 0u; index < UTP_NTRS_AFFINITY_CAPACITY; ++index) {
-        const utp_ntrs_udp_affinity_t* const current = &worker->affinities[index];
-
-        if (current->expires_at_ms > now_ms && utp_ntrs_endpoint_equal(&current->client, client)) {
-            return current;
-        }
-    }
-    return NULL;
 }
 
 static void utp_ntrs_udp_on_forward_event(evutil_socket_t fd, int16_t events, void* user_data)
@@ -587,8 +535,8 @@ static void utp_ntrs_udp_on_forward_event(evutil_socket_t fd, int16_t events, vo
     }
 }
 
-static void utp_ntrs_udp_enqueue_forward(utp_ntrs_udp_server_t*                    server,
-                                         const utp_ntrs_forward_filter_response_t* forward)
+static void utp_ntrs_udp_enqueue_forward(utp_ntrs_udp_server_t*                     server,
+                                         const utp_ntrs_forward_binding_response_t* forward)
 {
     utp_ntrs_udp_forward_item_t* const item   = malloc(sizeof(*item));
     const uint8_t                      notify = 1u;
@@ -618,20 +566,19 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
 
     (void)events;
     for (index = 0u; index < UTP_NTRS_UDP_READ_BATCH; ++index) {
-        struct sockaddr_storage     client_address;
-        struct iovec                input   = {0};
-        struct msghdr               message = {0};
-        uint8_t                     request[UTP_NTRS_NAT_PACKET_SIZE];
-        uint8_t                     response[UTP_NTRS_NAT_PACKET_SIZE];
-        utp_ntrs_endpoint_t         client_endpoint;
-        utp_ntrs_endpoint_t         alternate_endpoint;
-        utp_ntrs_endpoint_t         public_probe_endpoint;
-        utp_ntrs_endpoint_t         public_change_port_endpoint;
-        utp_ntrs_node_instance_t    primary_instance;
-        utp_ntrs_probe_request_t    decoded;
-        utp_ntrs_udp_reply_socket_t reply_socket;
-        size_t                      response_length;
-        ssize_t                     received;
+        struct sockaddr_storage  client_address;
+        struct iovec             input   = {0};
+        struct msghdr            message = {0};
+        uint8_t                  request[UTP_NTRS_NAT_PACKET_SIZE];
+        uint8_t                  response[UTP_NTRS_NAT_PACKET_SIZE];
+        utp_ntrs_endpoint_t      client_endpoint;
+        utp_ntrs_endpoint_t      alternate_endpoint;
+        utp_ntrs_endpoint_t      public_probe_endpoint;
+        utp_ntrs_endpoint_t      public_change_port_endpoint;
+        utp_ntrs_node_instance_t primary_instance;
+        utp_ntrs_probe_request_t decoded;
+        size_t                   response_length;
+        ssize_t                  received;
 
         input.iov_base      = request;
         input.iov_len       = sizeof(request);
@@ -651,10 +598,10 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
             continue;
         }
         (void)pthread_rwlock_rdlock(&worker->server->alternate_lock);
-        alternate_endpoint           = worker->options.alternate_probe_endpoint;
-        public_probe_endpoint        = worker->options.public_probe_endpoint;
-        public_change_port_endpoint  = worker->options.public_change_port_endpoint;
-        primary_instance             = worker->options.primary_instance;
+        alternate_endpoint          = worker->options.alternate_probe_endpoint;
+        public_probe_endpoint       = worker->options.public_probe_endpoint;
+        public_change_port_endpoint = worker->options.public_change_port_endpoint;
+        primary_instance            = worker->options.primary_instance;
         (void)pthread_rwlock_unlock(&worker->server->alternate_lock);
         if (!utp_ntrs_endpoint_from_sockaddr(&client_endpoint, (const struct sockaddr*)&client_address,
                                              message.msg_namelen) ||
@@ -662,37 +609,35 @@ static void utp_ntrs_udp_on_read(evutil_socket_t fd, short events, void* user_da
             !utp_ntrs_parse_probe_request(request, (size_t)received, &decoded)) {
             continue;
         }
-        if (decoded.phase == UTP_NTRS_NAT_PHASE_CHANGE_IP) {
-            const utp_ntrs_udp_affinity_t* const affinity =
-                utp_ntrs_affinity_find(worker, &client_endpoint, utp_ntrs_udp_now_ms());
-
-            if (affinity != NULL) {
-                utp_ntrs_forward_filter_response_t forward = {
-                    .target        = affinity->primary,
-                    .client        = client_endpoint,
-                    .forward_id    = utp_ntrs_forward_id(&decoded, &client_endpoint),
-                    .packet_number = decoded.packet_number,
-                    .phase         = decoded.phase,
-                };
-
-                (void)memcpy(forward.token, decoded.token, sizeof(forward.token));
-                utp_ntrs_udp_enqueue_forward(worker->server, &forward);
+        if (!utp_ntrs_udp_handle_probe_request(request, (size_t)received, &client_endpoint, &public_probe_endpoint,
+                                               &public_change_port_endpoint, &alternate_endpoint, response,
+                                               sizeof(response), &response_length, UTP_NTRS_UDP_REPLY_PROBE)) {
+            continue;
+        }
+        (void)sendto(worker->probe_fd, response, response_length, 0, (const struct sockaddr*)&client_address,
+                     message.msg_namelen);
+        if (decoded.step == UTP_NTRS_NAT_STEP_ALTERNATE_BINDING) {
+            if (utp_ntrs_udp_handle_probe_request(request, (size_t)received, &client_endpoint, &public_probe_endpoint,
+                                                  &public_change_port_endpoint, &alternate_endpoint, response,
+                                                  sizeof(response), &response_length, UTP_NTRS_UDP_REPLY_CHANGE_PORT)) {
+                (void)sendto(worker->change_port_fd, response, response_length, 0,
+                             (const struct sockaddr*)&client_address, message.msg_namelen);
             }
             continue;
         }
-        if (!utp_ntrs_udp_handle_probe_request(request, (size_t)received, &client_endpoint,
-                                               &public_probe_endpoint, &public_change_port_endpoint,
-                                               &alternate_endpoint, response, sizeof(response), &response_length,
-                                               &reply_socket)) {
-            continue;
-        }
-        (void)sendto(reply_socket == UTP_NTRS_UDP_REPLY_CHANGE_PORT ? worker->change_port_fd : worker->probe_fd,
-                     response, response_length, 0, (const struct sockaddr*)&client_address, message.msg_namelen);
-        if (decoded.phase == UTP_NTRS_NAT_PHASE_PROBE1 &&
-            alternate_endpoint.family == worker->options.probe_endpoint.family &&
-            !utp_ntrs_endpoint_same_ip(&alternate_endpoint, &worker->options.probe_endpoint)) {
-            utp_ntrs_affinity_store(worker, &client_endpoint, &primary_instance, &alternate_endpoint,
-                                    utp_ntrs_udp_now_ms());
+        if (alternate_endpoint.family == worker->options.probe_endpoint.family &&
+            !utp_ntrs_endpoint_same_ip(&alternate_endpoint, &worker->options.probe_endpoint) &&
+            primary_instance.node_id[0] != 0u) {
+            utp_ntrs_forward_binding_response_t forward = {
+                .target        = primary_instance,
+                .client        = client_endpoint,
+                .forward_id    = utp_ntrs_forward_id(&decoded, &client_endpoint),
+                .packet_number = decoded.packet_number,
+                .step          = decoded.step,
+            };
+
+            (void)memcpy(forward.token, decoded.token, sizeof(forward.token));
+            utp_ntrs_udp_enqueue_forward(worker->server, &forward);
         }
     }
 }
@@ -722,7 +667,6 @@ static void utp_ntrs_udp_worker_destroy(utp_ntrs_udp_worker_t* worker)
     if (worker->base != NULL) {
         event_base_free(worker->base);
     }
-    free(worker->affinities);
     *worker = (utp_ntrs_udp_worker_t){
         .probe_fd       = -1,
         .change_port_fd = -1,
@@ -824,7 +768,6 @@ utp_ntrs_udp_server_t* utp_ntrs_udp_server_start(const utp_ntrs_udp_server_optio
             worker->options.public_change_port_endpoint = worker->options.change_port_endpoint;
         }
         worker->base           = event_base_new();
-        worker->affinities     = calloc(UTP_NTRS_AFFINITY_CAPACITY, sizeof(*worker->affinities));
         worker->probe_fd       = utp_ntrs_udp_create_socket(&options->probe_endpoint, options->interface_name);
         worker->change_port_fd = utp_ntrs_udp_create_socket(&options->change_port_endpoint, options->interface_name);
         worker->probe_context  = (utp_ntrs_udp_socket_context_t){
@@ -835,7 +778,7 @@ utp_ntrs_udp_server_t* utp_ntrs_udp_server_start(const utp_ntrs_udp_server_optio
             .worker      = worker,
             .socket_kind = UTP_NTRS_UDP_REPLY_CHANGE_PORT,
         };
-        if (worker->base == NULL || worker->affinities == NULL || worker->probe_fd < 0 || worker->change_port_fd < 0 ||
+        if (worker->base == NULL || worker->probe_fd < 0 || worker->change_port_fd < 0 ||
             (worker->probe_event = event_new(worker->base, worker->probe_fd, EV_READ | EV_PERSIST, utp_ntrs_udp_on_read,
                                              &worker->probe_context)) == NULL ||
             (worker->change_port_event = event_new(worker->base, worker->change_port_fd, EV_READ | EV_PERSIST,
@@ -917,8 +860,7 @@ void utp_ntrs_udp_server_set_primary(utp_ntrs_udp_server_t* server, const utp_nt
     (void)pthread_rwlock_unlock(&server->alternate_lock);
 }
 
-void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server,
-                                              const utp_ntrs_endpoint_t* probe_endpoint,
+void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server, const utp_ntrs_endpoint_t* probe_endpoint,
                                               const utp_ntrs_endpoint_t* change_port_endpoint)
 {
     uint16_t index;
@@ -937,26 +879,29 @@ void utp_ntrs_udp_server_set_public_endpoints(utp_ntrs_udp_server_t* server,
     (void)pthread_rwlock_unlock(&server->alternate_lock);
 }
 
-bool utp_ntrs_udp_server_send_filter_response(utp_ntrs_udp_server_t*                    server,
-                                              const utp_ntrs_forward_filter_response_t* forward)
+bool utp_ntrs_udp_server_send_binding_response(utp_ntrs_udp_server_t*                     server,
+                                               const utp_ntrs_forward_binding_response_t* forward)
 {
     struct sockaddr_storage client_address;
     socklen_t               client_length;
     uint8_t                 response[UTP_NTRS_NAT_PACKET_SIZE];
     utp_ntrs_endpoint_t     public_probe_endpoint;
+    utp_ntrs_endpoint_t     public_change_port_endpoint;
     size_t                  response_length;
 
     if (server == NULL || forward == NULL || server->worker_count == 0u) {
         return false;
     }
     (void)pthread_rwlock_rdlock(&server->alternate_lock);
-    public_probe_endpoint = server->workers[0].options.public_probe_endpoint;
+    public_probe_endpoint       = server->workers[0].options.public_probe_endpoint;
+    public_change_port_endpoint = server->workers[0].options.public_change_port_endpoint;
     (void)pthread_rwlock_unlock(&server->alternate_lock);
     if (forward->client.family != public_probe_endpoint.family ||
         !utp_ntrs_endpoint_to_sockaddr(&forward->client, &client_address, &client_length) ||
-        !utp_ntrs_build_filter_response(forward, &public_probe_endpoint, response, &response_length)) {
+        !utp_ntrs_build_forwarded_binding_response(forward, &public_change_port_endpoint, &public_probe_endpoint,
+                                                   response, &response_length)) {
         return false;
     }
-    return sendto(server->workers[0].probe_fd, response, response_length, 0, (const struct sockaddr*)&client_address,
-                  client_length) == (ssize_t)response_length;
+    return sendto(server->workers[0].change_port_fd, response, response_length, 0,
+                  (const struct sockaddr*)&client_address, client_length) == (ssize_t)response_length;
 }
