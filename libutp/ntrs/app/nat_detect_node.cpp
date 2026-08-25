@@ -212,10 +212,8 @@ static bool nat_detect_node_forward_seen(nat_detect_node_t* node, uint64_t forwa
             slot = current;
         }
     }
-    *slot = nat_detect_node_forward_dedup_t{
-        .forward_id    = forward_id,
-        .expires_at_ms = now_ms + UTP_NTRS_FORWARD_DEDUP_LIFETIME_MS,
-    };
+    slot->forward_id    = forward_id;
+    slot->expires_at_ms = now_ms + UTP_NTRS_FORWARD_DEDUP_LIFETIME_MS;
     return false;
 }
 
@@ -449,14 +447,14 @@ static void nat_detect_node_on_closed(void* user_data)
 
 static void nat_detect_node_connect(nat_detect_node_t* node)
 {
-    struct sockaddr_storage        address;
-    socklen_t                      address_length;
-    int32_t                        fd;
-    const utp_ntrs_tls_callbacks_t callbacks = {
-        .ready     = nat_detect_node_on_ready,
-        .plaintext = nat_detect_node_on_plaintext,
-        .closed    = nat_detect_node_on_closed,
-    };
+    struct sockaddr_storage  address;
+    socklen_t                address_length;
+    int32_t                  fd;
+    utp_ntrs_tls_callbacks_t callbacks = {};
+
+    callbacks.ready     = nat_detect_node_on_ready;
+    callbacks.plaintext = nat_detect_node_on_plaintext;
+    callbacks.closed    = nat_detect_node_on_closed;
 
     if (node->hub_stream != NULL || !utp_ntrs_endpoint_to_sockaddr(&node->hub_endpoint, &address, &address_length)) {
         return;
@@ -494,20 +492,19 @@ static void nat_detect_node_on_reconnect(evutil_socket_t fd, int16_t events, voi
 
 static void nat_detect_node_on_heartbeat(evutil_socket_t fd, int16_t events, void* user_data)
 {
-    nat_detect_node_t* const        node      = static_cast<nat_detect_node_t*>(user_data);
-    const utp_ntrs_node_heartbeat_t heartbeat = {
-        .instance = node->registration.instance,
-        .load     = node->registration.load,
-    };
-    uint8_t message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
-    size_t  length;
+    nat_detect_node_t* const  node      = static_cast<nat_detect_node_t*>(user_data);
+    utp_ntrs_node_heartbeat_t heartbeat = {};
+    uint8_t                   message[UTP_NTRS_CONTROL_MAX_MESSAGE_SIZE];
+    size_t                    length;
 
     (void)fd;
     (void)events;
     if (!node->registered) {
         return;
     }
-    length = utp_ntrs_control_encode_heartbeat(message, sizeof(message), &heartbeat);
+    heartbeat.instance = node->registration.instance;
+    heartbeat.load     = node->registration.load;
+    length             = utp_ntrs_control_encode_heartbeat(message, sizeof(message), &heartbeat);
     if (length == 0u || !nat_detect_node_send(node, message, length)) {
         (void)fprintf(stderr, "nat_detect_node event=heartbeat_send_failed\n");
         nat_detect_node_schedule_disconnect(node);
@@ -574,22 +571,19 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
         return EXIT_FAILURE;
     }
     (void)memcpy(node.registration.instance.node_id, node_id, strlen(node_id));
-    node.interface_name                     = interface_name;
-    node.node_name                          = node_id;
-    udp_options.worker_count                = (uint16_t)workers;
-    udp_options.source_rate_per_second      = source_rate;
-    udp_options.source_burst                = source_burst;
-    udp_options.interface_name              = interface_name;
-    udp_options.public_probe_endpoint       = udp_options.probe_endpoint;
-    udp_options.public_change_port_endpoint = udp_options.change_port_endpoint;
-    node.registration.ipv4                  = utp_ntrs_node_family_t{
-        .public_endpoint      = udp_options.probe_endpoint,
-        .probe_endpoint       = udp_options.probe_endpoint,
-        .change_port_endpoint = udp_options.change_port_endpoint,
-        .control_endpoint     = node.registration.ipv4.control_endpoint,
-        .family               = udp_options.probe_endpoint.family,
-        .valid                = true,
-    };
+    node.interface_name                         = interface_name;
+    node.node_name                              = node_id;
+    udp_options.worker_count                    = (uint16_t)workers;
+    udp_options.source_rate_per_second          = source_rate;
+    udp_options.source_burst                    = source_burst;
+    udp_options.interface_name                  = interface_name;
+    udp_options.public_probe_endpoint           = udp_options.probe_endpoint;
+    udp_options.public_change_port_endpoint     = udp_options.change_port_endpoint;
+    node.registration.ipv4.public_endpoint      = udp_options.probe_endpoint;
+    node.registration.ipv4.probe_endpoint       = udp_options.probe_endpoint;
+    node.registration.ipv4.change_port_endpoint = udp_options.change_port_endpoint;
+    node.registration.ipv4.family               = udp_options.probe_endpoint.family;
+    node.registration.ipv4.valid                = true;
     node.registration.ipv4.public_endpoint.port = 0u;
     if (node.registration.ipv4.family != (uint8_t)AF_INET) {
         node.registration.ipv6        = node.registration.ipv4;
@@ -741,23 +735,23 @@ int main(int argc, char** argv)
         control = use_ipv6 ? "[::]:24003" : "0.0.0.0:24003";
     }
 
-    const nat_detect_node_options_t options = {
-        .hub            = hub.c_str(),
-        .node_id        = node_id.c_str(),
-        .probe          = probe.c_str(),
-        .change_port    = change_port.c_str(),
-        .control        = control.c_str(),
-        .interface_name = interface_name.empty() ? NULL : interface_name.c_str(),
-        .certificate    = certificate.empty() ? NULL : certificate.c_str(),
-        .private_key    = private_key.empty() ? NULL : private_key.c_str(),
-        .boot_id        = boot_id.empty() ? NULL : boot_id.c_str(),
-        .load           = load,
-        .heartbeat_ms   = heartbeat_ms,
-        .workers        = workers,
-        .source_rate    = source_rate,
-        .source_burst   = source_burst,
-        .use_ipv6       = use_ipv6,
-    };
+    nat_detect_node_options_t options = {};
+
+    options.hub            = hub.c_str();
+    options.node_id        = node_id.c_str();
+    options.probe          = probe.c_str();
+    options.change_port    = change_port.c_str();
+    options.control        = control.c_str();
+    options.interface_name = interface_name.empty() ? NULL : interface_name.c_str();
+    options.certificate    = certificate.empty() ? NULL : certificate.c_str();
+    options.private_key    = private_key.empty() ? NULL : private_key.c_str();
+    options.boot_id        = boot_id.empty() ? NULL : boot_id.c_str();
+    options.load           = load;
+    options.heartbeat_ms   = heartbeat_ms;
+    options.workers        = workers;
+    options.source_rate    = source_rate;
+    options.source_burst   = source_burst;
+    options.use_ipv6       = use_ipv6;
 
     utp_ntrs_app_log_init("nat_detect_node");
     return nat_detect_node_run(&options);

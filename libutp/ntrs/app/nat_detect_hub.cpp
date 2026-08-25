@@ -244,13 +244,14 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
                           utp_ntrs_endpoint_format(&session->peer_endpoint, peer, sizeof(peer)), replaced ? 1u : 0u);
         }
         {
-            uint8_t                          accepted[UTP_NTRS_CONTROL_HEADER_SIZE + 19u];
-            const utp_ntrs_registration_ok_t registration_ok = {
-                .public_endpoint = session->registration.ipv4.valid ? session->registration.ipv4.public_endpoint
-                                                                    : session->registration.ipv6.public_endpoint,
-            };
-            const size_t accepted_length =
-                utp_ntrs_control_encode_registration_ok(accepted, sizeof(accepted), &registration_ok);
+            uint8_t                    accepted[UTP_NTRS_CONTROL_HEADER_SIZE + 19u];
+            utp_ntrs_registration_ok_t registration_ok = {};
+            size_t                     accepted_length;
+
+            registration_ok.public_endpoint = session->registration.ipv4.valid
+                                                  ? session->registration.ipv4.public_endpoint
+                                                  : session->registration.ipv6.public_endpoint;
+            accepted_length = utp_ntrs_control_encode_registration_ok(accepted, sizeof(accepted), &registration_ok);
 
             if (accepted_length == 0u || !nat_detect_hub_session_send(session, accepted, accepted_length)) {
                 nat_detect_hub_session_schedule_close(session);
@@ -365,11 +366,10 @@ static void nat_detect_hub_on_accept(struct evconnlistener* listener, evutil_soc
 {
     nat_detect_hub_service_t* const service   = static_cast<nat_detect_hub_service_t*>(user_data);
     nat_detect_hub_session_t* const session   = static_cast<nat_detect_hub_session_t*>(calloc(1u, sizeof(*session)));
-    const utp_ntrs_tls_callbacks_t  callbacks = {
-        .ready     = NULL,
-        .plaintext = nat_detect_hub_session_on_plaintext,
-        .closed    = nat_detect_hub_session_on_closed,
-    };
+    utp_ntrs_tls_callbacks_t        callbacks = {};
+
+    callbacks.plaintext = nat_detect_hub_session_on_plaintext;
+    callbacks.closed    = nat_detect_hub_session_on_closed;
 
     (void)listener;
     if (session == NULL ||
