@@ -89,7 +89,7 @@ if(UTP_NTRS_BUILD_SERVICES)
         crypto
         -Wl,--end-group)
     target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_include_directories(nat_detect_hub SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
     target_compile_features(nat_detect_hub PRIVATE cxx_std_20)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_hub PRIVATE
@@ -111,8 +111,8 @@ if(UTP_NTRS_BUILD_SERVICES)
     add_dependencies(nat_detect_node utp_ntrs_node_udp utp_ntrs_service_core)
     target_include_directories(nat_detect_node PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(nat_detect_node SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
     target_compile_features(nat_detect_node PRIVATE cxx_std_20)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_node PRIVATE

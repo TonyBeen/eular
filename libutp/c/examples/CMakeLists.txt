@@ -34,5 +34,5 @@ foreach(example_target IN LISTS UTP_C_EXAMPLES)
     endif()
 endforeach()
 
-target_include_directories(ntrsc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
+target_include_directories(ntrsc SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
 target_compile_features(ntrsc PRIVATE cxx_std_11)
