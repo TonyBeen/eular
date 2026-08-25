@@ -482,6 +482,21 @@ TEST_CASE("a delayed ACK for an original packet confirms its retransmission", "[
     utp_connection_cleanup(&active);
 }
 
+TEST_CASE("connection rejects rendezvous packet types", "[connection][protocol]")
+{
+    const utp_address_t                     peer   = loopback_address(10011u);
+    const utp_packet_header_t               header = {99u, 55u, 1u, 0u, UTP_PACKET_TYPE_RENDEZVOUS, 0u};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE> wire = {};
+    utp_connection_t                        connection = {};
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 55u, 99u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(wire.data(), wire.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(&connection, wire.data(), wire.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("0-RTT request and response retransmissions allocate a new packet number",
           "[connection][retransmission][0rtt]")
 {

@@ -67,7 +67,8 @@ static bool utp_connection_transport_params_equal(const utp_frame_transport_para
 /* 收包基础校验与明文握手保护。 */
 static bool utp_connection_packet_type_is_valid(uint8_t type)
 {
-    return type >= UTP_PACKET_TYPE_INITIAL && type <= UTP_PACKET_TYPE_CONNECT;
+    return type == UTP_PACKET_TYPE_INITIAL || type == UTP_PACKET_TYPE_HANDSHAKE || type == UTP_PACKET_TYPE_0RTT ||
+           type == UTP_PACKET_TYPE_CONNECTION_CLOSE || type == UTP_PACKET_TYPE_CTRL;
 }
 
 static utp_internal_error_t utp_connection_untrusted_packet_error(const utp_connection_t* connection)

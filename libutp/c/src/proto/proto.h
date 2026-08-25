@@ -22,7 +22,7 @@ typedef enum utp_packet_type {
     UTP_PACKET_TYPE_0RTT             = 0x03,
     UTP_PACKET_TYPE_CONNECTION_CLOSE = 0x04,
     UTP_PACKET_TYPE_CTRL             = 0x05,
-    UTP_PACKET_TYPE_CONNECT          = 0x06,
+    UTP_PACKET_TYPE_RENDEZVOUS       = 0x06,
     UTP_PACKET_TYPE_NAT_PROBE        = 0x07
 } utp_packet_type_t;
 

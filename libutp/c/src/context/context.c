@@ -3692,6 +3692,10 @@ static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, 
         return utp_context_on_nat_probe_packet(context, &header, packet + UTP_PACKET_HEADER_SIZE, header.payload_length,
                                                peer, local, now_us);
     }
+    if (header.type == UTP_PACKET_TYPE_RENDEZVOUS) {
+        // 半连接报文必须在 CID 查表前分流，后续由 NTRS 模块处理。
+        return UTP_INTERNAL_ERROR_OK;
+    }
     if (packet_length != UTP_PACKET_HEADER_SIZE + header.payload_length || header.packet_number == 0u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
