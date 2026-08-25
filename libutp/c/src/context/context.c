@@ -602,11 +602,11 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t* conte
     const uint64_t expires_at_seconds = context->zero_rtt_token_max_lifetime_seconds > UINT64_MAX - now_seconds
                                             ? UINT64_MAX
                                             : now_seconds + context->zero_rtt_token_max_lifetime_seconds;
-    const uint8_t encryption_mode = slot->connection.crypto_configured
-                                        ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
-                                        : (uint8_t)UTP_ENCRYPTION_NONE;
-    uint8_t       token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
-    uint8_t       payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    const uint8_t  encryption_mode    = slot->connection.crypto_configured
+                                            ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
+                                            : (uint8_t)UTP_ENCRYPTION_NONE;
+    uint8_t        token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    uint8_t        payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
     utp_frame_session_token_t frame;
     utp_internal_error_t      error = utp_crypto_random_bytes(token_payload, UTP_CRYPTO_RESUMPTION_PSK_SIZE);
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -2124,9 +2124,9 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
-    size_t  payload_length;
+    size_t               payload_length;
     utp_internal_error_t error;
 
     if (out_packet_number == NULL) {
@@ -3637,8 +3637,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         context->callback_accept_zero_rtt  = slot;
         context->callback_accept_requested = false;
 
-        const bool accepted               = context->on_new_connection == NULL ||
-                                            context->on_new_connection(&info, context->on_new_connection_user_data);
+        const bool accepted = context->on_new_connection == NULL ||
+                              context->on_new_connection(&info, context->on_new_connection_user_data);
         context->callback_accept_zero_rtt = NULL;
         if (context->callback_accept_requested) {
             slot->zero_rtt_accepted = true;
@@ -4085,14 +4085,18 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
 
 utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context)
 {
+    size_t peer_id_length;
+
     if (out_context == NULL) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
-    *out_context = NULL;
+    *out_context   = NULL;
+    peer_id_length = options != NULL && options->peer_id != NULL ? strlen(options->peer_id) : 0u;
     if (options == NULL || options->event_base == NULL || !utp_context_log_level_is_valid(options->log_level) ||
         options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
         (options->cc_algorithm != UTP_CONGESTION_DEFAULT && options->cc_algorithm != UTP_CONGESTION_BBR &&
-         options->cc_algorithm != UTP_CONGESTION_CUBIC)) {
+         options->cc_algorithm != UTP_CONGESTION_CUBIC) ||
+        peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     utp_context_t* context = utp_allocator_alloc(NULL, sizeof(*context));
@@ -4114,6 +4118,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_udp_socket_init(&context->udp_socket);
     context->bound_address                = (utp_address_t){0};
     context->next_nat_probe_packet_number = 1u;
+    memcpy(context->peer_id, options->peer_id, peer_id_length);
+    context->peer_id[peer_id_length] = '\0';
+    context->peer_id_length          = (uint8_t)peer_id_length;
     utp_nat_probe_task_reset(&context->nat_probe);
     context->nat_result                       = (utp_nat_probe_result_t){0};
     context->nat_result_valid                 = false;

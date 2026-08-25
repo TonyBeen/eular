@@ -407,12 +407,13 @@ TEST_CASE("nat probe response only permits alternate endpoint during probe1", "[
 
 TEST_CASE("nat probe timeout returns a normal unknown result", "[nat][context]")
 {
-    event_base*             event_base      = event_base_new();
-    utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
-    utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
-    utp_context_t*          context         = nullptr;
-    test_nat_probe_callback callback        = {};
-    uint16_t                local_port      = 0u;
+    event_base*           event_base      = event_base_new();
+    utp_context_options_t context_options = UTP_CONTEXT_OPTIONS_INIT;
+    context_options.peer_id               = "test";
+    utp_nat_probe_options_t probe_options = UTP_NAT_PROBE_OPTIONS_INIT;
+    utp_context_t*          context       = nullptr;
+    test_nat_probe_callback callback      = {};
+    uint16_t                local_port    = 0u;
 
     REQUIRE(event_base != nullptr);
     context_options.event_base = event_base;
@@ -441,13 +442,14 @@ TEST_CASE("nat probe timeout returns a normal unknown result", "[nat][context]")
 
 TEST_CASE("nat probe completes all phases with a responsive service", "[nat][context]")
 {
-    event_base*             event_base      = event_base_new();
-    utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
-    utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
-    utp_context_t*          context         = nullptr;
-    test_nat_probe_callback callback        = {};
-    test_nat_server         server          = {};
-    uint16_t                local_port      = 0u;
+    event_base*           event_base      = event_base_new();
+    utp_context_options_t context_options = UTP_CONTEXT_OPTIONS_INIT;
+    context_options.peer_id               = "test";
+    utp_nat_probe_options_t probe_options = UTP_NAT_PROBE_OPTIONS_INIT;
+    utp_context_t*          context       = nullptr;
+    test_nat_probe_callback callback      = {};
+    test_nat_server         server        = {};
+    uint16_t                local_port    = 0u;
 
     REQUIRE(event_base != nullptr);
     REQUIRE(test_nat_server_start(&server, event_base));
@@ -480,12 +482,13 @@ TEST_CASE("nat probe completes all phases with a responsive service", "[nat][con
 
 TEST_CASE("wildcard bound public endpoint is classified as open public", "[nat][context]")
 {
-    event_base*             event_base      = event_base_new();
-    utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
-    utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
-    utp_context_t*          context         = nullptr;
-    test_nat_probe_callback callback        = {};
-    test_nat_server         server          = {};
+    event_base*           event_base      = event_base_new();
+    utp_context_options_t context_options = UTP_CONTEXT_OPTIONS_INIT;
+    context_options.peer_id               = "test";
+    utp_nat_probe_options_t probe_options = UTP_NAT_PROBE_OPTIONS_INIT;
+    utp_context_t*          context       = nullptr;
+    test_nat_probe_callback callback      = {};
+    test_nat_server         server        = {};
 
     REQUIRE(event_base != nullptr);
     REQUIRE(test_nat_server_start(&server, event_base));

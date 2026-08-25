@@ -593,7 +593,9 @@ static void transport_pair_init_with_options(transport_pair* pair, relay_rule ru
                                              const utp_context_options_t* server_options)
 {
     utp_context_options_t client_opts     = UTP_CONTEXT_OPTIONS_INIT;
+    client_opts.peer_id                   = "test";
     utp_context_options_t server_opts     = UTP_CONTEXT_OPTIONS_INIT;
+    server_opts.peer_id                   = "test";
     utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
     uint16_t              server_port     = 0u;
 
@@ -720,6 +722,7 @@ TEST_CASE("same relay address with distinct SCIDs creates distinct passive conne
     transport_pair        pair           = {};
     endpoint_probe        second_probe   = {};
     utp_context_options_t second_options = UTP_CONTEXT_OPTIONS_INIT;
+    second_options.peer_id               = "test";
     utp_connect_options_t second_connect = UTP_CONNECT_OPTIONS_INIT;
     utp_context_t*        second_client  = nullptr;
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
@@ -755,10 +758,11 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
     const relay_rule drop_done = {
         relay_direction::server_to_client, relay_action::drop, UTP_PACKET_TYPE_HANDSHAKE, 0u, true, 0u, false, false};
-    const std::array<uint8_t, 9>           early_data    = {'0', '-', 'r', 't', 't', '-', 'd', 'a', 't'};
-    session_token_probe                    token         = {};
-    endpoint_probe                         early_probe   = {};
-    utp_context_options_t                  early_options = UTP_CONTEXT_OPTIONS_INIT;
+    const std::array<uint8_t, 9> early_data              = {'0', '-', 'r', 't', 't', '-', 'd', 'a', 't'};
+    session_token_probe          token                   = {};
+    endpoint_probe               early_probe             = {};
+    utp_context_options_t        early_options           = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                                = "test";
     utp_connect_0rtt_options_t             early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
     utp_context_t*                         early_client  = nullptr;
     utp_stream_t*                          stream;
@@ -812,10 +816,11 @@ TEST_CASE("encrypted 0-RTT continues early stream data after the first packet", 
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::array<uint8_t, 4096u>             early_data    = {};
-    session_token_probe                    token         = {};
-    endpoint_probe                         early_probe   = {};
-    utp_context_options_t                  early_options = UTP_CONTEXT_OPTIONS_INIT;
+    std::array<uint8_t, 4096u> early_data                = {};
+    session_token_probe        token                     = {};
+    endpoint_probe             early_probe               = {};
+    utp_context_options_t      early_options             = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                                = "test";
     utp_connect_0rtt_options_t             early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
     utp_context_t*                         early_client  = nullptr;
     utp_stream_t*                          stream;
@@ -874,8 +879,9 @@ TEST_CASE("encrypted 0-RTT rejects a corrupted early ciphertext before accepting
     session_token_probe           token         = {};
     endpoint_probe                early_probe   = {};
     utp_context_options_t         early_options = UTP_CONTEXT_OPTIONS_INIT;
-    utp_connect_0rtt_options_t    early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
-    utp_context_t*                early_client  = nullptr;
+    early_options.peer_id                       = "test";
+    utp_connect_0rtt_options_t early_connect    = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*             early_client     = nullptr;
 
     transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_AES_GCM_128);
     transport_pair_connect(&pair);
@@ -913,8 +919,10 @@ TEST_CASE("path MTU probes reach the configured ceiling over UDP", "[transport][
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    utp_context_options_t      client_options   = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t      server_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t client_options        = UTP_CONTEXT_OPTIONS_INIT;
+    client_options.peer_id                      = "test";
+    utp_context_options_t server_options        = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id                      = "test";
     utp_connection_statistic_t client_statistic = {};
     utp_connection_statistic_t server_statistic = {};
 
@@ -998,10 +1006,11 @@ TEST_CASE("path validation preserves cached packets within its configured capaci
     const std::array<uint8_t, 32>     second      = {'c', 'a', 'c', 'h', 'e', '-', 's', 'e', 'c', 'o', 'n', 'd'};
     std::array<uint8_t, first.size()> received    = {};
     utp_context_options_t             server_opts = UTP_CONTEXT_OPTIONS_INIT;
-    uint32_t                          stream_id   = UINT32_MAX;
-    utp_stream_t*                     stream;
-    size_t                            cached_bytes;
-    size_t                            received_length = 0u;
+    server_opts.peer_id                           = "test";
+    uint32_t      stream_id                       = UINT32_MAX;
+    utp_stream_t* stream;
+    size_t        cached_bytes;
+    size_t        received_length = 0u;
 
     server_opts.context_id                      = 5302u;
     server_opts.path_validation_buffer_capacity = 96u;
@@ -1054,15 +1063,17 @@ TEST_CASE("application reads replenish connection and stream flow-control window
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::array<uint8_t, 192> payload      = {};
-    std::array<uint8_t, 64>  received     = {};
-    utp_context_options_t    client_opts  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t    server_opts  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_connect_options_t    connect_opts = UTP_CONNECT_OPTIONS_INIT;
-    uint16_t                 server_port  = 0u;
-    uint32_t                 stream_id    = UINT32_MAX;
-    utp_stream_t*            stream;
-    size_t                   received_length = 0u;
+    std::array<uint8_t, 192> payload     = {};
+    std::array<uint8_t, 64>  received    = {};
+    utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
+    client_opts.peer_id                  = "test";
+    utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
+    server_opts.peer_id                  = "test";
+    utp_connect_options_t connect_opts   = UTP_CONNECT_OPTIONS_INIT;
+    uint16_t              server_port    = 0u;
+    uint32_t              stream_id      = UINT32_MAX;
+    utp_stream_t*         stream;
+    size_t                received_length = 0u;
 
     for (size_t index = 0u; index < payload.size(); ++index) {
         payload[index] = static_cast<uint8_t>(index);
@@ -1123,23 +1134,25 @@ TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transpo
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    const relay_rule drop_flow_control    = {relay_direction::server_to_client,
-                                             relay_action::drop,
-                                             UTP_PACKET_TYPE_CTRL,
-                                             UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA),
-                                             true,
-                                             0u,
-                                             false,
-                                             false};
-    std::array<uint8_t, 128> payload      = {};
-    std::array<uint8_t, 64>  received     = {};
-    utp_context_options_t    client_opts  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t    server_opts  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_connect_options_t    connect_opts = UTP_CONNECT_OPTIONS_INIT;
-    uint16_t                 server_port  = 0u;
-    uint32_t                 stream_id    = UINT32_MAX;
-    utp_stream_t*            stream;
-    size_t                   received_length = 0u;
+    const relay_rule drop_flow_control   = {relay_direction::server_to_client,
+                                            relay_action::drop,
+                                            UTP_PACKET_TYPE_CTRL,
+                                            UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA),
+                                            true,
+                                            0u,
+                                            false,
+                                            false};
+    std::array<uint8_t, 128> payload     = {};
+    std::array<uint8_t, 64>  received    = {};
+    utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
+    client_opts.peer_id                  = "test";
+    utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
+    server_opts.peer_id                  = "test";
+    utp_connect_options_t connect_opts   = UTP_CONNECT_OPTIONS_INIT;
+    uint16_t              server_port    = 0u;
+    uint32_t              stream_id      = UINT32_MAX;
+    utp_stream_t*         stream;
+    size_t                received_length = 0u;
 
     for (size_t index = 0u; index < payload.size(); ++index) {
         payload[index] = static_cast<uint8_t>(index);
@@ -1593,21 +1606,22 @@ TEST_CASE("relay drops the first STREAM packet and PTO retransmission delivers i
 
 TEST_CASE("CUBIC shrinks its congestion window after an end-to-end STREAM loss", "[transport][integration][congestion]")
 {
-    transport_pair                      pair           = {};
-    utp_context_options_t               client_options = UTP_CONTEXT_OPTIONS_INIT;
-    const relay_rule                    rule           = {relay_direction::client_to_server,
-                                                          relay_action::drop,
-                                                          UTP_PACKET_TYPE_CTRL,
-                                                          UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM),
-                                                          true,
-                                                          0u,
-                                                          false,
-                                                          false};
-    const std::array<uint8_t, 12>       payload        = {'c', 'u', 'b', 'i', 'c', '-', 'l', 'o', 's', 's', '!', '!'};
-    std::array<uint8_t, payload.size()> received       = {};
-    utp_connection_statistic_t          statistic      = {};
-    uint64_t                            initial_cwnd   = 0u;
-    uint32_t                            stream_id      = UINT32_MAX;
+    transport_pair        pair                       = {};
+    utp_context_options_t client_options             = UTP_CONTEXT_OPTIONS_INIT;
+    client_options.peer_id                           = "test";
+    const relay_rule                    rule         = {relay_direction::client_to_server,
+                                                        relay_action::drop,
+                                                        UTP_PACKET_TYPE_CTRL,
+                                                        UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM),
+                                                        true,
+                                                        0u,
+                                                        false,
+                                                        false};
+    const std::array<uint8_t, 12>       payload      = {'c', 'u', 'b', 'i', 'c', '-', 'l', 'o', 's', 's', '!', '!'};
+    std::array<uint8_t, payload.size()> received     = {};
+    utp_connection_statistic_t          statistic    = {};
+    uint64_t                            initial_cwnd = 0u;
+    uint32_t                            stream_id    = UINT32_MAX;
     utp_stream_t*                       stream;
     size_t                              received_length = 0u;
 

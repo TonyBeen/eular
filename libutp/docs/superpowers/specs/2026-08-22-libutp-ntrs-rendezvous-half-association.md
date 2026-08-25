@@ -59,9 +59,9 @@ reserve = 0
 
 ## 3. 注册、身份与回调
 
-每个 Context 都设置一个文本 `peer_id`，长度为 `1..128` 字节。它是路由与应用识别信息，
-不是身份认证凭据。NTRS 注册的 target 节点 B 以此键被查找；A 的 `REQUEST` 也携带本 Context 的
-`peer_id`，无论 A 是否注册。
+每个 Context 在创建时通过 `utp_context_options_t.peer_id` 设置一个文本 `peer_id`，长度为
+`1..128` 字节；Context 复制后不可修改。它是路由与应用识别信息，不是身份认证凭据。NTRS 注册的
+target 节点 B 以此键被查找；A 的 `REQUEST` 也携带本 Context 的 `peer_id`，无论 A 是否注册。
 
 `registration_token` 为 NTRS 签发的 8 字节随机值。它是当前注册关联的唯一凭据；不使用
 `generation`。
@@ -217,8 +217,8 @@ IPv4 帧长度为 8 字节、IPv6 为 20 字节。公网观测不编码 IPv6 `sc
 
 ### 4.2 ADDRESS_UPDATE
 
-`utp_context_update_address()` 一次接受多个本机公网地址样本。上层提交与收到
-`OBSERVED_ADDRESS` 后产生的样本，均进入同一个 Context 待确认队列。
+收到 `OBSERVED_ADDRESS` 后，Context 将样本去重并写入待确认队列。应用层通过无参数的
+`utp_context_update_address()` 请求上报当前缓存；该接口不接受调用方提供的地址。
 
 每个样本只有：
 

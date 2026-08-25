@@ -508,6 +508,7 @@ int main(int argc, char** argv)
         return 1;
     }
     options.event_base                          = event_base;
+    options.peer_id                             = "echo-client";
     options.context_id                          = 2u;
     options.enable_keepalive                    = false;
     options.enable_dplpmtud                     = false;

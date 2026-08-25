@@ -343,6 +343,7 @@ static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char*
         goto cleanup;
     }
     context_options.event_base = app.base;
+    context_options.peer_id    = "ntrsc";
     context_options.log_sink   = verbose ? ntrsc_log_sink : NULL;
     context_options.log_level  = verbose ? UTP_LOG_LEVEL_DEBUG : UTP_LOG_LEVEL_SILENCE;
     status                     = utp_context_create(&context_options, &app.context);

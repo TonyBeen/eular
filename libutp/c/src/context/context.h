@@ -33,21 +33,21 @@ typedef struct utp_context_zero_rtt_replay_entry {
 } utp_context_zero_rtt_replay_entry_t;
 
 typedef struct utp_context_connection_slot {
-    utp_hash_node_t node;                                        // 按本端 CID 索引的哈希节点
-    utp_hash_node_t peer_node;                                   // 被动连接按来源地址和对端 CID 索引的哈希节点
-    TAILQ_ENTRY(utp_context_connection_slot) free_next;          // 空闲槽位链表节点
+    utp_hash_node_t node;                                          // 按本端 CID 索引的哈希节点
+    utp_hash_node_t peer_node;                                     // 被动连接按来源地址和对端 CID 索引的哈希节点
+    TAILQ_ENTRY(utp_context_connection_slot) free_next;            // 空闲槽位链表节点
     TAILQ_ENTRY(utp_context_connection_slot) terminal_error_next;  // 延迟终止事件链表节点
-    utp_connection_t           connection;                       // 槽位持有的连接对象
-    utp_connect_attempt_info_t connect_attempt;                  // 主动建连尝试描述
-    uint64_t                   connect_deadline_us;              // 主动连接超时截止时刻
-    utp_packet_in_t*           zero_rtt_early_packet;            // 被动 0-RTT 早数据 PacketIn 引用
-    size_t                     zero_rtt_early_wire_size;         // 早数据原始 UDP 长度
-    uint64_t                   zero_rtt_request_packet_number;   // 收到的 0-RTT 请求包号
-    uint64_t                   zero_rtt_request_received_us;     // 0-RTT 请求接收时刻
-    uint64_t                   zero_rtt_response_deadline_us;    // 0-RTT 响应重试截止时刻
-    uint64_t                   zero_rtt_expire_deadline_us;      // 被动 0-RTT 状态清理时刻
-    uint64_t                   zero_rtt_amplification_rx_bytes;  // 0-RTT 防放大接收额度
-    uint64_t                   zero_rtt_amplification_tx_bytes;  // 0-RTT 防放大已发送字节
+    utp_connection_t           connection;                         // 槽位持有的连接对象
+    utp_connect_attempt_info_t connect_attempt;                    // 主动建连尝试描述
+    uint64_t                   connect_deadline_us;                // 主动连接超时截止时刻
+    utp_packet_in_t*           zero_rtt_early_packet;              // 被动 0-RTT 早数据 PacketIn 引用
+    size_t                     zero_rtt_early_wire_size;           // 早数据原始 UDP 长度
+    uint64_t                   zero_rtt_request_packet_number;     // 收到的 0-RTT 请求包号
+    uint64_t                   zero_rtt_request_received_us;       // 0-RTT 请求接收时刻
+    uint64_t                   zero_rtt_response_deadline_us;      // 0-RTT 响应重试截止时刻
+    uint64_t                   zero_rtt_expire_deadline_us;        // 被动 0-RTT 状态清理时刻
+    uint64_t                   zero_rtt_amplification_rx_bytes;    // 0-RTT 防放大接收额度
+    uint64_t                   zero_rtt_amplification_tx_bytes;    // 0-RTT 防放大已发送字节
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
     uint8_t*                   zero_rtt_early_data;            // 主动 0-RTT 重传期间持有的早期流数据
@@ -104,12 +104,14 @@ struct utp_context {
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
     uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
-    utp_stream_scheduler_mode_t              stream_scheduler_mode;            // 新连接默认流调度策略
-    utp_congestion_algorithm_t               cc_algorithm;                     // 新连接默认拥塞算法
-    uint32_t                                 clock_granularity_us;             // pacer 时钟粒度
-    utp_bbr_config_t                         bbr_config;                       // BBR 默认配置
-    utp_cubic_config_t                       cubic_config;                     // CUBIC 默认配置
-    utp_mtu_config_t                         mtu_config;                       // MTU 发现默认配置
+    char                                     peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识
+    uint8_t                                  peer_id_length;                        // peer_id 的有效字节数
+    utp_stream_scheduler_mode_t              stream_scheduler_mode;                 // 新连接默认流调度策略
+    utp_congestion_algorithm_t               cc_algorithm;                          // 新连接默认拥塞算法
+    uint32_t                                 clock_granularity_us;                  // pacer 时钟粒度
+    utp_bbr_config_t                         bbr_config;                            // BBR 默认配置
+    utp_cubic_config_t                       cubic_config;                          // CUBIC 默认配置
+    utp_mtu_config_t                         mtu_config;                            // MTU 发现默认配置
     uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];  // 恢复根密钥
     utp_crypto_resumption_keys_t             resumption_keys;                      // 派生票据与本地状态密钥
     utp_hash_table_t                         zero_rtt_replay;                      // 0-RTT 抗重放键表
@@ -117,8 +119,8 @@ struct utp_context {
     uint32_t                                 zero_rtt_replay_cache_capacity;       // 抗重放表容量
     uint32_t                                 stream_terminal_capacity;             // 新连接流终态表容量
     uint32_t                                 path_validation_buffer_capacity;      // 新连接候选路径缓存上限(bytes)
-    utp_nat_probe_task_t                     nat_probe;                           // 当前 NAT 探测任务
-    utp_nat_probe_result_t                   nat_result;                          // 最近一次完成的 NAT 探测缓存
+    utp_nat_probe_task_t                     nat_probe;                            // 当前 NAT 探测任务
+    utp_nat_probe_result_t                   nat_result;                           // 最近一次完成的 NAT 探测缓存
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔
@@ -133,7 +135,7 @@ struct utp_context {
     bool                                     resumption_keys_ready : 1;            // 恢复工作密钥是否就绪
     bool                                     default_resumption_key_warning_logged : 1;  // 默认根密钥警告是否已输出
     bool                                     enable_keepalive : 1;                       // 是否为新连接启用保活
-    bool                                     nat_result_valid : 1;                      // nat_result 是否仍可用于注册
+    bool                                     nat_result_valid : 1;                       // nat_result 是否仍可用于注册
     utp_on_connected_fn                      on_connected;                               // 主动连接成功回调
     void*                                    on_connected_user_data;                     // 成功回调用户数据
     utp_on_connect_error_fn                  on_connect_error;                           // 主动连接失败回调
@@ -147,6 +149,6 @@ struct utp_context {
 };
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
-bool utp_context_suppress_terminal_error(utp_context_t* context, utp_connection_t* connection);
+bool                 utp_context_suppress_terminal_error(utp_context_t* context, utp_connection_t* connection);
 
 #endif  // EULAR_UTP_CONTEXT_CONTEXT_H

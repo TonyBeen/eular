@@ -158,7 +158,9 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
                                       uint64_t client_context_id, uint64_t server_context_id)
 {
     utp_context_options_t client_options         = UTP_CONTEXT_OPTIONS_INIT;
+    client_options.peer_id                       = "test";
     utp_context_options_t server_options         = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id                       = "test";
     utp_context_t*        client                 = NULL;
     utp_context_t*        server                 = NULL;
     uint16_t              client_port            = 0u;
@@ -286,9 +288,12 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
 
 static void test_plaintext_zero_rtt(struct event_base* event_base)
 {
-    utp_context_options_t      server_options  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t      first_options   = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t      early_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t server_options       = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id                     = "test";
+    utp_context_options_t first_options        = UTP_CONTEXT_OPTIONS_INIT;
+    first_options.peer_id                      = "test";
+    utp_context_options_t early_options        = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                      = "test";
     utp_connect_options_t      connect         = UTP_CONNECT_OPTIONS_INIT;
     utp_connect_0rtt_options_t early           = UTP_CONNECT_0RTT_OPTIONS_INIT;
     utp_context_t*             server          = NULL;
@@ -388,9 +393,12 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
 
 static void test_encrypted_zero_rtt(struct event_base* event_base)
 {
-    utp_context_options_t      server_options  = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t      first_options   = UTP_CONTEXT_OPTIONS_INIT;
-    utp_context_options_t      early_options   = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t server_options       = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id                     = "test";
+    utp_context_options_t first_options        = UTP_CONTEXT_OPTIONS_INIT;
+    first_options.peer_id                      = "test";
+    utp_context_options_t early_options        = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                      = "test";
     utp_connect_options_t      connect         = UTP_CONNECT_OPTIONS_INIT;
     utp_connect_0rtt_options_t early           = UTP_CONNECT_0RTT_OPTIONS_INIT;
     utp_context_t*             server          = NULL;
@@ -464,7 +472,9 @@ static void test_encrypted_zero_rtt(struct event_base* event_base)
 static void test_congestion_algorithm_selection(struct event_base* event_base)
 {
     utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+    client_options.peer_id                = "test";
     utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id                = "test";
     utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
     utp_context_t*        client          = NULL;
     utp_context_t*        server          = NULL;
@@ -537,6 +547,7 @@ int main(void)
     struct event_base*    event_base = event_base_new();
     utp_context_options_t options    = UTP_CONTEXT_OPTIONS_INIT;
     utp_context_t*        context    = NULL;
+    char                  oversized_peer_id[UTP_PEER_ID_MAX_LENGTH + 2u];
 
     assert(event_base != NULL);
     assert(options.mtu_probe_retries == 1u);
@@ -547,8 +558,17 @@ int main(void)
     options.log_sink   = test_log_sink;
     options.log_level  = UTP_LOG_LEVEL_INFO;
     test_log_count     = 0;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    options.peer_id = "";
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    memset(oversized_peer_id, 'x', sizeof(oversized_peer_id) - 1u);
+    oversized_peer_id[sizeof(oversized_peer_id) - 1u] = '\0';
+    options.peer_id                                   = oversized_peer_id;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    options.peer_id = "test";
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     assert(context != NULL);
+    assert(strcmp(context->peer_id, "test") == 0);
     assert(test_log_count == 1);
     assert(test_log_level == UTP_LOG_LEVEL_INFO);
     assert(strstr(test_log_message, "context created") != NULL);
@@ -566,7 +586,8 @@ int main(void)
     assert(test_log_count == 2);
     {
         utp_context_options_t quiet_options = UTP_CONTEXT_OPTIONS_INIT;
-        utp_context_t*        quiet_context = NULL;
+        quiet_options.peer_id               = "test";
+        utp_context_t* quiet_context        = NULL;
 
         quiet_options.event_base                     = event_base;
         quiet_options.context_id                     = 71u;
@@ -604,6 +625,7 @@ int main(void)
     }
     {
         utp_context_options_t many_options     = UTP_CONTEXT_OPTIONS_INIT;
+        many_options.peer_id                   = "test";
         utp_connect_options_t connect          = UTP_CONNECT_OPTIONS_INIT;
         utp_context_t*        many_context     = NULL;
         static const uint32_t connection_count = 33u;
@@ -638,8 +660,9 @@ int main(void)
 #if defined(__APPLE__)
     if (if_nametoindex("lo0") != 0u) {
         utp_context_options_t interface_options = UTP_CONTEXT_OPTIONS_INIT;
-        utp_context_t*        interface_context = NULL;
-        uint16_t              interface_port    = 0u;
+        interface_options.peer_id               = "test";
+        utp_context_t* interface_context        = NULL;
+        uint16_t       interface_port           = 0u;
 
         interface_options.event_base = event_base;
         interface_options.context_id = 8u;
@@ -651,7 +674,9 @@ int main(void)
 #endif
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+        client_options.peer_id                = "test";
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+        server_options.peer_id                = "test";
         utp_context_t*        client          = NULL;
         utp_context_t*        server          = NULL;
         uint16_t              client_port     = 0u;
@@ -736,7 +761,9 @@ int main(void)
     test_congestion_algorithm_selection(event_base);
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+        client_options.peer_id                = "test";
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+        server_options.peer_id                = "test";
         utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
         utp_context_t*        client          = NULL;
         utp_context_t*        server          = NULL;
@@ -763,7 +790,9 @@ int main(void)
     }
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+        client_options.peer_id                = "test";
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+        server_options.peer_id                = "test";
         utp_context_t*        client          = NULL;
         utp_context_t*        server          = NULL;
         uint16_t              client_port     = 0u;
@@ -834,7 +863,9 @@ int main(void)
     }
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
+        client_options.peer_id                = "test";
         utp_context_options_t server_options  = UTP_CONTEXT_OPTIONS_INIT;
+        server_options.peer_id                = "test";
         utp_context_t*        client          = NULL;
         utp_context_t*        server          = NULL;
         uint16_t              client_port     = 0u;

@@ -216,9 +216,10 @@ int main(int argc, char** argv)
 {
     concurrent_connection_test_t test           = {0};
     utp_context_options_t        server_options = UTP_CONTEXT_OPTIONS_INIT;
-    uint16_t                     server_port    = 0u;
-    uint32_t                     index;
-    int32_t                      result = 1;
+    server_options.peer_id                      = "test";
+    uint16_t server_port                        = 0u;
+    uint32_t index;
+    int32_t  result = 1;
 
     test.connection_count = 10u;
     test.hold_ms          = 5000u;
@@ -268,9 +269,10 @@ int main(int argc, char** argv)
         goto cleanup;
     }
     for (index = 0u; index < test.connection_count; ++index) {
-        concurrent_connection_client_t* client          = &test.clients[index];
-        utp_context_options_t           client_options  = UTP_CONTEXT_OPTIONS_INIT;
-        utp_connect_options_t           connect_options = UTP_CONNECT_OPTIONS_INIT;
+        concurrent_connection_client_t* client         = &test.clients[index];
+        utp_context_options_t           client_options = UTP_CONTEXT_OPTIONS_INIT;
+        client_options.peer_id                         = "test";
+        utp_connect_options_t connect_options          = UTP_CONNECT_OPTIONS_INIT;
 
         client->test                    = &test;
         client_options.event_base       = test.event_base;

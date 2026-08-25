@@ -429,6 +429,7 @@ int main(int argc, char** argv)
         return 1;
     }
     options.event_base                          = event_base;
+    options.peer_id                             = "echo-server";
     options.context_id                          = 1u;
     options.enable_keepalive                    = true;
     options.enable_dplpmtud                     = false;
