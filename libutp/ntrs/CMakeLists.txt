@@ -90,7 +90,7 @@ if(UTP_NTRS_BUILD_SERVICES)
         -Wl,--end-group)
     target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_include_directories(nat_detect_hub SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
-    target_compile_features(nat_detect_hub PRIVATE cxx_std_20)
+    target_compile_features(nat_detect_hub PRIVATE cxx_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_hub PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
@@ -113,7 +113,7 @@ if(UTP_NTRS_BUILD_SERVICES)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_include_directories(nat_detect_node SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
-    target_compile_features(nat_detect_node PRIVATE cxx_std_20)
+    target_compile_features(nat_detect_node PRIVATE cxx_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(nat_detect_node PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)

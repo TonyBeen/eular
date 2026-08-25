@@ -535,9 +535,9 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
     utp_ntrs_udp_server_options_t   udp_options      = {};
     struct event*                   signal_int       = NULL;
     struct event*                   signal_term      = NULL;
-    struct timeval                  reconnect_period = {.tv_sec = 1, .tv_usec = 0};
+    struct timeval                  reconnect_period = {1, 0};
     struct timeval                  heartbeat_period;
-    const struct timeval            peer_tick_period = {.tv_sec = 10, .tv_usec = 0};
+    const struct timeval            peer_tick_period = {10, 0};
     utp_ntrs_peer_manager_options_t peer_options     = {};
     const char* const               node_id          = options->node_id;
     const char* const               boot_id          = options->boot_id;

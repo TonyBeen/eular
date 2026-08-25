@@ -458,7 +458,7 @@ static int32_t nat_detect_hub_run(const char* listen, const char* interface_name
     socklen_t                address_length;
     struct event*            signal_int;
     struct event*            signal_term;
-    struct timeval           sweep_interval = {.tv_sec = 1, .tv_usec = 0};
+    struct timeval           sweep_interval = {1, 0};
     int32_t                  result         = EXIT_FAILURE;
 
     if (((certificate == NULL) != (private_key == NULL)) ||
