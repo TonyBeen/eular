@@ -2,7 +2,8 @@
 
 - 日期:2026-08-18
 - 状态:已确认，作为 NTRS 实现的前置需求
-- 优先级:本文件在 NAT 服务、打洞服务和 Context 接入范围内优先于旧设计中的冲突表述。
+- 优先级:本文件在 NAT 服务、Node/Hub TCP 控制链路、地址族、网卡绑定和服务部署范围内有效；
+  Rendezvous 半连接协议以 2026-08-22 规格为准。
 
 ---
 
@@ -15,11 +16,11 @@ NTRS 是由 NAT 服务和打洞服务组成的系统，不是单一服务。两�
   |
   +-- 用户调用 NAT 探测 --> NAT 服务集群（多 IP/端口、服务间协同）
   |
-  +-- 用户调用节点注册 --> 打洞服务（常驻控制连接、节点表、保活、CONNECT 转发）
+  +-- 用户调用节点注册 --> 打洞服务（半连接、节点表、PING/PONG 保活、RENDEZVOUS 转发）
 ```
 
-- NAT 服务负责观察 UDP 映射与过滤行为，并向 Context 返回探测结果；它不保存节点注册或 rendezvous ticket。
-- 打洞服务负责维护下挂节点、节点 NAT 记录、节点租约和 CONNECT 转发；它不与其他打洞服务联邦。
+- NAT 服务负责观察 UDP 映射与过滤行为，并向 Context 返回探测结果；它不保存打洞服务的节点注册状态。
+- 打洞服务负责维护下挂节点、节点 NAT 记录、节点租约和 RENDEZVOUS 转发；它不与其他打洞服务联邦。
 - NAT 服务集群内部允许服务间通信，用于协调多个独立公网 IP/端口的探测；打洞服务不依赖这种协同。
 - Context 发往 NAT 服务和打洞服务的报文必须使用同一个已 bind UDP socket。NAT 探测结果才可代表该 Context 后续 P2P 发送的映射行为。
 - NAT 服务实际使用的探测 IP 与打洞服务实际使用的 IP 必须不同。两个操作传入的服务 IP 地址
@@ -28,8 +29,8 @@ NTRS 是由 NAT 服务和打洞服务组成的系统，不是单一服务。两�
   线程调用；所有 NTRS 完成回调也在该线程同步执行。库不提供跨线程调用、锁或隐式任务串行化。
 
 本文件固定 Context 所需的 UTP 承载 NAT 探测基线、阶段和分类规则；字段编号、编解码模块
-接口及服务端内部协同 RPC 在实现 NAT 服务前单独冻结。CONNECT/FrameConnect 线格式、NTRS
-服务端认证和 peer 身份认证仍由后续专项需求确定。
+接口及服务端内部协同 RPC 在实现 NAT 服务前单独冻结。RENDEZVOUS/FrameRendezvous 线格式以
+`2026-08-22-libutp-ntrs-rendezvous-half-association.md` 为准；NTRS 服务端认证和 peer 身份认证仍由后续专项需求确定。
 
 ---
 
@@ -490,142 +491,27 @@ control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
 
 ## 4. 用户驱动的打洞服务注册
 
-Context 提供异步接口：
+注册、更新与反注册的公开 API、状态机和线格式，以
+[`2026-08-22-libutp-ntrs-rendezvous-half-association.md`](2026-08-22-libutp-ntrs-rendezvous-half-association.md)
+第 3、7 节为准。注册关联使用零 CID `UTP_TYPE_RENDEZVOUS` 半连接和 8 字节
+`registration_token`，不建立控制 connection，也不使用 `generation`、`NODE_*` 消息或 32 字节 token。
 
-```c
-utp_status_t utp_context_register_rendezvous(
-    utp_context_t* context,
-    const utp_rendezvous_register_options_t* options,
-    utp_on_rendezvous_registered_fn callback,
-    void* user_data);
-
-typedef void (*utp_on_rendezvous_unregistered_fn)(utp_context_t* context,
-                                                   utp_status_t status,
-                                                   void* user_data);
-
-utp_status_t utp_context_unregister_rendezvous(
-    utp_context_t* context,
-    utp_on_rendezvous_unregistered_fn callback,
-    void* user_data);
-```
-
-`utp_rendezvous_register_options_t` 至少包含 `rendezvous_service_address`、
-`rendezvous_service_port`、`node_name`、连接超时和重试配置。其中服务地址是 IPv4/IPv6
-字面 IP，端口不得为 `0`；地址只在调用期间借用，注册任务启动后 Context 只保存解析后的
-二进制 endpoint。`node_name` 是打洞服务下挂节点的路由键。该接口是幂等 upsert：首次调用
-创建注册，已注册后再次调用则更新该节点信息，不新增公开更新接口。
-
-状态机固定为：
-
-```text
-Disconnected -> Registering -> Registered <-> Updating -> Expired
-                                |
-                                +-> Unregistering -> Disconnected
-```
-
-- 调用前 Context 必须已 bind，`rendezvous_service_address` 与
-  `rendezvous_service_port` 必须同时有效，且地址族必须与 Context 已 bind socket 一致。
-  Context 不从 `utp_context_options_t` 或此前 NAT 探测操作继承打洞服务地址。
-- `Registering` 或 `Updating` 期间再次调用返回 `UTP_STATUS_IN_PROGRESS`。
-- `Registered` 时调用 `utp_context_unregister_rendezvous()` 会发送 `NODE_UNREGISTER`；
-  `Registering`、`Updating` 或 `Unregistering` 时调用返回 `UTP_STATUS_IN_PROGRESS`，`Disconnected`
-  或 `Expired` 时返回 `UTP_STATUS_NOT_FOUND`。
-- `Disconnected` 时调用会建立控制连接并发送 `NODE_REGISTER`；`Registered` 时调用会在既有控制连接上发送 `NODE_UPDATE`，并仍通过同一个完成回调报告结果。
-- 反注册成功收到确认后，Context 先清除本地注册 generation 和租约、关闭内部控制连接并进入
-  `Disconnected`，再调用 `utp_on_rendezvous_unregistered_fn(UTP_STATUS_OK, ...)`。NAT 探测缓存
-  不受影响，用户随后可再次调用注册 upsert。
-- 反注册请求超时、控制连接关闭或出现永久发送错误时，Context 同样关闭本地控制连接并进入
-  `Disconnected`，再通过反注册回调报告对应错误。`NODE_UNREGISTER_REJECT` 固定回调
-  `UTP_STATUS_RENDEZVOUS_REJECTED`。服务端可能已处理但响应丢失；关闭控制连接
-  能使仍残留的注册按连接失效/租约规则回收，调用方可以在回调后重新注册。
-- Context 与打洞服务建立常驻 UTP 控制连接。控制连接的加密、服务端认证与信任锚要求由 NTRS 认证需求单独定义，本接口不提供明文回退。
-- 注册成功后，Context 保持控制连接直到用户销毁 Context、连接失效或服务端拒绝/过期注册。
-- Context 销毁时不发送额外注销请求；服务端依赖控制连接失效和租约超时回收节点状态。
-
-注册请求或后续更新向打洞服务上报每个地址族的最新 NAT 记录：
-
-```text
-node_name
-nat_class
-local_candidates[]     // 本次注册时重新枚举得到的有效本地 IP
-probe_time
-expires_at
-port_samples
-```
-
-Context 在每次用户调用注册 upsert 时重新枚举 `local_candidates[]`，而不是复用 NAT 探测时的本地地址。未显式绑定网卡时，枚举结果必须排除 loopback、link-local、Docker、veth、bridge、tunnel 等虚拟或容器接口地址；显式绑定网卡时只枚举该网卡地址。打洞服务从节点控制连接的源地址自行记录公网 endpoint，节点不能上报或覆盖该值。
-
-- 注册信息必须完整。Context 至少须持有一条未过期 NAT 记录；`nat_class` 可以为 `UNKNOWN`，但本地候选、探测时间、失效时间和端口样本不得缺失。否则注册接口返回状态错误。
-- NAT 探测完成仅更新 Context 缓存，绝不自动发送 `NODE_UPDATE`。用户需要上报新结果时，必须再次调用注册 upsert 接口。
-- NAT 记录过期后，Context 必须在下一次 `NODE_KEEPALIVE` 中标记为 `UNKNOWN`，直至用户再次调用 NAT 探测。
-
-更新操作始终读取 Context 缓存的 NAT 记录，调用方不能直接伪造 `nat_class`、探测侧公网 endpoint 或端口样本。用户需要刷新 NAT 类型时，应先调用 `utp_context_probe_nat()`，再显式调用一次注册 upsert 同步。调用方可在重注册时传入新的 `node_name`；打洞服务以当前控制连接绑定的旧名称为源，检查新名称是否已被其他活跃节点占用后原子删除旧索引、写入新索引并递增 generation。新名称冲突时返回 `UTP_STATUS_EXISTS`，整个更新失败，旧注册保持不变。
-
-### 4.1 注册令牌与反注册条件
-
-服务端处理 `NODE_REGISTER` 成功后，必须在 `NODE_REGISTER_OK` 中签发随机的 32 字节
-`registration_token`，并绑定到该节点的 `node_name`、`generation` 与当前控制连接。Context
-只在内部保存该 token，不通过公共回调、配置或日志暴露它。一个已注册节点的 `NODE_UPDATE`
-不改变 token；重新注册得到新的 generation 和 token。
-
-`NODE_UNREGISTER` 必须携带：
-
-```text
-node_name
-generation
-registration_token[32]
-```
-
-服务端只有在三者全部匹配，且请求来自当前注册所绑定的控制连接时才删除节点。token 比较必须
-使用常量时间比较。任一项不匹配时不得修改节点表，返回 `NODE_UNREGISTER_REJECT`。这保证旧
-连接、旧 generation 或旧 token 的延迟反注册请求不能删除后来同名的新注册。
+- 调用前 Context 必须已 bind；NTRS endpoint 由当前注册调用显式提供，地址族必须与 Context socket
+  一致，且不得从 NAT 探测配置隐式继承。
+- 每次注册或更新都重新枚举 local candidates。未显式绑定网卡时排除 loopback、link-local、Docker、
+  veth、bridge、tunnel 等虚拟或容器接口地址；显式绑定网卡时只枚举该网卡，最多保留四项。
+- NAT 探测只更新 Context 缓存，不自动重注册。调用方决定何时再次调用注册接口；`UNKNOWN` 允许注册，
+  并按对称 NAT 的随机端口候选规则处理。
 
 ---
 
-## 5. 打洞服务节点协议与保活
-
-节点注册控制流使用常驻 UTP 连接中的单条双向控制流。控制消息采用有界、长度前缀的应用层封装；精确二进制编码在实现前单独冻结。
-
-首期消息语义固定为：
-
-| 消息 | 方向 | 语义 |
-|---|---|---|
-| `NODE_REGISTER` | Context -> 打洞服务 | 首次注册节点名称与当前 NAT 记录 |
-| `NODE_REGISTER_OK` | 打洞服务 -> Context | 注册成功，返回 generation、有效租约和 `registration_token` |
-| `NODE_REGISTER_REJECT` | 打洞服务 -> Context | 注册拒绝及错误原因 |
-| `NODE_UPDATE` | Context -> 打洞服务 | 覆盖已注册节点的 NAT 记录 |
-| `NODE_UPDATE_OK` | 打洞服务 -> Context | 更新成功，返回新的 generation 与有效租约 |
-| `NODE_UPDATE_REJECT` | 打洞服务 -> Context | 更新或改名被拒绝，旧注册保持有效 |
-| `NODE_KEEPALIVE` | Context -> 打洞服务 | 刷新节点注册租约，携带 generation |
-| `NODE_EXPIRED` | 打洞服务 -> Context | 服务端主动通知节点注册已失效 |
-| `NODE_UNREGISTER` | Context -> 打洞服务 | 携带 node_name、generation 和 registration_token 删除节点 |
-| `NODE_UNREGISTER_OK` | 打洞服务 -> Context | 节点已删除，可关闭控制连接 |
-| `NODE_UNREGISTER_REJECT` | 打洞服务 -> Context | 删除被拒绝；连接随后关闭并按租约回收 |
-
-保活有两层，职责不得混淆：
-
-- UTP transport keepalive 维持 Context 与打洞服务之间的 UDP 映射和控制连接存活。
-- `NODE_KEEPALIVE` 刷新打洞服务注册表中的节点租约。它不替代 transport keepalive。
-
-打洞服务以 `node_name` 索引节点。同名活跃注册直接拒绝并返回 `UTP_STATUS_EXISTS`，不替换旧连接。节点 NAT 记录、租约和控制连接任一失效时，打洞服务必须停止向该节点转发新的 CONNECT。
-
----
-
-## 6. 与后续打洞的关系
-
-- 打洞服务只消费节点主动上报且未过期的 NAT 记录，用于 CONNECT 方向判定、候选下发和端口预测。
-- `UTP_TYPE_CONNECT`、`FrameConnect`、rendezvous ticket、候选竞速和 CONNECT 重传仍按快可达打洞设计实现；本文件不改变其 `rendezvous_id` 为唯一归并键的约束。
-- `FrameConnect` 线格式必须新增显式消息种类，以区分 `REQUEST`、`RESPONSE`、`FORWARD`、`RESULT`、`CANCEL` 和 `COMPLETE`。`expiry` 仅为有效性边界，不属于 `rendezvous_id` 的相等键。
-- NAT 探测结果由节点上报给其打洞服务；打洞服务之间不转发节点注册、NAT 记录或 rendezvous ticket。
-
----
-
-## 7. 实现顺序与验收
+## 5. 实现顺序与验收
 
 1. 在 Context 中加入调用方提供的服务 IP endpoint 配置和 NAT 探测状态机。
 2. 定义 NAT 服务 UTP 承载探测计划、观测与结果协议，并完成多节点协同服务。
-3. 实现用户调用的打洞服务注册、控制流编解码、节点租约和双层保活。
-4. 定义并实现 `FrameConnect`，再接入 CONNECT 转发、方向判定与打洞状态机。
+3. 按 2026-08-22 半连接规格实现用户驱动的 NTRS 注册、反注册、PING/PONG、校准与节点租约。
+4. 实现 `UTP_TYPE_RENDEZVOUS`、`FrameRendezvous`、REQUEST/REDIRECT/FORWARD/INTRODUCTION、
+   CandidatePlan 和零 CID 单次开洞状态机。
 
 验收至少覆盖：
 
@@ -633,5 +519,5 @@ registration_token[32]
 - 同一 Context socket 的 NAT 探测结果能异步回调；并发探测返回 `IN_PROGRESS` 且已有任务继续执行。
 - 取消 NAT 探测不触发回调，调用返回后可以立刻启动下一次探测。
 - IPv4/IPv6 NAT 记录互不覆盖，过期记录降级为 `UNKNOWN`。
-- 注册、反注册、重连替换、租约刷新、UTP 控制连接失效和节点过期均能正确回收服务端节点状态。
+- 注册、反注册、重连替换、PING/PONG 关联失效和节点过期均能正确回收服务端节点状态。
 - NAT 服务集群协同不要求打洞服务之间建立任何服务间通信。

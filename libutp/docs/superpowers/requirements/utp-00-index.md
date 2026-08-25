@@ -51,8 +51,8 @@
 | Spec | 覆盖需求模块 | 状态 |
 |---|---|---|
 | **utp-core**(现有传输基线) | 01/02/03/04/05/06/09/11/12 | 已实现,本次反推为需求 |
-| **punch / fast-connect**(`2026-07-24-libutp-ntrs-fast-connect-design.md`) | 在 core 之上新增 CONNECT/FrameConnect/rendezvous/打洞/方向/NAT;**依赖并修改** 02/07/08/09/10/11 | 设计定稿,待与 core 对齐(见 §4 冲突) |
-| **NTRS 认证**(`2026-07-27-libutp-ntrs-auth-design.md`) | **home NtrsA↔节点**的自签 Ed25519 根认证 + NodeCertificate + 根证书轮换;单向服务端认证;只做 Ed25519 profile(不支持 TLS);认证材料走新增帧、X25519 复用 kFrameCrypto。跨 NtrsB 单包不认证(rendezvous_id + DoS) | 初稿已起草 |
+| **NTRS rendezvous**(`specs/2026-08-22-libutp-ntrs-rendezvous-half-association.md`) | 在 core 之上新增 RENDEZVOUS/FrameRendezvous、注册、保活、候选开洞与握手归并；**依赖并修改** 02/07/08/09/10/11 | 设计定稿，待实现 |
+| **NTRS 认证** | 基于半连接重新设计服务端认证、凭据保护和根密钥轮换；不复用已删除的常驻连接握手。 | 待设计 |
 | **crypto**(后续) | 扩展 10:**peer 身份**/Ed25519/显式 Finished/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现)。加密恢复 0-RTT 已在 utp-10 §10 确定两消息目标，尚待实现 | 未开始 |
 | **relay**(后续) | 双对称 / UDP 阻断兜底转发 | 未开始 |
 
@@ -71,35 +71,33 @@
 
 ---
 
-## 4. C 实现内建决策(原 punch↔cpp 冲突,现为 C 重写的设计约束)
+## 4. C 实现内建决策
 
-> 这些原是"反推后发现 punch spec 想当然复用 与 cpp 现状的分歧"。**方向改为 C 重写后,它们不再是"改 cpp"任务,而是 C 实现从一开始就要内建的设计决策**。汇总权威表见 [总纲 §5.1](../00-C-IMPLEMENTATION-ROADMAP.md)。
+> 这些决策约束 C 实现，不要求修改冻结的 C++ 实现。汇总权威表见
+> [总纲 §5.1](../00-C-IMPLEMENTATION-ROADMAP.md)。
 
 **决策状态(2026-07-27 后续更新)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ 普通 1-RTT 由 client→server HandshakeDone 帧驱动 promote；加密恢复 0-RTT 采用 server→client 两消息 `HANDSHAKE_DONE`（详见 utp-10 §10.6）/ C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**,"须"改为 **C 实现要内建的目标**。
 
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
-- punch §6.1 假设"连接态不用 SO_REUSEPORT、同 Context 不同端口"以保证 `(IP+端口+scid)` 解复用不被内核负载均衡打乱。
+- NTRS 服务端的受控多 worker 例外见半连接规格 §8；普通 Context 不得默认启用 `SO_REUSEPORT`。
 - **矛盾**:无条件 REUSEPORT 下,两个 Context 可绑同端口 → 内核跨 socket 负载均衡 → 误投。**须二选一**:改代码(去掉/收窄 REUSEPORT)或改 punch 解复用推理。
 
 **C2 [P0] connected 触发 / HandshakeDone 方向**
 - 现状(utp-02):HandshakeDone 是 **client→server**;服务端被动连接**惰性创建**——`accept()` 只发 server hello,真正 `ConnectionImpl` 在**收到 client 的 HandshakeDone 回声后**才建(`context_impl.cpp:1608-1642`);`initPassive` 一旦调用即置 `kStateConnected`(`:617`)。
-- punch §4.3 现写"server 收到**第一个非 Initial 包**→ connected"。
 - **C 目标**:普通 1-RTT 仍按 client→server HandshakeDone 驱动惰性建连；加密恢复 0-RTT 是明确例外，服务端验证后发送 early_s2c 加密 `HANDSHAKE_DONE`，客户端验证后立即 connected。两者均不得泛化为“任一非 Initial 包即 promote”。
 
 **C3 [P1] 抗放大:credit 值 + 每路径 vs 整连接**
 - 现状(utp-07):`kPathValidationSendCredit = 256`;`m_bytesIn/out` 是**整连接累计、迁移不清零**(非 RFC9000 每路径额度)。
-- punch §12/§16:credit 改 `3×MTU`,且 M2 要**按候选地址**额度。
 - **须**:(a) 改常量 256→3×MTU;(b) **新增每候选地址的收/发字节跟踪**(现有整连接模型不够);(c) 明确迁移时是否清零。
 
 **C4 [P1] MTU / padding 口径不统一(四个数)**
 - 现状:MTU 模块 base=1400 / floor=1280 / cap=1500(utp-09);`connect0Rtt` 单包上限**硬编码 1280**(`context_impl.cpp:594`);`doc` 提 Padding 1260(代码无此常量,utp-01)。
-- punch:握手/0-RTT floor 写的 1200。
-- **须统一一条口径**。建议:握手/打洞/CONNECT floor **对齐 1280(IPv6 min,与现有 0-RTT 上限一致)**,连接后 PLPMTUD 走 1280→1400→1500。
+- **须统一一条口径**。握手、打洞和 RENDEZVOUS floor 对齐 1280(IPv6 min,与现有 0-RTT 上限一致)，连接后 PLPMTUD 走 1280→1400→1500。
 
 **C5 [P1] 公共 API 返回值语义**
 - 现状(utp-12):公共 API 实际 **成功 0 / 失败 -1 + `utp_get_last_error()`**(`context.cpp:17` `NormalizePublicStatus`),非头注释/doc 说的"返回错误码";`createStream` 返回流 ID 或 -1。
-- punch 的统一 `connect0Rtt` 等描述须按此改。
+- 新增公开 API 必须遵循同一返回值约定。
 
 ---
 
