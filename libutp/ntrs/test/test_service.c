@@ -41,6 +41,7 @@ static void test_service_endpoint_resolution(void)
         .sin_addr   = {.s_addr = htonl(UINT32_C(0xc0000201))},
     };
     utp_ntrs_endpoint_t endpoint;
+    char                address[INET6_ADDRSTRLEN];
 
     assert(utp_ntrs_endpoint_resolve("127.0.0.1:24000", &endpoint));
     assert(endpoint.family == (uint8_t)AF_INET);
@@ -57,6 +58,8 @@ static void test_service_endpoint_resolution(void)
     assert(endpoint.port == 24001u);
     assert(endpoint.address[0] == 192u && endpoint.address[1] == 0u && endpoint.address[2] == 2u &&
            endpoint.address[3] == 1u);
+    assert(utp_ntrs_endpoint_address_format(&endpoint, address, sizeof(address)) == address);
+    assert(strcmp(address, "192.0.2.1") == 0);
     assert(utp_ntrs_socket_bind_interface(-1, NULL));
 }
 
@@ -75,12 +78,16 @@ static void test_node_instance_format(void)
         .boot_id = {0xabu},
     };
     char text[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+    char node_text[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
     assert(sizeof(node_id) - 1u == UTP_NTRS_NODE_ID_SIZE);
     (void)memcpy(instance.node_id, node_id, UTP_NTRS_NODE_ID_SIZE);
     assert(utp_ntrs_node_instance_format(&instance, text, sizeof(text)) == text);
     assert(memcmp(text, node_id, UTP_NTRS_NODE_ID_SIZE) == 0);
     assert(strcmp(text + UTP_NTRS_NODE_ID_SIZE, ":ab000000000000000000000000000000") == 0);
+    assert(utp_ntrs_node_id_format(&instance, node_text, sizeof(node_text)) == node_text);
+    assert(memcmp(node_text, node_id, UTP_NTRS_NODE_ID_SIZE) == 0);
+    assert(node_text[UTP_NTRS_NODE_ID_SIZE] == '\0');
 }
 
 static utp_ntrs_node_registration_t test_registration(uint8_t id, uint8_t boot, uint8_t public_ip, uint32_t load)

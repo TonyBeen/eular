@@ -1797,7 +1797,7 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
     return UTP_INTERNAL_ERROR_OK;
 }
 
-/** @brief 推进 NAT 探测的重发轮次及阶段总超时。 */
+/** @brief 推进 NAT 探测的两轮证据窗口及阶段总超时。 */
 static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* context, uint64_t now_us)
 {
     utp_nat_probe_task_t* task = &context->nat_probe;
@@ -1825,8 +1825,22 @@ static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* c
             utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
         }
         error = utp_context_advance_nat_probe(context, now_us);
-    } else if (!task->write_pending && task->round_deadline_us <= now_us && task->round < UTP_NAT_PROBE_MAX_ROUNDS) {
-        error = utp_context_send_nat_probe_batch(context, now_us);
+    } else if (!task->write_pending && task->round_deadline_us <= now_us) {
+        if (task->round < UTP_NAT_PROBE_MAX_ROUNDS) {
+            error = utp_context_send_nat_probe_batch(context, now_us);
+        } else {
+            if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
+                char message[208];
+
+                (void)snprintf(message, sizeof(message),
+                               "NAT %s evidence windows complete rounds=%" PRIu8 " responses=%" PRIu8,
+                               utp_context_nat_step_name(task->step), task->round,
+                               task->step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING ? task->primary_response_count
+                                                                                : task->secondary_response_count);
+                utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
+            }
+            error = utp_context_advance_nat_probe(context, now_us);
+        }
     } else {
         return UTP_INTERNAL_ERROR_OK;
     }

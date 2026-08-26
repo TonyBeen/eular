@@ -235,6 +235,20 @@ const char* utp_ntrs_endpoint_format(const utp_ntrs_endpoint_t* endpoint, char* 
     return NULL;
 }
 
+const char* utp_ntrs_endpoint_address_format(const utp_ntrs_endpoint_t* endpoint, char* buffer, size_t capacity)
+{
+    if (endpoint == NULL || buffer == NULL || capacity == 0u) {
+        return NULL;
+    }
+    if (endpoint->family == (uint8_t)AF_INET) {
+        return inet_ntop(AF_INET, endpoint->address, buffer, (socklen_t)capacity);
+    }
+    if (endpoint->family == (uint8_t)AF_INET6) {
+        return inet_ntop(AF_INET6, endpoint->address, buffer, (socklen_t)capacity);
+    }
+    return NULL;
+}
+
 static int32_t utp_ntrs_hex_value(char value)
 {
     if (value >= '0' && value <= '9') {
@@ -263,6 +277,24 @@ bool utp_ntrs_hex_decode(const char* text, uint8_t* output, size_t output_length
         output[index] = (uint8_t)((uint32_t)high << 4u) | (uint8_t)low;
     }
     return text[output_length * 2u] == '\0';
+}
+
+const char* utp_ntrs_node_id_format(const utp_ntrs_node_instance_t* instance, char* buffer, size_t capacity)
+{
+    size_t node_id_length = 0u;
+
+    if (instance == NULL || buffer == NULL) {
+        return NULL;
+    }
+    while (node_id_length < UTP_NTRS_NODE_ID_SIZE && instance->node_id[node_id_length] != '\0') {
+        ++node_id_length;
+    }
+    if (capacity < node_id_length + 1u) {
+        return NULL;
+    }
+    (void)memcpy(buffer, instance->node_id, node_id_length);
+    buffer[node_id_length] = '\0';
+    return buffer;
 }
 
 const char* utp_ntrs_node_instance_format(const utp_ntrs_node_instance_t* instance, char* buffer, size_t capacity)

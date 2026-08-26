@@ -602,6 +602,10 @@ TEST_CASE("nat alternate binding preserves filtering and mapping classifications
     REQUIRE(callback.result.nat_class == expected_class);
     REQUIRE(server.request_counts[UTP_NAT_PROBE_STEP_PRIMARY_BINDING] != 0u);
     REQUIRE(server.request_counts[UTP_NAT_PROBE_STEP_ALTERNATE_BINDING] != 0u);
+    if (expected_class == UTP_NAT_CLASS_PORT_RESTRICTED) {
+        REQUIRE(server.request_counts[UTP_NAT_PROBE_STEP_PRIMARY_BINDING] == 4u);
+        REQUIRE(server.request_counts[UTP_NAT_PROBE_STEP_ALTERNATE_BINDING] == 4u);
+    }
     utp_context_destroy(context);
     test_nat_server_stop(&server);
     event_base_free(event_base);

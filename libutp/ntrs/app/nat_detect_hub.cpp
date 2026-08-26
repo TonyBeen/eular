@@ -73,11 +73,17 @@ static bool nat_detect_hub_registration_apply_peer_endpoint(utp_ntrs_node_regist
 }
 
 static const char* nat_detect_hub_session_instance(const nat_detect_hub_session_t* session,
-                                                   char buffer[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE])
+                                                   char buffer[UTP_NTRS_NODE_ID_TEXT_SIZE])
 {
-    return session->registered ? utp_ntrs_node_instance_format(&session->registration.instance, buffer,
-                                                               UTP_NTRS_NODE_INSTANCE_TEXT_SIZE)
+    return session->registered ? utp_ntrs_node_id_format(&session->registration.instance, buffer,
+                                                         UTP_NTRS_NODE_ID_TEXT_SIZE)
                                : "unregistered";
+}
+
+static const char* nat_detect_hub_node_id(const utp_ntrs_node_instance_t* instance,
+                                          char                            buffer[UTP_NTRS_NODE_ID_TEXT_SIZE])
+{
+    return utp_ntrs_node_id_format(instance, buffer, UTP_NTRS_NODE_ID_TEXT_SIZE);
 }
 
 static bool nat_detect_hub_session_same_node_id(const nat_detect_hub_session_t* left,
@@ -94,8 +100,8 @@ static void nat_detect_hub_session_replace_owner(nat_detect_hub_session_t* sessi
     for (current = session->service->sessions; current != NULL; current = current->next) {
         if (current != session && current->registered && current->owns_registration &&
             nat_detect_hub_session_same_node_id(current, session)) {
-            char previous[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-            char replacement[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char previous[UTP_NTRS_NODE_ID_TEXT_SIZE];
+            char replacement[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr, "nat_detect_hub event=node_replaced previous=%s replacement=%s\n",
                           nat_detect_hub_session_instance(current, previous),
@@ -129,7 +135,7 @@ static void nat_detect_hub_session_schedule_close(nat_detect_hub_session_t* sess
 static bool nat_detect_hub_session_send(nat_detect_hub_session_t* session, const uint8_t* message, size_t length)
 {
     if (!utp_ntrs_tls_stream_send(session->tls, message, length)) {
-        char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(stderr, "nat_detect_hub event=control_send_failed node=%s\n",
                       nat_detect_hub_session_instance(session, instance));
@@ -157,19 +163,19 @@ static bool nat_detect_hub_session_send_assignment(nat_detect_hub_session_t* ses
         return false;
     }
     {
-        char node[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-        char primary[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-        char backup[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char node[UTP_NTRS_NODE_ID_TEXT_SIZE];
+        char primary[UTP_NTRS_NODE_ID_TEXT_SIZE];
+        char backup[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(
             stderr,
             "nat_detect_hub -> node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
             nat_detect_hub_session_instance(session, node), (uint32_t)family, (unsigned long long)assignment.version,
             assignment.has_primary
-                ? utp_ntrs_node_instance_format(&assignment.primary, primary, UTP_NTRS_NODE_INSTANCE_TEXT_SIZE)
+                ? nat_detect_hub_node_id(&assignment.primary, primary)
                 : "none",
             assignment.has_backup
-                ? utp_ntrs_node_instance_format(&assignment.backup, backup, UTP_NTRS_NODE_INSTANCE_TEXT_SIZE)
+                ? nat_detect_hub_node_id(&assignment.backup, backup)
                 : "none");
     }
     return true;
@@ -233,7 +239,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
         nat_detect_hub_session_replace_owner(session);
         session->owns_registration = true;
         {
-            char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
             char peer[64];
 
             (void)fprintf(stderr,
@@ -256,12 +262,13 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
                 return;
             }
             {
-                char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+                char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
                 char observed[64];
 
                 (void)fprintf(stderr, "nat_detect_hub -> node=%s [NodeRegisterOk] observed_public=%s\n",
                               nat_detect_hub_session_instance(session, instance),
-                              utp_ntrs_endpoint_format(&registration_ok.public_endpoint, observed, sizeof(observed)));
+                              utp_ntrs_endpoint_address_format(&registration_ok.public_endpoint, observed,
+                                                               sizeof(observed)));
             }
         }
         (void)replaced;
@@ -269,7 +276,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
         return;
     }
     if (!session->owns_registration) {
-        char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(stderr, "nat_detect_hub event=stale_control_message node=%s type=%u\n",
                       nat_detect_hub_session_instance(session, instance), (uint32_t)type);
@@ -282,7 +289,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
         if (!utp_ntrs_control_decode_heartbeat(message, length, &heartbeat) ||
             !utp_ntrs_node_instance_equal(&heartbeat.instance, &session->registration.instance) ||
             !utp_ntrs_hub_heartbeat(&session->service->hub, &heartbeat.instance, heartbeat.load, utp_ntrs_now_ms())) {
-            char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr, "nat_detect_hub event=heartbeat_rejected node=%s\n",
                           nat_detect_hub_session_instance(session, instance));
@@ -299,7 +306,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
         if (!utp_ntrs_control_decode_assignment_request(message, length, &request) ||
             !utp_ntrs_node_instance_equal(&request.instance, &session->registration.instance) ||
             !utp_ntrs_hub_request_assignment(&session->service->hub, &request, utp_ntrs_now_ms(), &assignment)) {
-            char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr, "nat_detect_hub event=assignment_request_rejected node=%s\n",
                           nat_detect_hub_session_instance(session, instance));
@@ -307,7 +314,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
             return;
         }
         {
-            char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr, "nat_detect_hub <- node=%s [AssignmentRequest] family=%u version=%llu roles=%u\n",
                           nat_detect_hub_session_instance(session, instance), (uint32_t)request.family,
@@ -315,33 +322,31 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
         }
         response_length = utp_ntrs_control_encode_assignment(response, sizeof(response), &assignment);
         if (response_length == 0u || !nat_detect_hub_session_send(session, response, response_length)) {
-            char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr, "nat_detect_hub event=assignment_response_failed node=%s\n",
                           nat_detect_hub_session_instance(session, instance));
             nat_detect_hub_session_schedule_close(session);
         } else {
-            char node[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-            char primary[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-            char backup[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char node[UTP_NTRS_NODE_ID_TEXT_SIZE];
+            char primary[UTP_NTRS_NODE_ID_TEXT_SIZE];
+            char backup[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr,
                           "nat_detect_hub -> node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
                           nat_detect_hub_session_instance(session, node), (uint32_t)assignment.family,
                           (unsigned long long)assignment.version,
                           assignment.has_primary
-                              ? utp_ntrs_node_instance_format(&assignment.primary, primary,
-                                                              UTP_NTRS_NODE_INSTANCE_TEXT_SIZE)
+                              ? nat_detect_hub_node_id(&assignment.primary, primary)
                               : "none",
                           assignment.has_backup
-                              ? utp_ntrs_node_instance_format(&assignment.backup, backup,
-                                                              UTP_NTRS_NODE_INSTANCE_TEXT_SIZE)
+                              ? nat_detect_hub_node_id(&assignment.backup, backup)
                               : "none");
         }
         return;
     }
     {
-        char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(stderr, "nat_detect_hub event=unexpected_control_message node=%s type=%u\n",
                       nat_detect_hub_session_instance(session, instance), (uint32_t)type);
@@ -354,7 +359,7 @@ static void nat_detect_hub_session_on_plaintext(void* user_data, const uint8_t* 
     nat_detect_hub_session_t* const session = static_cast<nat_detect_hub_session_t*>(user_data);
 
     if (!utp_ntrs_control_stream_feed(&session->control, data, length, nat_detect_hub_session_on_message, session)) {
-        char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(stderr, "nat_detect_hub event=invalid_control_stream node=%s\n",
                       nat_detect_hub_session_instance(session, instance));
@@ -365,9 +370,9 @@ static void nat_detect_hub_session_on_plaintext(void* user_data, const uint8_t* 
 static void nat_detect_hub_session_on_closed(void* user_data)
 {
     nat_detect_hub_session_t* const session = static_cast<nat_detect_hub_session_t*>(user_data);
-    char                            instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+    char                            instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
-    (void)fprintf(stderr, "nat_detect_hub event=control_closed node=%s\n",
+    (void)fprintf(stderr, "nat_detect_hub node=%s [ControlClosed]\n",
                   nat_detect_hub_session_instance(session, instance));
     nat_detect_hub_session_schedule_close(static_cast<nat_detect_hub_session_t*>(user_data));
 }
@@ -381,9 +386,9 @@ static void nat_detect_hub_session_destroy(nat_detect_hub_session_t* session)
     }
     *link = session->next;
     if (session->registered && session->owns_registration) {
-        char instance[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char instance[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
-        (void)fprintf(stderr, "nat_detect_hub event=node_disconnected node=%s\n",
+        (void)fprintf(stderr, "nat_detect_hub node=%s [NodeDisconnected]\n",
                       nat_detect_hub_session_instance(session, instance));
         (void)utp_ntrs_hub_remove(&session->service->hub, &session->registration.instance, utp_ntrs_now_ms());
     }

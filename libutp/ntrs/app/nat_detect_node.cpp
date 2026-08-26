@@ -78,9 +78,9 @@ static void        nat_detect_node_on_peer_forward(void* user_data, const utp_nt
                                                    const utp_ntrs_forward_binding_response_t* forward);
 
 static const char* nat_detect_node_instance(const utp_ntrs_node_instance_t* instance,
-                                            char                            text[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE])
+                                            char                            text[UTP_NTRS_NODE_ID_TEXT_SIZE])
 {
-    return utp_ntrs_node_instance_format(instance, text, UTP_NTRS_NODE_INSTANCE_TEXT_SIZE);
+    return utp_ntrs_node_id_format(instance, text, UTP_NTRS_NODE_ID_TEXT_SIZE);
 }
 
 static uint8_t nat_detect_node_family_slot(uint8_t family)
@@ -118,7 +118,7 @@ static bool nat_detect_node_send_assignment_request(nat_detect_node_t* node, uin
         return false;
     }
     {
-        char local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         char hub[64];
 
@@ -156,8 +156,8 @@ static void nat_detect_node_on_peer_failed(void* user_data, const utp_ntrs_node_
     uint8_t                  slot;
 
     {
-        char local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-        char peer[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
+        char peer[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
         (void)fprintf(stderr, "nat_detect_node event=peer_link_failed node=%s peer=%s\n",
                       nat_detect_node_instance(&node->registration.instance, local),
@@ -186,8 +186,8 @@ static void nat_detect_node_on_peer_active(void* user_data, const utp_ntrs_node_
 
         if (assignment->has_primary && utp_ntrs_node_instance_equal(&assignment->primary, remote)) {
             char endpoint[64];
-            char local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-            char peer[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
+            char peer[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             utp_ntrs_udp_server_set_primary(node->udp_server, remote, &assignment->primary_probe);
             (void)fprintf(stderr,
@@ -228,8 +228,8 @@ static bool nat_detect_node_forward_seen(nat_detect_node_t* node, uint64_t forwa
 static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward)
 {
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
-    char                     local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-    char                     target[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+    char                     local[UTP_NTRS_NODE_ID_TEXT_SIZE];
+    char                     target[UTP_NTRS_NODE_ID_TEXT_SIZE];
     char                     client[64];
 
     if (!utp_ntrs_peer_manager_send_forward(node->peers, &forward->target, forward)) {
@@ -256,8 +256,8 @@ static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_node
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
     const utp_ntrs_node_family_t* const family =
         node->registration.ipv4.valid ? &node->registration.ipv4 : &node->registration.ipv6;
-    char source_text[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-    char local_text[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+    char source_text[UTP_NTRS_NODE_ID_TEXT_SIZE];
+    char local_text[UTP_NTRS_NODE_ID_TEXT_SIZE];
     char client[64];
     char reply_from[64];
 
@@ -323,9 +323,9 @@ static void nat_detect_node_schedule_disconnect(nat_detect_node_t* node)
 static void nat_detect_node_disconnect(nat_detect_node_t* node)
 {
     if (node->hub_stream != NULL) {
-        char local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
-        (void)fprintf(stderr, "nat_detect_node event=hub_disconnected node=%s registered=%u\n",
+        (void)fprintf(stderr, "nat_detect_node node=%s [HubDisconnected] registered=%u\n",
                       nat_detect_node_instance(&node->registration.instance, local), node->registered ? 1u : 0u);
     }
     if (node->hub_stream != NULL) {
@@ -364,7 +364,7 @@ static void nat_detect_node_on_ready(void* user_data)
         return;
     }
     {
-        char node_id[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char node_id[UTP_NTRS_NODE_ID_TEXT_SIZE];
         char hub[64];
 
         (void)fprintf(stderr, "nat_detect_node %s -> hub=%s [NodeRegister]\n",
@@ -414,14 +414,14 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
             utp_ntrs_udp_server_set_public_endpoints(node->udp_server, &family->probe_endpoint,
                                                      &family->change_port_endpoint);
             {
-                char node_id[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+                char node_id[UTP_NTRS_NODE_ID_TEXT_SIZE];
                 char hub[64];
 
                 (void)fprintf(stderr, "nat_detect_node %s <- hub=%s [NodeRegisterOk] observed_public=%s\n",
                               nat_detect_node_instance(&node->registration.instance, node_id),
                               utp_ntrs_endpoint_format(&node->hub_endpoint, hub, sizeof(hub)),
-                              utp_ntrs_endpoint_format(&family->public_endpoint, public_endpoint,
-                                                       sizeof(public_endpoint)));
+                              utp_ntrs_endpoint_address_format(&family->public_endpoint, public_endpoint,
+                                                               sizeof(public_endpoint)));
             }
         }
         node->registered = true;
@@ -445,8 +445,8 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
         }
         slot = nat_detect_node_family_slot(assignment.family);
         if (assignment.version > node->assignment_versions[slot]) {
-            char primary[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
-            char backup[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+            char primary[UTP_NTRS_NODE_ID_TEXT_SIZE];
+            char backup[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             node->assignment_versions[slot] = assignment.version;
             node->assignments[slot]         = assignment;
@@ -487,7 +487,7 @@ static void nat_detect_node_on_plaintext(void* user_data, const uint8_t* data, s
 
 static void nat_detect_node_on_closed(void* user_data)
 {
-    (void)fprintf(stderr, "nat_detect_node event=hub_control_closed\n");
+    (void)fprintf(stderr, "nat_detect_node [HubControlClosed]\n");
     nat_detect_node_schedule_disconnect(static_cast<nat_detect_node_t*>(user_data));
 }
 
@@ -663,7 +663,7 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
         goto cleanup;
     }
     {
-        char                                local[UTP_NTRS_NODE_INSTANCE_TEXT_SIZE];
+        char                                local[UTP_NTRS_NODE_ID_TEXT_SIZE];
         char                                hub_endpoint[64];
         char                                probe_endpoint[64];
         char                                control_endpoint[64];
