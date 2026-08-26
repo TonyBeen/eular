@@ -1,5 +1,5 @@
 -- Eular UTP Wireshark Lua dissector
--- Protocol layout comes from src/proto/proto.h and src/proto/frame/*.h
+-- Protocol layout comes from c/src/proto, c/src/nat and c/src/rendezvous.
 
 local utp = Proto("UTP", "Eular UTP")
 
@@ -10,6 +10,8 @@ local packet_type_names = {
     [0x03] = "0RTT",
     [0x04] = "CONNECTION_CLOSE",
     [0x05] = "CTRL",
+    [0x06] = "RENDEZVOUS",
+    [0x07] = "NAT_PROBE",
 }
 
 local frame_type_names = {
@@ -35,6 +37,62 @@ local frame_type_names = {
     [19] = "MaxStreamData",
     [20] = "DataBlocked",
     [21] = "StreamDataBlocked",
+    [22] = "StopSending",
+    [23] = "Rendezvous",
+    [24] = "ObservedAddress",
+}
+
+local rendezvous_message_names = {
+    [1] = "REGISTER",
+    [2] = "REGISTERED",
+    [3] = "PING",
+    [4] = "PONG",
+    [5] = "CALIBRATE",
+    [6] = "ADDRESS_UPDATE",
+    [7] = "ADDRESS_UPDATED",
+    [8] = "REQUEST",
+    [9] = "REDIRECT",
+    [10] = "FORWARD",
+    [11] = "INTRODUCTION",
+    [12] = "UNREGISTER",
+    [13] = "UNREGISTERED",
+    [14] = "REJECTED",
+}
+
+local nat_message_names = {
+    [1] = "BindingRequest",
+    [2] = "BindingResponse",
+}
+
+local nat_step_names = {
+    [1] = "PrimaryBinding",
+    [2] = "AlternateBinding",
+}
+
+local nat_change_names = {
+    [0] = "None",
+    [1] = "ChangePort",
+    [3] = "ChangePort|ChangeIP",
+}
+
+local nat_tlv_names = {
+    [1] = "ProbeToken",
+    [6] = "MappedAddress",
+    [7] = "OriginAddress",
+    [8] = "AlternateProbeEndpoint",
+    [12] = "Padding",
+}
+
+local nat_class_names = {
+    [0] = "Unknown",
+    [1] = "OpenPublic",
+    [2] = "OpenPublicWithFirewall",
+    [3] = "FullCone",
+    [4] = "IpRestricted",
+    [5] = "PortRestricted",
+    [6] = "Symmetric",
+    [7] = "SymmetricMultiLine",
+    [8] = "UdpBlocked",
 }
 
 utp.prefs.udp_port = Pref.uint("UDP port", 9000, "UTP UDP port (0 disables auto registration)")
@@ -63,6 +121,14 @@ f.stream_data_len = ProtoField.uint16("eular_utp.stream.data_len", "Stream Data 
 f.stream_id = ProtoField.uint32("eular_utp.stream.id", "Stream ID", base.DEC)
 f.stream_offset = ProtoField.uint64("eular_utp.stream.offset", "Stream Offset", base.DEC)
 f.stream_data = ProtoField.bytes("eular_utp.stream.data", "Stream Data")
+
+f.stop_sending_error = ProtoField.uint16("eular_utp.stop_sending.error", "Stop Sending Error Code", base.DEC)
+f.stop_sending_stream_id = ProtoField.uint32("eular_utp.stop_sending.stream_id", "Stop Sending Stream ID", base.DEC)
+f.stream_limit_type = ProtoField.uint8("eular_utp.stream_limit.type", "Stream Type", base.DEC, {
+    [0] = "Bidirectional",
+    [1] = "Unidirectional",
+})
+f.stream_limit_value = ProtoField.uint16("eular_utp.stream_limit.value", "Stream Limit", base.DEC)
 
 f.ack_count = ProtoField.uint8("eular_utp.ack.count", "Ack Range Count", base.DEC)
 f.ack_delay = ProtoField.uint16("eular_utp.ack.delay", "Ack Delay", base.DEC)
@@ -118,6 +184,50 @@ f.data_blocked_limit = ProtoField.uint64("eular_utp.data_blocked.data_limit", "D
 f.stream_data_blocked_stream_id = ProtoField.uint32("eular_utp.stream_data_blocked.stream_id", "StreamDataBlocked Stream ID", base.DEC)
 f.stream_data_blocked_limit = ProtoField.uint64("eular_utp.stream_data_blocked.stream_data_limit", "Stream Data Limit", base.DEC)
 
+f.observed_family = ProtoField.uint8("eular_utp.observed_address.family", "Address Family", base.DEC, {
+    [4] = "IPv4",
+    [6] = "IPv6",
+})
+f.observed_port = ProtoField.uint16("eular_utp.observed_address.port", "Observed Port", base.DEC)
+f.observed_address = ProtoField.string("eular_utp.observed_address.address", "Observed Address")
+
+f.rendezvous_message_type = ProtoField.uint8("eular_utp.rendezvous.message_type", "Rendezvous Message", base.DEC,
+    rendezvous_message_names)
+f.rendezvous_payload_len = ProtoField.uint16("eular_utp.rendezvous.payload_len", "Rendezvous Payload Length", base.DEC)
+f.rendezvous_payload = ProtoField.bytes("eular_utp.rendezvous.payload", "Rendezvous Payload")
+f.rendezvous_id = ProtoField.bytes("eular_utp.rendezvous.id", "Rendezvous ID")
+f.rendezvous_source_peer_id = ProtoField.string("eular_utp.rendezvous.source_peer_id", "Source Peer ID")
+f.rendezvous_target_peer_id = ProtoField.string("eular_utp.rendezvous.target_peer_id", "Target Peer ID")
+f.rendezvous_nat_class = ProtoField.uint8("eular_utp.rendezvous.nat_class", "Source NAT Class", base.DEC,
+    nat_class_names)
+f.rendezvous_family = ProtoField.uint8("eular_utp.rendezvous.family", "Address Family", base.DEC, {
+    [4] = "IPv4",
+    [6] = "IPv6",
+})
+f.rendezvous_local_port = ProtoField.uint16("eular_utp.rendezvous.local_port", "Local Port", base.DEC)
+f.rendezvous_local_candidate_count = ProtoField.uint8("eular_utp.rendezvous.local_candidate_count",
+    "Local Candidate Count", base.DEC)
+f.rendezvous_local_candidate = ProtoField.string("eular_utp.rendezvous.local_candidate", "Local Candidate")
+f.rendezvous_public_address = ProtoField.string("eular_utp.rendezvous.public_address", "Public Address")
+f.rendezvous_public_port_count = ProtoField.uint8("eular_utp.rendezvous.public_port_count", "Public Port Count", base.DEC)
+f.rendezvous_public_port = ProtoField.uint16("eular_utp.rendezvous.public_port", "Public Port Candidate", base.DEC)
+
+f.nat_version = ProtoField.uint8("eular_utp.nat.version", "NAT Probe Version", base.DEC)
+f.nat_message_type = ProtoField.uint8("eular_utp.nat.message_type", "NAT Probe Message", base.DEC, nat_message_names)
+f.nat_step = ProtoField.uint8("eular_utp.nat.step", "NAT Probe Step", base.DEC, nat_step_names)
+f.nat_change_flags = ProtoField.uint8("eular_utp.nat.change_flags", "Requested/Response Change", base.HEX,
+    nat_change_names)
+f.nat_tlv_type = ProtoField.uint16("eular_utp.nat.tlv.type", "NAT TLV Type", base.DEC, nat_tlv_names)
+f.nat_tlv_len = ProtoField.uint16("eular_utp.nat.tlv.len", "NAT TLV Length", base.DEC)
+f.nat_tlv_value = ProtoField.bytes("eular_utp.nat.tlv.value", "NAT TLV Value")
+f.nat_token = ProtoField.bytes("eular_utp.nat.token", "Probe Token")
+f.nat_endpoint_family = ProtoField.uint8("eular_utp.nat.endpoint.family", "Endpoint Family", base.DEC, {
+    [4] = "IPv4",
+    [6] = "IPv6",
+})
+f.nat_endpoint_port = ProtoField.uint16("eular_utp.nat.endpoint.port", "Endpoint Port", base.DEC)
+f.nat_endpoint_address = ProtoField.string("eular_utp.nat.endpoint.address", "Endpoint Address")
+
 local function frame_name(ftype)
     return frame_type_names[ftype] or string.format("Unknown(%d)", ftype)
 end
@@ -131,6 +241,106 @@ local function packet_can_be_encrypted(ptype)
     return ptype == 0x03 or ptype == 0x04 or ptype == 0x05
 end
 
+local function address_length(family)
+    if family == 4 then
+        return 4
+    end
+    if family == 6 then
+        return 16
+    end
+    return nil
+end
+
+local function address_text(payload, offset, family)
+    local length = address_length(family)
+    if length == nil or offset + length > payload:len() then
+        return nil
+    end
+    if family == 4 then
+        return string.format("%u.%u.%u.%u", payload(offset, 1):uint(), payload(offset + 1, 1):uint(),
+            payload(offset + 2, 1):uint(), payload(offset + 3, 1):uint())
+    end
+
+    local groups = {}
+    local best_start = nil
+    local best_length = 0
+    local current_start = nil
+    local current_length = 0
+    for index = 0, 7 do
+        local group = payload(offset + index * 2, 2):uint()
+        groups[index + 1] = group
+        if group == 0 then
+            if current_start == nil then
+                current_start = index + 1
+                current_length = 1
+            else
+                current_length = current_length + 1
+            end
+        else
+            if current_length > best_length then
+                best_start = current_start
+                best_length = current_length
+            end
+            current_start = nil
+            current_length = 0
+        end
+    end
+    if current_length > best_length then
+        best_start = current_start
+        best_length = current_length
+    end
+    if best_length < 2 then
+        best_start = nil
+    end
+
+    local parts = {}
+    local index = 1
+    while index <= 8 do
+        if best_start ~= nil and index == best_start then
+            parts[#parts + 1] = ""
+            index = index + best_length
+            if index > 8 then
+                parts[#parts + 1] = ""
+            end
+        else
+            parts[#parts + 1] = string.format("%x", groups[index])
+            index = index + 1
+        end
+    end
+    local text = table.concat(parts, ":")
+    if best_start == 1 then
+        text = ":" .. text
+    end
+    return text
+end
+
+local function endpoint_text(payload, offset, family, port)
+    local address = address_text(payload, offset, family)
+    if address == nil then
+        return nil
+    end
+    if family == 6 then
+        return string.format("[%s]:%u", address, port)
+    end
+    return string.format("%s:%u", address, port)
+end
+
+local function rendezvous_message_name(message_type)
+    return rendezvous_message_names[message_type] or string.format("Unknown(%u)", message_type)
+end
+
+local function nat_message_name(message_type)
+    return nat_message_names[message_type] or string.format("Unknown(%u)", message_type)
+end
+
+local function nat_step_name(step)
+    return nat_step_names[step] or string.format("Unknown(%u)", step)
+end
+
+local function nat_change_name(change_flags)
+    return nat_change_names[change_flags] or string.format("Unknown(0x%02x)", change_flags)
+end
+
 local function append_summary(summaries, text)
     if text == nil or text == "" then
         return
@@ -139,6 +349,214 @@ local function append_summary(summaries, text)
         return
     end
     summaries[#summaries + 1] = text
+end
+
+local function parse_rendezvous_candidate_plan(payload, offset, payload_len, tree)
+    if offset + 4 > payload_len then
+        return nil, "truncated CandidatePlan header"
+    end
+    local family = payload(offset, 1):uint()
+    local local_port = payload(offset + 1, 2):uint()
+    local candidate_count = payload(offset + 3, 1):uint()
+    local addr_len = address_length(family)
+    if addr_len == nil or candidate_count > 4 then
+        return nil, "invalid CandidatePlan family or candidate count"
+    end
+    local candidates_offset = offset + 4
+    local public_address_offset = candidates_offset + candidate_count * addr_len
+    local port_count_offset = public_address_offset + addr_len
+    if port_count_offset + 1 > payload_len then
+        return nil, "truncated CandidatePlan addresses"
+    end
+    local public_port_count = payload(port_count_offset, 1):uint()
+    local ports_offset = port_count_offset + 1
+    local end_offset = ports_offset + public_port_count * 2
+    if public_port_count == 0 or public_port_count > 4 or end_offset > payload_len then
+        return nil, "invalid CandidatePlan public port count"
+    end
+
+    local plan = tree:add(payload(offset, end_offset - offset), "Candidate Plan")
+    plan:add(f.rendezvous_family, payload(offset, 1))
+    plan:add(f.rendezvous_local_port, payload(offset + 1, 2))
+    plan:add(f.rendezvous_local_candidate_count, payload(offset + 3, 1))
+    for index = 0, candidate_count - 1 do
+        local address_offset = candidates_offset + index * addr_len
+        local endpoint = endpoint_text(payload, address_offset, family, local_port)
+        if endpoint == nil then
+            return nil, "invalid CandidatePlan local candidate"
+        end
+        plan:add(f.rendezvous_local_candidate, payload(address_offset, addr_len), endpoint)
+    end
+    local public_address = address_text(payload, public_address_offset, family)
+    if public_address == nil then
+        return nil, "invalid CandidatePlan public address"
+    end
+    plan:add(f.rendezvous_public_address, payload(public_address_offset, addr_len), public_address)
+    plan:add(f.rendezvous_public_port_count, payload(port_count_offset, 1))
+    for index = 0, public_port_count - 1 do
+        plan:add(f.rendezvous_public_port, payload(ports_offset + index * 2, 2))
+    end
+    return end_offset
+end
+
+local function parse_rendezvous_payload(payload, tree, message_type, summaries)
+    local payload_len = payload:len()
+    local label = rendezvous_message_name(message_type)
+
+    if message_type == 11 then
+        if payload_len ~= 16 then
+            return "INTRODUCTION payload must be 16 bytes"
+        end
+        tree:add(f.rendezvous_id, payload(0, 16))
+        append_summary(summaries, "RENDEZVOUS INTRODUCTION")
+        return nil
+    end
+    if message_type == 8 then
+        if payload_len < 22 then
+            return "truncated REQUEST payload"
+        end
+        local offset = 0
+        tree:add(f.rendezvous_id, payload(offset, 16))
+        offset = offset + 16
+        local source_length = payload(offset, 1):uint()
+        offset = offset + 1
+        if source_length == 0 or source_length > 128 or offset + source_length + 1 > payload_len then
+            return "invalid REQUEST source peer ID"
+        end
+        tree:add(f.rendezvous_source_peer_id, payload(offset, source_length), payload(offset, source_length):string())
+        offset = offset + source_length
+        local target_length = payload(offset, 1):uint()
+        offset = offset + 1
+        if target_length == 0 or target_length > 128 or offset + target_length + 5 > payload_len then
+            return "invalid REQUEST target peer ID"
+        end
+        tree:add(f.rendezvous_target_peer_id, payload(offset, target_length), payload(offset, target_length):string())
+        offset = offset + target_length
+        tree:add(f.rendezvous_nat_class, payload(offset, 1))
+        tree:add(f.rendezvous_family, payload(offset + 1, 1))
+        tree:add(f.rendezvous_local_port, payload(offset + 2, 2))
+        tree:add(f.rendezvous_local_candidate_count, payload(offset + 4, 1))
+        local family = payload(offset + 1, 1):uint()
+        local local_port = payload(offset + 2, 2):uint()
+        local candidate_count = payload(offset + 4, 1):uint()
+        local addr_len = address_length(family)
+        offset = offset + 5
+        if addr_len == nil or candidate_count > 4 or offset + candidate_count * addr_len ~= payload_len then
+            return "invalid REQUEST local candidates"
+        end
+        for index = 0, candidate_count - 1 do
+            local address_offset = offset + index * addr_len
+            local endpoint = endpoint_text(payload, address_offset, family, local_port)
+            tree:add(f.rendezvous_local_candidate, payload(address_offset, addr_len), endpoint)
+        end
+        append_summary(summaries, "RENDEZVOUS REQUEST")
+        return nil
+    end
+    if message_type == 9 then
+        if payload_len <= 16 then
+            return "truncated REDIRECT payload"
+        end
+        tree:add(f.rendezvous_id, payload(0, 16))
+        local next_offset, error = parse_rendezvous_candidate_plan(payload, 16, payload_len, tree)
+        if next_offset == nil or next_offset ~= payload_len then
+            return error or "invalid REDIRECT CandidatePlan"
+        end
+        append_summary(summaries, "RENDEZVOUS REDIRECT")
+        return nil
+    end
+    if message_type == 10 then
+        if payload_len <= 17 then
+            return "truncated FORWARD payload"
+        end
+        tree:add(f.rendezvous_id, payload(0, 16))
+        local source_length = payload(16, 1):uint()
+        if source_length == 0 or source_length > 128 or 17 + source_length >= payload_len then
+            return "invalid FORWARD source peer ID"
+        end
+        tree:add(f.rendezvous_source_peer_id, payload(17, source_length), payload(17, source_length):string())
+        local next_offset, error = parse_rendezvous_candidate_plan(payload, 17 + source_length, payload_len, tree)
+        if next_offset == nil or next_offset ~= payload_len then
+            return error or "invalid FORWARD CandidatePlan"
+        end
+        append_summary(summaries, "RENDEZVOUS FORWARD")
+        return nil
+    end
+    append_summary(summaries, "RENDEZVOUS " .. label)
+    return nil
+end
+
+local function parse_nat_endpoint(payload, offset, length, tree, label)
+    if length < 8 then
+        return nil
+    end
+    local family = payload(offset, 1):uint()
+    local addr_len = address_length(family)
+    if addr_len == nil or length ~= 4 + addr_len then
+        return nil
+    end
+    local port = payload(offset + 2, 2):uint()
+    local endpoint = endpoint_text(payload, offset + 4, family, port)
+    if endpoint == nil then
+        return nil
+    end
+    local endpoint_tree = tree:add(payload(offset, length), label)
+    endpoint_tree:add(f.nat_endpoint_family, payload(offset, 1))
+    endpoint_tree:add(f.nat_endpoint_port, payload(offset + 2, 2))
+    endpoint_tree:add(f.nat_endpoint_address, payload(offset + 4, addr_len), endpoint)
+    return endpoint
+end
+
+local function parse_nat_probe(payload, tree, summaries)
+    local payload_len = payload:len()
+    if payload_len < 4 then
+        tree:add_expert_info(PI_MALFORMED, PI_ERROR, "Truncated NAT probe header")
+        return
+    end
+    local version = payload(0, 1):uint()
+    local message_type = payload(1, 1):uint()
+    local step = payload(2, 1):uint()
+    local change_flags = payload(3, 1):uint()
+    local header = tree:add(payload(0, 4), "NAT Probe Header")
+    header:add(f.nat_version, payload(0, 1))
+    header:add(f.nat_message_type, payload(1, 1))
+    header:add(f.nat_step, payload(2, 1))
+    header:add(f.nat_change_flags, payload(3, 1))
+    local summary = string.format("NAT %s %s %s", nat_step_name(step), nat_message_name(message_type),
+        nat_change_name(change_flags))
+    local offset = 4
+    while offset < payload_len do
+        if offset + 4 > payload_len then
+            tree:add_expert_info(PI_MALFORMED, PI_ERROR, "Truncated NAT probe TLV header")
+            break
+        end
+        local tlv_type = payload(offset, 2):uint()
+        local tlv_length = payload(offset + 2, 2):uint()
+        local value_offset = offset + 4
+        local next_offset = value_offset + tlv_length
+        if next_offset > payload_len then
+            tree:add_expert_info(PI_MALFORMED, PI_ERROR, "NAT probe TLV length exceeds payload")
+            break
+        end
+        local tlv = tree:add(payload(offset, 4 + tlv_length), nat_tlv_names[tlv_type] or string.format("NAT TLV %u", tlv_type))
+        tlv:add(f.nat_tlv_type, payload(offset, 2))
+        tlv:add(f.nat_tlv_len, payload(offset + 2, 2))
+        if tlv_length > 0 then
+            tlv:add(f.nat_tlv_value, payload(value_offset, tlv_length))
+        end
+        if tlv_type == 1 and tlv_length == 12 then
+            tlv:add(f.nat_token, payload(value_offset, tlv_length))
+        elseif tlv_type == 6 or tlv_type == 7 or tlv_type == 8 then
+            local endpoint = parse_nat_endpoint(payload, value_offset, tlv_length, tlv, nat_tlv_names[tlv_type])
+            if endpoint ~= nil and tlv_type == 6 then
+                summary = summary .. " mapped=" .. endpoint
+            end
+        end
+        offset = next_offset
+    end
+    if version ~= 2 then
+        tree:add_expert_info(PI_PROTOCOL, PI_WARN, string.format("Unexpected NAT probe version %u", version))
+    end
+    append_summary(summaries, summary)
 end
 
 local function parse_frame(payload, payload_offset, payload_len, tree, frame_index, summaries)
@@ -199,6 +617,27 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 19 or frame_type == 21 then
         -- FRAME_MAX_STREAM_DATA_SIZE / FRAME_STREAM_DATA_BLOCKED_SIZE = 1 + 4 + 8 = 13
         frame_len = 13
+    elseif frame_type == 7 or frame_type == 8 then
+        -- FRAME_STREAMS_LIMIT_SIZE = 1 + 1 + 2 = 4
+        frame_len = 4
+    elseif frame_type == 22 then
+        -- FRAME_STOP_SENDING_SIZE = 1 + 2 + 4 = 7
+        frame_len = 7
+    elseif frame_type == 23 then
+        if payload_offset + 4 > payload_len then
+            return -1
+        end
+        frame_len = 4 + payload(payload_offset + 2, 2):uint()
+    elseif frame_type == 24 then
+        if payload_offset + 2 > payload_len then
+            return -1
+        end
+        local family = payload(payload_offset + 1, 1):uint()
+        local addr_len = address_length(family)
+        if addr_len == nil then
+            return -1
+        end
+        frame_len = 4 + addr_len
     else
         return -1
     end
@@ -286,6 +725,11 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         node:add(f.reset_stream_id, payload(payload_offset + 3, 4))
         node:add(f.reset_final_size, payload(payload_offset + 7, 8))
         append_summary(summaries, string.format("RESET sid=%u err=%u", payload(payload_offset + 3, 4):uint(), payload(payload_offset + 1, 2):uint()))
+    elseif frame_type == 7 or frame_type == 8 then
+        node:add(f.stream_limit_type, payload(payload_offset + 1, 1))
+        node:add(f.stream_limit_value, payload(payload_offset + 2, 2))
+        append_summary(summaries, string.format("%s type=%u limit=%u", frame_type == 7 and "STREAMS_BLOCKED" or "MAX_STREAMS",
+            payload(payload_offset + 1, 1):uint(), payload(payload_offset + 2, 2):uint()))
     elseif frame_type == 9 or frame_type == 10 then
         node:add(f.path_data, payload(payload_offset + 1, 8))
         append_summary(summaries, frame_type == 9 and "PATH_CHALLENGE" or "PATH_RESPONSE")
@@ -349,6 +793,34 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         append_summary(summaries, string.format("STREAM_DATA_BLOCKED sid=%u limit=%s",
             payload(payload_offset + 1, 4):uint(),
             tostring(payload(payload_offset + 5, 8):uint64())))
+    elseif frame_type == 22 then
+        node:add(f.stop_sending_error, payload(payload_offset + 1, 2))
+        node:add(f.stop_sending_stream_id, payload(payload_offset + 3, 4))
+        append_summary(summaries, string.format("STOP_SENDING sid=%u err=%u", payload(payload_offset + 3, 4):uint(),
+            payload(payload_offset + 1, 2):uint()))
+    elseif frame_type == 23 then
+        local message_type = payload(payload_offset + 1, 1):uint()
+        local body_len = payload(payload_offset + 2, 2):uint()
+        local body = payload(payload_offset + 4, body_len)
+        local rendezvous = node:add(frame_tvb, "Rendezvous: " .. rendezvous_message_name(message_type))
+        rendezvous:add(f.rendezvous_message_type, payload(payload_offset + 1, 1))
+        rendezvous:add(f.rendezvous_payload_len, payload(payload_offset + 2, 2))
+        if body_len > 0 then
+            rendezvous:add(f.rendezvous_payload, body)
+        end
+        local error = parse_rendezvous_payload(body, rendezvous, message_type, summaries)
+        if error ~= nil then
+            rendezvous:add_expert_info(PI_MALFORMED, PI_ERROR, error)
+        end
+    elseif frame_type == 24 then
+        local family = payload(payload_offset + 1, 1):uint()
+        local addr_len = address_length(family)
+        local port = payload(payload_offset + 2, 2):uint()
+        local address = address_text(payload, payload_offset + 4, family)
+        node:add(f.observed_family, payload(payload_offset + 1, 1))
+        node:add(f.observed_port, payload(payload_offset + 2, 2))
+        node:add(f.observed_address, payload(payload_offset + 4, addr_len), address)
+        append_summary(summaries, string.format("OBSERVED_ADDRESS %s", endpoint_text(payload, payload_offset + 4, family, port)))
     end
 
     return frame_len
@@ -380,39 +852,43 @@ function utp.dissector(buffer, pinfo, tree)
     subtree:add(f.packet_type, buffer(18, 1))
     subtree:add(f.reserve, buffer(19, 1))
 
-    local payload_tree = subtree:add(buffer(20, payload_len), "Payload Frames")
+    local payload = buffer(20, payload_len)
+    local payload_tree = subtree:add(payload, packet_type == 0x07 and "NAT Probe Payload" or "Payload Frames")
     local off = 0
     local frame_index = 0
     local maybe_encrypted = packet_can_be_encrypted(packet_type)
     local frame_summaries = {}
-    while off < payload_len do
-        local consumed = parse_frame(buffer(20, payload_len), off, payload_len, payload_tree, frame_index, frame_summaries)
-        if consumed <= 0 then
-            local payload_tvb = buffer(20, payload_len)
-            if maybe_encrypted then
-                if off == 0 then
-                    payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
-                        "Payload likely encrypted; frame parsing skipped")
-                    append_summary(frame_summaries, "ENCRYPTED")
-                    if payload_len > 16 then
-                        payload_tree:add(f.payload_cipher, payload_tvb(0, payload_len - 16))
-                        payload_tree:add(f.payload_tag, payload_tvb(payload_len - 16, 16))
+    if packet_type == 0x07 then
+        parse_nat_probe(payload, payload_tree, frame_summaries)
+    else
+        while off < payload_len do
+            local consumed = parse_frame(payload, off, payload_len, payload_tree, frame_index, frame_summaries)
+            if consumed <= 0 then
+                if maybe_encrypted then
+                    if off == 0 then
+                        payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
+                            "Payload likely encrypted; frame parsing skipped")
+                        append_summary(frame_summaries, "ENCRYPTED")
+                        if payload_len > 16 then
+                            payload_tree:add(f.payload_cipher, payload(0, payload_len - 16))
+                            payload_tree:add(f.payload_tag, payload(payload_len - 16, 16))
+                        else
+                            payload_tree:add(f.payload_raw, payload)
+                        end
                     else
-                        payload_tree:add(f.payload_raw, payload_tvb)
+                        payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
+                            string.format("Frame parsing stopped at payload offset %d; remaining bytes undecoded", off))
+                        payload_tree:add(f.payload_undecoded, payload(off, payload_len - off))
                     end
                 else
-                    payload_tree:add_expert_info(PI_PROTOCOL, PI_NOTE,
-                        string.format("Frame parsing stopped at payload offset %d; remaining bytes undecoded", off))
-                    payload_tree:add(f.payload_undecoded, payload_tvb(off, payload_len - off))
+                    payload_tree:add_expert_info(PI_MALFORMED, PI_ERROR,
+                        string.format("Malformed frame at payload offset %d", off))
                 end
-            else
-                payload_tree:add_expert_info(PI_MALFORMED, PI_ERROR,
-                    string.format("Malformed frame at payload offset %d", off))
+                break
             end
-            break
+            off = off + consumed
+            frame_index = frame_index + 1
         end
-        off = off + consumed
-        frame_index = frame_index + 1
     end
 
     subtree:add(f.frame_count, frame_index)
