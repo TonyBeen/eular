@@ -1,17 +1,17 @@
--- Eular UTP Wireshark Lua dissector
+-- UTP Wireshark Lua dissector
 -- Protocol layout comes from c/src/proto, c/src/nat and c/src/rendezvous.
 
-local utp = Proto("UTP", "Eular UTP")
+local utp = Proto("UTP", "UTP")
 
 local packet_type_names = {
-    [0x00] = "NONE",
-    [0x01] = "INITIAL",
-    [0x02] = "HANDSHAKE",
-    [0x03] = "0RTT",
-    [0x04] = "CONNECTION_CLOSE",
-    [0x05] = "CTRL",
-    [0x06] = "RENDEZVOUS",
-    [0x07] = "NAT_PROBE",
+    [0x00] = "None",
+    [0x01] = "Initial",
+    [0x02] = "Handshake",
+    [0x03] = "ZeroRtt",
+    [0x04] = "ConnectionClose",
+    [0x05] = "Ctrl",
+    [0x06] = "Rendezvous",
+    [0x07] = "NatProbe",
 }
 
 local frame_type_names = {
@@ -60,8 +60,8 @@ local rendezvous_message_names = {
 }
 
 local nat_message_names = {
-    [1] = "BindingRequest",
-    [2] = "BindingResponse",
+    [1] = "Request",
+    [2] = "Response",
 }
 
 local nat_step_names = {
@@ -521,7 +521,7 @@ local function parse_nat_probe(payload, tree, summaries)
     header:add(f.nat_message_type, payload(1, 1))
     header:add(f.nat_step, payload(2, 1))
     header:add(f.nat_change_flags, payload(3, 1))
-    local summary = string.format("NAT %s %s %s", nat_step_name(step), nat_message_name(message_type),
+    local summary = string.format("NatProbe %s %s %s", nat_step_name(step), nat_message_name(message_type),
         nat_change_name(change_flags))
     local offset = 4
     while offset < payload_len do
@@ -843,9 +843,11 @@ function utp.dissector(buffer, pinfo, tree)
         return 0
     end
 
-    local subtree = tree:add(utp, buffer(), "Eular UTP Protocol")
-    subtree:add(f.scid, buffer(0, 4))
-    subtree:add(f.dcid, buffer(4, 4))
+    local subtree = tree:add(utp, buffer(), "UTP Protocol")
+    if packet_type ~= 0x07 then
+        subtree:add(f.scid, buffer(0, 4))
+        subtree:add(f.dcid, buffer(4, 4))
+    end
     subtree:add(f.pn, buffer(8, 8))
     subtree:add(f.payload_len, buffer(16, 2))
     subtree:add(f.packet_len, utp_packet_len)
@@ -891,17 +893,30 @@ function utp.dissector(buffer, pinfo, tree)
         end
     end
 
-    subtree:add(f.frame_count, frame_index)
+    if packet_type ~= 0x07 then
+        subtree:add(f.frame_count, frame_index)
+    end
 
     pinfo.cols.protocol = "UTP"
-    local info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x payload=%u frames=%u",
-        packet_type_name(packet_type),
-        tostring(buffer(8, 8):uint64()),
-        buffer(0, 4):uint(),
-        buffer(4, 4):uint(),
-        payload_len,
-        frame_index)
-    if #frame_summaries > 0 then
+    local info
+    if packet_type == 0x07 then
+        if #frame_summaries > 0 then
+            info = string.format("%s pn=%s payload=%u", table.concat(frame_summaries, ", "),
+                tostring(buffer(8, 8):uint64()), payload_len)
+        else
+            info = string.format("%s pn=%s payload=%u", packet_type_name(packet_type),
+                tostring(buffer(8, 8):uint64()), payload_len)
+        end
+    else
+        info = string.format("%s pn=%s scid=0x%08x dcid=0x%08x payload=%u frames=%u",
+            packet_type_name(packet_type),
+            tostring(buffer(8, 8):uint64()),
+            buffer(0, 4):uint(),
+            buffer(4, 4):uint(),
+            payload_len,
+            frame_index)
+    end
+    if packet_type ~= 0x07 and #frame_summaries > 0 then
         info = info .. " " .. table.concat(frame_summaries, ", ")
     end
     pinfo.cols.info = info
