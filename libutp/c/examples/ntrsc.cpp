@@ -369,9 +369,9 @@ static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char*
     }
 #endif
     (void)fprintf(stdout,
-                  "ntrsc event=probe_started bind_address=%s bind_port=%" PRIu16
-                  " nat_address=%s resolved_address=%s nat_port=%" PRIu16 " phase_timeout_ms=%" PRIu32 "\n",
-                  bind_address, local_port, nat_address, nat_numeric_address, nat_port,
+                  "ntrsc [NAT Probe] bind=%s:%" PRIu16 " -> node=%s:%" PRIu16 " resolved=%s timeout_ms=%" PRIu32
+                  "\n",
+                  bind_address, local_port, nat_address, nat_port, nat_numeric_address,
                   probe_options.phase_timeout_ms == 0u ? 3000u : probe_options.phase_timeout_ms);
     status = utp_context_probe_nat(app.context, &probe_options, ntrsc_on_probe_complete, &app);
     if (status != UTP_STATUS_OK) {

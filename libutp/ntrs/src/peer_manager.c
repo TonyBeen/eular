@@ -235,7 +235,7 @@ static void utp_ntrs_peer_on_message(void* user_data, uint8_t type, const uint8_
             utp_ntrs_peer_schedule_close(peer);
             return;
         }
-        peer->manager->on_forward(peer->manager->user_data, &forward);
+        peer->manager->on_forward(peer->manager->user_data, &peer->remote, &forward);
         return;
     }
     utp_ntrs_peer_schedule_close(peer);

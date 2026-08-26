@@ -16,7 +16,8 @@ typedef struct utp_ntrs_peer_manager utp_ntrs_peer_manager_t;
 
 typedef void (*utp_ntrs_peer_failed_fn)(void* user_data, const utp_ntrs_node_instance_t* remote);
 typedef void (*utp_ntrs_peer_active_fn)(void* user_data, const utp_ntrs_node_instance_t* remote);
-typedef void (*utp_ntrs_peer_forward_fn)(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
+typedef void (*utp_ntrs_peer_forward_fn)(void* user_data, const utp_ntrs_node_instance_t* source,
+                                         const utp_ntrs_forward_binding_response_t* forward);
 
 /** @brief Node 间控制链路管理器的启动参数。 */
 typedef struct utp_ntrs_peer_manager_options {

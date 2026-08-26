@@ -469,41 +469,28 @@ static void utp_context_log_close(utp_context_t* context, const utp_context_conn
     utp_context_log(context, level, message);
 }
 
-/** @brief 返回 NAT 探测步骤的稳定英文标识，用于诊断日志。 */
+/** @brief 返回当前 Binding 请求要求的响应来源，用于诊断日志。 */
 static const char* utp_context_nat_step_name(uint8_t step)
 {
     switch (step) {
     case UTP_NAT_PROBE_STEP_PRIMARY_BINDING:
-        return "primary_binding";
+        return "[PrimaryBinding|ChangePort|ChangeIP]";
     case UTP_NAT_PROBE_STEP_ALTERNATE_BINDING:
-        return "alternate_binding";
+        return "[AlternateBinding|ChangePort]";
     default:
-        return "unknown";
-    }
-}
-
-/** @brief 说明 NAT 探测步骤要验证的网络行为。 */
-static const char* utp_context_nat_step_purpose(uint8_t step)
-{
-    switch (step) {
-    case UTP_NAT_PROBE_STEP_PRIMARY_BINDING:
-        return "discover the public mapping and request replies from alternate port and IP";
-    case UTP_NAT_PROBE_STEP_ALTERNATE_BINDING:
-        return "compare the public mapping through the alternate server";
-    default:
-        return "unknown";
+        return "[Unknown]";
     }
 }
 
 static const char* utp_context_nat_response_source_name(uint8_t change_flags)
 {
     if (change_flags == UTP_NAT_PROBE_CHANGE_PORT) {
-        return "change_port";
+        return "ChangePort";
     }
     if (change_flags == UTP_NAT_PROBE_CHANGE_BOTH) {
-        return "change_ip_port";
+        return "ChangePort|ChangeIP";
     }
-    return "primary";
+    return "Probe";
 }
 
 /** @brief 输出单个 NAT endpoint；仅在 debug 日志启用时执行格式化。 */
@@ -519,8 +506,8 @@ static void utp_context_log_nat_endpoint(utp_context_t* context, const char* eve
     if (utp_address_format(endpoint, address, sizeof(address)) != UTP_INTERNAL_ERROR_OK) {
         return;
     }
-    (void)snprintf(message, sizeof(message), "nat probe %s: step=%s, request_to=%s:%" PRIu16 ", packet_number=%" PRIu64,
-                   event, utp_context_nat_step_name(step), address, endpoint->port, packet_number);
+    (void)snprintf(message, sizeof(message), "NAT %s [%s] -> %s:%" PRIu16 " pn=%" PRIu64,
+                   utp_context_nat_step_name(step), event, address, endpoint->port, packet_number);
     utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
 }
 
@@ -559,13 +546,12 @@ static void utp_context_log_nat_response(utp_context_t* context, uint8_t step, c
     }
     utp_context_format_nat_local(local, local_address, local_ifname);
     (void)snprintf(message, sizeof(message),
-                   "nat probe response accepted: step=%s, response_source=%s, response_from=%s:%" PRIu16
-                   ", observed_public_address=%s:%" PRIu16 ", received_on=%s:%" PRIu16
-                   ", interface=%s, ifindex=%" PRIu32 ", packet_number=%" PRIu64 ", rtt_us=%" PRIu64 ", alternate=%u",
-                   utp_context_nat_step_name(step), utp_context_nat_response_source_name(response->change_flags),
-                   peer_address, peer->port, mapped_address, response->mapped.port, local_address,
-                   local == NULL ? 0u : local->port, local_ifname, local == NULL ? 0u : local->scope_id, packet_number,
-                   rtt_us, response->has_alternate ? 1u : 0u);
+                   "NAT %s <- %s:%" PRIu16 " [BindingResponse|%s] mapped=%s:%" PRIu16 " recv=%s:%" PRIu16
+                   " if=%s ifindex=%" PRIu32 " pn=%" PRIu64 " rtt_us=%" PRIu64 " alternate=%u",
+                   utp_context_nat_step_name(step), peer_address, peer->port,
+                   utp_context_nat_response_source_name(response->change_flags), mapped_address, response->mapped.port,
+                   local_address, local == NULL ? 0u : local->port, local_ifname, local == NULL ? 0u : local->scope_id,
+                   packet_number, rtt_us, response->has_alternate ? 1u : 0u);
     utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
 }
 
@@ -585,8 +571,8 @@ static void utp_context_log_nat_response_rejected(utp_context_t* context, uint8_
     }
     utp_context_format_nat_local(local, local_address, local_ifname);
     (void)snprintf(message, sizeof(message),
-                   "nat probe response ignored: current_step=%s, response_from=%s:%" PRIu16 ", received_on=%s:%" PRIu16
-                   ", interface=%s, ifindex=%" PRIu32 ", packet_number=%" PRIu64 ", reason=%s",
+                   "NAT %s <- %s:%" PRIu16 " ignored recv=%s:%" PRIu16 " if=%s ifindex=%" PRIu32 " pn=%" PRIu64
+                   " reason=%s",
                    utp_context_nat_step_name(step), peer_address, peer->port, local_address,
                    local == NULL ? 0u : local->port, local_ifname, local == NULL ? 0u : local->scope_id, packet_number,
                    reason);
@@ -1491,8 +1477,7 @@ static void utp_context_finish_nat_probe(utp_context_t* context, utp_status_t st
             char message[256];
 
             (void)snprintf(message, sizeof(message),
-                           "nat probe completed: primary_responses=%" PRIu8 ", secondary_responses=%" PRIu8
-                           ", change_port=%u, change_ip_port=%u, class=%u",
+                           "NAT complete primary=%" PRIu8 " alternate=%" PRIu8 " change_port=%u change_ip=%u class=%u",
                            task->primary_response_count, task->secondary_response_count,
                            task->change_port_succeeded ? 1u : 0u, task->change_ip_port_succeeded ? 1u : 0u,
                            (uint32_t)task->result.nat_class);
@@ -1564,7 +1549,7 @@ static utp_internal_error_t utp_context_send_nat_probe_batch(utp_context_t* cont
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-        utp_context_log_nat_endpoint(context, "request sent", task->step, target, packet_number);
+        utp_context_log_nat_endpoint(context, "BindingRequest", task->step, target, packet_number);
         task->records[task->record_count].packet_number = packet_number;
         task->records[task->record_count].sent_at_us    = now_us;
         for (size_t index = 0u; index < sizeof(token); ++index) {
@@ -1598,8 +1583,8 @@ static utp_internal_error_t utp_context_start_nat_step(utp_context_t* context, u
     if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
         char message[320];
 
-        (void)snprintf(message, sizeof(message), "nat probe step started: step=%s, purpose=%s, timeout_ms=%" PRIu32,
-                       utp_context_nat_step_name(step), utp_context_nat_step_purpose(step), task->phase_timeout_ms);
+        (void)snprintf(message, sizeof(message), "NAT %s start timeout_ms=%" PRIu32,
+                       utp_context_nat_step_name(step), task->phase_timeout_ms);
         utp_context_log(context, UTP_LOG_LEVEL_DEBUG, message);
     }
     return utp_context_send_nat_probe_batch(context, now_us);
@@ -1833,8 +1818,7 @@ static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* c
         if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
             char message[192];
 
-            (void)snprintf(message, sizeof(message),
-                           "nat probe step timed out: step=%s, sent_rounds=%" PRIu8 ", responses=%" PRIu8,
+            (void)snprintf(message, sizeof(message), "NAT %s timeout rounds=%" PRIu8 " responses=%" PRIu8,
                            utp_context_nat_step_name(task->step), task->round,
                            task->step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING ? task->primary_response_count
                                                                             : task->secondary_response_count);
