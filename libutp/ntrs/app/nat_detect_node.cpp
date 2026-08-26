@@ -234,7 +234,7 @@ static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forwa
 
     if (!utp_ntrs_peer_manager_send_forward(node->peers, &forward->target, forward)) {
         (void)fprintf(stderr,
-                      "nat_detect_node %s <- client=%s; %s -> node=%s [ForwardBindingResponse] pn=%llu "
+                      "%s <- Node=%s; Node=%s -> Node=%s [ForwardBindingResponse] pn=%llu "
                       "failed=peer_unavailable\n",
                       nat_detect_node_binding_label(forward->step),
                       utp_ntrs_endpoint_format(&forward->client, client, sizeof(client)),
@@ -243,7 +243,7 @@ static void nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forwa
         return;
     }
     (void)fprintf(stderr,
-                  "nat_detect_node %s <- client=%s; %s -> node=%s [ForwardBindingResponse] pn=%llu\n",
+                  "%s <- Node=%s; Node=%s -> Node=%s [ForwardBindingResponse] pn=%llu\n",
                   nat_detect_node_binding_label(forward->step),
                   utp_ntrs_endpoint_format(&forward->client, client, sizeof(client)),
                   nat_detect_node_instance(&node->registration.instance, local),

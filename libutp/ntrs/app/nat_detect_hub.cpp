@@ -169,7 +169,7 @@ static bool nat_detect_hub_session_send_assignment(nat_detect_hub_session_t* ses
 
         (void)fprintf(
             stderr,
-            "nat_detect_hub -> node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
+            "Hub -> Node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
             nat_detect_hub_session_instance(session, node), (uint32_t)family, (unsigned long long)assignment.version,
             assignment.has_primary
                 ? nat_detect_hub_node_id(&assignment.primary, primary)
@@ -333,7 +333,7 @@ static void nat_detect_hub_session_on_message(void* user_data, uint8_t type, con
             char backup[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
             (void)fprintf(stderr,
-                          "nat_detect_hub -> node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
+                          "Hub -> Node=%s [Assignment] family=%u version=%llu primary=%s backup=%s\n",
                           nat_detect_hub_session_instance(session, node), (uint32_t)assignment.family,
                           (unsigned long long)assignment.version,
                           assignment.has_primary
