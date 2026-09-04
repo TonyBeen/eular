@@ -291,11 +291,12 @@ int main(int argc, char** argv)
         utp_context_set_on_connected(client->context, concurrent_connection_on_client_connected, client);
         utp_context_set_on_connect_error(client->context, concurrent_connection_on_connect_error, client);
         utp_context_set_on_connection_error(client->context, concurrent_connection_on_connection_error, client);
-        connect_options.address    = "127.0.0.1";
-        connect_options.port       = server_port;
-        connect_options.timeout_ms = 3000u;
-        connect_options.retries    = 5;
-        connect_options.encryption = test.encryption;
+        connect_options.address        = "127.0.0.1";
+        connect_options.target_peer_id = "test";
+        connect_options.port           = server_port;
+        connect_options.timeout_ms     = 3000u;
+        connect_options.retries        = 5;
+        connect_options.encryption     = test.encryption;
         if (utp_context_connect(client->context, &connect_options) != UTP_STATUS_OK) {
             fprintf(stderr, "client %" PRIu32 " connect start failed\n", index);
             goto cleanup;

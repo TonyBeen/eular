@@ -8,6 +8,10 @@
 #include "connection/connection.h"
 #include "context/context.h"
 #include "proto/frame.h"
+#include "proto/proto.h"
+#include "rendezvous/rendezvous.h"
+#include "socket/address.h"
+#include "socket/udp.h"
 
 #if defined(__APPLE__)
 #include <net/if.h>
@@ -41,6 +45,13 @@ typedef struct public_api_probe {
     uint8_t               session_token[256u];
     size_t                session_token_length;
 } public_api_probe_t;
+
+typedef struct ntrs_registration_probe {
+    int32_t        registered_count;
+    utp_context_t* context;
+    char           peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];
+    utp_endpoint_t endpoint;
+} ntrs_registration_probe_t;
 
 static int32_t         test_log_count;
 static utp_log_level_t test_log_level;
@@ -145,6 +156,19 @@ static void test_on_connect_error(utp_status_t status, const char* message, cons
     probe->last_connect_retries    = attempt->retries;
 }
 
+static void test_on_ntrs_registered(utp_context_t* context, const utp_ntrs_registered_info_t* info, void* user_data)
+{
+    ntrs_registration_probe_t* probe = user_data;
+
+    assert(context != NULL);
+    assert(info != NULL);
+    assert(info->peer_id != NULL);
+    ++probe->registered_count;
+    probe->context  = context;
+    probe->endpoint = info->ntrs_endpoint;
+    (void)snprintf(probe->peer_id, sizeof(probe->peer_id), "%s", info->peer_id);
+}
+
 static void pump_event_loop(struct event_base* event_base, int32_t iterations)
 {
     int32_t index;
@@ -207,9 +231,10 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     utp_context_set_on_connection_error(client, test_on_connection_error, &client_probe);
     utp_context_set_on_connection_error(server, test_on_connection_error, &server_probe);
 
-    connect_options.address    = "127.0.0.1";
-    connect_options.port       = server_port;
-    connect_options.encryption = encryption;
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "test";
+    connect_options.port           = server_port;
+    connect_options.encryption     = encryption;
     assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
     pump_event_loop(event_base, 8);
     assert(server_probe.new_connection_count == 1);
@@ -336,8 +361,9 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
     utp_context_set_on_connected(server, test_on_connected, &server_probe);
     utp_context_set_on_connected(first_client, test_on_connected, &first_probe);
-    connect.address = "127.0.0.1";
-    connect.port    = port;
+    connect.address        = "127.0.0.1";
+    connect.target_peer_id = "test";
+    connect.port           = port;
     assert(utp_context_connect(first_client, &connect) == UTP_STATUS_OK);
     pump_event_loop(event_base, 8);
     pump_event_loop(event_base, 20);
@@ -350,6 +376,7 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     assert(utp_context_bind(early_client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
     utp_context_set_on_connected(early_client, test_on_connected, &early_probe);
     early.address            = "127.0.0.1";
+    early.target_peer_id     = "test";
     early.port               = port;
     early.session_token      = token;
     early.session_token_size = token_length;
@@ -435,9 +462,10 @@ static void test_encrypted_zero_rtt(struct event_base* event_base)
     utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
     utp_context_set_on_connected(server, test_on_connected, &server_probe);
     utp_context_set_on_connected(first_client, test_on_connected, &first_probe);
-    connect.address    = "127.0.0.1";
-    connect.port       = port;
-    connect.encryption = UTP_ENCRYPTION_AES_GCM_128;
+    connect.address        = "127.0.0.1";
+    connect.target_peer_id = "test";
+    connect.port           = port;
+    connect.encryption     = UTP_ENCRYPTION_AES_GCM_128;
     assert(utp_context_connect(first_client, &connect) == UTP_STATUS_OK);
     pump_event_loop(event_base, 32);
     assert(first_probe.connected_connection != NULL);
@@ -448,6 +476,7 @@ static void test_encrypted_zero_rtt(struct event_base* event_base)
     assert(utp_context_bind(early_client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
     utp_context_set_on_connected(early_client, test_on_connected, &early_probe);
     early.address            = "127.0.0.1";
+    early.target_peer_id     = "test";
     early.port               = port;
     early.session_token      = token;
     early.session_token_size = token_length;
@@ -511,8 +540,9 @@ static void test_congestion_algorithm_selection(struct event_base* event_base)
     utp_context_set_on_connected(client, test_on_connected, &client_probe);
     utp_context_set_on_connected(server, test_on_connected, &server_probe);
     utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
-    connect_options.address = "127.0.0.1";
-    connect_options.port    = server_port;
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "test";
+    connect_options.port           = server_port;
     assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
     pump_event_loop(event_base, 16);
     assert(client_probe.connected_connection != NULL);
@@ -649,7 +679,8 @@ int main(void)
         assert(many_context->pending_incoming.max_entries == many_options.pending_incoming_limit);
         assert(many_context->pending_incoming_by_peer.max_entries == many_options.pending_incoming_limit);
         assert(many_context->packet_in_pool.max_free_capacity == many_options.packet_in_max_free);
-        connect.address = "127.0.0.1";
+        connect.address        = "127.0.0.1";
+        connect.target_peer_id = "test";
         for (uint32_t index = 0u; index < connection_count; ++index) {
             connect.port = (uint16_t)(10000u + index);
             assert(utp_context_connect(many_context, &connect) == UTP_STATUS_OK);
@@ -704,10 +735,14 @@ int main(void)
         utp_context_set_on_connection_error(client, test_on_connection_error, &client_probe);
         utp_context_set_on_connection_error(server, test_on_connection_error, &server_probe);
 
-        connect_options.address    = "127.0.0.1";
-        connect_options.port       = server_port;
-        connect_options.timeout_ms = 3000u;
-        connect_options.encryption = UTP_ENCRYPTION_NONE;
+        connect_options.address = "127.0.0.1";
+        connect_options.port    = server_port;
+        assert(utp_context_connect(client, &connect_options) == UTP_STATUS_INVALID_ARGUMENT);
+        connect_options.address        = "127.0.0.1";
+        connect_options.target_peer_id = "test";
+        connect_options.port           = server_port;
+        connect_options.timeout_ms     = 3000u;
+        connect_options.encryption     = UTP_ENCRYPTION_NONE;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
         pump_event_loop(event_base, 8);
         assert(server_probe.new_connection_count == 1);
@@ -779,8 +814,9 @@ int main(void)
         assert(utp_context_bind(client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
         assert(utp_context_bind(server, "127.0.0.1", 0u, NULL, &server_port) == UTP_STATUS_OK);
         utp_context_set_on_new_connection(server, test_on_new_connection_without_accept, &server_probe);
-        connect_options.address = "127.0.0.1";
-        connect_options.port    = server_port;
+        connect_options.address        = "127.0.0.1";
+        connect_options.target_peer_id = "test";
+        connect_options.port           = server_port;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
         pump_event_loop(event_base, 8);
         assert(server_probe.new_connection_count == 1);
@@ -815,8 +851,9 @@ int main(void)
         utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
         utp_context_set_on_connection_error(server, test_on_connection_error, &server_probe);
 
-        connect_options.address = "127.0.0.1";
-        connect_options.port    = server_port;
+        connect_options.address        = "127.0.0.1";
+        connect_options.target_peer_id = "test";
+        connect_options.port           = server_port;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
         pump_event_loop(event_base, 8);
         pump_event_loop(event_base, 16);
@@ -885,10 +922,11 @@ int main(void)
         assert(server_port != 0u);
         utp_context_set_on_connect_error(client, test_on_connect_error, &client_probe);
 
-        connect_options.address    = "127.0.0.1";
-        connect_options.port       = server_port;
-        connect_options.timeout_ms = 1u;
-        connect_options.retries    = 1;
+        connect_options.address        = "127.0.0.1";
+        connect_options.target_peer_id = "test";
+        connect_options.port           = server_port;
+        connect_options.timeout_ms     = 1u;
+        connect_options.retries        = 1;
         assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
         // 两次 1ms deadline 会与 server 的 UDP 读事件交错；不能依赖 Context 内部扫描耗时凑够轮次。
         for (int32_t retry = 0; retry < 16 && client_probe.connect_error_count == 0; ++retry) {
@@ -900,6 +938,100 @@ int main(void)
         assert(client_probe.last_connect_retries == 1);
         utp_context_destroy(server);
         utp_context_destroy(client);
+    }
+    {
+        utp_context_options_t       ntrs_context_options = UTP_CONTEXT_OPTIONS_INIT;
+        utp_ntrs_register_options_t register_options     = UTP_NTRS_REGISTER_OPTIONS_INIT;
+        utp_context_t*              ntrs_context         = NULL;
+        ntrs_registration_probe_t   probe                = {0};
+        utp_udp_socket_t            ntrs_socket;
+        utp_address_t               ntrs_requested;
+        utp_address_t               ntrs_local;
+        utp_address_t               client_peer;
+        uint8_t                     packet[512u];
+        uint8_t                     response[512u];
+        uint8_t                     response_body[128u];
+        size_t                      packet_length   = 0u;
+        size_t                      response_length = 0u;
+        size_t                      response_body_length;
+        utp_packet_view_t           packet_view;
+        utp_frame_rendezvous_t      frame;
+        utp_rendezvous_register_t   registration;
+        utp_rendezvous_registered_t registered = {0};
+        utp_packet_header_t         response_header;
+        size_t                      sent_length = 0u;
+        utp_internal_error_t        receive_error;
+        const struct timeval        retry_delay = {0, 1000};
+
+        ntrs_context_options.event_base = event_base;
+        ntrs_context_options.peer_id    = "ntrs-public-api-test";
+        assert(utp_context_create(&ntrs_context_options, &ntrs_context) == UTP_STATUS_OK);
+        assert(utp_context_bind(ntrs_context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+        assert(utp_address_parse(&ntrs_requested, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
+        utp_udp_socket_init(&ntrs_socket);
+        assert(utp_udp_socket_open(&ntrs_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_udp_socket_bind(&ntrs_socket, &ntrs_requested, NULL, &ntrs_local) == UTP_INTERNAL_ERROR_OK);
+
+        register_options.ntrs_address = "127.0.0.1";
+        register_options.ntrs_port    = ntrs_local.port;
+        register_options.timeout_ms   = 100u;
+        register_options.retries      = 0u;
+        assert(utp_context_register_ntrs(ntrs_context, &register_options, test_on_ntrs_registered, &probe) ==
+               UTP_STATUS_OK);
+        receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+        for (uint8_t attempt = 0u; attempt < 10u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+            receive_error =
+                utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+            if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                assert(event_base_loopexit(event_base, &retry_delay) == 0);
+                assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+            }
+        }
+        assert(receive_error == UTP_INTERNAL_ERROR_OK);
+        assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+        assert(packet_view.header.type == UTP_PACKET_TYPE_RENDEZVOUS);
+        assert(packet_view.header.scid == 0u);
+        assert(packet_view.header.dcid == 0u);
+        assert(packet_view.payload_length != 0u);
+        assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER);
+        assert(utp_rendezvous_register_decode(&registration, frame.payload, frame.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(registration.peer_id_length == strlen(ntrs_context_options.peer_id));
+        assert(memcmp(registration.peer_id, ntrs_context_options.peer_id, registration.peer_id_length) == 0);
+        assert(registration.registration_token[0] == 0u);
+
+        registered.registration_request_id = registration.registration_request_id;
+        for (size_t index = 0u; index < sizeof(registered.registration_token); ++index) {
+            registered.registration_token[index] = (uint8_t)(index + 1u);
+        }
+        assert(utp_rendezvous_registered_encode(response_body, sizeof(response_body), &registered,
+                                                &response_body_length) == UTP_INTERNAL_ERROR_OK);
+        response_header = (utp_packet_header_t){0u,
+                                                0u,
+                                                UINT64_C(7),
+                                                (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
+                                                UTP_PACKET_TYPE_RENDEZVOUS,
+                                                0u};
+        assert(utp_proto_encode_header(response, sizeof(response), &response_header) == UTP_INTERNAL_ERROR_OK);
+        frame =
+            (utp_frame_rendezvous_t){response_body, (uint16_t)response_body_length, UTP_RENDEZVOUS_MESSAGE_REGISTERED};
+        assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                           &frame) == UTP_INTERNAL_ERROR_OK);
+        response_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length;
+        assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(sent_length == response_length);
+        pump_event_loop(event_base, 4);
+        assert(probe.registered_count == 1);
+        assert(probe.context == ntrs_context);
+        assert(strcmp(probe.peer_id, ntrs_context_options.peer_id) == 0);
+        assert(probe.endpoint.family == 4u);
+        assert(probe.endpoint.port == ntrs_local.port);
+
+        utp_udp_socket_close(&ntrs_socket);
+        utp_context_destroy(ntrs_context);
     }
     event_base_free(event_base);
     assert(utp_version() != NULL);

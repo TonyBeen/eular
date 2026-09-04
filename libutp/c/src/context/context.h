@@ -9,6 +9,7 @@
 #include "mtu/mtu.h"
 #include "nat/nat.h"
 #include "proto/packet_in.h"
+#include "rendezvous/rendezvous.h"
 #include "socket/udp.h"
 #include "util/hash.h"
 #include "util/log.h"
@@ -25,6 +26,35 @@
 #define UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE \
     (UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE + UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE)
 #define UTP_CONTEXT_NAT_RESULT_LIFETIME_US UINT64_C(300000000)
+#define UTP_CONTEXT_NTRS_PACKET_CAPACITY   512u
+#define UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY \
+    (UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + 8u)
+
+typedef struct utp_context_ntrs_registration {
+    utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
+    utp_on_ntrs_registered_fn callback;   // 注册成功回调
+    void*                     user_data;  // 回调用户数据
+    uint8_t                   registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    uint8_t                   packet[UTP_CONTEXT_NTRS_PACKET_CAPACITY];  // REGISTER 逻辑包及其重传副本
+    uint8_t                   calibration_packets[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]
+                               [UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY];  // 各 calibration PING 的重传副本
+    utp_address_t calibration_endpoints[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
+    uint64_t      request_id;     // REGISTER 幂等键
+    uint64_t      packet_number;  // 本逻辑包的 Context 级包号
+    uint64_t      calibration_packet_numbers[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
+    uint64_t      deadline_us;              // 当前等待 REGISTERED 的截止时刻
+    uint64_t      calibration_deadline_us;  // 当前 calibration PONG 等待截止时刻
+    size_t        packet_length;            // 完整 UTP 包长度
+    uint8_t       calibration_packet_lengths[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
+    uint32_t      timeout_ms;                      // 本轮等待时限
+    uint8_t       retries_remaining;               // 尚可重传次数
+    uint8_t       calibration_pending_mask;        // 等待 PONG 的 endpoint 位图
+    uint8_t       calibration_write_pending_mask;  // 尚未写入内核的 endpoint 位图
+    bool          pending : 1;                     // 正在等待 REGISTERED
+    bool          registered : 1;                  // 已获得当前 token
+    bool          write_pending : 1;               // UDP 暂不可写，等待 writable 事件
+    bool          calibration_active : 1;          // REGISTERED 后正在收集 calibration PONG
+} utp_context_ntrs_registration_t;
 
 typedef struct utp_context_zero_rtt_replay_entry {
     utp_hash_node_t node;                                       // 按重放键索引的哈希节点
@@ -50,28 +80,31 @@ typedef struct utp_context_connection_slot {
     uint64_t                   zero_rtt_amplification_tx_bytes;    // 0-RTT 防放大已发送字节
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
-    uint8_t*                   zero_rtt_early_data;            // 主动 0-RTT 重传期间持有的早期流数据
-    size_t                     zero_rtt_early_data_size;       // 缓存早期数据长度
-    uint64_t                   zero_rtt_expires_at_seconds;    // 票据绝对过期时间
-    utp_status_t               terminal_error_status;          // 待投递的本地终止错误
-    const char*                terminal_error_reason;          // 待投递错误原因，只借用静态字符串
-    size_t                     terminal_error_reason_length;   // 待投递错误原因长度
-    int8_t                     connect_retries_remaining;      // 主动连接剩余重试次数
-    uint8_t                    zero_rtt_response_retries;      // 0-RTT 响应已重试次数
-    uint8_t                    zero_rtt_encryption_mode;       // 票据指定加密模式
-    bool                       zero_rtt_early_fin : 1;         // 早期流数据是否带 FIN
-    bool                       zero_rtt_awaiting_accept : 1;   // 是否等待 on_new_connection 决策
-    bool                       zero_rtt_accepted : 1;          // 应用是否已接受 0-RTT
-    bool                       zero_rtt_response_active : 1;   // 是否维护 0-RTT 响应重传状态
-    bool                       zero_rtt_response_queued : 1;   // HANDSHAKE_DONE 是否已排队
-    bool                       zero_rtt_response_sent : 1;     // HANDSHAKE_DONE 是否已实际发送
-    bool                       zero_rtt_early_delivered : 1;   // 是否已将早数据投递给流
-    bool                       used : 1;                       // 槽位是否正在使用
-    bool                       connected_reported : 1;         // 是否已调用 on_connected
-    bool                       connection_error_reported : 1;  // 是否已调用 connection error 回调
-    bool                       connect_pending : 1;            // 是否有主动连接等待完成
-    bool                       terminal_error_queued : 1;      // 是否已进入延迟终止事件队列
-    bool                       terminal_error_suppressed : 1;  // 本地 close 是否取消该错误回调
+    uint8_t                    rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];        // 主动连接的 rendezvous 幂等键
+    char                       target_peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 主动连接复制的目标路由标识
+    uint8_t*                   zero_rtt_early_data;                          // 主动 0-RTT 重传期间持有的早期流数据
+    size_t                     zero_rtt_early_data_size;                     // 缓存早期数据长度
+    uint64_t                   zero_rtt_expires_at_seconds;                  // 票据绝对过期时间
+    utp_status_t               terminal_error_status;                        // 待投递的本地终止错误
+    const char*                terminal_error_reason;                        // 待投递错误原因，只借用静态字符串
+    size_t                     terminal_error_reason_length;                 // 待投递错误原因长度
+    int8_t                     connect_retries_remaining;                    // 主动连接剩余重试次数
+    uint8_t                    zero_rtt_response_retries;                    // 0-RTT 响应已重试次数
+    uint8_t                    zero_rtt_encryption_mode;                     // 票据指定加密模式
+    uint8_t                    target_peer_id_length;                        // target_peer_id 的有效字节数
+    bool                       zero_rtt_early_fin : 1;                       // 早期流数据是否带 FIN
+    bool                       zero_rtt_awaiting_accept : 1;                 // 是否等待 on_new_connection 决策
+    bool                       zero_rtt_accepted : 1;                        // 应用是否已接受 0-RTT
+    bool                       zero_rtt_response_active : 1;                 // 是否维护 0-RTT 响应重传状态
+    bool                       zero_rtt_response_queued : 1;                 // HANDSHAKE_DONE 是否已排队
+    bool                       zero_rtt_response_sent : 1;                   // HANDSHAKE_DONE 是否已实际发送
+    bool                       zero_rtt_early_delivered : 1;                 // 是否已将早数据投递给流
+    bool                       used : 1;                                     // 槽位是否正在使用
+    bool                       connected_reported : 1;                       // 是否已调用 on_connected
+    bool                       connection_error_reported : 1;                // 是否已调用 connection error 回调
+    bool                       connect_pending : 1;                          // 是否有主动连接等待完成
+    bool                       terminal_error_queued : 1;                    // 是否已进入延迟终止事件队列
+    bool                       terminal_error_suppressed : 1;                // 本地 close 是否取消该错误回调
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
@@ -104,8 +137,11 @@ struct utp_context {
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
     uint32_t                                 next_cid;                         // 下一个自动分配 CID
     uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
+    uint64_t                                 next_rendezvous_packet_number;    // Context 半连接包号命名空间
+    utp_address_t                            local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 已知本地候选地址
     char                                     peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识
     uint8_t                                  peer_id_length;                        // peer_id 的有效字节数
+    uint8_t                                  local_candidate_count;                 // local_candidates 的有效项数
     utp_stream_scheduler_mode_t              stream_scheduler_mode;                 // 新连接默认流调度策略
     utp_congestion_algorithm_t               cc_algorithm;                          // 新连接默认拥塞算法
     uint32_t                                 clock_granularity_us;                  // pacer 时钟粒度
@@ -121,6 +157,7 @@ struct utp_context {
     uint32_t                                 path_validation_buffer_capacity;      // 新连接候选路径缓存上限(bytes)
     utp_nat_probe_task_t                     nat_probe;                            // 当前 NAT 探测任务
     utp_nat_probe_result_t                   nat_result;                           // 最近一次完成的 NAT 探测缓存
+    utp_context_ntrs_registration_t          ntrs_registration;                    // Context 到单个 NTRS 的半连接注册
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔

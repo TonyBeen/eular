@@ -40,18 +40,20 @@ typedef struct utp_endpoint {
 } utp_endpoint_t;
 
 typedef struct utp_connect_options {
-    const char*           address;     // 对端 IP 文本地址
-    uint16_t              port;        // 对端端口号
-    uint32_t              timeout_ms;  // 单次握手超时，单位 ms
-    int8_t                retries;     // 超时后的额外重试次数
-    utp_encryption_mode_t encryption;  // 本次连接使用的加密模式
+    const char*           address;         // 对端 IP 文本地址
+    const char*           target_peer_id;  // 目标 Context 路由标识，必须为 1..128 字节的字符串
+    uint16_t              port;            // 对端端口号
+    uint32_t              timeout_ms;      // 单次握手超时，单位 ms
+    int8_t                retries;         // 超时后的额外重试次数
+    utp_encryption_mode_t encryption;      // 本次连接使用的加密模式
 } utp_connect_options_t;
 
 // 主动连接配置的完整默认值。
-#define UTP_CONNECT_OPTIONS_INIT {NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
+#define UTP_CONNECT_OPTIONS_INIT {NULL, NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
 
 typedef struct utp_connect_0rtt_options {
     const char*    address;             // 对端 IP 文本地址
+    const char*    target_peer_id;      // 目标 Context 路由标识，必须为 1..128 字节的字符串
     uint16_t       port;                // 对端端口号
     uint32_t       timeout_ms;          // 单次握手超时，单位 ms
     int8_t         retries;             // 超时后的额外重试次数
@@ -63,7 +65,7 @@ typedef struct utp_connect_0rtt_options {
 } utp_connect_0rtt_options_t;
 
 // early_data 可被网络重放，调用方只能放入幂等或自行去重的应用数据。
-#define UTP_CONNECT_0RTT_OPTIONS_INIT {NULL, 0u, 3000u, 0, NULL, 0u, NULL, 0u, false}
+#define UTP_CONNECT_0RTT_OPTIONS_INIT {NULL, NULL, 0u, 3000u, 0, NULL, 0u, NULL, 0u, false}
 
 typedef struct utp_new_connection_info {
     utp_endpoint_t        remote;      // 已验证的对端地址
@@ -102,6 +104,23 @@ typedef struct utp_connection_error_info {
 typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const utp_connection_error_info_t* info,
                                            void* user_data);
 
+typedef struct utp_ntrs_register_options {
+    const char* ntrs_address;  // NTRS IP 文本地址，仅在调用期间借用
+    uint16_t    ntrs_port;     // NTRS UDP 端口
+    uint32_t    timeout_ms;    // 首次等待 REGISTERED 的时限，0 时采用 1000 ms
+    uint8_t     retries;       // REGISTERED 丢失后的额外重试次数，0 时不重试
+} utp_ntrs_register_options_t;
+
+#define UTP_NTRS_REGISTER_OPTIONS_INIT {NULL, 0u, 0u, 3u}
+
+typedef struct utp_ntrs_registered_info {
+    const char*    peer_id;        // 仅回调期间借用，等于 Context 创建时的 peer_id
+    utp_endpoint_t ntrs_endpoint;  // 实际返回 REGISTERED 的 NTRS endpoint
+} utp_ntrs_registered_info_t;
+
+typedef void (*utp_on_ntrs_registered_fn)(utp_context_t* context, const utp_ntrs_registered_info_t* info,
+                                          void* user_data);
+
 /** @brief 返回当前链接的 C 库语义版本字符串。 */
 const char*  utp_version(void);
 /** @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。 */
@@ -130,6 +149,9 @@ void utp_context_set_resumption_key(utp_context_t* context, const uint8_t root_k
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 /** @brief 基于会话票据发起非加密 0-RTT 建连；早数据固定写入客户端首个双向流，可能被重放。 */
 utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_0rtt_options_t* options);
+/** @brief 异步注册当前 Context 到 NTRS；成功时调用 @p callback，重复调用会更新已有注册。 */
+utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
+                                       utp_on_ntrs_registered_fn callback, void* user_data);
 /** @brief 接受一个已通过 on_new_connection 回调的 pending 被动连接。 */
 utp_status_t utp_context_accept(utp_context_t* context);
 

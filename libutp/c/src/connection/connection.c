@@ -7,6 +7,7 @@
 
 #include "context/context.h"
 #include "mtu/mtu.h"
+#include "rendezvous/rendezvous.h"
 #include "util/allocator.h"
 
 // 协议帧调度策略
@@ -4020,6 +4021,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
     bool                 peer_close;
     bool                 has_handshake_delay;
     bool                 transport_params_seen;
+    bool                 rendezvous_seen;
     uint32_t             handshake_delay_us;
 
     if (connection == NULL || packet == NULL || peer == NULL || now_us == 0u || wire_packet_length < packet_length) {
@@ -4129,10 +4131,12 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
     ack_progress          = false;
     peer_close            = false;
     transport_params_seen = false;
+    rendezvous_seen       = false;
     while (offset < view.payload_length) {
         const uint8_t* frame;
         uint8_t        frame_type;
         size_t         frame_length;
+        const size_t   frame_offset = offset;
 
         error = utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length);
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -4161,7 +4165,24 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
             continue;
         }
-        if (frame_type == UTP_FRAME_TYPE_ACK) {
+        if (frame_type == UTP_FRAME_TYPE_RENDEZVOUS) {
+            utp_frame_rendezvous_t rendezvous;
+            uint8_t                rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
+
+            if ((view.header.type != UTP_PACKET_TYPE_INITIAL && view.header.type != UTP_PACKET_TYPE_0RTT) ||
+                rendezvous_seen || frame_offset != 0u) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            error = utp_frame_rendezvous_decode(&rendezvous, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK || (rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                                                   rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) ||
+                (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_INTRODUCTION &&
+                 utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload,
+                                                     rendezvous.payload_length) != UTP_INTERNAL_ERROR_OK)) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
+            rendezvous_seen = true;
+        } else if (frame_type == UTP_FRAME_TYPE_ACK) {
             utp_ack_range_t               ranges[UTP_CONNECTION_MAX_RECEIVE_RANGES];
             utp_ack_info_t                ack = {0u, 0u, ranges, 0u, UTP_CONNECTION_MAX_RECEIVE_RANGES};
             utp_send_control_ack_result_t result;

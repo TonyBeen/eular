@@ -571,11 +571,12 @@ int main(int argc, char** argv)
     utp_context_set_on_connected(context, echo_client_connected, &app);
     utp_context_set_on_connect_error(context, echo_client_connect_error, &app);
     utp_context_set_on_connection_error(context, echo_client_connection_error, &app);
-    connect_options.address    = server_ip;
-    connect_options.port       = server_port;
-    connect_options.timeout_ms = 3000u;
-    connect_options.retries    = 0;
-    connect_options.encryption = encryption;
+    connect_options.address        = server_ip;
+    connect_options.target_peer_id = "echo-server";
+    connect_options.port           = server_port;
+    connect_options.timeout_ms     = 3000u;
+    connect_options.retries        = 0;
+    connect_options.encryption     = encryption;
     if (utp_context_connect(context, &connect_options) != UTP_STATUS_OK) {
         echo_client_fail(&app, "connect_start_failed");
     } else {

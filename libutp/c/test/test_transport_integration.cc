@@ -623,11 +623,12 @@ static void transport_pair_init_with_options(transport_pair* pair, relay_rule ru
     utp_context_set_on_new_connection(pair->server, on_new_connection, &pair->server_probe);
     utp_context_set_on_connection_error(pair->client, on_connection_error, &pair->client_probe);
     utp_context_set_on_connection_error(pair->server, on_connection_error, &pair->server_probe);
-    connect_options.address    = "127.0.0.1";
-    connect_options.port       = pair->relay.address.port;
-    connect_options.timeout_ms = 10u;
-    connect_options.retries    = 3;
-    connect_options.encryption = encryption;
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "test";
+    connect_options.port           = pair->relay.address.port;
+    connect_options.timeout_ms     = 10u;
+    connect_options.retries        = 3;
+    connect_options.encryption     = encryption;
     REQUIRE(utp_context_connect(pair->client, &connect_options) == UTP_STATUS_OK);
 }
 
@@ -735,11 +736,12 @@ TEST_CASE("same relay address with distinct SCIDs creates distinct passive conne
     utp_context_set_on_connected(second_client, on_connected, &second_probe);
     utp_context_set_on_connect_error(second_client, on_connect_error, &second_probe);
     utp_context_set_on_connection_error(second_client, on_connection_error, &second_probe);
-    second_connect.address    = "127.0.0.1";
-    second_connect.port       = pair.relay.address.port;
-    second_connect.timeout_ms = 10u;
-    second_connect.retries    = 3;
-    second_connect.encryption = UTP_ENCRYPTION_NONE;
+    second_connect.address        = "127.0.0.1";
+    second_connect.target_peer_id = "test";
+    second_connect.port           = pair.relay.address.port;
+    second_connect.timeout_ms     = 10u;
+    second_connect.retries        = 3;
+    second_connect.encryption     = UTP_ENCRYPTION_NONE;
     REQUIRE(utp_context_connect(second_client, &second_connect) == UTP_STATUS_OK);
     drive_until(pair.event_base, [&pair, &second_probe] {
         return pair.client_probe.connected == 1 && second_probe.connected == 1 && pair.server_probe.connected == 2;
@@ -783,6 +785,7 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     utp_context_set_on_connection_error(early_client, on_connection_error, &early_probe);
     pair.relay.rule                  = drop_done;
     early_connect.address            = "127.0.0.1";
+    early_connect.target_peer_id     = "test";
     early_connect.port               = pair.relay.address.port;
     early_connect.timeout_ms         = 10u;
     early_connect.retries            = 3;
@@ -841,6 +844,7 @@ TEST_CASE("encrypted 0-RTT continues early stream data after the first packet", 
     utp_context_set_on_connected(early_client, on_connected, &early_probe);
     utp_context_set_on_connection_error(early_client, on_connection_error, &early_probe);
     early_connect.address            = "127.0.0.1";
+    early_connect.target_peer_id     = "test";
     early_connect.port               = pair.relay.address.port;
     early_connect.timeout_ms         = 10u;
     early_connect.retries            = 3;
@@ -897,6 +901,7 @@ TEST_CASE("encrypted 0-RTT rejects a corrupted early ciphertext before accepting
     utp_context_set_on_connect_error(early_client, on_connect_error, &early_probe);
     pair.relay.rule                  = corrupt_early;
     early_connect.address            = "127.0.0.1";
+    early_connect.target_peer_id     = "test";
     early_connect.port               = pair.relay.address.port;
     early_connect.timeout_ms         = 10u;
     early_connect.retries            = 0;
@@ -1098,10 +1103,11 @@ TEST_CASE("application reads replenish connection and stream flow-control window
     utp_context_set_on_new_connection(pair.server, on_new_connection, &pair.server_probe);
     utp_context_set_on_connection_error(pair.client, on_connection_error, &pair.client_probe);
     utp_context_set_on_connection_error(pair.server, on_connection_error, &pair.server_probe);
-    connect_opts.address    = "127.0.0.1";
-    connect_opts.port       = pair.relay.address.port;
-    connect_opts.timeout_ms = 10u;
-    connect_opts.retries    = 3;
+    connect_opts.address        = "127.0.0.1";
+    connect_opts.target_peer_id = "test";
+    connect_opts.port           = pair.relay.address.port;
+    connect_opts.timeout_ms     = 10u;
+    connect_opts.retries        = 3;
     REQUIRE(utp_context_connect(pair.client, &connect_opts) == UTP_STATUS_OK);
     transport_pair_connect(&pair);
     utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
@@ -1177,10 +1183,11 @@ TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transpo
     utp_context_set_on_new_connection(pair.server, on_new_connection, &pair.server_probe);
     utp_context_set_on_connection_error(pair.client, on_connection_error, &pair.client_probe);
     utp_context_set_on_connection_error(pair.server, on_connection_error, &pair.server_probe);
-    connect_opts.address    = "127.0.0.1";
-    connect_opts.port       = pair.relay.address.port;
-    connect_opts.timeout_ms = 10u;
-    connect_opts.retries    = 3;
+    connect_opts.address        = "127.0.0.1";
+    connect_opts.target_peer_id = "test";
+    connect_opts.port           = pair.relay.address.port;
+    connect_opts.timeout_ms     = 10u;
+    connect_opts.retries        = 3;
     REQUIRE(utp_context_connect(pair.client, &connect_opts) == UTP_STATUS_OK);
     transport_pair_connect(&pair);
     pair.relay.rule = drop_flow_control;
