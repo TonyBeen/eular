@@ -3598,6 +3598,7 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
         utp_context_take_deadline(&deadline, utp_connection_mtu_deadline(connection, now_us));
         utp_context_take_deadline(&deadline, utp_connection_pacing_deadline(connection));
         utp_context_take_deadline(&deadline, utp_connection_path_validation_deadline(connection));
+        utp_context_take_deadline(&deadline, utp_connection_observed_address_challenge_deadline(connection));
         if (slot->connect_pending) {
             utp_context_take_deadline(&deadline, slot->connect_deadline_us);
         }
@@ -5191,6 +5192,9 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_connection_on_path_validation_timeout(&slot->connection, now_us);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_connection_on_observed_address_challenge_timeout(&slot->connection, now_us);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_context_queue_ack_if_due(&slot->connection, now_us);

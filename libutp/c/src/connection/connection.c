@@ -41,6 +41,7 @@
 #define UTP_CONNECTION_PATH_CHALLENGE_MAX_RETRIES 3u                 // 路径验证期间允许的最大重试次数
 #define UTP_CONNECTION_PATH_VALIDATION_SEND_CREDIT \
     (UINT64_C(3) * UTP_PACKET_MTU_FLOOR)  // 路径验证期间允许发送的最大字节数
+#define UTP_CONNECTION_OBSERVED_ADDRESS_CHALLENGE_DELAY_US UINT64_C(100000)
 
 // 本端默认流额度
 #define UTP_CONNECTION_DEFAULT_MAX_STREAMS_BIDI 64u  // 内部直接初始化时的兼容默认值
@@ -843,6 +844,18 @@ static utp_internal_error_t utp_connection_handle_path_response(utp_connection_t
     connection->candidate_queued_bytes     = 0u;
     connection->path_state                 = UTP_CONNECTION_PATH_STATE_VALIDATED;
     return UTP_INTERNAL_ERROR_OK;
+}
+
+static void utp_connection_schedule_observed_address_challenge(utp_connection_t* connection, uint64_t now_us)
+{
+    if (connection == NULL || now_us == 0u || connection->state != UTP_CONNECTION_STATE_CONNECTED ||
+        connection->observed_address_challenge_sent || connection->observed_address_challenge_deadline_us != 0u) {
+        return;
+    }
+    connection->observed_address_challenge_deadline_us =
+        now_us > UINT64_MAX - UTP_CONNECTION_OBSERVED_ADDRESS_CHALLENGE_DELAY_US
+            ? UINT64_MAX
+            : now_us + UTP_CONNECTION_OBSERVED_ADDRESS_CHALLENGE_DELAY_US;
 }
 
 static utp_internal_error_t utp_connection_handle_observed_address(utp_connection_t* connection, const uint8_t* frame,
@@ -2801,73 +2814,75 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
         return error;
     }
-    connection->context                         = NULL;
-    connection->on_incoming_stream              = NULL;
-    connection->on_incoming_stream_user_data    = NULL;
-    connection->session_token_cb                = NULL;
-    connection->session_token_cb_data           = NULL;
-    connection->terminal_blocks                 = NULL;
-    connection->terminal_current_block          = NULL;
-    connection->candidate_packet_head           = NULL;
-    connection->candidate_packet_tail           = NULL;
-    connection->stream_terminal_oldest          = NULL;
-    connection->stream_terminal_newest          = NULL;
-    connection->stream_terminal_capacity        = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
-    connection->stream_terminal_allocated       = 0u;
-    connection->stream_terminal_count           = 0u;
-    connection->path_validation_buffer_capacity = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
-    connection->rx_bytes                        = 0u;
-    connection->tx_bytes                        = 0u;
-    connection->rtx_bytes                       = 0u;
-    connection->scheduler_select_total          = 0u;
-    connection->scheduler_select_strict         = 0u;
-    connection->scheduler_select_drr            = 0u;
-    connection->scheduler_strict_aging_promoted = 0u;
-    connection->scheduler_mode_switches         = 0u;
-    connection->scheduler_drr_refills           = 0u;
-    connection->scheduler_drr_consumes          = 0u;
-    connection->peer_handshake_packet_number    = 0u;
-    connection->peer_handshake_received_us      = 0u;
-    connection->retransmission_deadline_us      = 0u;
-    connection->close_deadline_us               = 0u;
-    connection->close_last_sent_us              = 0u;
-    connection->close_pto_us                    = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
-    connection->keepalive_deadline_us           = 0u;
-    connection->last_peer_activity_us           = 0u;
-    connection->close_error_code                = 0u;
-    connection->peer_close_error_code           = 0u;
-    connection->peer_close_reason_length        = 0u;
-    connection->user_callback_depth             = 0u;
-    connection->path_challenge_deadline_us      = 0u;
-    connection->ack_profile_candidate_since_us  = 0u;
-    connection->ack_profile_last_sent_us        = 0u;
-    connection->ack_profile_baseline_srtt_us    = 0u;
-    connection->ack_loss_window_start_us        = 0u;
-    connection->last_ack_frequency_apply_us     = 0u;
-    connection->last_public_flush_us            = 0u;
-    connection->candidate_rx_bytes              = 0u;
-    connection->candidate_tx_bytes              = 0u;
-    connection->candidate_queued_bytes          = 0u;
-    connection->candidate_packet_bytes          = 0u;
-    connection->path_validation_generation      = 0u;
-    connection->path_challenge_retry_count      = 0u;
-    connection->keepalive_missed_probes         = 0u;
-    connection->keepalive_interval_ms           = 0u;
-    connection->keepalive_timeout_ms            = 1500u;
-    connection->keepalive_probes                = 3u;
-    connection->ack_loss_count                  = 0u;
-    connection->ack_profile_current             = UTP_CONNECTION_ACK_PROFILE_STABLE;
-    connection->ack_profile_candidate           = UTP_CONNECTION_ACK_PROFILE_STABLE;
-    connection->close_pending                   = false;
-    connection->udp_write_pending               = false;
-    connection->local_close_started             = false;
-    connection->peer_close_received             = false;
-    connection->path_challenge_pending          = false;
-    connection->crypto_type                     = 0u;
-    connection->peer_ack_delay_exponent         = 0u;
-    connection->peer_transport_params           = (utp_frame_transport_params_t){0};
-    connection->peer_ack_frequency              = (utp_frame_ack_frequency_t){0};
-    connection->local_transport_params          = (utp_frame_transport_params_t){
+    connection->context                                = NULL;
+    connection->on_incoming_stream                     = NULL;
+    connection->on_incoming_stream_user_data           = NULL;
+    connection->session_token_cb                       = NULL;
+    connection->session_token_cb_data                  = NULL;
+    connection->terminal_blocks                        = NULL;
+    connection->terminal_current_block                 = NULL;
+    connection->candidate_packet_head                  = NULL;
+    connection->candidate_packet_tail                  = NULL;
+    connection->stream_terminal_oldest                 = NULL;
+    connection->stream_terminal_newest                 = NULL;
+    connection->stream_terminal_capacity               = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
+    connection->stream_terminal_allocated              = 0u;
+    connection->stream_terminal_count                  = 0u;
+    connection->path_validation_buffer_capacity        = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
+    connection->rx_bytes                               = 0u;
+    connection->tx_bytes                               = 0u;
+    connection->rtx_bytes                              = 0u;
+    connection->scheduler_select_total                 = 0u;
+    connection->scheduler_select_strict                = 0u;
+    connection->scheduler_select_drr                   = 0u;
+    connection->scheduler_strict_aging_promoted        = 0u;
+    connection->scheduler_mode_switches                = 0u;
+    connection->scheduler_drr_refills                  = 0u;
+    connection->scheduler_drr_consumes                 = 0u;
+    connection->peer_handshake_packet_number           = 0u;
+    connection->peer_handshake_received_us             = 0u;
+    connection->retransmission_deadline_us             = 0u;
+    connection->close_deadline_us                      = 0u;
+    connection->close_last_sent_us                     = 0u;
+    connection->close_pto_us                           = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
+    connection->keepalive_deadline_us                  = 0u;
+    connection->last_peer_activity_us                  = 0u;
+    connection->close_error_code                       = 0u;
+    connection->peer_close_error_code                  = 0u;
+    connection->peer_close_reason_length               = 0u;
+    connection->user_callback_depth                    = 0u;
+    connection->path_challenge_deadline_us             = 0u;
+    connection->observed_address_challenge_deadline_us = 0u;
+    connection->ack_profile_candidate_since_us         = 0u;
+    connection->ack_profile_last_sent_us               = 0u;
+    connection->ack_profile_baseline_srtt_us           = 0u;
+    connection->ack_loss_window_start_us               = 0u;
+    connection->last_ack_frequency_apply_us            = 0u;
+    connection->last_public_flush_us                   = 0u;
+    connection->candidate_rx_bytes                     = 0u;
+    connection->candidate_tx_bytes                     = 0u;
+    connection->candidate_queued_bytes                 = 0u;
+    connection->candidate_packet_bytes                 = 0u;
+    connection->path_validation_generation             = 0u;
+    connection->path_challenge_retry_count             = 0u;
+    connection->keepalive_missed_probes                = 0u;
+    connection->keepalive_interval_ms                  = 0u;
+    connection->keepalive_timeout_ms                   = 1500u;
+    connection->keepalive_probes                       = 3u;
+    connection->ack_loss_count                         = 0u;
+    connection->ack_profile_current                    = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->ack_profile_candidate                  = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->close_pending                          = false;
+    connection->udp_write_pending                      = false;
+    connection->local_close_started                    = false;
+    connection->peer_close_received                    = false;
+    connection->path_challenge_pending                 = false;
+    connection->observed_address_challenge_sent        = false;
+    connection->crypto_type                            = 0u;
+    connection->peer_ack_delay_exponent                = 0u;
+    connection->peer_transport_params                  = (utp_frame_transport_params_t){0};
+    connection->peer_ack_frequency                     = (utp_frame_ack_frequency_t){0};
+    connection->local_transport_params                 = (utp_frame_transport_params_t){
         UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
@@ -3961,6 +3976,7 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
                connection->state == UTP_CONNECTION_STATE_INITIAL_SENT) {
         connection->state = UTP_CONNECTION_STATE_CONNECTED;
         utp_send_control_set_connected(&connection->send_control, true);
+        utp_connection_schedule_observed_address_challenge(connection, now_us);
     } else if (packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
                (packet->frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_CONNECTION_CLOSE)) != 0u) {
         connection->close_last_sent_us = now_us;
@@ -4004,6 +4020,7 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
                connection->retransmission_deadline_us == 0u) {
         error = utp_connection_ensure_retransmission_deadline(connection, now_us);
     }
+    utp_connection_schedule_observed_address_challenge(connection, now_us);
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -4707,6 +4724,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             utp_connection_release_queue(connection, &retired_handshake_packets);
             connection->state = UTP_CONNECTION_STATE_CONNECTED;
             utp_send_control_set_connected(&connection->send_control, true);
+            utp_connection_schedule_observed_address_challenge(connection, now_us);
         }
     } else if (!candidate_path && handshake_done && connection->role == UTP_CONNECTION_ROLE_PASSIVE &&
                connection->state != UTP_CONNECTION_STATE_CONNECTED) {
@@ -4730,6 +4748,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
         }
     }
+    utp_connection_schedule_observed_address_challenge(connection, now_us);
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -5050,6 +5069,39 @@ uint64_t utp_connection_path_validation_deadline(const utp_connection_t* connect
     return connection == NULL || connection->path_state != UTP_CONNECTION_PATH_STATE_VALIDATING
                ? 0u
                : connection->path_challenge_deadline_us;
+}
+
+uint64_t utp_connection_observed_address_challenge_deadline(const utp_connection_t* connection)
+{
+    return connection == NULL || connection->state != UTP_CONNECTION_STATE_CONNECTED ||
+                   connection->observed_address_challenge_sent
+               ? 0u
+               : connection->observed_address_challenge_deadline_us;
+}
+
+utp_internal_error_t utp_connection_on_observed_address_challenge_timeout(utp_connection_t* connection, uint64_t now_us)
+{
+    utp_frame_path_t     path;
+    utp_internal_error_t error;
+
+    if (connection == NULL || now_us == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (connection->state != UTP_CONNECTION_STATE_CONNECTED || connection->observed_address_challenge_sent ||
+        connection->observed_address_challenge_deadline_us == 0u ||
+        now_us < connection->observed_address_challenge_deadline_us) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    connection->observed_address_challenge_deadline_us = 0u;
+    if (RAND_bytes(path.data, sizeof(path.data)) != 1) {
+        return UTP_INTERNAL_ERROR_CRYPTO;
+    }
+    error = utp_connection_queue_path_frame(connection, UTP_FRAME_TYPE_PATH_CHALLENGE, &path, &connection->peer, false);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    connection->observed_address_challenge_sent = true;
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t* connection, uint64_t now_us)

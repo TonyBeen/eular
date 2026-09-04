@@ -185,6 +185,7 @@ typedef struct utp_connection {
     uint64_t                           keepalive_deadline_us;                     // 保活探测截止时刻
     uint64_t                           last_peer_activity_us;                     // 最近有效对端活动时刻
     uint64_t                           path_challenge_deadline_us;                // 路径验证超时截止时刻
+    uint64_t                           observed_address_challenge_deadline_us;    // 建连后地址观测 challenge 截止时刻
     uint64_t                           ack_profile_candidate_since_us;            // 候选 ACK 策略起始时刻
     uint64_t                           ack_profile_last_sent_us;                  // 最近 ACK_FREQUENCY 发送时刻
     uint64_t                           ack_profile_baseline_srtt_us;              // 策略评估 RTT 基线
@@ -207,38 +208,39 @@ typedef struct utp_connection {
     uint8_t                            peer_crypto_public_key[UTP_CRYPTO_X25519_KEY_SIZE];   // 对端临时公钥
     uint8_t                            session_token[UTP_CONNECTION_SESSION_TOKEN_SIZE];     // 导出给客户端的恢复状态
     uint8_t close_packet_data[UTP_PACKET_HEADER_SIZE + UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];  // CLOSE 内联缓冲
-    uint8_t stream_scheduler_mode;                                    // Strict 或 DRR 调度模式
-    utp_congestion_algorithm_t   congestion_algorithm;                // 当前拥塞控制算法
-    uint8_t                      crypto_type;                         // 协商的加密套件
-    uint8_t                      peer_ack_delay_exponent;             // 对端 ACK 延迟指数
-    utp_frame_transport_params_t peer_transport_params;               // 已解析对端传输参数
-    utp_frame_ack_frequency_t    peer_ack_frequency;                  // 已解析对端 ACK 策略
-    uint32_t                     stream_scheduler_cursor;             // 流调度轮转游标
-    uint8_t                      path_challenge_retry_count;          // 路径挑战已重试次数
-    uint16_t                     keepalive_missed_probes;             // 连续未响应保活数
-    uint16_t                     keepalive_probes;                    // 允许连续未响应探测数
-    uint32_t                     ack_loss_count;                      // ACK 策略窗口中的丢失计数
-    uint8_t                      ack_profile_current;                 // 当前 ACK 策略档位
-    uint8_t                      ack_profile_candidate;               // 候选 ACK 策略档位
-    uint64_t                     session_token_expires_at_seconds;    // 恢复状态绝对过期时间
-    uint16_t                     session_token_size;                  // 当前恢复状态长度
-    bool                         close_pending : 1;                   // CLOSE 包是否待发送
-    bool                         udp_write_pending : 1;               // socket 写事件是否已注册
-    bool                         local_close_started : 1;             // 是否已由本端开始关闭
-    bool                         peer_close_received : 1;             // 是否已接收对端 CLOSE
-    bool                         path_challenge_pending : 1;          // 路径挑战包是否正在飞行
-    bool                         crypto_configured : 1;               // 是否配置加密
-    bool                         crypto_ready : 1;                    // 1-RTT AEAD 是否就绪
-    bool                         zero_rtt_encrypted : 1;              // 当前 0-RTT 是否使用 early AEAD
-    bool                         session_token_issued : 1;            // 是否已向对端签发恢复票据
-    bool                         peer_transport_params_received : 1;  // 是否已收到对端传输参数
-    bool                         peer_ack_frequency_received : 1;     // 是否已收到对端 ACK 策略
-    bool                         keepalive_enabled : 1;               // 是否启用保活
-    bool                         public_flush_pending : 1;            // 用户回调退出后需要执行公开发送
-    const uint8_t*               peer_close_reason;                   // 对端 CLOSE 原包原因视图
-    utp_connection_role_t        role;                                // 主动或被动角色
-    utp_connection_state_t       state;                               // 连接生命周期状态
-    utp_connection_path_state_t  path_state;                          // 路径验证状态
+    uint8_t stream_scheduler_mode;                                     // Strict 或 DRR 调度模式
+    utp_congestion_algorithm_t   congestion_algorithm;                 // 当前拥塞控制算法
+    uint8_t                      crypto_type;                          // 协商的加密套件
+    uint8_t                      peer_ack_delay_exponent;              // 对端 ACK 延迟指数
+    utp_frame_transport_params_t peer_transport_params;                // 已解析对端传输参数
+    utp_frame_ack_frequency_t    peer_ack_frequency;                   // 已解析对端 ACK 策略
+    uint32_t                     stream_scheduler_cursor;              // 流调度轮转游标
+    uint8_t                      path_challenge_retry_count;           // 路径挑战已重试次数
+    uint16_t                     keepalive_missed_probes;              // 连续未响应保活数
+    uint16_t                     keepalive_probes;                     // 允许连续未响应探测数
+    uint32_t                     ack_loss_count;                       // ACK 策略窗口中的丢失计数
+    uint8_t                      ack_profile_current;                  // 当前 ACK 策略档位
+    uint8_t                      ack_profile_candidate;                // 候选 ACK 策略档位
+    uint64_t                     session_token_expires_at_seconds;     // 恢复状态绝对过期时间
+    uint16_t                     session_token_size;                   // 当前恢复状态长度
+    bool                         close_pending : 1;                    // CLOSE 包是否待发送
+    bool                         udp_write_pending : 1;                // socket 写事件是否已注册
+    bool                         local_close_started : 1;              // 是否已由本端开始关闭
+    bool                         peer_close_received : 1;              // 是否已接收对端 CLOSE
+    bool                         path_challenge_pending : 1;           // 路径挑战包是否正在飞行
+    bool                         observed_address_challenge_sent : 1;  // 建连后地址观测 challenge 是否已排队
+    bool                         crypto_configured : 1;                // 是否配置加密
+    bool                         crypto_ready : 1;                     // 1-RTT AEAD 是否就绪
+    bool                         zero_rtt_encrypted : 1;               // 当前 0-RTT 是否使用 early AEAD
+    bool                         session_token_issued : 1;             // 是否已向对端签发恢复票据
+    bool                         peer_transport_params_received : 1;   // 是否已收到对端传输参数
+    bool                         peer_ack_frequency_received : 1;      // 是否已收到对端 ACK 策略
+    bool                         keepalive_enabled : 1;                // 是否启用保活
+    bool                         public_flush_pending : 1;             // 用户回调退出后需要执行公开发送
+    const uint8_t*               peer_close_reason;                    // 对端 CLOSE 原包原因视图
+    utp_connection_role_t        role;                                 // 主动或被动角色
+    utp_connection_state_t       state;                                // 连接生命周期状态
+    utp_connection_path_state_t  path_state;                           // 路径验证状态
 } utp_connection_t;
 
 /** @brief 初始化连接运行状态及其有界发送、接收资源。 */
@@ -372,6 +374,11 @@ utp_internal_error_t utp_connection_on_mtu_timeout(utp_connection_t* connection,
 uint64_t             utp_connection_path_validation_deadline(const utp_connection_t* connection);
 /** @brief 处理 PATH_CHALLENGE 超时，重试或回退到原路径。 */
 utp_internal_error_t utp_connection_on_path_validation_timeout(utp_connection_t* connection, uint64_t now_us);
+/** @brief 返回建连后地址观测 PATH_CHALLENGE 的延迟发送截止时刻。 */
+uint64_t             utp_connection_observed_address_challenge_deadline(const utp_connection_t* connection);
+/** @brief 到期后排入一次当前路径的地址观测 PATH_CHALLENGE。 */
+utp_internal_error_t utp_connection_on_observed_address_challenge_timeout(utp_connection_t* connection,
+                                                                          uint64_t          now_us);
 /** @brief 设置流调度模式，支持 Strict 和 DRR。 */
 utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* connection, uint8_t mode);
 /** @brief 设置对端首次创建流时的同步通知回调。 */

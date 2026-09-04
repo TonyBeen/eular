@@ -1233,6 +1233,39 @@ TEST_CASE("connection caches a peer observed address once", "[connection][rendez
     utp_connection_cleanup(&connection);
 }
 
+TEST_CASE("connection sends one delayed observed-address challenge", "[connection][path]")
+{
+    const utp_address_t peer       = loopback_address(10022u);
+    utp_connection_t    connection = {};
+    utp_packet_out_t*   packet;
+    utp_packet_view_t   view = {};
+    const uint8_t*      frame;
+    uint8_t             frame_type;
+    size_t              frame_length;
+    size_t              offset = 0u;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 78u, 12u, &peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.observed_address_challenge_deadline_us = 100u;
+    REQUIRE(utp_connection_on_observed_address_challenge_timeout(&connection, 99u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_next_packet_to_send(&connection) == nullptr);
+    REQUIRE(utp_connection_on_observed_address_challenge_timeout(&connection, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.observed_address_challenge_sent);
+    REQUIRE(utp_connection_observed_address_challenge_deadline(&connection) == 0u);
+
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE_FALSE(packet->has_destination);
+    REQUIRE(utp_packet_view_decode(&view, packet->raw_data, packet->data_size) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_PATH_CHALLENGE);
+    REQUIRE(offset == view.payload_length);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 101u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_observed_address_challenge_timeout(&connection, 101u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_next_packet_to_send(&connection) == nullptr);
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("connection retries candidate path validation three times then keeps the active path", "[connection][path]")
 {
     const utp_address_t           active_peer    = loopback_address(10015u);
