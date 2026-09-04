@@ -109,7 +109,7 @@ static const uint8_t k_zero_rtt_ack_frequency_frame[UTP_FRAME_ACK_FREQUENCY_SIZE
 static uint64_t utp_context_now_us(void);
 
 /** @brief 返回当前 Context 主动连接 REQUEST 帧的精确空间需求。 */
-static size_t utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length)
+static size_t   utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length)
 {
     const size_t address_length = context->bound_address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
 
@@ -713,11 +713,11 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t* conte
     const uint64_t expires_at_seconds = context->zero_rtt_token_max_lifetime_seconds > UINT64_MAX - now_seconds
                                             ? UINT64_MAX
                                             : now_seconds + context->zero_rtt_token_max_lifetime_seconds;
-    const uint8_t  encryption_mode    = slot->connection.crypto_configured
-                                            ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
-                                            : (uint8_t)UTP_ENCRYPTION_NONE;
-    uint8_t        token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
-    uint8_t        payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    const uint8_t encryption_mode = slot->connection.crypto_configured
+                                        ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
+                                        : (uint8_t)UTP_ENCRYPTION_NONE;
+    uint8_t       token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    uint8_t       payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
     utp_frame_session_token_t frame;
     utp_internal_error_t      error = utp_crypto_random_bytes(token_payload, UTP_CRYPTO_RESUMPTION_PSK_SIZE);
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -888,24 +888,24 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
     slot->zero_rtt_expires_at_seconds     = 0u;
     slot->rendezvous_candidate_count      = 0u;
     memset(slot->rendezvous_punch_token, 0, sizeof(slot->rendezvous_punch_token));
-    slot->terminal_error_status           = UTP_STATUS_OK;
-    slot->terminal_error_reason           = NULL;
-    slot->terminal_error_reason_length    = 0u;
-    slot->zero_rtt_early_fin              = false;
-    slot->zero_rtt_awaiting_accept        = false;
-    slot->zero_rtt_accepted               = false;
-    slot->zero_rtt_response_active        = false;
-    slot->zero_rtt_response_queued        = false;
-    slot->zero_rtt_response_sent          = false;
-    slot->zero_rtt_early_delivered        = false;
-    slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-    slot->used                            = true;
-    slot->connected_reported              = false;
-    slot->connection_error_reported       = false;
-    slot->connect_pending                 = false;
-    slot->terminal_error_queued           = false;
-    slot->terminal_error_suppressed       = false;
-    slot->rendezvous_active               = false;
+    slot->terminal_error_status        = UTP_STATUS_OK;
+    slot->terminal_error_reason        = NULL;
+    slot->terminal_error_reason_length = 0u;
+    slot->zero_rtt_early_fin           = false;
+    slot->zero_rtt_awaiting_accept     = false;
+    slot->zero_rtt_accepted            = false;
+    slot->zero_rtt_response_active     = false;
+    slot->zero_rtt_response_queued     = false;
+    slot->zero_rtt_response_sent       = false;
+    slot->zero_rtt_early_delivered     = false;
+    slot->zero_rtt_encryption_mode     = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->used                         = true;
+    slot->connected_reported           = false;
+    slot->connection_error_reported    = false;
+    slot->connect_pending              = false;
+    slot->terminal_error_queued        = false;
+    slot->terminal_error_suppressed    = false;
+    slot->rendezvous_active            = false;
     return slot;
 }
 
@@ -1130,11 +1130,11 @@ static utp_internal_error_t utp_context_send_raw(utp_context_t* context, const u
 }
 
 static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* context, const utp_address_t* peer,
-                                                                const uint8_t* packet, size_t packet_length)
+                                                               const uint8_t* packet, size_t packet_length)
 {
     utp_context_rendezvous_output_entry_t* entry;
-    size_t                                  index;
-    utp_internal_error_t                    error;
+    size_t                                 index;
+    utp_internal_error_t                   error;
 
     if (context == NULL || peer == NULL || packet == NULL || packet_length == 0u ||
         packet_length > UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY) {
@@ -1152,21 +1152,14 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
     if (context->rendezvous_output_count >= UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    index = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
-            UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
-    entry = &context->rendezvous_output[index];
+    index       = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
+                  UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
+    entry       = &context->rendezvous_output[index];
     entry->peer = *peer;
     memcpy(entry->packet, packet, packet_length);
     entry->packet_length = (uint16_t)packet_length;
     ++context->rendezvous_output_count;
     return utp_context_enable_udp_write_event(context);
-}
-
-static void utp_context_pop_rendezvous_output(utp_context_t* context)
-{
-    context->rendezvous_output_head =
-        (uint8_t)(((size_t)context->rendezvous_output_head + 1u) % UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY);
-    --context->rendezvous_output_count;
 }
 
 static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* context)
@@ -1175,9 +1168,8 @@ static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* c
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     while (context->rendezvous_output_count != 0u) {
-        utp_context_rendezvous_output_entry_t* entry =
-            &context->rendezvous_output[context->rendezvous_output_head];
-        const utp_internal_error_t error =
+        utp_context_rendezvous_output_entry_t* entry = &context->rendezvous_output[context->rendezvous_output_head];
+        const utp_internal_error_t             error =
             utp_context_send_raw(context, &entry->peer, NULL, entry->packet, entry->packet_length);
 
         if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
@@ -1185,10 +1177,10 @@ static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* c
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
             utp_internal_log_error(&context->logger, &context->tag, error, "rendezvous datagram dropped");
-            utp_context_pop_rendezvous_output(context);
-            continue;
         }
-        utp_context_pop_rendezvous_output(context);
+        context->rendezvous_output_head =
+            (uint8_t)(((size_t)context->rendezvous_output_head + 1u) % UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY);
+        --context->rendezvous_output_count;
     }
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -1221,7 +1213,7 @@ static bool utp_context_rendezvous_token_is_zero(const uint8_t token[UTP_RENDEZV
 }
 
 static bool utp_context_rendezvous_candidate_exists(const utp_context_connection_slot_t* slot,
-                                                     const utp_address_t*                 endpoint)
+                                                    const utp_address_t*                 endpoint)
 {
     for (uint8_t index = 0u; index < slot->rendezvous_candidate_count; ++index) {
         if (utp_address_equal(&slot->rendezvous_candidates[index], endpoint)) {
@@ -1242,9 +1234,9 @@ static void utp_context_purge_rendezvous_punch_cache(utp_context_t* context, uin
     }
 }
 
-static void utp_context_cache_rendezvous_punch(utp_context_t* context,
-                                                const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE],
-                                                const utp_address_t* peer, uint64_t now_us)
+static void utp_context_cache_rendezvous_punch(utp_context_t*       context,
+                                               const uint8_t        token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE],
+                                               const utp_address_t* peer, uint64_t now_us)
 {
     utp_context_rendezvous_punch_cache_entry_t* selected = NULL;
 
@@ -1269,13 +1261,13 @@ static void utp_context_cache_rendezvous_punch(utp_context_t* context,
         selected->expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US
                                       ? UINT64_MAX
                                       : now_us + UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US;
-        selected->used = true;
+        selected->used          = true;
     }
 }
 
 static bool utp_context_take_rendezvous_punch(utp_context_t* context,
-                                               const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE],
-                                               uint64_t now_us, utp_address_t* endpoint)
+                                              const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE], uint64_t now_us,
+                                              utp_address_t* endpoint)
 {
     utp_context_purge_rendezvous_punch_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
@@ -1316,8 +1308,8 @@ static bool utp_context_rendezvous_forward_seen(utp_context_t* context,
 }
 
 static void utp_context_remember_rendezvous_forward(utp_context_t* context,
-                                                    const uint8_t rendezvous_id[UTP_RENDEZVOUS_ID_SIZE],
-                                                    uint64_t now_us)
+                                                    const uint8_t  rendezvous_id[UTP_RENDEZVOUS_ID_SIZE],
+                                                    uint64_t       now_us)
 {
     utp_context_rendezvous_forward_cache_entry_t* selected = NULL;
 
@@ -1338,15 +1330,14 @@ static void utp_context_remember_rendezvous_forward(utp_context_t* context,
         selected->expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US
                                       ? UINT64_MAX
                                       : now_us + UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US;
-        selected->used = true;
+        selected->used          = true;
     }
 }
 
 static utp_internal_error_t utp_context_add_rendezvous_candidate(utp_context_connection_slot_t* slot,
-                                                                  const utp_address_t* endpoint)
+                                                                 const utp_address_t*           endpoint)
 {
-    if (slot == NULL || endpoint == NULL || endpoint->port == 0u ||
-        endpoint->family != slot->connection.peer.family) {
+    if (slot == NULL || endpoint == NULL || endpoint->port == 0u || endpoint->family != slot->connection.peer.family) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (utp_context_rendezvous_candidate_exists(slot, endpoint)) {
@@ -1362,16 +1353,13 @@ static utp_internal_error_t utp_context_add_rendezvous_candidate(utp_context_con
 static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* context, const utp_address_t* peer,
                                                               const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE])
 {
-    uint8_t                 packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE +
-                                    UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
-    utp_packet_header_t       header;
-    const utp_frame_rendezvous_t frame = {token, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE,
-                                          UTP_RENDEZVOUS_MESSAGE_PUNCH};
-    utp_internal_error_t error;
+    uint8_t packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
+    utp_packet_header_t          header;
+    const utp_frame_rendezvous_t frame = {token, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE, UTP_RENDEZVOUS_MESSAGE_PUNCH};
+    utp_internal_error_t         error;
 
-    if (context == NULL || peer == NULL || peer->port == 0u ||
-        peer->family != context->bound_address.family || utp_context_rendezvous_token_is_zero(token) ||
-        context->next_rendezvous_packet_number == 0u ||
+    if (context == NULL || peer == NULL || peer->port == 0u || peer->family != context->bound_address.family ||
+        utp_context_rendezvous_token_is_zero(token) || context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -1381,10 +1369,10 @@ static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* con
                                    (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE),
                                    UTP_PACKET_TYPE_RENDEZVOUS,
                                    0u};
-    error = utp_proto_encode_header(packet, sizeof(packet), &header);
+    error  = utp_proto_encode_header(packet, sizeof(packet), &header);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE,
-                                            sizeof(packet) - UTP_PACKET_HEADER_SIZE, &frame);
+        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE, sizeof(packet) - UTP_PACKET_HEADER_SIZE,
+                                            &frame);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         ++context->next_rendezvous_packet_number;
@@ -1394,14 +1382,14 @@ static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* con
 }
 
 static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, const utp_address_t* peer,
-                                                        uint64_t acknowledged_packet_number)
+                                                       uint64_t acknowledged_packet_number)
 {
-    utp_rendezvous_pong_t pong;
-    utp_packet_header_t   header;
+    utp_rendezvous_pong_t  pong;
+    utp_packet_header_t    header;
     utp_frame_rendezvous_t frame;
-    uint8_t body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
-    uint8_t packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
-    utp_internal_error_t error;
+    uint8_t                body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
+    uint8_t                packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
+    utp_internal_error_t   error;
 
     if (context == NULL || peer == NULL || !context->ntrs_registration.registered ||
         !utp_address_equal(peer, &context->ntrs_registration.endpoint) ||
@@ -1425,8 +1413,8 @@ static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, c
     frame  = (utp_frame_rendezvous_t){body, sizeof(body), UTP_RENDEZVOUS_MESSAGE_PONG};
     error  = utp_proto_encode_header(packet, sizeof(packet), &header);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE,
-                                            sizeof(packet) - UTP_PACKET_HEADER_SIZE, &frame);
+        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE, sizeof(packet) - UTP_PACKET_HEADER_SIZE,
+                                            &frame);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         ++context->next_rendezvous_packet_number;
@@ -1477,16 +1465,16 @@ static utp_context_connection_slot_t* utp_context_find_rendezvous_punch_slot(
     return NULL;
 }
 
-static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t* context,
-                                                                  utp_context_connection_slot_t* slot)
+static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t*                 context,
+                                                                 utp_context_connection_slot_t* slot)
 {
     utp_packet_out_t* packet;
 
-    if (context == NULL || slot == NULL || !slot->rendezvous_active ||
-        slot->rendezvous_candidate_count == 0u) {
+    if (context == NULL || slot == NULL || !slot->rendezvous_active || slot->rendezvous_candidate_count == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    TAILQ_FOREACH(packet, &slot->connection.send_control.ledger.unacked_packets, po_next) {
+    TAILQ_FOREACH(packet, &slot->connection.send_control.ledger.unacked_packets, po_next)
+    {
         if (packet->packet_type != UTP_PACKET_TYPE_INITIAL && packet->packet_type != UTP_PACKET_TYPE_0RTT) {
             continue;
         }
@@ -1502,9 +1490,9 @@ static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t* 
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t* context,
-                                                                 const utp_context_connection_slot_t* slot,
-                                                                 const utp_packet_out_t* packet)
+static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t*                       context,
+                                                                const utp_context_connection_slot_t* slot,
+                                                                const utp_packet_out_t*              packet)
 {
     if (context == NULL || slot == NULL || packet == NULL || !slot->rendezvous_active ||
         slot->rendezvous_candidate_count == 0u ||
@@ -1522,8 +1510,8 @@ static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t* c
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connection_slot_t*          slot,
-                                                               const utp_rendezvous_candidate_plan_t* plan)
+static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connection_slot_t*         slot,
+                                                              const utp_rendezvous_candidate_plan_t* plan)
 {
     utp_internal_error_t error;
 
@@ -1548,7 +1536,7 @@ static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connec
 }
 
 static bool utp_context_rendezvous_plan_contains(const utp_rendezvous_candidate_plan_t* plan,
-                                                  const utp_address_t*                   endpoint)
+                                                 const utp_address_t*                   endpoint)
 {
     if (plan == NULL || endpoint == NULL) {
         return false;
@@ -1566,10 +1554,9 @@ static bool utp_context_rendezvous_plan_contains(const utp_rendezvous_candidate_
     return false;
 }
 
-static utp_internal_error_t utp_context_send_rendezvous_punches(utp_context_t* context,
-                                                                 const utp_address_t* candidates,
-                                                                 uint8_t candidate_count,
-                                                                 const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE])
+static utp_internal_error_t utp_context_send_rendezvous_punches(utp_context_t* context, const utp_address_t* candidates,
+                                                                uint8_t       candidate_count,
+                                                                const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE])
 {
     for (uint8_t index = 0u; index < candidate_count; ++index) {
         const utp_internal_error_t error = utp_context_send_rendezvous_punch(context, &candidates[index], token);
@@ -2679,8 +2666,8 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
         }
 #if defined(UTP_HAVE_SENDMMSG)
         if ((packet->po_flags & UTP_PO_ENCRYPTED) == 0u && !utp_connection_is_close_packet(connection, packet) &&
-            !(slot->rendezvous_active && (packet->packet_type == UTP_PACKET_TYPE_INITIAL ||
-                                          packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
+            !(slot->rendezvous_active &&
+              (packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
             utp_packet_out_t*      packets[UTP_UDP_SOCKET_BATCH_SIZE];
             utp_udp_send_message_t messages[UTP_UDP_SOCKET_BATCH_SIZE];
             utp_udp_send_slice_t   slices[UTP_UDP_SOCKET_BATCH_SIZE][UTP_PACKET_OUT_MAX_SLICES];
@@ -2708,8 +2695,8 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                     (slot->zero_rtt_response_active && slot->zero_rtt_response_sent &&
                      (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) == 0u) ||
                     (packet->po_flags & UTP_PO_ENCRYPTED) != 0u || utp_connection_is_close_packet(connection, packet) ||
-                    (slot->rendezvous_active && (packet->packet_type == UTP_PACKET_TYPE_INITIAL ||
-                                                  packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
+                    (slot->rendezvous_active &&
+                     (packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
                     error = utp_send_control_reschedule_packet(&connection->send_control, packet);
                     if (error != UTP_INTERNAL_ERROR_OK) {
                         break;
@@ -2795,8 +2782,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
             error = utp_context_send_rendezvous_initial(context, slot, packet);
         } else {
             error = utp_context_send_packet(context, connection,
-                                            packet->has_destination ? &packet->destination : &connection->peer,
-                                            packet);
+                                            packet->has_destination ? &packet->destination : &connection->peer, packet);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_context_complete_packet_send(context, slot, packet, now_us);
@@ -2973,9 +2959,9 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+    uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
-    size_t               payload_length;
+    size_t  payload_length;
     utp_internal_error_t error;
 
     if (out_packet_number == NULL) {
@@ -3753,9 +3739,9 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     uint64_t             now_us = *inout_now_us;
     utp_internal_error_t error;
 
-    if (slot->connect_pending && slot->rendezvous_active &&
-        slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && header->type == UTP_PACKET_TYPE_HANDSHAKE &&
-        !utp_address_equal(peer, &slot->connection.peer) && utp_context_rendezvous_candidate_exists(slot, peer)) {
+    if (slot->connect_pending && slot->rendezvous_active && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE && !utp_address_equal(peer, &slot->connection.peer) &&
+        utp_context_rendezvous_candidate_exists(slot, peer)) {
         slot->connection.peer           = *peer;
         slot->connection.candidate_peer = *peer;
         utp_context_endpoint_from_address(&slot->connect_attempt.remote, peer);
@@ -4559,8 +4545,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         context->callback_accept_zero_rtt  = slot;
         context->callback_accept_requested = false;
 
-        const bool accepted = context->on_new_connection == NULL ||
-                              context->on_new_connection(&info, context->on_new_connection_user_data);
+        const bool accepted               = context->on_new_connection == NULL ||
+                                            context->on_new_connection(&info, context->on_new_connection_user_data);
         context->callback_accept_zero_rtt = NULL;
         if (context->callback_accept_requested) {
             slot->zero_rtt_accepted = true;
@@ -4604,7 +4590,7 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
 {
     uint8_t seen_messages[UINT8_MAX + 1u] = {0};
     bool    ntrs_ping_seen                = false;
-    size_t  offset                         = 0u;
+    size_t  offset                        = 0u;
 
     if (context == NULL || peer == NULL || header->scid != 0u || header->dcid != 0u || header->packet_number == 0u ||
         header->reserve != 0u || payload_length == 0u) {
@@ -4729,10 +4715,10 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     }
                 }
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_REDIRECT) {
-                utp_rendezvous_redirect_t       redirect;
+                utp_rendezvous_redirect_t      redirect;
                 utp_context_connection_slot_t* slot;
-                utp_address_t                   cached_peer;
-                bool                            has_cached_peer;
+                utp_address_t                  cached_peer;
+                bool                           has_cached_peer;
 
                 error = utp_rendezvous_redirect_decode(&redirect, rendezvous.payload, rendezvous.payload_length);
                 if (error != UTP_INTERNAL_ERROR_OK) {
@@ -4741,9 +4727,9 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 slot = utp_context_find_rendezvous_slot(context, redirect.rendezvous_id);
                 if (slot != NULL && !slot->rendezvous_active && utp_address_equal(peer, &slot->connection.peer)) {
                     error = utp_context_apply_rendezvous_plan(slot, &redirect.target_plan);
-                    has_cached_peer = error == UTP_INTERNAL_ERROR_OK &&
-                                      utp_context_take_rendezvous_punch(context, redirect.punch_token, now_us,
-                                                                        &cached_peer);
+                    has_cached_peer =
+                        error == UTP_INTERNAL_ERROR_OK &&
+                        utp_context_take_rendezvous_punch(context, redirect.punch_token, now_us, &cached_peer);
                     if (error == UTP_INTERNAL_ERROR_OK && has_cached_peer) {
                         error = utp_context_add_rendezvous_candidate(slot, &cached_peer);
                     }
@@ -4751,13 +4737,13 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                         memcpy(slot->rendezvous_punch_token, redirect.punch_token,
                                sizeof(slot->rendezvous_punch_token));
                         error = utp_context_send_rendezvous_punches(context, slot->rendezvous_candidates,
-                                                                     slot->rendezvous_candidate_count,
-                                                                     slot->rendezvous_punch_token);
+                                                                    slot->rendezvous_candidate_count,
+                                                                    slot->rendezvous_punch_token);
                     }
                     if (error == UTP_INTERNAL_ERROR_OK) {
-                        slot->rendezvous_active          = true;
-                        slot->connection.peer             = has_cached_peer ? cached_peer : slot->rendezvous_candidates[0];
-                        slot->connection.candidate_peer   = slot->connection.peer;
+                        slot->rendezvous_active = true;
+                        slot->connection.peer   = has_cached_peer ? cached_peer : slot->rendezvous_candidates[0];
+                        slot->connection.candidate_peer = slot->connection.peer;
                         utp_context_endpoint_from_address(&slot->connect_attempt.remote, &slot->connection.peer);
                         error = utp_context_send_rendezvous_initials(context, slot);
                     }
@@ -4781,15 +4767,15 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     return UTP_INTERNAL_ERROR_PROTOCOL;
                 }
                 if (!utp_context_rendezvous_forward_seen(context, forward.rendezvous_id, now_us)) {
-                    has_cached_peer = utp_context_take_rendezvous_punch(context, forward.punch_token, now_us,
-                                                                         &cached_peer);
+                    has_cached_peer =
+                        utp_context_take_rendezvous_punch(context, forward.punch_token, now_us, &cached_peer);
                     error = utp_context_send_rendezvous_punches(context, forward.source_plan.local_candidates,
-                                                                 forward.source_plan.local_candidate_count,
-                                                                 forward.punch_token);
+                                                                forward.source_plan.local_candidate_count,
+                                                                forward.punch_token);
                     if (error == UTP_INTERNAL_ERROR_OK) {
                         error = utp_context_send_rendezvous_punches(context, forward.source_plan.public_candidates,
-                                                                     forward.source_plan.public_candidate_count,
-                                                                     forward.punch_token);
+                                                                    forward.source_plan.public_candidate_count,
+                                                                    forward.punch_token);
                     }
                     if (error == UTP_INTERNAL_ERROR_OK && has_cached_peer &&
                         !utp_context_rendezvous_plan_contains(&forward.source_plan, &cached_peer)) {
@@ -5949,8 +5935,8 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         const uint16_t target_size    = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
         const size_t   request_length = utp_context_request_frame_size(context, (uint8_t)target_peer_id_length);
         size_t         fixed_length   = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                              UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        size_t first_data_capacity;
+                                        UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        size_t         first_data_capacity;
 
         if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
             fixed_length += UTP_CRYPTO_AEAD_TAG_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_VERSION_SIZE +
