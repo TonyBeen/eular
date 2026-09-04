@@ -18,11 +18,12 @@ extern "C" {
 #define UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE 8u
 #define UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE        8u
 #define UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES    4u
+#define UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES     4u
 
 /* REGISTER：请求标识、当前 token、Context 身份与本地候选地址。 */
 typedef struct utp_rendezvous_register {
-    const uint8_t*       peer_id;           // Context peer_id 的字节视图
-    const utp_address_t* local_candidates;  // 最多四个本地候选地址
+    const uint8_t*       peer_id;                   // Context peer_id 的字节视图
+    const utp_address_t* local_candidates;          // 最多四个本地候选地址
     const utp_address_t* reported_public_endpoint;  // NAT 探测得出的公网 endpoint，可为空
     uint8_t              registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
     utp_address_t        decoded_reported_public_endpoint;
@@ -57,6 +58,21 @@ typedef struct utp_rendezvous_pong {
     uint64_t acknowledged_packet_number;
 } utp_rendezvous_pong_t;
 
+/* ADDRESS_UPDATE：注册 Context 批量上报被连接对端观察到的公网地址。 */
+typedef struct utp_rendezvous_address_update {
+    const utp_address_t* samples;  // 1..4 个观测样本
+    uint8_t              registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    utp_address_t        decoded_samples[UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES];
+    uint64_t             observed_at_unix_ms[UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES];
+    uint64_t             update_id;  // 同一批重传保持不变
+    uint8_t              sample_count;
+} utp_rendezvous_address_update_t;
+
+/* ADDRESS_UPDATED：NTRS 已处理指定 update_id，不表达每条样本的采纳结果。 */
+typedef struct utp_rendezvous_address_updated {
+    uint64_t update_id;
+} utp_rendezvous_address_updated_t;
+
 /* REQUEST：rendezvous_id(16), source_id, target_id, NAT 信息和本地候选地址。 */
 typedef struct utp_rendezvous_request {
     const uint8_t*       source_peer_id;                         // 请求方 Context peer_id 的字节视图
@@ -76,21 +92,21 @@ typedef struct utp_rendezvous_request {
 
 /* CandidatePlan：本地候选地址及不可拆分的公网 IP:port 候选。 */
 typedef struct utp_rendezvous_candidate_plan {
-    const utp_address_t* local_candidates;                                               // 最多四个本地候选地址
-    const utp_address_t* public_candidates;                                              // 最多四个公网 IP:port 候选
-    utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 解码存储
-    utp_address_t        decoded_public_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]; // 解码存储
-    uint16_t             local_port;                                                     // Context 已绑定 UDP 端口
-    uint8_t              family;                                                         // 4 或 6
-    uint8_t              local_candidate_count;                                          // 0..4
-    uint8_t              public_candidate_count;                                         // 1..4
+    const utp_address_t* local_candidates;                                                // 最多四个本地候选地址
+    const utp_address_t* public_candidates;                                               // 最多四个公网 IP:port 候选
+    utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];   // 解码存储
+    utp_address_t        decoded_public_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 解码存储
+    uint16_t             local_port;                                                      // Context 已绑定 UDP 端口
+    uint8_t              family;                                                          // 4 或 6
+    uint8_t              local_candidate_count;                                           // 0..4
+    uint8_t              public_candidate_count;                                          // 1..4
 } utp_rendezvous_candidate_plan_t;
 
 /* REDIRECT：rendezvous_id(16) 加目标 CandidatePlan。 */
 typedef struct utp_rendezvous_redirect {
     uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
     uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
-    utp_rendezvous_candidate_plan_t target_plan;                            // 目标 B 的候选计划
+    utp_rendezvous_candidate_plan_t target_plan;  // 目标 B 的候选计划
 } utp_rendezvous_redirect_t;
 
 /* FORWARD：rendezvous_id(16)、请求方 peer_id 与请求方 CandidatePlan。 */
@@ -98,8 +114,8 @@ typedef struct utp_rendezvous_forward {
     const uint8_t*                  source_peer_id;                         // 请求方 peer_id 的输入视图
     uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
     uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
-    uint8_t                         source_peer_id_length;                  // 1..128
-    utp_rendezvous_candidate_plan_t source_plan;                            // 请求方 A 的候选计划
+    uint8_t                         source_peer_id_length;  // 1..128
+    utp_rendezvous_candidate_plan_t source_plan;            // 请求方 A 的候选计划
 } utp_rendezvous_forward_t;
 
 /** @brief 编码 REGISTER 消息体，输出不含 FrameRendezvous 包络。 */
@@ -123,6 +139,19 @@ utp_internal_error_t utp_rendezvous_ping_decode(utp_rendezvous_ping_t* ping, con
 utp_internal_error_t utp_rendezvous_pong_encode(uint8_t* buffer, size_t capacity, const utp_rendezvous_pong_t* pong);
 /** @brief 解码固定长度 PONG 消息体。 */
 utp_internal_error_t utp_rendezvous_pong_decode(utp_rendezvous_pong_t* pong, const uint8_t* buffer, size_t length);
+/** @brief 编码 ADDRESS_UPDATE 消息体。 */
+utp_internal_error_t utp_rendezvous_address_update_encode(uint8_t* buffer, size_t capacity,
+                                                          const utp_rendezvous_address_update_t* update,
+                                                          size_t*                                out_length);
+/** @brief 解码严格的 ADDRESS_UPDATE 消息体，samples 指向输出结构内的解码存储。 */
+utp_internal_error_t utp_rendezvous_address_update_decode(utp_rendezvous_address_update_t* update,
+                                                          const uint8_t* buffer, size_t length);
+/** @brief 编码固定长度 ADDRESS_UPDATED 消息体。 */
+utp_internal_error_t utp_rendezvous_address_updated_encode(uint8_t* buffer, size_t capacity,
+                                                           const utp_rendezvous_address_updated_t* updated);
+/** @brief 解码固定长度 ADDRESS_UPDATED 消息体。 */
+utp_internal_error_t utp_rendezvous_address_updated_decode(utp_rendezvous_address_updated_t* updated,
+                                                           const uint8_t* buffer, size_t length);
 /** @brief 编码 REQUEST 消息体，输出不含 FrameRendezvous 包络。 */
 utp_internal_error_t utp_rendezvous_request_encode(uint8_t* buffer, size_t capacity,
                                                    const utp_rendezvous_request_t* request, size_t* out_length);

@@ -788,30 +788,30 @@ TEST_CASE("rendezvous REQUEST round trips peer IDs and local candidates", "[rend
     utp_rendezvous_request_t     decoded     = {};
     size_t                       body_length = 0u;
 
-    candidates[0].family          = UTP_ADDRESS_FAMILY_IPV4;
-    candidates[0].port            = UINT16_C(4567);
-    candidates[0].address[0]      = 192u;
-    candidates[0].address[1]      = 168u;
-    candidates[0].address[2]      = 1u;
-    candidates[0].address[3]      = 10u;
-    candidates[1]                 = candidates[0];
-    candidates[1].address[3]      = 11u;
-    request.source_peer_id        = source_id.data();
-    request.target_peer_id        = target_id.data();
-    request.local_candidates      = candidates.data();
-    request.local_port            = UINT16_C(4567);
-    request.source_peer_id_length = static_cast<uint8_t>(source_id.size());
-    request.target_peer_id_length = static_cast<uint8_t>(target_id.size());
-    request.source_nat_class      = 6u;
-    request.local_family          = UTP_ADDRESS_FAMILY_IPV4;
-    request.local_candidate_count = static_cast<uint8_t>(candidates.size());
-    request.decoded_reported_public_endpoint.family = UTP_ADDRESS_FAMILY_IPV4;
-    request.decoded_reported_public_endpoint.port   = UINT16_C(54001);
+    candidates[0].family                                = UTP_ADDRESS_FAMILY_IPV4;
+    candidates[0].port                                  = UINT16_C(4567);
+    candidates[0].address[0]                            = 192u;
+    candidates[0].address[1]                            = 168u;
+    candidates[0].address[2]                            = 1u;
+    candidates[0].address[3]                            = 10u;
+    candidates[1]                                       = candidates[0];
+    candidates[1].address[3]                            = 11u;
+    request.source_peer_id                              = source_id.data();
+    request.target_peer_id                              = target_id.data();
+    request.local_candidates                            = candidates.data();
+    request.local_port                                  = UINT16_C(4567);
+    request.source_peer_id_length                       = static_cast<uint8_t>(source_id.size());
+    request.target_peer_id_length                       = static_cast<uint8_t>(target_id.size());
+    request.source_nat_class                            = 6u;
+    request.local_family                                = UTP_ADDRESS_FAMILY_IPV4;
+    request.local_candidate_count                       = static_cast<uint8_t>(candidates.size());
+    request.decoded_reported_public_endpoint.family     = UTP_ADDRESS_FAMILY_IPV4;
+    request.decoded_reported_public_endpoint.port       = UINT16_C(54001);
     request.decoded_reported_public_endpoint.address[0] = 203u;
     request.decoded_reported_public_endpoint.address[1] = 0u;
     request.decoded_reported_public_endpoint.address[2] = 113u;
     request.decoded_reported_public_endpoint.address[3] = 12u;
-    request.reported_public_endpoint = &request.decoded_reported_public_endpoint;
+    request.reported_public_endpoint                    = &request.decoded_reported_public_endpoint;
     for (size_t index = 0u; index < sizeof(request.rendezvous_id); ++index) {
         request.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
     }
@@ -838,33 +838,33 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
     std::array<utp_address_t, 2> public_candidates = {};
     std::array<uint8_t, 256>     body              = {};
     utp_rendezvous_redirect_t    redirect          = {};
-    utp_rendezvous_redirect_t    decoded_redirect = {};
-    utp_rendezvous_forward_t     forward = {};
-    utp_rendezvous_forward_t     decoded_forward = {};
-    size_t                       body_length = 0u;
+    utp_rendezvous_redirect_t    decoded_redirect  = {};
+    utp_rendezvous_forward_t     forward           = {};
+    utp_rendezvous_forward_t     decoded_forward   = {};
+    size_t                       body_length       = 0u;
 
-    candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
-    candidates[0].port       = UINT16_C(4567);
-    candidates[0].address[0] = 192u;
-    candidates[0].address[1] = 168u;
-    candidates[0].address[2] = 1u;
-    candidates[0].address[3] = 10u;
-    candidates[1]            = candidates[0];
-    candidates[1].address[3] = 11u;
-    public_candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
-    public_candidates[0].port       = UINT16_C(40001);
-    public_candidates[0].address[0] = 203u;
-    public_candidates[0].address[1] = 0u;
-    public_candidates[0].address[2] = 113u;
-    public_candidates[0].address[3] = 8u;
-    public_candidates[1]            = public_candidates[0];
-    public_candidates[1].port       = UINT16_C(40002);
-    public_candidates[1].address[3] = 9u;
-    redirect.target_plan.local_candidates      = candidates.data();
-    redirect.target_plan.public_candidates     = public_candidates.data();
-    redirect.target_plan.local_port            = UINT16_C(4567);
-    redirect.target_plan.family                = UTP_ADDRESS_FAMILY_IPV4;
-    redirect.target_plan.local_candidate_count = static_cast<uint8_t>(candidates.size());
+    candidates[0].family                        = UTP_ADDRESS_FAMILY_IPV4;
+    candidates[0].port                          = UINT16_C(4567);
+    candidates[0].address[0]                    = 192u;
+    candidates[0].address[1]                    = 168u;
+    candidates[0].address[2]                    = 1u;
+    candidates[0].address[3]                    = 10u;
+    candidates[1]                               = candidates[0];
+    candidates[1].address[3]                    = 11u;
+    public_candidates[0].family                 = UTP_ADDRESS_FAMILY_IPV4;
+    public_candidates[0].port                   = UINT16_C(40001);
+    public_candidates[0].address[0]             = 203u;
+    public_candidates[0].address[1]             = 0u;
+    public_candidates[0].address[2]             = 113u;
+    public_candidates[0].address[3]             = 8u;
+    public_candidates[1]                        = public_candidates[0];
+    public_candidates[1].port                   = UINT16_C(40002);
+    public_candidates[1].address[3]             = 9u;
+    redirect.target_plan.local_candidates       = candidates.data();
+    redirect.target_plan.public_candidates      = public_candidates.data();
+    redirect.target_plan.local_port             = UINT16_C(4567);
+    redirect.target_plan.family                 = UTP_ADDRESS_FAMILY_IPV4;
+    redirect.target_plan.local_candidate_count  = static_cast<uint8_t>(candidates.size());
     redirect.target_plan.public_candidate_count = static_cast<uint8_t>(public_candidates.size());
     for (size_t index = 0u; index < sizeof(redirect.rendezvous_id); ++index) {
         redirect.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
@@ -873,8 +873,7 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
         redirect.punch_token[index] = static_cast<uint8_t>(index + 9u);
     }
 
-    REQUIRE(utp_rendezvous_redirect_encode(body.data(), body.size(), &redirect, &body_length) ==
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_redirect_encode(body.data(), body.size(), &redirect, &body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_redirect_decode(&decoded_redirect, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(std::memcmp(decoded_redirect.rendezvous_id, redirect.rendezvous_id, sizeof(redirect.rendezvous_id)) == 0);
     REQUIRE(decoded_redirect.target_plan.local_candidate_count == candidates.size());
@@ -899,8 +898,8 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
 
 TEST_CASE("rendezvous INTRODUCTION requires exactly one rendezvous ID", "[rendezvous]")
 {
-    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE> rendezvous_id = {};
-    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE - 1u> truncated = {};
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE>      rendezvous_id = {};
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE - 1u> truncated     = {};
 
     REQUIRE(utp_rendezvous_introduction_decode(rendezvous_id.data(), truncated.data(), truncated.size()) ==
             UTP_INTERNAL_ERROR_PROTOCOL);
@@ -932,23 +931,23 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     local_candidates[1]            = local_candidates[0];
     local_candidates[1].address[3] = 11u;
 
-    registration.peer_id                 = peer_id.data();
-    registration.local_candidates        = local_candidates.data();
-    registration.registration_request_id = UINT64_C(0x1020304050607080);
-    registration.registration_token[0]   = 1u;
-    registration.registration_token[7]   = 8u;
-    registration.local_port              = UINT16_C(34000);
-    registration.peer_id_length          = static_cast<uint8_t>(peer_id.size());
-    registration.nat_class               = UTP_NAT_CLASS_PORT_RESTRICTED;
-    registration.local_family            = UTP_ADDRESS_FAMILY_IPV4;
-    registration.local_candidate_count   = static_cast<uint8_t>(local_candidates.size());
-    registration.decoded_reported_public_endpoint.family = UTP_ADDRESS_FAMILY_IPV4;
-    registration.decoded_reported_public_endpoint.port   = UINT16_C(54000);
+    registration.peer_id                                     = peer_id.data();
+    registration.local_candidates                            = local_candidates.data();
+    registration.registration_request_id                     = UINT64_C(0x1020304050607080);
+    registration.registration_token[0]                       = 1u;
+    registration.registration_token[7]                       = 8u;
+    registration.local_port                                  = UINT16_C(34000);
+    registration.peer_id_length                              = static_cast<uint8_t>(peer_id.size());
+    registration.nat_class                                   = UTP_NAT_CLASS_PORT_RESTRICTED;
+    registration.local_family                                = UTP_ADDRESS_FAMILY_IPV4;
+    registration.local_candidate_count                       = static_cast<uint8_t>(local_candidates.size());
+    registration.decoded_reported_public_endpoint.family     = UTP_ADDRESS_FAMILY_IPV4;
+    registration.decoded_reported_public_endpoint.port       = UINT16_C(54000);
     registration.decoded_reported_public_endpoint.address[0] = 203u;
     registration.decoded_reported_public_endpoint.address[1] = 0u;
     registration.decoded_reported_public_endpoint.address[2] = 113u;
     registration.decoded_reported_public_endpoint.address[3] = 11u;
-    registration.reported_public_endpoint = &registration.decoded_reported_public_endpoint;
+    registration.reported_public_endpoint                    = &registration.decoded_reported_public_endpoint;
     REQUIRE(utp_rendezvous_register_encode(buffer.data(), buffer.size(), &registration, &length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_register_decode(&decoded_registration, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
@@ -989,6 +988,44 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(decoded_pong.acknowledged_packet_number == pong.acknowledged_packet_number);
     buffer[15] = 0u;
     REQUIRE(utp_rendezvous_pong_decode(&decoded_pong, buffer.data(), 16u) == UTP_INTERNAL_ERROR_PROTOCOL);
+}
+
+TEST_CASE("rendezvous address update payloads preserve a batch and acknowledgement", "[rendezvous]")
+{
+    std::array<uint8_t, 128>         buffer          = {};
+    std::array<utp_address_t, 2>     samples         = {};
+    utp_rendezvous_address_update_t  update          = {};
+    utp_rendezvous_address_update_t  decoded         = {};
+    utp_rendezvous_address_updated_t updated         = {UINT64_C(0x0102030405060708)};
+    utp_rendezvous_address_updated_t decoded_updated = {};
+    size_t                           length          = 0u;
+
+    REQUIRE(utp_address_parse(&samples[0], "192.0.2.7", 12000u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_address_parse(&samples[1], "2001:db8::8", 12001u) == UTP_INTERNAL_ERROR_OK);
+    for (size_t index = 0u; index < sizeof(update.registration_token); ++index) {
+        update.registration_token[index] = static_cast<uint8_t>(index + 1u);
+    }
+    update.samples                = samples.data();
+    update.update_id              = UINT64_C(0x8877665544332211);
+    update.sample_count           = static_cast<uint8_t>(samples.size());
+    update.observed_at_unix_ms[0] = UINT64_C(1760000000000);
+    update.observed_at_unix_ms[1] = UINT64_C(1760000000001);
+
+    REQUIRE(utp_rendezvous_address_update_encode(buffer.data(), buffer.size(), &update, &length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_address_update_decode(&decoded, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded.update_id == update.update_id);
+    REQUIRE(decoded.sample_count == update.sample_count);
+    REQUIRE(std::memcmp(decoded.registration_token, update.registration_token, sizeof(update.registration_token)) == 0);
+    REQUIRE(utp_address_equal(&decoded.samples[0], &samples[0]));
+    REQUIRE(utp_address_equal(&decoded.samples[1], &samples[1]));
+    REQUIRE(decoded.observed_at_unix_ms[0] == update.observed_at_unix_ms[0]);
+    REQUIRE(decoded.observed_at_unix_ms[1] == update.observed_at_unix_ms[1]);
+    REQUIRE(utp_rendezvous_address_update_decode(&decoded, buffer.data(), length - 1u) != UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_address_updated_encode(buffer.data(), sizeof(uint64_t), &updated) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_address_updated_decode(&decoded_updated, buffer.data(), sizeof(uint64_t)) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_updated.update_id == updated.update_id);
 }
 
 TEST_CASE("transport parameter and ACK frequency frames normalize and validate values", "[frame]")
