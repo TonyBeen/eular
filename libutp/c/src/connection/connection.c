@@ -449,7 +449,9 @@ static bool utp_connection_packet_bypasses_congestion(const utp_packet_out_t* pa
     return (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u ||
            packet->packet_type == UTP_PACKET_TYPE_CONNECTION_CLOSE ||
            packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) ||
-           packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE);
+           packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE) ||
+           packet->frame_types ==
+               (UTP_FRAME_BIT(UTP_FRAME_TYPE_PATH_RESPONSE) | UTP_FRAME_BIT(UTP_FRAME_TYPE_OBSERVED_ADDRESS));
 }
 
 static bool utp_connection_can_transmit_packet(utp_connection_t* connection, const utp_packet_out_t* packet)
@@ -675,18 +677,39 @@ static utp_internal_error_t utp_connection_queue_path_frame(utp_connection_t* co
                                                             const utp_frame_path_t* path,
                                                             const utp_address_t* destination, bool candidate_path)
 {
-    utp_packet_out_t*    packet = NULL;
-    utp_internal_error_t error;
-    uint64_t             packet_number;
-    const size_t         packet_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_PATH_SIZE;
-    const size_t         wire_packet_length =
-        packet_length + (connection != NULL && connection->crypto_ready ? UTP_CRYPTO_AEAD_TAG_SIZE : 0u);
+    utp_packet_out_t*            packet   = NULL;
+    utp_frame_observed_address_t observed = {{0}, 0u, 0u};
+    utp_internal_error_t         error;
+    uint64_t                     packet_number;
+    size_t                       observed_length;
+    size_t                       payload_length;
+    size_t                       packet_length;
+    size_t                       wire_packet_length;
+    bool                         include_observed;
 
     if (connection == NULL || path == NULL || destination == NULL ||
         (frame_type != UTP_FRAME_TYPE_PATH_CHALLENGE && frame_type != UTP_FRAME_TYPE_PATH_RESPONSE) ||
         connection->state == UTP_CONNECTION_STATE_DRAINING || connection->state == UTP_CONNECTION_STATE_CLOSED) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    include_observed = frame_type == UTP_FRAME_TYPE_PATH_RESPONSE;
+    if (include_observed) {
+        observed.family = destination->family;
+        observed.port   = destination->port;
+        if ((observed.family != UTP_ADDRESS_FAMILY_IPV4 && observed.family != UTP_ADDRESS_FAMILY_IPV6) ||
+            observed.port == 0u) {
+            return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        }
+        memcpy(observed.address, destination->address,
+               observed.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : sizeof(observed.address));
+        observed_length = observed.family == UTP_ADDRESS_FAMILY_IPV4 ? UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE
+                                                                     : UTP_FRAME_OBSERVED_ADDRESS_IPV6_SIZE;
+    } else {
+        observed_length = 0u;
+    }
+    payload_length     = UTP_FRAME_PATH_SIZE + observed_length;
+    packet_length      = UTP_PACKET_HEADER_SIZE + payload_length;
+    wire_packet_length = packet_length + (connection->crypto_ready ? UTP_CRYPTO_AEAD_TAG_SIZE : 0u);
     if (candidate_path && (!utp_address_equal(destination, &connection->candidate_peer) ||
                            !utp_connection_candidate_can_queue(connection, wire_packet_length))) {
         return UTP_INTERNAL_ERROR_PATH_VALIDATION_BLOCKED;
@@ -696,21 +719,44 @@ static utp_internal_error_t utp_connection_queue_path_frame(utp_connection_t* co
         error = utp_send_control_allocate_packet_number(&connection->send_control, &packet_number);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        packet->packet_number    = packet_number;
-        packet->data_size        = (uint16_t)packet_length;
-        packet->packet_type      = UTP_PACKET_TYPE_CTRL;
-        packet->frame_types      = UTP_FRAME_BIT(frame_type);
-        packet->slice_count      = 1u;
-        packet->slices[0].source = UTP_PACKET_OUT_SLICE_RAW_OFFSET;
-        packet->slices[0].offset = 0u;
-        packet->slices[0].length = (uint16_t)packet_length;
-        packet->slices[0].data   = NULL;
+        packet->packet_number = packet_number;
+        packet->data_size     = (uint16_t)packet_length;
+        packet->packet_type   = UTP_PACKET_TYPE_CTRL;
+        packet->frame_types =
+            UTP_FRAME_BIT(frame_type) | (include_observed ? UTP_FRAME_BIT(UTP_FRAME_TYPE_OBSERVED_ADDRESS) : 0u);
+        packet->control_prefix_size = include_observed ? UTP_FRAME_PATH_SIZE : 0u;
+        packet->slice_count         = 1u;
+        packet->slices[0].source    = UTP_PACKET_OUT_SLICE_RAW_OFFSET;
+        packet->slices[0].offset    = 0u;
+        packet->slices[0].length    = (uint16_t)packet_length;
+        packet->slices[0].data      = NULL;
         error = utp_frame_path_encode(packet->raw_data + UTP_PACKET_HEADER_SIZE, UTP_FRAME_PATH_SIZE, frame_type, path);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && include_observed) {
+        error = utp_frame_observed_address_encode(packet->raw_data + UTP_PACKET_HEADER_SIZE + UTP_FRAME_PATH_SIZE,
+                                                  observed_length, &observed);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_encode_header(connection, packet, UTP_PACKET_TYPE_CTRL);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
+        if (include_observed) {
+            packet->frame_meta[0]    = (utp_frame_meta_info_t){NULL,
+                                                               0u,
+                                                               UTP_PACKET_HEADER_SIZE,
+                                                               UTP_FRAME_PATH_SIZE,
+                                                               0u,
+                                                               UTP_FRAME_TYPE_PATH_RESPONSE,
+                                                               UTP_FRAME_META_TRANSIENT_ON_RETRANSMIT};
+            packet->frame_meta[1]    = (utp_frame_meta_info_t){NULL,
+                                                               0u,
+                                                               UTP_PACKET_HEADER_SIZE + UTP_FRAME_PATH_SIZE,
+                                                               (uint16_t)observed_length,
+                                                               0u,
+                                                               UTP_FRAME_TYPE_OBSERVED_ADDRESS,
+                                                               0u};
+            packet->frame_meta_count = 2u;
+        }
         packet->has_destination = !utp_address_equal(destination, &connection->peer);
         if (packet->has_destination) {
             packet->destination = *destination;
@@ -719,7 +765,7 @@ static utp_internal_error_t utp_connection_queue_path_frame(utp_connection_t* co
             packet->po_flags                   |= UTP_PO_PATH_VALIDATION;
             packet->path_validation_generation  = connection->path_validation_generation;
         }
-        error = utp_send_control_schedule_packet(&connection->send_control, packet, false);
+        error = utp_send_control_schedule_packet(&connection->send_control, packet, include_observed);
     }
     if (error == UTP_INTERNAL_ERROR_OK && candidate_path) {
         connection->candidate_queued_bytes += (uint64_t)wire_packet_length;
@@ -796,6 +842,34 @@ static utp_internal_error_t utp_connection_handle_path_response(utp_connection_t
     connection->path_challenge_pending     = false;
     connection->candidate_queued_bytes     = 0u;
     connection->path_state                 = UTP_CONNECTION_PATH_STATE_VALIDATED;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static utp_internal_error_t utp_connection_handle_observed_address(utp_connection_t* connection, const uint8_t* frame,
+                                                                   size_t frame_length, const utp_address_t* peer)
+{
+    utp_frame_observed_address_t observed;
+    utp_address_t                address = {0};
+    utp_internal_error_t         error;
+    size_t                       address_length;
+
+    if (connection == NULL || peer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_frame_observed_address_decode(&observed, frame, frame_length);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (observed.family != peer->family) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    address.family = observed.family;
+    address.port   = observed.port;
+    address_length = address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : sizeof(address.address);
+    memcpy(address.address, observed.address, address_length);
+    if (connection->context != NULL) {
+        utp_context_remember_observed_address(connection->context, &address);
+    }
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -2770,7 +2844,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->ack_profile_baseline_srtt_us    = 0u;
     connection->ack_loss_window_start_us        = 0u;
     connection->last_ack_frequency_apply_us     = 0u;
-    connection->last_public_flush_us           = 0u;
+    connection->last_public_flush_us            = 0u;
     connection->candidate_rx_bytes              = 0u;
     connection->candidate_tx_bytes              = 0u;
     connection->candidate_queued_bytes          = 0u;
@@ -2876,10 +2950,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_connection_enter_user_callback(utp_connection_t* connection)
-{
-    connection->user_callback_depth += 1u;
-}
+void utp_connection_enter_user_callback(utp_connection_t* connection) { connection->user_callback_depth += 1u; }
 
 bool utp_connection_leave_user_callback(utp_connection_t* connection)
 {
@@ -4150,6 +4221,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 error = utp_connection_handle_path_challenge(connection, frame, frame_length, peer, charge_candidate);
             } else if (frame_type == UTP_FRAME_TYPE_PATH_RESPONSE) {
                 error = utp_connection_handle_path_response(connection, frame, frame_length, peer, true);
+            } else if (frame_type == UTP_FRAME_TYPE_OBSERVED_ADDRESS) {
+                error = utp_connection_handle_observed_address(connection, frame, frame_length, peer);
             } else if (frame_type == UTP_FRAME_TYPE_CONNECTION_CLOSE) {
                 utp_frame_connection_close_t close;
 
@@ -4174,11 +4247,12 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 return UTP_INTERNAL_ERROR_PROTOCOL;
             }
             error = utp_frame_rendezvous_decode(&rendezvous, frame, frame_length);
-            if (error != UTP_INTERNAL_ERROR_OK || (rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-                                                   rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) ||
+            if (error != UTP_INTERNAL_ERROR_OK ||
+                (rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                 rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) ||
                 (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_INTRODUCTION &&
-                 utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload,
-                                                     rendezvous.payload_length) != UTP_INTERNAL_ERROR_OK)) {
+                 utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload, rendezvous.payload_length) !=
+                     UTP_INTERNAL_ERROR_OK)) {
                 return UTP_INTERNAL_ERROR_PROTOCOL;
             }
             rendezvous_seen = true;
@@ -4324,6 +4398,11 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
         } else if (frame_type == UTP_FRAME_TYPE_PATH_RESPONSE) {
             error = utp_connection_handle_path_response(connection, frame, frame_length, peer, false);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+        } else if (frame_type == UTP_FRAME_TYPE_OBSERVED_ADDRESS) {
+            error = utp_connection_handle_observed_address(connection, frame, frame_length, peer);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }

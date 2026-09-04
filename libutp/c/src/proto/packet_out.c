@@ -342,6 +342,12 @@ utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t* pkt, uint16_t
     if (utp_proto_encode_header(pkt->raw_data, pkt->alloc_size, &header) != UTP_INTERNAL_ERROR_OK) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    if ((pkt->po_flags & UTP_PO_ENCRYPTED) != 0u) {
+        if (pkt->encrypt_data_size < prefix_length) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        pkt->encrypt_data_size = (uint16_t)(pkt->encrypt_data_size - prefix_length);
+    }
     pkt->data_size   = (uint16_t)(pkt->data_size - prefix_length);
     pkt->slice_count = (uint8_t)output_count;
     for (size_t index = 0u; index < output_count; ++index) {

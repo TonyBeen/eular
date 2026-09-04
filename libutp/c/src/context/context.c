@@ -658,6 +658,17 @@ static uint64_t utp_context_now_us(void)
     return now_us == 0u ? 1u : now_us;
 }
 
+static uint64_t utp_context_unix_now_ms(void)
+{
+    struct timespec now;
+
+    if (timespec_get(&now, TIME_UTC) != TIME_UTC || now.tv_sec < 0 ||
+        (uint64_t)now.tv_sec > UINT64_MAX / UINT64_C(1000)) {
+        return 0u;
+    }
+    return (uint64_t)now.tv_sec * UINT64_C(1000) + (uint64_t)now.tv_nsec / UINT64_C(1000000);
+}
+
 static void utp_context_endpoint_from_address(utp_endpoint_t* endpoint, const utp_address_t* address)
 {
     endpoint->family   = address->family;
@@ -713,11 +724,11 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t* conte
     const uint64_t expires_at_seconds = context->zero_rtt_token_max_lifetime_seconds > UINT64_MAX - now_seconds
                                             ? UINT64_MAX
                                             : now_seconds + context->zero_rtt_token_max_lifetime_seconds;
-    const uint8_t encryption_mode = slot->connection.crypto_configured
-                                        ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
-                                        : (uint8_t)UTP_ENCRYPTION_NONE;
-    uint8_t       token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
-    uint8_t       payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    const uint8_t  encryption_mode    = slot->connection.crypto_configured
+                                            ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
+                                            : (uint8_t)UTP_ENCRYPTION_NONE;
+    uint8_t        token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    uint8_t        payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
     utp_frame_session_token_t frame;
     utp_internal_error_t      error = utp_crypto_random_bytes(token_payload, UTP_CRYPTO_RESUMPTION_PSK_SIZE);
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1152,8 +1163,8 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
     if (context->rendezvous_output_count >= UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    index       = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
-                  UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
+    index = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
+            UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
     entry       = &context->rendezvous_output[index];
     entry->peer = *peer;
     memcpy(entry->packet, packet, packet_length);
@@ -2071,6 +2082,28 @@ static void utp_context_remember_local_candidate(utp_context_t* context, const u
     }
 }
 
+void utp_context_remember_observed_address(utp_context_t* context, const utp_address_t* address)
+{
+    const uint64_t observed_at_unix_ms = utp_context_unix_now_ms();
+
+    if (context == NULL || address == NULL || address->port == 0u ||
+        (address->family != UTP_ADDRESS_FAMILY_IPV4 && address->family != UTP_ADDRESS_FAMILY_IPV6) ||
+        utp_context_address_is_unspecified(address)) {
+        return;
+    }
+    for (uint8_t index = 0u; index < context->observed_address_count; ++index) {
+        if (utp_address_equal(&context->observed_addresses[index].endpoint, address)) {
+            context->observed_addresses[index].observed_at_unix_ms = observed_at_unix_ms;
+            return;
+        }
+    }
+    if (context->observed_address_count < UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY) {
+        context->observed_addresses[context->observed_address_count].endpoint            = *address;
+        context->observed_addresses[context->observed_address_count].observed_at_unix_ms = observed_at_unix_ms;
+        ++context->observed_address_count;
+    }
+}
+
 static void utp_context_nat_clear_records(utp_nat_probe_task_t* task)
 {
     for (uint8_t index = 0u; index < UTP_NAT_PROBE_MAX_IN_FLIGHT; ++index) {
@@ -2959,9 +2992,9 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
-    size_t  payload_length;
+    size_t               payload_length;
     utp_internal_error_t error;
 
     if (out_packet_number == NULL) {
@@ -4545,8 +4578,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         context->callback_accept_zero_rtt  = slot;
         context->callback_accept_requested = false;
 
-        const bool accepted               = context->on_new_connection == NULL ||
-                                            context->on_new_connection(&info, context->on_new_connection_user_data);
+        const bool accepted = context->on_new_connection == NULL ||
+                              context->on_new_connection(&info, context->on_new_connection_user_data);
         context->callback_accept_zero_rtt = NULL;
         if (context->callback_accept_requested) {
             slot->zero_rtt_accepted = true;
@@ -5292,6 +5325,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->next_nat_probe_packet_number  = 1u;
     context->next_rendezvous_packet_number = 1u;
     context->local_candidate_count         = 0u;
+    context->observed_address_count        = 0u;
     context->ntrs_registration             = (utp_context_ntrs_registration_t){0};
     memcpy(context->peer_id, options->peer_id, peer_id_length);
     context->peer_id[peer_id_length] = '\0';
@@ -5935,8 +5969,8 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         const uint16_t target_size    = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
         const size_t   request_length = utp_context_request_frame_size(context, (uint8_t)target_peer_id_length);
         size_t         fixed_length   = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                                        UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        size_t         first_data_capacity;
+                              UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        size_t first_data_capacity;
 
         if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
             fixed_length += UTP_CRYPTO_AEAD_TAG_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_VERSION_SIZE +

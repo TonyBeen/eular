@@ -7,6 +7,7 @@
 #include <catch2/catch.hpp>
 
 extern "C" {
+#include "crypto/crypto.h"
 #include "proto/frame.h"
 #include "proto/packet_out.h"
 #include "proto/proto.h"
@@ -278,4 +279,24 @@ TEST_CASE("packet_out strips a transient prefix without moving external stream d
                         UTP_FRAME_STREAM_HEADER_SIZE) == 0);
     REQUIRE(std::memcmp(wire.data() + UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE, stream_data.data(),
                         stream_data.size()) == 0);
+}
+
+TEST_CASE("stripping a transient prefix preserves encrypted packet size", "[packet_out]")
+{
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 3u> raw    = {};
+    utp_packet_header_t                              header = {1u, 2u, 3u, 3u, UTP_PACKET_TYPE_CTRL, 0u};
+    utp_packet_out_t                                 packet = {};
+
+    REQUIRE(utp_proto_encode_header(raw.data(), raw.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    packet.raw_data          = raw.data();
+    packet.alloc_size        = (uint16_t)raw.size();
+    packet.data_size         = (uint16_t)raw.size();
+    packet.encrypt_data_size = (uint16_t)(raw.size() + UTP_CRYPTO_AEAD_TAG_SIZE);
+    packet.po_flags          = UTP_PO_ENCRYPTED;
+    packet.slice_count       = 1u;
+    packet.slices[0]         = {0u, (uint16_t)raw.size(), nullptr, UTP_PACKET_OUT_SLICE_RAW_OFFSET};
+
+    REQUIRE(utp_packet_out_strip_prefix(&packet, 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet.data_size == raw.size() - 1u);
+    REQUIRE(packet.encrypt_data_size == packet.data_size + UTP_CRYPTO_AEAD_TAG_SIZE);
 }

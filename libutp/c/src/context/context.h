@@ -29,13 +29,14 @@
 #define UTP_CONTEXT_NTRS_PACKET_CAPACITY   512u
 #define UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY \
     (UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + 8u)
-#define UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES (UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 2u + 1u)
-#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY 16u
-#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US UINT64_C(5000000)
-#define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY 16u
+#define UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES            (UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 2u + 1u)
+#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY      16u
+#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US   UINT64_C(5000000)
+#define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY    16u
 #define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US UINT64_C(30000000)
-#define UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY 32u
-#define UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY UTP_PACKET_MTU_FLOOR
+#define UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY           32u
+#define UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY           UTP_PACKET_MTU_FLOOR
+#define UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY            4u
 
 typedef struct utp_context_ntrs_registration {
     utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
@@ -87,7 +88,7 @@ typedef struct utp_context_connection_slot {
     uint64_t                   zero_rtt_amplification_tx_bytes;    // 0-RTT 防放大已发送字节
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
-    uint8_t                    rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];        // 主动连接的 rendezvous 幂等键
+    uint8_t                    rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 主动连接的 rendezvous 幂等键
     uint8_t                    rendezvous_punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     utp_address_t              rendezvous_candidates[UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES];
     char                       target_peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 主动连接复制的目标路由标识
@@ -102,28 +103,28 @@ typedef struct utp_context_connection_slot {
     uint8_t                    zero_rtt_encryption_mode;                     // 票据指定加密模式
     uint8_t                    target_peer_id_length;                        // target_peer_id 的有效字节数
     uint8_t                    rendezvous_candidate_count;
-    bool                       zero_rtt_early_fin : 1;                       // 早期流数据是否带 FIN
-    bool                       zero_rtt_awaiting_accept : 1;                 // 是否等待 on_new_connection 决策
-    bool                       zero_rtt_accepted : 1;                        // 应用是否已接受 0-RTT
-    bool                       zero_rtt_response_active : 1;                 // 是否维护 0-RTT 响应重传状态
-    bool                       zero_rtt_response_queued : 1;                 // HANDSHAKE_DONE 是否已排队
-    bool                       zero_rtt_response_sent : 1;                   // HANDSHAKE_DONE 是否已实际发送
-    bool                       zero_rtt_early_delivered : 1;                 // 是否已将早数据投递给流
-    bool                       used : 1;                                     // 槽位是否正在使用
-    bool                       connected_reported : 1;                       // 是否已调用 on_connected
-    bool                       connection_error_reported : 1;                // 是否已调用 connection error 回调
-    bool                       connect_pending : 1;                          // 是否有主动连接等待完成
-    bool                       terminal_error_queued : 1;                    // 是否已进入延迟终止事件队列
-    bool                       terminal_error_suppressed : 1;                // 本地 close 是否取消该错误回调
-    bool                       rendezvous_active : 1;                         // 已收到 NTRS 候选计划，握手包向全部候选 fanout
+    bool                       zero_rtt_early_fin : 1;         // 早期流数据是否带 FIN
+    bool                       zero_rtt_awaiting_accept : 1;   // 是否等待 on_new_connection 决策
+    bool                       zero_rtt_accepted : 1;          // 应用是否已接受 0-RTT
+    bool                       zero_rtt_response_active : 1;   // 是否维护 0-RTT 响应重传状态
+    bool                       zero_rtt_response_queued : 1;   // HANDSHAKE_DONE 是否已排队
+    bool                       zero_rtt_response_sent : 1;     // HANDSHAKE_DONE 是否已实际发送
+    bool                       zero_rtt_early_delivered : 1;   // 是否已将早数据投递给流
+    bool                       used : 1;                       // 槽位是否正在使用
+    bool                       connected_reported : 1;         // 是否已调用 on_connected
+    bool                       connection_error_reported : 1;  // 是否已调用 connection error 回调
+    bool                       connect_pending : 1;            // 是否有主动连接等待完成
+    bool                       terminal_error_queued : 1;      // 是否已进入延迟终止事件队列
+    bool                       terminal_error_suppressed : 1;  // 本地 close 是否取消该错误回调
+    bool                       rendezvous_active : 1;          // 已收到 NTRS 候选计划，握手包向全部候选 fanout
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
 
 typedef struct utp_context_rendezvous_punch_cache_entry {
-    utp_address_t endpoint;                                                  // 提前到达 PUNCH 的来源 endpoint
-    uint8_t       token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];                    // PUNCH token
-    uint64_t      expires_at_us;                                              // 单调时钟过期时间
-    bool          used;                                                       // 是否占用
+    utp_address_t endpoint;                                // 提前到达 PUNCH 的来源 endpoint
+    uint8_t       token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];  // PUNCH token
+    uint64_t      expires_at_us;                           // 单调时钟过期时间
+    bool          used;                                    // 是否占用
 } utp_context_rendezvous_punch_cache_entry_t;
 
 typedef struct utp_context_rendezvous_forward_cache_entry {
@@ -137,6 +138,11 @@ typedef struct utp_context_rendezvous_output_entry {
     uint8_t       packet[UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY];
     uint16_t      packet_length;
 } utp_context_rendezvous_output_entry_t;
+
+typedef struct utp_context_observed_address {
+    utp_address_t endpoint;             // 对端从连接路径观察到的本端公网 endpoint
+    uint64_t      observed_at_unix_ms;  // 该观测的墙钟时间，供 ADDRESS_UPDATE 透传
+} utp_context_observed_address_t;
 
 typedef struct utp_context_pending_slot {
     utp_hash_node_t node;                                                  // 按待处理本端 CID 索引的哈希节点
@@ -169,61 +175,65 @@ struct utp_context {
     uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
     uint64_t                                 next_rendezvous_packet_number;    // Context 半连接包号命名空间
     utp_address_t                            local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 已知本地候选地址
-    char                                     peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识
-    uint8_t                                  peer_id_length;                        // peer_id 的有效字节数
-    uint8_t                                  local_candidate_count;                 // local_candidates 的有效项数
-    uint8_t                                  rendezvous_output_head;
-    uint8_t                                  rendezvous_output_count;
-    utp_stream_scheduler_mode_t              stream_scheduler_mode;                 // 新连接默认流调度策略
-    utp_congestion_algorithm_t               cc_algorithm;                          // 新连接默认拥塞算法
-    uint32_t                                 clock_granularity_us;                  // pacer 时钟粒度
-    utp_bbr_config_t                         bbr_config;                            // BBR 默认配置
-    utp_cubic_config_t                       cubic_config;                          // CUBIC 默认配置
-    utp_mtu_config_t                         mtu_config;                            // MTU 发现默认配置
-    uint8_t                                  resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];  // 恢复根密钥
-    utp_crypto_resumption_keys_t             resumption_keys;                      // 派生票据与本地状态密钥
-    utp_hash_table_t                         zero_rtt_replay;                      // 0-RTT 抗重放键表
-    uint32_t                                 zero_rtt_token_max_lifetime_seconds;  // 票据最大有效期
-    uint32_t                                 zero_rtt_replay_cache_capacity;       // 抗重放表容量
-    uint32_t                                 stream_terminal_capacity;             // 新连接流终态表容量
-    uint32_t                                 path_validation_buffer_capacity;      // 新连接候选路径缓存上限(bytes)
-    utp_nat_probe_task_t                     nat_probe;                            // 当前 NAT 探测任务
-    utp_nat_probe_result_t                   nat_result;                           // 最近一次完成的 NAT 探测缓存
-    utp_context_ntrs_registration_t          ntrs_registration;                    // Context 到单个 NTRS 的半连接注册
+    utp_context_observed_address_t
+                                 observed_addresses[UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY];  // 对端观察到的本端公网地址
+    char                         peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识
+    uint8_t                      peer_id_length;                        // peer_id 的有效字节数
+    uint8_t                      local_candidate_count;                 // local_candidates 的有效项数
+    uint8_t                      observed_address_count;                // observed_addresses 的有效项数
+    uint8_t                      rendezvous_output_head;
+    uint8_t                      rendezvous_output_count;
+    utp_stream_scheduler_mode_t  stream_scheduler_mode;                                // 新连接默认流调度策略
+    utp_congestion_algorithm_t   cc_algorithm;                                         // 新连接默认拥塞算法
+    uint32_t                     clock_granularity_us;                                 // pacer 时钟粒度
+    utp_bbr_config_t             bbr_config;                                           // BBR 默认配置
+    utp_cubic_config_t           cubic_config;                                         // CUBIC 默认配置
+    utp_mtu_config_t             mtu_config;                                           // MTU 发现默认配置
+    uint8_t                      resumption_root_key[UTP_CRYPTO_RESUMPTION_KEY_SIZE];  // 恢复根密钥
+    utp_crypto_resumption_keys_t resumption_keys;                                      // 派生票据与本地状态密钥
+    utp_hash_table_t             zero_rtt_replay;                                      // 0-RTT 抗重放键表
+    uint32_t                     zero_rtt_token_max_lifetime_seconds;                  // 票据最大有效期
+    uint32_t                     zero_rtt_replay_cache_capacity;                       // 抗重放表容量
+    uint32_t                     stream_terminal_capacity;                             // 新连接流终态表容量
+    uint32_t                     path_validation_buffer_capacity;                      // 新连接候选路径缓存上限(bytes)
+    utp_nat_probe_task_t         nat_probe;                                            // 当前 NAT 探测任务
+    utp_nat_probe_result_t       nat_result;                                           // 最近一次完成的 NAT 探测缓存
+    utp_context_ntrs_registration_t ntrs_registration;  // Context 到单个 NTRS 的半连接注册
     utp_context_rendezvous_punch_cache_entry_t
-        rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];         // 未匹配 PUNCH 的短期缓存
+        rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];  // 未匹配 PUNCH 的短期缓存
     utp_context_rendezvous_forward_cache_entry_t
-        rendezvous_forward_cache[UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY];      // 已处理 FORWARD 的短期去重缓存
+        rendezvous_forward_cache[UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY];  // 已处理 FORWARD 的短期去重缓存
     utp_context_rendezvous_output_entry_t
-        rendezvous_output[UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY];                     // 零 CID Rendezvous 延迟发送 FIFO
-    utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
-    utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
-    uint32_t                                 keepalive_interval_ms;                // 保活间隔
-    uint32_t                                 keepalive_timeout_ms;                 // 保活超时
-    uint16_t                                 handshake_timeout_ms;                 // 被动握手超时
-    uint16_t                                 keepalive_probes;                     // 连续保活探测次数
-    uint8_t                                  handshake_max_retries;                // 被动握手最大重试次数
-    utp_context_pending_slot_t*              callback_accept_pending;              // 当前回调可接受的 pending 槽位
-    utp_context_connection_slot_t*           callback_accept_zero_rtt;             // 当前回调可接受的 0-RTT 槽位
-    bool                                     callback_accept_requested : 1;        // on_new_connection 是否调用 accept
-    bool                                     resumption_key_explicit : 1;          // 根密钥是否由用户设置
-    bool                                     resumption_keys_ready : 1;            // 恢复工作密钥是否就绪
-    bool                                     default_resumption_key_warning_logged : 1;  // 默认根密钥警告是否已输出
-    bool                                     enable_keepalive : 1;                       // 是否为新连接启用保活
-    bool                                     nat_result_valid : 1;                       // nat_result 是否仍可用于注册
-    utp_on_connected_fn                      on_connected;                               // 主动连接成功回调
-    void*                                    on_connected_user_data;                     // 成功回调用户数据
-    utp_on_connect_error_fn                  on_connect_error;                           // 主动连接失败回调
-    void*                                    on_connect_error_user_data;                 // 失败回调用户数据
-    utp_on_new_connection_fn                 on_new_connection;                          // 被动连接决策回调
-    void*                                    on_new_connection_user_data;                // 决策回调用户数据
-    utp_on_connection_error_fn               on_connection_error;                        // 被动关闭或致命错误回调
-    void*                                    on_connection_error_user_data;              // 关闭回调用户数据
-    utp_logger_t                             logger;                                     // Context 日志器
-    utp_log_tag_t                            tag;                                        // Context 日志标签
+        rendezvous_output[UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY];             // 零 CID Rendezvous 延迟发送 FIFO
+    utp_frame_transport_params_t   local_transport_params;                     // 新连接本端传输参数
+    utp_frame_ack_frequency_t      local_ack_frequency;                        // 新连接本端 ACK 策略
+    uint32_t                       keepalive_interval_ms;                      // 保活间隔
+    uint32_t                       keepalive_timeout_ms;                       // 保活超时
+    uint16_t                       handshake_timeout_ms;                       // 被动握手超时
+    uint16_t                       keepalive_probes;                           // 连续保活探测次数
+    uint8_t                        handshake_max_retries;                      // 被动握手最大重试次数
+    utp_context_pending_slot_t*    callback_accept_pending;                    // 当前回调可接受的 pending 槽位
+    utp_context_connection_slot_t* callback_accept_zero_rtt;                   // 当前回调可接受的 0-RTT 槽位
+    bool                           callback_accept_requested : 1;              // on_new_connection 是否调用 accept
+    bool                           resumption_key_explicit : 1;                // 根密钥是否由用户设置
+    bool                           resumption_keys_ready : 1;                  // 恢复工作密钥是否就绪
+    bool                           default_resumption_key_warning_logged : 1;  // 默认根密钥警告是否已输出
+    bool                           enable_keepalive : 1;                       // 是否为新连接启用保活
+    bool                           nat_result_valid : 1;                       // nat_result 是否仍可用于注册
+    utp_on_connected_fn            on_connected;                               // 主动连接成功回调
+    void*                          on_connected_user_data;                     // 成功回调用户数据
+    utp_on_connect_error_fn        on_connect_error;                           // 主动连接失败回调
+    void*                          on_connect_error_user_data;                 // 失败回调用户数据
+    utp_on_new_connection_fn       on_new_connection;                          // 被动连接决策回调
+    void*                          on_new_connection_user_data;                // 决策回调用户数据
+    utp_on_connection_error_fn     on_connection_error;                        // 被动关闭或致命错误回调
+    void*                          on_connection_error_user_data;              // 关闭回调用户数据
+    utp_logger_t                   logger;                                     // Context 日志器
+    utp_log_tag_t                  tag;                                        // Context 日志标签
 };
 
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
 bool                 utp_context_suppress_terminal_error(utp_context_t* context, utp_connection_t* connection);
+void                 utp_context_remember_observed_address(utp_context_t* context, const utp_address_t* address);
 
 #endif  // EULAR_UTP_CONTEXT_CONTEXT_H

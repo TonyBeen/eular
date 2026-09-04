@@ -8,6 +8,7 @@
 
 extern "C" {
 #include "connection/connection.h"
+#include "context/context.h"
 #include "proto/ack.h"
 #include "proto/packet_in.h"
 }
@@ -484,10 +485,10 @@ TEST_CASE("a delayed ACK for an original packet confirms its retransmission", "[
 
 TEST_CASE("connection rejects rendezvous packet types", "[connection][protocol]")
 {
-    const utp_address_t                     peer   = loopback_address(10011u);
-    const utp_packet_header_t               header = {99u, 55u, 1u, 0u, UTP_PACKET_TYPE_RENDEZVOUS, 0u};
-    std::array<uint8_t, UTP_PACKET_HEADER_SIZE> wire = {};
-    utp_connection_t                        connection = {};
+    const utp_address_t                         peer       = loopback_address(10011u);
+    const utp_packet_header_t                   header     = {99u, 55u, 1u, 0u, UTP_PACKET_TYPE_RENDEZVOUS, 0u};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE> wire       = {};
+    utp_connection_t                            connection = {};
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 55u, 99u, &peer, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
@@ -1110,18 +1111,22 @@ TEST_CASE("candidate PATH_CHALLENGE bypasses the cache and queues its response",
     const utp_address_t    candidate_peer = loopback_address(10020u);
     const utp_frame_path_t challenge_data = {{UINT8_C(0x91), UINT8_C(0x82), UINT8_C(0x73), UINT8_C(0x64), UINT8_C(0x55),
                                               UINT8_C(0x46), UINT8_C(0x37), UINT8_C(0x28)}};
-    std::array<uint8_t, UTP_FRAME_PATH_SIZE> payload     = {};
-    utp_packet_in_pool_t                     packet_pool = {};
-    utp_packet_in_t*                         packet      = nullptr;
-    utp_connection_t                         connection  = {};
-    utp_packet_out_t*                        outbound;
-    utp_packet_header_t                      header;
-    utp_packet_view_t                        view = {};
-    const uint8_t*                           frame;
-    uint8_t                                  frame_type;
-    size_t                                   frame_length;
-    size_t                                   offset        = 0u;
-    utp_frame_path_t                         response_data = {};
+    std::array<uint8_t, UTP_FRAME_PATH_SIZE>                                           payload     = {};
+    utp_packet_in_pool_t                                                               packet_pool = {};
+    utp_packet_in_t*                                                                   packet      = nullptr;
+    utp_connection_t                                                                   connection  = {};
+    utp_packet_out_t*                                                                  outbound;
+    utp_packet_header_t                                                                header;
+    utp_packet_view_t                                                                  view = {};
+    const uint8_t*                                                                     frame;
+    uint8_t                                                                            frame_type;
+    size_t                                                                             frame_length;
+    size_t                                                                             offset         = 0u;
+    utp_frame_path_t                                                                   response_data  = {};
+    utp_frame_observed_address_t                                                       observed_data  = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE> retransmission = {};
+    uint64_t                                                                           deadline;
+    size_t                                                                             retransmission_length;
 
     REQUIRE(utp_frame_path_encode(payload.data(), payload.size(), UTP_FRAME_TYPE_PATH_CHALLENGE, &challenge_data) ==
             UTP_INTERNAL_ERROR_OK);
@@ -1162,8 +1167,70 @@ TEST_CASE("candidate PATH_CHALLENGE bypasses the cache and queues its response",
     REQUIRE(utp_frame_path_decode(&response_data, frame, frame_length, UTP_FRAME_TYPE_PATH_RESPONSE) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(std::memcmp(response_data.data, challenge_data.data, sizeof(response_data.data)) == 0);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_OBSERVED_ADDRESS);
+    REQUIRE(utp_frame_observed_address_decode(&observed_data, frame, frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(observed_data.family == UTP_ADDRESS_FAMILY_IPV4);
+    REQUIRE(observed_data.port == candidate_peer.port);
+    REQUIRE(std::memcmp(observed_data.address, candidate_peer.address, 4u) == 0);
+    REQUIRE(utp_connection_on_packet_sent(&connection, outbound, 102u) == UTP_INTERNAL_ERROR_OK);
+    deadline = utp_connection_retransmission_deadline(&connection);
+    REQUIRE(deadline > 102u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+
+    outbound = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(outbound != nullptr);
+    REQUIRE(outbound->has_destination);
+    REQUIRE(utp_address_equal(&outbound->destination, &candidate_peer));
+    offset = 0u;
+    REQUIRE(utp_packet_out_flatten(outbound, retransmission.data(), retransmission.size(), &retransmission_length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_decode(&view, retransmission.data(), retransmission_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_view_next_frame(&view, &offset, &frame_type, &frame, &frame_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_OBSERVED_ADDRESS);
+    REQUIRE(offset == view.payload_length);
     utp_connection_cleanup(&connection);
     utp_packet_in_pool_cleanup(&packet_pool);
+}
+
+TEST_CASE("connection caches a peer observed address once", "[connection][rendezvous]")
+{
+    const utp_address_t                                       peer      = loopback_address(10021u);
+    const utp_frame_observed_address_t                        observed  = {{198u, 51u, 100u, 19u}, UINT16_C(51413), 4u};
+    std::array<uint8_t, UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE> payload   = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + payload.size()> packet = {};
+    utp_packet_header_t                                          header;
+    utp_connection_t                                             connection = {};
+    utp_context_t                                                context    = {};
+    utp_address_t                                                expected   = {};
+
+    REQUIRE(utp_frame_observed_address_encode(payload.data(), payload.size(), &observed) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &peer, 2u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.context = &context;
+    connection.state   = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+    header = {11u, 77u, 1u, (uint16_t)payload.size(), UTP_PACKET_TYPE_CTRL, 0u};
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(packet.data() + UTP_PACKET_HEADER_SIZE, payload.data(), payload.size());
+    REQUIRE(utp_connection_on_packet_received(&connection, packet.data(), packet.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(context.observed_address_count == 1u);
+    expected.family     = UTP_ADDRESS_FAMILY_IPV4;
+    expected.port       = UINT16_C(51413);
+    expected.address[0] = 198u;
+    expected.address[1] = 51u;
+    expected.address[2] = 100u;
+    expected.address[3] = 19u;
+    REQUIRE(utp_address_equal(&context.observed_addresses[0].endpoint, &expected));
+    REQUIRE(context.observed_addresses[0].observed_at_unix_ms != 0u);
+
+    header.packet_number = 2u;
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(&connection, packet.data(), packet.size(), &peer, 101u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(context.observed_address_count == 1u);
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("connection retries candidate path validation three times then keeps the active path", "[connection][path]")
