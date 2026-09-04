@@ -13,6 +13,8 @@ endif()
 
 set(UTP_NTRS_SERVICE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../c/src/proto/proto.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../c/src/proto/frame.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../c/src/rendezvous/rendezvous.c"
     src/control.c
     src/control_stream.c
     src/hub.c
@@ -80,6 +82,18 @@ elseif(MSVC)
 endif()
 
 if(UTP_NTRS_BUILD_SERVICES)
+    add_executable(ntrs app/ntrs.cpp app/app_log.c)
+    target_link_libraries(ntrs PRIVATE utp_ntrs_service_core utp_ntrs_service_runtime)
+    target_include_directories(ntrs PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../c/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../c/include")
+    target_include_directories(ntrs SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_compile_features(ntrs PRIVATE cxx_std_11)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ntrs PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
+        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
+    endif()
     add_executable(nat_detect_hub app/nat_detect_hub.cpp app/app_log.c)
     target_link_libraries(nat_detect_hub PRIVATE
         utp_ntrs_service_core
