@@ -232,8 +232,9 @@ IPv4 帧长度为 8 字节、IPv6 为 20 字节。公网观测不编码 IPv6 `sc
 
 ### 4.2 ADDRESS_UPDATE
 
-收到 `OBSERVED_ADDRESS` 后，Context 将样本去重并写入待确认队列。应用层通过无参数的
-`utp_context_update_address()` 请求上报当前缓存；该接口不接受调用方提供的地址。
+收到 `OBSERVED_ADDRESS` 后，Context 将样本去重并写入待上报队列。队列累计到 4 条时立即发送；未满
+4 条时，从首条待上报样本起最多聚合 5 秒后发送。NTRS 未注册时只保留样本，不发送。应用层可通过无
+参数的 `utp_context_update_address()` 立即尝试上报当前缓存；该接口不接受调用方提供的地址。
 
 每个样本只有：
 
@@ -263,13 +264,14 @@ samples[sample_count]:
 update_id:u64
 ```
 
-NTRS 只接受 `public_ip` 等于当前从 B 有效保活包观察到的公网 IP 的样本。它可忽略不匹配、非法或
-过期样本，但收到并处理一个 `update_id` 后必须回复 `ADDRESS_UPDATED(update_id)`；B 不需要知道采纳
-数量、预测模型或拒绝原因。
+Context 发出一批后将其保留为独立快照等待确认；发送期间新产生或刷新的样本进入下一批。NTRS 只接受
+`public_ip` 等于当前从 B 有效保活包观察到的公网 IP 的样本。它可忽略不匹配、非法或过期样本，但收到
+并处理一个 `update_id` 后必须回复 `ADDRESS_UPDATED(update_id)`；B 不需要知道采纳数量、预测模型或
+拒绝原因。
 
 未收到 `ADDRESS_UPDATED` 时，Context 以 1 秒初始超时指数退避，默认额外重试三次；这两个参数均可
-配置。确认后删除整个批次；重试耗尽后删除并记录 warning，不影响既有 UTP connection 或触发连接错误
-回调。
+通过 NTRS 注册选项配置。确认后删除整个发送快照；重试耗尽后删除并记录 warning，不影响既有 UTP
+connection 或触发连接错误回调。
 
 ## 5. CandidatePlan 与预连接开洞
 
