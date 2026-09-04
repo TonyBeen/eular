@@ -113,6 +113,27 @@ utp_internal_error_t utp_frame_measure(const uint8_t* frame, size_t available, u
     case UTP_FRAME_TYPE_STREAM_DATA_BLOCKED:
         length = UTP_FRAME_STREAM_DATA_BLOCKED_SIZE;
         break;
+    case UTP_FRAME_TYPE_RENDEZVOUS:
+        error = utp_frame_require_size(available, UTP_FRAME_RENDEZVOUS_HEADER_SIZE);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        variable_length = (size_t)utp_frame_read_u16(frame + 2u);
+        length          = UTP_FRAME_RENDEZVOUS_HEADER_SIZE + variable_length;
+        break;
+    case UTP_FRAME_TYPE_OBSERVED_ADDRESS:
+        error = utp_frame_require_size(available, 2u);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        if (frame[1] == 4u) {
+            length = UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE;
+        } else if (frame[1] == 6u) {
+            length = UTP_FRAME_OBSERVED_ADDRESS_IPV6_SIZE;
+        } else {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        break;
     default:
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
@@ -253,6 +274,167 @@ utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t
         }
     }
     *path = decoded;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_frame_rendezvous_encode(uint8_t* buffer, size_t capacity,
+                                                 const utp_frame_rendezvous_t* rendezvous)
+{
+    utp_wire_writer_t    writer;
+    size_t               index;
+    size_t               frame_length;
+    utp_internal_error_t error;
+
+    if (rendezvous->message_type == 0u || (rendezvous->payload_length != 0u && rendezvous->payload == NULL)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    frame_length = UTP_FRAME_RENDEZVOUS_HEADER_SIZE + (size_t)rendezvous->payload_length;
+    if (capacity < frame_length) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_RENDEZVOUS);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, rendezvous->message_type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u16(&writer, rendezvous->payload_length);
+    }
+    for (index = 0u; index < (size_t)rendezvous->payload_length && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_write_u8(&writer, rendezvous->payload[index]);
+    }
+    return error;
+}
+
+utp_internal_error_t utp_frame_rendezvous_decode(utp_frame_rendezvous_t* rendezvous, const uint8_t* buffer,
+                                                 size_t length)
+{
+    utp_wire_reader_t      reader;
+    utp_frame_rendezvous_t decoded;
+    uint8_t                type;
+    utp_internal_error_t   error;
+    size_t                 frame_length;
+
+    if (length < UTP_FRAME_RENDEZVOUS_HEADER_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_RENDEZVOUS_HEADER_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &decoded.message_type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u16(&reader, &decoded.payload_length);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (type != UTP_FRAME_TYPE_RENDEZVOUS || decoded.message_type == 0u) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    frame_length = UTP_FRAME_RENDEZVOUS_HEADER_SIZE + (size_t)decoded.payload_length;
+    if (length < frame_length) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    decoded.payload = buffer + UTP_FRAME_RENDEZVOUS_HEADER_SIZE;
+    *rendezvous     = decoded;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_frame_observed_address_encode(uint8_t* buffer, size_t capacity,
+                                                       const utp_frame_observed_address_t* address)
+{
+    utp_wire_writer_t    writer;
+    size_t               address_length;
+    size_t               index;
+    size_t               frame_length;
+    utp_internal_error_t error;
+
+    if (address->family == 4u) {
+        address_length = 4u;
+        frame_length   = UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE;
+    } else if (address->family == 6u) {
+        address_length = 16u;
+        frame_length   = UTP_FRAME_OBSERVED_ADDRESS_IPV6_SIZE;
+    } else {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (address->port == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (capacity < frame_length) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_OBSERVED_ADDRESS);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, address->family);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u16(&writer, address->port);
+    }
+    for (index = 0u; index < address_length && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_write_u8(&writer, address->address[index]);
+    }
+    return error;
+}
+
+utp_internal_error_t utp_frame_observed_address_decode(utp_frame_observed_address_t* address, const uint8_t* buffer,
+                                                       size_t length)
+{
+    utp_wire_reader_t            reader;
+    utp_frame_observed_address_t decoded = {0};
+    size_t                       address_length;
+    size_t                       frame_length;
+    size_t                       index;
+    uint8_t                      type;
+    utp_internal_error_t         error;
+
+    if (length < UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer, UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &type);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &decoded.family);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u16(&reader, &decoded.port);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (type != UTP_FRAME_TYPE_OBSERVED_ADDRESS || decoded.port == 0u) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (decoded.family == 4u) {
+        address_length = 4u;
+        frame_length   = UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE;
+    } else if (decoded.family == 6u) {
+        address_length = 16u;
+        frame_length   = UTP_FRAME_OBSERVED_ADDRESS_IPV6_SIZE;
+    } else {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (length < frame_length) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    error = utp_wire_reader_init(&reader, buffer + 4u, address_length);
+    for (index = 0u; index < address_length && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_read_u8(&reader, &decoded.address[index]);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    *address = decoded;
     return UTP_INTERNAL_ERROR_OK;
 }
 

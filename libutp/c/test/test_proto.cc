@@ -19,11 +19,14 @@
 #include <event2/event.h>
 
 extern "C" {
+#include <utp/nat.h>
+
 #include "context/event_loop.h"
 #include "proto/ack.h"
 #include "proto/frame.h"
 #include "proto/proto.h"
 #include "proto/wire.h"
+#include "rendezvous/rendezvous.h"
 #include "socket/address.h"
 #include "socket/udp.h"
 #include "util/error.h"
@@ -715,6 +718,246 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
     uint32_t frame_types = 0u;
     REQUIRE(utp_frame_scan(payload.data(), payload.size(), &frame_types) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(frame_types == expected_types);
+}
+
+TEST_CASE("rendezvous and observed address frames preserve their wire layouts", "[frame][rendezvous]")
+{
+    const std::array<uint8_t, 3> request_body = {0xaau, 0xbbu, 0xccu};
+    const utp_frame_rendezvous_t request      = {request_body.data(), static_cast<uint16_t>(request_body.size()),
+                                                 UTP_RENDEZVOUS_MESSAGE_REQUEST};
+    const std::array<uint8_t, 7> request_wire = {
+        UTP_FRAME_TYPE_RENDEZVOUS, UTP_RENDEZVOUS_MESSAGE_REQUEST, 0u, 3u, 0xaau, 0xbbu, 0xccu};
+    const utp_frame_observed_address_t                              ipv4 = {{192u, 0u, 2u, 8u}, UINT16_C(8443), 4u};
+    const std::array<uint8_t, UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE> ipv4_wire = {
+        UTP_FRAME_TYPE_OBSERVED_ADDRESS, 4u, 0x20u, 0xfbu, 192u, 0u, 2u, 8u};
+    std::array<uint8_t, request_wire.size()>                  request_encoded = {};
+    std::array<uint8_t, UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE> address_encoded = {};
+    utp_frame_rendezvous_t                                    decoded_request = {};
+    utp_frame_observed_address_t                              decoded_address = {};
+    uint8_t                                                   type            = 0u;
+    size_t                                                    length          = 0u;
+
+    REQUIRE(utp_frame_rendezvous_encode(request_encoded.data(), request_encoded.size(), &request) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(request_encoded.data(), request_wire.data(), request_wire.size()) == 0);
+    REQUIRE(utp_frame_measure(request_encoded.data(), request_encoded.size(), &type, &length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(type == UTP_FRAME_TYPE_RENDEZVOUS);
+    REQUIRE(length == request_wire.size());
+    REQUIRE(utp_frame_rendezvous_decode(&decoded_request, request_encoded.data(), request_encoded.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_request.message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+    REQUIRE(decoded_request.payload_length == request_body.size());
+    REQUIRE(std::memcmp(decoded_request.payload, request_body.data(), request_body.size()) == 0);
+
+    REQUIRE(utp_frame_observed_address_encode(address_encoded.data(), address_encoded.size(), &ipv4) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(address_encoded.data(), ipv4_wire.data(), ipv4_wire.size()) == 0);
+    REQUIRE(utp_frame_observed_address_decode(&decoded_address, address_encoded.data(), address_encoded.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_address.family == 4u);
+    REQUIRE(decoded_address.port == UINT16_C(8443));
+    REQUIRE(std::memcmp(decoded_address.address, ipv4.address, 4u) == 0);
+}
+
+TEST_CASE("rendezvous frames reject truncated and malformed envelopes", "[frame][rendezvous]")
+{
+    const std::array<uint8_t, 4> truncated       = {UTP_FRAME_TYPE_RENDEZVOUS, UTP_RENDEZVOUS_MESSAGE_REQUEST, 0u, 1u};
+    const std::array<uint8_t, 8> invalid_address = {UTP_FRAME_TYPE_OBSERVED_ADDRESS, 5u, 0u, 1u, 0u, 0u, 0u, 1u};
+    utp_frame_rendezvous_t       rendezvous      = {};
+    utp_frame_observed_address_t address         = {};
+    size_t                       frame_length    = 0u;
+    uint8_t                      frame_type      = 0u;
+
+    REQUIRE(utp_frame_measure(truncated.data(), truncated.size(), &frame_type, &frame_length) ==
+            UTP_INTERNAL_ERROR_OVERFLOW);
+    REQUIRE(utp_frame_rendezvous_decode(&rendezvous, truncated.data(), truncated.size()) ==
+            UTP_INTERNAL_ERROR_OVERFLOW);
+    REQUIRE(utp_frame_measure(invalid_address.data(), invalid_address.size(), &frame_type, &frame_length) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+    REQUIRE(utp_frame_observed_address_decode(&address, invalid_address.data(), invalid_address.size()) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+}
+
+TEST_CASE("rendezvous REQUEST round trips peer IDs and local candidates", "[rendezvous]")
+{
+    const std::array<uint8_t, 5> source_id   = {'s', 'o', 'u', 'r', 'c'};
+    const std::array<uint8_t, 6> target_id   = {'t', 'a', 'r', 'g', 'e', 't'};
+    std::array<utp_address_t, 2> candidates  = {};
+    std::array<uint8_t, 128>     body        = {};
+    utp_rendezvous_request_t     request     = {};
+    utp_rendezvous_request_t     decoded     = {};
+    size_t                       body_length = 0u;
+
+    candidates[0].family          = UTP_ADDRESS_FAMILY_IPV4;
+    candidates[0].port            = UINT16_C(4567);
+    candidates[0].address[0]      = 192u;
+    candidates[0].address[1]      = 168u;
+    candidates[0].address[2]      = 1u;
+    candidates[0].address[3]      = 10u;
+    candidates[1]                 = candidates[0];
+    candidates[1].address[3]      = 11u;
+    request.source_peer_id        = source_id.data();
+    request.target_peer_id        = target_id.data();
+    request.local_candidates      = candidates.data();
+    request.local_port            = UINT16_C(4567);
+    request.source_peer_id_length = static_cast<uint8_t>(source_id.size());
+    request.target_peer_id_length = static_cast<uint8_t>(target_id.size());
+    request.source_nat_class      = 6u;
+    request.local_family          = UTP_ADDRESS_FAMILY_IPV4;
+    request.local_candidate_count = static_cast<uint8_t>(candidates.size());
+    for (size_t index = 0u; index < sizeof(request.rendezvous_id); ++index) {
+        request.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
+    }
+
+    REQUIRE(utp_rendezvous_request_encode(body.data(), body.size(), &request, &body_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_request_decode(&decoded, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(decoded.rendezvous_id, request.rendezvous_id, sizeof(request.rendezvous_id)) == 0);
+    REQUIRE(decoded.source_peer_id_length == source_id.size());
+    REQUIRE(decoded.target_peer_id_length == target_id.size());
+    REQUIRE(std::memcmp(decoded.source_peer_id, source_id.data(), source_id.size()) == 0);
+    REQUIRE(std::memcmp(decoded.target_peer_id, target_id.data(), target_id.size()) == 0);
+    REQUIRE(decoded.local_candidate_count == candidates.size());
+    REQUIRE(decoded.local_candidates[0].port == UINT16_C(4567));
+    REQUIRE(std::memcmp(decoded.local_candidates[1].address, candidates[1].address, 4u) == 0);
+}
+
+TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvous]")
+{
+    const std::array<uint8_t, 6> source_id = {'s', 'o', 'u', 'r', 'c', 'e'};
+    std::array<utp_address_t, 2> candidates = {};
+    std::array<uint8_t, 256>     body       = {};
+    utp_rendezvous_redirect_t    redirect   = {};
+    utp_rendezvous_redirect_t    decoded_redirect = {};
+    utp_rendezvous_forward_t     forward = {};
+    utp_rendezvous_forward_t     decoded_forward = {};
+    size_t                       body_length = 0u;
+
+    candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
+    candidates[0].port       = UINT16_C(4567);
+    candidates[0].address[0] = 192u;
+    candidates[0].address[1] = 168u;
+    candidates[0].address[2] = 1u;
+    candidates[0].address[3] = 10u;
+    candidates[1]            = candidates[0];
+    candidates[1].address[3] = 11u;
+    redirect.target_plan.local_candidates      = candidates.data();
+    redirect.target_plan.local_port            = UINT16_C(4567);
+    redirect.target_plan.family                = UTP_ADDRESS_FAMILY_IPV4;
+    redirect.target_plan.local_candidate_count = static_cast<uint8_t>(candidates.size());
+    redirect.target_plan.public_address.family = UTP_ADDRESS_FAMILY_IPV4;
+    redirect.target_plan.public_address.address[0] = 203u;
+    redirect.target_plan.public_address.address[1] = 0u;
+    redirect.target_plan.public_address.address[2] = 113u;
+    redirect.target_plan.public_address.address[3] = 8u;
+    redirect.target_plan.public_ports[0] = UINT16_C(40001);
+    redirect.target_plan.public_ports[1] = UINT16_C(40002);
+    redirect.target_plan.public_port_count = 2u;
+    for (size_t index = 0u; index < sizeof(redirect.rendezvous_id); ++index) {
+        redirect.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
+    }
+
+    REQUIRE(utp_rendezvous_redirect_encode(body.data(), body.size(), &redirect, &body_length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_redirect_decode(&decoded_redirect, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(decoded_redirect.rendezvous_id, redirect.rendezvous_id, sizeof(redirect.rendezvous_id)) == 0);
+    REQUIRE(decoded_redirect.target_plan.local_candidate_count == candidates.size());
+    REQUIRE(decoded_redirect.target_plan.public_port_count == 2u);
+    REQUIRE(decoded_redirect.target_plan.public_ports[1] == UINT16_C(40002));
+
+    forward.source_peer_id        = source_id.data();
+    forward.source_peer_id_length = static_cast<uint8_t>(source_id.size());
+    std::memcpy(forward.rendezvous_id, redirect.rendezvous_id, sizeof(forward.rendezvous_id));
+    forward.source_plan = redirect.target_plan;
+    REQUIRE(utp_rendezvous_forward_encode(body.data(), body.size(), &forward, &body_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_forward_decode(&decoded_forward, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_forward.source_peer_id_length == source_id.size());
+    REQUIRE(std::memcmp(decoded_forward.source_peer_id, source_id.data(), source_id.size()) == 0);
+    REQUIRE(decoded_forward.source_plan.public_ports[0] == UINT16_C(40001));
+}
+
+TEST_CASE("rendezvous INTRODUCTION requires exactly one rendezvous ID", "[rendezvous]")
+{
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE> rendezvous_id = {};
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE - 1u> truncated = {};
+
+    REQUIRE(utp_rendezvous_introduction_decode(rendezvous_id.data(), truncated.data(), truncated.size()) ==
+            UTP_INTERNAL_ERROR_PROTOCOL);
+    REQUIRE(utp_rendezvous_introduction_decode(rendezvous_id.data(), rendezvous_id.data(), rendezvous_id.size()) ==
+            UTP_INTERNAL_ERROR_OK);
+}
+
+TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezvous]")
+{
+    const std::array<uint8_t, 6> peer_id              = {'n', 'o', 'd', 'e', '-', 'b'};
+    std::array<utp_address_t, 2> local_candidates     = {};
+    std::array<uint8_t, 512>     buffer               = {};
+    utp_rendezvous_register_t    registration         = {};
+    utp_rendezvous_register_t    decoded_registration = {};
+    utp_rendezvous_registered_t  registered           = {};
+    utp_rendezvous_registered_t  decoded_registered   = {};
+    utp_rendezvous_ping_t        ping                 = {};
+    utp_rendezvous_ping_t        decoded_ping         = {};
+    utp_rendezvous_pong_t        pong                 = {};
+    utp_rendezvous_pong_t        decoded_pong         = {};
+    size_t                       length               = 0u;
+
+    local_candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
+    local_candidates[0].port       = UINT16_C(34000);
+    local_candidates[0].address[0] = 192u;
+    local_candidates[0].address[1] = 168u;
+    local_candidates[0].address[2] = 1u;
+    local_candidates[0].address[3] = 10u;
+    local_candidates[1]            = local_candidates[0];
+    local_candidates[1].address[3] = 11u;
+
+    registration.peer_id                 = peer_id.data();
+    registration.local_candidates        = local_candidates.data();
+    registration.registration_request_id = UINT64_C(0x1020304050607080);
+    registration.registration_token[0]   = 1u;
+    registration.registration_token[7]   = 8u;
+    registration.local_port              = UINT16_C(34000);
+    registration.peer_id_length          = static_cast<uint8_t>(peer_id.size());
+    registration.nat_class               = UTP_NAT_CLASS_PORT_RESTRICTED;
+    registration.local_family            = UTP_ADDRESS_FAMILY_IPV4;
+    registration.local_candidate_count   = static_cast<uint8_t>(local_candidates.size());
+    REQUIRE(utp_rendezvous_register_encode(buffer.data(), buffer.size(), &registration, &length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_register_decode(&decoded_registration, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_registration.registration_request_id == registration.registration_request_id);
+    REQUIRE(decoded_registration.peer_id_length == peer_id.size());
+    REQUIRE(std::memcmp(decoded_registration.peer_id, peer_id.data(), peer_id.size()) == 0);
+    REQUIRE(decoded_registration.local_candidate_count == local_candidates.size());
+    REQUIRE(decoded_registration.local_candidates[1].address[3] == 11u);
+    REQUIRE(utp_rendezvous_register_decode(&decoded_registration, buffer.data(), length - 1u) != UTP_INTERNAL_ERROR_OK);
+
+    registered.registration_request_id    = registration.registration_request_id;
+    registered.registration_token[0]      = 1u;
+    registered.registration_token[7]      = 8u;
+    registered.calibration_id             = UINT64_C(0x1122334455667788);
+    registered.calibration_endpoints      = local_candidates.data();
+    registered.calibration_endpoint_count = 1u;
+    REQUIRE(utp_rendezvous_registered_encode(buffer.data(), buffer.size(), &registered, &length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_registered_decode(&decoded_registered, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_registered.calibration_id == registered.calibration_id);
+    REQUIRE(decoded_registered.calibration_endpoint_count == 1u);
+    REQUIRE(decoded_registered.calibration_endpoints[0].port == UINT16_C(34000));
+
+    ping.registration_token[0] = 1u;
+    ping.registration_token[7] = 8u;
+    ping.calibration_id        = registered.calibration_id;
+    REQUIRE(utp_rendezvous_ping_encode(buffer.data(), 16u, &ping) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_ping_decode(&decoded_ping, buffer.data(), 16u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_ping.calibration_id == ping.calibration_id);
+
+    pong.registration_token[0]      = 1u;
+    pong.registration_token[7]      = 8u;
+    pong.acknowledged_packet_number = UINT64_C(42);
+    REQUIRE(utp_rendezvous_pong_encode(buffer.data(), 16u, &pong) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_pong_decode(&decoded_pong, buffer.data(), 16u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_pong.acknowledged_packet_number == pong.acknowledged_packet_number);
+    buffer[15] = 0u;
+    REQUIRE(utp_rendezvous_pong_decode(&decoded_pong, buffer.data(), 16u) == UTP_INTERNAL_ERROR_PROTOCOL);
 }
 
 TEST_CASE("transport parameter and ACK frequency frames normalize and validate values", "[frame]")

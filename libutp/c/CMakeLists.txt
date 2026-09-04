@@ -96,7 +96,7 @@ set(UTP_C_SOURCES
     src/status.c src/util/time.c src/socket/udp.c src/proto/proto.c src/context/ack_scheduler.c src/util/send_history.c
     src/util/rtt.c src/util/receive_history.c src/proto/packet_out.c src/proto/packet_in.c src/context/send_ledger.c
     src/context/send_control.c src/context/pending_incoming.c src/congestion/bbr.c src/congestion/bw_sampler.c src/congestion/congestion.c src/congestion/cubic.c
-    src/congestion/minmax.c src/congestion/pacer.c src/mtu/mtu.c src/nat/nat.c
+    src/congestion/minmax.c src/congestion/pacer.c src/mtu/mtu.c src/nat/nat.c src/rendezvous/rendezvous.c
     src/connection/stream.c src/connection/connection.c src/context/context.c src/utp.c)
 set(UTP_C_HEADERS
     include/utp/connection.h include/utp/context.h include/utp/log.h include/utp/nat.h include/utp/option.h include/utp/status.h include/utp/stream.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
@@ -105,7 +105,7 @@ set(UTP_C_HEADERS
     src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h src/proto/packet_in.h
     src/proto/wire.h src/context/send_ledger.h src/context/send_control.h src/context/pending_incoming.h src/congestion/congestion.h
     src/congestion/bbr.h src/congestion/bw_sampler.h src/congestion/cubic.h src/congestion/minmax.h src/congestion/pacer.h src/context/context.h)
-list(APPEND UTP_C_HEADERS src/connection/stream.h src/connection/connection.h src/mtu/mtu.h src/nat/nat.h)
+list(APPEND UTP_C_HEADERS src/connection/stream.h src/connection/connection.h src/mtu/mtu.h src/nat/nat.h src/rendezvous/rendezvous.h)
 add_library(utp_c STATIC ${UTP_C_SOURCES} ${UTP_C_HEADERS})
 add_library(eular::utp_c ALIAS utp_c)
 set_target_properties(utp_c PROPERTIES OUTPUT_NAME utp)

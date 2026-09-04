@@ -33,6 +33,9 @@ extern "C" {
 #define UTP_FRAME_MAX_STREAM_DATA_SIZE         13u
 #define UTP_FRAME_DATA_BLOCKED_SIZE            9u
 #define UTP_FRAME_STREAM_DATA_BLOCKED_SIZE     13u
+#define UTP_FRAME_RENDEZVOUS_HEADER_SIZE       4u
+#define UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE   8u
+#define UTP_FRAME_OBSERVED_ADDRESS_IPV6_SIZE   20u
 #define UTP_STREAM_FLAG_NONE                   0x00u
 #define UTP_STREAM_FLAG_FIN                    0x01u
 // STOP_SENDING 专用错误码：本端不再消费该流，请对端停止发送并回送 RESET_STREAM。
@@ -90,6 +93,8 @@ extern "C" {
  * MAX_STREAM_DATA:     type(1), stream_id(4), maximum_stream_data(8)
  * DATA_BLOCKED:        type(1), data_limit(8)
  * STREAM_DATA_BLOCKED: type(1), stream_id(4), stream_data_limit(8)
+ * RENDEZVOUS:          type(1), message_type(1), payload_length(2), payload(payload_length)
+ * OBSERVED_ADDRESS:    type(1), family(1), port(2), address(4 或 16)
  */
 typedef enum utp_frame_type {
     UTP_FRAME_TYPE_INVALID             = 0x00,
@@ -115,8 +120,28 @@ typedef enum utp_frame_type {
     UTP_FRAME_TYPE_DATA_BLOCKED        = 0x14,
     UTP_FRAME_TYPE_STREAM_DATA_BLOCKED = 0x15,
     UTP_FRAME_TYPE_STOP_SENDING        = 0x16,
-    UTP_FRAME_TYPE_MAX                 = 0x17
+    UTP_FRAME_TYPE_RENDEZVOUS          = 0x17,
+    UTP_FRAME_TYPE_OBSERVED_ADDRESS    = 0x18,
+    UTP_FRAME_TYPE_MAX                 = 0x19
 } utp_frame_type_t;
+
+/* FrameRendezvous 的消息类型；服务端与 Context 共享，未知值按长度跳过。 */
+typedef enum utp_rendezvous_message_type {
+    UTP_RENDEZVOUS_MESSAGE_REGISTER        = 1,
+    UTP_RENDEZVOUS_MESSAGE_REGISTERED      = 2,
+    UTP_RENDEZVOUS_MESSAGE_PING            = 3,
+    UTP_RENDEZVOUS_MESSAGE_PONG            = 4,
+    UTP_RENDEZVOUS_MESSAGE_CALIBRATE       = 5,
+    UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE  = 6,
+    UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATED = 7,
+    UTP_RENDEZVOUS_MESSAGE_REQUEST         = 8,
+    UTP_RENDEZVOUS_MESSAGE_REDIRECT        = 9,
+    UTP_RENDEZVOUS_MESSAGE_FORWARD         = 10,
+    UTP_RENDEZVOUS_MESSAGE_INTRODUCTION    = 11,
+    UTP_RENDEZVOUS_MESSAGE_UNREGISTER      = 12,
+    UTP_RENDEZVOUS_MESSAGE_UNREGISTERED    = 13,
+    UTP_RENDEZVOUS_MESSAGE_REJECTED        = 14
+} utp_rendezvous_message_type_t;
 
 typedef struct utp_packet_view {
     utp_packet_header_t header;          // 已解码的固定包头
@@ -124,6 +149,20 @@ typedef struct utp_packet_view {
     size_t              payload_length;  // payload 总长度
     uint32_t            frame_types;     // 扫描得到的帧类型位图
 } utp_packet_view_t;
+
+/* RENDEZVOUS：type(1), message_type(1), payload_length(2), payload(payload_length)。 */
+typedef struct utp_frame_rendezvous {
+    const uint8_t* payload;         // 消息体零拷贝视图，仅在输入包存活期间有效
+    uint16_t       payload_length;  // 消息体长度，不含 4 字节帧包络
+    uint8_t        message_type;    // utp_rendezvous_message_type_t，未知值由调用方按需跳过
+} utp_frame_rendezvous_t;
+
+/* OBSERVED_ADDRESS：type(1), family(1), port(2), address(4 或 16)。 */
+typedef struct utp_frame_observed_address {
+    uint8_t  address[16];  // 网络字节序地址；IPv4 只使用前 4 字节
+    uint16_t port;         // 主机字节序端口
+    uint8_t  family;       // 4 为 IPv4，6 为 IPv6
+} utp_frame_observed_address_t;
 
 /* PATH_CHALLENGE/PATH_RESPONSE：type(1), data(8)。 */
 typedef struct utp_frame_path {
@@ -252,6 +291,18 @@ utp_internal_error_t utp_frame_path_encode(uint8_t* buffer, size_t capacity, uin
 /** @brief 解码并校验指定类型的路径验证帧。 */
 utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t* buffer, size_t length,
                                            uint8_t expected_type);
+/** @brief 编码长度界定的 NTRS 半连接消息帧。 */
+utp_internal_error_t utp_frame_rendezvous_encode(uint8_t* buffer, size_t capacity,
+                                                 const utp_frame_rendezvous_t* rendezvous);
+/** @brief 解码 NTRS 半连接消息帧，消息体仅借用输入缓冲。 */
+utp_internal_error_t utp_frame_rendezvous_decode(utp_frame_rendezvous_t* rendezvous, const uint8_t* buffer,
+                                                 size_t length);
+/** @brief 编码连接级可靠公网地址观测帧。 */
+utp_internal_error_t utp_frame_observed_address_encode(uint8_t* buffer, size_t capacity,
+                                                       const utp_frame_observed_address_t* address);
+/** @brief 解码连接级可靠公网地址观测帧。 */
+utp_internal_error_t utp_frame_observed_address_decode(utp_frame_observed_address_t* address, const uint8_t* buffer,
+                                                       size_t length);
 /** @brief 编码明文握手阶段携带的 CRYPTO 帧。 */
 utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, const utp_frame_crypto_t* crypto);
 /** @brief 解码并校验 CRYPTO 帧的保留字段与算法类型。 */
