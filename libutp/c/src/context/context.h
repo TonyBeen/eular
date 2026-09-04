@@ -29,6 +29,11 @@
 #define UTP_CONTEXT_NTRS_PACKET_CAPACITY   512u
 #define UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY \
     (UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + 8u)
+#define UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES (UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 2u + 1u)
+#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY 16u
+#define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US UINT64_C(5000000)
+#define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY 16u
+#define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US UINT64_C(30000000)
 
 typedef struct utp_context_ntrs_registration {
     utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
@@ -81,6 +86,8 @@ typedef struct utp_context_connection_slot {
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
     uint8_t                    rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];        // 主动连接的 rendezvous 幂等键
+    uint8_t                    rendezvous_punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
+    utp_address_t              rendezvous_candidates[UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES];
     char                       target_peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 主动连接复制的目标路由标识
     uint8_t*                   zero_rtt_early_data;                          // 主动 0-RTT 重传期间持有的早期流数据
     size_t                     zero_rtt_early_data_size;                     // 缓存早期数据长度
@@ -92,6 +99,7 @@ typedef struct utp_context_connection_slot {
     uint8_t                    zero_rtt_response_retries;                    // 0-RTT 响应已重试次数
     uint8_t                    zero_rtt_encryption_mode;                     // 票据指定加密模式
     uint8_t                    target_peer_id_length;                        // target_peer_id 的有效字节数
+    uint8_t                    rendezvous_candidate_count;
     bool                       zero_rtt_early_fin : 1;                       // 早期流数据是否带 FIN
     bool                       zero_rtt_awaiting_accept : 1;                 // 是否等待 on_new_connection 决策
     bool                       zero_rtt_accepted : 1;                        // 应用是否已接受 0-RTT
@@ -105,8 +113,22 @@ typedef struct utp_context_connection_slot {
     bool                       connect_pending : 1;                          // 是否有主动连接等待完成
     bool                       terminal_error_queued : 1;                    // 是否已进入延迟终止事件队列
     bool                       terminal_error_suppressed : 1;                // 本地 close 是否取消该错误回调
+    bool                       rendezvous_active : 1;                         // 已收到 NTRS 候选计划，握手包向全部候选 fanout
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
+
+typedef struct utp_context_rendezvous_punch_cache_entry {
+    utp_address_t endpoint;                                                  // 提前到达 PUNCH 的来源 endpoint
+    uint8_t       token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];                    // PUNCH token
+    uint64_t      expires_at_us;                                              // 单调时钟过期时间
+    bool          used;                                                       // 是否占用
+} utp_context_rendezvous_punch_cache_entry_t;
+
+typedef struct utp_context_rendezvous_forward_cache_entry {
+    uint8_t  rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
+    uint64_t expires_at_us;
+    bool     used;
+} utp_context_rendezvous_forward_cache_entry_t;
 
 typedef struct utp_context_pending_slot {
     utp_hash_node_t node;                                                  // 按待处理本端 CID 索引的哈希节点
@@ -158,6 +180,10 @@ struct utp_context {
     utp_nat_probe_task_t                     nat_probe;                            // 当前 NAT 探测任务
     utp_nat_probe_result_t                   nat_result;                           // 最近一次完成的 NAT 探测缓存
     utp_context_ntrs_registration_t          ntrs_registration;                    // Context 到单个 NTRS 的半连接注册
+    utp_context_rendezvous_punch_cache_entry_t
+        rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];         // 未匹配 PUNCH 的短期缓存
+    utp_context_rendezvous_forward_cache_entry_t
+        rendezvous_forward_cache[UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY];      // 已处理 FORWARD 的短期去重缓存
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔

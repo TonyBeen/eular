@@ -572,6 +572,240 @@ static void test_congestion_algorithm_selection(struct event_base* event_base)
     utp_context_destroy(server);
 }
 
+static void test_ntrs_redirect_connect(struct event_base* event_base)
+{
+    utp_context_options_t       client_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t       server_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t       connect_options = UTP_CONNECT_OPTIONS_INIT;
+    utp_context_t*              client = NULL;
+    utp_context_t*              server = NULL;
+    utp_udp_socket_t            ntrs_socket;
+    utp_address_t               requested = {0};
+    utp_address_t               ntrs_local = {0};
+    utp_address_t               client_peer = {0};
+    utp_address_t               public_candidates[1] = {{0}};
+    uint8_t                     packet[UTP_PACKET_MTU_FLOOR] = {0};
+    uint8_t                     response[512u] = {0};
+    uint8_t                     response_body[256u] = {0};
+    size_t                      packet_length = 0u;
+    size_t                      response_length = 0u;
+    size_t                      response_body_length = 0u;
+    uint16_t                    server_port = 0u;
+    size_t                      sent_length = 0u;
+    utp_packet_view_t           packet_view;
+    utp_frame_rendezvous_t      frame;
+    utp_rendezvous_request_t    request;
+    utp_rendezvous_redirect_t   redirect = {0};
+    utp_packet_header_t         response_header;
+    public_api_probe_t          client_probe = {0};
+    public_api_probe_t          server_probe = {0};
+    utp_internal_error_t        receive_error;
+    const struct timeval        retry_delay = {0, 1000};
+
+    client_options.event_base = event_base;
+    client_options.context_id = 601u;
+    client_options.peer_id    = "node-a";
+    server_options.event_base = event_base;
+    server_options.context_id = 602u;
+    server_options.peer_id    = "node-b";
+    assert(utp_context_create(&client_options, &client) == UTP_STATUS_OK);
+    assert(utp_context_create(&server_options, &server) == UTP_STATUS_OK);
+    assert(utp_context_bind(client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+    assert(utp_context_bind(server, "127.0.0.1", 0u, NULL, &server_port) == UTP_STATUS_OK);
+    assert(server_port != 0u);
+    server_probe.context = server;
+    server_probe.expected_encryption = UTP_ENCRYPTION_NONE;
+    utp_context_set_on_connected(client, test_on_connected, &client_probe);
+    utp_context_set_on_connected(server, test_on_connected, &server_probe);
+    utp_context_set_on_new_connection(server, test_on_new_connection, &server_probe);
+    utp_udp_socket_init(&ntrs_socket);
+    assert(utp_address_parse(&requested, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_open(&ntrs_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_bind(&ntrs_socket, &requested, NULL, &ntrs_local) == UTP_INTERNAL_ERROR_OK);
+
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "node-b";
+    connect_options.port           = ntrs_local.port;
+    connect_options.encryption     = UTP_ENCRYPTION_NONE;
+    assert(utp_context_connect(client, &connect_options) == UTP_STATUS_OK);
+    receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    for (uint8_t attempt = 0u; attempt < 10u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+        receive_error = utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+        if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            assert(event_base_loopexit(event_base, &retry_delay) == 0);
+            assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+        }
+    }
+    assert(receive_error == UTP_INTERNAL_ERROR_OK);
+    assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+    assert(packet_view.header.type == UTP_PACKET_TYPE_INITIAL);
+    assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+    assert(utp_rendezvous_request_decode(&request, frame.payload, frame.payload_length) == UTP_INTERNAL_ERROR_OK);
+
+    public_candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
+    public_candidates[0].port       = server_port;
+    public_candidates[0].address[0] = 127u;
+    public_candidates[0].address[3] = 1u;
+    memcpy(redirect.rendezvous_id, request.rendezvous_id, sizeof(redirect.rendezvous_id));
+    for (size_t index = 0u; index < sizeof(redirect.punch_token); ++index) {
+        redirect.punch_token[index] = (uint8_t)(index + 1u);
+    }
+    redirect.target_plan.local_port = server_port;
+    redirect.target_plan.family = UTP_ADDRESS_FAMILY_IPV4;
+    redirect.target_plan.public_candidates = public_candidates;
+    redirect.target_plan.public_candidate_count = 1u;
+    assert(utp_rendezvous_redirect_encode(response_body, sizeof(response_body), &redirect, &response_body_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    response_header = (utp_packet_header_t){0u,
+                                            0u,
+                                            UINT64_C(1),
+                                            (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
+                                            UTP_PACKET_TYPE_RENDEZVOUS,
+                                            0u};
+    assert(utp_proto_encode_header(response, sizeof(response), &response_header) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){response_body, (uint16_t)response_body_length, UTP_RENDEZVOUS_MESSAGE_REDIRECT};
+    assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                       &frame) == UTP_INTERNAL_ERROR_OK);
+    response_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length;
+    assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(sent_length == response_length);
+    pump_event_loop(event_base, 32);
+    assert(client_probe.connected_count == 1);
+    assert(server_probe.connected_count == 1);
+
+    utp_udp_socket_close(&ntrs_socket);
+    utp_context_destroy(client);
+    utp_context_destroy(server);
+}
+
+static void test_ntrs_forward_punch(struct event_base* event_base)
+{
+    utp_context_options_t    options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_t*           context = NULL;
+    utp_udp_socket_t         ntrs_socket;
+    utp_udp_socket_t         source_socket;
+    utp_address_t            requested = {0};
+    utp_address_t            ntrs_local = {0};
+    utp_address_t            source_local = {0};
+    utp_address_t            received_peer;
+    utp_address_t            public_candidates[1] = {{0}};
+    utp_rendezvous_ping_t    ping = {0};
+    utp_rendezvous_forward_t forward = {0};
+    utp_packet_header_t      header;
+    utp_packet_view_t        packet_view;
+    utp_frame_rendezvous_t   frame;
+    utp_rendezvous_pong_t    pong;
+    uint8_t                  ping_body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
+    uint8_t                  forward_body[256u];
+    uint8_t                  packet[512u];
+    uint8_t                  received[512u];
+    size_t                   ping_length;
+    size_t                   forward_length;
+    size_t                   packet_length;
+    size_t                   received_length;
+    size_t                   sent_length;
+
+    options.event_base = event_base;
+    options.context_id = 603u;
+    options.peer_id    = "node-b";
+    assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
+    assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+
+    assert(utp_address_parse(&requested, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
+    utp_udp_socket_init(&ntrs_socket);
+    utp_udp_socket_init(&source_socket);
+    assert(utp_udp_socket_open(&ntrs_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_open(&source_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_bind(&ntrs_socket, &requested, NULL, &ntrs_local) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_bind(&source_socket, &requested, NULL, &source_local) == UTP_INTERNAL_ERROR_OK);
+
+    context->ntrs_registration.registered = true;
+    context->ntrs_registration.endpoint   = ntrs_local;
+    for (size_t index = 0u; index < sizeof(ping.registration_token); ++index) {
+        ping.registration_token[index] = (uint8_t)(index + 1u);
+    }
+    memcpy(context->ntrs_registration.registration_token, ping.registration_token,
+           sizeof(context->ntrs_registration.registration_token));
+    assert(utp_rendezvous_ping_encode(ping_body, sizeof(ping_body), &ping) == UTP_INTERNAL_ERROR_OK);
+    ping_length = sizeof(ping_body);
+
+    public_candidates[0] = source_local;
+    forward.source_peer_id = (const uint8_t*)"node-a";
+    forward.source_peer_id_length = (uint8_t)strlen((const char*)forward.source_peer_id);
+    forward.source_plan.family = UTP_ADDRESS_FAMILY_IPV4;
+    forward.source_plan.local_port = source_local.port;
+    forward.source_plan.public_candidates = public_candidates;
+    forward.source_plan.public_candidate_count = 1u;
+    for (size_t index = 0u; index < sizeof(forward.rendezvous_id); ++index) {
+        forward.rendezvous_id[index] = (uint8_t)(index + 1u);
+    }
+    for (size_t index = 0u; index < sizeof(forward.punch_token); ++index) {
+        forward.punch_token[index] = (uint8_t)(index + 17u);
+    }
+    assert(utp_rendezvous_forward_encode(forward_body, sizeof(forward_body), &forward, &forward_length) ==
+           UTP_INTERNAL_ERROR_OK);
+
+    header = (utp_packet_header_t){0u,
+                                   0u,
+                                   UINT64_C(17),
+                                   (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + ping_length +
+                                              UTP_FRAME_RENDEZVOUS_HEADER_SIZE + forward_length),
+                                   UTP_PACKET_TYPE_RENDEZVOUS,
+                                   0u};
+    assert(utp_proto_encode_header(packet, sizeof(packet), &header) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){ping_body, (uint16_t)ping_length, UTP_RENDEZVOUS_MESSAGE_PING};
+    assert(utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE, sizeof(packet) - UTP_PACKET_HEADER_SIZE,
+                                       &frame) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){forward_body, (uint16_t)forward_length, UTP_RENDEZVOUS_MESSAGE_FORWARD};
+    assert(utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE +
+                                           ping_length,
+                                       sizeof(packet) - UTP_PACKET_HEADER_SIZE - UTP_FRAME_RENDEZVOUS_HEADER_SIZE -
+                                           ping_length,
+                                       &frame) == UTP_INTERNAL_ERROR_OK);
+    packet_length = UTP_PACKET_HEADER_SIZE + header.payload_length;
+
+    assert(utp_udp_socket_send_to(&ntrs_socket, packet, packet_length, &context->bound_address, &sent_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(sent_length == packet_length);
+    pump_event_loop(event_base, 16);
+    assert(utp_udp_socket_recv_from(&source_socket, received, sizeof(received), &received_length, &received_peer) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(utp_packet_view_decode(&packet_view, received, received_length) == UTP_INTERNAL_ERROR_OK);
+    assert(packet_view.header.type == UTP_PACKET_TYPE_RENDEZVOUS);
+    assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_PUNCH);
+    assert(frame.payload_length == sizeof(forward.punch_token));
+    assert(memcmp(frame.payload, forward.punch_token, sizeof(forward.punch_token)) == 0);
+    assert(utp_udp_socket_recv_from(&ntrs_socket, received, sizeof(received), &received_length, &received_peer) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(utp_packet_view_decode(&packet_view, received, received_length) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_PONG);
+    assert(utp_rendezvous_pong_decode(&pong, frame.payload, frame.payload_length) == UTP_INTERNAL_ERROR_OK);
+    assert(pong.acknowledged_packet_number == header.packet_number);
+
+    assert(utp_udp_socket_send_to(&ntrs_socket, packet, packet_length, &context->bound_address, &sent_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    pump_event_loop(event_base, 16);
+    assert(utp_udp_socket_recv_from(&source_socket, received, sizeof(received), &received_length, &received_peer) ==
+           UTP_INTERNAL_ERROR_WOULD_BLOCK);
+    assert(utp_udp_socket_recv_from(&ntrs_socket, received, sizeof(received), &received_length, &received_peer) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(utp_packet_view_decode(&packet_view, received, received_length) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_PONG);
+
+    utp_udp_socket_close(&source_socket);
+    utp_udp_socket_close(&ntrs_socket);
+    utp_context_destroy(context);
+}
+
 int main(void)
 {
     struct event_base*    event_base = event_base_new();
@@ -791,6 +1025,8 @@ int main(void)
     }
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_128, 101u, 102u);
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_256, 103u, 104u);
+    test_ntrs_redirect_connect(event_base);
+    test_ntrs_forward_punch(event_base);
     test_plaintext_zero_rtt(event_base);
     test_encrypted_zero_rtt(event_base);
     test_congestion_algorithm_selection(event_base);
