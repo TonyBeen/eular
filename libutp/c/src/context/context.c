@@ -104,13 +104,16 @@ static const uint8_t k_zero_rtt_ack_frequency_frame[UTP_FRAME_ACK_FREQUENCY_SIZE
     UTP_FRAME_TYPE_ACK_FREQUENCY, 2u, 1u, 0u, 0u, 0u, 25u,
 };
 
+static uint64_t utp_context_now_us(void);
+
 /** @brief 返回当前 Context 主动连接 REQUEST 帧的精确空间需求。 */
 static size_t utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length)
 {
     const size_t address_length = context->bound_address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
 
     return UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ID_SIZE + 1u + context->peer_id_length + 1u +
-           target_peer_id_length + 1u + 1u + 2u + 1u + address_length * (size_t)context->local_candidate_count;
+           target_peer_id_length + 1u + 1u + 1u + address_length + 2u + 2u + 1u +
+           address_length * (size_t)context->local_candidate_count;
 }
 
 /** @brief 在 Initial 或 0-RTT 的明文首部追加本轮 rendezvous REQUEST。 */
@@ -118,10 +121,11 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
                                                              const utp_context_connection_slot_t* slot, uint8_t* buffer,
                                                              size_t capacity, size_t* offset)
 {
-    uint8_t body[UTP_RENDEZVOUS_ID_SIZE + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + 1u + 2u +
-                 1u + UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 16u];
+    uint8_t body[UTP_RENDEZVOUS_ID_SIZE + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + 1u + 1u +
+                 16u + 2u + 2u + 1u + UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 16u];
     utp_rendezvous_request_t request = {0};
     utp_frame_rendezvous_t   frame;
+    utp_address_t            reported_public_endpoint = {0};
     size_t                   body_length;
     utp_internal_error_t     error;
 
@@ -137,6 +141,15 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
     request.target_peer_id_length = slot->target_peer_id_length;
     request.source_nat_class =
         context->nat_result_valid ? (uint8_t)context->nat_result.nat_class : (uint8_t)UTP_NAT_CLASS_UNKNOWN;
+    if (context->nat_result_valid && context->nat_result.expires_at_us > utp_context_now_us() &&
+        context->nat_result.primary_mapped_endpoint.family == context->bound_address.family &&
+        context->nat_result.primary_mapped_endpoint.port != 0u) {
+        reported_public_endpoint.family = context->nat_result.primary_mapped_endpoint.family;
+        reported_public_endpoint.port   = context->nat_result.primary_mapped_endpoint.port;
+        memcpy(reported_public_endpoint.address, context->nat_result.primary_mapped_endpoint.address,
+               sizeof(reported_public_endpoint.address));
+        request.reported_public_endpoint = &reported_public_endpoint;
+    }
     request.local_family          = context->bound_address.family;
     request.local_candidate_count = context->local_candidate_count;
     memcpy(request.rendezvous_id, slot->rendezvous_id, sizeof(request.rendezvous_id));
@@ -5042,6 +5055,7 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
     utp_frame_rendezvous_t          frame;
     utp_packet_header_t             header;
     utp_address_t                   endpoint;
+    utp_address_t                   reported_public_endpoint = {0};
     uint8_t  body[UTP_CONTEXT_NTRS_PACKET_CAPACITY - UTP_PACKET_HEADER_SIZE - UTP_FRAME_RENDEZVOUS_HEADER_SIZE];
     size_t   body_length;
     uint64_t now_us;
@@ -5092,6 +5106,15 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
     register_message.nat_class = context->nat_result_valid && context->nat_result.expires_at_us > utp_context_now_us()
                                      ? (uint8_t)context->nat_result.nat_class
                                      : (uint8_t)UTP_NAT_CLASS_UNKNOWN;
+    if (context->nat_result_valid && context->nat_result.expires_at_us > utp_context_now_us() &&
+        context->nat_result.primary_mapped_endpoint.family == context->bound_address.family &&
+        context->nat_result.primary_mapped_endpoint.port != 0u) {
+        reported_public_endpoint.family = context->nat_result.primary_mapped_endpoint.family;
+        reported_public_endpoint.port   = context->nat_result.primary_mapped_endpoint.port;
+        memcpy(reported_public_endpoint.address, context->nat_result.primary_mapped_endpoint.address,
+               sizeof(reported_public_endpoint.address));
+        register_message.reported_public_endpoint = &reported_public_endpoint;
+    }
     register_message.local_family          = context->bound_address.family;
     register_message.local_port            = context->bound_address.port;
     register_message.local_candidate_count = context->local_candidate_count;

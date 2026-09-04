@@ -16,13 +16,16 @@ extern "C" {
 
 #define UTP_RENDEZVOUS_ID_SIZE                 16u
 #define UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE 8u
+#define UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE        8u
 #define UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES    4u
 
 /* REGISTER：请求标识、当前 token、Context 身份与本地候选地址。 */
 typedef struct utp_rendezvous_register {
     const uint8_t*       peer_id;           // Context peer_id 的字节视图
     const utp_address_t* local_candidates;  // 最多四个本地候选地址
+    const utp_address_t* reported_public_endpoint;  // NAT 探测得出的公网 endpoint，可为空
     uint8_t              registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    utp_address_t        decoded_reported_public_endpoint;
     utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
     uint64_t             registration_request_id;  // 首次注册及其重传保持不变
     uint16_t             local_port;               // Context 已绑定 UDP 端口
@@ -59,7 +62,9 @@ typedef struct utp_rendezvous_request {
     const uint8_t*       source_peer_id;                         // 请求方 Context peer_id 的字节视图
     const uint8_t*       target_peer_id;                         // 目标节点 peer_id 的字节视图
     const utp_address_t* local_candidates;                       // 最多四个本地候选地址
+    const utp_address_t* reported_public_endpoint;               // NAT 探测得出的公网 endpoint，可为空
     uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 本轮幂等键
+    utp_address_t        decoded_reported_public_endpoint;       // 解码存储
     utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 解码存储
     uint16_t             local_port;                                                     // Context 已绑定 UDP 端口
     uint8_t              source_peer_id_length;                                          // 1..128
@@ -69,21 +74,22 @@ typedef struct utp_rendezvous_request {
     uint8_t              local_candidate_count;                                          // 0..4
 } utp_rendezvous_request_t;
 
-/* CandidatePlan：本地候选地址加 NTRS 观测到的公网地址及其候选端口。 */
+/* CandidatePlan：本地候选地址及不可拆分的公网 IP:port 候选。 */
 typedef struct utp_rendezvous_candidate_plan {
     const utp_address_t* local_candidates;                                               // 最多四个本地候选地址
+    const utp_address_t* public_candidates;                                              // 最多四个公网 IP:port 候选
     utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 解码存储
-    utp_address_t        public_address;                                                 // NTRS 观测到的公网地址
-    uint16_t             public_ports[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];              // 有序公网端口候选
+    utp_address_t        decoded_public_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]; // 解码存储
     uint16_t             local_port;                                                     // Context 已绑定 UDP 端口
     uint8_t              family;                                                         // 4 或 6
     uint8_t              local_candidate_count;                                          // 0..4
-    uint8_t              public_port_count;                                              // 1..4
+    uint8_t              public_candidate_count;                                         // 1..4
 } utp_rendezvous_candidate_plan_t;
 
 /* REDIRECT：rendezvous_id(16) 加目标 CandidatePlan。 */
 typedef struct utp_rendezvous_redirect {
     uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
+    uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     utp_rendezvous_candidate_plan_t target_plan;                            // 目标 B 的候选计划
 } utp_rendezvous_redirect_t;
 
@@ -91,6 +97,7 @@ typedef struct utp_rendezvous_redirect {
 typedef struct utp_rendezvous_forward {
     const uint8_t*                  source_peer_id;                         // 请求方 peer_id 的输入视图
     uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
+    uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     uint8_t                         source_peer_id_length;                  // 1..128
     utp_rendezvous_candidate_plan_t source_plan;                            // 请求方 A 的候选计划
 } utp_rendezvous_forward_t;

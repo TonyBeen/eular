@@ -140,7 +140,8 @@ typedef enum utp_rendezvous_message_type {
     UTP_RENDEZVOUS_MESSAGE_INTRODUCTION    = 11,
     UTP_RENDEZVOUS_MESSAGE_UNREGISTER      = 12,
     UTP_RENDEZVOUS_MESSAGE_UNREGISTERED    = 13,
-    UTP_RENDEZVOUS_MESSAGE_REJECTED        = 14
+    UTP_RENDEZVOUS_MESSAGE_REJECTED        = 14,
+    UTP_RENDEZVOUS_MESSAGE_PUNCH           = 15
 } utp_rendezvous_message_type_t;
 
 typedef struct utp_packet_view {

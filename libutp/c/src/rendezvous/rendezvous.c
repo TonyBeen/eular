@@ -52,6 +52,11 @@ static utp_internal_error_t utp_rendezvous_validate_register(const utp_rendezvou
     if (address_length == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    if (registration->reported_public_endpoint != NULL &&
+        (registration->reported_public_endpoint->family != registration->local_family ||
+         registration->reported_public_endpoint->port == 0u)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
     for (index = 0u; index < registration->local_candidate_count; ++index) {
         if (registration->local_candidates[index].family != registration->local_family ||
             registration->local_candidates[index].port != registration->local_port) {
@@ -117,6 +122,15 @@ utp_internal_error_t utp_rendezvous_register_encode(uint8_t* buffer, size_t capa
         error = utp_wire_write_u8(&writer, registration->local_family);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, registration->reported_public_endpoint == NULL ? UINT8_C(0) : UINT8_C(1));
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && registration->reported_public_endpoint != NULL) {
+        error = utp_rendezvous_write_bytes(&writer, registration->reported_public_endpoint->address, address_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && registration->reported_public_endpoint != NULL) {
+        error = utp_wire_write_u16(&writer, registration->reported_public_endpoint->port);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u16(&writer, registration->local_port);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -139,6 +153,7 @@ utp_internal_error_t utp_rendezvous_register_decode(utp_rendezvous_register_t* r
     utp_internal_error_t      error;
     size_t                    address_length;
     size_t                    index;
+    uint8_t                   reported_public_present;
 
     if (registration == NULL || buffer == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -161,14 +176,30 @@ utp_internal_error_t utp_rendezvous_register_decode(utp_rendezvous_register_t* r
     reader.cursor    += decoded.peer_id_length;
     reader.remaining -= decoded.peer_id_length;
     if (utp_wire_read_u8(&reader, &decoded.nat_class) != UTP_INTERNAL_ERROR_OK ||
-        utp_wire_read_u8(&reader, &decoded.local_family) != UTP_INTERNAL_ERROR_OK ||
-        utp_wire_read_u16(&reader, &decoded.local_port) != UTP_INTERNAL_ERROR_OK ||
-        utp_wire_read_u8(&reader, &decoded.local_candidate_count) != UTP_INTERNAL_ERROR_OK) {
+        utp_wire_read_u8(&reader, &decoded.local_family) != UTP_INTERNAL_ERROR_OK) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     address_length = utp_rendezvous_address_length(decoded.local_family);
-    if (decoded.local_port == 0u || decoded.local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
-        address_length == 0u || reader.remaining != address_length * (size_t)decoded.local_candidate_count) {
+    if (address_length == 0u || utp_wire_read_u8(&reader, &reported_public_present) != UTP_INTERNAL_ERROR_OK ||
+        reported_public_present > 1u) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    if (reported_public_present != 0u) {
+        decoded.decoded_reported_public_endpoint.family = decoded.local_family;
+        if (utp_rendezvous_read_bytes(&reader, decoded.decoded_reported_public_endpoint.address, address_length) !=
+            UTP_INTERNAL_ERROR_OK) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        if (utp_wire_read_u16(&reader, &decoded.decoded_reported_public_endpoint.port) != UTP_INTERNAL_ERROR_OK ||
+            decoded.decoded_reported_public_endpoint.port == 0u) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        decoded.reported_public_endpoint = &decoded.decoded_reported_public_endpoint;
+    }
+    if (utp_wire_read_u16(&reader, &decoded.local_port) != UTP_INTERNAL_ERROR_OK ||
+        utp_wire_read_u8(&reader, &decoded.local_candidate_count) != UTP_INTERNAL_ERROR_OK || decoded.local_port == 0u ||
+        decoded.local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        reader.remaining != address_length * (size_t)decoded.local_candidate_count) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     for (index = 0u; index < decoded.local_candidate_count; ++index) {
@@ -181,6 +212,9 @@ utp_internal_error_t utp_rendezvous_register_decode(utp_rendezvous_register_t* r
     }
     decoded.local_candidates       = decoded.decoded_local_candidates;
     *registration                  = decoded;
+    if (registration->reported_public_endpoint != NULL) {
+        registration->reported_public_endpoint = &registration->decoded_reported_public_endpoint;
+    }
     registration->local_candidates = registration->decoded_local_candidates;
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -364,18 +398,38 @@ utp_internal_error_t utp_rendezvous_pong_decode(utp_rendezvous_pong_t* pong, con
                                                                                     : error;
 }
 
+static bool utp_rendezvous_bytes_are_zero(const uint8_t* bytes, size_t length)
+{
+    uint8_t value = 0u;
+
+    for (size_t index = 0u; index < length; ++index) {
+        value |= bytes[index];
+    }
+    return value == 0u;
+}
+
+static bool utp_rendezvous_address_equal(const utp_address_t* left, const utp_address_t* right)
+{
+    const size_t address_length = utp_rendezvous_address_length(left->family);
+
+    return address_length != 0u && left->family == right->family && left->port == right->port &&
+           memcmp(left->address, right->address, address_length) == 0;
+}
+
 static utp_internal_error_t utp_rendezvous_validate_candidate_plan(const utp_rendezvous_candidate_plan_t* plan)
 {
     size_t address_length;
     size_t index;
+    size_t other_index;
 
-    if (plan->local_port == 0u || plan->local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
-        plan->public_port_count == 0u || plan->public_port_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
-        (plan->local_candidate_count != 0u && plan->local_candidates == NULL)) {
+    if (plan == NULL || plan->local_port == 0u ||
+        plan->local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        plan->public_candidate_count == 0u || plan->public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        (plan->local_candidate_count != 0u && plan->local_candidates == NULL) || plan->public_candidates == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     address_length = utp_rendezvous_address_length(plan->family);
-    if (address_length == 0u || plan->public_address.family != plan->family || plan->public_address.port != 0u) {
+    if (address_length == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     for (index = 0u; index < plan->local_candidate_count; ++index) {
@@ -384,10 +438,15 @@ static utp_internal_error_t utp_rendezvous_validate_candidate_plan(const utp_ren
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
         }
     }
-    for (index = 0u; index < plan->public_port_count; ++index) {
-        if (plan->public_ports[index] == 0u ||
-            (index != 0u && plan->public_ports[index - 1u] == plan->public_ports[index])) {
+    for (index = 0u; index < plan->public_candidate_count; ++index) {
+        if (plan->public_candidates[index].family != plan->family || plan->public_candidates[index].port == 0u) {
             return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        }
+        for (other_index = 0u; other_index < index; ++other_index) {
+            if (utp_rendezvous_address_equal(&plan->public_candidates[index],
+                                              &plan->public_candidates[other_index])) {
+                return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+            }
         }
     }
     return UTP_INTERNAL_ERROR_OK;
@@ -398,7 +457,8 @@ static utp_internal_error_t utp_rendezvous_validate_request(const utp_rendezvous
     size_t address_length;
     size_t index;
 
-    if (request->source_peer_id == NULL || request->target_peer_id == NULL || request->source_peer_id_length == 0u ||
+    if (request == NULL || request->source_peer_id == NULL || request->target_peer_id == NULL ||
+        request->source_peer_id_length == 0u ||
         request->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH || request->target_peer_id_length == 0u ||
         request->target_peer_id_length > UTP_PEER_ID_MAX_LENGTH || request->local_port == 0u ||
         request->local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
@@ -407,6 +467,11 @@ static utp_internal_error_t utp_rendezvous_validate_request(const utp_rendezvous
     }
     address_length = utp_rendezvous_address_length(request->local_family);
     if (address_length == 0u) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (request->reported_public_endpoint != NULL &&
+        (request->reported_public_endpoint->family != request->local_family ||
+         request->reported_public_endpoint->port == 0u)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     for (index = 0u; index < request->local_candidate_count; ++index) {
@@ -454,6 +519,15 @@ utp_internal_error_t utp_rendezvous_request_encode(uint8_t* buffer, size_t capac
         error = utp_wire_write_u8(&writer, request->local_family);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, request->reported_public_endpoint == NULL ? UINT8_C(0) : UINT8_C(1));
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && request->reported_public_endpoint != NULL) {
+        error = utp_rendezvous_write_bytes(&writer, request->reported_public_endpoint->address, address_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK && request->reported_public_endpoint != NULL) {
+        error = utp_wire_write_u16(&writer, request->reported_public_endpoint->port);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u16(&writer, request->local_port);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -479,7 +553,11 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
     size_t                   index;
     size_t                   address_index;
     utp_internal_error_t     error;
+    uint8_t                  reported_public_present;
 
+    if (request == NULL || buffer == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
     error = utp_wire_reader_init(&reader, buffer, length);
     for (index = 0u; index < sizeof(decoded.rendezvous_id) && error == UTP_INTERNAL_ERROR_OK; ++index) {
         error = utp_wire_read_u8(&reader, &decoded.rendezvous_id[index]);
@@ -506,6 +584,24 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_read_u8(&reader, &decoded.local_family);
     }
+    address_length = utp_rendezvous_address_length(decoded.local_family);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_read_u8(&reader, &reported_public_present);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK || address_length == 0u || reported_public_present > 1u) {
+        return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
+    }
+    if (reported_public_present != 0u) {
+        decoded.decoded_reported_public_endpoint.family = decoded.local_family;
+        error = utp_rendezvous_read_bytes(&reader, decoded.decoded_reported_public_endpoint.address, address_length);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_wire_read_u16(&reader, &decoded.decoded_reported_public_endpoint.port);
+        }
+        if (error != UTP_INTERNAL_ERROR_OK || decoded.decoded_reported_public_endpoint.port == 0u) {
+            return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
+        }
+        decoded.reported_public_endpoint = &decoded.decoded_reported_public_endpoint;
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_read_u16(&reader, &decoded.local_port);
     }
@@ -516,7 +612,6 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
         decoded.local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES) {
         return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
     }
-    address_length = utp_rendezvous_address_length(decoded.local_family);
     if (address_length == 0u || reader.remaining != address_length * (size_t)decoded.local_candidate_count) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
@@ -531,6 +626,9 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
         }
     }
     *request                  = decoded;
+    if (request->reported_public_endpoint != NULL) {
+        request->reported_public_endpoint = &request->decoded_reported_public_endpoint;
+    }
     request->local_candidates = request->decoded_local_candidates;
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -565,14 +663,14 @@ utp_internal_error_t utp_rendezvous_candidate_plan_encode(uint8_t* buffer, size_
             error = utp_wire_write_u8(&writer, plan->local_candidates[index].address[address_index]);
         }
     }
-    for (address_index = 0u; address_index < address_length && error == UTP_INTERNAL_ERROR_OK; ++address_index) {
-        error = utp_wire_write_u8(&writer, plan->public_address.address[address_index]);
-    }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_wire_write_u8(&writer, plan->public_port_count);
+        error = utp_wire_write_u8(&writer, plan->public_candidate_count);
     }
-    for (index = 0u; index < plan->public_port_count && error == UTP_INTERNAL_ERROR_OK; ++index) {
-        error = utp_wire_write_u16(&writer, plan->public_ports[index]);
+    for (index = 0u; index < plan->public_candidate_count && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_rendezvous_write_bytes(&writer, plan->public_candidates[index].address, address_length);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_wire_write_u16(&writer, plan->public_candidates[index].port);
+        }
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         *out_length = capacity - writer.remaining;
@@ -590,6 +688,9 @@ utp_internal_error_t utp_rendezvous_candidate_plan_decode(utp_rendezvous_candida
     size_t                          index;
     size_t                          address_index;
 
+    if (plan == NULL || buffer == NULL || consumed == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
     error = utp_wire_reader_init(&reader, buffer, length);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_read_u8(&reader, &decoded.family);
@@ -603,7 +704,7 @@ utp_internal_error_t utp_rendezvous_candidate_plan_decode(utp_rendezvous_candida
     address_length = utp_rendezvous_address_length(decoded.family);
     if (error != UTP_INTERNAL_ERROR_OK || decoded.local_port == 0u || address_length == 0u ||
         decoded.local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
-        reader.remaining < address_length * (size_t)decoded.local_candidate_count + address_length + 1u) {
+        reader.remaining < address_length * (size_t)decoded.local_candidate_count + 1u) {
         return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
     }
     for (index = 0u; index < decoded.local_candidate_count; ++index) {
@@ -616,30 +717,34 @@ utp_internal_error_t utp_rendezvous_candidate_plan_decode(utp_rendezvous_candida
             }
         }
     }
-    decoded.public_address.family = decoded.family;
-    for (address_index = 0u; address_index < address_length; ++address_index) {
-        error = utp_wire_read_u8(&reader, &decoded.public_address.address[address_index]);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
-        }
-    }
-    error = utp_wire_read_u8(&reader, &decoded.public_port_count);
-    if (error != UTP_INTERNAL_ERROR_OK || decoded.public_port_count == 0u ||
-        decoded.public_port_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
-        reader.remaining < (size_t)decoded.public_port_count * 2u) {
+    error = utp_wire_read_u8(&reader, &decoded.public_candidate_count);
+    if (error != UTP_INTERNAL_ERROR_OK || decoded.public_candidate_count == 0u ||
+        decoded.public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        reader.remaining < (size_t)decoded.public_candidate_count * (address_length + 2u)) {
         return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
     }
-    for (index = 0u; index < decoded.public_port_count; ++index) {
-        error = utp_wire_read_u16(&reader, &decoded.public_ports[index]);
-        if (error != UTP_INTERNAL_ERROR_OK || decoded.public_ports[index] == 0u ||
-            (index != 0u && decoded.public_ports[index - 1u] == decoded.public_ports[index])) {
+    for (index = 0u; index < decoded.public_candidate_count; ++index) {
+        decoded.decoded_public_candidates[index].family = decoded.family;
+        error = utp_rendezvous_read_bytes(&reader, decoded.decoded_public_candidates[index].address, address_length);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_wire_read_u16(&reader, &decoded.decoded_public_candidates[index].port);
+        }
+        if (error != UTP_INTERNAL_ERROR_OK || decoded.decoded_public_candidates[index].port == 0u) {
             return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
+        }
+        for (address_index = 0u; address_index < index; ++address_index) {
+            if (utp_rendezvous_address_equal(&decoded.decoded_public_candidates[index],
+                                              &decoded.decoded_public_candidates[address_index])) {
+                return UTP_INTERNAL_ERROR_PROTOCOL;
+            }
         }
     }
     decoded.local_candidates = decoded.decoded_local_candidates;
+    decoded.public_candidates = decoded.decoded_public_candidates;
     *consumed                = length - reader.remaining;
     *plan                    = decoded;
     plan->local_candidates   = plan->decoded_local_candidates;
+    plan->public_candidates  = plan->decoded_public_candidates;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -649,14 +754,20 @@ utp_internal_error_t utp_rendezvous_redirect_encode(uint8_t* buffer, size_t capa
     size_t               plan_length;
     utp_internal_error_t error;
 
-    if (capacity < UTP_RENDEZVOUS_ID_SIZE) {
+    if (buffer == NULL || redirect == NULL || out_length == NULL ||
+        utp_rendezvous_bytes_are_zero(redirect->punch_token, sizeof(redirect->punch_token))) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (capacity < UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     memcpy(buffer, redirect->rendezvous_id, UTP_RENDEZVOUS_ID_SIZE);
-    error = utp_rendezvous_candidate_plan_encode(buffer + UTP_RENDEZVOUS_ID_SIZE, capacity - UTP_RENDEZVOUS_ID_SIZE,
+    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE, redirect->punch_token, sizeof(redirect->punch_token));
+    error = utp_rendezvous_candidate_plan_encode(buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token),
+                                                 capacity - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token),
                                                  &redirect->target_plan, &plan_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        *out_length = UTP_RENDEZVOUS_ID_SIZE + plan_length;
+        *out_length = UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token) + plan_length;
     }
     return error;
 }
@@ -667,17 +778,24 @@ utp_internal_error_t utp_rendezvous_redirect_decode(utp_rendezvous_redirect_t* r
     size_t               consumed;
     utp_internal_error_t error;
 
-    if (length < UTP_RENDEZVOUS_ID_SIZE) {
+    if (redirect == NULL || buffer == NULL || length < UTP_RENDEZVOUS_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     *redirect = (utp_rendezvous_redirect_t){0};
     memcpy(redirect->rendezvous_id, buffer, UTP_RENDEZVOUS_ID_SIZE);
-    error = utp_rendezvous_candidate_plan_decode(&redirect->target_plan, buffer + UTP_RENDEZVOUS_ID_SIZE,
-                                                 length - UTP_RENDEZVOUS_ID_SIZE, &consumed);
+    memcpy(redirect->punch_token, buffer + UTP_RENDEZVOUS_ID_SIZE, sizeof(redirect->punch_token));
+    if (utp_rendezvous_bytes_are_zero(redirect->punch_token, sizeof(redirect->punch_token))) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    error = utp_rendezvous_candidate_plan_decode(&redirect->target_plan,
+                                                 buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token),
+                                                 length - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token),
+                                                 &consumed);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return consumed == length - UTP_RENDEZVOUS_ID_SIZE ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_PROTOCOL;
+    return consumed == length - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token) ? UTP_INTERNAL_ERROR_OK
+                                                                                          : UTP_INTERNAL_ERROR_PROTOCOL;
 }
 
 utp_internal_error_t utp_rendezvous_forward_encode(uint8_t* buffer, size_t capacity,
@@ -686,19 +804,25 @@ utp_internal_error_t utp_rendezvous_forward_encode(uint8_t* buffer, size_t capac
     size_t               plan_length;
     utp_internal_error_t error;
 
-    if (forward->source_peer_id == NULL || forward->source_peer_id_length == 0u ||
+    if (buffer == NULL || forward == NULL || out_length == NULL || forward->source_peer_id == NULL ||
+        forward->source_peer_id_length == 0u ||
         forward->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
-        capacity < UTP_RENDEZVOUS_ID_SIZE + 1u + forward->source_peer_id_length) {
+        utp_rendezvous_bytes_are_zero(forward->punch_token, sizeof(forward->punch_token)) ||
+        capacity < UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     memcpy(buffer, forward->rendezvous_id, UTP_RENDEZVOUS_ID_SIZE);
-    buffer[UTP_RENDEZVOUS_ID_SIZE] = forward->source_peer_id_length;
-    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE + 1u, forward->source_peer_id, forward->source_peer_id_length);
+    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE, forward->punch_token, sizeof(forward->punch_token));
+    buffer[UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token)] = forward->source_peer_id_length;
+    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u, forward->source_peer_id,
+           forward->source_peer_id_length);
     error = utp_rendezvous_candidate_plan_encode(
-        buffer + UTP_RENDEZVOUS_ID_SIZE + 1u + forward->source_peer_id_length,
-        capacity - UTP_RENDEZVOUS_ID_SIZE - 1u - forward->source_peer_id_length, &forward->source_plan, &plan_length);
+        buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length,
+        capacity - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
+        &forward->source_plan, &plan_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        *out_length = UTP_RENDEZVOUS_ID_SIZE + 1u + forward->source_peer_id_length + plan_length;
+        *out_length = UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length +
+                      plan_length;
     }
     return error;
 }
@@ -709,24 +833,29 @@ utp_internal_error_t utp_rendezvous_forward_decode(utp_rendezvous_forward_t* for
     size_t               consumed;
     utp_internal_error_t error;
 
-    if (length <= UTP_RENDEZVOUS_ID_SIZE) {
+    if (forward == NULL || buffer == NULL || length <= UTP_RENDEZVOUS_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     *forward = (utp_rendezvous_forward_t){0};
     memcpy(forward->rendezvous_id, buffer, UTP_RENDEZVOUS_ID_SIZE);
-    forward->source_peer_id_length = buffer[UTP_RENDEZVOUS_ID_SIZE];
-    if (forward->source_peer_id_length == 0u || forward->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
-        length <= UTP_RENDEZVOUS_ID_SIZE + 1u + forward->source_peer_id_length) {
+    memcpy(forward->punch_token, buffer + UTP_RENDEZVOUS_ID_SIZE, sizeof(forward->punch_token));
+    if (utp_rendezvous_bytes_are_zero(forward->punch_token, sizeof(forward->punch_token))) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    forward->source_peer_id = buffer + UTP_RENDEZVOUS_ID_SIZE + 1u;
+    forward->source_peer_id_length = buffer[UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token)];
+    if (forward->source_peer_id_length == 0u || forward->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
+        length <= UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    forward->source_peer_id = buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u;
     error                   = utp_rendezvous_candidate_plan_decode(
         &forward->source_plan, forward->source_peer_id + forward->source_peer_id_length,
-        length - UTP_RENDEZVOUS_ID_SIZE - 1u - forward->source_peer_id_length, &consumed);
+        length - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
+        &consumed);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return consumed == length - UTP_RENDEZVOUS_ID_SIZE - 1u - forward->source_peer_id_length
+    return consumed == length - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length
                ? UTP_INTERNAL_ERROR_OK
                : UTP_INTERNAL_ERROR_PROTOCOL;
 }

@@ -805,6 +805,13 @@ TEST_CASE("rendezvous REQUEST round trips peer IDs and local candidates", "[rend
     request.source_nat_class      = 6u;
     request.local_family          = UTP_ADDRESS_FAMILY_IPV4;
     request.local_candidate_count = static_cast<uint8_t>(candidates.size());
+    request.decoded_reported_public_endpoint.family = UTP_ADDRESS_FAMILY_IPV4;
+    request.decoded_reported_public_endpoint.port   = UINT16_C(54001);
+    request.decoded_reported_public_endpoint.address[0] = 203u;
+    request.decoded_reported_public_endpoint.address[1] = 0u;
+    request.decoded_reported_public_endpoint.address[2] = 113u;
+    request.decoded_reported_public_endpoint.address[3] = 12u;
+    request.reported_public_endpoint = &request.decoded_reported_public_endpoint;
     for (size_t index = 0u; index < sizeof(request.rendezvous_id); ++index) {
         request.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
     }
@@ -819,14 +826,18 @@ TEST_CASE("rendezvous REQUEST round trips peer IDs and local candidates", "[rend
     REQUIRE(decoded.local_candidate_count == candidates.size());
     REQUIRE(decoded.local_candidates[0].port == UINT16_C(4567));
     REQUIRE(std::memcmp(decoded.local_candidates[1].address, candidates[1].address, 4u) == 0);
+    REQUIRE(decoded.reported_public_endpoint != NULL);
+    REQUIRE(decoded.reported_public_endpoint->port == UINT16_C(54001));
+    REQUIRE(decoded.reported_public_endpoint->address[3] == 12u);
 }
 
 TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvous]")
 {
-    const std::array<uint8_t, 6> source_id = {'s', 'o', 'u', 'r', 'c', 'e'};
-    std::array<utp_address_t, 2> candidates = {};
-    std::array<uint8_t, 256>     body       = {};
-    utp_rendezvous_redirect_t    redirect   = {};
+    const std::array<uint8_t, 6> source_id         = {'s', 'o', 'u', 'r', 'c', 'e'};
+    std::array<utp_address_t, 2> candidates        = {};
+    std::array<utp_address_t, 2> public_candidates = {};
+    std::array<uint8_t, 256>     body              = {};
+    utp_rendezvous_redirect_t    redirect          = {};
     utp_rendezvous_redirect_t    decoded_redirect = {};
     utp_rendezvous_forward_t     forward = {};
     utp_rendezvous_forward_t     decoded_forward = {};
@@ -840,20 +851,26 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
     candidates[0].address[3] = 10u;
     candidates[1]            = candidates[0];
     candidates[1].address[3] = 11u;
+    public_candidates[0].family     = UTP_ADDRESS_FAMILY_IPV4;
+    public_candidates[0].port       = UINT16_C(40001);
+    public_candidates[0].address[0] = 203u;
+    public_candidates[0].address[1] = 0u;
+    public_candidates[0].address[2] = 113u;
+    public_candidates[0].address[3] = 8u;
+    public_candidates[1]            = public_candidates[0];
+    public_candidates[1].port       = UINT16_C(40002);
+    public_candidates[1].address[3] = 9u;
     redirect.target_plan.local_candidates      = candidates.data();
+    redirect.target_plan.public_candidates     = public_candidates.data();
     redirect.target_plan.local_port            = UINT16_C(4567);
     redirect.target_plan.family                = UTP_ADDRESS_FAMILY_IPV4;
     redirect.target_plan.local_candidate_count = static_cast<uint8_t>(candidates.size());
-    redirect.target_plan.public_address.family = UTP_ADDRESS_FAMILY_IPV4;
-    redirect.target_plan.public_address.address[0] = 203u;
-    redirect.target_plan.public_address.address[1] = 0u;
-    redirect.target_plan.public_address.address[2] = 113u;
-    redirect.target_plan.public_address.address[3] = 8u;
-    redirect.target_plan.public_ports[0] = UINT16_C(40001);
-    redirect.target_plan.public_ports[1] = UINT16_C(40002);
-    redirect.target_plan.public_port_count = 2u;
+    redirect.target_plan.public_candidate_count = static_cast<uint8_t>(public_candidates.size());
     for (size_t index = 0u; index < sizeof(redirect.rendezvous_id); ++index) {
         redirect.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
+    }
+    for (size_t index = 0u; index < sizeof(redirect.punch_token); ++index) {
+        redirect.punch_token[index] = static_cast<uint8_t>(index + 9u);
     }
 
     REQUIRE(utp_rendezvous_redirect_encode(body.data(), body.size(), &redirect, &body_length) ==
@@ -861,18 +878,23 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
     REQUIRE(utp_rendezvous_redirect_decode(&decoded_redirect, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(std::memcmp(decoded_redirect.rendezvous_id, redirect.rendezvous_id, sizeof(redirect.rendezvous_id)) == 0);
     REQUIRE(decoded_redirect.target_plan.local_candidate_count == candidates.size());
-    REQUIRE(decoded_redirect.target_plan.public_port_count == 2u);
-    REQUIRE(decoded_redirect.target_plan.public_ports[1] == UINT16_C(40002));
+    REQUIRE(std::memcmp(decoded_redirect.punch_token, redirect.punch_token, sizeof(redirect.punch_token)) == 0);
+    REQUIRE(decoded_redirect.target_plan.public_candidate_count == public_candidates.size());
+    REQUIRE(decoded_redirect.target_plan.public_candidates[1].port == UINT16_C(40002));
+    REQUIRE(decoded_redirect.target_plan.public_candidates[1].address[3] == 9u);
 
     forward.source_peer_id        = source_id.data();
     forward.source_peer_id_length = static_cast<uint8_t>(source_id.size());
     std::memcpy(forward.rendezvous_id, redirect.rendezvous_id, sizeof(forward.rendezvous_id));
+    std::memcpy(forward.punch_token, redirect.punch_token, sizeof(forward.punch_token));
     forward.source_plan = redirect.target_plan;
     REQUIRE(utp_rendezvous_forward_encode(body.data(), body.size(), &forward, &body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_forward_decode(&decoded_forward, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(decoded_forward.source_peer_id_length == source_id.size());
     REQUIRE(std::memcmp(decoded_forward.source_peer_id, source_id.data(), source_id.size()) == 0);
-    REQUIRE(decoded_forward.source_plan.public_ports[0] == UINT16_C(40001));
+    REQUIRE(std::memcmp(decoded_forward.punch_token, forward.punch_token, sizeof(forward.punch_token)) == 0);
+    REQUIRE(decoded_forward.source_plan.public_candidates[0].port == UINT16_C(40001));
+    REQUIRE(decoded_forward.source_plan.public_candidates[0].address[3] == 8u);
 }
 
 TEST_CASE("rendezvous INTRODUCTION requires exactly one rendezvous ID", "[rendezvous]")
@@ -920,6 +942,13 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     registration.nat_class               = UTP_NAT_CLASS_PORT_RESTRICTED;
     registration.local_family            = UTP_ADDRESS_FAMILY_IPV4;
     registration.local_candidate_count   = static_cast<uint8_t>(local_candidates.size());
+    registration.decoded_reported_public_endpoint.family = UTP_ADDRESS_FAMILY_IPV4;
+    registration.decoded_reported_public_endpoint.port   = UINT16_C(54000);
+    registration.decoded_reported_public_endpoint.address[0] = 203u;
+    registration.decoded_reported_public_endpoint.address[1] = 0u;
+    registration.decoded_reported_public_endpoint.address[2] = 113u;
+    registration.decoded_reported_public_endpoint.address[3] = 11u;
+    registration.reported_public_endpoint = &registration.decoded_reported_public_endpoint;
     REQUIRE(utp_rendezvous_register_encode(buffer.data(), buffer.size(), &registration, &length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_register_decode(&decoded_registration, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
@@ -928,6 +957,8 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(std::memcmp(decoded_registration.peer_id, peer_id.data(), peer_id.size()) == 0);
     REQUIRE(decoded_registration.local_candidate_count == local_candidates.size());
     REQUIRE(decoded_registration.local_candidates[1].address[3] == 11u);
+    REQUIRE(decoded_registration.reported_public_endpoint != NULL);
+    REQUIRE(decoded_registration.reported_public_endpoint->port == UINT16_C(54000));
     REQUIRE(utp_rendezvous_register_decode(&decoded_registration, buffer.data(), length - 1u) != UTP_INTERNAL_ERROR_OK);
 
     registered.registration_request_id    = registration.registration_request_id;
