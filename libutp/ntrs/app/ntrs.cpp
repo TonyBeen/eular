@@ -30,12 +30,16 @@ struct Registration {
   std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token;
   std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES>
       local_candidates;
+  std::array<utp_address_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES>
+      observed_addresses;
+  std::array<uint64_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES> observed_at_unix_ms;
   utp_address_t reported_public_endpoint;
   uint64_t last_register_request_id;
   uint16_t local_port;
   uint8_t nat_class;
   uint8_t local_family;
   uint8_t local_candidate_count;
+  uint8_t observed_address_count;
   bool has_reported_public_endpoint;
   bool last_register_was_initial;
 };
@@ -180,6 +184,21 @@ static bool addresses_equal(const utp_address_t &left,
          memcmp(left.address, right.address, address_length) == 0;
 }
 
+static bool address_matches_endpoint_ip(const utp_address_t &address,
+                                        const utp_ntrs_endpoint_t &endpoint) {
+  const size_t address_length = address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u
+                                : address.family == UTP_ADDRESS_FAMILY_IPV6
+                                    ? 16u
+                                    : 0u;
+  const uint8_t endpoint_family =
+      endpoint.family == AF_INET    ? UTP_ADDRESS_FAMILY_IPV4
+      : endpoint.family == AF_INET6 ? UTP_ADDRESS_FAMILY_IPV6
+                                    : 0u;
+
+  return address_length != 0u && address.family == endpoint_family &&
+         memcmp(address.address, endpoint.address, address_length) == 0;
+}
+
 static bool append_public_candidate(
     utp_rendezvous_candidate_plan_t *plan, const utp_address_t &candidate) {
   for (uint8_t index = 0u; index < plan->public_candidate_count; ++index) {
@@ -237,6 +256,54 @@ static void update_registration(Registration *registration,
     registration->reported_public_endpoint = *request.reported_public_endpoint;
   for (uint8_t index = 0u; index < request.local_candidate_count; ++index)
     registration->local_candidates[index] = request.local_candidates[index];
+}
+
+static uint8_t
+update_observed_addresses(Registration *registration,
+                          const utp_rendezvous_address_update_t &update) {
+  uint8_t accepted = 0u;
+
+  for (uint8_t index = 0u; index < update.sample_count; ++index) {
+    const utp_address_t &sample = update.samples[index];
+    uint8_t replacement = 0u;
+
+    if (!address_matches_endpoint_ip(sample, registration->endpoint))
+      continue;
+    for (uint8_t existing = 0u; existing < registration->observed_address_count;
+         ++existing) {
+      if (!addresses_equal(sample, registration->observed_addresses[existing]))
+        continue;
+      if (update.observed_at_unix_ms[index] >=
+          registration->observed_at_unix_ms[existing]) {
+        registration->observed_at_unix_ms[existing] =
+            update.observed_at_unix_ms[index];
+        ++accepted;
+      }
+      replacement = UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES;
+      break;
+    }
+    if (replacement == UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES)
+      continue;
+    if (registration->observed_address_count <
+        UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES) {
+      replacement = registration->observed_address_count++;
+    } else {
+      for (uint8_t existing = 1u; existing < UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES;
+           ++existing) {
+        if (registration->observed_at_unix_ms[existing] <
+            registration->observed_at_unix_ms[replacement])
+          replacement = existing;
+      }
+      if (update.observed_at_unix_ms[index] <=
+          registration->observed_at_unix_ms[replacement])
+        continue;
+    }
+    registration->observed_addresses[replacement] = sample;
+    registration->observed_at_unix_ms[replacement] =
+        update.observed_at_unix_ms[index];
+    ++accepted;
+  }
+  return accepted;
 }
 
 static std::string make_endpoint_text(const std::string &address,
@@ -518,6 +585,47 @@ static void handle_pong(Server *server, const utp_ntrs_endpoint_t &observed,
   }
 }
 
+static void handle_address_update(Server *server, const sockaddr_storage &peer,
+                                  socklen_t peer_length,
+                                  const utp_ntrs_endpoint_t &observed,
+                                  const utp_frame_rendezvous_t &frame) {
+  utp_rendezvous_address_update_t update = {};
+  utp_rendezvous_address_updated_t updated = {};
+  uint8_t body[sizeof(updated.update_id)] = {};
+  uint8_t accepted = 0u;
+  size_t body_length = 0u;
+  char observed_text[INET6_ADDRSTRLEN + 8u] = {};
+
+  if (utp_rendezvous_address_update_decode(&update, frame.payload,
+                                           frame.payload_length) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+  for (std::unordered_map<std::string, Registration>::iterator entry =
+           server->registrations.begin();
+       entry != server->registrations.end(); ++entry) {
+    if (memcmp(update.registration_token, entry->second.token.data(),
+               entry->second.token.size()) != 0)
+      continue;
+    if (!endpoints_equal(entry->second.endpoint, observed))
+      return;
+    accepted = update_observed_addresses(&entry->second, update);
+    updated.update_id = update.update_id;
+    if (utp_rendezvous_address_updated_encode(body, sizeof(body), &updated) !=
+        UTP_INTERNAL_ERROR_OK)
+      return;
+    body_length = sizeof(body);
+    (void)send_message(server, peer, peer_length,
+                       UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATED, body,
+                       body_length);
+    fprintf(stderr, "NTRS <- Node=%s [AddressUpdate] samples=%u accepted=%u\n",
+            utp_ntrs_endpoint_format(&observed, observed_text,
+                                     sizeof(observed_text)),
+            static_cast<unsigned>(update.sample_count),
+            static_cast<unsigned>(accepted));
+    return;
+  }
+}
+
 static void handle_request(Server *server, const sockaddr_storage &peer,
                            socklen_t peer_length,
                            const utp_ntrs_endpoint_t &observed,
@@ -690,6 +798,8 @@ static void on_read(evutil_socket_t, short, void *user_data) {
         handle_ping(server, peer, peer_length, observed, header, frame);
       else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PONG)
         handle_pong(server, observed, frame);
+      else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE)
+        handle_address_update(server, peer, peer_length, observed, frame);
     } else if (header.type == UTP_PACKET_TYPE_INITIAL ||
                header.type == UTP_PACKET_TYPE_0RTT) {
       utp_frame_rendezvous_t frame = {};
