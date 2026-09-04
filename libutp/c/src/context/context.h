@@ -37,6 +37,7 @@
 #define UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY           32u
 #define UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY           UTP_PACKET_MTU_FLOOR
 #define UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY            4u
+#define UTP_CONTEXT_ADDRESS_UPDATE_DEBOUNCE_MS            5000u
 
 typedef struct utp_context_ntrs_registration {
     utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
@@ -63,6 +64,23 @@ typedef struct utp_context_ntrs_registration {
     bool          write_pending : 1;               // UDP 暂不可写，等待 writable 事件
     bool          calibration_active : 1;          // REGISTERED 后正在收集 calibration PONG
 } utp_context_ntrs_registration_t;
+
+typedef struct utp_context_ntrs_address_update {
+    uint8_t       packet[UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY];  // ADDRESS_UPDATE 逻辑包及其重传副本
+    utp_address_t samples[UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES];     // 等待 ADDRESS_UPDATED 的发送快照
+    uint64_t      observed_at_unix_ms[UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES];
+    uint64_t      update_id;          // 当前批次幂等键
+    uint64_t      deadline_us;        // 等待 ADDRESS_UPDATED 的截止时刻
+    uint64_t      flush_deadline_us;  // 未发送样本的聚合截止时刻
+    size_t        packet_length;
+    uint32_t      timeout_ms;      // 初始等待时限
+    uint32_t      retry_delay_ms;  // 下一次等待时限，指数退避
+    uint8_t       retries;         // 配置的额外重试次数
+    uint8_t       retries_remaining;
+    uint8_t       sample_count;
+    bool          pending : 1;        // 正在等待 ADDRESS_UPDATED
+    bool          write_pending : 1;  // UDP 暂不可写，等待统一 writable 事件
+} utp_context_ntrs_address_update_t;
 
 typedef struct utp_context_zero_rtt_replay_entry {
     utp_hash_node_t node;                                       // 按重放键索引的哈希节点
@@ -199,6 +217,7 @@ struct utp_context {
     utp_nat_probe_task_t         nat_probe;                                            // 当前 NAT 探测任务
     utp_nat_probe_result_t       nat_result;                                           // 最近一次完成的 NAT 探测缓存
     utp_context_ntrs_registration_t ntrs_registration;  // Context 到单个 NTRS 的半连接注册
+    utp_context_ntrs_address_update_t ntrs_address_update;  // Context 到 NTRS 的地址样本批量上报
     utp_context_rendezvous_punch_cache_entry_t
         rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];  // 未匹配 PUNCH 的短期缓存
     utp_context_rendezvous_forward_cache_entry_t

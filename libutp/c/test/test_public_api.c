@@ -1194,7 +1194,11 @@ int main(void)
         utp_frame_rendezvous_t      frame;
         utp_rendezvous_register_t   registration;
         utp_rendezvous_registered_t registered = {0};
+        utp_rendezvous_address_update_t  address_update;
+        utp_rendezvous_address_updated_t address_updated;
         utp_packet_header_t         response_header;
+        utp_address_t                observed_address;
+        utp_address_t                refreshed_address;
         size_t                      sent_length = 0u;
         utp_internal_error_t        receive_error;
         const struct timeval        retry_delay = {0, 1000};
@@ -1265,6 +1269,53 @@ int main(void)
         assert(strcmp(probe.peer_id, ntrs_context_options.peer_id) == 0);
         assert(probe.endpoint.family == 4u);
         assert(probe.endpoint.port == ntrs_local.port);
+
+        assert(utp_address_parse(&observed_address, "198.51.100.7", 41000u) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_address_parse(&refreshed_address, "198.51.100.8", 41001u) == UTP_INTERNAL_ERROR_OK);
+        utp_context_remember_observed_address(ntrs_context, &observed_address);
+        assert(utp_context_update_address(ntrs_context) == UTP_STATUS_OK);
+        receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+        for (uint8_t attempt = 0u; attempt < 10u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+            receive_error =
+                utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+            if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                assert(event_base_loopexit(event_base, &retry_delay) == 0);
+                assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+            }
+        }
+        assert(receive_error == UTP_INTERNAL_ERROR_OK);
+        assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE);
+        assert(utp_rendezvous_address_update_decode(&address_update, frame.payload, frame.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(address_update.sample_count == 1u);
+        assert(memcmp(address_update.registration_token, registered.registration_token,
+                      sizeof(address_update.registration_token)) == 0);
+        assert(utp_address_equal(&address_update.samples[0], &observed_address));
+        utp_context_remember_observed_address(ntrs_context, &refreshed_address);
+
+        address_updated.update_id = address_update.update_id;
+        assert(utp_rendezvous_address_updated_encode(response_body, sizeof(response_body), &address_updated) ==
+               UTP_INTERNAL_ERROR_OK);
+        response_header = (utp_packet_header_t){0u,
+                                                0u,
+                                                UINT64_C(8),
+                                                (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(uint64_t)),
+                                                UTP_PACKET_TYPE_RENDEZVOUS,
+                                                0u};
+        assert(utp_proto_encode_header(response, sizeof(response), &response_header) == UTP_INTERNAL_ERROR_OK);
+        frame = (utp_frame_rendezvous_t){response_body, sizeof(uint64_t), UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATED};
+        assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                           &frame) == UTP_INTERNAL_ERROR_OK);
+        response_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(uint64_t);
+        assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        pump_event_loop(event_base, 4);
+        assert(!ntrs_context->ntrs_address_update.pending);
+        assert(ntrs_context->observed_address_count == 1u);
+        assert(utp_address_equal(&ntrs_context->observed_addresses[0].endpoint, &refreshed_address));
 
         utp_udp_socket_close(&ntrs_socket);
         utp_context_destroy(ntrs_context);
