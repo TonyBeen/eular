@@ -1162,6 +1162,13 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
     return utp_context_enable_udp_write_event(context);
 }
 
+static void utp_context_pop_rendezvous_output(utp_context_t* context)
+{
+    context->rendezvous_output_head =
+        (uint8_t)(((size_t)context->rendezvous_output_head + 1u) % UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY);
+    --context->rendezvous_output_count;
+}
+
 static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* context)
 {
     if (context == NULL) {
@@ -1177,11 +1184,11 @@ static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* c
             return UTP_INTERNAL_ERROR_OK;
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
+            utp_internal_log_error(&context->logger, &context->tag, error, "rendezvous datagram dropped");
+            utp_context_pop_rendezvous_output(context);
+            continue;
         }
-        context->rendezvous_output_head =
-            (uint8_t)(((size_t)context->rendezvous_output_head + 1u) % UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY);
-        --context->rendezvous_output_count;
+        utp_context_pop_rendezvous_output(context);
     }
     return UTP_INTERNAL_ERROR_OK;
 }

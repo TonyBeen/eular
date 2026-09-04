@@ -73,6 +73,7 @@ struct Server {
   int fd;
   uint64_t next_packet_number;
   bool write_event_active;
+  bool fatal_socket_error;
   std::deque<OutgoingDatagram> output_queue;
   std::unordered_map<std::string, Registration> registrations;
   std::unordered_map<std::string, PendingRendezvous> pending_rendezvous;
@@ -86,6 +87,35 @@ static const uint8_t k_forward_retry_count = 3u;
 static const size_t k_output_queue_capacity = 128u;
 
 static void on_write(evutil_socket_t, short, void *user_data);
+
+static bool is_fatal_udp_send_error(int error) {
+#ifdef EBADF
+  if (error == EBADF)
+    return true;
+#endif
+#ifdef ENOTSOCK
+  if (error == ENOTSOCK)
+    return true;
+#endif
+#ifdef EINVAL
+  if (error == EINVAL)
+    return true;
+#endif
+#ifdef ENOBUFS
+  if (error == ENOBUFS)
+    return true;
+#endif
+  return false;
+}
+
+static void stop_for_udp_send_error(Server *server, int error) {
+  if (server == NULL || server->fatal_socket_error)
+    return;
+  server->fatal_socket_error = true;
+  fprintf(stderr, "NTRS [Fatal] udp send errno=%d\n", error);
+  if (server->base != NULL)
+    event_base_loopbreak(server->base);
+}
 
 static bool token_is_zero(const uint8_t *token) {
   uint8_t value = 0u;
@@ -229,16 +259,30 @@ struct OutgoingFrame {
 static bool send_datagram(Server *server, const sockaddr_storage &peer,
                           socklen_t peer_length, const uint8_t *packet,
                           size_t packet_length) {
-  if (server == NULL || packet == NULL || packet_length == 0u ||
+  if (server == NULL || server->fatal_socket_error || packet == NULL || packet_length == 0u ||
       packet_length > UTP_PACKET_MTU_FLOOR)
     return false;
   if (server->output_queue.empty()) {
-    if (sendto(server->fd, packet, packet_length, 0,
-               reinterpret_cast<const sockaddr *>(&peer), peer_length) ==
-        static_cast<ssize_t>(packet_length))
-      return true;
-    if (errno != EAGAIN && errno != EWOULDBLOCK)
+    ssize_t sent_length;
+    for (;;) {
+      sent_length = sendto(server->fd, packet, packet_length, 0,
+                           reinterpret_cast<const sockaddr *>(&peer), peer_length);
+      if (sent_length == static_cast<ssize_t>(packet_length))
+        return true;
+      if (sent_length >= 0 || errno != EINTR)
+        break;
+    }
+    if (sent_length >= 0) {
+      fprintf(stderr, "NTRS [DatagramDropped] udp send short=%zd\n", sent_length);
       return false;
+    }
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      if (is_fatal_udp_send_error(errno))
+        stop_for_udp_send_error(server, errno);
+      else
+        fprintf(stderr, "NTRS [DatagramDropped] udp send errno=%d\n", errno);
+      return false;
+    }
   }
   if (server->output_queue.size() >= k_output_queue_capacity ||
       server->write_event == NULL)
@@ -250,8 +294,10 @@ static bool send_datagram(Server *server, const sockaddr_storage &peer,
   memcpy(datagram.packet.data(), packet, packet_length);
   server->output_queue.push_back(datagram);
   if (!server->write_event_active) {
-    if (event_add(server->write_event, NULL) != 0)
+    if (event_add(server->write_event, NULL) != 0) {
+      server->output_queue.pop_back();
       return false;
+    }
     server->write_event_active = true;
   }
   return true;
@@ -681,15 +727,27 @@ static void on_write(evutil_socket_t, short, void *user_data) {
 
   while (!server->output_queue.empty()) {
     const OutgoingDatagram &datagram = server->output_queue.front();
-    if (sendto(server->fd, datagram.packet.data(), datagram.packet_length, 0,
-               reinterpret_cast<const sockaddr *>(&datagram.peer),
-               datagram.peer_length) ==
-        static_cast<ssize_t>(datagram.packet_length)) {
+    ssize_t sent_length;
+    do {
+      sent_length = sendto(server->fd, datagram.packet.data(), datagram.packet_length, 0,
+                           reinterpret_cast<const sockaddr *>(&datagram.peer), datagram.peer_length);
+    } while (sent_length < 0 && errno == EINTR);
+    if (sent_length == static_cast<ssize_t>(datagram.packet_length)) {
+      server->output_queue.pop_front();
+      continue;
+    }
+    if (sent_length >= 0) {
+      fprintf(stderr, "NTRS [DatagramDropped] udp send short=%zd\n", sent_length);
       server->output_queue.pop_front();
       continue;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK)
       return;
+    if (is_fatal_udp_send_error(errno)) {
+      stop_for_udp_send_error(server, errno);
+      return;
+    }
+    fprintf(stderr, "NTRS [DatagramDropped] udp send errno=%d\n", errno);
     server->output_queue.pop_front();
   }
   event_del(server->write_event);
@@ -751,5 +809,5 @@ int main(int argc, char **argv) {
   event_free(server.read_event);
   event_base_free(server.base);
   close(server.fd);
-  return 0;
+  return server.fatal_socket_error ? 1 : 0;
 }
