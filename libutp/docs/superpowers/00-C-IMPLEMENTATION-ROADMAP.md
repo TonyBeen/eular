@@ -114,7 +114,7 @@
 | 编号 | 决策 | 出处 |
 |---|---|---|
 | **H1** | 握手方向固定：调用 `utp_context_connect()` 的 A 始终发 `INITIAL`/`0RTT`，B 始终响应；NAT 类型不参与角色交换。 | 2026-08-22 半连接规格 §1/§6 |
-| **H2** | A/B 都按 CandidatePlan 向对端每个候选 endpoint 单次发送零 CID `PATH_CHALLENGE` 开洞包；不等待响应、不周期重发。 | 2026-08-22 半连接规格 §5 |
+| **H2** | A/B 都按 CandidatePlan 向对端每个候选 endpoint 单次发送零 CID `PUNCH` 开洞包；不等待响应、不周期重发。 | 2026-08-22 半连接规格 §5 |
 | **H3** | `registration_token` 仅标识目标 B 与 NTRS 的注册关联；请求归并使用 `rendezvous_id`。 | 2026-08-22 半连接规格 §3/§6 |
 | **H4** | 未验证地址的发送额度遵循 **`3×MTU`** 反放大限制。 | C3 |
 | **H5** | FORWARD/REDIRECT 与直连 Initial 的**归并键 = `rendezvous_id`(128 位)**,CID 只做 transport demux,不做匹配键。 | 2026-08-22 半连接规格 §3/§6 |
@@ -123,7 +123,7 @@
 
 | # | 决策要点 | 落点 | 出处 |
 |---|---|---|---|
-| 1 | `rendezvous_id` 归并 REQUEST/FORWARD/REDIRECT/INTRODUCTION；握手方向固定为 A 发起、B 响应。 | NTRS/connection | 2026-08-22 §1/§6 |
+| 1 | `rendezvous_id` 归并 REQUEST/FORWARD/REDIRECT 与直连 Initial；握手方向固定为 A 发起、B 响应。 | NTRS/connection | 2026-08-22 §1/§6 |
 | 2 | 对称 NAT 的公网端口预测仅由 NTRS 完成；Peer 按 CandidatePlan 发送。 | NTRS | 2026-08-22 §4/§5 |
 | 3 | 一次打洞 attempt 以一个 `rendezvous_id` 归并；最终 Initial/0RTT 的 CID 由正常握手分配，重复逻辑消息按其请求标识去重。 | connection | 2026-08-22 §2/§6 |
 | 4 | NTRS 不转发业务数据；Rendezvous 的未知、非法或无匹配关联报文静默丢弃。 | NTRS | 2026-08-22 §1/§9 |

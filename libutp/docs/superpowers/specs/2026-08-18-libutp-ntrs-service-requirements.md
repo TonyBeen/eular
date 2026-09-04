@@ -517,7 +517,7 @@ control_header = version:u8 | type:u8 | reserved:u16 | payload_length:u32
 1. 在 Context 中加入调用方提供的服务 IP endpoint 配置和 NAT 探测状态机。
 2. 定义 NAT 服务 UTP 承载探测计划、观测与结果协议，并完成多节点协同服务。
 3. 按 2026-08-22 半连接规格实现用户驱动的 NTRS 注册、反注册、PING/PONG、校准与节点租约。
-4. 实现 `UTP_TYPE_RENDEZVOUS`、`FrameRendezvous`、REQUEST/REDIRECT/FORWARD/INTRODUCTION、
+4. 实现 `UTP_TYPE_RENDEZVOUS`、`FrameRendezvous`、REQUEST/REDIRECT/FORWARD/PUNCH、
    CandidatePlan 和零 CID 单次开洞状态机。
 
 验收至少覆盖：

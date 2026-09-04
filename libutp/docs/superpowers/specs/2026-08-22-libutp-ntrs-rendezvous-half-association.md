@@ -25,6 +25,8 @@
 
 ```c
 UTP_PACKET_TYPE_RENDEZVOUS = 0x06
+UTP_FRAME_TYPE_RENDEZVOUS = 0x17
+UTP_FRAME_TYPE_OBSERVED_ADDRESS = 0x18
 ```
 
 `FrameRendezvous` 是长度界定的通用帧，线上包络为：
@@ -37,6 +39,15 @@ type:u8 | message_type:u8 | payload_length:u16 | payload
 - `payload_length` 不包含四字节包络，且不得超过包剩余字节数。
 - 未知 `message_type` 按 `payload_length` 跳过；同一包中同类消息不得重复。
 - `FrameRendezvous` 只允许出现在 `UTP_TYPE_RENDEZVOUS`，以及 `INITIAL`/`0RTT` 的明文首帧。
+
+`message_type` 固定分配如下，后续只在末尾追加新值：
+
+```text
+1 REGISTER          2 REGISTERED        3 PING             4 PONG
+5 CALIBRATE         6 ADDRESS_UPDATE    7 ADDRESS_UPDATED  8 REQUEST
+9 REDIRECT          10 FORWARD          11 INTRODUCTION(废弃保留) 12 UNREGISTER
+13 UNREGISTERED     14 REJECTED          15 PUNCH
+```
 
 所有 `UTP_TYPE_RENDEZVOUS` 包固定满足：
 
@@ -104,6 +115,9 @@ peer_id_length:u8                 // 1..128
 peer_id:bytes                     // 当前 Context peer_id
 nat_class:u8
 local_family:u8                   // 4 或 6
+reported_public_present:u8
+reported_public_address:4 或 16   // present=1 时
+reported_public_port:u16          // present=1 时，非零
 local_port:u16                    // 当前 Context UDP 端口
 local_candidate_count:u8          // 0..4
 local_addresses[count]:4 或 16    // 由 local_family 决定
@@ -112,8 +126,9 @@ local_addresses[count]:4 或 16    // 由 local_family 决定
 - 注册时 Context 重新枚举 local candidates。显式绑定网卡时只枚举该网卡；绑定未指定地址时排除
   loopback、link-local、Docker、bridge、veth、tunnel 等地址，按接口优先级保留最多四个。
 - 一个 Context 只绑定一种地址族，因此 `local_family`、`local_port` 在一批地址中只编码一次。
-- NTRS 以 `peer_id` 建立 B 的目标索引，并从 UDP 源地址观察 B 的公网 endpoint；客户端不得自报
-  公网 endpoint、NAT 探测端口样本或覆盖服务端观测。
+- `reported_public_*` 是 B 的 NAT 探测公网 endpoint；NTRS 同时从 REGISTER 的 UDP 源地址观察 B 的
+  当前服务端 endpoint。两者都保留为 B 的候选来源，不能互相覆盖。
+- NTRS 以 `peer_id` 建立 B 的目标索引；客户端不得上报端口预测或覆盖服务端观测。
 - 首次注册的 `peer_id` 已有活动记录时，NTRS 拒绝该请求；只有携带该记录当前
   `registration_token` 的注册更新可以原子覆盖自身记录。
 
@@ -265,29 +280,35 @@ family:u8                         // 4 或 6
 local_port:u16
 local_candidate_count:u8          // 0..4
 local_addresses[count]:4 或 16
-public_address:4 或 16
-public_port_count:u8              // 1..4
-public_ports[count]:u16           // 有序、去重、非零
+public_candidate_count:u8         // 1..4
+public_candidates[count]:
+  address:4 或 16
+  port:u16                         // 非零
 ```
 
-`local_candidates` 来自目标注册或请求方 REQUEST，适合同局域网与 hairpin 场景；`public_address` 和
-端口列表来自 NTRS 的服务端观测与预测。端口顺序是 Peer 发送打洞包和握手 fanout 的顺序。NTRS 可按
-顺序模型、有限范围或随机候选构建端口表；预测不足时返回默认四个随机端口，具体数量可配置，但任何
-计划最多四端口。
+`local_candidates` 来自目标注册或请求方 REQUEST，适合同局域网与 hairpin 场景；公网候选来自 NTRS
+的服务端观测与预测。每个公网候选是不可拆分的精确 `IP:port` 对，禁止将多个 IP 与多个端口交叉组合。
+顺序是 Peer 发送打洞包和握手 fanout 的顺序。NTRS 可按顺序模型、有限范围或随机候选构建端口表；预测
+不足时返回默认四个随机候选，具体数量可配置，但任何计划最多四个公网候选。
 
 收到 `REDIRECT/FORWARD` 后，A、B 从同一个 Context socket 向对方 CandidatePlan 中每个 endpoint
-各发送一次零 CID `PATH_CHALLENGE`：
+各发送一次零 CID `PUNCH`：
 
 ```text
 UTP_TYPE_RENDEZVOUS
 scid = 0
 dcid = 0
-payload = PATH_CHALLENGE(data[8])
+FrameRendezvous(PUNCH):
+  punch_token:8
 ```
 
-该包仅用于创建出向 NAT 映射和过滤规则。接收端静默丢弃，绝不回复 `PATH_RESPONSE`，不创建 connection
-或 pending，也不做路径选择。每个候选只发送一次；临时本地发送阻塞可在 attempt 期限内重试。最终
-`INITIAL/0RTT` 的正常握手 PTO 重传负责后续可达性，不重发零 CID 打洞包。
+`PUNCH` 仅用于创建出向 NAT 映射和过滤规则；它不是连接级 `PATH_CHALLENGE`，不得回复
+`PATH_RESPONSE`。消息体必须恰为非零的 8 字节 token。每个候选每轮只发送一次；临时本地发送阻塞可在
+attempt 期限内重试。收到匹配本轮
+`punch_token` 的 PUNCH 时，接收端不创建 connection，但将 UDP 源 endpoint 去重后提升为对应 peer 的
+首选候选。未知 token 的 PUNCH 在一个有界、短时缓存中按 token 保存源 endpoint；随后收到匹配
+`REDIRECT` 或 `FORWARD` 时同样提升该 endpoint，超时则静默删除。最终 `INITIAL/0RTT` 的正常握手 PTO
+重传负责后续可达性，不重发零 CID 打洞包。
 
 ## 6. REQUEST、REDIRECT、FORWARD 与握手
 
@@ -303,62 +324,89 @@ source_peer_id:bytes             // 1..128，取 A Context peer_id
 target_peer_id_length:u8
 target_peer_id:bytes             // 1..128
 source_nat_class:u8
-local_family:u8
+local_family:u8                   // 4 或 6；同时决定后续地址宽度
+source_reported_public_present:u8
+source_reported_public_address:4 或 16  // present=1 时
+source_reported_public_port:u16          // present=1 时，非零
 local_port:u16
 local_candidate_count:u8         // 0..4
 local_addresses[count]:4 或 16
 ```
 
-`rendezvous_id` 是 128 位随机值，是 REQUEST 重传幂等键、B 侧 pending 归并键和最终握手匹配键。
-NTRS 以 `target_peer_id` 查找已注册 B；A 是否注册不参与请求接受条件。A 的公网地址由 NTRS 从 REQUEST
-承载 UDP 包的源地址观察，不能在 REQUEST 中自报。
+`rendezvous_id` 是 128 位随机值，是 REQUEST 重传幂等键和 B 侧 pending 归并键。NTRS 以
+`target_peer_id` 查找已注册 B；A 是否注册不参与请求接受条件。`source_reported_public_*` 是 A 的 NAT
+探测结果；NTRS 同时从 REQUEST 承载 UDP 包的源地址取得 A 的当前服务端观测 endpoint。两者代表不同
+目的地址上的映射，均不得覆盖对方。
 
 NTRS 的下行消息体：
 
 ```text
 REDIRECT:
   rendezvous_id:16
+  punch_token:8
   target_plan:CandidatePlan       // B 的候选计划
 
 FORWARD:
   rendezvous_id:16
+  punch_token:8
   source_peer_id_length:u8
   source_peer_id:bytes
   source_plan:CandidatePlan       // A 的候选计划
 ```
 
-NTRS 收到重复 REQUEST 时重发相同 REDIRECT，不重复创建 FORWARD 事务。向 B 的 FORWARD 与 PING 合包；
-B PONG 回显该包号后，NTRS 才移除待投递项。PONG 丢失时重投同一个 `PING + FORWARD`，B 以
-`rendezvous_id` 去重并再次 PONG。
+NTRS 为每个新 `rendezvous_id` 分配 8 字节随机 `punch_token`。A 的 `source_plan` 只包含 A 的 local
+candidates、A 在 REQUEST 中携带的 NAT 探测公网 endpoint，以及 NTRS 当前观察到的 A 公网 endpoint；两个
+公网 endpoint 相同则去重。NTRS 不预测 A 的端口。B 的 `target_plan` 先纳入 B 注册时携带的 NAT 探测
+endpoint 和 NTRS 当前观察 endpoint，去重后再按剩余容量加入 B 的端口预测候选；整个计划仍最多四个公网
+候选。
 
-`INTRODUCTION` 消息体只有：
-
-```text
-rendezvous_id:16
-```
+NTRS 收到 REQUEST 后先向 A 发送 REDIRECT，再向 B 发送合包的 `PING + FORWARD`；这只是本地发送顺序，
+UDP 不保证 A、B 的实际到达先后。重复 REQUEST 重发相同 REDIRECT，不重复创建 FORWARD 事务。向 B 的
+FORWARD 与 PING 合包；B PONG 回显该包号后，NTRS 才移除待投递项。PONG 丢失时重投同一个
+`PING + FORWARD`，B 以 `rendezvous_id` 去重、仅发送一次 PUNCH 并再次 PONG。
 
 帧顺序固定：
 
 ```text
 A -> NTRS 的 INITIAL：
-  FrameRendezvous(REQUEST) 必须为第一个帧，后面是普通 Initial 握手帧。
+  FrameRendezvous(REQUEST) 必须为第一个帧；后面保留普通 Initial 握手帧。
 
-A -> B candidate 的最终 INITIAL：
-  FrameRendezvous(INTRODUCTION) 必须为第一个帧，后面是普通 Initial 握手帧。
+A -> NTRS 的 0-RTT：
+  明文 FrameRendezvous(REQUEST) 必须为第一个帧；
+  明文 SESSION_TOKEN 紧随其后；后面保留既有加密 0-RTT 帧与 early data。
 
-A -> B candidate 的最终 0-RTT：
-  明文 FrameRendezvous(INTRODUCTION) 为第一个帧；
-  明文 SESSION_TOKEN 紧随其后；
-  后面是既有加密 0-RTT 帧与 early data。
+A -> B candidate：
+  重发上述同一份 INITIAL/0-RTT 数据报，不替换 REQUEST，不重建 CID、握手帧、
+  SESSION_TOKEN 或 early data。
 ```
 
-目标是普通 direct peer 时，它识别并忽略第一个 `REQUEST`，继续普通握手。目标是 NTRS 时，NTRS 只解析
-REQUEST，不创建 UTP connection。最终收到带匹配 `INTRODUCTION` 的 B 以 `rendezvous_id` 命中 pending，
-再按普通握手流程处理。
+同一个 `connect()` 接口不区分目标 endpoint 是 NTRS 还是普通 peer。目标是普通 direct peer 时，它忽略
+第一个 `REQUEST` 并继续普通握手；目标是 NTRS 时，NTRS 只解析 REQUEST，不创建 UTP connection。B 收到
+Initial/0-RTT 时也继续普通握手；若其中 REQUEST 的 `rendezvous_id` 已命中 FORWARD pending，则将两者归并
+到同一轮打洞状态。FORWARD 先到或 Initial/0-RTT 先到均可归并。
+
+A 收到 REDIRECT 后立即向 B 候选发送一次 PUNCH，并将保留的原始 INITIAL/0-RTT 向相同候选 fanout；B
+收到 FORWARD 后立即向 A 候选发送一次 PUNCH。若 A 收到 B 的匹配 PUNCH，它以该 UDP 源 endpoint 替换
+本轮首选目标并立刻向其重发原始 INITIAL/0-RTT。旧候选不删除，后续握手 PTO 仍向未排除候选 fanout。
+NTRS 不转发 Initial/0-RTT，也不进入 A/B 的 UTP 连接状态。
 
 同一轮 candidate fanout 中，A 向所有候选发送字节完全相同的 `INITIAL/0RTT` 数据报，仅 UDP 目标地址
 不同；相同的包号、ciphertext、early nonce、stream offset 使副本按既有包号与流重组规则去重。后续握手
 PTO 仍向未排除候选 fanout，收到合法握手响应后由既有连接状态固定实际对端 endpoint。
+
+### 6.1 NAT 组合的开洞边界
+
+- A 为 FullCone 或 IP 限制型、B 为对称 NAT 时，B 发往 A 的 PUNCH 源 endpoint 即 B 对 A 的实际映射。
+  A 将其提升后立即重发 Initial；IP 限制型 A 已向 B 的公网 IP 发过 PUNCH，允许该 IP 的任意源端口入站。
+- A 为端口限制型、B 为对称 NAT 时，B 的端口预测必须命中。A 只有先向 B 的实际 `IP:port` 发出 PUNCH，
+  才会允许 B 该端口的 PUNCH 入站；token 无法消除该 NAT 的端口过滤限制。
+- A 为对称 NAT、B 为 FullCone 或 IP 限制型时，A 向 B 已知候选发出的 PUNCH 会让 B 观察到 A 对 B 的
+  实际映射；B 接收该 PUNCH 或后续 Initial 后可直接向该源 endpoint 回复握手，A 使用同一 Context socket
+  上已建立的映射接收即可。
+- A 为对称 NAT、B 为端口限制型时，B 必须预先向 A 对 B 的实际映射端口发过包，才能接收 A 的 PUNCH 或
+  Initial。NTRS 不预测 A 的端口，因此该组合只在 A 的探测/服务端观测候选碰巧命中时可用，不能承诺成功。
+- local candidates 与公网候选同时尝试；同局域网、hairpin 和公网路径不需要选择不同 API。IPv4 与 IPv6
+  候选严格按 family 隔离，绝不跨地址族组合。
 
 ## 7. 反注册与拒绝
 
@@ -421,8 +469,9 @@ calibration 报文；进程级包号使 PONG 可通过 `(registration_token, ack
 
 - 公开注册、反注册、地址更新、peer_id 设置及回调都在 Context 所属事件循环线程调用，不支持跨线程。
 - NTRS 逻辑和 `UTP_TYPE_NAT_PROBE` 分流必须在普通 connection/pending 查找之前处理。
-- `UTP_TYPE_RENDEZVOUS` 的未知或非法消息、非法零 CID 组合和无匹配 token/rendezvous_id 的包均静默丢弃。
-- 预连接零 CID `PATH_CHALLENGE` 是唯一例外：它是合法但无响应的打洞包；已建连后的 PATH 挑战/响应仍走
-  既有 connection 路径。
+- `UTP_TYPE_RENDEZVOUS` 的未知或非法消息、非法零 CID 组合和无匹配 token/rendezvous_id 的包均静默丢弃；
+  未匹配但格式合法的 PUNCH 仅可按第 5 节写入有界短时缓存。
+- 预连接零 CID `PUNCH` 是唯一例外：它是合法但无响应的打洞包；已建连后的 PATH 挑战/响应仍走既有
+  connection 路径。
 - NTRS 不分片。注册、CandidatePlan、FORWARD 和请求帧必须受当前 MTU 限制；local candidates 与
-  public ports 各自最多四项。
+  public candidates 各自最多四项。
