@@ -27,8 +27,27 @@
 struct Registration {
   utp_ntrs_endpoint_t endpoint;
   std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token;
+  std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES>
+      local_candidates;
+  utp_address_t reported_public_endpoint;
   uint64_t last_register_request_id;
+  uint16_t local_port;
+  uint8_t nat_class;
+  uint8_t local_family;
+  uint8_t local_candidate_count;
+  bool has_reported_public_endpoint;
   bool last_register_was_initial;
+};
+
+struct PendingRendezvous {
+  utp_ntrs_endpoint_t source_endpoint;
+  utp_ntrs_endpoint_t target_endpoint;
+  std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> target_token;
+  std::array<uint8_t, UTP_PACKET_MTU_FLOOR> redirect_body;
+  uint64_t created_at_ms;
+  uint64_t forward_packet_number;
+  size_t redirect_body_length;
+  bool forward_delivered;
 };
 
 struct Server {
@@ -37,6 +56,7 @@ struct Server {
   int fd;
   uint64_t next_packet_number;
   std::unordered_map<std::string, Registration> registrations;
+  std::unordered_map<std::string, PendingRendezvous> pending_rendezvous;
 };
 
 static bool token_is_zero(const uint8_t *token) {
@@ -63,6 +83,104 @@ static bool random_token(
   return !token_is_zero(token->data());
 }
 
+static bool endpoint_to_address(const utp_ntrs_endpoint_t &endpoint,
+                                utp_address_t *address) {
+  size_t address_length = 0u;
+
+  if (endpoint.family == AF_INET) {
+    address->family = UTP_ADDRESS_FAMILY_IPV4;
+    address_length = 4u;
+  } else if (endpoint.family == AF_INET6) {
+    address->family = UTP_ADDRESS_FAMILY_IPV6;
+    address_length = 16u;
+  } else {
+    return false;
+  }
+  address->port = endpoint.port;
+  memcpy(address->address, endpoint.address, address_length);
+  return endpoint.port != 0u;
+}
+
+static bool endpoints_equal(const utp_ntrs_endpoint_t &left,
+                            const utp_ntrs_endpoint_t &right) {
+  const size_t address_length = left.family == AF_INET ? 4u :
+                                left.family == AF_INET6 ? 16u : 0u;
+
+  return address_length != 0u && left.family == right.family &&
+         left.port == right.port &&
+         memcmp(left.address, right.address, address_length) == 0;
+}
+
+static bool addresses_equal(const utp_address_t &left,
+                            const utp_address_t &right) {
+  const size_t address_length =
+      left.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u :
+      left.family == UTP_ADDRESS_FAMILY_IPV6 ? 16u : 0u;
+
+  return address_length != 0u && left.family == right.family &&
+         left.port == right.port &&
+         memcmp(left.address, right.address, address_length) == 0;
+}
+
+static bool append_public_candidate(
+    utp_rendezvous_candidate_plan_t *plan, const utp_address_t &candidate) {
+  for (uint8_t index = 0u; index < plan->public_candidate_count; ++index) {
+    if (addresses_equal(plan->decoded_public_candidates[index], candidate))
+      return true;
+  }
+  if (plan->public_candidate_count >= UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES)
+    return false;
+  plan->decoded_public_candidates[plan->public_candidate_count++] = candidate;
+  return true;
+}
+
+static bool make_candidate_plan(
+    utp_rendezvous_candidate_plan_t *plan, uint8_t family, uint16_t local_port,
+    const utp_address_t *local_candidates, uint8_t local_candidate_count,
+    const utp_address_t *reported_public_endpoint,
+    const utp_ntrs_endpoint_t &observed_endpoint) {
+  utp_address_t observed_public_endpoint = {};
+
+  if (plan == NULL || local_port == 0u ||
+      local_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+      !endpoint_to_address(observed_endpoint, &observed_public_endpoint) ||
+      observed_public_endpoint.family != family ||
+      (local_candidate_count != 0u && local_candidates == NULL))
+    return false;
+  *plan = {};
+  plan->family = family;
+  plan->local_port = local_port;
+  plan->local_candidates = local_candidates;
+  plan->local_candidate_count = local_candidate_count;
+  if (reported_public_endpoint != NULL &&
+      (reported_public_endpoint->family != family ||
+       reported_public_endpoint->port == 0u))
+    return false;
+  if (reported_public_endpoint != NULL &&
+      !append_public_candidate(plan, *reported_public_endpoint))
+    return false;
+  if (!append_public_candidate(plan, observed_public_endpoint))
+    return false;
+  plan->public_candidates = plan->decoded_public_candidates;
+  return plan->public_candidate_count != 0u;
+}
+
+static void update_registration(Registration *registration,
+                                const utp_rendezvous_register_t &request,
+                                const utp_ntrs_endpoint_t &observed) {
+  registration->endpoint = observed;
+  registration->nat_class = request.nat_class;
+  registration->local_family = request.local_family;
+  registration->local_port = request.local_port;
+  registration->local_candidate_count = request.local_candidate_count;
+  registration->has_reported_public_endpoint =
+      request.reported_public_endpoint != NULL;
+  if (registration->has_reported_public_endpoint)
+    registration->reported_public_endpoint = *request.reported_public_endpoint;
+  for (uint8_t index = 0u; index < request.local_candidate_count; ++index)
+    registration->local_candidates[index] = request.local_candidates[index];
+}
+
 static std::string make_endpoint_text(const std::string &address,
                                       uint16_t port) {
   const std::string port_text = std::to_string(port);
@@ -74,32 +192,317 @@ static std::string make_endpoint_text(const std::string &address,
   return address + ":" + port_text;
 }
 
-static bool send_message(Server *server, const sockaddr_storage &peer,
-                         socklen_t peer_length, uint8_t message_type,
-                         const uint8_t *body, size_t body_length) {
+struct OutgoingFrame {
+  const uint8_t *body;
+  size_t body_length;
+  uint8_t message_type;
+};
+
+static bool send_frames(Server *server, const sockaddr_storage &peer,
+                        socklen_t peer_length, const OutgoingFrame *frames,
+                        size_t frame_count, uint64_t *packet_number) {
   uint8_t packet[UTP_PACKET_MTU_FLOOR] = {};
   utp_packet_header_t header = {};
-  utp_frame_rendezvous_t frame = {body, static_cast<uint16_t>(body_length),
-                                  message_type};
-  const size_t packet_length =
-      UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length;
+  size_t payload_length = 0u;
+  size_t offset = UTP_PACKET_HEADER_SIZE;
 
-  if (body_length > UINT16_MAX || packet_length > sizeof(packet) ||
+  if (server == NULL || frames == NULL || frame_count == 0u ||
       server->next_packet_number == 0u ||
       server->next_packet_number > UTP_PACKET_NUMBER_MAX)
     return false;
+  for (size_t index = 0u; index < frame_count; ++index) {
+    if (frames[index].message_type == 0u || frames[index].body_length > UINT16_MAX ||
+        (frames[index].body == NULL && frames[index].body_length != 0u) ||
+        payload_length > UINT16_MAX - UTP_FRAME_RENDEZVOUS_HEADER_SIZE - frames[index].body_length)
+      return false;
+    payload_length += UTP_FRAME_RENDEZVOUS_HEADER_SIZE + frames[index].body_length;
+  }
+  if (UTP_PACKET_HEADER_SIZE + payload_length > sizeof(packet))
+    return false;
   header.packet_number = server->next_packet_number++;
-  header.payload_length =
-      static_cast<uint16_t>(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length);
+  header.payload_length = static_cast<uint16_t>(payload_length);
   header.type = UTP_PACKET_TYPE_RENDEZVOUS;
-  return utp_proto_encode_header(packet, sizeof(packet), &header) ==
-             UTP_INTERNAL_ERROR_OK &&
-         utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE,
-                                     sizeof(packet) - UTP_PACKET_HEADER_SIZE,
-                                     &frame) == UTP_INTERNAL_ERROR_OK &&
-         sendto(server->fd, packet, packet_length, 0,
+  if (utp_proto_encode_header(packet, sizeof(packet), &header) !=
+      UTP_INTERNAL_ERROR_OK)
+    return false;
+  for (size_t index = 0u; index < frame_count; ++index) {
+    const utp_frame_rendezvous_t frame = {
+        frames[index].body, static_cast<uint16_t>(frames[index].body_length),
+        frames[index].message_type};
+    if (utp_frame_rendezvous_encode(packet + offset, sizeof(packet) - offset,
+                                    &frame) != UTP_INTERNAL_ERROR_OK)
+      return false;
+    offset += UTP_FRAME_RENDEZVOUS_HEADER_SIZE + frames[index].body_length;
+  }
+  if (packet_number != NULL)
+    *packet_number = header.packet_number;
+  return sendto(server->fd, packet, offset, 0,
                 reinterpret_cast<const sockaddr *>(&peer),
-                peer_length) == static_cast<ssize_t>(packet_length);
+                peer_length) == static_cast<ssize_t>(offset);
+}
+
+static bool send_message(Server *server, const sockaddr_storage &peer,
+                         socklen_t peer_length, uint8_t message_type,
+                         const uint8_t *body, size_t body_length) {
+  const OutgoingFrame frame = {body, body_length, message_type};
+
+  return send_frames(server, peer, peer_length, &frame, 1u, NULL);
+}
+
+static void expire_pending_rendezvous(Server *server, uint64_t now_ms) {
+  for (std::unordered_map<std::string, PendingRendezvous>::iterator entry =
+           server->pending_rendezvous.begin();
+       entry != server->pending_rendezvous.end();) {
+    if (now_ms - entry->second.created_at_ms >= 30000u)
+      entry = server->pending_rendezvous.erase(entry);
+    else
+      ++entry;
+  }
+}
+
+static void handle_register(Server *server, const sockaddr_storage &peer,
+                            socklen_t peer_length,
+                            const utp_ntrs_endpoint_t &observed,
+                            const utp_frame_rendezvous_t &frame) {
+  utp_rendezvous_register_t request = {};
+  uint8_t body[64] = {};
+  char observed_text[INET6_ADDRSTRLEN + 8u] = {};
+  size_t body_length = 0u;
+
+  if (utp_rendezvous_register_decode(&request, frame.payload,
+                                     frame.payload_length) !=
+          UTP_INTERNAL_ERROR_OK ||
+      (request.local_family == UTP_ADDRESS_FAMILY_IPV4 &&
+       observed.family != AF_INET) ||
+      (request.local_family == UTP_ADDRESS_FAMILY_IPV6 &&
+       observed.family != AF_INET6))
+    return;
+  const std::string peer_id(reinterpret_cast<const char *>(request.peer_id),
+                            request.peer_id_length);
+  std::unordered_map<std::string, Registration>::iterator entry =
+      server->registrations.find(peer_id);
+  if (entry == server->registrations.end()) {
+    if (!token_is_zero(request.registration_token))
+      return;
+    Registration registration = {};
+    if (!random_token(&registration.token))
+      return;
+    registration.last_register_request_id = request.registration_request_id;
+    registration.last_register_was_initial = true;
+    entry = server->registrations.insert(std::make_pair(peer_id, registration))
+                .first;
+  } else {
+    const bool initial_retry =
+        token_is_zero(request.registration_token) &&
+        entry->second.last_register_was_initial &&
+        request.registration_request_id == entry->second.last_register_request_id;
+    const bool update =
+        !token_is_zero(request.registration_token) &&
+        memcmp(request.registration_token, entry->second.token.data(),
+               entry->second.token.size()) == 0;
+
+    if (!initial_retry && !update)
+      return;
+    if (update) {
+      entry->second.last_register_request_id = request.registration_request_id;
+      entry->second.last_register_was_initial = false;
+    }
+  }
+  update_registration(&entry->second, request, observed);
+  utp_rendezvous_registered_t reply = {};
+  reply.registration_request_id = request.registration_request_id;
+  memcpy(reply.registration_token, entry->second.token.data(),
+         entry->second.token.size());
+  if (utp_rendezvous_registered_encode(body, sizeof(body), &reply,
+                                       &body_length) == UTP_INTERNAL_ERROR_OK)
+    (void)send_message(server, peer, peer_length,
+                       UTP_RENDEZVOUS_MESSAGE_REGISTERED, body, body_length);
+  fprintf(stderr, "NTRS <- Node=%s [Register] peer_id=%s\n",
+          utp_ntrs_endpoint_format(&observed, observed_text,
+                                   sizeof(observed_text)),
+          peer_id.c_str());
+}
+
+static void handle_ping(Server *server, const sockaddr_storage &peer,
+                        socklen_t peer_length,
+                        const utp_ntrs_endpoint_t &observed,
+                        const utp_packet_header_t &header,
+                        const utp_frame_rendezvous_t &frame) {
+  utp_rendezvous_ping_t ping = {};
+  utp_rendezvous_pong_t pong = {};
+  uint8_t body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] =
+      {};
+
+  if (utp_rendezvous_ping_decode(&ping, frame.payload,
+                                 frame.payload_length) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+  for (std::unordered_map<std::string, Registration>::iterator entry =
+           server->registrations.begin();
+       entry != server->registrations.end(); ++entry) {
+    if (memcmp(ping.registration_token, entry->second.token.data(),
+               entry->second.token.size()) != 0)
+      continue;
+    if ((entry->second.local_family == UTP_ADDRESS_FAMILY_IPV4 &&
+         observed.family != AF_INET) ||
+        (entry->second.local_family == UTP_ADDRESS_FAMILY_IPV6 &&
+         observed.family != AF_INET6))
+      return;
+    entry->second.endpoint = observed;
+    memcpy(pong.registration_token, ping.registration_token,
+           sizeof(pong.registration_token));
+    pong.acknowledged_packet_number = header.packet_number;
+    if (utp_rendezvous_pong_encode(body, sizeof(body), &pong) ==
+        UTP_INTERNAL_ERROR_OK)
+      (void)send_message(server, peer, peer_length,
+                         UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
+    return;
+  }
+}
+
+static void handle_pong(Server *server, const utp_ntrs_endpoint_t &observed,
+                        const utp_frame_rendezvous_t &frame) {
+  utp_rendezvous_pong_t pong = {};
+
+  if (utp_rendezvous_pong_decode(&pong, frame.payload,
+                                 frame.payload_length) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+  for (std::unordered_map<std::string, PendingRendezvous>::iterator entry =
+           server->pending_rendezvous.begin();
+       entry != server->pending_rendezvous.end(); ++entry) {
+    if (endpoints_equal(entry->second.target_endpoint, observed) &&
+        memcmp(entry->second.target_token.data(), pong.registration_token,
+               entry->second.target_token.size()) == 0 &&
+        entry->second.forward_packet_number == pong.acknowledged_packet_number) {
+      entry->second.forward_delivered = true;
+      return;
+    }
+  }
+}
+
+static void handle_request(Server *server, const sockaddr_storage &peer,
+                           socklen_t peer_length,
+                           const utp_ntrs_endpoint_t &observed,
+                           const utp_frame_rendezvous_t &frame) {
+  utp_rendezvous_request_t request = {};
+  utp_rendezvous_candidate_plan_t source_plan = {};
+  utp_rendezvous_candidate_plan_t target_plan = {};
+  utp_rendezvous_redirect_t redirect = {};
+  utp_rendezvous_forward_t forward = {};
+  utp_rendezvous_ping_t ping = {};
+  uint8_t ping_body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] =
+      {};
+  sockaddr_storage target_socket_address = {};
+  socklen_t target_socket_length = 0u;
+  char source_text[INET6_ADDRSTRLEN + 8u] = {};
+  char target_text[INET6_ADDRSTRLEN + 8u] = {};
+  size_t forward_body_length = 0u;
+
+  if (utp_rendezvous_request_decode(&request, frame.payload,
+                                    frame.payload_length) !=
+          UTP_INTERNAL_ERROR_OK ||
+      (request.local_family == UTP_ADDRESS_FAMILY_IPV4 &&
+       observed.family != AF_INET) ||
+      (request.local_family == UTP_ADDRESS_FAMILY_IPV6 &&
+       observed.family != AF_INET6))
+    return;
+  expire_pending_rendezvous(server, utp_ntrs_now_ms());
+  const std::string rendezvous_key(
+      reinterpret_cast<const char *>(request.rendezvous_id),
+      sizeof(request.rendezvous_id));
+  std::unordered_map<std::string, PendingRendezvous>::iterator pending =
+      server->pending_rendezvous.find(rendezvous_key);
+  if (pending != server->pending_rendezvous.end()) {
+    if (endpoints_equal(pending->second.source_endpoint, observed))
+      (void)send_message(server, peer, peer_length,
+                         UTP_RENDEZVOUS_MESSAGE_REDIRECT,
+                         pending->second.redirect_body.data(),
+                         pending->second.redirect_body_length);
+    return;
+  }
+  const std::string target_peer_id(
+      reinterpret_cast<const char *>(request.target_peer_id),
+      request.target_peer_id_length);
+  std::unordered_map<std::string, Registration>::iterator target =
+      server->registrations.find(target_peer_id);
+  if (target == server->registrations.end() ||
+      target->second.local_family != request.local_family ||
+      !make_candidate_plan(&source_plan, request.local_family,
+                           request.local_port, request.local_candidates,
+                           request.local_candidate_count,
+                           request.reported_public_endpoint, observed) ||
+      !make_candidate_plan(
+          &target_plan, target->second.local_family,
+          target->second.local_port, target->second.local_candidates.data(),
+          target->second.local_candidate_count,
+          target->second.has_reported_public_endpoint
+              ? &target->second.reported_public_endpoint
+              : NULL,
+          target->second.endpoint) ||
+      !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint,
+                                     &target_socket_address,
+                                     &target_socket_length))
+    return;
+
+  PendingRendezvous transaction = {};
+  std::array<uint8_t, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE> punch_token = {};
+  if (!random_token(&punch_token))
+    return;
+  memcpy(redirect.rendezvous_id, request.rendezvous_id,
+         sizeof(redirect.rendezvous_id));
+  memcpy(redirect.punch_token, punch_token.data(), punch_token.size());
+  redirect.target_plan = target_plan;
+  if (utp_rendezvous_redirect_encode(transaction.redirect_body.data(),
+                                     transaction.redirect_body.size(),
+                                     &redirect,
+                                     &transaction.redirect_body_length) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+  forward.source_peer_id = request.source_peer_id;
+  forward.source_peer_id_length = request.source_peer_id_length;
+  memcpy(forward.rendezvous_id, request.rendezvous_id,
+         sizeof(forward.rendezvous_id));
+  memcpy(forward.punch_token, punch_token.data(), punch_token.size());
+  forward.source_plan = source_plan;
+  uint8_t forward_body[UTP_PACKET_MTU_FLOOR] = {};
+  if (utp_rendezvous_forward_encode(forward_body, sizeof(forward_body),
+                                    &forward, &forward_body_length) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+  memcpy(ping.registration_token, target->second.token.data(),
+         target->second.token.size());
+  if (utp_rendezvous_ping_encode(ping_body, sizeof(ping_body), &ping) !=
+      UTP_INTERNAL_ERROR_OK)
+    return;
+
+  transaction.source_endpoint = observed;
+  transaction.target_endpoint = target->second.endpoint;
+  memcpy(transaction.target_token.data(), target->second.token.data(),
+         transaction.target_token.size());
+  transaction.created_at_ms = utp_ntrs_now_ms();
+  if (!send_message(server, peer, peer_length,
+                    UTP_RENDEZVOUS_MESSAGE_REDIRECT,
+                    transaction.redirect_body.data(),
+                    transaction.redirect_body_length))
+    return;
+  const OutgoingFrame frames[2] = {
+      {ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
+      {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
+  if (!send_frames(server, target_socket_address, target_socket_length, frames,
+                   2u, &transaction.forward_packet_number))
+    return;
+  server->pending_rendezvous.insert(std::make_pair(rendezvous_key, transaction));
+  fprintf(stderr, "NTRS <- Node=%s [Request] target_peer_id=%s\n",
+          utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)),
+          target_peer_id.c_str());
+  fprintf(stderr, "NTRS -> Node=%s [Redirect] target=%s\n",
+          utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)),
+          target_peer_id.c_str());
+  fprintf(stderr, "NTRS -> Node=%s [Ping|Forward] source=%s\n",
+          utp_ntrs_endpoint_format(&target->second.endpoint, target_text,
+                                   sizeof(target_text)),
+          utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)));
 }
 
 static void on_read(evutil_socket_t, short, void *user_data) {
@@ -112,7 +515,6 @@ static void on_read(evutil_socket_t, short, void *user_data) {
         recvfrom(server->fd, packet, sizeof(packet), 0,
                  reinterpret_cast<sockaddr *>(&peer), &peer_length);
     utp_packet_header_t header = {};
-    utp_frame_rendezvous_t frame = {};
     utp_ntrs_endpoint_t observed = {};
 
     if (count < 0) {
@@ -122,106 +524,43 @@ static void on_read(evutil_socket_t, short, void *user_data) {
     }
     if (utp_proto_decode_header(&header, packet, static_cast<size_t>(count)) !=
             UTP_INTERNAL_ERROR_OK ||
-        header.type != UTP_PACKET_TYPE_RENDEZVOUS || header.scid != 0u ||
-        header.dcid != 0u || header.packet_number == 0u ||
-        header.reserve != 0u ||
+        header.packet_number == 0u || header.reserve != 0u ||
         static_cast<size_t>(count) !=
             UTP_PACKET_HEADER_SIZE + header.payload_length ||
-        utp_frame_rendezvous_decode(&frame, packet + UTP_PACKET_HEADER_SIZE,
-                                    header.payload_length) !=
-            UTP_INTERNAL_ERROR_OK ||
-        header.payload_length !=
-            UTP_FRAME_RENDEZVOUS_HEADER_SIZE + frame.payload_length ||
         !utp_ntrs_endpoint_from_sockaddr(
             &observed, reinterpret_cast<const sockaddr *>(&peer), peer_length))
       continue;
-    if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER) {
-      utp_rendezvous_register_t request = {};
-      uint8_t body[64] = {};
-      char observed_text[INET6_ADDRSTRLEN + 8u] = {};
-      size_t body_length = 0u;
-      if (utp_rendezvous_register_decode(&request, frame.payload,
-                                         frame.payload_length) !=
+    if (header.type == UTP_PACKET_TYPE_RENDEZVOUS) {
+      utp_frame_rendezvous_t frame = {};
+      if (header.scid != 0u || header.dcid != 0u ||
+          utp_frame_rendezvous_decode(&frame, packet + UTP_PACKET_HEADER_SIZE,
+                                      header.payload_length) !=
               UTP_INTERNAL_ERROR_OK ||
-          (request.local_family == 4u && observed.family != AF_INET) ||
-          (request.local_family == 6u && observed.family != AF_INET6))
+          header.payload_length !=
+              UTP_FRAME_RENDEZVOUS_HEADER_SIZE + frame.payload_length)
         continue;
-      const std::string peer_id(reinterpret_cast<const char *>(request.peer_id),
-                                request.peer_id_length);
-      std::unordered_map<std::string, Registration>::iterator entry =
-          server->registrations.find(peer_id);
-      if (entry == server->registrations.end()) {
-        if (!token_is_zero(request.registration_token))
-          continue;
-        Registration registration = {};
-        if (!random_token(&registration.token))
-          continue;
-        registration.endpoint = observed;
-        registration.last_register_request_id = request.registration_request_id;
-        registration.last_register_was_initial = true;
-        entry =
-            server->registrations.insert(std::make_pair(peer_id, registration))
-                .first;
-      } else {
-        const bool initial_retry = token_is_zero(request.registration_token) &&
-                                   entry->second.last_register_was_initial &&
-                                   request.registration_request_id ==
-                                       entry->second.last_register_request_id;
-        const bool update =
-            !token_is_zero(request.registration_token) &&
-            memcmp(request.registration_token, entry->second.token.data(),
-                   entry->second.token.size()) == 0;
-
-        if (!initial_retry && !update)
-          continue;
-        if (update) {
-          entry->second.last_register_request_id =
-              request.registration_request_id;
-          entry->second.last_register_was_initial = false;
-        }
-      }
-      entry->second.endpoint = observed;
-      utp_rendezvous_registered_t reply = {};
-      reply.registration_request_id = request.registration_request_id;
-      memcpy(reply.registration_token, entry->second.token.data(),
-             entry->second.token.size());
-      if (utp_rendezvous_registered_encode(body, sizeof(body), &reply,
-                                           &body_length) ==
-          UTP_INTERNAL_ERROR_OK)
-        (void)send_message(server, peer, peer_length,
-                           UTP_RENDEZVOUS_MESSAGE_REGISTERED, body,
-                           body_length);
-      fprintf(stderr, "NTRS <- Node=%s [Register] peer_id=%s\n",
-              utp_ntrs_endpoint_format(&observed, observed_text,
-                                       sizeof(observed_text)),
-              peer_id.c_str());
-    } else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PING) {
-      utp_rendezvous_ping_t ping = {};
-      utp_rendezvous_pong_t pong = {};
-      uint8_t body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] =
-          {};
-      bool found = false;
-      if (utp_rendezvous_ping_decode(&ping, frame.payload,
-                                     frame.payload_length) !=
-          UTP_INTERNAL_ERROR_OK)
+      if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER)
+        handle_register(server, peer, peer_length, observed, frame);
+      else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PING)
+        handle_ping(server, peer, peer_length, observed, header, frame);
+      else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PONG)
+        handle_pong(server, observed, frame);
+    } else if (header.type == UTP_PACKET_TYPE_INITIAL ||
+               header.type == UTP_PACKET_TYPE_0RTT) {
+      utp_frame_rendezvous_t frame = {};
+      uint8_t frame_type = 0u;
+      size_t frame_length = 0u;
+      if (header.scid == 0u || header.dcid != 0u ||
+          utp_frame_measure(packet + UTP_PACKET_HEADER_SIZE,
+                            header.payload_length, &frame_type,
+                            &frame_length) != UTP_INTERNAL_ERROR_OK ||
+          frame_type != UTP_FRAME_TYPE_RENDEZVOUS ||
+          utp_frame_rendezvous_decode(&frame,
+                                      packet + UTP_PACKET_HEADER_SIZE,
+                                      frame_length) != UTP_INTERNAL_ERROR_OK ||
+          frame.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST)
         continue;
-      for (std::unordered_map<std::string, Registration>::iterator entry =
-               server->registrations.begin();
-           entry != server->registrations.end(); ++entry) {
-        if (memcmp(ping.registration_token, entry->second.token.data(),
-                   entry->second.token.size()) == 0) {
-          entry->second.endpoint = observed;
-          memcpy(pong.registration_token, ping.registration_token,
-                 sizeof(pong.registration_token));
-          pong.acknowledged_packet_number = header.packet_number;
-          found = true;
-          break;
-        }
-      }
-      if (found && utp_rendezvous_pong_encode(body, sizeof(body), &pong) ==
-                       UTP_INTERNAL_ERROR_OK)
-        (void)send_message(server, peer, peer_length,
-                           UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
+      handle_request(server, peer, peer_length, observed, frame);
     }
   }
 }
