@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <deque>
 #include <string>
 #include <unordered_map>
 
@@ -57,12 +58,22 @@ struct PendingRendezvous {
   bool forward_delivered;
 };
 
+struct OutgoingDatagram {
+  sockaddr_storage peer;
+  std::array<uint8_t, UTP_PACKET_MTU_FLOOR> packet;
+  size_t packet_length;
+  socklen_t peer_length;
+};
+
 struct Server {
   event_base *base;
   event *read_event;
   event *timer_event;
+  event *write_event;
   int fd;
   uint64_t next_packet_number;
+  bool write_event_active;
+  std::deque<OutgoingDatagram> output_queue;
   std::unordered_map<std::string, Registration> registrations;
   std::unordered_map<std::string, PendingRendezvous> pending_rendezvous;
 };
@@ -72,6 +83,9 @@ static const uint32_t k_forward_retry_initial_delay_ms = 1000u;
 static const uint32_t k_forward_retry_max_delay_ms = 8000u;
 static const uint32_t k_forward_retry_send_failure_delay_ms = 100u;
 static const uint8_t k_forward_retry_count = 3u;
+static const size_t k_output_queue_capacity = 128u;
+
+static void on_write(evutil_socket_t, short, void *user_data);
 
 static bool token_is_zero(const uint8_t *token) {
   uint8_t value = 0u;
@@ -212,6 +226,37 @@ struct OutgoingFrame {
   uint8_t message_type;
 };
 
+static bool send_datagram(Server *server, const sockaddr_storage &peer,
+                          socklen_t peer_length, const uint8_t *packet,
+                          size_t packet_length) {
+  if (server == NULL || packet == NULL || packet_length == 0u ||
+      packet_length > UTP_PACKET_MTU_FLOOR)
+    return false;
+  if (server->output_queue.empty()) {
+    if (sendto(server->fd, packet, packet_length, 0,
+               reinterpret_cast<const sockaddr *>(&peer), peer_length) ==
+        static_cast<ssize_t>(packet_length))
+      return true;
+    if (errno != EAGAIN && errno != EWOULDBLOCK)
+      return false;
+  }
+  if (server->output_queue.size() >= k_output_queue_capacity ||
+      server->write_event == NULL)
+    return false;
+  OutgoingDatagram datagram = {};
+  datagram.peer = peer;
+  datagram.peer_length = peer_length;
+  datagram.packet_length = packet_length;
+  memcpy(datagram.packet.data(), packet, packet_length);
+  server->output_queue.push_back(datagram);
+  if (!server->write_event_active) {
+    if (event_add(server->write_event, NULL) != 0)
+      return false;
+    server->write_event_active = true;
+  }
+  return true;
+}
+
 static bool send_frames(Server *server, const sockaddr_storage &peer,
                         socklen_t peer_length, const OutgoingFrame *frames,
                         size_t frame_count, uint64_t *packet_number,
@@ -252,15 +297,11 @@ static bool send_frames(Server *server, const sockaddr_storage &peer,
   }
   if (packet_number != NULL)
     *packet_number = header.packet_number;
-  const bool sent =
-      sendto(server->fd, packet, offset, 0,
-             reinterpret_cast<const sockaddr *>(&peer), peer_length) ==
-      static_cast<ssize_t>(offset);
-  if (sent && encoded_packet != NULL && encoded_packet_length != NULL) {
+  if (encoded_packet != NULL && encoded_packet_length != NULL) {
     memcpy(encoded_packet->data(), packet, offset);
     *encoded_packet_length = offset;
   }
-  return sent;
+  return send_datagram(server, peer, peer_length, packet, offset);
 }
 
 static bool send_message(Server *server, const sockaddr_storage &peer,
@@ -293,11 +334,10 @@ static void retry_pending_rendezvous(Server *server, uint64_t now_ms) {
         transaction.forward_retries_remaining == 0u ||
         transaction.forward_retry_at_ms > now_ms)
       continue;
-    if (sendto(server->fd, transaction.forward_packet.data(),
-               transaction.forward_packet_length, 0,
-               reinterpret_cast<const sockaddr *>(&transaction.target_socket_address),
-               transaction.target_socket_length) !=
-        static_cast<ssize_t>(transaction.forward_packet_length)) {
+    if (!send_datagram(server, transaction.target_socket_address,
+                       transaction.target_socket_length,
+                       transaction.forward_packet.data(),
+                       transaction.forward_packet_length)) {
       transaction.forward_retry_at_ms =
           now_ms + k_forward_retry_send_failure_delay_ms;
       continue;
@@ -636,6 +676,26 @@ static void on_timer(evutil_socket_t, short, void *user_data) {
   retry_pending_rendezvous(server, now_ms);
 }
 
+static void on_write(evutil_socket_t, short, void *user_data) {
+  Server *server = static_cast<Server *>(user_data);
+
+  while (!server->output_queue.empty()) {
+    const OutgoingDatagram &datagram = server->output_queue.front();
+    if (sendto(server->fd, datagram.packet.data(), datagram.packet_length, 0,
+               reinterpret_cast<const sockaddr *>(&datagram.peer),
+               datagram.peer_length) ==
+        static_cast<ssize_t>(datagram.packet_length)) {
+      server->output_queue.pop_front();
+      continue;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      return;
+    server->output_queue.pop_front();
+  }
+  event_del(server->write_event);
+  server->write_event_active = false;
+}
+
 int main(int argc, char **argv) {
   CLI::App cli{"NTRS rendezvous service"};
   std::string address = "0.0.0.0";
@@ -665,6 +725,8 @@ int main(int argc, char **argv) {
           NULL ||
       (server.timer_event = event_new(server.base, -1, EV_PERSIST, on_timer,
                                       &server)) == NULL ||
+      (server.write_event = event_new(server.base, server.fd, EV_WRITE | EV_PERSIST,
+                                      on_write, &server)) == NULL ||
       event_add(server.read_event, NULL) != 0)
     return 1;
   server.next_packet_number = 1u;
@@ -684,6 +746,7 @@ int main(int argc, char **argv) {
   (void)event_base_dispatch(server.base);
   event_free(signal_int);
   event_free(signal_term);
+  event_free(server.write_event);
   event_free(server.timer_event);
   event_free(server.read_event);
   event_base_free(server.base);

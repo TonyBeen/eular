@@ -1129,6 +1129,63 @@ static utp_internal_error_t utp_context_send_raw(utp_context_t* context, const u
     return utp_udp_socket_send_from_to(&context->udp_socket, packet, packet_length, peer, local, &sent_length);
 }
 
+static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* context, const utp_address_t* peer,
+                                                                const uint8_t* packet, size_t packet_length)
+{
+    utp_context_rendezvous_output_entry_t* entry;
+    size_t                                  index;
+    utp_internal_error_t                    error;
+
+    if (context == NULL || peer == NULL || packet == NULL || packet_length == 0u ||
+        packet_length > UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    if (context->rendezvous_output_count == 0u) {
+        error = utp_context_send_raw(context, peer, NULL, packet, packet_length);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        if (error != UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            return error;
+        }
+    }
+    if (context->rendezvous_output_count >= UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+    index = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
+            UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
+    entry = &context->rendezvous_output[index];
+    entry->peer = *peer;
+    memcpy(entry->packet, packet, packet_length);
+    entry->packet_length = (uint16_t)packet_length;
+    ++context->rendezvous_output_count;
+    return utp_context_enable_udp_write_event(context);
+}
+
+static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* context)
+{
+    if (context == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    while (context->rendezvous_output_count != 0u) {
+        utp_context_rendezvous_output_entry_t* entry =
+            &context->rendezvous_output[context->rendezvous_output_head];
+        const utp_internal_error_t error =
+            utp_context_send_raw(context, &entry->peer, NULL, entry->packet, entry->packet_length);
+
+        if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        context->rendezvous_output_head =
+            (uint8_t)(((size_t)context->rendezvous_output_head + 1u) % UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY);
+        --context->rendezvous_output_count;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static uint64_t utp_context_deadline_after_ms(uint64_t now_us, uint32_t timeout_ms)
 {
     const uint64_t timeout_us = (uint64_t)timeout_ms * UINT64_C(1000);
@@ -1324,7 +1381,7 @@ static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* con
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         ++context->next_rendezvous_packet_number;
-        error = utp_context_send_raw(context, peer, NULL, packet, sizeof(packet));
+        error = utp_context_send_rendezvous_output(context, peer, packet, sizeof(packet));
     }
     return error;
 }
@@ -1366,7 +1423,7 @@ static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, c
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         ++context->next_rendezvous_packet_number;
-        error = utp_context_send_raw(context, peer, NULL, packet, sizeof(packet));
+        error = utp_context_send_rendezvous_output(context, peer, packet, sizeof(packet));
     }
     return error;
 }
@@ -1870,6 +1927,9 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
         return false;
     }
     if (context->ntrs_registration.write_pending || context->ntrs_registration.calibration_write_pending_mask != 0u) {
+        return true;
+    }
+    if (context->rendezvous_output_count != 0u) {
         return true;
     }
     if (context->nat_probe.write_pending) {
@@ -4954,6 +5014,13 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
 
         if (error != UTP_INTERNAL_ERROR_OK) {
             utp_internal_log_error(&context->logger, &context->tag, error, "NTRS REGISTER writable retry failed");
+        }
+    }
+    {
+        const utp_internal_error_t error = utp_context_drain_rendezvous_output(context);
+
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            utp_internal_log_error(&context->logger, &context->tag, error, "rendezvous writable retry failed");
         }
     }
     utp_hash_iter_init(&iter);

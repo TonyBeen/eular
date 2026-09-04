@@ -34,6 +34,8 @@
 #define UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US UINT64_C(5000000)
 #define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY 16u
 #define UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US UINT64_C(30000000)
+#define UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY 32u
+#define UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY UTP_PACKET_MTU_FLOOR
 
 typedef struct utp_context_ntrs_registration {
     utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
@@ -130,6 +132,12 @@ typedef struct utp_context_rendezvous_forward_cache_entry {
     bool     used;
 } utp_context_rendezvous_forward_cache_entry_t;
 
+typedef struct utp_context_rendezvous_output_entry {
+    utp_address_t peer;
+    uint8_t       packet[UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY];
+    uint16_t      packet_length;
+} utp_context_rendezvous_output_entry_t;
+
 typedef struct utp_context_pending_slot {
     utp_hash_node_t node;                                                  // 按待处理本端 CID 索引的哈希节点
     utp_hash_node_t peer_node;                                             // 按来源地址和对端 CID 索引的哈希节点
@@ -164,6 +172,8 @@ struct utp_context {
     char                                     peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识
     uint8_t                                  peer_id_length;                        // peer_id 的有效字节数
     uint8_t                                  local_candidate_count;                 // local_candidates 的有效项数
+    uint8_t                                  rendezvous_output_head;
+    uint8_t                                  rendezvous_output_count;
     utp_stream_scheduler_mode_t              stream_scheduler_mode;                 // 新连接默认流调度策略
     utp_congestion_algorithm_t               cc_algorithm;                          // 新连接默认拥塞算法
     uint32_t                                 clock_granularity_us;                  // pacer 时钟粒度
@@ -184,6 +194,8 @@ struct utp_context {
         rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];         // 未匹配 PUNCH 的短期缓存
     utp_context_rendezvous_forward_cache_entry_t
         rendezvous_forward_cache[UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY];      // 已处理 FORWARD 的短期去重缓存
+    utp_context_rendezvous_output_entry_t
+        rendezvous_output[UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY];                     // 零 CID Rendezvous 延迟发送 FIFO
     utp_frame_transport_params_t             local_transport_params;               // 新连接本端传输参数
     utp_frame_ack_frequency_t                local_ack_frequency;                  // 新连接本端 ACK 策略
     uint32_t                                 keepalive_interval_ms;                // 保活间隔
