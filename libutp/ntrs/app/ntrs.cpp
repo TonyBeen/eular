@@ -42,22 +42,36 @@ struct Registration {
 struct PendingRendezvous {
   utp_ntrs_endpoint_t source_endpoint;
   utp_ntrs_endpoint_t target_endpoint;
+  sockaddr_storage target_socket_address;
   std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> target_token;
+  std::array<uint8_t, UTP_PACKET_MTU_FLOOR> forward_packet;
   std::array<uint8_t, UTP_PACKET_MTU_FLOOR> redirect_body;
   uint64_t created_at_ms;
   uint64_t forward_packet_number;
+  uint64_t forward_retry_at_ms;
+  size_t forward_packet_length;
   size_t redirect_body_length;
+  socklen_t target_socket_length;
+  uint8_t forward_retries_remaining;
+  uint32_t forward_retry_delay_ms;
   bool forward_delivered;
 };
 
 struct Server {
   event_base *base;
   event *read_event;
+  event *timer_event;
   int fd;
   uint64_t next_packet_number;
   std::unordered_map<std::string, Registration> registrations;
   std::unordered_map<std::string, PendingRendezvous> pending_rendezvous;
 };
+
+static const uint64_t k_pending_rendezvous_lifetime_ms = 30000u;
+static const uint32_t k_forward_retry_initial_delay_ms = 1000u;
+static const uint32_t k_forward_retry_max_delay_ms = 8000u;
+static const uint32_t k_forward_retry_send_failure_delay_ms = 100u;
+static const uint8_t k_forward_retry_count = 3u;
 
 static bool token_is_zero(const uint8_t *token) {
   uint8_t value = 0u;
@@ -200,7 +214,9 @@ struct OutgoingFrame {
 
 static bool send_frames(Server *server, const sockaddr_storage &peer,
                         socklen_t peer_length, const OutgoingFrame *frames,
-                        size_t frame_count, uint64_t *packet_number) {
+                        size_t frame_count, uint64_t *packet_number,
+                        std::array<uint8_t, UTP_PACKET_MTU_FLOOR> *encoded_packet = NULL,
+                        size_t *encoded_packet_length = NULL) {
   uint8_t packet[UTP_PACKET_MTU_FLOOR] = {};
   utp_packet_header_t header = {};
   size_t payload_length = 0u;
@@ -236,9 +252,15 @@ static bool send_frames(Server *server, const sockaddr_storage &peer,
   }
   if (packet_number != NULL)
     *packet_number = header.packet_number;
-  return sendto(server->fd, packet, offset, 0,
-                reinterpret_cast<const sockaddr *>(&peer),
-                peer_length) == static_cast<ssize_t>(offset);
+  const bool sent =
+      sendto(server->fd, packet, offset, 0,
+             reinterpret_cast<const sockaddr *>(&peer), peer_length) ==
+      static_cast<ssize_t>(offset);
+  if (sent && encoded_packet != NULL && encoded_packet_length != NULL) {
+    memcpy(encoded_packet->data(), packet, offset);
+    *encoded_packet_length = offset;
+  }
+  return sent;
 }
 
 static bool send_message(Server *server, const sockaddr_storage &peer,
@@ -253,10 +275,39 @@ static void expire_pending_rendezvous(Server *server, uint64_t now_ms) {
   for (std::unordered_map<std::string, PendingRendezvous>::iterator entry =
            server->pending_rendezvous.begin();
        entry != server->pending_rendezvous.end();) {
-    if (now_ms - entry->second.created_at_ms >= 30000u)
+    if (now_ms - entry->second.created_at_ms >=
+        k_pending_rendezvous_lifetime_ms)
       entry = server->pending_rendezvous.erase(entry);
     else
       ++entry;
+  }
+}
+
+static void retry_pending_rendezvous(Server *server, uint64_t now_ms) {
+  for (std::unordered_map<std::string, PendingRendezvous>::iterator entry =
+           server->pending_rendezvous.begin();
+       entry != server->pending_rendezvous.end(); ++entry) {
+    PendingRendezvous &transaction = entry->second;
+
+    if (transaction.forward_delivered ||
+        transaction.forward_retries_remaining == 0u ||
+        transaction.forward_retry_at_ms > now_ms)
+      continue;
+    if (sendto(server->fd, transaction.forward_packet.data(),
+               transaction.forward_packet_length, 0,
+               reinterpret_cast<const sockaddr *>(&transaction.target_socket_address),
+               transaction.target_socket_length) !=
+        static_cast<ssize_t>(transaction.forward_packet_length)) {
+      transaction.forward_retry_at_ms =
+          now_ms + k_forward_retry_send_failure_delay_ms;
+      continue;
+    }
+    --transaction.forward_retries_remaining;
+    transaction.forward_retry_at_ms = now_ms + transaction.forward_retry_delay_ms;
+    if (transaction.forward_retry_delay_ms < k_forward_retry_max_delay_ms / 2u)
+      transaction.forward_retry_delay_ms *= 2u;
+    else
+      transaction.forward_retry_delay_ms = k_forward_retry_max_delay_ms;
   }
 }
 
@@ -478,9 +529,15 @@ static void handle_request(Server *server, const sockaddr_storage &peer,
 
   transaction.source_endpoint = observed;
   transaction.target_endpoint = target->second.endpoint;
+  transaction.target_socket_address = target_socket_address;
+  transaction.target_socket_length = target_socket_length;
   memcpy(transaction.target_token.data(), target->second.token.data(),
          transaction.target_token.size());
   transaction.created_at_ms = utp_ntrs_now_ms();
+  transaction.forward_retry_at_ms =
+      transaction.created_at_ms + k_forward_retry_initial_delay_ms;
+  transaction.forward_retries_remaining = k_forward_retry_count;
+  transaction.forward_retry_delay_ms = k_forward_retry_initial_delay_ms;
   if (!send_message(server, peer, peer_length,
                     UTP_RENDEZVOUS_MESSAGE_REDIRECT,
                     transaction.redirect_body.data(),
@@ -490,7 +547,9 @@ static void handle_request(Server *server, const sockaddr_storage &peer,
       {ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
       {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
   if (!send_frames(server, target_socket_address, target_socket_length, frames,
-                   2u, &transaction.forward_packet_number))
+                   2u, &transaction.forward_packet_number,
+                   &transaction.forward_packet,
+                   &transaction.forward_packet_length))
     return;
   server->pending_rendezvous.insert(std::make_pair(rendezvous_key, transaction));
   fprintf(stderr, "NTRS <- Node=%s [Request] target_peer_id=%s\n",
@@ -569,6 +628,14 @@ static void on_signal(evutil_socket_t, short, void *user_data) {
   event_base_loopbreak(static_cast<event_base *>(user_data));
 }
 
+static void on_timer(evutil_socket_t, short, void *user_data) {
+  Server *server = static_cast<Server *>(user_data);
+  const uint64_t now_ms = utp_ntrs_now_ms();
+
+  expire_pending_rendezvous(server, now_ms);
+  retry_pending_rendezvous(server, now_ms);
+}
+
 int main(int argc, char **argv) {
   CLI::App cli{"NTRS rendezvous service"};
   std::string address = "0.0.0.0";
@@ -596,6 +663,8 @@ int main(int argc, char **argv) {
       (server.read_event = event_new(server.base, server.fd,
                                      EV_READ | EV_PERSIST, on_read, &server)) ==
           NULL ||
+      (server.timer_event = event_new(server.base, -1, EV_PERSIST, on_timer,
+                                      &server)) == NULL ||
       event_add(server.read_event, NULL) != 0)
     return 1;
   server.next_packet_number = 1u;
@@ -603,8 +672,10 @@ int main(int argc, char **argv) {
   event *signal_int = evsignal_new(server.base, SIGINT, on_signal, server.base);
   event *signal_term =
       evsignal_new(server.base, SIGTERM, on_signal, server.base);
+  const timeval timer_interval = {0, 100000};
   if (signal_int == NULL || signal_term == NULL ||
-      event_add(signal_int, NULL) != 0 || event_add(signal_term, NULL) != 0)
+      event_add(signal_int, NULL) != 0 || event_add(signal_term, NULL) != 0 ||
+      event_add(server.timer_event, &timer_interval) != 0)
     return 1;
   char formatted_endpoint[INET6_ADDRSTRLEN + 8u] = {};
   fprintf(stderr, "NTRS [Started] bind=%s\n",
@@ -613,6 +684,7 @@ int main(int argc, char **argv) {
   (void)event_base_dispatch(server.base);
   event_free(signal_int);
   event_free(signal_term);
+  event_free(server.timer_event);
   event_free(server.read_event);
   event_base_free(server.base);
   close(server.fd);
