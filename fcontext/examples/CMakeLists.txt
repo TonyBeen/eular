@@ -1,0 +1,4 @@
+add_executable(fcontext_example fcontext_example.cc)
+
+target_compile_features(fcontext_example PRIVATE cxx_std_11)
+target_link_libraries(fcontext_example PRIVATE fcontext)
