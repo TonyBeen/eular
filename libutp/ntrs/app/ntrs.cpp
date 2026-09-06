@@ -795,14 +795,17 @@ bool NtrsServer::completePendingRendezvous(PendingRendezvous* transaction)
     transaction->forward_retry_delay_ms    = k_forward_retry_initial_delay_ms;
     const OutgoingFrame frames[2] = {{ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
                                      {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
+    if (!sendMessage(&primary_socket_, transaction->source_socket_address, transaction->source_socket_length,
+                     UTP_RENDEZVOUS_MESSAGE_REDIRECT, transaction->redirect_body.data(),
+                     transaction->redirect_body_length)) {
+        return false;
+    }
     if (!sendFrames(&primary_socket_, transaction->target_socket_address, transaction->target_socket_length, frames, 2u,
                     &transaction->forward_packet_number, &transaction->forward_packet,
                     &transaction->forward_packet_length)) {
         return false;
     }
-    return sendMessage(&primary_socket_, transaction->source_socket_address, transaction->source_socket_length,
-                       UTP_RENDEZVOUS_MESSAGE_REDIRECT, transaction->redirect_body.data(),
-                       transaction->redirect_body_length);
+    return true;
 }
 
 void NtrsServer::expirePendingRendezvous(uint64_t now_ms)
