@@ -33,7 +33,7 @@ struct Registration {
     std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>    token;
     std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES> local_candidates;
     std::array<utp_address_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES>  observed_addresses;
-    std::array<uint16_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES>      calibration_ports;
+    std::array<uint16_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES + 1u> calibration_ports;
     std::array<uint64_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES>       observed_at_unix_ms;
     utp_address_t                                                  reported_public_endpoint;
     uint64_t                                                       last_register_request_id;
@@ -499,8 +499,8 @@ void Registration::recordCalibrationEndpoint(uint8_t index, const utp_ntrs_endpo
         calibration_ip_consistent = false;
         return;
     }
-    calibration_ports[index]   = observed.port;
-    calibration_received_mask |= static_cast<uint8_t>(1u << index);
+    calibration_ports[index + 1u]  = observed.port;
+    calibration_received_mask     |= static_cast<uint8_t>(UINT8_C(1) << (index + 1u));
 }
 
 bool NtrsServer::beginCalibration(Registration* registration)
@@ -509,9 +509,10 @@ bool NtrsServer::beginCalibration(Registration* registration)
     registration->calibration_id             = 0u;
     registration->calibration_ip             = registration->endpoint;
     registration->calibration_endpoint_count = calibration_endpoint_count_;
-    registration->calibration_received_mask  = 0u;
     registration->calibration_ports          = {};
     registration->calibration_ip_consistent  = true;
+    registration->calibration_ports[0u]      = registration->endpoint.port;
+    registration->calibration_received_mask  = UINT8_C(0x01);
     if (calibration_endpoint_count_ == 0u) return true;
     return random_u64(&registration->calibration_id);
 }
@@ -552,21 +553,21 @@ static uint16_t advance_port(uint16_t port, int delta)
 static bool appendRegistrationPredictedCandidates(utp_rendezvous_candidate_plan_t* plan,
                                                   const Registration& registration, uint8_t public_candidate_count)
 {
-    utp_address_t candidate       = {};
-    bool          predictable     = false;
-    int           step            = 0;
-    uint8_t       expected_mask   = 0u;
-    uint8_t       calibration_end = 0u;
+    utp_address_t candidate                = {};
+    bool          predictable              = false;
+    int           step                     = 0;
+    uint8_t       expected_mask            = 0u;
+    uint8_t       calibration_sample_count = 0u;
 
     if (registration.nat_class != UTP_NAT_CLASS_SYMMETRIC && registration.nat_class != UTP_NAT_CLASS_UNKNOWN)
         return true;
     if (!endpoint_to_address(registration.endpoint, &candidate)) return false;
-    calibration_end = registration.calibration_endpoint_count;
-    if (calibration_end >= 3u) {
-        expected_mask = static_cast<uint8_t>((UINT8_C(1) << calibration_end) - 1u);
+    calibration_sample_count = (uint8_t)(registration.calibration_endpoint_count + 1u);
+    if (calibration_sample_count >= 3u) {
+        expected_mask = static_cast<uint8_t>((UINT8_C(1) << calibration_sample_count) - 1u);
         if (registration.calibration_ip_consistent && registration.calibration_received_mask == expected_mask) {
             predictable = true;
-            for (uint8_t index = 1u; index < calibration_end; ++index) {
+            for (uint8_t index = 1u; index < calibration_sample_count; ++index) {
                 int current_step = static_cast<int>(registration.calibration_ports[index]) -
                                    static_cast<int>(registration.calibration_ports[index - 1u]);
 
@@ -584,7 +585,7 @@ static bool appendRegistrationPredictedCandidates(utp_rendezvous_candidate_plan_
         }
     }
     if (predictable) {
-        candidate.port = registration.calibration_ports[calibration_end - 1u];
+        candidate.port = registration.calibration_ports[calibration_sample_count - 1u];
         while (plan->public_candidate_count < public_candidate_count) {
             candidate.port = advance_port(candidate.port, step);
             if (!append_public_candidate(plan, candidate)) return false;
