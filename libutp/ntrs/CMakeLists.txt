@@ -160,4 +160,28 @@ if(BUILD_TESTING AND UTP_NTRS_BUILD_TESTS)
         target_compile_options(utp_ntrs_service_test PRIVATE /utf-8 /W4 /WX /UNDEBUG)
     endif()
     add_test(NAME utp_ntrs_service_test COMMAND utp_ntrs_service_test)
+
+    if(UTP_NTRS_BUILD_SERVICES)
+        add_executable(utp_ntrs_rendezvous_test test/test_rendezvous.cpp)
+        target_link_libraries(utp_ntrs_rendezvous_test PRIVATE
+            utp_ntrs_service_core
+            utp_ntrs_service_runtime
+            -Wl,--start-group
+            ssl
+            crypto
+            -Wl,--end-group)
+        add_dependencies(utp_ntrs_rendezvous_test ntrs)
+        target_include_directories(utp_ntrs_rendezvous_test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/../c/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../c/include")
+        target_compile_features(utp_ntrs_rendezvous_test PRIVATE cxx_std_11)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(utp_ntrs_rendezvous_test PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2 -UNDEBUG)
+        elseif(MSVC)
+            target_compile_options(utp_ntrs_rendezvous_test PRIVATE /utf-8 /W4 /WX /UNDEBUG)
+        endif()
+        add_test(NAME utp_ntrs_rendezvous_test
+            COMMAND utp_ntrs_rendezvous_test $<TARGET_FILE:ntrs>)
+    endif()
 endif()
