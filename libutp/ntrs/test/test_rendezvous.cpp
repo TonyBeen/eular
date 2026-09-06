@@ -106,9 +106,9 @@ static bool port_available(uint16_t port)
 
 static uint16_t find_service_port()
 {
-    const uint16_t first_port = static_cast<uint16_t>(30000u + (static_cast<unsigned>(getpid()) % 20000u));
+    const uint16_t first_port = static_cast<uint16_t>(30000u + (static_cast<unsigned>(getpid()) % 5000u));
 
-    for (uint32_t offset = 0u; offset < 10000u; ++offset) {
+    for (uint32_t offset = 0u; offset < 5000u; ++offset) {
         const uint32_t candidate = static_cast<uint32_t>(first_port) + offset;
 
         if (candidate > 65000u) break;
@@ -285,7 +285,8 @@ static bool receive_message(int socket_fd, uint8_t message_type, uint32_t timeou
 }
 
 static RendezvousFrame encode_register_frame(const char* peer_id, uint8_t nat_class, uint16_t local_port,
-                                             uint64_t request_id)
+                                             uint64_t      request_id,
+                                             const uint8_t registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE])
 {
     utp_rendezvous_register_t registration = {};
     const utp_address_t       address      = loopback_address(local_port);
@@ -301,6 +302,8 @@ static RendezvousFrame encode_register_frame(const char* peer_id, uint8_t nat_cl
     registration.nat_class                = nat_class;
     registration.local_family             = UTP_ADDRESS_FAMILY_IPV4;
     registration.local_candidate_count    = 1u;
+    if (registration_token != NULL)
+        memcpy(registration.registration_token, registration_token, sizeof(registration.registration_token));
     CHECK(utp_rendezvous_register_encode(body.data(), body.size(), &registration, &body_length) ==
           UTP_INTERNAL_ERROR_OK);
     body.resize(body_length);
@@ -310,7 +313,7 @@ static RendezvousFrame encode_register_frame(const char* peer_id, uint8_t nat_cl
 static utp_rendezvous_registered_t register_peer(int socket_fd, uint16_t server_port, const char* peer_id,
                                                  uint8_t nat_class, uint64_t request_id)
 {
-    const RendezvousFrame       frame = encode_register_frame(peer_id, nat_class, socket_port(socket_fd), request_id);
+    const RendezvousFrame frame = encode_register_frame(peer_id, nat_class, socket_port(socket_fd), request_id, NULL);
     utp_rendezvous_registered_t registered = {};
 
     for (uint64_t attempt = 1u; attempt <= 3u; ++attempt) {
@@ -359,6 +362,33 @@ static void expect_pong(int socket_fd, const uint8_t token[UTP_RENDEZVOUS_REGIST
     CHECK(utp_rendezvous_pong_decode(&pong, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
     CHECK(memcmp(pong.registration_token, token, sizeof(pong.registration_token)) == 0);
     CHECK(pong.acknowledged_packet_number == packet_number);
+}
+
+static void send_unregister(int socket_fd, uint16_t server_port,
+                            const uint8_t token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE])
+{
+    utp_rendezvous_unregister_t  unregister_message = {};
+    std::vector<uint8_t>         body(UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE);
+    std::vector<RendezvousFrame> frames;
+    Datagram                     packet = {};
+
+    memcpy(unregister_message.registration_token, token, sizeof(unregister_message.registration_token));
+    CHECK(utp_rendezvous_unregister_encode(body.data(), body.size(), &unregister_message) == UTP_INTERNAL_ERROR_OK);
+    frames.push_back(RendezvousFrame{UTP_RENDEZVOUS_MESSAGE_UNREGISTER, body});
+    CHECK(encode_packet(UTP_PACKET_TYPE_RENDEZVOUS, 0u, 3u, frames, &packet));
+    send_packet(socket_fd, server_port, packet);
+}
+
+static void expect_unregistered(int socket_fd, const uint8_t token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE])
+{
+    std::vector<uint8_t>        body;
+    uint64_t                    packet_number = 0u;
+    utp_rendezvous_unregister_t unregistered  = {};
+
+    CHECK(receive_message(socket_fd, UTP_RENDEZVOUS_MESSAGE_UNREGISTERED, 1000u, &packet_number, &body));
+    CHECK(packet_number != 0u);
+    CHECK(utp_rendezvous_unregister_decode(&unregistered, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+    CHECK(memcmp(unregistered.registration_token, token, sizeof(unregistered.registration_token)) == 0);
 }
 
 static Datagram make_request(const char* source_peer_id, const char* target_peer_id, uint8_t source_nat_class,
@@ -448,17 +478,22 @@ static void receive_forward_and_pong(int target_socket, uint16_t server_port,
 class NtrsProcess
 {
 public:
-    NtrsProcess(const char* executable, uint16_t service_port) : pid_(-1)
+    NtrsProcess(const char* executable, uint16_t service_port, uint32_t registration_timeout_ms,
+                uint32_t keepalive_interval_ms)
+        : pid_(-1)
     {
-        const std::string port            = std::to_string(service_port);
-        const std::string calibration_one = std::to_string(static_cast<uint16_t>(service_port + 1u));
-        const std::string calibration_two = std::to_string(static_cast<uint16_t>(service_port + 2u));
+        const std::string port                 = std::to_string(service_port);
+        const std::string calibration_one      = std::to_string(static_cast<uint16_t>(service_port + 1u));
+        const std::string calibration_two      = std::to_string(static_cast<uint16_t>(service_port + 2u));
+        const std::string registration_timeout = std::to_string(registration_timeout_ms);
+        const std::string keepalive_interval   = std::to_string(keepalive_interval_ms);
 
         pid_ = fork();
         CHECK(pid_ >= 0);
         if (pid_ == 0) {
             execl(executable, executable, "-a", "127.0.0.1", "-e", "127.0.0.1", "-p", port.c_str(), "-c",
-                  calibration_one.c_str(), "-c", calibration_two.c_str(), static_cast<char*>(NULL));
+                  calibration_one.c_str(), "-c", calibration_two.c_str(), "-t", registration_timeout.c_str(), "-k",
+                  keepalive_interval.c_str(), static_cast<char*>(NULL));
             _exit(127);
         }
         g_ntrs_pid = pid_;
@@ -513,6 +548,82 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
     {
         Datagram ignored = {};
         CHECK(!receive_datagram(target.primary, 300u, &ignored));
+    }
+    {
+        const std::vector<RendezvousFrame> frames(1u, encode_register_frame("symmetric-target", UTP_NAT_CLASS_SYMMETRIC,
+                                                                            socket_port(target.primary), 5u, NULL));
+        std::vector<uint8_t>               body;
+        uint64_t                           packet_number = 0u;
+        utp_rendezvous_rejected_t          rejected      = {};
+        Datagram                           packet        = {};
+
+        CHECK(encode_packet(UTP_PACKET_TYPE_RENDEZVOUS, 0u, 5u, frames, &packet));
+        send_packet(target.primary, service_port, packet);
+        CHECK(receive_message(target.primary, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER);
+        CHECK(rejected.reference_length == UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE);
+        CHECK(rejected.reference_id[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE - 1u] == 5u);
+        CHECK(rejected.reason_code == 3u);
+    }
+    {
+        const uint8_t                      invalid_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE] = {1u};
+        const std::vector<RendezvousFrame> frames(
+            1u, encode_register_frame("symmetric-target", UTP_NAT_CLASS_SYMMETRIC, socket_port(target.primary), 6u,
+                                      invalid_token));
+        std::vector<uint8_t>      body;
+        uint64_t                  packet_number = 0u;
+        utp_rendezvous_rejected_t rejected      = {};
+        Datagram                  packet        = {};
+
+        CHECK(encode_packet(UTP_PACKET_TYPE_RENDEZVOUS, 0u, 6u, frames, &packet));
+        send_packet(target.primary, service_port, packet);
+        CHECK(receive_message(target.primary, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER);
+        CHECK(rejected.reference_length == UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE);
+        CHECK(rejected.reference_id[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE - 1u] == 6u);
+        CHECK(rejected.reason_code == 4u);
+    }
+    {
+        const uint8_t unacknowledged_id[UTP_RENDEZVOUS_ID_SIZE] = {7u};
+        std::vector<uint8_t>      body;
+        uint64_t                  packet_number = 0u;
+        utp_rendezvous_forward_t  unacknowledged_forward = {};
+
+        request = make_request("source-port-restricted", "symmetric-target", UTP_NAT_CLASS_PORT_RESTRICTED,
+                               socket_port(source), unacknowledged_id);
+        send_packet(source, service_port, request);
+        (void)receive_redirect(source);
+        CHECK(receive_message(target.primary, UTP_RENDEZVOUS_MESSAGE_FORWARD, 1500u, &packet_number, &body));
+        CHECK(utp_rendezvous_forward_decode(&unacknowledged_forward, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(memcmp(unacknowledged_forward.rendezvous_id, unacknowledged_id,
+                     sizeof(unacknowledged_forward.rendezvous_id)) == 0);
+    }
+    send_unregister(target.primary, service_port, registered.registration_token);
+    expect_unregistered(target.primary, registered.registration_token);
+    {
+        Datagram ignored = {};
+
+        CHECK(!receive_datagram(target.primary, 1250u, &ignored));
+    }
+    send_unregister(target.primary, service_port, registered.registration_token);
+    expect_unregistered(target.primary, registered.registration_token);
+    {
+        const uint8_t  rejected_id[UTP_RENDEZVOUS_ID_SIZE] = {4u};
+        const Datagram rejected_request = make_request("source-port-restricted", "symmetric-target",
+                                                       UTP_NAT_CLASS_PORT_RESTRICTED, socket_port(source), rejected_id);
+        std::vector<uint8_t>      body;
+        uint64_t                  packet_number = 0u;
+        utp_rendezvous_rejected_t rejected      = {};
+
+        send_packet(source, service_port, rejected_request);
+        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+        CHECK(rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE);
+        CHECK(memcmp(rejected.reference_id, rejected_id, sizeof(rejected_id)) == 0);
+        CHECK(rejected.reason_code == 2u);
     }
     (void)close(source);
     close_sequence(&target);
@@ -580,6 +691,32 @@ static void test_temporary_calibration_timeout(uint16_t service_port)
     close_sequence(&source);
 }
 
+static void test_registration_timeout(const char* executable)
+{
+    const uint16_t              service_port                          = find_service_port();
+    const int                   target                                = open_socket(0u);
+    const int                   source                                = open_socket(0u);
+    const uint8_t               rendezvous_id[UTP_RENDEZVOUS_ID_SIZE] = {5u};
+    utp_rendezvous_registered_t registered;
+    const Datagram            request = make_request("timeout-source", "expired-target", UTP_NAT_CLASS_PORT_RESTRICTED,
+                                                     socket_port(source), rendezvous_id);
+    std::vector<uint8_t>      body;
+    uint64_t                  packet_number = 0u;
+    utp_rendezvous_rejected_t rejected      = {};
+
+    NtrsProcess               server(executable, service_port, 200u, 100u);
+    registered = register_peer(target, service_port, "expired-target", UTP_NAT_CLASS_PORT_RESTRICTED, 4u);
+    CHECK(registered.registration_token[0u] != 0u);
+    poll(NULL, 0u, 400);
+    send_packet(source, service_port, request);
+    CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+    CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+    CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+    CHECK(rejected.reason_code == 2u);
+    (void)close(source);
+    (void)close(target);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -587,9 +724,13 @@ int main(int argc, char** argv)
     const uint16_t service_port = find_service_port();
 
     CHECK(argc == 2);
-    NtrsProcess server(argv[1], service_port);
-    test_registered_symmetric_prediction(service_port);
-    test_temporary_symmetric_calibration(service_port);
-    test_temporary_calibration_timeout(service_port);
+    {
+        NtrsProcess server(argv[1], service_port, 90000u, 30000u);
+
+        test_registered_symmetric_prediction(service_port);
+        test_temporary_symmetric_calibration(service_port);
+        test_temporary_calibration_timeout(service_port);
+    }
+    test_registration_timeout(argv[1]);
     return 0;
 }

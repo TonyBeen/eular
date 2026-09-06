@@ -645,6 +645,87 @@ utp_internal_error_t utp_rendezvous_address_updated_decode(utp_rendezvous_addres
     return error == UTP_INTERNAL_ERROR_OK && updated->update_id == 0u ? UTP_INTERNAL_ERROR_PROTOCOL : error;
 }
 
+utp_internal_error_t utp_rendezvous_unregister_encode(uint8_t* buffer, size_t capacity,
+                                                      const utp_rendezvous_unregister_t* unregister_message)
+{
+    if (buffer == NULL || unregister_message == NULL || capacity < UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE ||
+        utp_rendezvous_bytes_are_zero(unregister_message->registration_token,
+                                      sizeof(unregister_message->registration_token))) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    memcpy(buffer, unregister_message->registration_token, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE);
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_rendezvous_unregister_decode(utp_rendezvous_unregister_t* unregister_message,
+                                                      const uint8_t* buffer, size_t length)
+{
+    if (unregister_message == NULL || buffer == NULL || length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    memcpy(unregister_message->registration_token, buffer, sizeof(unregister_message->registration_token));
+    return utp_rendezvous_bytes_are_zero(unregister_message->registration_token,
+                                         sizeof(unregister_message->registration_token))
+               ? UTP_INTERNAL_ERROR_PROTOCOL
+               : UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_rendezvous_rejected_encode(uint8_t* buffer, size_t capacity,
+                                                    const utp_rendezvous_rejected_t* rejected, size_t* out_length)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+
+    if (buffer == NULL || rejected == NULL || out_length == NULL ||
+        (rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REGISTER &&
+         rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+         rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_UNREGISTER) ||
+        ((rejected->rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+          rejected->reference_length != UTP_RENDEZVOUS_ID_SIZE) ||
+         (rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+          rejected->reference_length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE))) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, rejected->rejected_message_type);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, rejected->reference_length);
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_write_bytes(&writer, rejected->reference_id, rejected->reference_length);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, rejected->reason_code);
+    if (error == UTP_INTERNAL_ERROR_OK) *out_length = capacity - writer.remaining;
+    return error;
+}
+
+utp_internal_error_t utp_rendezvous_rejected_decode(utp_rendezvous_rejected_t* rejected, const uint8_t* buffer,
+                                                    size_t length)
+{
+    utp_wire_reader_t         reader;
+    utp_rendezvous_rejected_t decoded = {0};
+    utp_internal_error_t      error;
+
+    if (rejected == NULL || buffer == NULL) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_wire_reader_init(&reader, buffer, length);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &decoded.rejected_message_type);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &decoded.reference_length);
+    if (error == UTP_INTERNAL_ERROR_OK && (decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REGISTER &&
+                                           decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                                           decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_UNREGISTER))
+        error = UTP_INTERNAL_ERROR_PROTOCOL;
+    if (error == UTP_INTERNAL_ERROR_OK &&
+        ((decoded.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+          decoded.reference_length != UTP_RENDEZVOUS_ID_SIZE) ||
+         (decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+          decoded.reference_length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE)))
+        error = UTP_INTERNAL_ERROR_PROTOCOL;
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_read_bytes(&reader, decoded.reference_id, decoded.reference_length);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u16(&reader, &decoded.reason_code);
+    if (error != UTP_INTERNAL_ERROR_OK || reader.remaining != 0u)
+        return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
+    *rejected = decoded;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static bool utp_rendezvous_address_equal(const utp_address_t* left, const utp_address_t* right)
 {
     const size_t address_length = utp_rendezvous_address_length(left->family);

@@ -83,6 +83,18 @@ typedef struct utp_rendezvous_address_updated {
     uint64_t update_id;
 } utp_rendezvous_address_updated_t;
 
+/* UNREGISTER/UNREGISTERED：固定携带当前 registration token。 */
+typedef struct utp_rendezvous_unregister {
+    uint8_t registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+} utp_rendezvous_unregister_t;
+
+typedef struct utp_rendezvous_rejected {
+    uint8_t  reference_id[UTP_RENDEZVOUS_ID_SIZE];  // REGISTER/UNREGISTER 为 8，REQUEST 为 16
+    uint16_t reason_code;                           // NTRS 私有原因码，Context 不暴露
+    uint8_t  rejected_message_type;
+    uint8_t  reference_length;
+} utp_rendezvous_rejected_t;
+
 /* REQUEST：rendezvous_id(16), source_id, target_id, NAT 信息和本地候选地址。 */
 typedef struct utp_rendezvous_request {
     const uint8_t*       source_peer_id;                         // 请求方 Context peer_id 的字节视图
@@ -168,6 +180,18 @@ utp_internal_error_t utp_rendezvous_address_updated_encode(uint8_t* buffer, size
 /** @brief 解码固定长度 ADDRESS_UPDATED 消息体。 */
 utp_internal_error_t utp_rendezvous_address_updated_decode(utp_rendezvous_address_updated_t* updated,
                                                            const uint8_t* buffer, size_t length);
+/** @brief 编码固定长度 UNREGISTER 或 UNREGISTERED 消息体。 */
+utp_internal_error_t utp_rendezvous_unregister_encode(uint8_t* buffer, size_t capacity,
+                                                      const utp_rendezvous_unregister_t* unregister_message);
+/** @brief 解码固定长度 UNREGISTER 或 UNREGISTERED 消息体。 */
+utp_internal_error_t utp_rendezvous_unregister_decode(utp_rendezvous_unregister_t* unregister_message,
+                                                      const uint8_t* buffer, size_t length);
+/** @brief 编码 NTRS 私有 REJECTED 消息体。 */
+utp_internal_error_t utp_rendezvous_rejected_encode(uint8_t* buffer, size_t capacity,
+                                                    const utp_rendezvous_rejected_t* rejected, size_t* out_length);
+/** @brief 解码严格的 REJECTED 消息体。 */
+utp_internal_error_t utp_rendezvous_rejected_decode(utp_rendezvous_rejected_t* rejected, const uint8_t* buffer,
+                                                    size_t length);
 /** @brief 编码 REQUEST 消息体，输出不含 FrameRendezvous 包络。 */
 utp_internal_error_t utp_rendezvous_request_encode(uint8_t* buffer, size_t capacity,
                                                    const utp_rendezvous_request_t* request, size_t* out_length);

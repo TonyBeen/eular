@@ -37,25 +37,33 @@
 #define UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY           32u
 #define UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY           UTP_PACKET_MTU_FLOOR
 #define UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY            4u
-#define UTP_CONTEXT_ADDRESS_UPDATE_DEBOUNCE_MS            5000u
+#define UTP_CONTEXT_ADDRESS_UPDATE_DEBOUNCE_MS           5000u
 
 typedef struct utp_context_ntrs_registration {
-    utp_address_t             endpoint;   // 当前 NTRS 目标或已注册 endpoint
-    utp_on_ntrs_registered_fn callback;   // 注册成功回调
-    void*                     user_data;  // 回调用户数据
-    uint8_t                   registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
-    uint8_t                   packet[UTP_CONTEXT_NTRS_PACKET_CAPACITY];  // REGISTER 逻辑包及其重传副本
-    uint8_t                   calibration_packets[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]
-                               [UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY];  // 各 calibration PING 的重传副本
+    utp_address_t               endpoint;   // 当前 NTRS 目标或已注册 endpoint
+    utp_on_ntrs_registered_fn   callback;   // 注册成功回调
+    void*                       user_data;  // 回调用户数据
+    utp_on_ntrs_unregistered_fn unregister_callback;
+    void*                       unregister_user_data;
+    uint8_t                     registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    uint8_t                     packet[UTP_CONTEXT_NTRS_PACKET_CAPACITY];  // REGISTER 逻辑包及其重传副本
+    uint8_t       calibration_packets[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]
+                                     [UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY];  // 各 calibration PING 的重传副本
     utp_address_t calibration_endpoints[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
     uint64_t      request_id;     // REGISTER 幂等键
     uint64_t      packet_number;  // 本逻辑包的 Context 级包号
+    uint64_t      last_activity_us;
+    uint64_t      keepalive_packet_number;
+    uint64_t      keepalive_deadline_us;
     uint64_t      calibration_packet_numbers[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
     uint64_t      deadline_us;              // 当前等待 REGISTERED 的截止时刻
     uint64_t      calibration_deadline_us;  // 当前 calibration PONG 等待截止时刻
     size_t        packet_length;            // 完整 UTP 包长度
     uint8_t       calibration_packet_lengths[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
-    uint32_t      timeout_ms;                      // 本轮等待时限
+    uint32_t      timeout_ms;  // 本轮等待时限
+    uint32_t      keepalive_interval_ms;
+    uint32_t      keepalive_timeout_ms;
+    uint8_t       retries;                         // REGISTER/UNREGISTER 的额外重试次数
     uint8_t       retries_remaining;               // 尚可重传次数
     uint8_t       calibration_pending_mask;        // 等待 PONG 的 endpoint 位图
     uint8_t       calibration_write_pending_mask;  // 尚未写入内核的 endpoint 位图
@@ -63,6 +71,8 @@ typedef struct utp_context_ntrs_registration {
     bool          registered : 1;                  // 已获得当前 token
     bool          write_pending : 1;               // UDP 暂不可写，等待 writable 事件
     bool          calibration_active : 1;          // REGISTERED 后正在收集 calibration PONG
+    bool          unregistering : 1;               // 正在等待 UNREGISTERED
+    bool          keepalive_pending : 1;           // 正在等待半连接 PONG
 } utp_context_ntrs_registration_t;
 
 typedef struct utp_context_ntrs_address_update {
@@ -216,7 +226,7 @@ struct utp_context {
     uint32_t                     path_validation_buffer_capacity;                      // 新连接候选路径缓存上限(bytes)
     utp_nat_probe_task_t         nat_probe;                                            // 当前 NAT 探测任务
     utp_nat_probe_result_t       nat_result;                                           // 最近一次完成的 NAT 探测缓存
-    utp_context_ntrs_registration_t ntrs_registration;  // Context 到单个 NTRS 的半连接注册
+    utp_context_ntrs_registration_t   ntrs_registration;    // Context 到单个 NTRS 的半连接注册
     utp_context_ntrs_address_update_t ntrs_address_update;  // Context 到 NTRS 的地址样本批量上报
     utp_context_rendezvous_punch_cache_entry_t
         rendezvous_punch_cache[UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY];  // 未匹配 PUNCH 的短期缓存

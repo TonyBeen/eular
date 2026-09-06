@@ -67,6 +67,8 @@ static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context
 static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_context_t* context, uint64_t now_us);
 static utp_internal_error_t utp_context_retry_ntrs_address_update_send(utp_context_t* context, uint64_t now_us);
 static void                 utp_context_report_ntrs_registered(utp_context_t* context);
+static void                 utp_context_finish_ntrs_unregistration(utp_context_t* context);
+static void                 utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us);
 static void utp_context_remember_local_candidate(utp_context_t* context, const utp_address_t* candidate);
 /** @brief 将 Context 固定配置应用至新建连接，所有建连路径必须调用。 */
 static utp_internal_error_t utp_context_configure_connection(utp_context_t* context, utp_connection_t* connection)
@@ -726,11 +728,11 @@ static utp_internal_error_t utp_context_queue_session_token(utp_context_t* conte
     const uint64_t expires_at_seconds = context->zero_rtt_token_max_lifetime_seconds > UINT64_MAX - now_seconds
                                             ? UINT64_MAX
                                             : now_seconds + context->zero_rtt_token_max_lifetime_seconds;
-    const uint8_t  encryption_mode    = slot->connection.crypto_configured
-                                            ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
-                                            : (uint8_t)UTP_ENCRYPTION_NONE;
-    uint8_t        token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
-    uint8_t        payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    const uint8_t encryption_mode = slot->connection.crypto_configured
+                                        ? (uint8_t)utp_context_encryption_from_crypto_type(slot->connection.crypto_type)
+                                        : (uint8_t)UTP_ENCRYPTION_NONE;
+    uint8_t       token_payload[UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
+    uint8_t       payload[UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + UTP_CRYPTO_SESSION_TOKEN_PAYLOAD_SIZE];
     utp_frame_session_token_t frame;
     utp_internal_error_t      error = utp_crypto_random_bytes(token_payload, UTP_CRYPTO_RESUMPTION_PSK_SIZE);
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1165,8 +1167,8 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
     if (context->rendezvous_output_count >= UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    index = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
-            UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
+    index       = (size_t)(context->rendezvous_output_head + context->rendezvous_output_count) %
+                  UTP_CONTEXT_RENDEZVOUS_OUTPUT_CAPACITY;
     entry       = &context->rendezvous_output[index];
     entry->peer = *peer;
     memcpy(entry->packet, packet, packet_length);
@@ -1434,6 +1436,48 @@ static utp_internal_error_t utp_context_send_rendezvous_calibration_ping(
     return error;
 }
 
+/** @brief 空闲时主动发送半连接 PING，等待对应 PONG 前不重复发送。 */
+static utp_internal_error_t utp_context_send_ntrs_keepalive_ping(utp_context_t* context, uint64_t now_us)
+{
+    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_rendezvous_ping_t            ping         = {0};
+    utp_packet_header_t              header;
+    utp_frame_rendezvous_t           frame;
+    uint8_t                          body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
+    uint8_t                          packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
+    utp_internal_error_t             error;
+
+    if (!registration->registered || registration->pending || registration->keepalive_pending ||
+        utp_context_ntrs_token_is_zero(registration->registration_token) ||
+        context->next_rendezvous_packet_number == 0u ||
+        context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
+        return UTP_INTERNAL_ERROR_STATE;
+    }
+    memcpy(ping.registration_token, registration->registration_token, sizeof(ping.registration_token));
+    error = utp_rendezvous_ping_encode(body, sizeof(body), &ping);
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    header = (utp_packet_header_t){0u,
+                                   0u,
+                                   context->next_rendezvous_packet_number++,
+                                   (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)),
+                                   UTP_PACKET_TYPE_RENDEZVOUS,
+                                   0u};
+    error  = utp_proto_encode_header(packet, sizeof(packet), &header);
+    frame  = (utp_frame_rendezvous_t){body, sizeof(body), UTP_RENDEZVOUS_MESSAGE_PING};
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE, sizeof(packet) - UTP_PACKET_HEADER_SIZE,
+                                            &frame);
+    }
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    error = utp_context_send_rendezvous_output(context, &registration->endpoint, packet, sizeof(packet));
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        registration->keepalive_packet_number = header.packet_number;
+        registration->keepalive_pending       = true;
+        registration->keepalive_deadline_us = utp_context_deadline_after_ms(now_us, registration->keepalive_timeout_ms);
+    }
+    return error;
+}
+
 static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, const utp_address_t* peer,
                                                        uint64_t acknowledged_packet_number)
 {
@@ -1666,16 +1710,16 @@ static utp_internal_error_t utp_context_send_ntrs_address_update(utp_context_t* 
 /** @brief 以待上报样本构造一个新的 ADDRESS_UPDATE，并将发送期间的新样本留给下一批。 */
 static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_address_update_t* update = &context->ntrs_address_update;
+    utp_context_ntrs_address_update_t* update  = &context->ntrs_address_update;
     utp_rendezvous_address_update_t    message = {0};
-    utp_packet_header_t                 header;
-    utp_frame_rendezvous_t              frame;
+    utp_packet_header_t                header;
+    utp_frame_rendezvous_t             frame;
     uint8_t body[UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY - UTP_PACKET_HEADER_SIZE - UTP_FRAME_RENDEZVOUS_HEADER_SIZE];
-    size_t body_length;
+    size_t  body_length;
     utp_internal_error_t error;
 
-    if (context == NULL || !context->ntrs_registration.registered || context->ntrs_registration.pending || update->pending ||
-        context->observed_address_count == 0u ||
+    if (context == NULL || !context->ntrs_registration.registered || context->ntrs_registration.pending ||
+        update->pending || context->observed_address_count == 0u ||
         context->observed_address_count > UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES ||
         context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
@@ -1693,9 +1737,9 @@ static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t*
         update->samples[index]             = context->observed_addresses[index].endpoint;
         update->observed_at_unix_ms[index] = context->observed_addresses[index].observed_at_unix_ms;
     }
-    message.samples       = update->samples;
-    message.update_id     = update->update_id;
-    message.sample_count  = update->sample_count;
+    message.samples      = update->samples;
+    message.update_id    = update->update_id;
+    message.sample_count = update->sample_count;
     memcpy(message.registration_token, context->ntrs_registration.registration_token,
            sizeof(message.registration_token));
     memcpy(message.observed_at_unix_ms, update->observed_at_unix_ms, sizeof(message.observed_at_unix_ms));
@@ -1709,8 +1753,8 @@ static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t*
                                    (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length),
                                    UTP_PACKET_TYPE_RENDEZVOUS,
                                    0u};
-    error = utp_proto_encode_header(update->packet, sizeof(update->packet), &header);
-    frame = (utp_frame_rendezvous_t){body, (uint16_t)body_length, UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE};
+    error  = utp_proto_encode_header(update->packet, sizeof(update->packet), &header);
+    frame  = (utp_frame_rendezvous_t){body, (uint16_t)body_length, UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE};
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_frame_rendezvous_encode(update->packet + UTP_PACKET_HEADER_SIZE,
                                             sizeof(update->packet) - UTP_PACKET_HEADER_SIZE, &frame);
@@ -1718,15 +1762,15 @@ static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t*
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    update->packet_length      = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length;
-    update->retries_remaining  = update->retries;
-    update->retry_delay_ms     = update->timeout_ms;
-    update->deadline_us        = utp_context_deadline_after_ms(now_us, update->retry_delay_ms);
-    update->flush_deadline_us  = 0u;
-    update->pending            = true;
-    update->write_pending      = false;
+    update->packet_length           = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length;
+    update->retries_remaining       = update->retries;
+    update->retry_delay_ms          = update->timeout_ms;
+    update->deadline_us             = utp_context_deadline_after_ms(now_us, update->retry_delay_ms);
+    update->flush_deadline_us       = 0u;
+    update->pending                 = true;
+    update->write_pending           = false;
     context->observed_address_count = 0u;
-    error = utp_context_send_ntrs_address_update(context);
+    error                           = utp_context_send_ntrs_address_update(context);
     if (error != UTP_INTERNAL_ERROR_OK) {
         update->pending       = false;
         update->write_pending = false;
@@ -1764,10 +1808,9 @@ static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_co
             return UTP_INTERNAL_ERROR_OK;
         }
         --update->retries_remaining;
-        update->retry_delay_ms = update->retry_delay_ms > UINT32_MAX / 2u ? UINT32_MAX
-                                                                            : update->retry_delay_ms * 2u;
-        update->deadline_us = utp_context_deadline_after_ms(now_us, update->retry_delay_ms);
-        error               = utp_context_send_ntrs_address_update(context);
+        update->retry_delay_ms = update->retry_delay_ms > UINT32_MAX / 2u ? UINT32_MAX : update->retry_delay_ms * 2u;
+        update->deadline_us    = utp_context_deadline_after_ms(now_us, update->retry_delay_ms);
+        error                  = utp_context_send_ntrs_address_update(context);
         if (error != UTP_INTERNAL_ERROR_OK) {
             update->pending       = false;
             update->write_pending = false;
@@ -1778,8 +1821,8 @@ static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_co
         return error;
     }
     if (context->ntrs_registration.registered && !context->ntrs_registration.pending &&
-        context->observed_address_count != 0u &&
-        update->flush_deadline_us != 0u && update->flush_deadline_us <= now_us) {
+        context->observed_address_count != 0u && update->flush_deadline_us != 0u &&
+        update->flush_deadline_us <= now_us) {
         return utp_context_start_ntrs_address_update(context, now_us);
     }
     return UTP_INTERNAL_ERROR_OK;
@@ -1796,6 +1839,37 @@ static void utp_context_report_ntrs_registered(utp_context_t* context)
     info.peer_id = context->peer_id;
     utp_context_endpoint_from_address(&info.ntrs_endpoint, &registration->endpoint);
     registration->callback(context, &info, registration->user_data);
+}
+
+static void utp_context_finish_ntrs_unregistration(utp_context_t* context)
+{
+    utp_on_ntrs_unregistered_fn callback  = context->ntrs_registration.unregister_callback;
+    void*                       user_data = context->ntrs_registration.unregister_user_data;
+
+    context->ntrs_registration   = (utp_context_ntrs_registration_t){0};
+    context->ntrs_address_update = (utp_context_ntrs_address_update_t){0};
+    utp_context_disable_udp_write_event_if_idle(context);
+    if (callback != NULL) callback(context, user_data);
+}
+
+static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us)
+{
+    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    const uint32_t                   keepalive_interval_ms =
+        registration->keepalive_interval_ms == 0u ? 30000u : registration->keepalive_interval_ms;
+
+    registration->last_activity_us        = now_us;
+    registration->keepalive_packet_number = 0u;
+    registration->keepalive_pending       = false;
+    registration->keepalive_deadline_us   = utp_context_deadline_after_ms(now_us, keepalive_interval_ms);
+}
+
+static bool utp_context_rendezvous_reference_matches_u64(const uint8_t reference[sizeof(uint64_t)], uint64_t value)
+{
+    for (size_t index = 0u; index < sizeof(uint64_t); ++index) {
+        if (reference[index] != (uint8_t)(value >> ((sizeof(uint64_t) - 1u - index) * 8u))) return false;
+    }
+    return true;
 }
 
 static void utp_context_finish_ntrs_calibration(utp_context_t* context)
@@ -2828,6 +2902,17 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
     utp_internal_error_t             error;
 
     if (!registration->pending || registration->deadline_us == 0u || registration->deadline_us > now_us) {
+        if (registration->registered && registration->keepalive_deadline_us != 0u &&
+            registration->keepalive_deadline_us <= now_us) {
+            if (registration->keepalive_pending) {
+                utp_context_log(context, UTP_LOG_LEVEL_WARNING, "NTRS keepalive timed out");
+                context->ntrs_registration   = (utp_context_ntrs_registration_t){0};
+                context->ntrs_address_update = (utp_context_ntrs_address_update_t){0};
+                utp_context_disable_udp_write_event_if_idle(context);
+                return UTP_INTERNAL_ERROR_OK;
+            }
+            return utp_context_send_ntrs_keepalive_ping(context, now_us);
+        }
         if (!registration->calibration_active || registration->calibration_deadline_us == 0u ||
             registration->calibration_deadline_us > now_us) {
             return UTP_INTERNAL_ERROR_OK;
@@ -2840,7 +2925,9 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
         registration->write_pending = false;
         registration->deadline_us   = 0u;
         utp_context_disable_udp_write_event_if_idle(context);
-        utp_context_log(context, UTP_LOG_LEVEL_ERROR, "NTRS REGISTER timed out");
+        utp_context_log(context, UTP_LOG_LEVEL_ERROR,
+                        registration->unregistering ? "NTRS UNREGISTER timed out" : "NTRS REGISTER timed out");
+        if (registration->unregistering) registration->unregistering = false;
         return UTP_INTERNAL_ERROR_OK;
     }
     --registration->retries_remaining;
@@ -3200,9 +3287,9 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
                                                                uint64_t* out_packet_number)
 {
-    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+    uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
-    size_t               payload_length;
+    size_t  payload_length;
     utp_internal_error_t error;
 
     if (out_packet_number == NULL) {
@@ -3777,6 +3864,9 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
     }
     if (context->ntrs_registration.pending) {
         utp_context_take_deadline(&deadline, context->ntrs_registration.deadline_us);
+    }
+    if (context->ntrs_registration.registered) {
+        utp_context_take_deadline(&deadline, context->ntrs_registration.keepalive_deadline_us);
     }
     if (context->ntrs_registration.calibration_active) {
         utp_context_take_deadline(&deadline, context->ntrs_registration.calibration_deadline_us);
@@ -4793,8 +4883,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         context->callback_accept_zero_rtt  = slot;
         context->callback_accept_requested = false;
 
-        const bool accepted = context->on_new_connection == NULL ||
-                              context->on_new_connection(&info, context->on_new_connection_user_data);
+        const bool accepted               = context->on_new_connection == NULL ||
+                                            context->on_new_connection(&info, context->on_new_connection_user_data);
         context->callback_accept_zero_rtt = NULL;
         if (context->callback_accept_requested) {
             slot->zero_rtt_accepted = true;
@@ -4882,6 +4972,7 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                            sizeof(ping.registration_token)) != 0) {
                     return UTP_INTERNAL_ERROR_PROTOCOL;
                 }
+                utp_context_note_ntrs_activity(context, now_us);
                 ntrs_ping_seen = true;
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_FORWARD && !ntrs_ping_seen) {
                 return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -4938,7 +5029,8 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 if (error != UTP_INTERNAL_ERROR_OK) {
                     return error;
                 }
-                if (registration->pending && utp_address_equal(peer, &registration->endpoint) &&
+                if (registration->pending && !registration->unregistering &&
+                    utp_address_equal(peer, &registration->endpoint) &&
                     registered.registration_request_id == registration->request_id &&
                     !utp_context_ntrs_token_is_zero(registered.registration_token)) {
                     for (uint8_t index = 0u; index < registered.calibration_endpoint_count; ++index) {
@@ -4953,9 +5045,55 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     registration->write_pending = false;
                     registration->registered    = true;
                     registration->deadline_us   = 0u;
-                    error                       = utp_context_start_ntrs_calibration(context, &registered, now_us);
+                    utp_context_note_ntrs_activity(context, now_us);
+                    error = utp_context_start_ntrs_calibration(context, &registered, now_us);
                     if (error != UTP_INTERNAL_ERROR_OK) {
                         return error;
+                    }
+                }
+            } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTERED) {
+                utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+                utp_rendezvous_unregister_t      unregistered;
+
+                error = utp_rendezvous_unregister_decode(&unregistered, rendezvous.payload, rendezvous.payload_length);
+                if (error != UTP_INTERNAL_ERROR_OK) return error;
+                if (registration->pending && registration->unregistering &&
+                    utp_address_equal(peer, &registration->endpoint) &&
+                    memcmp(unregistered.registration_token, registration->registration_token,
+                           sizeof(unregistered.registration_token)) == 0) {
+                    utp_context_finish_ntrs_unregistration(context);
+                }
+            } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_REJECTED) {
+                utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+                utp_rendezvous_rejected_t        rejected;
+
+                error = utp_rendezvous_rejected_decode(&rejected, rendezvous.payload, rendezvous.payload_length);
+                if (error != UTP_INTERNAL_ERROR_OK) return error;
+                if (registration->pending && utp_address_equal(peer, &registration->endpoint) &&
+                    ((registration->unregistering &&
+                      rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTER &&
+                      rejected.reference_length == UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE &&
+                      memcmp(rejected.reference_id, registration->registration_token,
+                             UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE) == 0) ||
+                     (!registration->unregistering &&
+                      rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER &&
+                      rejected.reference_length == sizeof(registration->request_id) &&
+                      utp_context_rendezvous_reference_matches_u64(rejected.reference_id, registration->request_id)))) {
+                    registration->pending       = false;
+                    registration->write_pending = false;
+                    registration->deadline_us   = 0u;
+                    utp_context_disable_udp_write_event_if_idle(context);
+                    utp_context_log(context, UTP_LOG_LEVEL_WARNING, "NTRS registration request rejected");
+                    if (registration->unregistering) utp_context_finish_ntrs_unregistration(context);
+                } else if (rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                           rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE) {
+                    utp_context_connection_slot_t* slot =
+                        utp_context_find_rendezvous_slot(context, rejected.reference_id);
+
+                    if (slot != NULL && slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
+                        utp_address_equal(peer, &slot->connection.peer)) {
+                        utp_context_fail_pending_connect(context, slot, UTP_STATUS_RENDEZVOUS_REJECTED,
+                                                         "NTRS rendezvous request rejected");
                     }
                 }
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_PONG) {
@@ -4966,9 +5104,14 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 if (error != UTP_INTERNAL_ERROR_OK) {
                     return error;
                 }
-                if (registration->calibration_active &&
+                if (registration->keepalive_pending && utp_address_equal(peer, &registration->endpoint) &&
                     memcmp(pong.registration_token, registration->registration_token,
-                           sizeof(registration->registration_token)) == 0) {
+                           sizeof(pong.registration_token)) == 0 &&
+                    pong.acknowledged_packet_number == registration->keepalive_packet_number) {
+                    utp_context_note_ntrs_activity(context, now_us);
+                } else if (registration->calibration_active &&
+                           memcmp(pong.registration_token, registration->registration_token,
+                                  sizeof(registration->registration_token)) == 0) {
                     for (uint8_t index = 0u; index < UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES; ++index) {
                         const uint8_t mask = (uint8_t)(UINT8_C(1) << index);
 
@@ -4986,17 +5129,19 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 }
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATED) {
                 utp_context_ntrs_address_update_t* update = &context->ntrs_address_update;
-                utp_rendezvous_address_updated_t    updated;
+                utp_rendezvous_address_updated_t   updated;
 
                 error = utp_rendezvous_address_updated_decode(&updated, rendezvous.payload, rendezvous.payload_length);
                 if (error != UTP_INTERNAL_ERROR_OK) {
                     return error;
                 }
                 if (update->pending && context->ntrs_registration.registered &&
-                    utp_address_equal(peer, &context->ntrs_registration.endpoint) && updated.update_id == update->update_id) {
+                    utp_address_equal(peer, &context->ntrs_registration.endpoint) &&
+                    updated.update_id == update->update_id) {
                     update->pending       = false;
                     update->write_pending = false;
                     update->deadline_us   = 0u;
+                    utp_context_note_ntrs_activity(context, now_us);
                     update->packet_length = 0u;
                     update->sample_count  = 0u;
                     utp_context_disable_udp_write_event_if_idle(context);
@@ -5951,14 +6096,17 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_STATUS_OVERFLOW;
     }
-    previous                       = context->ntrs_registration;
-    registration.endpoint          = endpoint;
-    registration.callback          = callback;
-    registration.user_data         = user_data;
-    registration.timeout_ms        = options->timeout_ms == 0u ? 1000u : options->timeout_ms;
-    registration.retries_remaining = options->retries;
-    registration.pending           = true;
-    registration.registered        = previous.registered && utp_address_equal(&previous.endpoint, &endpoint);
+    previous                           = context->ntrs_registration;
+    registration.endpoint              = endpoint;
+    registration.callback              = callback;
+    registration.user_data             = user_data;
+    registration.timeout_ms            = options->timeout_ms == 0u ? 1000u : options->timeout_ms;
+    registration.retries               = options->retries;
+    registration.retries_remaining     = options->retries;
+    registration.keepalive_interval_ms = options->keepalive_interval_ms == 0u ? 30000u : options->keepalive_interval_ms;
+    registration.keepalive_timeout_ms  = options->keepalive_timeout_ms == 0u ? 3000u : options->keepalive_timeout_ms;
+    registration.pending               = true;
+    registration.registered            = previous.registered && utp_address_equal(&previous.endpoint, &endpoint);
     if (registration.registered) {
         memcpy(registration.registration_token, previous.registration_token, sizeof(registration.registration_token));
     }
@@ -6017,7 +6165,7 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
     context->ntrs_address_update.timeout_ms =
         options->address_update_timeout_ms == 0u ? 1000u : options->address_update_timeout_ms;
     context->ntrs_address_update.retries = options->address_update_retries;
-    error                      = utp_context_send_ntrs_registration(context);
+    error                                = utp_context_send_ntrs_registration(context);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_refresh_timer(context, now_us);
     }
@@ -6027,6 +6175,62 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
         return utp_internal_error_to_status(error);
     }
     return UTP_STATUS_OK;
+}
+
+utp_status_t utp_context_unregister_ntrs(utp_context_t* context, utp_on_ntrs_unregistered_fn callback, void* user_data)
+{
+    utp_context_ntrs_registration_t* registration;
+    utp_rendezvous_unregister_t      unregister_message = {0};
+    utp_frame_rendezvous_t           frame;
+    utp_packet_header_t              header;
+    uint8_t                          body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    uint64_t                         now_us;
+    utp_internal_error_t             error;
+
+    if (context == NULL) return UTP_STATUS_INVALID_ARGUMENT;
+    if (!utp_udp_socket_is_open(&context->udp_socket)) return UTP_STATUS_SOCKET_NOT_BOUND;
+    registration = &context->ntrs_registration;
+    if (!registration->registered) return UTP_STATUS_RENDEZVOUS_UNAVAILABLE;
+    if (registration->pending || registration->calibration_active || context->ntrs_address_update.pending)
+        return UTP_STATUS_IN_PROGRESS;
+    if (context->next_rendezvous_packet_number == 0u || context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX)
+        return UTP_STATUS_OVERFLOW;
+    memcpy(unregister_message.registration_token, registration->registration_token,
+           sizeof(unregister_message.registration_token));
+    error = utp_rendezvous_unregister_encode(body, sizeof(body), &unregister_message);
+    if (error != UTP_INTERNAL_ERROR_OK) return utp_internal_error_to_status(error);
+    header =
+        (utp_packet_header_t){0u,
+                              0u,
+                              context->next_rendezvous_packet_number++,
+                              (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE),
+                              UTP_PACKET_TYPE_RENDEZVOUS,
+                              0u};
+    error = utp_proto_encode_header(registration->packet, sizeof(registration->packet), &header);
+    frame = (utp_frame_rendezvous_t){body, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE, UTP_RENDEZVOUS_MESSAGE_UNREGISTER};
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_frame_rendezvous_encode(registration->packet + UTP_PACKET_HEADER_SIZE,
+                                            sizeof(registration->packet) - UTP_PACKET_HEADER_SIZE, &frame);
+    if (error != UTP_INTERNAL_ERROR_OK) return utp_internal_error_to_status(error);
+    registration->packet_length =
+        UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE;
+    registration->packet_number        = header.packet_number;
+    registration->unregister_callback  = callback;
+    registration->unregister_user_data = user_data;
+    registration->pending              = true;
+    registration->unregistering        = true;
+    registration->write_pending        = false;
+    registration->retries_remaining    = registration->retries;
+    now_us                             = utp_context_now_us();
+    registration->deadline_us          = utp_context_deadline_after_ms(now_us, registration->timeout_ms);
+    error                              = utp_context_send_ntrs_registration(context);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_context_refresh_timer(context, now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        registration->pending       = false;
+        registration->unregistering = false;
+        registration->deadline_us   = 0u;
+    }
+    return error == UTP_INTERNAL_ERROR_OK ? UTP_STATUS_OK : utp_internal_error_to_status(error);
 }
 
 utp_status_t utp_context_update_address(utp_context_t* context)
@@ -6052,9 +6256,9 @@ utp_status_t utp_context_update_address(utp_context_t* context)
     if (context->observed_address_count == 0u) {
         return UTP_STATUS_NOT_FOUND;
     }
-    now_us = utp_context_now_us();
+    now_us                                         = utp_context_now_us();
     context->ntrs_address_update.flush_deadline_us = now_us;
-    error = utp_context_start_ntrs_address_update(context, now_us);
+    error                                          = utp_context_start_ntrs_address_update(context, now_us);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_refresh_timer(context, now_us);
     }
@@ -6273,8 +6477,8 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         const uint16_t target_size    = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
         const size_t   request_length = utp_context_request_frame_size(context, (uint8_t)target_peer_id_length);
         size_t         fixed_length   = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                              UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        size_t first_data_capacity;
+                                        UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        size_t         first_data_capacity;
 
         if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
             fixed_length += UTP_CRYPTO_AEAD_TAG_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_VERSION_SIZE +

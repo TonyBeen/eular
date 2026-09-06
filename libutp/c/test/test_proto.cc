@@ -982,13 +982,13 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(utp_rendezvous_ping_decode(&decoded_ping, buffer.data(), 16u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(decoded_ping.calibration_id == ping.calibration_id);
 
-    calibrate.endpoints                = local_candidates.data();
-    calibrate.calibration_token[0]     = 1u;
-    calibrate.calibration_token[7]     = 8u;
-    calibrate.calibration_id           = UINT64_C(0x8877665544332211);
-    calibrate.endpoint_count           = static_cast<uint8_t>(local_candidates.size());
-    calibrate.rendezvous_id[0]         = 1u;
-    calibrate.rendezvous_id[15]        = 16u;
+    calibrate.endpoints            = local_candidates.data();
+    calibrate.calibration_token[0] = 1u;
+    calibrate.calibration_token[7] = 8u;
+    calibrate.calibration_id       = UINT64_C(0x8877665544332211);
+    calibrate.endpoint_count       = static_cast<uint8_t>(local_candidates.size());
+    calibrate.rendezvous_id[0]     = 1u;
+    calibrate.rendezvous_id[15]    = 16u;
     REQUIRE(utp_rendezvous_calibrate_encode(buffer.data(), buffer.size(), &calibrate, &length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
@@ -996,8 +996,7 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(decoded_calibrate.endpoint_count == local_candidates.size());
     REQUIRE(decoded_calibrate.endpoints[1].port == UINT16_C(34000));
     REQUIRE(decoded_calibrate.rendezvous_id[15] == 16u);
-    REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length - 1u) !=
-            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length - 1u) != UTP_INTERNAL_ERROR_OK);
 
     pong.registration_token[0]      = 1u;
     pong.registration_token[7]      = 8u;
@@ -1007,6 +1006,47 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(decoded_pong.acknowledged_packet_number == pong.acknowledged_packet_number);
     buffer[15] = 0u;
     REQUIRE(utp_rendezvous_pong_decode(&decoded_pong, buffer.data(), 16u) == UTP_INTERNAL_ERROR_PROTOCOL);
+}
+
+TEST_CASE("rendezvous registration lifecycle payloads are strict", "[rendezvous]")
+{
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE + 4u> buffer             = {};
+    utp_rendezvous_unregister_t                      unregister_message = {};
+    utp_rendezvous_unregister_t                      decoded_unregister = {};
+    utp_rendezvous_rejected_t                        rejected           = {};
+    utp_rendezvous_rejected_t                        decoded_rejected   = {};
+    size_t                                           length             = 0u;
+
+    for (size_t index = 0u; index < sizeof(unregister_message.registration_token); ++index) {
+        unregister_message.registration_token[index] = static_cast<uint8_t>(index + 1u);
+    }
+    REQUIRE(utp_rendezvous_unregister_encode(buffer.data(), buffer.size(), &unregister_message) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_unregister_decode(&decoded_unregister, buffer.data(),
+                                             UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(std::memcmp(decoded_unregister.registration_token, unregister_message.registration_token,
+                        sizeof(unregister_message.registration_token)) == 0);
+    std::memset(unregister_message.registration_token, 0, sizeof(unregister_message.registration_token));
+    REQUIRE(utp_rendezvous_unregister_encode(buffer.data(), buffer.size(), &unregister_message) ==
+            UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    rejected.rejected_message_type = UTP_RENDEZVOUS_MESSAGE_REQUEST;
+    rejected.reference_length      = UTP_RENDEZVOUS_ID_SIZE;
+    rejected.reason_code           = 2u;
+    for (size_t index = 0u; index < sizeof(rejected.reference_id); ++index) {
+        rejected.reference_id[index] = static_cast<uint8_t>(index + 1u);
+    }
+    REQUIRE(utp_rendezvous_rejected_encode(buffer.data(), buffer.size(), &rejected, &length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(length == UTP_RENDEZVOUS_ID_SIZE + 4u);
+    REQUIRE(utp_rendezvous_rejected_decode(&decoded_rejected, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+    REQUIRE(decoded_rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE);
+    REQUIRE(decoded_rejected.reason_code == rejected.reason_code);
+    REQUIRE(std::memcmp(decoded_rejected.reference_id, rejected.reference_id, sizeof(rejected.reference_id)) == 0);
+
+    rejected.rejected_message_type = UTP_RENDEZVOUS_MESSAGE_REGISTER;
+    REQUIRE(utp_rendezvous_rejected_encode(buffer.data(), buffer.size(), &rejected, &length) ==
+            UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("rendezvous address update payloads preserve a batch and acknowledgement", "[rendezvous]")

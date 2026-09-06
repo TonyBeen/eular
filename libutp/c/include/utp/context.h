@@ -111,9 +111,11 @@ typedef struct utp_ntrs_register_options {
     uint8_t     retries;                    // REGISTERED 丢失后的额外重试次数，0 时不重试
     uint32_t    address_update_timeout_ms;  // 首次等待 ADDRESS_UPDATED 的时限，0 时采用 1000 ms
     uint8_t     address_update_retries;     // ADDRESS_UPDATED 丢失后的额外重试次数，0 时不重试
+    uint32_t    keepalive_interval_ms;      // NTRS 关联空闲多久后发 PING，0 时采用 30000 ms
+    uint32_t    keepalive_timeout_ms;       // PING 等待 PONG 的时限，0 时采用 3000 ms
 } utp_ntrs_register_options_t;
 
-#define UTP_NTRS_REGISTER_OPTIONS_INIT {NULL, 0u, 0u, 3u, 0u, 3u}
+#define UTP_NTRS_REGISTER_OPTIONS_INIT {NULL, 0u, 0u, 3u, 0u, 3u, 0u, 0u}
 
 typedef struct utp_ntrs_registered_info {
     const char*    peer_id;        // 仅回调期间借用，等于 Context 创建时的 peer_id
@@ -122,6 +124,7 @@ typedef struct utp_ntrs_registered_info {
 
 typedef void (*utp_on_ntrs_registered_fn)(utp_context_t* context, const utp_ntrs_registered_info_t* info,
                                           void* user_data);
+typedef void (*utp_on_ntrs_unregistered_fn)(utp_context_t* context, void* user_data);
 
 /** @brief 返回当前链接的 C 库语义版本字符串。 */
 const char*  utp_version(void);
@@ -154,6 +157,8 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
 /** @brief 异步注册当前 Context 到 NTRS；成功时调用 @p callback，重复调用会更新已有注册。 */
 utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
                                        utp_on_ntrs_registered_fn callback, void* user_data);
+/** @brief 异步反注册当前 Context；收到 UNREGISTERED 后清除本地 NTRS 关联并调用 @p callback。 */
+utp_status_t utp_context_unregister_ntrs(utp_context_t* context, utp_on_ntrs_unregistered_fn callback, void* user_data);
 /** @brief 立即尝试将 Context 缓存的 OBSERVED_ADDRESS 样本批量上报给已注册 NTRS。 */
 utp_status_t utp_context_update_address(utp_context_t* context);
 /** @brief 接受一个已通过 on_new_connection 回调的 pending 被动连接。 */

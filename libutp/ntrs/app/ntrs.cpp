@@ -37,6 +37,9 @@ struct Registration {
     std::array<uint64_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES>       observed_at_unix_ms;
     utp_address_t                                                  reported_public_endpoint;
     uint64_t                                                       last_register_request_id;
+    uint64_t                                                       last_activity_ms;
+    uint64_t                                                       keepalive_packet_number;
+    uint64_t                                                       last_keepalive_ping_ms;
     uint16_t                                                       local_port;
     uint8_t                                                        nat_class;
     uint8_t                                                        local_family;
@@ -51,6 +54,7 @@ struct Registration {
 
     bool    matchesToken(const uint8_t value[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE]) const;
     bool    acceptsFamily(const utp_ntrs_endpoint_t& observed) const;
+    void    touch(uint64_t now_ms);
     void    updateEndpoint(const utp_ntrs_endpoint_t& observed);
     void    update(const utp_rendezvous_register_t& request, const utp_ntrs_endpoint_t& observed);
     uint8_t updateObservedAddresses(const utp_rendezvous_address_update_t& update);
@@ -124,7 +128,7 @@ public:
 
     bool start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_endpoint_t& advertised_endpoint,
                const char* interface_name, const std::vector<uint16_t>& calibration_ports,
-               uint8_t public_candidate_count);
+               uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms);
     int  run(const utp_ntrs_endpoint_t& endpoint);
 
 private:
@@ -147,10 +151,16 @@ private:
                     size_t*                                    encoded_packet_length = NULL);
     bool sendMessage(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length, uint8_t message_type,
                      const uint8_t* body, size_t body_length);
+    bool sendRejected(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
+                      uint8_t rejected_message_type, const uint8_t* reference_id, uint8_t reference_length,
+                      uint16_t reason_code);
+    bool sendKeepalivePing(Registration* registration, uint64_t now_ms);
     bool beginCalibration(Registration* registration);
     bool sendCalibration(PendingRendezvous* transaction);
     bool completePendingRendezvous(PendingRendezvous* transaction);
     void expirePendingRendezvous(uint64_t now_ms);
+    void expireRegistrations(uint64_t now_ms);
+    void sendKeepalivePings(uint64_t now_ms);
     void retryPendingRendezvous(uint64_t now_ms);
     void handleRegister(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
                         const utp_frame_rendezvous_t& frame);
@@ -160,6 +170,7 @@ private:
     void handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame);
     void handleAddressUpdate(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
                              const utp_frame_rendezvous_t& frame);
+    void handleUnregister(const sockaddr_storage& peer, socklen_t peer_length, const utp_frame_rendezvous_t& frame);
     void handleRequest(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
                        const utp_frame_rendezvous_t& frame);
     void onRead(UdpSocket* socket);
@@ -174,12 +185,18 @@ private:
     uint64_t                                                       next_packet_number_;
     uint8_t                                                        calibration_endpoint_count_;
     uint8_t                                                        public_candidate_count_;
+    uint32_t                                                       registration_timeout_ms_;
+    uint32_t                                                       keepalive_interval_ms_;
     bool                                                           fatal_socket_error_;
     std::unordered_map<std::string, Registration>                  registrations_;
+    std::unordered_map<std::string, uint64_t>                      unregistration_tombstones_;
     std::unordered_map<std::string, PendingRendezvous>             pending_rendezvous_;
 };
 
 static const uint64_t k_pending_rendezvous_lifetime_ms       = 30000u;
+static const uint64_t k_unregistration_tombstone_lifetime_ms = 30000u;
+static const uint32_t k_registration_timeout_default_ms      = 90000u;
+static const uint32_t k_keepalive_interval_default_ms        = 30000u;
 static const uint32_t k_forward_retry_initial_delay_ms       = 1000u;
 static const uint32_t k_forward_retry_max_delay_ms           = 8000u;
 static const uint32_t k_forward_retry_send_failure_delay_ms  = 100u;
@@ -189,7 +206,13 @@ static const uint8_t  k_temporary_calibration_endpoint_count = 2u;
 static const size_t   k_output_queue_capacity                = 128u;
 static const uint8_t  k_primary_socket_index                 = UINT8_MAX;
 
-static bool           is_fatal_udp_send_error(int error)
+enum NtrsRejectionReason {
+    k_rejection_peer_not_found = 2u,
+    k_rejection_peer_id_exists = 3u,
+    k_rejection_token_invalid  = 4u
+};
+
+static bool is_fatal_udp_send_error(int error)
 {
 #ifdef EBADF
     if (error == EBADF) return true;
@@ -215,6 +238,8 @@ NtrsServer::NtrsServer()
       next_packet_number_(1u),
       calibration_endpoint_count_(0u),
       public_candidate_count_(UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES),
+      registration_timeout_ms_(k_registration_timeout_default_ms),
+      keepalive_interval_ms_(k_keepalive_interval_default_ms),
       fatal_socket_error_(false)
 {
     primary_socket_.fd = -1;
@@ -445,6 +470,13 @@ void Registration::updateEndpoint(const utp_ntrs_endpoint_t& observed)
     endpoint = observed;
 }
 
+void Registration::touch(uint64_t now_ms)
+{
+    last_activity_ms        = now_ms;
+    keepalive_packet_number = 0u;
+    last_keepalive_ping_ms  = 0u;
+}
+
 void Registration::update(const utp_rendezvous_register_t& request, const utp_ntrs_endpoint_t& observed)
 {
     updateEndpoint(observed);
@@ -456,6 +488,7 @@ void Registration::update(const utp_rendezvous_register_t& request, const utp_nt
     if (has_reported_public_endpoint) reported_public_endpoint = *request.reported_public_endpoint;
     for (uint8_t index = 0u; index < request.local_candidate_count; ++index)
         local_candidates[index] = request.local_candidates[index];
+    touch(utp_ntrs_now_ms());
 }
 
 uint8_t Registration::updateObservedAddresses(const utp_rendezvous_address_update_t& update)
@@ -736,6 +769,45 @@ bool NtrsServer::sendMessage(UdpSocket* socket, const sockaddr_storage& peer, so
     return sendFrames(socket, peer, peer_length, &frame, 1u, NULL);
 }
 
+bool NtrsServer::sendRejected(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
+                              uint8_t rejected_message_type, const uint8_t* reference_id, uint8_t reference_length,
+                              uint16_t reason_code)
+{
+    utp_rendezvous_rejected_t rejected                          = {};
+    uint8_t                   body[UTP_RENDEZVOUS_ID_SIZE + 4u] = {};
+    size_t                    body_length                       = 0u;
+
+    if (reference_id == NULL || reference_length > sizeof(rejected.reference_id)) return false;
+    rejected.rejected_message_type = rejected_message_type;
+    rejected.reference_length      = reference_length;
+    rejected.reason_code           = reason_code;
+    memcpy(rejected.reference_id, reference_id, reference_length);
+    if (utp_rendezvous_rejected_encode(body, sizeof(body), &rejected, &body_length) != UTP_INTERNAL_ERROR_OK)
+        return false;
+    return sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REJECTED, body, body_length);
+}
+
+bool NtrsServer::sendKeepalivePing(Registration* registration, uint64_t now_ms)
+{
+    utp_rendezvous_ping_t ping                                                            = {};
+    uint8_t               body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {};
+    sockaddr_storage      peer                                                            = {};
+    socklen_t             peer_length                                                     = 0u;
+    OutgoingFrame         frame;
+    uint64_t              packet_number = 0u;
+
+    if (registration == NULL || !utp_ntrs_endpoint_to_sockaddr(&registration->endpoint, &peer, &peer_length)) {
+        return false;
+    }
+    memcpy(ping.registration_token, registration->token.data(), sizeof(ping.registration_token));
+    if (utp_rendezvous_ping_encode(body, sizeof(body), &ping) != UTP_INTERNAL_ERROR_OK) return false;
+    frame = OutgoingFrame{body, sizeof(body), UTP_RENDEZVOUS_MESSAGE_PING};
+    if (!sendFrames(&primary_socket_, peer, peer_length, &frame, 1u, &packet_number, NULL, NULL)) return false;
+    registration->keepalive_packet_number = packet_number;
+    registration->last_keepalive_ping_ms  = now_ms;
+    return true;
+}
+
 bool NtrsServer::sendCalibration(PendingRendezvous* transaction)
 {
     utp_rendezvous_calibrate_t calibrate                  = {};
@@ -794,8 +866,8 @@ bool NtrsServer::completePendingRendezvous(PendingRendezvous* transaction)
     transaction->forward_retry_at_ms       = utp_ntrs_now_ms() + k_forward_retry_initial_delay_ms;
     transaction->forward_retries_remaining = k_forward_retry_count;
     transaction->forward_retry_delay_ms    = k_forward_retry_initial_delay_ms;
-    const OutgoingFrame frames[2] = {{ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
-                                     {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
+    const OutgoingFrame frames[2]          = {{ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
+                                              {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
     if (!sendMessage(&primary_socket_, transaction->source_socket_address, transaction->source_socket_length,
                      UTP_RENDEZVOUS_MESSAGE_REDIRECT, transaction->redirect_body.data(),
                      transaction->redirect_body_length)) {
@@ -817,6 +889,39 @@ void NtrsServer::expirePendingRendezvous(uint64_t now_ms)
             entry = pending_rendezvous_.erase(entry);
         else
             ++entry;
+    }
+}
+
+void NtrsServer::expireRegistrations(uint64_t now_ms)
+{
+    for (std::unordered_map<std::string, Registration>::iterator entry = registrations_.begin();
+         entry != registrations_.end();) {
+        if (now_ms - entry->second.last_activity_ms >= registration_timeout_ms_)
+            entry = registrations_.erase(entry);
+        else
+            ++entry;
+    }
+    for (std::unordered_map<std::string, uint64_t>::iterator entry = unregistration_tombstones_.begin();
+         entry != unregistration_tombstones_.end();) {
+        if (entry->second <= now_ms)
+            entry = unregistration_tombstones_.erase(entry);
+        else
+            ++entry;
+    }
+}
+
+void NtrsServer::sendKeepalivePings(uint64_t now_ms)
+{
+    for (std::unordered_map<std::string, Registration>::iterator entry = registrations_.begin();
+         entry != registrations_.end(); ++entry) {
+        Registration& registration = entry->second;
+
+        if (now_ms - registration.last_activity_ms < keepalive_interval_ms_ ||
+            (registration.last_keepalive_ping_ms != 0u &&
+             now_ms - registration.last_keepalive_ping_ms < keepalive_interval_ms_)) {
+            continue;
+        }
+        (void)sendKeepalivePing(&registration, now_ms);
     }
 }
 
@@ -861,7 +966,11 @@ void NtrsServer::handleRegister(const sockaddr_storage& peer, socklen_t peer_len
     const std::string peer_id(reinterpret_cast<const char*>(request.peer_id), request.peer_id_length);
     std::unordered_map<std::string, Registration>::iterator entry = registrations_.find(peer_id);
     if (entry == registrations_.end()) {
-        if (!token_is_zero(request.registration_token)) return;
+        if (!token_is_zero(request.registration_token)) {
+            (void)sendRejected(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REGISTER, frame.payload,
+                               UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE, k_rejection_token_invalid);
+            return;
+        }
         Registration registration = {};
         if (!random_token(&registration.token)) return;
         registration.last_register_request_id  = request.registration_request_id;
@@ -874,7 +983,13 @@ void NtrsServer::handleRegister(const sockaddr_storage& peer, socklen_t peer_len
         const bool update =
             !token_is_zero(request.registration_token) && entry->second.matchesToken(request.registration_token);
 
-        if (!initial_retry && !update) return;
+        if (!initial_retry && !update) {
+            (void)sendRejected(
+                &primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REGISTER, frame.payload,
+                UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE,
+                token_is_zero(request.registration_token) ? k_rejection_peer_id_exists : k_rejection_token_invalid);
+            return;
+        }
         if (update) {
             entry->second.last_register_request_id  = request.registration_request_id;
             entry->second.last_register_was_initial = false;
@@ -928,6 +1043,7 @@ void NtrsServer::handlePing(UdpSocket* socket, const sockaddr_storage& peer, soc
                 return;
             entry->second.recordCalibrationEndpoint(socket->calibration_index, observed);
         }
+        entry->second.touch(utp_ntrs_now_ms());
         memcpy(pong.registration_token, ping.registration_token, sizeof(pong.registration_token));
         pong.acknowledged_packet_number = header.packet_number;
         if (utp_rendezvous_pong_encode(body, sizeof(body), &pong) == UTP_INTERNAL_ERROR_OK)
@@ -968,6 +1084,18 @@ void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame
     utp_rendezvous_pong_t pong = {};
 
     if (utp_rendezvous_pong_decode(&pong, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK) return;
+    for (std::unordered_map<std::string, Registration>::iterator entry = registrations_.begin();
+         entry != registrations_.end(); ++entry) {
+        Registration& registration = entry->second;
+
+        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token) &&
+            registration.keepalive_packet_number == pong.acknowledged_packet_number) {
+            registration.keepalive_packet_number = 0u;
+            registration.last_keepalive_ping_ms  = 0u;
+            registration.touch(utp_ntrs_now_ms());
+            return;
+        }
+    }
     for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
          entry != pending_rendezvous_.end(); ++entry) {
         if (endpoints_equal(entry->second.target_endpoint, observed) &&
@@ -975,6 +1103,14 @@ void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame
                 0 &&
             entry->second.forward_packet_number == pong.acknowledged_packet_number) {
             entry->second.forward_delivered = true;
+            for (std::unordered_map<std::string, Registration>::iterator registration = registrations_.begin();
+                 registration != registrations_.end(); ++registration) {
+                if (endpoints_equal(registration->second.endpoint, observed) &&
+                    registration->second.matchesToken(pong.registration_token)) {
+                    registration->second.touch(utp_ntrs_now_ms());
+                    break;
+                }
+            }
             return;
         }
     }
@@ -996,7 +1132,8 @@ void NtrsServer::handleAddressUpdate(const sockaddr_storage& peer, socklen_t pee
          entry != registrations_.end(); ++entry) {
         if (!entry->second.matchesToken(update.registration_token)) continue;
         if (!endpoints_equal(entry->second.endpoint, observed)) return;
-        accepted          = entry->second.updateObservedAddresses(update);
+        accepted = entry->second.updateObservedAddresses(update);
+        entry->second.touch(utp_ntrs_now_ms());
         updated.update_id = update.update_id;
         if (utp_rendezvous_address_updated_encode(body, sizeof(body), &updated) != UTP_INTERNAL_ERROR_OK) return;
         body_length = sizeof(body);
@@ -1007,6 +1144,45 @@ void NtrsServer::handleAddressUpdate(const sockaddr_storage& peer, socklen_t pee
                 static_cast<unsigned>(update.sample_count), static_cast<unsigned>(accepted));
         return;
     }
+}
+
+void NtrsServer::handleUnregister(const sockaddr_storage& peer, socklen_t peer_length,
+                                  const utp_frame_rendezvous_t& frame)
+{
+    utp_rendezvous_unregister_t unregister_message = {};
+    const uint64_t              now_ms             = utp_ntrs_now_ms();
+
+    if (utp_rendezvous_unregister_decode(&unregister_message, frame.payload, frame.payload_length) !=
+        UTP_INTERNAL_ERROR_OK)
+        return;
+    const std::string key(reinterpret_cast<const char*>(unregister_message.registration_token),
+                          sizeof(unregister_message.registration_token));
+    for (std::unordered_map<std::string, Registration>::iterator entry = registrations_.begin();
+         entry != registrations_.end(); ++entry) {
+        if (entry->second.matchesToken(unregister_message.registration_token)) {
+            for (std::unordered_map<std::string, PendingRendezvous>::iterator pending = pending_rendezvous_.begin();
+                 pending != pending_rendezvous_.end();) {
+                if (memcmp(pending->second.target_token.data(), unregister_message.registration_token,
+                           sizeof(unregister_message.registration_token)) == 0)
+                    pending = pending_rendezvous_.erase(pending);
+                else
+                    ++pending;
+            }
+            registrations_.erase(entry);
+            unregistration_tombstones_[key] = now_ms + k_unregistration_tombstone_lifetime_ms;
+            (void)sendMessage(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_UNREGISTERED,
+                              unregister_message.registration_token, sizeof(unregister_message.registration_token));
+            return;
+        }
+    }
+    if (unregistration_tombstones_.find(key) != unregistration_tombstones_.end()) {
+        (void)sendMessage(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_UNREGISTERED,
+                          unregister_message.registration_token, sizeof(unregister_message.registration_token));
+        return;
+    }
+    (void)sendRejected(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_UNREGISTER,
+                       unregister_message.registration_token, sizeof(unregister_message.registration_token),
+                       k_rejection_token_invalid);
 }
 
 void NtrsServer::handleRequest(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
@@ -1049,8 +1225,11 @@ void NtrsServer::handleRequest(const sockaddr_storage& peer, socklen_t peer_leng
             target->second.endpoint, public_candidate_count_) ||
         !appendRegistrationObservedCandidates(&target_plan, target->second, public_candidate_count_) ||
         !appendRegistrationPredictedCandidates(&target_plan, target->second, public_candidate_count_) ||
-        !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint, &target_address, &target_length))
+        !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint, &target_address, &target_length)) {
+        (void)sendRejected(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.rendezvous_id,
+                           sizeof(request.rendezvous_id), k_rejection_peer_not_found);
         return;
+    }
 
     PendingRendezvous transaction = {};
     if (!random_token(&transaction.punch_token)) return;
@@ -1156,6 +1335,9 @@ void NtrsServer::onRead(UdpSocket* socket)
             else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE &&
                      socket->calibration_index == k_primary_socket_index)
                 handleAddressUpdate(peer, peer_length, observed, frame);
+            else if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTER &&
+                     socket->calibration_index == k_primary_socket_index)
+                handleUnregister(peer, peer_length, frame);
         } else if (socket->calibration_index == k_primary_socket_index &&
                    (header.type == UTP_PACKET_TYPE_INITIAL || header.type == UTP_PACKET_TYPE_0RTT)) {
             utp_frame_rendezvous_t frame        = {};
@@ -1189,6 +1371,8 @@ void NtrsServer::onTimer()
     const uint64_t now_ms = utp_ntrs_now_ms();
 
     expirePendingRendezvous(now_ms);
+    expireRegistrations(now_ms);
+    sendKeepalivePings(now_ms);
     for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
          entry != pending_rendezvous_.end(); ++entry) {
         PendingRendezvous& transaction = entry->second;
@@ -1239,9 +1423,11 @@ void NtrsServer::onWrite(UdpSocket* socket)
 
 bool NtrsServer::start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_endpoint_t& advertised_endpoint,
                        const char* interface_name, const std::vector<uint16_t>& calibration_ports,
-                       uint8_t public_candidate_count)
+                       uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms)
 {
     if (bind_endpoint.family != advertised_endpoint.family || public_candidate_count == 0u ||
+        registration_timeout_ms == 0u || keepalive_interval_ms == 0u ||
+        keepalive_interval_ms >= registration_timeout_ms ||
         public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
         calibration_ports.size() > calibration_sockets_.size() ||
         (!calibration_ports.empty() && endpoint_is_unspecified(advertised_endpoint)) ||
@@ -1249,7 +1435,9 @@ bool NtrsServer::start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_
         !createSocket(&primary_socket_, bind_endpoint, interface_name, k_primary_socket_index) ||
         (timer_event_ = event_new(base_, -1, EV_PERSIST, OnTimerEvent, this)) == NULL)
         return false;
-    public_candidate_count_ = public_candidate_count;
+    public_candidate_count_  = public_candidate_count;
+    registration_timeout_ms_ = registration_timeout_ms;
+    keepalive_interval_ms_   = keepalive_interval_ms;
     for (size_t index = 0u; index < calibration_ports.size(); ++index) {
         utp_ntrs_endpoint_t calibration_bind_endpoint       = bind_endpoint;
         utp_ntrs_endpoint_t calibration_advertised_endpoint = advertised_endpoint;
@@ -1297,14 +1485,18 @@ int main(int argc, char** argv)
     std::string           advertised_address;
     std::string           interface_name;
     std::vector<uint16_t> calibration_ports;
-    uint32_t              public_candidate_count = UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES;
-    uint16_t              port                   = 24000u;
+    uint32_t              public_candidate_count  = UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES;
+    uint32_t              registration_timeout_ms = k_registration_timeout_default_ms;
+    uint32_t              keepalive_interval_ms   = k_keepalive_interval_default_ms;
+    uint16_t              port                    = 24000u;
     cli.add_option("-a", bind_address, "Bind IP");
     cli.add_option("-e", advertised_address, "Advertised public IP");
     cli.add_option("-p", port, "Bind UDP port");
     cli.add_option("-i", interface_name, "Bind interface");
     cli.add_option("-c", calibration_ports, "Calibration UDP port");
     cli.add_option("-n", public_candidate_count, "Public candidate count");
+    cli.add_option("-t", registration_timeout_ms, "Registration timeout ms");
+    cli.add_option("-k", keepalive_interval_ms, "NTRS keepalive interval ms");
     CLI11_PARSE(cli, argc, argv);
 
     const std::string bind_endpoint_text = make_endpoint_text(bind_address, port);
@@ -1315,10 +1507,13 @@ int main(int argc, char** argv)
     NtrsServer          server;
 
     if (public_candidate_count == 0u || public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        registration_timeout_ms == 0u || keepalive_interval_ms == 0u ||
+        keepalive_interval_ms >= registration_timeout_ms ||
         !utp_ntrs_endpoint_parse(bind_endpoint_text.c_str(), &bind_endpoint) ||
         !utp_ntrs_endpoint_parse(advertised_endpoint_text.c_str(), &advertised_endpoint) ||
         !server.start(bind_endpoint, advertised_endpoint, interface_name.empty() ? NULL : interface_name.c_str(),
-                      calibration_ports, static_cast<uint8_t>(public_candidate_count)))
+                      calibration_ports, static_cast<uint8_t>(public_candidate_count), registration_timeout_ms,
+                      keepalive_interval_ms))
         return 1;
     utp_ntrs_app_log_init("ntrs");
     return server.run(bind_endpoint);
