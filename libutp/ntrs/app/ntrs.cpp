@@ -173,6 +173,15 @@ static bool endpoints_equal(const utp_ntrs_endpoint_t &left,
          memcmp(left.address, right.address, address_length) == 0;
 }
 
+static bool endpoint_ips_equal(const utp_ntrs_endpoint_t &left,
+                               const utp_ntrs_endpoint_t &right) {
+  const size_t address_length = left.family == AF_INET ? 4u :
+                                left.family == AF_INET6 ? 16u : 0u;
+
+  return address_length != 0u && left.family == right.family &&
+         memcmp(left.address, right.address, address_length) == 0;
+}
+
 static bool addresses_equal(const utp_address_t &left,
                             const utp_address_t &right) {
   const size_t address_length =
@@ -245,6 +254,11 @@ static bool make_candidate_plan(
 static void update_registration(Registration *registration,
                                 const utp_rendezvous_register_t &request,
                                 const utp_ntrs_endpoint_t &observed) {
+  if (!endpoint_ips_equal(registration->endpoint, observed)) {
+    registration->observed_addresses = {};
+    registration->observed_at_unix_ms = {};
+    registration->observed_address_count = 0u;
+  }
   registration->endpoint = observed;
   registration->nat_class = request.nat_class;
   registration->local_family = request.local_family;
@@ -552,6 +566,11 @@ static void handle_ping(Server *server, const sockaddr_storage &peer,
         (entry->second.local_family == UTP_ADDRESS_FAMILY_IPV6 &&
          observed.family != AF_INET6))
       return;
+    if (!endpoint_ips_equal(entry->second.endpoint, observed)) {
+      entry->second.observed_addresses = {};
+      entry->second.observed_at_unix_ms = {};
+      entry->second.observed_address_count = 0u;
+    }
     entry->second.endpoint = observed;
     memcpy(pong.registration_token, ping.registration_token,
            sizeof(pong.registration_token));
