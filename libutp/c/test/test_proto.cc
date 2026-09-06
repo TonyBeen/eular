@@ -918,6 +918,8 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     utp_rendezvous_registered_t  decoded_registered   = {};
     utp_rendezvous_ping_t        ping                 = {};
     utp_rendezvous_ping_t        decoded_ping         = {};
+    utp_rendezvous_calibrate_t   calibrate            = {};
+    utp_rendezvous_calibrate_t   decoded_calibrate    = {};
     utp_rendezvous_pong_t        pong                 = {};
     utp_rendezvous_pong_t        decoded_pong         = {};
     size_t                       length               = 0u;
@@ -979,6 +981,23 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     REQUIRE(utp_rendezvous_ping_encode(buffer.data(), 16u, &ping) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_ping_decode(&decoded_ping, buffer.data(), 16u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(decoded_ping.calibration_id == ping.calibration_id);
+
+    calibrate.endpoints                = local_candidates.data();
+    calibrate.calibration_token[0]     = 1u;
+    calibrate.calibration_token[7]     = 8u;
+    calibrate.calibration_id           = UINT64_C(0x8877665544332211);
+    calibrate.endpoint_count           = static_cast<uint8_t>(local_candidates.size());
+    calibrate.rendezvous_id[0]         = 1u;
+    calibrate.rendezvous_id[15]        = 16u;
+    REQUIRE(utp_rendezvous_calibrate_encode(buffer.data(), buffer.size(), &calibrate, &length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(decoded_calibrate.calibration_id == calibrate.calibration_id);
+    REQUIRE(decoded_calibrate.endpoint_count == local_candidates.size());
+    REQUIRE(decoded_calibrate.endpoints[1].port == UINT16_C(34000));
+    REQUIRE(decoded_calibrate.rendezvous_id[15] == 16u);
+    REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length - 1u) !=
+            UTP_INTERNAL_ERROR_OK);
 
     pong.registration_token[0]      = 1u;
     pong.registration_token[7]      = 8u;

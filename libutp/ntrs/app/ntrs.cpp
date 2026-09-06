@@ -58,21 +58,41 @@ struct Registration {
 };
 
 struct PendingRendezvous {
-    utp_ntrs_endpoint_t                                         source_endpoint;
-    utp_ntrs_endpoint_t                                         target_endpoint;
-    sockaddr_storage                                            target_socket_address;
-    std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> target_token;
-    std::array<uint8_t, UTP_PACKET_MTU_FLOOR>                   forward_packet;
-    std::array<uint8_t, UTP_PACKET_MTU_FLOOR>                   redirect_body;
-    uint64_t                                                    created_at_ms;
-    uint64_t                                                    forward_packet_number;
-    uint64_t                                                    forward_retry_at_ms;
-    size_t                                                      forward_packet_length;
-    size_t                                                      redirect_body_length;
-    socklen_t                                                   target_socket_length;
-    uint8_t                                                     forward_retries_remaining;
-    uint32_t                                                    forward_retry_delay_ms;
-    bool                                                        forward_delivered;
+    utp_ntrs_endpoint_t                                            source_endpoint;
+    utp_ntrs_endpoint_t                                            target_endpoint;
+    sockaddr_storage                                               source_socket_address;
+    sockaddr_storage                                               target_socket_address;
+    std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>    target_token;
+    std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>    calibration_token;
+    std::array<uint8_t, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE>           punch_token;
+    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE>                    rendezvous_id;
+    std::array<uint8_t, UTP_PEER_ID_MAX_LENGTH>                    source_peer_id;
+    std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES> source_local_candidates;
+    std::array<uint16_t, 3u>                                       calibration_ports;
+    std::array<uint8_t, UTP_PACKET_MTU_FLOOR>                      forward_packet;
+    std::array<uint8_t, UTP_PACKET_MTU_FLOOR>                      redirect_body;
+    utp_address_t                                                  source_reported_public_endpoint;
+    utp_ntrs_endpoint_t                                            calibration_ip;
+    uint64_t                                                       created_at_ms;
+    uint64_t                                                       calibration_id;
+    uint64_t                                                       calibration_deadline_ms;
+    uint64_t                                                       forward_packet_number;
+    uint64_t                                                       forward_retry_at_ms;
+    size_t                                                         forward_packet_length;
+    size_t                                                         redirect_body_length;
+    socklen_t                                                      source_socket_length;
+    socklen_t                                                      target_socket_length;
+    uint16_t                                                       source_local_port;
+    uint8_t                                                        source_peer_id_length;
+    uint8_t                                                        source_local_family;
+    uint8_t                                                        source_local_candidate_count;
+    uint8_t                                                        calibration_received_mask;
+    uint8_t                                                        forward_retries_remaining;
+    uint32_t                                                       forward_retry_delay_ms;
+    bool                                                           has_source_reported_public_endpoint;
+    bool                                                           calibration_ip_consistent;
+    bool                                                           calibration_pending;
+    bool                                                           forward_delivered;
 };
 
 struct OutgoingDatagram {
@@ -128,6 +148,8 @@ private:
     bool sendMessage(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length, uint8_t message_type,
                      const uint8_t* body, size_t body_length);
     bool beginCalibration(Registration* registration);
+    bool sendCalibration(PendingRendezvous* transaction);
+    bool completePendingRendezvous(PendingRendezvous* transaction);
     void expirePendingRendezvous(uint64_t now_ms);
     void retryPendingRendezvous(uint64_t now_ms);
     void handleRegister(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
@@ -157,13 +179,15 @@ private:
     std::unordered_map<std::string, PendingRendezvous>             pending_rendezvous_;
 };
 
-static const uint64_t k_pending_rendezvous_lifetime_ms      = 30000u;
-static const uint32_t k_forward_retry_initial_delay_ms      = 1000u;
-static const uint32_t k_forward_retry_max_delay_ms          = 8000u;
-static const uint32_t k_forward_retry_send_failure_delay_ms = 100u;
-static const uint8_t  k_forward_retry_count                 = 3u;
-static const size_t   k_output_queue_capacity               = 128u;
-static const uint8_t  k_primary_socket_index                = UINT8_MAX;
+static const uint64_t k_pending_rendezvous_lifetime_ms       = 30000u;
+static const uint32_t k_forward_retry_initial_delay_ms       = 1000u;
+static const uint32_t k_forward_retry_max_delay_ms           = 8000u;
+static const uint32_t k_forward_retry_send_failure_delay_ms  = 100u;
+static const uint8_t  k_forward_retry_count                  = 3u;
+static const uint32_t k_temporary_calibration_timeout_ms     = 1000u;
+static const uint8_t  k_temporary_calibration_endpoint_count = 2u;
+static const size_t   k_output_queue_capacity                = 128u;
+static const uint8_t  k_primary_socket_index                 = UINT8_MAX;
 
 static bool           is_fatal_udp_send_error(int error)
 {
@@ -572,6 +596,41 @@ static bool appendRegistrationPredictedCandidates(utp_rendezvous_candidate_plan_
     return true;
 }
 
+static bool appendTemporaryPredictedCandidates(utp_rendezvous_candidate_plan_t* plan,
+                                               const PendingRendezvous& transaction, uint8_t public_candidate_count)
+{
+    utp_address_t candidate = {};
+    int           first_step;
+    int           second_step;
+
+    if (!endpoint_to_address(transaction.calibration_ip, &candidate)) return false;
+    first_step =
+        static_cast<int>(transaction.calibration_ports[1u]) - static_cast<int>(transaction.calibration_ports[0u]);
+    second_step =
+        static_cast<int>(transaction.calibration_ports[2u]) - static_cast<int>(transaction.calibration_ports[1u]);
+    if (first_step > 32767)
+        first_step -= 65535;
+    else if (first_step < -32767)
+        first_step += 65535;
+    if (second_step > 32767)
+        second_step -= 65535;
+    else if (second_step < -32767)
+        second_step += 65535;
+    if (!transaction.calibration_ip_consistent || transaction.calibration_received_mask != UINT8_C(0x07) ||
+        first_step == 0 || first_step != second_step || first_step < -1024 || first_step > 1024) {
+        while (plan->public_candidate_count < public_candidate_count) {
+            if (!random_port(&candidate.port) || !append_public_candidate(plan, candidate)) return false;
+        }
+        return true;
+    }
+    candidate.port = transaction.calibration_ports[2u];
+    while (plan->public_candidate_count < public_candidate_count) {
+        candidate.port = advance_port(candidate.port, first_step);
+        if (!append_public_candidate(plan, candidate)) return false;
+    }
+    return true;
+}
+
 static std::string make_endpoint_text(const std::string& address, uint16_t port)
 {
     const std::string port_text = std::to_string(port);
@@ -674,6 +733,76 @@ bool NtrsServer::sendMessage(UdpSocket* socket, const sockaddr_storage& peer, so
     const OutgoingFrame frame = {body, body_length, message_type};
 
     return sendFrames(socket, peer, peer_length, &frame, 1u, NULL);
+}
+
+bool NtrsServer::sendCalibration(PendingRendezvous* transaction)
+{
+    utp_rendezvous_calibrate_t calibrate                  = {};
+    uint8_t                    body[UTP_PACKET_MTU_FLOOR] = {};
+    size_t                     body_length                = 0u;
+
+    if (transaction == NULL || !transaction->calibration_pending || calibration_endpoint_count_ < 2u ||
+        transaction->calibration_id == 0u) {
+        return false;
+    }
+    memcpy(calibrate.rendezvous_id, transaction->rendezvous_id.data(), sizeof(calibrate.rendezvous_id));
+    memcpy(calibrate.calibration_token, transaction->calibration_token.data(), sizeof(calibrate.calibration_token));
+    calibrate.calibration_id = transaction->calibration_id;
+    calibrate.endpoint_count = k_temporary_calibration_endpoint_count;
+    calibrate.endpoints      = calibration_endpoints_.data();
+    if (utp_rendezvous_calibrate_encode(body, sizeof(body), &calibrate, &body_length) != UTP_INTERNAL_ERROR_OK) {
+        return false;
+    }
+    return sendMessage(&primary_socket_, transaction->source_socket_address, transaction->source_socket_length,
+                       UTP_RENDEZVOUS_MESSAGE_CALIBRATE, body, body_length);
+}
+
+bool NtrsServer::completePendingRendezvous(PendingRendezvous* transaction)
+{
+    utp_rendezvous_candidate_plan_t source_plan                                                          = {};
+    utp_rendezvous_forward_t        forward                                                              = {};
+    utp_rendezvous_ping_t           ping                                                                 = {};
+    uint8_t                         forward_body[UTP_PACKET_MTU_FLOOR]                                   = {};
+    uint8_t                         ping_body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {};
+    size_t                          forward_body_length                                                  = 0u;
+
+    if (transaction == NULL || transaction->source_peer_id_length == 0u ||
+        !make_candidate_plan(
+            &source_plan, transaction->source_local_family, transaction->source_local_port,
+            transaction->source_local_candidates.data(), transaction->source_local_candidate_count,
+            transaction->has_source_reported_public_endpoint ? &transaction->source_reported_public_endpoint : NULL,
+            transaction->source_endpoint, public_candidate_count_)) {
+        return false;
+    }
+    if (transaction->calibration_id != 0u &&
+        !appendTemporaryPredictedCandidates(&source_plan, *transaction, public_candidate_count_)) {
+        return false;
+    }
+    forward.source_peer_id        = transaction->source_peer_id.data();
+    forward.source_peer_id_length = transaction->source_peer_id_length;
+    memcpy(forward.rendezvous_id, transaction->rendezvous_id.data(), sizeof(forward.rendezvous_id));
+    memcpy(forward.punch_token, transaction->punch_token.data(), sizeof(forward.punch_token));
+    forward.source_plan = source_plan;
+    if (utp_rendezvous_forward_encode(forward_body, sizeof(forward_body), &forward, &forward_body_length) !=
+        UTP_INTERNAL_ERROR_OK) {
+        return false;
+    }
+    memcpy(ping.registration_token, transaction->target_token.data(), sizeof(ping.registration_token));
+    if (utp_rendezvous_ping_encode(ping_body, sizeof(ping_body), &ping) != UTP_INTERNAL_ERROR_OK) return false;
+    transaction->calibration_pending       = false;
+    transaction->forward_retry_at_ms       = utp_ntrs_now_ms() + k_forward_retry_initial_delay_ms;
+    transaction->forward_retries_remaining = k_forward_retry_count;
+    transaction->forward_retry_delay_ms    = k_forward_retry_initial_delay_ms;
+    const OutgoingFrame frames[2] = {{ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
+                                     {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
+    if (!sendFrames(&primary_socket_, transaction->target_socket_address, transaction->target_socket_length, frames, 2u,
+                    &transaction->forward_packet_number, &transaction->forward_packet,
+                    &transaction->forward_packet_length)) {
+        return false;
+    }
+    return sendMessage(&primary_socket_, transaction->source_socket_address, transaction->source_socket_length,
+                       UTP_RENDEZVOUS_MESSAGE_REDIRECT, transaction->redirect_body.data(),
+                       transaction->redirect_body_length);
 }
 
 void NtrsServer::expirePendingRendezvous(uint64_t now_ms)
@@ -801,6 +930,33 @@ void NtrsServer::handlePing(UdpSocket* socket, const sockaddr_storage& peer, soc
             (void)sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
         return;
     }
+    if (socket->calibration_index == k_primary_socket_index || ping.calibration_id == 0u ||
+        socket->calibration_index >= k_temporary_calibration_endpoint_count) {
+        return;
+    }
+    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
+         entry != pending_rendezvous_.end(); ++entry) {
+        PendingRendezvous& transaction = entry->second;
+        const uint8_t      index       = (uint8_t)(socket->calibration_index + 1u);
+
+        if (!transaction.calibration_pending || transaction.calibration_id != ping.calibration_id ||
+            memcmp(transaction.calibration_token.data(), ping.registration_token,
+                   transaction.calibration_token.size()) != 0) {
+            continue;
+        }
+        if (!endpoint_ips_equal(transaction.calibration_ip, observed)) {
+            transaction.calibration_ip_consistent = false;
+            return;
+        }
+        transaction.calibration_ports[index]   = observed.port;
+        transaction.calibration_received_mask |= (uint8_t)(UINT8_C(1) << index);
+        memcpy(pong.registration_token, ping.registration_token, sizeof(pong.registration_token));
+        pong.acknowledged_packet_number = header.packet_number;
+        if (utp_rendezvous_pong_encode(body, sizeof(body), &pong) == UTP_INTERNAL_ERROR_OK)
+            (void)sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
+        if (transaction.calibration_received_mask == UINT8_C(0x07)) (void)completePendingRendezvous(&transaction);
+        return;
+    }
 }
 
 void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame)
@@ -852,18 +1008,13 @@ void NtrsServer::handleAddressUpdate(const sockaddr_storage& peer, socklen_t pee
 void NtrsServer::handleRequest(const sockaddr_storage& peer, socklen_t peer_length, const utp_ntrs_endpoint_t& observed,
                                const utp_frame_rendezvous_t& frame)
 {
-    utp_rendezvous_request_t        request                                                              = {};
-    utp_rendezvous_candidate_plan_t source_plan                                                          = {};
-    utp_rendezvous_candidate_plan_t target_plan                                                          = {};
-    utp_rendezvous_redirect_t       redirect                                                             = {};
-    utp_rendezvous_forward_t        forward                                                              = {};
-    utp_rendezvous_ping_t           ping                                                                 = {};
-    uint8_t                         ping_body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {};
-    sockaddr_storage                target_socket_address                                                = {};
-    socklen_t                       target_socket_length                                                 = 0u;
-    char                            source_text[INET6_ADDRSTRLEN + 8u]                                   = {};
-    char                            target_text[INET6_ADDRSTRLEN + 8u]                                   = {};
-    size_t                          forward_body_length                                                  = 0u;
+    utp_rendezvous_request_t        request                            = {};
+    utp_rendezvous_candidate_plan_t target_plan                        = {};
+    utp_rendezvous_redirect_t       redirect                           = {};
+    sockaddr_storage                target_address                     = {};
+    socklen_t                       target_length                      = 0u;
+    char                            source_text[INET6_ADDRSTRLEN + 8u] = {};
+    char                            target_text[INET6_ADDRSTRLEN + 8u] = {};
 
     if (utp_rendezvous_request_decode(&request, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK ||
         (request.local_family == UTP_ADDRESS_FAMILY_IPV4 && observed.family != AF_INET) ||
@@ -874,18 +1025,19 @@ void NtrsServer::handleRequest(const sockaddr_storage& peer, socklen_t peer_leng
                                      sizeof(request.rendezvous_id));
     std::unordered_map<std::string, PendingRendezvous>::iterator pending = pending_rendezvous_.find(rendezvous_key);
     if (pending != pending_rendezvous_.end()) {
-        if (endpoints_equal(pending->second.source_endpoint, observed))
-            (void)sendMessage(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REDIRECT,
-                              pending->second.redirect_body.data(), pending->second.redirect_body_length);
+        if (endpoints_equal(pending->second.source_endpoint, observed)) {
+            if (pending->second.calibration_pending)
+                (void)sendCalibration(&pending->second);
+            else
+                (void)sendMessage(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REDIRECT,
+                                  pending->second.redirect_body.data(), pending->second.redirect_body_length);
+        }
         return;
     }
     const std::string target_peer_id(reinterpret_cast<const char*>(request.target_peer_id),
                                      request.target_peer_id_length);
     std::unordered_map<std::string, Registration>::iterator target = registrations_.find(target_peer_id);
     if (target == registrations_.end() || target->second.local_family != request.local_family ||
-        !make_candidate_plan(&source_plan, request.local_family, request.local_port, request.local_candidates,
-                             request.local_candidate_count, request.reported_public_endpoint, observed,
-                             public_candidate_count_) ||
         !make_candidate_plan(
             &target_plan, target->second.local_family, target->second.local_port,
             target->second.local_candidates.data(), target->second.local_candidate_count,
@@ -893,48 +1045,55 @@ void NtrsServer::handleRequest(const sockaddr_storage& peer, socklen_t peer_leng
             target->second.endpoint, public_candidate_count_) ||
         !appendRegistrationObservedCandidates(&target_plan, target->second, public_candidate_count_) ||
         !appendRegistrationPredictedCandidates(&target_plan, target->second, public_candidate_count_) ||
-        !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint, &target_socket_address, &target_socket_length))
+        !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint, &target_address, &target_length))
         return;
 
-    PendingRendezvous                                    transaction = {};
-    std::array<uint8_t, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE> punch_token = {};
-    if (!random_token(&punch_token)) return;
+    PendingRendezvous transaction = {};
+    if (!random_token(&transaction.punch_token)) return;
+    memcpy(transaction.rendezvous_id.data(), request.rendezvous_id, transaction.rendezvous_id.size());
     memcpy(redirect.rendezvous_id, request.rendezvous_id, sizeof(redirect.rendezvous_id));
-    memcpy(redirect.punch_token, punch_token.data(), punch_token.size());
+    memcpy(redirect.punch_token, transaction.punch_token.data(), transaction.punch_token.size());
     redirect.target_plan = target_plan;
     if (utp_rendezvous_redirect_encode(transaction.redirect_body.data(), transaction.redirect_body.size(), &redirect,
                                        &transaction.redirect_body_length) != UTP_INTERNAL_ERROR_OK)
         return;
-    forward.source_peer_id        = request.source_peer_id;
-    forward.source_peer_id_length = request.source_peer_id_length;
-    memcpy(forward.rendezvous_id, request.rendezvous_id, sizeof(forward.rendezvous_id));
-    memcpy(forward.punch_token, punch_token.data(), punch_token.size());
-    forward.source_plan                        = source_plan;
-    uint8_t forward_body[UTP_PACKET_MTU_FLOOR] = {};
-    if (utp_rendezvous_forward_encode(forward_body, sizeof(forward_body), &forward, &forward_body_length) !=
-        UTP_INTERNAL_ERROR_OK)
-        return;
-    memcpy(ping.registration_token, target->second.token.data(), target->second.token.size());
-    if (utp_rendezvous_ping_encode(ping_body, sizeof(ping_body), &ping) != UTP_INTERNAL_ERROR_OK) return;
-
     transaction.source_endpoint       = observed;
     transaction.target_endpoint       = target->second.endpoint;
-    transaction.target_socket_address = target_socket_address;
-    transaction.target_socket_length  = target_socket_length;
+    transaction.source_socket_address = peer;
+    transaction.source_socket_length  = peer_length;
+    transaction.target_socket_address = target_address;
+    transaction.target_socket_length  = target_length;
     memcpy(transaction.target_token.data(), target->second.token.data(), transaction.target_token.size());
-    transaction.created_at_ms             = utp_ntrs_now_ms();
-    transaction.forward_retry_at_ms       = transaction.created_at_ms + k_forward_retry_initial_delay_ms;
-    transaction.forward_retries_remaining = k_forward_retry_count;
-    transaction.forward_retry_delay_ms    = k_forward_retry_initial_delay_ms;
-    if (!sendMessage(&primary_socket_, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REDIRECT,
-                     transaction.redirect_body.data(), transaction.redirect_body_length))
+    memcpy(transaction.source_peer_id.data(), request.source_peer_id, request.source_peer_id_length);
+    transaction.source_peer_id_length               = request.source_peer_id_length;
+    transaction.source_local_port                   = request.local_port;
+    transaction.source_local_family                 = request.local_family;
+    transaction.source_local_candidate_count        = request.local_candidate_count;
+    transaction.has_source_reported_public_endpoint = request.reported_public_endpoint != NULL;
+    if (transaction.has_source_reported_public_endpoint)
+        transaction.source_reported_public_endpoint = *request.reported_public_endpoint;
+    for (uint8_t index = 0u; index < request.local_candidate_count; ++index)
+        transaction.source_local_candidates[index] = request.local_candidates[index];
+    transaction.created_at_ms       = utp_ntrs_now_ms();
+    transaction.calibration_pending = request.source_nat_class == UTP_NAT_CLASS_SYMMETRIC &&
+                                      target->second.nat_class == UTP_NAT_CLASS_PORT_RESTRICTED &&
+                                      calibration_endpoint_count_ >= k_temporary_calibration_endpoint_count;
+    if (transaction.calibration_pending) {
+        transaction.calibration_ip            = observed;
+        transaction.calibration_ports[0u]     = observed.port;
+        transaction.calibration_received_mask = UINT8_C(0x01);
+        transaction.calibration_ip_consistent = true;
+        transaction.calibration_deadline_ms   = transaction.created_at_ms + k_temporary_calibration_timeout_ms;
+        if (!random_u64(&transaction.calibration_id) || !random_token(&transaction.calibration_token) ||
+            !sendCalibration(&transaction)) {
+            return;
+        }
+        pending_rendezvous_.insert(std::make_pair(rendezvous_key, transaction));
+        fprintf(stderr, "NTRS <- Node=%s [Request|Calibrate] target=%s\n",
+                utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
         return;
-    const OutgoingFrame frames[2] = {{ping_body, sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING},
-                                     {forward_body, forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD}};
-    if (!sendFrames(&primary_socket_, target_socket_address, target_socket_length, frames, 2u,
-                    &transaction.forward_packet_number, &transaction.forward_packet,
-                    &transaction.forward_packet_length))
-        return;
+    }
+    if (!completePendingRendezvous(&transaction)) return;
     pending_rendezvous_.insert(std::make_pair(rendezvous_key, transaction));
     fprintf(stderr, "NTRS <- Node=%s [Request] target_peer_id=%s\n",
             utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
@@ -1026,6 +1185,13 @@ void NtrsServer::onTimer()
     const uint64_t now_ms = utp_ntrs_now_ms();
 
     expirePendingRendezvous(now_ms);
+    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
+         entry != pending_rendezvous_.end(); ++entry) {
+        PendingRendezvous& transaction = entry->second;
+
+        if (transaction.calibration_pending && transaction.calibration_deadline_ms <= now_ms)
+            (void)completePendingRendezvous(&transaction);
+    }
     retryPendingRendezvous(now_ms);
 }
 

@@ -369,6 +369,97 @@ utp_internal_error_t utp_rendezvous_ping_decode(utp_rendezvous_ping_t* ping, con
     return error;
 }
 
+static utp_internal_error_t utp_rendezvous_validate_calibrate(const utp_rendezvous_calibrate_t* calibrate)
+{
+    size_t index;
+
+    if (calibrate == NULL || calibrate->endpoints == NULL || calibrate->endpoint_count == 0u ||
+        calibrate->endpoint_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES || calibrate->calibration_id == 0u ||
+        utp_rendezvous_bytes_are_zero(calibrate->calibration_token, sizeof(calibrate->calibration_token))) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    for (index = 0u; index < calibrate->endpoint_count; ++index) {
+        if (calibrate->endpoints[index].port == 0u ||
+            utp_rendezvous_address_length(calibrate->endpoints[index].family) == 0u) {
+            return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        }
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+utp_internal_error_t utp_rendezvous_calibrate_encode(uint8_t* buffer, size_t capacity,
+                                                     const utp_rendezvous_calibrate_t* calibrate, size_t* out_length)
+{
+    utp_wire_writer_t    writer;
+    utp_internal_error_t error;
+    size_t               index;
+
+    if (buffer == NULL || out_length == NULL) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_rendezvous_validate_calibrate(calibrate);
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    error = utp_wire_writer_init(&writer, buffer, capacity);
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_write_bytes(&writer, calibrate->rendezvous_id, sizeof(calibrate->rendezvous_id));
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_write_bytes(&writer, calibrate->calibration_token, sizeof(calibrate->calibration_token));
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, calibrate->calibration_id);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, calibrate->endpoint_count);
+    for (index = 0u; index < calibrate->endpoint_count && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        const utp_address_t* endpoint       = &calibrate->endpoints[index];
+        const size_t         address_length = utp_rendezvous_address_length(endpoint->family);
+
+        error = utp_wire_write_u8(&writer, endpoint->family);
+        if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u16(&writer, endpoint->port);
+        if (error == UTP_INTERNAL_ERROR_OK)
+            error = utp_rendezvous_write_bytes(&writer, endpoint->address, address_length);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) *out_length = capacity - writer.remaining;
+    return error;
+}
+
+utp_internal_error_t utp_rendezvous_calibrate_decode(utp_rendezvous_calibrate_t* calibrate, const uint8_t* buffer,
+                                                     size_t length)
+{
+    utp_wire_reader_t          reader;
+    utp_rendezvous_calibrate_t decoded = {0};
+    utp_internal_error_t       error;
+    size_t                     index;
+
+    if (calibrate == NULL || buffer == NULL) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    error = utp_wire_reader_init(&reader, buffer, length);
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_read_bytes(&reader, decoded.rendezvous_id, sizeof(decoded.rendezvous_id));
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_rendezvous_read_bytes(&reader, decoded.calibration_token, sizeof(decoded.calibration_token));
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &decoded.calibration_id);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u8(&reader, &decoded.endpoint_count);
+    if (error != UTP_INTERNAL_ERROR_OK || decoded.calibration_id == 0u || decoded.endpoint_count == 0u ||
+        decoded.endpoint_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        utp_rendezvous_bytes_are_zero(decoded.calibration_token, sizeof(decoded.calibration_token))) {
+        return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_PROTOCOL : error;
+    }
+    for (index = 0u; index < decoded.endpoint_count; ++index) {
+        utp_address_t* endpoint = &decoded.decoded_endpoints[index];
+        size_t         address_length;
+
+        if (utp_wire_read_u8(&reader, &endpoint->family) != UTP_INTERNAL_ERROR_OK ||
+            utp_wire_read_u16(&reader, &endpoint->port) != UTP_INTERNAL_ERROR_OK) {
+            return UTP_INTERNAL_ERROR_OVERFLOW;
+        }
+        address_length = utp_rendezvous_address_length(endpoint->family);
+        if (endpoint->port == 0u || address_length == 0u || reader.remaining < address_length) {
+            return UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        error = utp_rendezvous_read_bytes(&reader, endpoint->address, address_length);
+        if (error != UTP_INTERNAL_ERROR_OK) return error;
+    }
+    if (reader.remaining != 0u) return UTP_INTERNAL_ERROR_PROTOCOL;
+    decoded.endpoints    = decoded.decoded_endpoints;
+    *calibrate           = decoded;
+    calibrate->endpoints = calibrate->decoded_endpoints;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 utp_internal_error_t utp_rendezvous_pong_encode(uint8_t* buffer, size_t capacity, const utp_rendezvous_pong_t* pong)
 {
     utp_wire_writer_t    writer;

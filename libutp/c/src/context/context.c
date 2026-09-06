@@ -1394,6 +1394,46 @@ static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* con
     return error;
 }
 
+static utp_internal_error_t utp_context_send_rendezvous_calibration_ping(
+    utp_context_t* context, const utp_address_t* peer, const uint8_t token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE],
+    uint64_t calibration_id)
+{
+    utp_rendezvous_ping_t  ping;
+    utp_packet_header_t    header;
+    utp_frame_rendezvous_t frame;
+    uint8_t                body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
+    uint8_t                packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
+    utp_internal_error_t   error;
+
+    if (context == NULL || peer == NULL || token == NULL || peer->port == 0u ||
+        peer->family != context->bound_address.family || utp_context_ntrs_token_is_zero(token) ||
+        calibration_id == 0u || context->next_rendezvous_packet_number == 0u ||
+        context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    memcpy(ping.registration_token, token, sizeof(ping.registration_token));
+    ping.calibration_id = calibration_id;
+    error               = utp_rendezvous_ping_encode(body, sizeof(body), &ping);
+    if (error != UTP_INTERNAL_ERROR_OK) return error;
+    header = (utp_packet_header_t){0u,
+                                   0u,
+                                   context->next_rendezvous_packet_number,
+                                   (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)),
+                                   UTP_PACKET_TYPE_RENDEZVOUS,
+                                   0u};
+    frame  = (utp_frame_rendezvous_t){body, sizeof(body), UTP_RENDEZVOUS_MESSAGE_PING};
+    error  = utp_proto_encode_header(packet, sizeof(packet), &header);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_frame_rendezvous_encode(packet + UTP_PACKET_HEADER_SIZE, sizeof(packet) - UTP_PACKET_HEADER_SIZE,
+                                            &frame);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        ++context->next_rendezvous_packet_number;
+        error = utp_context_send_rendezvous_output(context, peer, packet, sizeof(packet));
+    }
+    return error;
+}
+
 static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, const utp_address_t* peer,
                                                        uint64_t acknowledged_packet_number)
 {
@@ -4868,7 +4908,29 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }
-            if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTERED) {
+            if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_CALIBRATE) {
+                utp_rendezvous_calibrate_t     calibrate;
+                utp_context_connection_slot_t* slot;
+
+                error = utp_rendezvous_calibrate_decode(&calibrate, rendezvous.payload, rendezvous.payload_length);
+                if (error != UTP_INTERNAL_ERROR_OK) {
+                    return error;
+                }
+                slot = utp_context_find_rendezvous_slot(context, calibrate.rendezvous_id);
+                if (slot != NULL && !slot->rendezvous_active && utp_address_equal(peer, &slot->connection.peer)) {
+                    for (uint8_t index = 0u; index < calibrate.endpoint_count; ++index) {
+                        if (calibrate.endpoints[index].family != context->bound_address.family) {
+                            return UTP_INTERNAL_ERROR_PROTOCOL;
+                        }
+                        error = utp_context_send_rendezvous_calibration_ping(context, &calibrate.endpoints[index],
+                                                                             calibrate.calibration_token,
+                                                                             calibrate.calibration_id);
+                        if (error != UTP_INTERNAL_ERROR_OK) {
+                            return error;
+                        }
+                    }
+                }
+            } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTERED) {
                 utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
                 utp_rendezvous_registered_t      registered;
 

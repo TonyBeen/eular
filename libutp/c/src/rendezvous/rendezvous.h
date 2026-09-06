@@ -52,6 +52,16 @@ typedef struct utp_rendezvous_ping {
     uint64_t calibration_id;  // 普通保活固定为 0
 } utp_rendezvous_ping_t;
 
+/* CALIBRATE：NTRS 要求本轮主动连接从指定副端口发出 PING，以采集对称 NAT 端口样本。 */
+typedef struct utp_rendezvous_calibrate {
+    const utp_address_t* endpoints;  // 1..4 个 NTRS 副端口
+    uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
+    uint8_t              calibration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
+    utp_address_t        decoded_endpoints[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
+    uint64_t             calibration_id;
+    uint8_t              endpoint_count;
+} utp_rendezvous_calibrate_t;
+
 /* PONG：确认携带该 token 的关联和指定的半连接包号。 */
 typedef struct utp_rendezvous_pong {
     uint8_t  registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
@@ -135,6 +145,12 @@ utp_internal_error_t utp_rendezvous_registered_decode(utp_rendezvous_registered_
 utp_internal_error_t utp_rendezvous_ping_encode(uint8_t* buffer, size_t capacity, const utp_rendezvous_ping_t* ping);
 /** @brief 解码固定长度 PING 消息体。 */
 utp_internal_error_t utp_rendezvous_ping_decode(utp_rendezvous_ping_t* ping, const uint8_t* buffer, size_t length);
+/** @brief 编码临时对称 NAT 校准指令。 */
+utp_internal_error_t utp_rendezvous_calibrate_encode(uint8_t* buffer, size_t capacity,
+                                                     const utp_rendezvous_calibrate_t* calibrate, size_t* out_length);
+/** @brief 解码严格的临时对称 NAT 校准指令。 */
+utp_internal_error_t utp_rendezvous_calibrate_decode(utp_rendezvous_calibrate_t* calibrate, const uint8_t* buffer,
+                                                     size_t length);
 /** @brief 编码固定长度 PONG 消息体。 */
 utp_internal_error_t utp_rendezvous_pong_encode(uint8_t* buffer, size_t capacity, const utp_rendezvous_pong_t* pong);
 /** @brief 解码固定长度 PONG 消息体。 */
