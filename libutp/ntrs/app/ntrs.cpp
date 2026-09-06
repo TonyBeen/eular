@@ -29,6 +29,7 @@
 
 struct Registration {
     utp_ntrs_endpoint_t                                            endpoint;
+    utp_ntrs_endpoint_t                                            calibration_ip;
     std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>    token;
     std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES> local_candidates;
     std::array<utp_address_t, UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES>  observed_addresses;
@@ -45,6 +46,7 @@ struct Registration {
     uint8_t                                                        calibration_received_mask;
     bool                                                           has_reported_public_endpoint;
     bool                                                           last_register_was_initial;
+    bool                                                           calibration_ip_consistent;
     uint64_t                                                       calibration_id;
 
     bool    matchesToken(const uint8_t value[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE]) const;
@@ -52,7 +54,7 @@ struct Registration {
     void    updateEndpoint(const utp_ntrs_endpoint_t& observed);
     void    update(const utp_rendezvous_register_t& request, const utp_ntrs_endpoint_t& observed);
     uint8_t updateObservedAddresses(const utp_rendezvous_address_update_t& update);
-    void    recordCalibrationPort(uint8_t index, uint16_t port);
+    void    recordCalibrationEndpoint(uint8_t index, const utp_ntrs_endpoint_t& observed);
 };
 
 struct PendingRendezvous {
@@ -466,10 +468,14 @@ uint8_t Registration::updateObservedAddresses(const utp_rendezvous_address_updat
     return accepted;
 }
 
-void Registration::recordCalibrationPort(uint8_t index, uint16_t port)
+void Registration::recordCalibrationEndpoint(uint8_t index, const utp_ntrs_endpoint_t& observed)
 {
-    if (index >= calibration_endpoint_count || port == 0u) return;
-    calibration_ports[index]   = port;
+    if (index >= calibration_endpoint_count || observed.port == 0u) return;
+    if (!endpoint_ips_equal(calibration_ip, observed)) {
+        calibration_ip_consistent = false;
+        return;
+    }
+    calibration_ports[index]   = observed.port;
     calibration_received_mask |= static_cast<uint8_t>(1u << index);
 }
 
@@ -477,9 +483,11 @@ bool NtrsServer::beginCalibration(Registration* registration)
 {
     if (registration == NULL) return false;
     registration->calibration_id             = 0u;
+    registration->calibration_ip             = registration->endpoint;
     registration->calibration_endpoint_count = calibration_endpoint_count_;
     registration->calibration_received_mask  = 0u;
     registration->calibration_ports          = {};
+    registration->calibration_ip_consistent  = true;
     if (calibration_endpoint_count_ == 0u) return true;
     return random_u64(&registration->calibration_id);
 }
@@ -520,30 +528,39 @@ static uint16_t advance_port(uint16_t port, int delta)
 static bool appendRegistrationPredictedCandidates(utp_rendezvous_candidate_plan_t* plan,
                                                   const Registration& registration, uint8_t public_candidate_count)
 {
-    utp_address_t candidate      = {};
-    int           previous_index = -1;
-    int           newest_index   = -1;
-    int           step           = 0;
+    utp_address_t candidate       = {};
+    bool          predictable     = false;
+    int           step            = 0;
+    uint8_t       expected_mask   = 0u;
+    uint8_t       calibration_end = 0u;
 
     if (registration.nat_class != UTP_NAT_CLASS_SYMMETRIC && registration.nat_class != UTP_NAT_CLASS_UNKNOWN)
         return true;
     if (!endpoint_to_address(registration.endpoint, &candidate)) return false;
-    for (uint8_t index = 0u; index < registration.calibration_endpoint_count; ++index) {
-        if ((registration.calibration_received_mask & static_cast<uint8_t>(1u << index)) == 0u) continue;
-        previous_index = newest_index;
-        newest_index   = index;
+    calibration_end = registration.calibration_endpoint_count;
+    if (calibration_end >= 3u) {
+        expected_mask = static_cast<uint8_t>((UINT8_C(1) << calibration_end) - 1u);
+        if (registration.calibration_ip_consistent && registration.calibration_received_mask == expected_mask) {
+            predictable = true;
+            for (uint8_t index = 1u; index < calibration_end; ++index) {
+                int current_step = static_cast<int>(registration.calibration_ports[index]) -
+                                   static_cast<int>(registration.calibration_ports[index - 1u]);
+
+                if (current_step > 32767)
+                    current_step -= 65535;
+                else if (current_step < -32767)
+                    current_step += 65535;
+                if (current_step == 0 || current_step < -1024 || current_step > 1024 ||
+                    (index > 1u && current_step != step)) {
+                    predictable = false;
+                    break;
+                }
+                step = current_step;
+            }
+        }
     }
-    if (previous_index >= 0 && newest_index >= 0) {
-        step = static_cast<int>(registration.calibration_ports[static_cast<size_t>(newest_index)]) -
-               static_cast<int>(registration.calibration_ports[static_cast<size_t>(previous_index)]);
-        if (step > 32767)
-            step -= 65535;
-        else if (step < -32767)
-            step += 65535;
-        if (step < -1024 || step > 1024) step = 0;
-    }
-    if (step != 0) {
-        candidate.port = registration.calibration_ports[static_cast<size_t>(newest_index)];
+    if (predictable) {
+        candidate.port = registration.calibration_ports[calibration_end - 1u];
         while (plan->public_candidate_count < public_candidate_count) {
             candidate.port = advance_port(candidate.port, step);
             if (!append_public_candidate(plan, candidate)) return false;
@@ -736,9 +753,11 @@ void NtrsServer::handleRegister(const sockaddr_storage& peer, socklen_t peer_len
     if (begin_calibration && !beginCalibration(&entry->second)) return;
     if (request.nat_class != UTP_NAT_CLASS_SYMMETRIC) {
         entry->second.calibration_id             = 0u;
+        entry->second.calibration_ip             = {};
         entry->second.calibration_endpoint_count = 0u;
         entry->second.calibration_received_mask  = 0u;
         entry->second.calibration_ports          = {};
+        entry->second.calibration_ip_consistent  = false;
     }
     utp_rendezvous_registered_t reply = {};
     reply.registration_request_id     = request.registration_request_id;
@@ -774,7 +793,7 @@ void NtrsServer::handlePing(UdpSocket* socket, const sockaddr_storage& peer, soc
             if (ping.calibration_id == 0u || ping.calibration_id != entry->second.calibration_id ||
                 socket->calibration_index >= entry->second.calibration_endpoint_count)
                 return;
-            entry->second.recordCalibrationPort(socket->calibration_index, observed.port);
+            entry->second.recordCalibrationEndpoint(socket->calibration_index, observed);
         }
         memcpy(pong.registration_token, ping.registration_token, sizeof(pong.registration_token));
         pong.acknowledged_packet_number = header.packet_number;
