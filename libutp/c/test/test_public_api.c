@@ -581,7 +581,7 @@ static void test_congestion_algorithm_selection(struct event_base* event_base)
     utp_context_destroy(server);
 }
 
-static void test_ntrs_redirect_connect(struct event_base* event_base)
+static void test_ntrs_redirect_connect(struct event_base* event_base, bool forward_first)
 {
     utp_context_options_t     client_options  = UTP_CONTEXT_OPTIONS_INIT;
     utp_context_options_t     server_options  = UTP_CONTEXT_OPTIONS_INIT;
@@ -589,22 +589,30 @@ static void test_ntrs_redirect_connect(struct event_base* event_base)
     utp_context_t*            client          = NULL;
     utp_context_t*            server          = NULL;
     utp_udp_socket_t          ntrs_socket;
-    utp_address_t             requested                    = {0};
-    utp_address_t             ntrs_local                   = {0};
-    utp_address_t             client_peer                  = {0};
-    utp_address_t             public_candidates[1]         = {{0}};
-    uint8_t                   packet[UTP_PACKET_MTU_FLOOR] = {0};
-    uint8_t                   response[512u]               = {0};
-    uint8_t                   response_body[256u]          = {0};
-    size_t                    packet_length                = 0u;
-    size_t                    response_length              = 0u;
-    size_t                    response_body_length         = 0u;
-    uint16_t                  server_port                  = 0u;
-    size_t                    sent_length                  = 0u;
+    utp_address_t             requested                                                            = {0};
+    utp_address_t             ntrs_local                                                           = {0};
+    utp_address_t             client_peer                                                          = {0};
+    utp_address_t             public_candidates[1]                                                 = {{0}};
+    utp_address_t             source_public_candidates[1]                                          = {{0}};
+    uint8_t                   packet[UTP_PACKET_MTU_FLOOR]                                         = {0};
+    uint8_t                   response[512u]                                                       = {0};
+    uint8_t                   forward_packet[512u]                                                 = {0};
+    uint8_t                   response_body[256u]                                                  = {0};
+    uint8_t                   ping_body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {0};
+    uint8_t                   forward_body[256u]                                                   = {0};
+    size_t                    packet_length                                                        = 0u;
+    size_t                    response_length                                                      = 0u;
+    size_t                    response_body_length                                                 = 0u;
+    size_t                    forward_body_length                                                  = 0u;
+    size_t                    forward_packet_length                                                = 0u;
+    uint16_t                  server_port                                                          = 0u;
+    size_t                    sent_length                                                          = 0u;
     utp_packet_view_t         packet_view;
     utp_frame_rendezvous_t    frame;
     utp_rendezvous_request_t  request;
     utp_rendezvous_redirect_t redirect = {0};
+    utp_rendezvous_ping_t     ping     = {0};
+    utp_rendezvous_forward_t  forward  = {0};
     utp_packet_header_t       response_header;
     public_api_probe_t        client_probe = {0};
     public_api_probe_t        server_probe = {0};
@@ -631,6 +639,14 @@ static void test_ntrs_redirect_connect(struct event_base* event_base)
     assert(utp_address_parse(&requested, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
     assert(utp_udp_socket_open(&ntrs_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
     assert(utp_udp_socket_bind(&ntrs_socket, &requested, NULL, &ntrs_local) == UTP_INTERNAL_ERROR_OK);
+
+    server->ntrs_registration.registered = true;
+    server->ntrs_registration.endpoint   = ntrs_local;
+    for (size_t index = 0u; index < sizeof(ping.registration_token); ++index) {
+        ping.registration_token[index] = (uint8_t)(index + 1u);
+    }
+    memcpy(server->ntrs_registration.registration_token, ping.registration_token,
+           sizeof(server->ntrs_registration.registration_token));
 
     connect_options.address        = "127.0.0.1";
     connect_options.target_peer_id = "node-b";
@@ -667,9 +683,49 @@ static void test_ntrs_redirect_connect(struct event_base* event_base)
     redirect.target_plan.public_candidate_count = 1u;
     assert(utp_rendezvous_redirect_encode(response_body, sizeof(response_body), &redirect, &response_body_length) ==
            UTP_INTERNAL_ERROR_OK);
+
+    source_public_candidates[0]                = client->bound_address;
+    forward.source_peer_id                     = (const uint8_t*)"node-a";
+    forward.source_peer_id_length              = (uint8_t)strlen((const char*)forward.source_peer_id);
+    forward.source_plan.family                 = UTP_ADDRESS_FAMILY_IPV4;
+    forward.source_plan.local_port             = client->bound_address.port;
+    forward.source_plan.public_candidates      = source_public_candidates;
+    forward.source_plan.public_candidate_count = 1u;
+    memcpy(forward.rendezvous_id, request.rendezvous_id, sizeof(forward.rendezvous_id));
+    memcpy(forward.punch_token, redirect.punch_token, sizeof(forward.punch_token));
+    assert(utp_rendezvous_ping_encode(ping_body, sizeof(ping_body), &ping) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_rendezvous_forward_encode(forward_body, sizeof(forward_body), &forward, &forward_body_length) ==
+           UTP_INTERNAL_ERROR_OK);
     response_header = (utp_packet_header_t){0u,
                                             0u,
                                             UINT64_C(1),
+                                            (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(ping_body) +
+                                                       UTP_FRAME_RENDEZVOUS_HEADER_SIZE + forward_body_length),
+                                            UTP_PACKET_TYPE_RENDEZVOUS,
+                                            0u};
+    assert(utp_proto_encode_header(forward_packet, sizeof(forward_packet), &response_header) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){ping_body, (uint16_t)sizeof(ping_body), UTP_RENDEZVOUS_MESSAGE_PING};
+    assert(utp_frame_rendezvous_encode(forward_packet + UTP_PACKET_HEADER_SIZE,
+                                       sizeof(forward_packet) - UTP_PACKET_HEADER_SIZE,
+                                       &frame) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){forward_body, (uint16_t)forward_body_length, UTP_RENDEZVOUS_MESSAGE_FORWARD};
+    assert(utp_frame_rendezvous_encode(
+               forward_packet + UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(ping_body),
+               sizeof(forward_packet) - UTP_PACKET_HEADER_SIZE - UTP_FRAME_RENDEZVOUS_HEADER_SIZE - sizeof(ping_body),
+               &frame) == UTP_INTERNAL_ERROR_OK);
+    forward_packet_length = UTP_PACKET_HEADER_SIZE + response_header.payload_length;
+
+    if (forward_first) {
+        /* A 必须缓存 REDIRECT 前 B 发来的 PUNCH。 */
+        assert(utp_udp_socket_send_to(&ntrs_socket, forward_packet, forward_packet_length, &server->bound_address,
+                                      &sent_length) == UTP_INTERNAL_ERROR_OK);
+        assert(sent_length == forward_packet_length);
+        pump_event_loop(event_base, 16);
+    }
+
+    response_header = (utp_packet_header_t){0u,
+                                            0u,
+                                            UINT64_C(2),
                                             (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
                                             UTP_PACKET_TYPE_RENDEZVOUS,
                                             0u};
@@ -681,6 +737,12 @@ static void test_ntrs_redirect_connect(struct event_base* event_base)
     assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
            UTP_INTERNAL_ERROR_OK);
     assert(sent_length == response_length);
+    if (!forward_first) {
+        pump_event_loop(event_base, 16);
+        assert(utp_udp_socket_send_to(&ntrs_socket, forward_packet, forward_packet_length, &server->bound_address,
+                                      &sent_length) == UTP_INTERNAL_ERROR_OK);
+        assert(sent_length == forward_packet_length);
+    }
     pump_event_loop(event_base, 32);
     assert(client_probe.connected_count == 1);
     assert(server_probe.connected_count == 1);
@@ -688,6 +750,92 @@ static void test_ntrs_redirect_connect(struct event_base* event_base)
     utp_udp_socket_close(&ntrs_socket);
     utp_context_destroy(client);
     utp_context_destroy(server);
+}
+
+static void test_ntrs_request_rejected(struct event_base* event_base)
+{
+    utp_context_options_t     options         = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t     connect_options = UTP_CONNECT_OPTIONS_INIT;
+    utp_context_t*            context         = NULL;
+    utp_udp_socket_t          ntrs_socket;
+    utp_address_t             requested                                  = {0};
+    utp_address_t             ntrs_local                                 = {0};
+    utp_address_t             client_peer                                = {0};
+    uint8_t                   packet[UTP_PACKET_MTU_FLOOR]               = {0};
+    uint8_t                   response[UTP_PACKET_MTU_FLOOR]             = {0};
+    uint8_t                   response_body[UTP_RENDEZVOUS_ID_SIZE + 4u] = {0};
+    size_t                    packet_length                              = 0u;
+    size_t                    response_length                            = 0u;
+    size_t                    response_body_length                       = 0u;
+    size_t                    sent_length                                = 0u;
+    utp_packet_view_t         packet_view;
+    utp_frame_rendezvous_t    frame;
+    utp_rendezvous_request_t  request;
+    utp_rendezvous_rejected_t rejected = {0};
+    utp_packet_header_t       header;
+    public_api_probe_t        probe = {0};
+    utp_internal_error_t      receive_error;
+    const struct timeval      retry_delay = {0, 1000};
+
+    options.event_base = event_base;
+    options.context_id = 603u;
+    options.peer_id    = "node-a";
+    assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
+    assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+    utp_context_set_on_connect_error(context, test_on_connect_error, &probe);
+    utp_udp_socket_init(&ntrs_socket);
+    assert(utp_address_parse(&requested, "127.0.0.1", 0u) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_open(&ntrs_socket, UTP_ADDRESS_FAMILY_IPV4) == UTP_INTERNAL_ERROR_OK);
+    assert(utp_udp_socket_bind(&ntrs_socket, &requested, NULL, &ntrs_local) == UTP_INTERNAL_ERROR_OK);
+
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "node-b";
+    connect_options.port           = ntrs_local.port;
+    connect_options.encryption     = UTP_ENCRYPTION_NONE;
+    assert(utp_context_connect(context, &connect_options) == UTP_STATUS_OK);
+    receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    for (uint8_t attempt = 0u; attempt < 10u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+        receive_error = utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+        if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            assert(event_base_loopexit(event_base, &retry_delay) == 0);
+            assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+        }
+    }
+    assert(receive_error == UTP_INTERNAL_ERROR_OK);
+    assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+    assert(packet_view.header.type == UTP_PACKET_TYPE_INITIAL);
+    assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+    assert(utp_rendezvous_request_decode(&request, frame.payload, frame.payload_length) == UTP_INTERNAL_ERROR_OK);
+
+    memcpy(rejected.reference_id, request.rendezvous_id, sizeof(rejected.reference_id));
+    rejected.rejected_message_type = UTP_RENDEZVOUS_MESSAGE_REQUEST;
+    rejected.reference_length      = UTP_RENDEZVOUS_ID_SIZE;
+    rejected.reason_code           = 2u;
+    assert(utp_rendezvous_rejected_encode(response_body, sizeof(response_body), &rejected, &response_body_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    header = (utp_packet_header_t){0u,
+                                   0u,
+                                   UINT64_C(1),
+                                   (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
+                                   UTP_PACKET_TYPE_RENDEZVOUS,
+                                   0u};
+    assert(utp_proto_encode_header(response, sizeof(response), &header) == UTP_INTERNAL_ERROR_OK);
+    frame = (utp_frame_rendezvous_t){response_body, (uint16_t)response_body_length, UTP_RENDEZVOUS_MESSAGE_REJECTED};
+    assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                       &frame) == UTP_INTERNAL_ERROR_OK);
+    response_length = UTP_PACKET_HEADER_SIZE + header.payload_length;
+    assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+           UTP_INTERNAL_ERROR_OK);
+    assert(sent_length == response_length);
+    pump_event_loop(event_base, 16);
+    assert(probe.connected_count == 0);
+    assert(probe.connect_error_count == 1);
+    assert(probe.last_connect_status == UTP_STATUS_RENDEZVOUS_REJECTED);
+
+    utp_udp_socket_close(&ntrs_socket);
+    utp_context_destroy(context);
 }
 
 static void test_ntrs_forward_punch(struct event_base* event_base)
@@ -1033,7 +1181,9 @@ int main(void)
     }
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_128, 101u, 102u);
     test_encrypted_connection(event_base, UTP_ENCRYPTION_AES_GCM_256, 103u, 104u);
-    test_ntrs_redirect_connect(event_base);
+    test_ntrs_redirect_connect(event_base, true);
+    test_ntrs_redirect_connect(event_base, false);
+    test_ntrs_request_rejected(event_base);
     test_ntrs_forward_punch(event_base);
     test_plaintext_zero_rtt(event_base);
     test_encrypted_zero_rtt(event_base);
