@@ -57,6 +57,7 @@ local rendezvous_message_names = {
     [12] = "UNREGISTER",
     [13] = "UNREGISTERED",
     [14] = "REJECTED",
+    [15] = "PUNCH",
 }
 
 local nat_message_names = {
@@ -196,6 +197,13 @@ f.rendezvous_message_type = ProtoField.uint8("eular_utp.rendezvous.message_type"
 f.rendezvous_payload_len = ProtoField.uint16("eular_utp.rendezvous.payload_len", "Rendezvous Payload Length", base.DEC)
 f.rendezvous_payload = ProtoField.bytes("eular_utp.rendezvous.payload", "Rendezvous Payload")
 f.rendezvous_id = ProtoField.bytes("eular_utp.rendezvous.id", "Rendezvous ID")
+f.rendezvous_punch_token = ProtoField.bytes("eular_utp.rendezvous.punch_token", "Punch Token")
+f.rendezvous_registration_request_id = ProtoField.uint64("eular_utp.rendezvous.registration_request_id",
+    "Registration Request ID", base.DEC)
+f.rendezvous_registration_token = ProtoField.bytes("eular_utp.rendezvous.registration_token", "Registration Token")
+f.rendezvous_calibration_token = ProtoField.bytes("eular_utp.rendezvous.calibration_token", "Calibration Token")
+f.rendezvous_acknowledged_packet_number = ProtoField.uint64("eular_utp.rendezvous.acknowledged_packet_number",
+    "Acknowledged Packet Number", base.DEC)
 f.rendezvous_source_peer_id = ProtoField.string("eular_utp.rendezvous.source_peer_id", "Source Peer ID")
 f.rendezvous_target_peer_id = ProtoField.string("eular_utp.rendezvous.target_peer_id", "Target Peer ID")
 f.rendezvous_nat_class = ProtoField.uint8("eular_utp.rendezvous.nat_class", "Source NAT Class", base.DEC,
@@ -208,9 +216,27 @@ f.rendezvous_local_port = ProtoField.uint16("eular_utp.rendezvous.local_port", "
 f.rendezvous_local_candidate_count = ProtoField.uint8("eular_utp.rendezvous.local_candidate_count",
     "Local Candidate Count", base.DEC)
 f.rendezvous_local_candidate = ProtoField.string("eular_utp.rendezvous.local_candidate", "Local Candidate")
+f.rendezvous_reported_public_present = ProtoField.bool("eular_utp.rendezvous.reported_public_present",
+    "Reported Public Endpoint Present", 8, nil, 0x01)
+f.rendezvous_reported_public_endpoint = ProtoField.string("eular_utp.rendezvous.reported_public_endpoint",
+    "Reported Public Endpoint")
 f.rendezvous_public_address = ProtoField.string("eular_utp.rendezvous.public_address", "Public Address")
-f.rendezvous_public_port_count = ProtoField.uint8("eular_utp.rendezvous.public_port_count", "Public Port Count", base.DEC)
-f.rendezvous_public_port = ProtoField.uint16("eular_utp.rendezvous.public_port", "Public Port Candidate", base.DEC)
+f.rendezvous_public_port_count = ProtoField.uint8("eular_utp.rendezvous.public_port_count", "Public Candidate Count", base.DEC)
+f.rendezvous_public_port = ProtoField.uint16("eular_utp.rendezvous.public_port", "Public Candidate Port", base.DEC)
+f.rendezvous_calibration_id = ProtoField.uint64("eular_utp.rendezvous.calibration_id", "Calibration ID", base.DEC)
+f.rendezvous_calibration_endpoint_count = ProtoField.uint8("eular_utp.rendezvous.calibration_endpoint_count",
+    "Calibration Endpoint Count", base.DEC)
+f.rendezvous_calibration_endpoint = ProtoField.string("eular_utp.rendezvous.calibration_endpoint",
+    "Calibration Endpoint")
+f.rendezvous_update_id = ProtoField.uint64("eular_utp.rendezvous.update_id", "Address Update ID", base.DEC)
+f.rendezvous_address_sample_count = ProtoField.uint8("eular_utp.rendezvous.address_sample_count",
+    "Address Sample Count", base.DEC)
+f.rendezvous_address_sample = ProtoField.string("eular_utp.rendezvous.address_sample", "Observed Address Sample")
+f.rendezvous_observed_at = ProtoField.uint64("eular_utp.rendezvous.observed_at", "Observed At Unix Time (ms)", base.DEC)
+f.rendezvous_rejected_message_type = ProtoField.uint8("eular_utp.rendezvous.rejected_message_type",
+    "Rejected Rendezvous Message", base.DEC, rendezvous_message_names)
+f.rendezvous_rejected_reference = ProtoField.bytes("eular_utp.rendezvous.rejected_reference", "Rejected Reference")
+f.rendezvous_rejected_reason = ProtoField.uint16("eular_utp.rendezvous.rejected_reason", "Rejection Reason", base.DEC)
 
 f.nat_version = ProtoField.uint8("eular_utp.nat.version", "NAT Probe Version", base.DEC)
 f.nat_message_type = ProtoField.uint8("eular_utp.nat.message_type", "NAT Probe Message", base.DEC, nat_message_names)
@@ -363,16 +389,15 @@ local function parse_rendezvous_candidate_plan(payload, offset, payload_len, tre
         return nil, "invalid CandidatePlan family or candidate count"
     end
     local candidates_offset = offset + 4
-    local public_address_offset = candidates_offset + candidate_count * addr_len
-    local port_count_offset = public_address_offset + addr_len
-    if port_count_offset + 1 > payload_len then
+    local public_count_offset = candidates_offset + candidate_count * addr_len
+    if public_count_offset + 1 > payload_len then
         return nil, "truncated CandidatePlan addresses"
     end
-    local public_port_count = payload(port_count_offset, 1):uint()
-    local ports_offset = port_count_offset + 1
-    local end_offset = ports_offset + public_port_count * 2
-    if public_port_count == 0 or public_port_count > 4 or end_offset > payload_len then
-        return nil, "invalid CandidatePlan public port count"
+    local public_candidate_count = payload(public_count_offset, 1):uint()
+    local public_candidates_offset = public_count_offset + 1
+    local end_offset = public_candidates_offset + public_candidate_count * (addr_len + 2)
+    if public_candidate_count == 0 or public_candidate_count > 4 or end_offset > payload_len then
+        return nil, "invalid CandidatePlan public candidate count"
     end
 
     local plan = tree:add(payload(offset, end_offset - offset), "Candidate Plan")
@@ -387,22 +412,177 @@ local function parse_rendezvous_candidate_plan(payload, offset, payload_len, tre
         end
         plan:add(f.rendezvous_local_candidate, payload(address_offset, addr_len), endpoint)
     end
-    local public_address = address_text(payload, public_address_offset, family)
-    if public_address == nil then
-        return nil, "invalid CandidatePlan public address"
-    end
-    plan:add(f.rendezvous_public_address, payload(public_address_offset, addr_len), public_address)
-    plan:add(f.rendezvous_public_port_count, payload(port_count_offset, 1))
-    for index = 0, public_port_count - 1 do
-        plan:add(f.rendezvous_public_port, payload(ports_offset + index * 2, 2))
+    plan:add(f.rendezvous_public_port_count, payload(public_count_offset, 1))
+    for index = 0, public_candidate_count - 1 do
+        local candidate_offset = public_candidates_offset + index * (addr_len + 2)
+        local public_address = address_text(payload, candidate_offset, family)
+        if public_address == nil then
+            return nil, "invalid CandidatePlan public address"
+        end
+        plan:add(f.rendezvous_public_address, payload(candidate_offset, addr_len), public_address)
+        plan:add(f.rendezvous_public_port, payload(candidate_offset + addr_len, 2))
     end
     return end_offset
+end
+
+local function parse_rendezvous_endpoint(payload, offset, payload_len, tree, field, label)
+    if offset + 3 > payload_len then
+        return nil, "truncated " .. label
+    end
+    local family = payload(offset, 1):uint()
+    local addr_len = address_length(family)
+    local end_offset = offset + 3 + (addr_len or 0)
+    if addr_len == nil or end_offset > payload_len then
+        return nil, "invalid " .. label
+    end
+    local port = payload(offset + 1, 2):uint()
+    local endpoint = endpoint_text(payload, offset + 3, family, port)
+    if port == 0 or endpoint == nil then
+        return nil, "invalid " .. label
+    end
+    tree:add(field, payload(offset, end_offset - offset), endpoint)
+    return end_offset
+end
+
+local function parse_rendezvous_registration(payload, tree, message_type)
+    local payload_len = payload:len()
+    local offset = 0
+
+    if payload_len < 24 then
+        return "truncated " .. rendezvous_message_name(message_type) .. " payload"
+    end
+    tree:add(f.rendezvous_registration_request_id, payload(offset, 8))
+    offset = offset + 8
+    tree:add(f.rendezvous_registration_token, payload(offset, 8))
+    offset = offset + 8
+    local peer_id_length = payload(offset, 1):uint()
+    offset = offset + 1
+    if peer_id_length == 0 or peer_id_length > 128 or offset + peer_id_length + 3 > payload_len then
+        return "invalid REGISTER peer ID"
+    end
+    tree:add(f.rendezvous_source_peer_id, payload(offset, peer_id_length), payload(offset, peer_id_length):string())
+    offset = offset + peer_id_length
+    tree:add(f.rendezvous_nat_class, payload(offset, 1))
+    local family = payload(offset + 1, 1):uint()
+    local addr_len = address_length(family)
+    local reported_public_present = payload(offset + 2, 1):uint()
+    tree:add(f.rendezvous_family, payload(offset + 1, 1))
+    tree:add(f.rendezvous_reported_public_present, payload(offset + 2, 1))
+    offset = offset + 3
+    if addr_len == nil or reported_public_present > 1 then
+        return "invalid REGISTER address family or public endpoint flag"
+    end
+    if reported_public_present == 1 then
+        if offset + addr_len + 2 > payload_len then
+            return "truncated REGISTER public endpoint"
+        end
+        local public_port = payload(offset + addr_len, 2):uint()
+        local public_endpoint = endpoint_text(payload, offset, family, public_port)
+        if public_port == 0 or public_endpoint == nil then
+            return "invalid REGISTER public endpoint"
+        end
+        tree:add(f.rendezvous_reported_public_endpoint, payload(offset, addr_len + 2), public_endpoint)
+        offset = offset + addr_len + 2
+    end
+    if offset + 3 > payload_len then
+        return "truncated REGISTER local candidates"
+    end
+    local local_port = payload(offset, 2):uint()
+    local candidate_count = payload(offset + 2, 1):uint()
+    if local_port == 0 or candidate_count > 4 or offset + 3 + candidate_count * addr_len ~= payload_len then
+        return "invalid REGISTER local candidates"
+    end
+    tree:add(f.rendezvous_local_port, payload(offset, 2))
+    tree:add(f.rendezvous_local_candidate_count, payload(offset + 2, 1))
+    offset = offset + 3
+    for index = 0, candidate_count - 1 do
+        local candidate_offset = offset + index * addr_len
+        local endpoint = endpoint_text(payload, candidate_offset, family, local_port)
+        tree:add(f.rendezvous_local_candidate, payload(candidate_offset, addr_len), endpoint)
+    end
+    return nil
 end
 
 local function parse_rendezvous_payload(payload, tree, message_type, summaries)
     local payload_len = payload:len()
     local label = rendezvous_message_name(message_type)
 
+    if message_type == 1 then
+        local error = parse_rendezvous_registration(payload, tree, message_type)
+        if error == nil then append_summary(summaries, "RENDEZVOUS REGISTER") end
+        return error
+    end
+    if message_type == 2 then
+        if payload_len < 25 then return "truncated REGISTERED payload" end
+        tree:add(f.rendezvous_registration_request_id, payload(0, 8))
+        tree:add(f.rendezvous_registration_token, payload(8, 8))
+        tree:add(f.rendezvous_calibration_id, payload(16, 8))
+        local endpoint_count = payload(24, 1):uint()
+        if endpoint_count > 4 then return "invalid REGISTERED calibration endpoint count" end
+        tree:add(f.rendezvous_calibration_endpoint_count, payload(24, 1))
+        local offset = 25
+        for _ = 1, endpoint_count do
+            local next_offset, error = parse_rendezvous_endpoint(payload, offset, payload_len, tree,
+                f.rendezvous_calibration_endpoint, "REGISTERED calibration endpoint")
+            if next_offset == nil then return error end
+            offset = next_offset
+        end
+        if offset ~= payload_len then return "trailing bytes in REGISTERED payload" end
+        append_summary(summaries, "RENDEZVOUS REGISTERED")
+        return nil
+    end
+    if message_type == 3 or message_type == 4 then
+        if payload_len ~= 16 then return label .. " payload must be 16 bytes" end
+        tree:add(f.rendezvous_registration_token, payload(0, 8))
+        tree:add(message_type == 3 and f.rendezvous_calibration_id or f.rendezvous_acknowledged_packet_number,
+            payload(8, 8))
+        append_summary(summaries, "RENDEZVOUS " .. label)
+        return nil
+    end
+    if message_type == 5 then
+        if payload_len < 33 then return "truncated CALIBRATE payload" end
+        tree:add(f.rendezvous_id, payload(0, 16))
+        tree:add(f.rendezvous_calibration_token, payload(16, 8))
+        tree:add(f.rendezvous_calibration_id, payload(24, 8))
+        local endpoint_count = payload(32, 1):uint()
+        if endpoint_count == 0 or endpoint_count > 4 then return "invalid CALIBRATE endpoint count" end
+        tree:add(f.rendezvous_calibration_endpoint_count, payload(32, 1))
+        local offset = 33
+        for _ = 1, endpoint_count do
+            local next_offset, error = parse_rendezvous_endpoint(payload, offset, payload_len, tree,
+                f.rendezvous_calibration_endpoint, "CALIBRATE endpoint")
+            if next_offset == nil then return error end
+            offset = next_offset
+        end
+        if offset ~= payload_len then return "trailing bytes in CALIBRATE payload" end
+        append_summary(summaries, "RENDEZVOUS CALIBRATE")
+        return nil
+    end
+    if message_type == 6 then
+        if payload_len < 17 then return "truncated ADDRESS_UPDATE payload" end
+        tree:add(f.rendezvous_registration_token, payload(0, 8))
+        tree:add(f.rendezvous_update_id, payload(8, 8))
+        local sample_count = payload(16, 1):uint()
+        if sample_count == 0 or sample_count > 4 then return "invalid ADDRESS_UPDATE sample count" end
+        tree:add(f.rendezvous_address_sample_count, payload(16, 1))
+        local offset = 17
+        for _ = 1, sample_count do
+            local next_offset, error = parse_rendezvous_endpoint(payload, offset, payload_len, tree,
+                f.rendezvous_address_sample, "ADDRESS_UPDATE sample")
+            if next_offset == nil or next_offset + 8 > payload_len then return error or "truncated ADDRESS_UPDATE time" end
+            tree:add(f.rendezvous_observed_at, payload(next_offset, 8))
+            offset = next_offset + 8
+        end
+        if offset ~= payload_len then return "trailing bytes in ADDRESS_UPDATE payload" end
+        append_summary(summaries, "RENDEZVOUS ADDRESS_UPDATE")
+        return nil
+    end
+    if message_type == 7 then
+        if payload_len ~= 8 then return "ADDRESS_UPDATED payload must be 8 bytes" end
+        tree:add(f.rendezvous_update_id, payload(0, 8))
+        append_summary(summaries, "RENDEZVOUS ADDRESS_UPDATED")
+        return nil
+    end
     if message_type == 11 then
         if payload_len ~= 16 then
             return "INTRODUCTION payload must be 16 bytes"
@@ -412,7 +592,7 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         return nil
     end
     if message_type == 8 then
-        if payload_len < 22 then
+        if payload_len < 27 then
             return "truncated REQUEST payload"
         end
         local offset = 0
@@ -427,21 +607,36 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         offset = offset + source_length
         local target_length = payload(offset, 1):uint()
         offset = offset + 1
-        if target_length == 0 or target_length > 128 or offset + target_length + 5 > payload_len then
+        if target_length == 0 or target_length > 128 or offset + target_length + 6 > payload_len then
             return "invalid REQUEST target peer ID"
         end
         tree:add(f.rendezvous_target_peer_id, payload(offset, target_length), payload(offset, target_length):string())
         offset = offset + target_length
         tree:add(f.rendezvous_nat_class, payload(offset, 1))
         tree:add(f.rendezvous_family, payload(offset + 1, 1))
-        tree:add(f.rendezvous_local_port, payload(offset + 2, 2))
-        tree:add(f.rendezvous_local_candidate_count, payload(offset + 4, 1))
         local family = payload(offset + 1, 1):uint()
-        local local_port = payload(offset + 2, 2):uint()
-        local candidate_count = payload(offset + 4, 1):uint()
         local addr_len = address_length(family)
-        offset = offset + 5
-        if addr_len == nil or candidate_count > 4 or offset + candidate_count * addr_len ~= payload_len then
+        local reported_public_present = payload(offset + 2, 1):uint()
+        tree:add(f.rendezvous_reported_public_present, payload(offset + 2, 1))
+        offset = offset + 3
+        if addr_len == nil or reported_public_present > 1 then
+            return "invalid REQUEST address family or public endpoint flag"
+        end
+        if reported_public_present == 1 then
+            if offset + addr_len + 2 > payload_len then return "truncated REQUEST public endpoint" end
+            local public_port = payload(offset + addr_len, 2):uint()
+            local public_endpoint = endpoint_text(payload, offset, family, public_port)
+            if public_port == 0 or public_endpoint == nil then return "invalid REQUEST public endpoint" end
+            tree:add(f.rendezvous_reported_public_endpoint, payload(offset, addr_len + 2), public_endpoint)
+            offset = offset + addr_len + 2
+        end
+        if offset + 3 > payload_len then return "truncated REQUEST local candidates" end
+        local local_port = payload(offset, 2):uint()
+        local candidate_count = payload(offset + 2, 1):uint()
+        tree:add(f.rendezvous_local_port, payload(offset, 2))
+        tree:add(f.rendezvous_local_candidate_count, payload(offset + 2, 1))
+        offset = offset + 3
+        if local_port == 0 or addr_len == nil or candidate_count > 4 or offset + candidate_count * addr_len ~= payload_len then
             return "invalid REQUEST local candidates"
         end
         for index = 0, candidate_count - 1 do
@@ -453,11 +648,12 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         return nil
     end
     if message_type == 9 then
-        if payload_len <= 16 then
+        if payload_len < 35 then
             return "truncated REDIRECT payload"
         end
         tree:add(f.rendezvous_id, payload(0, 16))
-        local next_offset, error = parse_rendezvous_candidate_plan(payload, 16, payload_len, tree)
+        tree:add(f.rendezvous_punch_token, payload(16, 8))
+        local next_offset, error = parse_rendezvous_candidate_plan(payload, 24, payload_len, tree)
         if next_offset == nil or next_offset ~= payload_len then
             return error or "invalid REDIRECT CandidatePlan"
         end
@@ -465,20 +661,46 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         return nil
     end
     if message_type == 10 then
-        if payload_len <= 17 then
+        if payload_len < 37 then
             return "truncated FORWARD payload"
         end
         tree:add(f.rendezvous_id, payload(0, 16))
-        local source_length = payload(16, 1):uint()
-        if source_length == 0 or source_length > 128 or 17 + source_length >= payload_len then
+        tree:add(f.rendezvous_punch_token, payload(16, 8))
+        local source_length = payload(24, 1):uint()
+        if source_length == 0 or source_length > 128 or 25 + source_length >= payload_len then
             return "invalid FORWARD source peer ID"
         end
-        tree:add(f.rendezvous_source_peer_id, payload(17, source_length), payload(17, source_length):string())
-        local next_offset, error = parse_rendezvous_candidate_plan(payload, 17 + source_length, payload_len, tree)
+        tree:add(f.rendezvous_source_peer_id, payload(25, source_length), payload(25, source_length):string())
+        local next_offset, error = parse_rendezvous_candidate_plan(payload, 25 + source_length, payload_len, tree)
         if next_offset == nil or next_offset ~= payload_len then
             return error or "invalid FORWARD CandidatePlan"
         end
         append_summary(summaries, "RENDEZVOUS FORWARD")
+        return nil
+    end
+    if message_type == 12 or message_type == 13 then
+        if payload_len ~= 8 then return label .. " payload must be 8 bytes" end
+        tree:add(f.rendezvous_registration_token, payload(0, 8))
+        append_summary(summaries, "RENDEZVOUS " .. label)
+        return nil
+    end
+    if message_type == 14 then
+        if payload_len < 4 then return "truncated REJECTED payload" end
+        local rejected_message_type = payload(0, 1):uint()
+        local reference_length = payload(1, 1):uint()
+        if (reference_length ~= 8 and reference_length ~= 16) or 2 + reference_length + 2 ~= payload_len then
+            return "invalid REJECTED reference"
+        end
+        tree:add(f.rendezvous_rejected_message_type, payload(0, 1))
+        tree:add(f.rendezvous_rejected_reference, payload(2, reference_length))
+        tree:add(f.rendezvous_rejected_reason, payload(2 + reference_length, 2))
+        append_summary(summaries, "RENDEZVOUS REJECTED " .. rendezvous_message_name(rejected_message_type))
+        return nil
+    end
+    if message_type == 15 then
+        if payload_len ~= 8 then return "PUNCH payload must be 8 bytes" end
+        tree:add(f.rendezvous_punch_token, payload(0, 8))
+        append_summary(summaries, "RENDEZVOUS PUNCH")
         return nil
     end
     append_summary(summaries, "RENDEZVOUS " .. label)
