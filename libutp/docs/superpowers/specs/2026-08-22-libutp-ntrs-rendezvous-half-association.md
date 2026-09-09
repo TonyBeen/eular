@@ -30,8 +30,9 @@ NTRS 进程由多个 UDP Worker 和一个 control thread 组成。所有 Worker 
 ```text
 Worker:
   recv/decode UDP datagram
-  只读查询 registration/pending
-  将需要修改全局状态的事件放入 control MPSC
+  REQUEST 按 rendezvous_id 哈希到固定 owner Worker
+  非 owner 通过目标 Worker 的有界 MPSC 转交
+  owner Worker 执行 REQUEST 处理
   消费本 Worker 的输出队列并发送 UDP
 
 control thread:
@@ -41,14 +42,14 @@ control thread:
   通过 Worker 输出队列发送 Redirect、Forward、PONG 等响应
 ```
 
-`registrations`、`pending_rendezvous` 和注销 tombstone 均采用单写多读模型。Worker 读取
-pending 只能在锁保护下复制必要状态，不能持有容器 iterator 或引用离开锁作用域，也不能修改或
-删除记录。Worker 对 `REQUEST` 的新旧判断只是提示，control thread 收到任务后必须重新校验，
-以处理多个 Worker 同时收到相同 rendezvous 的情况。
+`registrations` 和注销 tombstone 由 control thread 管理；`pending_rendezvous` 目前仍由所有
+REQUEST owner 与 control timer 通过同一把互斥锁保护，迁移到 owner Worker 的本地状态后再移除
+该共享热点。固定 owner 保证同一 `rendezvous_id` 的 REQUEST 顺序一致。
 
-`REQUEST`、校准 `PING` 和 `PONG` 都由 Worker 解码后移交 control thread；Worker 不直接改变
-pending。control thread 生成的 UDP 响应进入目标 Worker 的有界输出 MPSC，Worker 是该输出队列
-的唯一消费者。control MPSC 满时丢弃新的任务，调用方依靠协议重试。
+`REQUEST` 由 owner Worker 执行，当前 `pending_rendezvous` 仍由 control thread 统一加锁管理；
+校准 `PING` 和 `PONG` 仍移交 control thread。control thread 生成的 UDP 响应进入目标 Worker 的
+有界输出 MPSC，Worker 是该输出队列的唯一消费者。入站或输出队列满时丢弃新的任务，调用方依靠
+协议重试。
 
 pending 的超时、校准截止、Forward 重试和删除均由 control thread 的单一 timer 执行，不按
 Worker 分配 owner，也不由多个 Worker 扫描共享 pending 表。收到 B 的 `PONG` 只标记
