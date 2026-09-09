@@ -21,6 +21,46 @@
 - NTRS 请求方 A 可以注册也可以不注册。注册只决定节点能否作为目标 B 被查找、接收 `FORWARD`、
   保存端口样本；NTRS 不因 A 未注册拒绝 `REQUEST`。
 
+## 1.1 NTRS 进程内并发模型
+
+NTRS 进程由多个 UDP Worker 和一个 control thread 组成。所有 Worker 通过
+`SO_REUSEPORT` 绑定同一组 UDP endpoint；Worker 注册 UDP 读事件，control thread 不注册 UDP
+读事件，只监听本地 control socketpair 和定时器。
+
+```text
+Worker:
+  recv/decode UDP datagram
+  只读查询 registration/pending
+  将需要修改全局状态的事件放入 control MPSC
+  消费本 Worker 的输出队列并发送 UDP
+
+control thread:
+  唯一写入 registration、pending 和注销 tombstone
+  处理 REGISTER、UNREGISTER、保活、REQUEST、PONG
+  处理 pending 的校准超时、Forward 重试和生命周期淘汰
+  通过 Worker 输出队列发送 Redirect、Forward、PONG 等响应
+```
+
+`registrations`、`pending_rendezvous` 和注销 tombstone 均采用单写多读模型。Worker 读取
+pending 只能在锁保护下复制必要状态，不能持有容器 iterator 或引用离开锁作用域，也不能修改或
+删除记录。Worker 对 `REQUEST` 的新旧判断只是提示，control thread 收到任务后必须重新校验，
+以处理多个 Worker 同时收到相同 rendezvous 的情况。
+
+`REQUEST`、校准 `PING` 和 `PONG` 都由 Worker 解码后移交 control thread；Worker 不直接改变
+pending。control thread 生成的 UDP 响应进入目标 Worker 的有界输出 MPSC，Worker 是该输出队列
+的唯一消费者。control MPSC 满时丢弃新的任务，调用方依靠协议重试。
+
+pending 的超时、校准截止、Forward 重试和删除均由 control thread 的单一 timer 执行，不按
+Worker 分配 owner，也不由多个 Worker 扫描共享 pending 表。收到 B 的 `PONG` 只标记
+`forward_delivered` 并停止 Forward 重试，pending 保留到生命周期结束，以便在 A 未收到
+`REDIRECT` 而重试 `REQUEST` 时重发同一 Redirect；只有过期、注销或进程停止时删除。
+
+本地 socketpair 只用于唤醒 control thread 和 Worker 输出消费者，采用非阻塞 socket。通知消息
+本身不承载协议数据；队列中的任务才是实际数据。启动阶段检查 event 注册失败，运行期间已创建
+且参数固定的写事件注册视为成功。不可恢复的 UDP 或本地通知 socket 错误记录操作名、错误码和
+系统描述，设置进程级 fatal 状态，使所有线程正常收尾后以非零状态退出，交由外部 supervisor
+重启。
+
 ## 2. 包类型、帧包络与包号
 
 ```c
