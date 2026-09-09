@@ -3480,10 +3480,13 @@ static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t
     } else {
         slot->zero_rtt_response_sent = true;
     }
+    error = utp_context_complete_connected_side_effects(context, slot);
     if (!slot->zero_rtt_early_delivered && slot->zero_rtt_early_packet != NULL) {
-        error = utp_connection_on_plaintext_packet_in_received(&slot->connection, slot->zero_rtt_early_packet,
-                                                               slot->zero_rtt_early_wire_size, &slot->connection.peer,
-                                                               now_us);
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_connection_on_plaintext_packet_in_received(&slot->connection, slot->zero_rtt_early_packet,
+                                                                   slot->zero_rtt_early_wire_size,
+                                                                   &slot->connection.peer, now_us);
+        }
         if (error == UTP_INTERNAL_ERROR_OK) {
             slot->zero_rtt_early_delivered = true;
         }
@@ -3507,9 +3510,6 @@ static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t
         utp_context_report_connection_error(context, slot, status, 0u, (const uint8_t*)reason, strlen(reason), false);
         error = utp_connection_queue_close(&slot->connection, close_code);
         return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, slot) : error;
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_complete_connected_side_effects(context, slot);
     }
     if (error == UTP_INTERNAL_ERROR_OK && slot->zero_rtt_response_active) {
         const uint64_t delay_us = utp_context_zero_rtt_response_delay(context, slot->zero_rtt_response_retries);

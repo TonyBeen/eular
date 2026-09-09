@@ -142,15 +142,17 @@ static void test_pump_until(struct event_base* event_base, uint32_t timeout_ms, 
 static pid_t test_start_ntrs(const char* executable, uint16_t port)
 {
     char  port_text[6u];
+    char  worker_text[2u];
     pid_t pid;
 
     REQUIRE(executable != NULL);
     REQUIRE(snprintf(port_text, sizeof(port_text), "%u", (unsigned int)port) > 0);
+    REQUIRE(snprintf(worker_text, sizeof(worker_text), "%u", 2u) > 0);
     pid = fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {
         execl(executable, executable, "-a", "127.0.0.1", "-e", "127.0.0.1", "-p", port_text, "-t", "3000", "-k", "1000",
-              (char*)NULL);
+              "-w", worker_text, (char*)NULL);
         _exit(127);
     }
     return pid;
