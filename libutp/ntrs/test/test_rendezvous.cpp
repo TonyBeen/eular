@@ -487,13 +487,14 @@ public:
         const std::string calibration_two      = std::to_string(static_cast<uint16_t>(service_port + 2u));
         const std::string registration_timeout = std::to_string(registration_timeout_ms);
         const std::string keepalive_interval   = std::to_string(keepalive_interval_ms);
+        const std::string worker_count         = std::to_string(2u);
 
         pid_ = fork();
         CHECK(pid_ >= 0);
         if (pid_ == 0) {
             execl(executable, executable, "-a", "127.0.0.1", "-e", "127.0.0.1", "-p", port.c_str(), "-c",
                   calibration_one.c_str(), "-c", calibration_two.c_str(), "-t", registration_timeout.c_str(), "-k",
-                  keepalive_interval.c_str(), static_cast<char*>(NULL));
+                  keepalive_interval.c_str(), "-w", worker_count.c_str(), static_cast<char*>(NULL));
             _exit(127);
         }
         g_ntrs_pid = pid_;
@@ -586,17 +587,18 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
         CHECK(rejected.reason_code == 4u);
     }
     {
-        const uint8_t unacknowledged_id[UTP_RENDEZVOUS_ID_SIZE] = {7u};
-        std::vector<uint8_t>      body;
-        uint64_t                  packet_number = 0u;
-        utp_rendezvous_forward_t  unacknowledged_forward = {};
+        const uint8_t            unacknowledged_id[UTP_RENDEZVOUS_ID_SIZE] = {7u};
+        std::vector<uint8_t>     body;
+        uint64_t                 packet_number          = 0u;
+        utp_rendezvous_forward_t unacknowledged_forward = {};
 
         request = make_request("source-port-restricted", "symmetric-target", UTP_NAT_CLASS_PORT_RESTRICTED,
                                socket_port(source), unacknowledged_id);
         send_packet(source, service_port, request);
         (void)receive_redirect(source);
         CHECK(receive_message(target.primary, UTP_RENDEZVOUS_MESSAGE_FORWARD, 1500u, &packet_number, &body));
-        CHECK(utp_rendezvous_forward_decode(&unacknowledged_forward, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(utp_rendezvous_forward_decode(&unacknowledged_forward, body.data(), body.size()) ==
+              UTP_INTERNAL_ERROR_OK);
         CHECK(memcmp(unacknowledged_forward.rendezvous_id, unacknowledged_id,
                      sizeof(unacknowledged_forward.rendezvous_id)) == 0);
     }
