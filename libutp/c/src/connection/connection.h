@@ -119,7 +119,8 @@ typedef struct utp_connection {
     utp_send_control_t                 send_control;                              // 发送、确认和重传状态
     utp_receive_history_t              receive_history;                           // 已认证接收包号历史
     utp_ack_scheduler_t                ack_scheduler;                             // ACK 调度状态
-    utp_packet_out_pool_t              packet_pool;                               // 有界 PacketOut 对象池
+    utp_packet_out_pool_t              packet_pool;                               // Connection 私有 PacketOut 描述符池
+    utp_packet_out_buffer_pool_t*      packet_buffer_pool;                        // Context 共享发送缓冲池，不拥有
     utp_mtu_discovery_t                mtu_discovery;                             // 路径 MTU 发现状态
     utp_bbr_t                          bbr_congestion;                            // BBR 算法状态
     utp_cubic_t                        cubic_congestion;                          // CUBIC 算法状态
@@ -246,7 +247,7 @@ typedef struct utp_connection {
 /** @brief 初始化连接运行状态及其有界发送、接收资源。 */
 utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_connection_role_t role, uint32_t local_cid,
                                          uint32_t peer_cid, const utp_address_t* peer, size_t packet_limit,
-                                         uint16_t packet_capacity);
+                                         uint16_t packet_capacity, utp_packet_out_buffer_pool_t* packet_buffer_pool);
 /** @brief 释放连接持有的流、包、加密与计时资源。 */
 void                 utp_connection_cleanup(utp_connection_t* connection);
 /** @brief 应用 Context 的 MTU 配置，并重置连接级 MTU 运行状态。 */

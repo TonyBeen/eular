@@ -13,6 +13,8 @@ extern "C" {
 #include "proto/packet_in.h"
 }
 
+#include "connection_test_util.h"
+
 namespace {
 
 std::array<uint8_t, UTP_FRAME_VERSION_SIZE> version_frame()
@@ -1333,7 +1335,7 @@ TEST_CASE("connection keepalive probes are ACK-eliciting and abort after missed 
         REQUIRE(challenge != nullptr);
         REQUIRE((challenge->po_flags & UTP_PO_PATH_VALIDATION) != 0u);
         utp_connection_on_packet_abandoned(&connection, challenge);
-        utp_packet_out_pool_release(&connection.packet_pool, challenge);
+        utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, challenge);
     }
 
     for (probe = 0u; probe < UTP_CONNECTION_KEEPALIVE_MAX_PROBES; ++probe) {
@@ -1409,7 +1411,7 @@ TEST_CASE("connection sends a ladder MTU probe and immediately backs off on EMSG
     REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&connection.mtu_discovery));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&connection.mtu_discovery) == 1425u);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
     utp_connection_cleanup(&connection);
 }
 

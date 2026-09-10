@@ -44,15 +44,18 @@ adaptation explicit and is normative for `c/` production code and tests.
 
 ## Resource And Performance Rules
 
-- Packet parsing, ACK processing, and established-connection send/receive
-  paths must not allocate. Their memory is bounded at Context or Connection
-  creation.
+- Packet parsing and ACK processing must not allocate. Established-connection
+  send paths may acquire `packet_out` objects only from the Connection slab and
+  Context shared buffer pools. Those pools grow in fixed-size batches, return
+  allocation failures to the caller, and reclaim fully idle buffer batches;
+  they must not allocate once per packet or use unbounded work.
 - A hash table may rehash only as an admission or management operation. Failed
   rehash must preserve the old table and existing connections; it can reject
   only the new insertion.
-- Every untrusted-cardinality collection has a configured maximum. Check
-  integer overflow before size arithmetic, allocation, indexing, and counter
-  advancement.
+- Every untrusted-cardinality collection has a configured maximum, except the
+  Context connection inventory: it is deliberately allocator-bounded and must
+  return an admission failure on allocation exhaustion. Check integer overflow
+  before size arithmetic, allocation, indexing, and counter advancement.
 - Any new hot-path container needs a benchmark and a deterministic regression
   test. Measure on a fixed environment before accepting a performance claim.
 

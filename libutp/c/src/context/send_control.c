@@ -14,8 +14,7 @@
 #define UTP_SEND_CONTROL_MAX_RTO_BACKOFFS            10u
 #define UTP_SEND_CONTROL_MAX_TLP_COUNT               2u
 #define UTP_SEND_CONTROL_PACER_GRANULARITY_US        1000u
-#define UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER          4u
-#define UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE      16u
+#define UTP_SEND_CONTROL_ATTEMPT_BLOCK_SIZE          32u
 
 static utp_internal_error_t utp_send_control_attempt_add_block(utp_send_control_t* control)
 {
@@ -353,16 +352,10 @@ utp_internal_error_t utp_send_control_init(utp_send_control_t* control, size_t p
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    if (packet_limit > SIZE_MAX / UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER) {
-        utp_send_ledger_cleanup(&control->ledger);
-        return UTP_INTERNAL_ERROR_OVERFLOW;
-    }
-    control->attempt_block_size = packet_limit * UTP_SEND_CONTROL_ATTEMPT_MULTIPLIER;
-    if (control->attempt_block_size < UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE) {
-        control->attempt_block_size = UTP_SEND_CONTROL_MIN_ATTEMPT_BLOCK_SIZE;
-    }
-    control->attempt_level = 1u;
-    error                  = utp_send_control_attempt_add_block(control);
+    // 发送尝试索引按固定批次增长，不能跟随逻辑队列上限预分配。
+    control->attempt_block_size = UTP_SEND_CONTROL_ATTEMPT_BLOCK_SIZE;
+    control->attempt_level      = 1u;
+    error                       = utp_send_control_attempt_add_block(control);
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_send_ledger_cleanup(&control->ledger);
         return error;

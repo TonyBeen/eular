@@ -3085,7 +3085,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 utp_connection_on_packet_send_error(connection, failed_packet, error, now_us);
                 utp_connection_on_packet_abandoned(connection, failed_packet);
                 utp_send_control_forget_packet_attempts(&connection->send_control, failed_packet);
-                utp_packet_out_pool_release(&connection->packet_pool, failed_packet);
+                utp_packet_out_pool_release(&connection->packet_pool, connection->packet_buffer_pool, failed_packet);
                 if (error != UTP_INTERNAL_ERROR_NOBUFS) {
                     for (size_t index = packet_count; index > sent_count + 1u; --index) {
                         const utp_internal_error_t reschedule_error =
@@ -3154,7 +3154,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 utp_connection_on_packet_send_error(connection, packet, error, now_us);
                 utp_connection_on_packet_abandoned(connection, packet);
                 utp_send_control_forget_packet_attempts(&connection->send_control, packet);
-                utp_packet_out_pool_release(&connection->packet_pool, packet);
+                utp_packet_out_pool_release(&connection->packet_pool, connection->packet_buffer_pool, packet);
             }
             if (error == UTP_INTERNAL_ERROR_NOBUFS || close_packet) {
                 const char* reason =
@@ -3585,7 +3585,7 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_ACTIVE, local_cid, 0u, peer,
-                                    UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+                                    UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX, &context->packet_out_buffer_pool);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_configure_connection(context, &slot->connection);
@@ -3978,7 +3978,8 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         return UTP_INTERNAL_ERROR_NOMEM;
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
-                                pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+                                pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX,
+                                &context->packet_out_buffer_pool);
     if (error == UTP_INTERNAL_ERROR_OK) {
         slot->connection.local = pending_slot->pending.local;
     }
@@ -4617,7 +4618,7 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
         return error == UTP_INTERNAL_ERROR_OK ? UTP_INTERNAL_ERROR_NOMEM : error;
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view->header.scid, peer,
-                                UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+                                UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX, &context->packet_out_buffer_pool);
     if (error == UTP_INTERNAL_ERROR_OK && local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
         slot->connection.local = *local;
     }
@@ -4867,7 +4868,7 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     slot->zero_rtt_expires_at_seconds = session_token.expires_at_seconds;
     slot->zero_rtt_encryption_mode    = encryption_mode;
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view.header.scid, peer,
-                                UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX);
+                                UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX, &context->packet_out_buffer_pool);
     if (error == UTP_INTERNAL_ERROR_OK && local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
         slot->connection.local = *local;
     }
@@ -5756,6 +5757,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->packet_in_pool.max_free_capacity = 0u;
     context->packet_in_pool.buffer_capacity   = 0u;
     context->packet_in_pool.dynamic           = false;
+    context->packet_out_buffer_pool           = (utp_packet_out_buffer_pool_t){0};
 
     context->on_connected                  = NULL;
     context->on_connected_user_data        = NULL;
@@ -5909,9 +5911,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
                                                 UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY, packet_in_max_free,
                                                 packet_in_capacity);
     }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_packet_out_buffer_pool_init(&context->packet_out_buffer_pool, NULL);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_internal_log_error(&context->logger, &context->tag, error, "context initialization failed");
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
+        utp_packet_out_buffer_pool_cleanup(&context->packet_out_buffer_pool);
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
         utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
@@ -5970,6 +5976,7 @@ void utp_context_destroy(utp_context_t* context)
         }
         utp_udp_socket_close(&context->udp_socket);
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
+        utp_packet_out_buffer_pool_cleanup(&context->packet_out_buffer_pool);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);

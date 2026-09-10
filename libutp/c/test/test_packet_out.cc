@@ -46,134 +46,124 @@ void tracked_free(void* user_data, void* pointer)
 
 }  // namespace
 
-TEST_CASE("packet_out pool init allocates once for structs plus two allocations per bucket", "[packet_out][pool]")
+TEST_CASE("packet_out pools allocate no storage during initialization", "[packet_out][pool]")
 {
-    allocation_tracker             tracker   = {};
-    const utp_allocator_t          allocator = {tracked_alloc, tracked_realloc, tracked_free, &tracker};
-    utp_packet_out_pool_t          pool      = {};
-    utp_packet_out_bucket_config_t buckets[] = {{128u, 2u}, {512u, 1u}};
+    allocation_tracker           tracker   = {};
+    const utp_allocator_t        allocator = {tracked_alloc, tracked_realloc, tracked_free, &tracker};
+    utp_packet_out_pool_t        packets   = {};
+    utp_packet_out_buffer_pool_t buffers   = {};
 
-    REQUIRE(utp_packet_out_pool_init(&pool, &allocator, 3u, buckets, 2u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(tracker.allocations == 5u);  // structs(1) + (storage+nodes) * 2 buckets
+    REQUIRE(utp_packet_out_pool_init(&packets, &allocator) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, &allocator) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(tracker.allocations == 0u);
 
-    utp_packet_out_pool_cleanup(&pool);
-    REQUIRE(tracker.frees == 5u);
+    utp_packet_out_pool_cleanup(&packets);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
+    REQUIRE(tracker.frees == 0u);
 }
 
-TEST_CASE("packet_out pool init rejects invalid bucket configuration", "[packet_out][pool]")
+TEST_CASE("packet_out pools reject invalid initialization", "[packet_out][pool]")
 {
-    utp_packet_out_pool_t          pool                                      = {};
-    utp_packet_out_bucket_config_t single[]                                  = {{128u, 1u}};
-    utp_packet_out_bucket_config_t too_many[UTP_PACKET_OUT_MAX_BUCKETS + 1u] = {};
-    utp_packet_out_bucket_config_t zero_size[]                               = {{0u, 1u}};
-    utp_packet_out_bucket_config_t zero_count[]                              = {{128u, 0u}};
-    size_t                         i;
+    allocation_tracker           tracker             = {};
+    utp_packet_out_pool_t        packets             = {};
+    utp_packet_out_buffer_pool_t buffers             = {};
+    utp_allocator_t              malformed_allocator = {nullptr, tracked_realloc, tracked_free, &tracker};
 
-    for (i = 0u; i < UTP_PACKET_OUT_MAX_BUCKETS + 1u; ++i) {
-        too_many[i].size  = static_cast<uint16_t>(128u + i);
-        too_many[i].count = 1u;
+    REQUIRE(utp_packet_out_pool_init(nullptr, nullptr) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+    REQUIRE(utp_packet_out_buffer_pool_init(nullptr, nullptr) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+    REQUIRE(utp_packet_out_pool_init(&packets, &malformed_allocator) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, &malformed_allocator) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("packet_out acquire uses the fixed smallest fitting bucket", "[packet_out][acquire]")
+{
+    utp_packet_out_pool_t        packets = {};
+    utp_packet_out_buffer_pool_t buffers = {};
+    utp_packet_out_t*            packet  = nullptr;
+
+    REQUIRE(utp_packet_out_pool_init(&packets, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, nullptr) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 1280u, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet->alloc_size == 1280u);
+    utp_packet_out_pool_release(&packets, &buffers, packet);
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 1281u, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet->alloc_size == 1500u);
+    utp_packet_out_pool_release(&packets, &buffers, packet);
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 65535u, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet->alloc_size == 65535u);
+    REQUIRE(packet->raw_data == packet->encrypt_data);
+    REQUIRE(packet->loss_chain == packet);
+    utp_packet_out_pool_release(&packets, &buffers, packet);
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 0u, &packet) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    utp_packet_out_pool_cleanup(&packets);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
+}
+
+TEST_CASE("packet_out pools grow in fixed batches", "[packet_out][pool]")
+{
+    allocation_tracker                tracker   = {};
+    const utp_allocator_t             allocator = {tracked_alloc, tracked_realloc, tracked_free, &tracker};
+    utp_packet_out_pool_t             packets   = {};
+    utp_packet_out_buffer_pool_t      buffers   = {};
+    std::array<utp_packet_out_t*, 33> acquired  = {};
+
+    REQUIRE(utp_packet_out_pool_init(&packets, &allocator) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, &allocator) == UTP_INTERNAL_ERROR_OK);
+    for (auto& packet : acquired) {
+        REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 1200u, &packet) == UTP_INTERNAL_ERROR_OK);
     }
+    REQUIRE(packets.allocated_count == 64u);
+    REQUIRE(buffers.buckets[0].allocated_count == 64u);
+    REQUIRE(tracker.allocations == 4u);
 
-    REQUIRE(utp_packet_out_pool_init(nullptr, nullptr, 1u, single, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 0u, single, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, nullptr, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, single, 0u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, too_many, UTP_PACKET_OUT_MAX_BUCKETS + 1u) ==
-            UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, zero_size, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, zero_count, 1u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+    for (auto* packet : acquired) {
+        utp_packet_out_pool_release(&packets, &buffers, packet);
+    }
+    utp_packet_out_pool_cleanup(&packets);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
+    REQUIRE(tracker.frees == 4u);
 }
 
-TEST_CASE("packet_out pool accepts a bucket sized at the uint16_t ceiling", "[packet_out][pool]")
+TEST_CASE("packet_out buffer pool is shared by connections", "[packet_out][pool]")
 {
-    utp_packet_out_pool_t          pool      = {};
-    utp_packet_out_bucket_config_t buckets[] = {{65535u, 1u}};
+    utp_packet_out_pool_t        first_pool  = {};
+    utp_packet_out_pool_t        second_pool = {};
+    utp_packet_out_buffer_pool_t buffers     = {};
+    utp_packet_out_t*            first       = nullptr;
+    utp_packet_out_t*            second      = nullptr;
+    uint8_t*                     data;
 
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
-    utp_packet_out_pool_cleanup(&pool);
-}
+    REQUIRE(utp_packet_out_pool_init(&first_pool, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_init(&second_pool, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&first_pool, &buffers, 1200u, &first) == UTP_INTERNAL_ERROR_OK);
+    data = first->raw_data;
+    utp_packet_out_pool_release(&first_pool, &buffers, first);
+    REQUIRE(utp_packet_out_pool_acquire(&second_pool, &buffers, 1200u, &second) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(buffers.buckets[0].allocated_count == UTP_PACKET_OUT_GROW_COUNT);
+    REQUIRE(second->raw_data != nullptr);
+    REQUIRE(data != nullptr);
 
-TEST_CASE("packet_out pool rejects malformed custom allocator with NULL function pointer", "[packet_out][pool]")
-{
-    allocation_tracker             tracker             = {};
-    utp_packet_out_pool_t          pool                = {};
-    utp_packet_out_bucket_config_t buckets[]           = {{128u, 1u}};
-    utp_allocator_t                malformed_allocator = {nullptr, tracked_realloc, tracked_free, &tracker};
-
-    REQUIRE(utp_packet_out_pool_init(&pool, &malformed_allocator, 1u, buckets, 1u) ==
-            UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-}
-
-TEST_CASE("packet_out pool acquire selects the smallest bucket regardless of configuration order",
-          "[packet_out][acquire]")
-{
-    utp_packet_out_pool_t          pool      = {};
-    utp_packet_out_bucket_config_t buckets[] = {{512u, 1u}, {128u, 2u}};  // 故意乱序
-    utp_packet_out_t*              pkt_small = nullptr;
-    utp_packet_out_t*              pkt_large = nullptr;
-
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 4u, buckets, 2u) == UTP_INTERNAL_ERROR_OK);
-
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(pkt_small->alloc_size == 128u);
-    REQUIRE(pkt_small->raw_data == pkt_small->encrypt_data);
-    REQUIRE(pkt_small->loss_chain == pkt_small);
-
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 200u, &pkt_large) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(pkt_large->alloc_size == 512u);
-
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 9000u, &pkt_large) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
-
-    utp_packet_out_pool_cleanup(&pool);
-}
-
-TEST_CASE("packet_out pool acquire reports LIMIT when a bucket is exhausted without touching other buckets",
-          "[packet_out][acquire]")
-{
-    utp_packet_out_pool_t          pool       = {};
-    utp_packet_out_bucket_config_t buckets[]  = {{128u, 1u}, {512u, 1u}};
-    utp_packet_out_t*              pkt_small  = nullptr;
-    utp_packet_out_t*              pkt_small2 = nullptr;
-    utp_packet_out_t*              pkt_large  = nullptr;
-
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 4u, buckets, 2u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt_small2) == UTP_INTERNAL_ERROR_LIMIT);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 500u, &pkt_large) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(pkt_large->alloc_size == 512u);
-
-    utp_packet_out_pool_cleanup(&pool);
-}
-
-TEST_CASE("packet_out pool acquire reports LIMIT when the struct pool is exhausted", "[packet_out][acquire]")
-{
-    utp_packet_out_pool_t          pool      = {};
-    utp_packet_out_bucket_config_t buckets[] = {{128u, 4u}};
-    utp_packet_out_t*              pkt1      = nullptr;
-    utp_packet_out_t*              pkt2      = nullptr;
-
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 1u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt1) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_LIMIT);
-
-    // 结构体池耗尽时不消耗缓冲区名额:release 后应能再次成功 acquire。
-    utp_packet_out_pool_release(&pool, pkt1);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_OK);
-
-    utp_packet_out_pool_cleanup(&pool);
+    utp_packet_out_pool_release(&second_pool, &buffers, second);
+    utp_packet_out_pool_cleanup(&first_pool);
+    utp_packet_out_pool_cleanup(&second_pool);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
 }
 
 TEST_CASE("packet_out pool release resets state but preserves the buffer for reuse", "[packet_out][release]")
 {
-    utp_packet_out_pool_t          pool      = {};
-    utp_packet_out_bucket_config_t buckets[] = {{128u, 1u}};
-    utp_packet_out_t*              pkt       = nullptr;
-    utp_packet_out_t*              pkt2      = nullptr;
-    uint8_t*                       original_raw_data;
-    uint16_t                       original_alloc_size;
+    utp_packet_out_pool_t        packets = {};
+    utp_packet_out_buffer_pool_t buffers = {};
+    utp_packet_out_t*            pkt     = nullptr;
+    utp_packet_out_t*            pkt2    = nullptr;
+    uint8_t*                     original_raw_data;
+    uint16_t                     original_alloc_size;
 
-    REQUIRE(utp_packet_out_pool_init(&pool, nullptr, 2u, buckets, 1u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_init(&packets, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 100u, &pkt) == UTP_INTERNAL_ERROR_OK);
 
     pkt->po_flags         = UTP_PO_ENCRYPTED;
     pkt->local_flags      = UTP_POL_LOSS;
@@ -184,8 +174,8 @@ TEST_CASE("packet_out pool release resets state but preserves the buffer for reu
     original_raw_data     = pkt->raw_data;
     original_alloc_size   = pkt->alloc_size;
 
-    utp_packet_out_pool_release(&pool, pkt);
-    REQUIRE(utp_packet_out_pool_acquire(&pool, 100u, &pkt2) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_out_pool_release(&packets, &buffers, pkt);
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 100u, &pkt2) == UTP_INTERNAL_ERROR_OK);
 
     REQUIRE(pkt2->raw_data == original_raw_data);
     REQUIRE(pkt2->alloc_size == original_alloc_size);
@@ -197,7 +187,38 @@ TEST_CASE("packet_out pool release resets state but preserves the buffer for reu
     REQUIRE(pkt2->attempt_count == 0u);
     REQUIRE(pkt2->loss_chain == pkt2);
 
-    utp_packet_out_pool_cleanup(&pool);
+    utp_packet_out_pool_release(&packets, &buffers, pkt2);
+    utp_packet_out_pool_cleanup(&packets);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
+}
+
+TEST_CASE("packet_out buffer pool releases fully idle growth blocks", "[packet_out][pool]")
+{
+    utp_packet_out_pool_t             packets  = {};
+    utp_packet_out_buffer_pool_t      buffers  = {};
+    std::array<utp_packet_out_t*, 33> acquired = {};
+    utp_packet_out_t*                 packet   = nullptr;
+    auto&                             bucket   = buffers.buckets[0];
+
+    REQUIRE(utp_packet_out_pool_init(&packets, nullptr) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_packet_out_buffer_pool_init(&buffers, nullptr) == UTP_INTERNAL_ERROR_OK);
+    for (auto& item : acquired) {
+        REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 100u, &item) == UTP_INTERNAL_ERROR_OK);
+    }
+    for (auto* item : acquired) {
+        utp_packet_out_pool_release(&packets, &buffers, item);
+    }
+    REQUIRE(bucket.allocated_count == 64u);
+
+    bucket.sample_calls       = 1023u;
+    bucket.sample_max_in_use  = 0u;
+    bucket.sample_max_average = 1u;
+    REQUIRE(utp_packet_out_pool_acquire(&packets, &buffers, 100u, &packet) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(bucket.allocated_count == 32u);
+    utp_packet_out_pool_release(&packets, &buffers, packet);
+
+    utp_packet_out_pool_cleanup(&packets);
+    utp_packet_out_buffer_pool_cleanup(&buffers);
 }
 
 TEST_CASE("packet_out flatten joins raw and external slices", "[packet_out][slice]")
@@ -224,16 +245,16 @@ TEST_CASE("packet_out strips a transient prefix without moving external stream d
 {
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 2u + UTP_FRAME_STREAM_HEADER_SIZE> raw         = {};
     std::array<uint8_t, 4u>                                                         stream_data = {'d', 'a', 't', 'a'};
-    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> wire    = {};
-    const utp_packet_header_t                                                                       header  = {11u,
-                                                                                                               22u,
-                                                                                                               33u,
-                                                                                                               static_cast<uint16_t>(2u + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()),
-                                                                                                               UTP_PACKET_TYPE_CTRL,
-                                                                                                               0u};
-    utp_packet_header_t                                                                             decoded = {};
-    utp_packet_out_t                                                                                packet  = {};
-    size_t                                                                                          length  = 0u;
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> wire = {};
+    const utp_packet_header_t header  = {11u,
+                                         22u,
+                                         33u,
+                                         static_cast<uint16_t>(2u + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()),
+                                         UTP_PACKET_TYPE_CTRL,
+                                         0u};
+    utp_packet_header_t       decoded = {};
+    utp_packet_out_t          packet  = {};
+    size_t                    length  = 0u;
 
     REQUIRE(utp_proto_encode_header(raw.data(), raw.size(), &header) == UTP_INTERNAL_ERROR_OK);
     raw[UTP_PACKET_HEADER_SIZE]     = UTP_FRAME_TYPE_ACK;

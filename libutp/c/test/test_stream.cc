@@ -12,6 +12,8 @@ extern "C" {
 #include "connection/connection.h"
 }
 
+#include "connection_test_util.h"
+
 namespace {
 
 utp_address_t loopback_address(uint16_t port)
@@ -920,7 +922,7 @@ TEST_CASE("connection restores an unsent STREAM frame after a UDP write failure"
     REQUIRE(packet->stream_data_size == 4u);
     REQUIRE(utp_connection_find_stream_internal(&active, stream_id)->send_in_flight_bytes == 4u);
     utp_connection_on_packet_abandoned(&active, packet);
-    utp_packet_out_pool_release(&active.packet_pool, packet);
+    utp_packet_out_pool_release(&active.packet_pool, active.packet_buffer_pool, packet);
     REQUIRE(utp_connection_find_stream_internal(&active, stream_id)->send_in_flight_bytes == 0u);
     REQUIRE(active.stream_data_sent_total == 0u);
 
@@ -929,7 +931,7 @@ TEST_CASE("connection restores an unsent STREAM frame after a UDP write failure"
     REQUIRE(retry->stream_offset == 0u);
     REQUIRE(retry->stream_data_size == 4u);
     utp_connection_on_packet_abandoned(&active, retry);
-    utp_packet_out_pool_release(&active.packet_pool, retry);
+    utp_packet_out_pool_release(&active.packet_pool, active.packet_buffer_pool, retry);
     utp_connection_cleanup(&active);
 }
 
@@ -962,7 +964,7 @@ TEST_CASE("strict stream scheduler honors priority and round-robins equal priori
     REQUIRE(packet != nullptr);
     REQUIRE(packet->stream_id == second_id);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
 
     REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, first_id), 4u) == UTP_STATUS_OK);
     REQUIRE(utp_stream_set_priority(utp_connection_find_stream_internal(&connection, second_id), 4u) == UTP_STATUS_OK);
@@ -971,12 +973,12 @@ TEST_CASE("strict stream scheduler honors priority and round-robins equal priori
     REQUIRE(packet != nullptr);
     REQUIRE(packet->stream_id == first_id);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
     packet = utp_connection_next_packet_to_send_at(&connection, 102u);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->stream_id == second_id);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
     utp_connection_cleanup(&connection);
 }
 
@@ -1008,13 +1010,13 @@ TEST_CASE("drr scheduler limits each STREAM fragment by its weighted deficit", "
     REQUIRE(packet->stream_id == high_id);
     REQUIRE(packet->stream_data_size == 1244u);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
     packet = utp_connection_next_packet_to_send_at(&connection, 101u);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->stream_id == low_id);
     REQUIRE(packet->stream_data_size == 1200u);
     utp_connection_on_packet_abandoned(&connection, packet);
-    utp_packet_out_pool_release(&connection.packet_pool, packet);
+    utp_packet_out_pool_release(&connection.packet_pool, connection.packet_buffer_pool, packet);
     utp_connection_cleanup(&connection);
 }
 
@@ -1563,7 +1565,7 @@ TEST_CASE("connection STREAM packets use an external data slice", "[stream][zero
     REQUIRE(packet->slices[1].length == 4u);
     REQUIRE(packet->slices[1].data != nullptr);
 
-    utp_packet_out_pool_release(&active.packet_pool, packet);
+    utp_packet_out_pool_release(&active.packet_pool, active.packet_buffer_pool, packet);
     utp_connection_cleanup(&active);
     (void)active_address;
 }

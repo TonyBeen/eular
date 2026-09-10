@@ -1,6 +1,8 @@
 #ifndef EULAR_UTP_CONTEXT_CONTEXT_H
 #define EULAR_UTP_CONTEXT_CONTEXT_H
 
+#include <stdint.h>
+
 #include <utp/context.h>
 
 #include "connection/connection.h"
@@ -15,7 +17,7 @@
 #include "util/log.h"
 
 #define UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT   1024u
-#define UTP_CONTEXT_PACKET_LIMIT                     32u
+#define UTP_CONTEXT_PACKET_LIMIT                     SIZE_MAX
 #define UTP_CONTEXT_PACKET_IN_GROW_CAPACITY          64u
 #define UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY         8u
 #define UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE       256u
@@ -191,6 +193,7 @@ struct utp_context {
     utp_udp_socket_t                         udp_socket;                       // Context 持有的 UDP socket
     utp_address_t                            bound_address;                    // bind 成功后的本地地址与地址族
     utp_packet_in_pool_t                     packet_in_pool;                   // 入站包对象池
+    utp_packet_out_buffer_pool_t             packet_out_buffer_pool;           // 所有连接共享的发送缓冲池
     uint8_t                                  encrypt_send_buffer[UINT16_MAX];  // 握手构造和最终 UDP 加密串行复用缓冲
     utp_hash_table_t                         connections;                      // 活跃连接 CID 表
     utp_hash_table_t                         passive_connections_by_peer;      // 被动连接来源地址和对端 CID 表

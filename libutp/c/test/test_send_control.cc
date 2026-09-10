@@ -130,6 +130,18 @@ TEST_CASE("send control grows historical attempt indexes for repeated retransmis
     utp_send_control_cleanup(&control);
 }
 
+TEST_CASE("send control supports an unbounded queue policy with fixed attempt batches", "[send_control][pool]")
+{
+    utp_send_control_t control = {};
+
+    REQUIRE(utp_send_control_init(&control, SIZE_MAX, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(control.ledger.packet_limit == SIZE_MAX);
+    REQUIRE(control.scheduled_packet_limit == SIZE_MAX);
+    REQUIRE(control.attempt_block_size == 32u);
+    REQUIRE(control.attempt_capacity == 32u);
+    utp_send_control_cleanup(&control);
+}
+
 TEST_CASE("send control records sent packets and applies an ACK", "[send_control]")
 {
     utp_send_control_t            control = {};

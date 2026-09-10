@@ -1,146 +1,239 @@
 #include "proto/packet_out.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 
 #include "proto/frame.h"
 #include "proto/proto.h"
 
-static void bucket_cleanup(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator)
+static const uint16_t k_packet_out_bucket_sizes[] = {1280u, 1500u, 4096u, 9000u, UINT16_MAX};
+
+#define UTP_PACKET_OUT_POOL_SAMPLE_PERIOD 1024u
+
+static void bucket_init(utp_packet_out_bucket_t* bucket, uint16_t size)
 {
-    if (bucket->nodes != NULL) {
-        utp_allocator_free(allocator, bucket->nodes);
-    }
-    if (bucket->storage != NULL) {
-        utp_allocator_free(allocator, bucket->storage);
-    }
-    bucket->size    = 0u;
-    bucket->count   = 0u;
-    bucket->storage = NULL;
-    bucket->nodes   = NULL;
+    memset(bucket, 0, sizeof(*bucket));
+    bucket->size = size;
     TAILQ_INIT(&bucket->free_buffers);
+    TAILQ_INIT(&bucket->blocks);
 }
 
-static utp_internal_error_t bucket_init(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator,
-                                        uint16_t size, size_t count)
+static void bucket_cleanup(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator)
 {
-    TAILQ_INIT(&bucket->free_buffers);
-    bucket->size    = size;
-    bucket->count   = count;
-    bucket->storage = NULL;
-    bucket->nodes   = NULL;
+    utp_packet_out_buffer_block_t* block;
 
-    if (count > SIZE_MAX / size || count > SIZE_MAX / sizeof(*bucket->nodes)) {
+    while ((block = TAILQ_FIRST(&bucket->blocks)) != NULL) {
+        TAILQ_REMOVE(&bucket->blocks, block, link);
+        utp_allocator_free(allocator, block);
+    }
+    memset(bucket, 0, sizeof(*bucket));
+    TAILQ_INIT(&bucket->free_buffers);
+    TAILQ_INIT(&bucket->blocks);
+}
+
+static size_t choose_bucket(const utp_packet_out_buffer_pool_t* pool, uint16_t requested_size)
+{
+    for (size_t index = 0u; index < pool->bucket_count; ++index) {
+        if (pool->buckets[index].size >= requested_size) {
+            return index;
+        }
+    }
+    return pool->bucket_count;
+}
+
+static bool bucket_has_new_sample(const utp_packet_out_bucket_t* bucket)
+{
+    return bucket->sample_calls != 0u && bucket->sample_calls % UTP_PACKET_OUT_POOL_SAMPLE_PERIOD == 0u;
+}
+
+static void bucket_record_activity(utp_packet_out_bucket_t* bucket)
+{
+    ++bucket->sample_calls;
+    if (bucket->in_use_count > bucket->sample_max_in_use) {
+        bucket->sample_max_in_use = bucket->in_use_count;
+    }
+    if (!bucket_has_new_sample(bucket)) {
+        return;
+    }
+    if (bucket->sample_max_average == 0u) {
+        bucket->sample_max_average = bucket->sample_max_in_use;
+    } else {
+        bucket->sample_max_average -= bucket->sample_max_average / 8u;
+        bucket->sample_max_average += bucket->sample_max_in_use / 8u;
+    }
+    bucket->sample_max_in_use = bucket->in_use_count;
+}
+
+static void bucket_shrink(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator)
+{
+    utp_packet_out_buffer_block_t* block;
+    size_t                         target_count;
+
+    if (bucket->sample_max_average >= bucket->allocated_count / 4u ||
+        bucket->allocated_count <= UTP_PACKET_OUT_GROW_COUNT) {
+        return;
+    }
+    target_count = bucket->allocated_count / 2u;
+    block        = TAILQ_FIRST(&bucket->blocks);
+    while (block != NULL && bucket->allocated_count > target_count) {
+        utp_packet_out_buffer_block_t* next = TAILQ_NEXT(block, link);
+
+        if (block->free_count == UTP_PACKET_OUT_GROW_COUNT) {
+            for (size_t index = 0u; index < UTP_PACKET_OUT_GROW_COUNT; ++index) {
+                TAILQ_REMOVE(&bucket->free_buffers, &block->nodes[index], link);
+            }
+            TAILQ_REMOVE(&bucket->blocks, block, link);
+            utp_allocator_free(allocator, block);
+            bucket->allocated_count -= UTP_PACKET_OUT_GROW_COUNT;
+        }
+        block = next;
+    }
+}
+
+static utp_internal_error_t bucket_grow(utp_packet_out_bucket_t* bucket, const utp_allocator_t* allocator)
+{
+    const size_t                   storage_size = (size_t)bucket->size * UTP_PACKET_OUT_GROW_COUNT;
+    utp_packet_out_buffer_block_t* block;
+
+    block = utp_allocator_alloc(allocator, sizeof(*block) + storage_size);
+    if (block == NULL) {
+        return UTP_INTERNAL_ERROR_NOMEM;
+    }
+    block->free_count = UTP_PACKET_OUT_GROW_COUNT;
+    block->storage    = (uint8_t*)(block + 1);
+    for (size_t index = 0u; index < UTP_PACKET_OUT_GROW_COUNT; ++index) {
+        block->nodes[index].block = block;
+        block->nodes[index].data  = block->storage + index * (size_t)bucket->size;
+        TAILQ_INSERT_TAIL(&bucket->free_buffers, &block->nodes[index], link);
+    }
+    TAILQ_INSERT_TAIL(&bucket->blocks, block, link);
+    bucket->allocated_count += UTP_PACKET_OUT_GROW_COUNT;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static utp_internal_error_t bucket_acquire(utp_packet_out_buffer_pool_t* buffer_pool, size_t bucket_index,
+                                           utp_packet_out_buffer_node_t** out)
+{
+    utp_packet_out_bucket_t*      bucket = &buffer_pool->buckets[bucket_index];
+    utp_packet_out_buffer_node_t* node;
+    utp_internal_error_t          error;
+
+    if (TAILQ_EMPTY(&bucket->free_buffers)) {
+        error = bucket_grow(bucket, buffer_pool->allocator);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    node = TAILQ_FIRST(&bucket->free_buffers);
+    TAILQ_REMOVE(&bucket->free_buffers, node, link);
+    --node->block->free_count;
+    ++bucket->in_use_count;
+    bucket_record_activity(bucket);
+    if (bucket_has_new_sample(bucket)) {
+        bucket_shrink(bucket, buffer_pool->allocator);
+    }
+    *out = node;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static void bucket_release(utp_packet_out_buffer_pool_t* buffer_pool, size_t bucket_index,
+                           utp_packet_out_buffer_node_t* node)
+{
+    utp_packet_out_bucket_t* bucket = &buffer_pool->buckets[bucket_index];
+
+    ++node->block->free_count;
+    TAILQ_INSERT_HEAD(&bucket->free_buffers, node, link);
+    --bucket->in_use_count;
+    bucket_record_activity(bucket);
+    if (bucket_has_new_sample(bucket)) {
+        bucket_shrink(bucket, buffer_pool->allocator);
+    }
+}
+
+utp_internal_error_t utp_packet_out_buffer_pool_init(utp_packet_out_buffer_pool_t* pool,
+                                                     const utp_allocator_t*        allocator)
+{
+    const utp_allocator_t* resolved_allocator;
+
+    if (pool == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    resolved_allocator = utp_allocator_resolve(allocator);
+    if (resolved_allocator == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    memset(pool, 0, sizeof(*pool));
+    pool->allocator    = resolved_allocator;
+    pool->bucket_count = sizeof(k_packet_out_bucket_sizes) / sizeof(k_packet_out_bucket_sizes[0]);
+    for (size_t index = 0u; index < pool->bucket_count; ++index) {
+        bucket_init(&pool->buckets[index], k_packet_out_bucket_sizes[index]);
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
 
-    bucket->storage = utp_allocator_alloc(allocator, (size_t)size * count);
-    if (bucket->storage == NULL) {
-        return UTP_INTERNAL_ERROR_NOMEM;
+void utp_packet_out_buffer_pool_cleanup(utp_packet_out_buffer_pool_t* pool)
+{
+    if (pool == NULL) {
+        return;
     }
-    bucket->nodes = utp_allocator_alloc(allocator, count * sizeof(*bucket->nodes));
-    if (bucket->nodes == NULL) {
-        bucket_cleanup(bucket, allocator);
-        return UTP_INTERNAL_ERROR_NOMEM;
+    for (size_t index = 0u; index < pool->bucket_count; ++index) {
+        bucket_cleanup(&pool->buckets[index], pool->allocator);
     }
-    for (size_t i = 0u; i < count; ++i) {
-        bucket->nodes[i].data = bucket->storage + i * (size_t)size;
-        TAILQ_INSERT_TAIL(&bucket->free_buffers, &bucket->nodes[i], link);
+    pool->allocator    = NULL;
+    pool->bucket_count = 0u;
+}
+
+utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t* pool, const utp_allocator_t* allocator)
+{
+    const utp_allocator_t* resolved_allocator;
+
+    if (pool == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
+    resolved_allocator = utp_allocator_resolve(allocator);
+    if (resolved_allocator == NULL) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    memset(pool, 0, sizeof(*pool));
+    pool->allocator = resolved_allocator;
+    TAILQ_INIT(&pool->free_structs);
+    TAILQ_INIT(&pool->blocks);
     return UTP_INTERNAL_ERROR_OK;
 }
 
 void utp_packet_out_pool_cleanup(utp_packet_out_pool_t* pool)
 {
+    utp_packet_out_block_t* block;
+
     if (pool == NULL) {
         return;
     }
-    for (size_t i = 0u; i < pool->bucket_count; ++i) {
-        bucket_cleanup(&pool->buckets[i], pool->allocator);
-    }
-    if (pool->structs != NULL) {
-        utp_allocator_free(pool->allocator, pool->structs);
+    while ((block = TAILQ_FIRST(&pool->blocks)) != NULL) {
+        TAILQ_REMOVE(&pool->blocks, block, link);
+        utp_allocator_free(pool->allocator, block);
     }
     pool->allocator       = NULL;
-    pool->structs         = NULL;
-    pool->struct_capacity = 0u;
-    pool->bucket_count    = 0u;
+    pool->allocated_count = 0u;
     TAILQ_INIT(&pool->free_structs);
+    TAILQ_INIT(&pool->blocks);
 }
 
-utp_internal_error_t utp_packet_out_pool_init(utp_packet_out_pool_t* pool, const utp_allocator_t* allocator,
-                                              size_t struct_capacity, const utp_packet_out_bucket_config_t* buckets,
-                                              size_t bucket_count)
+static utp_internal_error_t packet_out_pool_grow(utp_packet_out_pool_t* pool)
 {
-    utp_packet_out_bucket_config_t sorted[UTP_PACKET_OUT_MAX_BUCKETS];
+    utp_packet_out_block_t* block;
 
-    if (pool == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    pool->allocator       = NULL;
-    pool->structs         = NULL;
-    pool->struct_capacity = 0u;
-    pool->bucket_count    = 0u;
-    TAILQ_INIT(&pool->free_structs);
-
-    if (struct_capacity == 0u || struct_capacity > SIZE_MAX / sizeof(utp_packet_out_t) || buckets == NULL ||
-        bucket_count == 0u || bucket_count > UTP_PACKET_OUT_MAX_BUCKETS) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    for (size_t i = 0u; i < bucket_count; ++i) {
-        if (buckets[i].size == 0u || buckets[i].count == 0u) {
-            return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-        }
-    }
-
-    for (size_t i = 0u; i < bucket_count; ++i) {
-        sorted[i] = buckets[i];
-    }
-    for (size_t i = 1u; i < bucket_count; ++i) {
-        for (size_t j = i; j > 0u && sorted[j - 1u].size > sorted[j].size; --j) {
-            utp_packet_out_bucket_config_t tmp = sorted[j];
-
-            sorted[j]      = sorted[j - 1u];
-            sorted[j - 1u] = tmp;
-        }
-    }
-
-    pool->allocator = utp_allocator_resolve(allocator);
-    if (pool->allocator == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
-    pool->structs = utp_allocator_alloc(pool->allocator, struct_capacity * sizeof(utp_packet_out_t));
-    if (pool->structs == NULL) {
+    block = utp_allocator_alloc(pool->allocator, sizeof(*block));
+    if (block == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
     }
-    pool->struct_capacity = struct_capacity;
-    TAILQ_INIT(&pool->free_structs);
-    for (size_t i = 0u; i < struct_capacity; ++i) {
-        pool->structs[i].loss_chain = &pool->structs[i];
-        TAILQ_INSERT_TAIL(&pool->free_structs, &pool->structs[i], po_next);
+    for (size_t index = 0u; index < UTP_PACKET_OUT_GROW_COUNT; ++index) {
+        block->packets[index].loss_chain = &block->packets[index];
+        TAILQ_INSERT_TAIL(&pool->free_structs, &block->packets[index], po_next);
     }
-
-    for (size_t i = 0u; i < bucket_count; ++i) {
-        utp_internal_error_t error = bucket_init(&pool->buckets[i], pool->allocator, sorted[i].size, sorted[i].count);
-
-        if (!utp_internal_error_is_ok(error)) {
-            pool->bucket_count = i;
-            utp_packet_out_pool_cleanup(pool);
-            return error;
-        }
-    }
-    pool->bucket_count = bucket_count;
+    TAILQ_INSERT_TAIL(&pool->blocks, block, link);
+    pool->allocated_count += UTP_PACKET_OUT_GROW_COUNT;
     return UTP_INTERNAL_ERROR_OK;
-}
-
-static size_t choose_bucket(const utp_packet_out_pool_t* pool, uint16_t requested_size)
-{
-    for (size_t i = 0u; i < pool->bucket_count; ++i) {
-        if (pool->buckets[i].size >= requested_size) {
-            return i;
-        }
-    }
-    return pool->bucket_count;
 }
 
 static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_buffer_node_t* node,
@@ -177,82 +270,64 @@ static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_b
     pkt->destination.scope_id        = 0u;
     pkt->has_destination             = false;
     pkt->bucket_index                = bucket_index;
+    pkt->buffer_node                 = node;
 }
 
-utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t* pool, uint16_t requested_size,
-                                                 utp_packet_out_t** out)
+utp_internal_error_t utp_packet_out_pool_acquire(utp_packet_out_pool_t* pool, utp_packet_out_buffer_pool_t* buffer_pool,
+                                                 uint16_t requested_size, utp_packet_out_t** out)
 {
-    if (pool == NULL || out == NULL || requested_size == 0u) {
+    utp_packet_out_buffer_node_t* node;
+    utp_packet_out_t*             packet;
+    size_t                        bucket_index;
+    utp_internal_error_t          error;
+
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (pool == NULL || buffer_pool == NULL || out == NULL || requested_size == 0u || pool->allocator == NULL ||
+        buffer_pool->allocator == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    size_t bucket_index = choose_bucket(pool, requested_size);
-    if (bucket_index == pool->bucket_count) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    bucket_index = choose_bucket(buffer_pool, requested_size);
+    error        = bucket_acquire(buffer_pool, bucket_index, &node);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
     }
-    utp_packet_out_bucket_t* bucket = &pool->buckets[bucket_index];
-    if (TAILQ_EMPTY(&bucket->free_buffers) || TAILQ_EMPTY(&pool->free_structs)) {
-        return UTP_INTERNAL_ERROR_LIMIT;
+    if (TAILQ_EMPTY(&pool->free_structs)) {
+        error = packet_out_pool_grow(pool);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            bucket_release(buffer_pool, bucket_index, node);
+            return error;
+        }
     }
-
-    utp_packet_out_buffer_node_t* node = TAILQ_FIRST(&bucket->free_buffers);
-    TAILQ_REMOVE(&bucket->free_buffers, node, link);
-
-    utp_packet_out_t* pkt = TAILQ_FIRST(&pool->free_structs);
-    TAILQ_REMOVE(&pool->free_structs, pkt, po_next);
-
-    reset_packet_out_for_acquire(pkt, node, bucket, bucket_index);
-
-    *out = pkt;
+    packet = TAILQ_FIRST(&pool->free_structs);
+    TAILQ_REMOVE(&pool->free_structs, packet, po_next);
+    reset_packet_out_for_acquire(packet, node, &buffer_pool->buckets[bucket_index], bucket_index);
+    *out = packet;
     return UTP_INTERNAL_ERROR_OK;
 }
 
-void utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_t* pkt)
+void utp_packet_out_pool_release(utp_packet_out_pool_t* pool, utp_packet_out_buffer_pool_t* buffer_pool,
+                                 utp_packet_out_t* pkt)
 {
-    if (pool == NULL || pkt == NULL) {
-        return;
-    }
+    utp_packet_out_buffer_node_t* node;
+    size_t                        bucket_index;
 
-    uint8_t*                 raw_data     = pkt->raw_data;
-    uint8_t*                 encrypt_data = pkt->encrypt_data;
-    uint16_t                 alloc_size   = pkt->alloc_size;
-    size_t                   bucket_index = pkt->bucket_index;
-    utp_packet_out_bucket_t* bucket       = &pool->buckets[bucket_index];
-
-    pkt->sent_time_us                = 0u;
-    pkt->packet_number               = 0u;
-    pkt->ack_number                  = 0u;
-    pkt->loss_chain                  = pkt;
-    pkt->frame_types                 = 0u;
-    pkt->po_flags                    = 0u;
-    pkt->local_flags                 = 0u;
-    pkt->data_size                   = 0u;
-    pkt->encrypt_data_size           = 0u;
-    pkt->alloc_size                  = alloc_size;
-    pkt->packet_type                 = 0u;
-    pkt->slice_count                 = 0u;
-    pkt->frame_meta_count            = 0u;
-    pkt->stream_data_size            = 0u;
-    pkt->path_validation_generation  = 0u;
-    pkt->transient_ack_size          = 0u;
-    pkt->control_prefix_size         = 0u;
-    pkt->early_plaintext_prefix_size = 0u;
-    pkt->stream_id                   = 0u;
-    pkt->stream_offset               = 0u;
-    pkt->attempts                    = NULL;
-    pkt->attempt_count               = 0u;
-    pkt->bw_packet_state.valid       = false;
-    pkt->bw_state                    = NULL;
-    pkt->raw_data                    = raw_data;
-    pkt->encrypt_data                = encrypt_data;
-    pkt->destination.family          = UTP_ADDRESS_FAMILY_UNSPECIFIED;
-    pkt->destination.port            = 0u;
-    pkt->destination.scope_id        = 0u;
-    pkt->has_destination             = false;
-    pkt->bucket_index                = bucket_index;
+    assert(pool != NULL);
+    assert(buffer_pool != NULL);
+    assert(pkt != NULL);
+    assert(pool->allocator != NULL);
+    assert(buffer_pool->allocator != NULL);
+    bucket_index = pkt->bucket_index;
+    node         = pkt->buffer_node;
+    assert(bucket_index < buffer_pool->bucket_count);
+    assert(node != NULL);
+    assert(node->block != NULL);
+    assert(node->data == pkt->raw_data);
+    assert(pkt->alloc_size == buffer_pool->buckets[bucket_index].size);
+    reset_packet_out_for_acquire(pkt, node, &buffer_pool->buckets[bucket_index], bucket_index);
     TAILQ_INSERT_TAIL(&pool->free_structs, pkt, po_next);
-
-    size_t node_index = (size_t)(raw_data - bucket->storage) / bucket->size;
-    TAILQ_INSERT_TAIL(&bucket->free_buffers, &bucket->nodes[node_index], link);
+    bucket_release(buffer_pool, bucket_index, node);
 }
 
 utp_internal_error_t utp_packet_out_strip_prefix(utp_packet_out_t* pkt, uint16_t prefix_length)
