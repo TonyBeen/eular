@@ -605,6 +605,19 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
     send_unregister(target.primary, service_port, registered.registration_token);
     expect_unregistered(target.primary, registered.registration_token);
     {
+        std::vector<uint8_t>      body;
+        uint64_t                  packet_number = 0u;
+        utp_rendezvous_rejected_t rejected      = {};
+
+        send_packet(source, service_port, request);
+        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+        CHECK(rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE);
+        CHECK(memcmp(rejected.reference_id, unacknowledged_id, sizeof(unacknowledged_id)) == 0);
+        CHECK(rejected.reason_code == 2u);
+    }
+    {
         Datagram ignored = {};
 
         CHECK(!receive_datagram(target.primary, 1250u, &ignored));

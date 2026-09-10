@@ -32,35 +32,41 @@ Worker:
   recv/decode UDP datagram
   REQUEST 按 rendezvous_id 哈希到固定 owner Worker
   非 owner 通过目标 Worker 的有界 MPSC 转交
-  owner Worker 执行 REQUEST 处理
+  owner Worker 独占执行 REQUEST、pending、临时校准和 Forward 重试
+  校准 PING 按 (calibration_token, calibration_id)、Forward PONG 按 (registration_token, acknowledged_packet_number) 路由到 owner
   消费本 Worker 的输出队列并发送 UDP
 
 control thread:
-  唯一写入 registration、pending 和注销 tombstone
-  处理 REGISTER、UNREGISTER、保活、REQUEST、PONG
-  处理 pending 的校准超时、Forward 重试和生命周期淘汰
-  通过 Worker 输出队列发送 Redirect、Forward、PONG 等响应
+  唯一写入 registration、活动 registration token 索引和注销 tombstone
+  处理 REGISTER、UNREGISTER、ADDRESS_UPDATE、注册保活及其 PONG
 ```
 
-`registrations` 和注销 tombstone 由 control thread 管理；`pending_rendezvous` 目前仍由所有
-REQUEST owner 与 control timer 通过同一把互斥锁保护，迁移到 owner Worker 的本地状态后再移除
-该共享热点。固定 owner 保证同一 `rendezvous_id` 的 REQUEST 顺序一致。
+`registrations`、活动 registration token 索引和注销 tombstone 只由 control thread 管理。每个 owner Worker 私有
+`pending_rendezvous`；同一个 `rendezvous_id` 始终只会落到同一个 owner，因此重复 REQUEST、
+校准截止、Forward 重试和生命周期淘汰都无需共享锁。固定 owner 保证同一
+`rendezvous_id` 的处理顺序一致。
 
-`REQUEST` 由 owner Worker 执行，当前 `pending_rendezvous` 仍由 control thread 统一加锁管理；
-校准 `PING` 和 `PONG` 仍移交 control thread。control thread 生成的 UDP 响应进入目标 Worker 的
-有界输出 MPSC，Worker 是该输出队列的唯一消费者。入站或输出队列满时丢弃新的任务，调用方依靠
-协议重试。
+共享互斥锁只保护 control 状态快照及两个短时路由索引：`(calibration_token, calibration_id) -> owner` 和
+`(registration_token, acknowledged_packet_number) -> owner`。Worker 读取目标注册时复制快照，
+在锁外构建 CandidatePlan、编码并发送；不得保存注册表 iterator 或引用。control thread 同时维护活动
+registration token 索引；目标注销或注册超时时，先使 token 失效。owner Worker 在处理已有 pending、
+calibration 截止、Forward 重传或 Forward PONG 前检查该索引；token 已失效时删除本地 pending 和路由索引，
+不再产生新的 Redirect、Forward 或重传，不依赖可能已满的跨 Worker 取消队列。
 
-pending 的超时、校准截止、Forward 重试和删除均由 control thread 的单一 timer 执行，不按
-Worker 分配 owner，也不由多个 Worker 扫描共享 pending 表。收到 B 的 `PONG` 只标记
-`forward_delivered` 并停止 Forward 重试，pending 保留到生命周期结束，以便在 A 未收到
-`REDIRECT` 而重试 `REQUEST` 时重发同一 Redirect；只有过期、注销或进程停止时删除。
+收到 B 的 Forward PONG 后，owner 标记 `forward_delivered` 并移除 PONG 路由；pending 保留到
+生命周期结束，以便 A 未收到 `REDIRECT` 时重试 REQUEST 并重发同一 Redirect。pending 仅在过期、
+目标注销或进程停止时删除。
 
-本地 socketpair 只用于唤醒 control thread 和 Worker 输出消费者，采用非阻塞 socket。通知消息
-本身不承载协议数据；队列中的任务才是实际数据。启动阶段检查 event 注册失败，运行期间已创建
-且参数固定的写事件注册视为成功。不可恢复的 UDP 或本地通知 socket 错误记录操作名、错误码和
-系统描述，设置进程级 fatal 状态，使所有线程正常收尾后以非零状态退出，交由外部 supervisor
-重启。
+本地 socketpair 只用于唤醒 control thread、目标 Worker 和 Worker 输出消费者，采用非阻塞
+socket。通知消息本身不承载协议数据；队列中的任务才是实际数据。control 使用生命周期和保活两条
+启动时分配的有界连续内存 MPSC 环：`REGISTER`、`UNREGISTER`、`ADDRESS_UPDATE` 进入生命周期队列，
+`PING`、`PONG` 进入保活队列，control thread 总是优先消费生命周期队列。`--control-queue-capacity`
+表示两者总容量，默认 `1024`，其中四分之一保留给生命周期队列；每个 Worker 和每个 UDP socket
+输出队列默认容量分别为 `1024` 和 `128`。入站、Worker 或输出队列满时丢弃新的任务，客户端依靠
+`REGISTERED`、`UNREGISTERED` 等协议确认重试；内部 token 失效不依赖队列投递。
+启动阶段检查 event 注册失败，运行期间已创建且参数固定的写事件注册视为成功。不可恢复的 UDP 或
+本地通知 socket 错误记录操作名、错误码和系统描述，设置进程级 fatal 状态，使所有线程正常收尾后以
+非零状态退出，交由外部 supervisor 重启。
 
 ## 2. 包类型、帧包络与包号
 
@@ -500,13 +506,16 @@ NTRS 进程共享以下资源：
 ```text
 peer_id -> Registration
 registration_token -> Registration
-rendezvous_id -> ForwardPending
+registration_token -> active/inactive
+(calibration_token, calibration_id) -> owner Worker
+(registration_token, acknowledged_packet_number) -> owner Worker
 ```
 
-索引按 peer_id、token 或 rendezvous_id 分片；每次只在对应 shard 上短暂加锁完成查找、更新或取得稳定
-记录引用，UDP 编解码与发送均在锁外。任一 worker 都可处理 B 的 PING、PONG、ADDRESS_UPDATE 或
-calibration 报文；进程级包号使 PONG 可通过 `(registration_token, acknowledged_packet_number)` 全局匹配
-待确认的 `PING + FORWARD`，无需跨线程转发 UDP 数据报。
+注册表及 tombstone 仅由 control thread 写入；Worker 读取时在短锁内复制 Registration 快照。每个
+`rendezvous_id` 对应的 `ForwardPending` 是其 owner Worker 的本地状态，不进入共享表。非 owner 收到
+REQUEST、临时 calibration PING 或 Forward PONG 时，通过有界 MPSC 转交 owner；owner 在自己的事件循环
+中处理、重传和回收。进程级包号使 PONG 可以用
+`(registration_token, acknowledged_packet_number)` 全局定位 owner，无需跨线程转发 UDP 数据报。
 
 ## 9. 实现边界
 

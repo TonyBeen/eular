@@ -2,86 +2,90 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <new>
 
-// Dmitry Vyukov intrusive MPSC node-based queue.
-// Source: https://www.1024cores.net/home/lock-free-algorithms/queues
-//         https://www.1024cores.net/home/lock-free-algorithms/queues/non-intrusive-mpsc-node-based-queue
+// Dmitry Vyukov's bounded MPMC queue, used here with one consumer.
+// Source: https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
 //
-// Concurrency contract:
-// - push: safe for multiple producer threads.
-// - try_pop: safe for exactly one consumer thread.
-//
-// A null result can mean either an empty queue or the brief interval after a
-// producer exchanged head and before it linked the previous node. Consumers
-// must wait for their external notification and retry later.
-
-struct mpscq_node_t {
-    std::atomic<mpscq_node_t*> next;
-
-    mpscq_node_t() : next(NULL) {}
-    mpscq_node_t(const mpscq_node_t&)            = delete;
-    mpscq_node_t& operator=(const mpscq_node_t&) = delete;
-    mpscq_node_t(mpscq_node_t&&)                 = delete;
-    mpscq_node_t& operator=(mpscq_node_t&&)      = delete;
-};
-
-struct mpscq_t {
-    std::atomic<mpscq_node_t*> head;
-    mpscq_node_t*              tail;
-    mpscq_node_t               stub;
-
-    mpscq_t() : head(&stub), tail(&stub), stub() {}
-    mpscq_t(const mpscq_t&)            = delete;
-    mpscq_t& operator=(const mpscq_t&) = delete;
-    mpscq_t(mpscq_t&&)                 = delete;
-    mpscq_t& operator=(mpscq_t&&)      = delete;
-};
-
-#ifndef container_of
-#define container_of(ptr, type, member) reinterpret_cast<type*>(reinterpret_cast<char*>(ptr) - offsetof(type, member))
-#endif
-
-#ifndef mpscq_entry
-#define mpscq_entry(ptr, type, member) container_of(ptr, type, member)
-#endif
-
-inline void mpscq_create(mpscq_t* self)
+// Storage is allocated once before producers start. push returns false when the
+// queue is full; pop returns false when it is empty or a producer is still
+// publishing the next slot.
+template <typename T>
+class MpscQueue
 {
-    self->stub.next.store(NULL, std::memory_order_relaxed);
-    self->head.store(&self->stub, std::memory_order_relaxed);
-    self->tail = &self->stub;
-}
+    MpscQueue(const MpscQueue&)            = delete;
+    MpscQueue& operator=(const MpscQueue&) = delete;
 
-inline void mpscq_push(mpscq_t* self, mpscq_node_t* node)
-{
-    node->next.store(NULL, std::memory_order_relaxed);
-    mpscq_node_t* const previous = self->head.exchange(node, std::memory_order_acq_rel);
+public:
+    MpscQueue() : slots_(), capacity_(0u), enqueue_position_(0u), dequeue_position_(0u) {}
 
-    previous->next.store(node, std::memory_order_release);
-}
+    bool create(size_t capacity)
+    {
+        if (capacity == 0u || slots_) return false;
+        std::unique_ptr<Slot[]> slots(new (std::nothrow) Slot[capacity]);
 
-inline mpscq_node_t* mpscq_try_pop(mpscq_t* self)
-{
-    mpscq_node_t* tail = self->tail;
-    mpscq_node_t* next = tail->next.load(std::memory_order_acquire);
-
-    if (tail == &self->stub) {
-        if (next == NULL) return NULL;
-        self->tail = next;
-        tail       = next;
-        next       = next->next.load(std::memory_order_acquire);
+        if (!slots) return false;
+        for (size_t index = 0u; index < capacity; ++index)
+            slots[index].sequence.store(index, std::memory_order_relaxed);
+        slots_    = std::move(slots);
+        capacity_ = capacity;
+        enqueue_position_.store(0u, std::memory_order_relaxed);
+        dequeue_position_ = 0u;
+        return true;
     }
-    if (next != NULL) {
-        self->tail = next;
-        return tail;
+
+    bool push(const T& value)
+    {
+        size_t position;
+
+        if (!slots_) return false;
+        position = enqueue_position_.load(std::memory_order_relaxed);
+        for (;;) {
+            Slot&          slot       = slots_[position % capacity_];
+            const size_t   sequence   = slot.sequence.load(std::memory_order_acquire);
+            const intptr_t difference = static_cast<intptr_t>(sequence) - static_cast<intptr_t>(position);
+
+            if (difference == 0) {
+                if (enqueue_position_.compare_exchange_weak(position, position + 1u, std::memory_order_relaxed,
+                                                            std::memory_order_relaxed)) {
+                    slot.value = value;
+                    slot.sequence.store(position + 1u, std::memory_order_release);
+                    return true;
+                }
+            } else if (difference < 0) {
+                return false;
+            } else {
+                position = enqueue_position_.load(std::memory_order_relaxed);
+            }
+        }
     }
-    if (tail != self->head.load(std::memory_order_acquire)) return NULL;
 
-    mpscq_push(self, &self->stub);
-    next = tail->next.load(std::memory_order_acquire);
-    if (next == NULL) return NULL;
-    self->tail = next;
-    return tail;
-}
+    bool pop(T* value)
+    {
+        if (!slots_ || value == NULL) return false;
+        Slot&          slot       = slots_[dequeue_position_ % capacity_];
+        const size_t   sequence   = slot.sequence.load(std::memory_order_acquire);
+        const intptr_t difference = static_cast<intptr_t>(sequence) - static_cast<intptr_t>(dequeue_position_ + 1u);
 
-inline mpscq_node_t* mpscq_pop(mpscq_t* self) { return mpscq_try_pop(self); }
+        if (difference != 0) return false;
+        *value = slot.value;
+        slot.sequence.store(dequeue_position_ + capacity_, std::memory_order_release);
+        ++dequeue_position_;
+        return true;
+    }
+
+private:
+    struct Slot {
+        std::atomic<size_t> sequence;
+        T                   value;
+
+        Slot() : sequence(0u), value() {}
+    };
+
+    std::unique_ptr<Slot[]> slots_;
+    size_t                  capacity_;
+    std::atomic<size_t>     enqueue_position_;
+    size_t                  dequeue_position_;
+};

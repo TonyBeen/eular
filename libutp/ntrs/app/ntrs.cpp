@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -107,45 +108,6 @@ struct PendingRendezvous {
 
 class NtrsServer;
 
-struct SharedNtrsState {
-    std::mutex                                         mutex;
-    std::atomic<uint64_t>                              next_packet_number;
-    std::atomic<bool>                                  fatal_socket_error;
-    std::atomic<int>                                   fatal_error_code;
-    mpscq_t                                            control_queue;
-    int                                                control_notify_fd;
-    int                                                control_notify_write_fd;
-    std::atomic<size_t>                                control_queue_size;
-    std::unordered_map<std::string, Registration>      registrations;
-    std::unordered_map<std::string, uint64_t>          unregistration_tombstones;
-    std::unordered_map<std::string, PendingRendezvous> pending_rendezvous;
-    std::vector<NtrsServer*>                           workers;
-
-    SharedNtrsState()
-        : next_packet_number(1u),
-          fatal_socket_error(false),
-          fatal_error_code(0),
-          control_queue(),
-          control_notify_fd(-1),
-          control_notify_write_fd(-1),
-          control_queue_size(0u)
-    {
-    }
-
-    uint64_t nextPacketNumber()
-    {
-        uint64_t current = next_packet_number.load(std::memory_order_relaxed);
-
-        while (current != 0u && current <= UTP_PACKET_NUMBER_MAX) {
-            if (next_packet_number.compare_exchange_weak(current, current + 1u, std::memory_order_relaxed,
-                                                         std::memory_order_relaxed)) {
-                return current;
-            }
-        }
-        return 0u;
-    }
-};
-
 struct OutgoingDatagram {
     sockaddr_storage                          peer;
     std::array<uint8_t, UTP_PACKET_MTU_FLOOR> packet;
@@ -160,7 +122,7 @@ struct UdpSocket {
     event*                       read_event;
     event*                       write_event;
     std::deque<OutgoingDatagram> output_queue;
-    mpscq_t                      control_output_queue;
+    MpscQueue<OutgoingDatagram>  control_output_queue;
     std::atomic<size_t>          control_output_queue_size;
     int                          fd;
     int                          control_output_read_fd;
@@ -179,7 +141,6 @@ struct PreparedDatagram {
 };
 
 struct ControlTask {
-    mpscq_node_t                              node;
     sockaddr_storage                          peer;
     utp_ntrs_endpoint_t                       observed;
     utp_packet_header_t                       header;
@@ -188,16 +149,11 @@ struct ControlTask {
     socklen_t                                 peer_length;
     uint16_t                                  frame_payload_length;
     uint8_t                                   message_type;
-    uint8_t                                   pending_hint;
 };
 
-struct ControlOutput {
-    mpscq_node_t     node;
-    PreparedDatagram datagram;
-};
+enum WorkerTaskType { kWorkerTaskRequest = 1u, kWorkerTaskCalibrationPing = 2u, kWorkerTaskForwardPong = 3u };
 
 struct WorkerTask {
-    mpscq_node_t                              node;
     sockaddr_storage                          peer;
     utp_ntrs_endpoint_t                       observed;
     utp_packet_header_t                       header;
@@ -206,6 +162,51 @@ struct WorkerTask {
     socklen_t                                 peer_length;
     uint16_t                                  frame_payload_length;
     uint8_t                                   message_type;
+    uint8_t                                   task_type;
+    uint8_t                                   calibration_index;
+};
+
+struct SharedNtrsState {
+    std::mutex                                    mutex;
+    std::atomic<uint64_t>                         next_packet_number;
+    std::atomic<bool>                             fatal_socket_error;
+    std::atomic<int>                              fatal_error_code;
+    MpscQueue<ControlTask>                        lifecycle_control_queue;
+    MpscQueue<ControlTask>                        keepalive_control_queue;
+    int                                           control_notify_fd;
+    int                                           control_notify_write_fd;
+    std::unordered_map<std::string, Registration> registrations;
+    std::unordered_map<std::string, uint64_t>     unregistration_tombstones;
+    std::unordered_set<std::string>               active_registration_tokens;
+    // Registration state is owned by the control thread. These indexes only
+    // route packets to the Worker that owns a rendezvous transaction.
+    std::unordered_map<std::string, uint16_t>     calibration_owners;
+    std::unordered_map<std::string, uint16_t>     forward_owners;
+    std::vector<NtrsServer*>                      workers;
+
+    SharedNtrsState()
+        : next_packet_number(1u),
+          fatal_socket_error(false),
+          fatal_error_code(0),
+          lifecycle_control_queue(),
+          keepalive_control_queue(),
+          control_notify_fd(-1),
+          control_notify_write_fd(-1)
+    {
+    }
+
+    uint64_t nextPacketNumber()
+    {
+        uint64_t current = next_packet_number.load(std::memory_order_relaxed);
+
+        while (current != 0u && current <= UTP_PACKET_NUMBER_MAX) {
+            if (next_packet_number.compare_exchange_weak(current, current + 1u, std::memory_order_relaxed,
+                                                         std::memory_order_relaxed)) {
+                return current;
+            }
+        }
+        return 0u;
+    }
 };
 
 struct OutgoingFrame;
@@ -218,7 +219,8 @@ public:
 
     bool start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_endpoint_t& advertised_endpoint,
                const char* interface_name, const std::vector<uint16_t>& calibration_ports,
-               uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms);
+               uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms,
+               size_t output_queue_capacity, size_t worker_queue_capacity);
     int  run(const utp_ntrs_endpoint_t& endpoint);
 
 private:
@@ -272,42 +274,46 @@ private:
                           const utp_frame_rendezvous_t& frame);
     void handleRequest(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
                        const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame);
-    uint8_t     classifyPendingRequest(const utp_ntrs_endpoint_t& observed,
-                                       const uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE]) const;
-    bool        enqueueControl(ControlTask* task);
-    bool        reserveControlSlot();
-    void        releaseControlSlot();
-    bool        enqueueControlOutput(const PreparedDatagram& datagram);
-    bool        enqueueWorker(WorkerTask* task);
-    void        onControlEvent();
-    void        onControlOutput(UdpSocket* socket);
-    void        onWorkerEvent();
-    void        onControlTimer();
-    int         runControl();
-    void        onRead(UdpSocket* socket);
-    void        onTimer();
-    void        onWrite(UdpSocket* socket);
+    void handleCalibrationPing(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
+                               const utp_ntrs_endpoint_t& observed, const utp_packet_header_t& header,
+                               const utp_frame_rendezvous_t& frame);
+    void handleForwardPong(const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame);
+    void erasePendingRendezvous(const std::string& rendezvous_key);
+    bool isRegistrationTokenActive(const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>& token) const;
+    bool enqueueControl(const ControlTask& task);
+    bool enqueueControlOutput(const PreparedDatagram& datagram);
+    bool enqueueWorker(const WorkerTask& task);
+    void handleControlTask(const ControlTask& task);
+    void onControlEvent();
+    void onControlOutput(UdpSocket* socket);
+    void onWorkerEvent();
+    void onControlTimer();
+    int  runControl();
+    void onRead(UdpSocket* socket);
+    void onTimer();
+    void onWrite(UdpSocket* socket);
 
-    event_base* base_;
-    event*      timer_event_;
-    event*      control_event_;
-    event*      control_timer_event_;
-    event*      worker_event_;
-    event_base* control_base_;
-    UdpSocket   primary_socket_;
+    event_base*                                                    base_;
+    event*                                                         timer_event_;
+    event*                                                         control_event_;
+    event*                                                         control_timer_event_;
+    event*                                                         worker_event_;
+    event_base*                                                    control_base_;
+    UdpSocket                                                      primary_socket_;
     std::array<UdpSocket, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES>     calibration_sockets_;
     std::array<utp_address_t, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES> calibration_endpoints_;
     std::shared_ptr<SharedNtrsState>                               shared_state_;
-    mpscq_t                                                        worker_queue_;
-    std::atomic<size_t>                                            worker_queue_size_;
+    MpscQueue<WorkerTask>                                          worker_queue_;
     int                                                            worker_notify_fd_;
     int                                                            worker_notify_write_fd_;
     uint8_t                                                        calibration_endpoint_count_;
     uint8_t                                                        public_candidate_count_;
     uint32_t                                                       registration_timeout_ms_;
     uint32_t                                                       keepalive_interval_ms_;
+    size_t                                                         output_queue_capacity_;
     uint16_t                                                       worker_index_;
     bool                                                           fatal_socket_error_;
+    std::unordered_map<std::string, PendingRendezvous>             pending_rendezvous_;
 };
 
 static const uint64_t        k_pending_rendezvous_lifetime_ms       = 30000u;
@@ -320,13 +326,11 @@ static const uint32_t        k_forward_retry_send_failure_delay_ms  = 100u;
 static const uint8_t         k_forward_retry_count                  = 3u;
 static const uint32_t        k_temporary_calibration_timeout_ms     = 1000u;
 static const uint8_t         k_temporary_calibration_endpoint_count = 2u;
-static const size_t          k_output_queue_capacity                = 128u;
-static const size_t          k_control_queue_capacity               = 1024u;
-static const size_t          k_worker_queue_capacity                = 1024u;
+static const size_t          k_output_queue_capacity_default        = 128u;
+static const size_t          k_control_queue_capacity_default       = 1024u;
+static const size_t          k_worker_queue_capacity_default        = 1024u;
 static const uint8_t         k_primary_socket_index                 = UINT8_MAX;
 static volatile sig_atomic_t g_stop_requested                       = 0;
-
-enum PendingRequestHint { k_pending_request_new = 0u, k_pending_request_retry = 1u, k_pending_request_conflict = 2u };
 
 enum NtrsRejectionReason {
     k_rejection_peer_not_found = 2u,
@@ -363,17 +367,17 @@ NtrsServer::NtrsServer(const std::shared_ptr<SharedNtrsState>& shared_state, uin
       calibration_endpoints_(),
       shared_state_(shared_state),
       worker_queue_(),
-      worker_queue_size_(0u),
       worker_notify_fd_(-1),
       worker_notify_write_fd_(-1),
       calibration_endpoint_count_(0u),
       public_candidate_count_(UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES),
       registration_timeout_ms_(k_registration_timeout_default_ms),
       keepalive_interval_ms_(k_keepalive_interval_default_ms),
+      output_queue_capacity_(k_output_queue_capacity_default),
       worker_index_(worker_index),
-      fatal_socket_error_(false)
+      fatal_socket_error_(false),
+      pending_rendezvous_()
 {
-    mpscq_create(&worker_queue_);
     primary_socket_.fd                      = -1;
     primary_socket_.control_output_read_fd  = -1;
     primary_socket_.control_output_write_fd = -1;
@@ -388,9 +392,8 @@ NtrsServer::NtrsServer(const std::shared_ptr<SharedNtrsState>& shared_state, uin
 
 NtrsServer::~NtrsServer()
 {
-    while (mpscq_node_t* const node = mpscq_pop(&worker_queue_)) {
-        worker_queue_size_.fetch_sub(1u, std::memory_order_relaxed);
-        delete mpscq_entry(node, WorkerTask, node);
+    WorkerTask task = {};
+    while (worker_queue_.pop(&task)) {
     }
     for (size_t index = 0u; index < calibration_sockets_.size(); ++index) releaseSocket(&calibration_sockets_[index]);
     releaseSocket(&primary_socket_);
@@ -424,9 +427,8 @@ void NtrsServer::stopForFatalError(int error, const char* operation)
 void NtrsServer::releaseSocket(UdpSocket* socket)
 {
     if (socket == NULL) return;
-    while (mpscq_node_t* const node = mpscq_pop(&socket->control_output_queue)) {
-        socket->control_output_queue_size.fetch_sub(1u, std::memory_order_relaxed);
-        delete mpscq_entry(node, ControlOutput, node);
+    OutgoingDatagram datagram = {};
+    while (socket->control_output_queue.pop(&datagram)) {
     }
     if (socket->control_output_event != NULL) event_free(socket->control_output_event);
     if (socket->write_event != NULL) event_free(socket->write_event);
@@ -445,7 +447,6 @@ void NtrsServer::releaseSocket(UdpSocket* socket)
     socket->calibration_index       = 0u;
     socket->write_event_active      = false;
     socket->control_output_queue_size.store(0u, std::memory_order_relaxed);
-    mpscq_create(&socket->control_output_queue);
 }
 
 bool NtrsServer::createSocket(UdpSocket* socket, const utp_ntrs_endpoint_t& endpoint, const char* interface_name,
@@ -466,7 +467,7 @@ bool NtrsServer::createSocket(UdpSocket* socket, const utp_ntrs_endpoint_t& endp
     socket->write_event_active      = false;
     socket->control_output_queue_size.store(0u, std::memory_order_relaxed);
     socket->calibration_index = calibration_index;
-    mpscq_create(&socket->control_output_queue);
+    if (!socket->control_output_queue.create(output_queue_capacity_)) return false;
     const int reuse_port = 1;
     if ((socket->fd = ::socket(endpoint.family, SOCK_DGRAM, 0)) < 0 ||
         setsockopt(socket->fd, SOL_SOCKET, SO_REUSEPORT, &reuse_port, sizeof(reuse_port)) != 0 ||
@@ -908,59 +909,53 @@ bool NtrsServer::sendDatagram(const PreparedDatagram& datagram)
                         datagram.packet_length);
 }
 
-bool NtrsServer::enqueueControl(ControlTask* task)
+bool NtrsServer::enqueueControl(const ControlTask& task)
 {
-    const uint8_t wakeup = 1u;
+    const uint8_t           wakeup = 1u;
+    MpscQueue<ControlTask>* queue  = NULL;
 
-    if (task == NULL || shared_state_ == NULL || shared_state_->control_notify_write_fd < 0) return false;
-    mpscq_push(&shared_state_->control_queue, &task->node);
+    if (shared_state_ == NULL || shared_state_->control_notify_write_fd < 0) return false;
+    queue = &shared_state_->lifecycle_control_queue;
+    if (task.message_type == UTP_RENDEZVOUS_MESSAGE_PING || task.message_type == UTP_RENDEZVOUS_MESSAGE_PONG)
+        queue = &shared_state_->keepalive_control_queue;
+    if (!queue->push(task)) return false;
+
     while (write(shared_state_->control_notify_write_fd, &wakeup, sizeof(wakeup)) < 0) {
         if (errno == EINTR) continue;
-        if (errno != EAGAIN && errno != EWOULDBLOCK) fprintf(stderr, "NTRS [ControlWakeupFailed] errno=%d\n", errno);
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            stopForFatalError(errno, "control wakeup");
+            return false;
+        }
         break;
     }
     return true;
 }
 
-bool NtrsServer::reserveControlSlot()
-{
-    size_t expected;
-
-    if (shared_state_ == NULL) return false;
-    expected = shared_state_->control_queue_size.load(std::memory_order_relaxed);
-    do {
-        if (expected >= k_control_queue_capacity) return false;
-    } while (
-        !shared_state_->control_queue_size.compare_exchange_weak(expected, expected + 1u, std::memory_order_relaxed));
-    return true;
-}
-
-void NtrsServer::releaseControlSlot()
-{
-    if (shared_state_ != NULL) shared_state_->control_queue_size.fetch_sub(1u, std::memory_order_relaxed);
-}
-
 bool NtrsServer::enqueueControlOutput(const PreparedDatagram& datagram)
 {
-    ControlOutput* output;
-    const uint8_t  wakeup = 1u;
+    OutgoingDatagram output = {};
+    const uint8_t    wakeup = 1u;
 
     if (datagram.socket == NULL || datagram.socket->control_output_write_fd < 0) return false;
-    size_t expected = datagram.socket->control_output_queue_size.load(std::memory_order_relaxed);
+    output.peer          = datagram.peer;
+    output.peer_length   = datagram.peer_length;
+    output.packet        = datagram.packet;
+    output.packet_length = datagram.packet_length;
+    size_t expected      = datagram.socket->control_output_queue_size.load(std::memory_order_relaxed);
     do {
-        if (expected >= k_output_queue_capacity) return false;
-    } while (!datagram.socket->control_output_queue_size.compare_exchange_weak(expected, expected + 1u,
-                                                                               std::memory_order_relaxed));
-    output = new (std::nothrow) ControlOutput();
-    if (output == NULL) {
+        if (expected >= output_queue_capacity_) return false;
+    } while (!datagram.socket->control_output_queue_size.compare_exchange_weak(
+        expected, expected + 1u, std::memory_order_relaxed, std::memory_order_relaxed));
+    if (!datagram.socket->control_output_queue.push(output)) {
         datagram.socket->control_output_queue_size.fetch_sub(1u, std::memory_order_relaxed);
         return false;
     }
-    output->datagram = datagram;
-    mpscq_push(&datagram.socket->control_output_queue, &output->node);
     while (write(datagram.socket->control_output_write_fd, &wakeup, sizeof(wakeup)) < 0) {
         if (errno == EINTR) continue;
-        if (errno != EAGAIN && errno != EWOULDBLOCK) fprintf(stderr, "NTRS [OutputWakeupFailed] errno=%d\n", errno);
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            stopForFatalError(errno, "output wakeup");
+            return false;
+        }
         break;
     }
     return true;
@@ -969,7 +964,7 @@ bool NtrsServer::enqueueControlOutput(const PreparedDatagram& datagram)
 static size_t rendezvous_hash(const uint8_t* id, size_t length, size_t worker_count)
 {
     uint64_t hash = UINT64_C(1469598103934665603);
-    size_t index;
+    size_t   index;
 
     if (id == NULL || length == 0u || worker_count == 0u) return 0u;
     for (index = 0u; index < length; ++index) {
@@ -979,20 +974,58 @@ static size_t rendezvous_hash(const uint8_t* id, size_t length, size_t worker_co
     return static_cast<size_t>(hash % worker_count);
 }
 
-bool NtrsServer::enqueueWorker(WorkerTask* task)
+static std::string registration_token_key(const uint8_t token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE])
+{
+    return std::string(reinterpret_cast<const char*>(token), UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE);
+}
+
+static std::string rendezvous_route_key(const uint8_t token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE],
+                                        uint64_t      packet_number)
+{
+    std::string key = registration_token_key(token);
+
+    for (size_t index = 0u; index < sizeof(packet_number); ++index) {
+        const size_t shift = (sizeof(packet_number) - index - 1u) * 8u;
+        key.push_back(static_cast<char>((packet_number >> shift) & UINT64_C(0xff)));
+    }
+    return key;
+}
+
+bool NtrsServer::isRegistrationTokenActive(
+    const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE>& token) const
+{
+    if (shared_state_ == NULL) return false;
+    std::lock_guard<std::mutex> lock(shared_state_->mutex);
+    return shared_state_->active_registration_tokens.find(registration_token_key(token.data())) !=
+           shared_state_->active_registration_tokens.end();
+}
+
+void NtrsServer::erasePendingRendezvous(const std::string& rendezvous_key)
+{
+    std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.find(rendezvous_key);
+
+    if (entry == pending_rendezvous_.end()) return;
+    std::lock_guard<std::mutex> lock(shared_state_->mutex);
+    if (entry->second.calibration_id != 0u)
+        shared_state_->calibration_owners.erase(
+            rendezvous_route_key(entry->second.calibration_token.data(), entry->second.calibration_id));
+    if (entry->second.forward_packet_number != 0u)
+        shared_state_->forward_owners.erase(
+            rendezvous_route_key(entry->second.target_token.data(), entry->second.forward_packet_number));
+    pending_rendezvous_.erase(entry);
+}
+
+bool NtrsServer::enqueueWorker(const WorkerTask& task)
 {
     const uint8_t wakeup = 1u;
-    size_t expected;
 
-    if (task == NULL || worker_notify_write_fd_ < 0) return false;
-    expected = worker_queue_size_.load(std::memory_order_relaxed);
-    do {
-        if (expected >= k_worker_queue_capacity) return false;
-    } while (!worker_queue_size_.compare_exchange_weak(expected, expected + 1u, std::memory_order_relaxed));
-    mpscq_push(&worker_queue_, &task->node);
+    if (worker_notify_write_fd_ < 0 || !worker_queue_.push(task)) return false;
     while (write(worker_notify_write_fd_, &wakeup, sizeof(wakeup)) < 0) {
         if (errno == EINTR) continue;
-        if (errno != EAGAIN && errno != EWOULDBLOCK) fprintf(stderr, "NTRS [WorkerWakeupFailed] errno=%d\n", errno);
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            stopForFatalError(errno, "worker wakeup");
+            return false;
+        }
         break;
     }
     return true;
@@ -1177,9 +1210,11 @@ void NtrsServer::expireRegistrations(uint64_t now_ms)
 {
     for (std::unordered_map<std::string, Registration>::iterator entry = shared_state_->registrations.begin();
          entry != shared_state_->registrations.end();) {
-        if (now_ms - entry->second.last_activity_ms >= registration_timeout_ms_)
+        if (now_ms - entry->second.last_activity_ms >= registration_timeout_ms_) {
+            const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token = entry->second.token;
+            shared_state_->active_registration_tokens.erase(registration_token_key(token.data()));
             entry = shared_state_->registrations.erase(entry);
-        else
+        } else
             ++entry;
     }
     for (std::unordered_map<std::string, uint64_t>::iterator entry = shared_state_->unregistration_tombstones.begin();
@@ -1263,6 +1298,7 @@ void NtrsServer::handleRegister(UdpSocket* socket, const sockaddr_storage& peer,
             }
             if (utp_rendezvous_registered_encode(body, sizeof(body), &reply, &body_length) != UTP_INTERNAL_ERROR_OK)
                 return;
+            shared_state_->active_registration_tokens.insert(registration_token_key(entry->second.token.data()));
         }
     }
     if (rejected)
@@ -1281,9 +1317,7 @@ void NtrsServer::handlePing(UdpSocket* socket, const sockaddr_storage& peer, soc
     utp_rendezvous_ping_t ping                                                            = {};
     utp_rendezvous_pong_t pong                                                            = {};
     uint8_t               body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {};
-    PendingRendezvous     completed_transaction                                           = {};
     bool                  send_pong                                                       = false;
-    bool                  complete_transaction                                            = false;
 
     if (shared_state_ == NULL ||
         utp_rendezvous_ping_decode(&ping, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK)
@@ -1307,59 +1341,78 @@ void NtrsServer::handlePing(UdpSocket* socket, const sockaddr_storage& peer, soc
             send_pong = true;
             break;
         }
-        if (!send_pong && socket->calibration_index != k_primary_socket_index && ping.calibration_id != 0u &&
-            socket->calibration_index < k_temporary_calibration_endpoint_count) {
-            for (std::unordered_map<std::string, PendingRendezvous>::iterator entry =
-                     shared_state_->pending_rendezvous.begin();
-                 entry != shared_state_->pending_rendezvous.end(); ++entry) {
-                PendingRendezvous& transaction = entry->second;
-                const uint8_t      index       = (uint8_t)(socket->calibration_index + 1u);
-
-                if (!transaction.calibration_pending || transaction.calibration_id != ping.calibration_id ||
-                    memcmp(transaction.calibration_token.data(), ping.registration_token,
-                           transaction.calibration_token.size()) != 0) {
-                    continue;
-                }
-                if (!endpoint_ips_equal(transaction.calibration_ip, observed)) {
-                    transaction.calibration_ip_consistent = false;
-                    return;
-                }
-                transaction.calibration_ports[index]   = observed.port;
-                transaction.calibration_received_mask |= (uint8_t)(UINT8_C(1) << index);
-                send_pong                              = true;
-                if (transaction.calibration_received_mask == UINT8_C(0x07)) {
-                    completed_transaction = transaction;
-                    complete_transaction  = true;
-                }
-                break;
-            }
-        }
     }
     if (!send_pong) return;
     memcpy(pong.registration_token, ping.registration_token, sizeof(pong.registration_token));
     pong.acknowledged_packet_number = header.packet_number;
     if (utp_rendezvous_pong_encode(body, sizeof(body), &pong) == UTP_INTERNAL_ERROR_OK)
         (void)sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
-    if (complete_transaction) {
-        PreparedDatagram redirect_datagram = {};
-        PreparedDatagram forward_datagram  = {};
-        bool             dispatch          = false;
+}
 
-        if (preparePendingRendezvous(&completed_transaction, &redirect_datagram, &forward_datagram)) {
-            const std::string key(reinterpret_cast<const char*>(completed_transaction.rendezvous_id.data()),
-                                  completed_transaction.rendezvous_id.size());
-            std::unordered_map<std::string, PendingRendezvous>::iterator entry =
-                shared_state_->pending_rendezvous.find(key);
-            if (entry != shared_state_->pending_rendezvous.end() && entry->second.calibration_pending) {
-                entry->second = completed_transaction;
-                dispatch      = true;
-            }
+void NtrsServer::handleCalibrationPing(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
+                                       const utp_ntrs_endpoint_t& observed, const utp_packet_header_t& header,
+                                       const utp_frame_rendezvous_t& frame)
+{
+    utp_rendezvous_ping_t ping                                                            = {};
+    utp_rendezvous_pong_t pong                                                            = {};
+    uint8_t               body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)] = {};
+    PendingRendezvous     completed                                                       = {};
+    bool                  complete                                                        = false;
+
+    if (socket == NULL ||
+        utp_rendezvous_ping_decode(&ping, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK ||
+        ping.calibration_id == 0u || socket->calibration_index >= k_temporary_calibration_endpoint_count)
+        return;
+    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
+         entry != pending_rendezvous_.end(); ++entry) {
+        PendingRendezvous& transaction = entry->second;
+        const uint8_t      index       = static_cast<uint8_t>(socket->calibration_index + 1u);
+
+        if (!transaction.calibration_pending || transaction.calibration_id != ping.calibration_id ||
+            memcmp(transaction.calibration_token.data(), ping.registration_token,
+                   transaction.calibration_token.size()) != 0)
+            continue;
+        if (!isRegistrationTokenActive(transaction.target_token)) {
+            erasePendingRendezvous(entry->first);
+            return;
         }
-        if (dispatch) {
-            (void)sendDatagram(redirect_datagram);
-            (void)sendDatagram(forward_datagram);
+        if (!endpoint_ips_equal(transaction.calibration_ip, observed)) {
+            transaction.calibration_ip_consistent = false;
+            return;
         }
+        transaction.calibration_ports[index]   = observed.port;
+        transaction.calibration_received_mask |= static_cast<uint8_t>(UINT8_C(1) << index);
+        complete                               = transaction.calibration_received_mask == UINT8_C(0x07);
+        if (complete) completed = transaction;
+        memcpy(pong.registration_token, ping.registration_token, sizeof(pong.registration_token));
+        pong.acknowledged_packet_number = header.packet_number;
+        if (utp_rendezvous_pong_encode(body, sizeof(body), &pong) == UTP_INTERNAL_ERROR_OK)
+            (void)sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_PONG, body, sizeof(body));
+        break;
     }
+    if (!complete) return;
+    const std::string key(reinterpret_cast<const char*>(completed.rendezvous_id.data()),
+                          completed.rendezvous_id.size());
+    if (!isRegistrationTokenActive(completed.target_token)) {
+        erasePendingRendezvous(key);
+        return;
+    }
+    PreparedDatagram redirect = {};
+    PreparedDatagram forward  = {};
+    if (!preparePendingRendezvous(&completed, &redirect, &forward)) return;
+    std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.find(key);
+    if (entry == pending_rendezvous_.end() || !entry->second.calibration_pending) return;
+    entry->second = completed;
+    {
+        std::lock_guard<std::mutex> lock(shared_state_->mutex);
+        shared_state_->calibration_owners.erase(
+            rendezvous_route_key(completed.calibration_token.data(), completed.calibration_id));
+        shared_state_
+            ->forward_owners[rendezvous_route_key(completed.target_token.data(), completed.forward_packet_number)] =
+            worker_index_;
+    }
+    (void)sendDatagram(redirect);
+    (void)sendDatagram(forward);
 }
 
 void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame)
@@ -1374,32 +1427,49 @@ void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame
          entry != shared_state_->registrations.end(); ++entry) {
         Registration& registration = entry->second;
 
-        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token) &&
-            registration.keepalive_packet_number == pong.acknowledged_packet_number) {
-            registration.keepalive_packet_number = 0u;
-            registration.last_keepalive_ping_ms  = 0u;
+        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token)) {
+            if (registration.keepalive_packet_number == pong.acknowledged_packet_number) {
+                registration.keepalive_packet_number = 0u;
+                registration.last_keepalive_ping_ms  = 0u;
+            }
             registration.touch(utp_ntrs_now_ms());
             return;
         }
     }
-    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = shared_state_->pending_rendezvous.begin();
-         entry != shared_state_->pending_rendezvous.end(); ++entry) {
-        if (endpoints_equal(entry->second.target_endpoint, observed) &&
-            memcmp(entry->second.target_token.data(), pong.registration_token, entry->second.target_token.size()) ==
-                0 &&
-            entry->second.forward_packet_number == pong.acknowledged_packet_number) {
-            entry->second.forward_delivered = true;
-            for (std::unordered_map<std::string, Registration>::iterator registration =
-                     shared_state_->registrations.begin();
-                 registration != shared_state_->registrations.end(); ++registration) {
-                if (endpoints_equal(registration->second.endpoint, observed) &&
-                    registration->second.matchesToken(pong.registration_token)) {
-                    registration->second.touch(utp_ntrs_now_ms());
-                    break;
-                }
-            }
+}
+
+void NtrsServer::handleForwardPong(const utp_ntrs_endpoint_t& observed, const utp_frame_rendezvous_t& frame)
+{
+    utp_rendezvous_pong_t pong = {};
+
+    if (shared_state_ == NULL ||
+        utp_rendezvous_pong_decode(&pong, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK)
+        return;
+    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
+         entry != pending_rendezvous_.end(); ++entry) {
+        PendingRendezvous& transaction = entry->second;
+        if (!endpoints_equal(transaction.target_endpoint, observed) ||
+            memcmp(transaction.target_token.data(), pong.registration_token, transaction.target_token.size()) != 0 ||
+            transaction.forward_packet_number != pong.acknowledged_packet_number)
+            continue;
+        if (!isRegistrationTokenActive(transaction.target_token)) {
+            erasePendingRendezvous(entry->first);
             return;
         }
+        transaction.forward_delivered = true;
+        {
+            std::lock_guard<std::mutex> lock(shared_state_->mutex);
+            shared_state_->forward_owners.erase(
+                rendezvous_route_key(pong.registration_token, pong.acknowledged_packet_number));
+        }
+        ControlTask task = {};
+
+        task.observed             = observed;
+        task.message_type         = UTP_RENDEZVOUS_MESSAGE_PONG;
+        task.frame_payload_length = frame.payload_length;
+        memcpy(task.frame_payload.data(), frame.payload, frame.payload_length);
+        (void)enqueueControl(task);
+        return;
     }
 }
 
@@ -1446,24 +1516,15 @@ void NtrsServer::handleUnregister(UdpSocket* socket, const sockaddr_storage& pee
     if (shared_state_ == NULL || utp_rendezvous_unregister_decode(&unregister_message, frame.payload,
                                                                   frame.payload_length) != UTP_INTERNAL_ERROR_OK)
         return;
-    std::lock_guard<std::mutex> lock(shared_state_->mutex);
-    const std::string           key(reinterpret_cast<const char*>(unregister_message.registration_token),
-                                    sizeof(unregister_message.registration_token));
-    bool                        unregistered = false;
+    const std::string key          = registration_token_key(unregister_message.registration_token);
+    bool              unregistered = false;
 
     {
+        std::lock_guard<std::mutex> lock(shared_state_->mutex);
         for (std::unordered_map<std::string, Registration>::iterator entry = shared_state_->registrations.begin();
              entry != shared_state_->registrations.end(); ++entry) {
             if (entry->second.matchesToken(unregister_message.registration_token)) {
-                for (std::unordered_map<std::string, PendingRendezvous>::iterator pending =
-                         shared_state_->pending_rendezvous.begin();
-                     pending != shared_state_->pending_rendezvous.end();) {
-                    if (memcmp(pending->second.target_token.data(), unregister_message.registration_token,
-                               sizeof(unregister_message.registration_token)) == 0)
-                        pending = shared_state_->pending_rendezvous.erase(pending);
-                    else
-                        ++pending;
-                }
+                shared_state_->active_registration_tokens.erase(key);
                 shared_state_->registrations.erase(entry);
                 shared_state_->unregistration_tombstones[key] = now_ms + k_unregistration_tombstone_lifetime_ms;
                 unregistered                                  = true;
@@ -1482,19 +1543,6 @@ void NtrsServer::handleUnregister(UdpSocket* socket, const sockaddr_storage& pee
     (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_UNREGISTER,
                        unregister_message.registration_token, sizeof(unregister_message.registration_token),
                        k_rejection_token_invalid);
-}
-
-uint8_t NtrsServer::classifyPendingRequest(const utp_ntrs_endpoint_t& observed,
-                                           const uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE]) const
-{
-    if (shared_state_ == NULL || rendezvous_id == NULL) return k_pending_request_new;
-    const std::string           key(reinterpret_cast<const char*>(rendezvous_id), UTP_RENDEZVOUS_ID_SIZE);
-    std::lock_guard<std::mutex> lock(shared_state_->mutex);
-    std::unordered_map<std::string, PendingRendezvous>::const_iterator entry =
-        shared_state_->pending_rendezvous.find(key);
-    if (entry == shared_state_->pending_rendezvous.end()) return k_pending_request_new;
-    return endpoints_equal(entry->second.source_endpoint, observed) ? k_pending_request_retry
-                                                                    : k_pending_request_conflict;
 }
 
 void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, socklen_t peer_length,
@@ -1522,29 +1570,41 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
         (request.local_family == UTP_ADDRESS_FAMILY_IPV4 && observed.family != AF_INET) ||
         (request.local_family == UTP_ADDRESS_FAMILY_IPV6 && observed.family != AF_INET6))
         return;
-    std::lock_guard<std::mutex> lock(shared_state_->mutex);
     rendezvous_key = std::string(reinterpret_cast<const char*>(request.rendezvous_id), sizeof(request.rendezvous_id));
     target_peer_id = std::string(reinterpret_cast<const char*>(request.target_peer_id), request.target_peer_id_length);
     {
-        std::unordered_map<std::string, PendingRendezvous>::iterator pending =
-            shared_state_->pending_rendezvous.find(rendezvous_key);
-        if (pending != shared_state_->pending_rendezvous.end()) {
+        std::unordered_map<std::string, PendingRendezvous>::iterator pending = pending_rendezvous_.find(rendezvous_key);
+        if (pending != pending_rendezvous_.end() && !isRegistrationTokenActive(pending->second.target_token)) {
+            erasePendingRendezvous(rendezvous_key);
+            pending = pending_rendezvous_.end();
+        }
+        if (pending != pending_rendezvous_.end()) {
             if (endpoints_equal(pending->second.source_endpoint, observed)) {
                 existing_transaction = pending->second;
                 existing             = true;
             }
         } else {
-            std::unordered_map<std::string, Registration>::iterator target =
-                shared_state_->registrations.find(target_peer_id);
-            if (target == shared_state_->registrations.end() || target->second.local_family != request.local_family ||
+            Registration target_registration = {};
+            bool         target_found        = false;
+            {
+                std::lock_guard<std::mutex>                                   lock(shared_state_->mutex);
+                std::unordered_map<std::string, Registration>::const_iterator target =
+                    shared_state_->registrations.find(target_peer_id);
+                if (target != shared_state_->registrations.end()) {
+                    target_registration = target->second;
+                    target_found        = true;
+                }
+            }
+            if (!target_found || target_registration.local_family != request.local_family ||
                 !make_candidate_plan(
-                    &target_plan, target->second.local_family, target->second.local_port,
-                    target->second.local_candidates.data(), target->second.local_candidate_count,
-                    target->second.has_reported_public_endpoint ? &target->second.reported_public_endpoint : NULL,
-                    target->second.endpoint, public_candidate_count_) ||
-                !appendRegistrationObservedCandidates(&target_plan, target->second, public_candidate_count_) ||
-                !appendRegistrationPredictedCandidates(&target_plan, target->second, public_candidate_count_) ||
-                !utp_ntrs_endpoint_to_sockaddr(&target->second.endpoint, &target_address, &target_length)) {
+                    &target_plan, target_registration.local_family, target_registration.local_port,
+                    target_registration.local_candidates.data(), target_registration.local_candidate_count,
+                    target_registration.has_reported_public_endpoint ? &target_registration.reported_public_endpoint
+                                                                     : NULL,
+                    target_registration.endpoint, public_candidate_count_) ||
+                !appendRegistrationObservedCandidates(&target_plan, target_registration, public_candidate_count_) ||
+                !appendRegistrationPredictedCandidates(&target_plan, target_registration, public_candidate_count_) ||
+                !utp_ntrs_endpoint_to_sockaddr(&target_registration.endpoint, &target_address, &target_length)) {
                 rejected         = true;
                 rejection_reason = k_rejection_peer_not_found;
             } else {
@@ -1558,12 +1618,13 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
                                                    &transaction.redirect_body_length) != UTP_INTERNAL_ERROR_OK)
                     return;
                 transaction.source_endpoint       = observed;
-                transaction.target_endpoint       = target->second.endpoint;
+                transaction.target_endpoint       = target_registration.endpoint;
                 transaction.source_socket_address = peer;
                 transaction.source_socket_length  = peer_length;
                 transaction.target_socket_address = target_address;
                 transaction.target_socket_length  = target_length;
-                memcpy(transaction.target_token.data(), target->second.token.data(), transaction.target_token.size());
+                memcpy(transaction.target_token.data(), target_registration.token.data(),
+                       transaction.target_token.size());
                 memcpy(transaction.source_peer_id.data(), request.source_peer_id, request.source_peer_id_length);
                 transaction.source_peer_id_length               = request.source_peer_id_length;
                 transaction.source_local_port                   = request.local_port;
@@ -1576,7 +1637,7 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
                     transaction.source_local_candidates[index] = request.local_candidates[index];
                 transaction.created_at_ms       = utp_ntrs_now_ms();
                 transaction.calibration_pending = request.source_nat_class == UTP_NAT_CLASS_SYMMETRIC &&
-                                                  target->second.nat_class == UTP_NAT_CLASS_PORT_RESTRICTED &&
+                                                  target_registration.nat_class == UTP_NAT_CLASS_PORT_RESTRICTED &&
                                                   calibration_endpoint_count_ >= k_temporary_calibration_endpoint_count;
                 if (transaction.calibration_pending) {
                     transaction.calibration_ip            = observed;
@@ -1591,7 +1652,12 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
                 } else {
                     prepare_rendezvous = true;
                 }
-                shared_state_->pending_rendezvous.insert(std::make_pair(rendezvous_key, transaction));
+                pending_rendezvous_.insert(std::make_pair(rendezvous_key, transaction));
+                if (transaction.calibration_pending) {
+                    std::lock_guard<std::mutex> lock(shared_state_->mutex);
+                    shared_state_->calibration_owners[rendezvous_route_key(transaction.calibration_token.data(),
+                                                                           transaction.calibration_id)] = worker_index_;
+                }
             }
         }
     }
@@ -1601,6 +1667,12 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
         return;
     }
     if (existing) {
+        if (!isRegistrationTokenActive(existing_transaction.target_token)) {
+            erasePendingRendezvous(rendezvous_key);
+            (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.rendezvous_id,
+                               sizeof(request.rendezvous_id), k_rejection_peer_not_found);
+            return;
+        }
         if (existing_transaction.calibration_pending) {
             PreparedDatagram datagram = {};
             if (prepareCalibration(existing_transaction, &datagram)) (void)sendDatagram(datagram);
@@ -1611,6 +1683,12 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
         return;
     }
     if (prepare_calibration) {
+        if (!isRegistrationTokenActive(transaction.target_token)) {
+            erasePendingRendezvous(rendezvous_key);
+            (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.rendezvous_id,
+                               sizeof(request.rendezvous_id), k_rejection_peer_not_found);
+            return;
+        }
         PreparedDatagram datagram = {};
         if (prepareCalibration(transaction, &datagram)) (void)sendDatagram(datagram);
         fprintf(stderr, "NTRS <- Node=%s [Request|Calibrate] target=%s\n",
@@ -1618,20 +1696,25 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
         return;
     }
     if (!prepare_rendezvous) return;
+    if (!isRegistrationTokenActive(transaction.target_token)) {
+        erasePendingRendezvous(rendezvous_key);
+        (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.rendezvous_id,
+                           sizeof(request.rendezvous_id), k_rejection_peer_not_found);
+        return;
+    }
     PreparedDatagram redirect_datagram = {};
     PreparedDatagram forward_datagram  = {};
     if (!preparePendingRendezvous(&transaction, &redirect_datagram, &forward_datagram)) return;
     (void)sendDatagram(redirect_datagram);
-    bool dispatch = false;
+    std::unordered_map<std::string, PendingRendezvous>::iterator pending = pending_rendezvous_.find(rendezvous_key);
+    if (pending == pending_rendezvous_.end() || pending->second.forward_packet_number != 0u) return;
+    pending->second = transaction;
     {
-        std::unordered_map<std::string, PendingRendezvous>::iterator pending =
-            shared_state_->pending_rendezvous.find(rendezvous_key);
-        if (pending != shared_state_->pending_rendezvous.end() && pending->second.forward_packet_number == 0u) {
-            pending->second = transaction;
-            dispatch        = true;
-        }
+        std::lock_guard<std::mutex> lock(shared_state_->mutex);
+        shared_state_
+            ->forward_owners[rendezvous_route_key(transaction.target_token.data(), transaction.forward_packet_number)] =
+            worker_index_;
     }
-    if (!dispatch) return;
     (void)sendDatagram(forward_datagram);
     fprintf(stderr, "NTRS <- Node=%s [Request] target_peer_id=%s\n",
             utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
@@ -1673,16 +1756,16 @@ void NtrsServer::onWorkerEvent()
     while (read(worker_notify_fd_, discarded, sizeof(discarded)) > 0) {
     }
     for (;;) {
-        mpscq_node_t* const node = mpscq_pop(&worker_queue_);
-        WorkerTask* task;
+        WorkerTask task = {};
 
-        if (node == NULL) return;
-        worker_queue_size_.fetch_sub(1u, std::memory_order_relaxed);
-        task = mpscq_entry(node, WorkerTask, node);
-        const utp_frame_rendezvous_t frame = {task->frame_payload.data(), task->frame_payload_length,
-                                              task->message_type};
-        handleRequest(task->socket, task->peer, task->peer_length, task->observed, frame);
-        delete task;
+        if (!worker_queue_.pop(&task)) return;
+        const utp_frame_rendezvous_t frame = {task.frame_payload.data(), task.frame_payload_length, task.message_type};
+        if (task.task_type == kWorkerTaskRequest)
+            handleRequest(task.socket, task.peer, task.peer_length, task.observed, frame);
+        else if (task.task_type == kWorkerTaskCalibrationPing)
+            handleCalibrationPing(task.socket, task.peer, task.peer_length, task.observed, task.header, frame);
+        else if (task.task_type == kWorkerTaskForwardPong)
+            handleForwardPong(task.observed, frame);
     }
 }
 
@@ -1717,6 +1800,71 @@ void NtrsServer::onRead(UdpSocket* socket)
             if (socket->calibration_index != k_primary_socket_index &&
                 frame.message_type != UTP_RENDEZVOUS_MESSAGE_PING)
                 continue;
+            if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PING &&
+                socket->calibration_index != k_primary_socket_index) {
+                utp_rendezvous_ping_t ping  = {};
+                NtrsServer*           owner = NULL;
+
+                if (utp_rendezvous_ping_decode(&ping, frame.payload, frame.payload_length) == UTP_INTERNAL_ERROR_OK &&
+                    ping.calibration_id != 0u) {
+                    {
+                        std::lock_guard<std::mutex>                               lock(shared_state_->mutex);
+                        std::unordered_map<std::string, uint16_t>::const_iterator route =
+                            shared_state_->calibration_owners.find(
+                                rendezvous_route_key(ping.registration_token, ping.calibration_id));
+                        if (route != shared_state_->calibration_owners.end() &&
+                            route->second < shared_state_->workers.size())
+                            owner = shared_state_->workers[route->second];
+                    }
+                    if (owner != NULL) {
+                        if (owner == this) {
+                            handleCalibrationPing(socket, peer, peer_length, observed, header, frame);
+                        } else {
+                            WorkerTask task           = {};
+                            task.peer                 = peer;
+                            task.peer_length          = peer_length;
+                            task.observed             = observed;
+                            task.header               = header;
+                            task.socket               = socket;
+                            task.message_type         = frame.message_type;
+                            task.task_type            = kWorkerTaskCalibrationPing;
+                            task.calibration_index    = socket->calibration_index;
+                            task.frame_payload_length = frame.payload_length;
+                            memcpy(task.frame_payload.data(), frame.payload, frame.payload_length);
+                            (void)owner->enqueueWorker(task);
+                        }
+                        continue;
+                    }
+                }
+            }
+            if (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PONG &&
+                socket->calibration_index == k_primary_socket_index) {
+                utp_rendezvous_pong_t pong  = {};
+                NtrsServer*           owner = NULL;
+
+                if (utp_rendezvous_pong_decode(&pong, frame.payload, frame.payload_length) == UTP_INTERNAL_ERROR_OK) {
+                    std::lock_guard<std::mutex>                               lock(shared_state_->mutex);
+                    std::unordered_map<std::string, uint16_t>::const_iterator route =
+                        shared_state_->forward_owners.find(
+                            rendezvous_route_key(pong.registration_token, pong.acknowledged_packet_number));
+                    if (route != shared_state_->forward_owners.end() && route->second < shared_state_->workers.size())
+                        owner = shared_state_->workers[route->second];
+                }
+                if (owner != NULL) {
+                    if (owner == this) {
+                        handleForwardPong(observed, frame);
+                    } else {
+                        WorkerTask task           = {};
+                        task.observed             = observed;
+                        task.message_type         = frame.message_type;
+                        task.task_type            = kWorkerTaskForwardPong;
+                        task.frame_payload_length = frame.payload_length;
+                        memcpy(task.frame_payload.data(), frame.payload, frame.payload_length);
+                        (void)owner->enqueueWorker(task);
+                    }
+                    continue;
+                }
+            }
             const bool supported = (frame.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER &&
                                     socket->calibration_index == k_primary_socket_index) ||
                                    (frame.message_type == UTP_RENDEZVOUS_MESSAGE_PING &&
@@ -1729,28 +1877,16 @@ void NtrsServer::onRead(UdpSocket* socket)
                                    (frame.message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTER &&
                                     socket->calibration_index == k_primary_socket_index);
             if (supported) {
-                ControlTask* task;
-
-                if (!reserveControlSlot()) continue;
-                task = new (std::nothrow) ControlTask();
-                if (task == NULL) {
-                    releaseControlSlot();
-                    continue;
-                }
-
-                task->peer                 = peer;
-                task->peer_length          = peer_length;
-                task->observed             = observed;
-                task->header               = header;
-                task->socket               = socket;
-                task->message_type         = frame.message_type;
-                task->pending_hint         = k_pending_request_new;
-                task->frame_payload_length = frame.payload_length;
-                memcpy(task->frame_payload.data(), frame.payload, frame.payload_length);
-                if (!enqueueControl(task)) {
-                    releaseControlSlot();
-                    delete task;
-                }
+                ControlTask task          = {};
+                task.peer                 = peer;
+                task.peer_length          = peer_length;
+                task.observed             = observed;
+                task.header               = header;
+                task.socket               = socket;
+                task.message_type         = frame.message_type;
+                task.frame_payload_length = frame.payload_length;
+                memcpy(task.frame_payload.data(), frame.payload, frame.payload_length);
+                (void)enqueueControl(task);
             }
         } else if (socket->calibration_index == k_primary_socket_index &&
                    (header.type == UTP_PACKET_TYPE_INITIAL || header.type == UTP_PACKET_TYPE_0RTT)) {
@@ -1767,53 +1903,29 @@ void NtrsServer::onRead(UdpSocket* socket)
                 continue;
             utp_rendezvous_request_t request_hint = {};
             NtrsServer*              owner;
-            WorkerTask*              task;
 
             if (utp_rendezvous_request_decode(&request_hint, frame.payload, frame.payload_length) !=
-                UTP_INTERNAL_ERROR_OK || shared_state_ == NULL || shared_state_->workers.empty())
+                    UTP_INTERNAL_ERROR_OK ||
+                shared_state_ == NULL || shared_state_->workers.empty())
                 continue;
-            owner = shared_state_->workers[rendezvous_hash(request_hint.rendezvous_id, sizeof(request_hint.rendezvous_id),
-                                                            shared_state_->workers.size())];
+            owner = shared_state_->workers[rendezvous_hash(
+                request_hint.rendezvous_id, sizeof(request_hint.rendezvous_id), shared_state_->workers.size())];
             if (owner == this) {
-                ControlTask* control_task;
-
-                if (!reserveControlSlot()) continue;
-                control_task = new (std::nothrow) ControlTask();
-                if (control_task == NULL) {
-                    releaseControlSlot();
-                    continue;
-                }
-                control_task->peer                 = peer;
-                control_task->peer_length          = peer_length;
-                control_task->observed             = observed;
-                control_task->header               = header;
-                control_task->socket               = socket;
-                control_task->message_type         = frame.message_type;
-                control_task->pending_hint         = k_pending_request_new;
-                control_task->frame_payload_length = frame.payload_length;
-                memcpy(control_task->frame_payload.data(), frame.payload, frame.payload_length);
-                control_task->pending_hint = classifyPendingRequest(observed, request_hint.rendezvous_id);
-                if (!enqueueControl(control_task)) {
-                    releaseControlSlot();
-                    delete control_task;
-                }
+                handleRequest(socket, peer, peer_length, observed, frame);
                 continue;
             }
-            task = new (std::nothrow) WorkerTask();
-            if (task == NULL) {
-                continue;
-            }
-            task->peer                 = peer;
-            task->peer_length          = peer_length;
-            task->observed             = observed;
-            task->header               = header;
-            task->socket               = socket;
-            task->message_type         = frame.message_type;
-            task->frame_payload_length = frame.payload_length;
-            memcpy(task->frame_payload.data(), frame.payload, frame.payload_length);
-            if (!owner->enqueueWorker(task)) {
-                delete task;
-            }
+            WorkerTask task           = {};
+            task.peer                 = peer;
+            task.peer_length          = peer_length;
+            task.observed             = observed;
+            task.header               = header;
+            task.socket               = socket;
+            task.message_type         = frame.message_type;
+            task.task_type            = kWorkerTaskRequest;
+            task.calibration_index    = k_primary_socket_index;
+            task.frame_payload_length = frame.payload_length;
+            memcpy(task.frame_payload.data(), frame.payload, frame.payload_length);
+            (void)owner->enqueueWorker(task);
         }
     }
 }
@@ -1830,6 +1942,22 @@ void NtrsServer::OnControlTimerEvent(evutil_socket_t, short, void* user_data)
     static_cast<NtrsServer*>(user_data)->onControlTimer();
 }
 
+void NtrsServer::handleControlTask(const ControlTask& task)
+{
+    const utp_frame_rendezvous_t frame = {task.frame_payload.data(), task.frame_payload_length, task.message_type};
+
+    if (task.message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER)
+        handleRegister(task.socket, task.peer, task.peer_length, task.observed, frame);
+    else if (task.message_type == UTP_RENDEZVOUS_MESSAGE_PING)
+        handlePing(task.socket, task.peer, task.peer_length, task.observed, task.header, frame);
+    else if (task.message_type == UTP_RENDEZVOUS_MESSAGE_PONG)
+        handlePong(task.observed, frame);
+    else if (task.message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE)
+        handleAddressUpdate(task.socket, task.peer, task.peer_length, task.observed, frame);
+    else if (task.message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTER)
+        handleUnregister(task.socket, task.peer, task.peer_length, frame);
+}
+
 void NtrsServer::onControlEvent()
 {
     uint64_t discarded;
@@ -1838,26 +1966,12 @@ void NtrsServer::onControlEvent()
     while (read(shared_state_->control_notify_fd, &discarded, sizeof(discarded)) < 0 && errno == EINTR) {
     }
     for (;;) {
-        mpscq_node_t* const node = mpscq_pop(&shared_state_->control_queue);
-        if (node == NULL) return;
-        shared_state_->control_queue_size.fetch_sub(1u, std::memory_order_relaxed);
-        ControlTask* const           task  = mpscq_entry(node, ControlTask, node);
-        const utp_frame_rendezvous_t frame = {task->frame_payload.data(), task->frame_payload_length,
-                                              task->message_type};
-
-        if (task->message_type == UTP_RENDEZVOUS_MESSAGE_REGISTER)
-            handleRegister(task->socket, task->peer, task->peer_length, task->observed, frame);
-        else if (task->message_type == UTP_RENDEZVOUS_MESSAGE_PING)
-            handlePing(task->socket, task->peer, task->peer_length, task->observed, task->header, frame);
-        else if (task->message_type == UTP_RENDEZVOUS_MESSAGE_PONG)
-            handlePong(task->observed, frame);
-        else if (task->message_type == UTP_RENDEZVOUS_MESSAGE_ADDRESS_UPDATE)
-            handleAddressUpdate(task->socket, task->peer, task->peer_length, task->observed, frame);
-        else if (task->message_type == UTP_RENDEZVOUS_MESSAGE_UNREGISTER)
-            handleUnregister(task->socket, task->peer, task->peer_length, frame);
-        else if (task->message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST)
-            handleRequest(task->socket, task->peer, task->peer_length, task->observed, frame);
-        delete task;
+        ControlTask task = {};
+        if (shared_state_->lifecycle_control_queue.pop(&task) || shared_state_->keepalive_control_queue.pop(&task)) {
+            handleControlTask(task);
+            continue;
+        }
+        return;
     }
 }
 
@@ -1869,23 +1983,15 @@ void NtrsServer::onControlOutput(UdpSocket* socket)
     while (read(socket->control_output_read_fd, &discarded, sizeof(discarded)) < 0 && errno == EINTR) {
     }
     for (;;) {
-        mpscq_node_t* const node = mpscq_pop(&socket->control_output_queue);
-        if (node == NULL) break;
-        ControlOutput* const output = mpscq_entry(node, ControlOutput, node);
+        OutgoingDatagram output = {};
+        if (!socket->control_output_queue.pop(&output)) break;
 
-        if (socket->output_queue.size() >= k_output_queue_capacity) {
+        if (socket->output_queue.size() >= output_queue_capacity_) {
             fprintf(stderr, "NTRS [DatagramDropped] output queue full\n");
             socket->control_output_queue_size.fetch_sub(1u, std::memory_order_relaxed);
         } else {
-            OutgoingDatagram datagram = {};
-
-            datagram.peer          = output->datagram.peer;
-            datagram.peer_length   = output->datagram.peer_length;
-            datagram.packet        = output->datagram.packet;
-            datagram.packet_length = output->datagram.packet_length;
-            socket->output_queue.push_back(datagram);
+            socket->output_queue.push_back(output);
         }
-        delete output;
     }
     if (!socket->output_queue.empty() && !socket->write_event_active) {
         (void)event_add(socket->write_event, NULL);
@@ -1899,6 +2005,58 @@ void NtrsServer::onTimer()
         shared_state_->fatal_socket_error.load(std::memory_order_relaxed)) {
         event_base_loopbreak(base_);
         return;
+    }
+    const uint64_t now_ms = utp_ntrs_now_ms();
+    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = pending_rendezvous_.begin();
+         entry != pending_rendezvous_.end();) {
+        PendingRendezvous& transaction = entry->second;
+
+        if (!isRegistrationTokenActive(transaction.target_token) ||
+            now_ms - transaction.created_at_ms >= k_pending_rendezvous_lifetime_ms) {
+            std::lock_guard<std::mutex> lock(shared_state_->mutex);
+            if (transaction.calibration_id != 0u)
+                shared_state_->calibration_owners.erase(
+                    rendezvous_route_key(transaction.calibration_token.data(), transaction.calibration_id));
+            if (transaction.forward_packet_number != 0u)
+                shared_state_->forward_owners.erase(
+                    rendezvous_route_key(transaction.target_token.data(), transaction.forward_packet_number));
+            entry = pending_rendezvous_.erase(entry);
+            continue;
+        }
+        if (transaction.calibration_pending && transaction.calibration_deadline_ms <= now_ms) {
+            PreparedDatagram redirect = {};
+            PreparedDatagram forward  = {};
+            if (preparePendingRendezvous(&transaction, &redirect, &forward)) {
+                {
+                    std::lock_guard<std::mutex> lock(shared_state_->mutex);
+                    shared_state_->calibration_owners.erase(
+                        rendezvous_route_key(transaction.calibration_token.data(), transaction.calibration_id));
+                    shared_state_->forward_owners[rendezvous_route_key(
+                        transaction.target_token.data(), transaction.forward_packet_number)] = worker_index_;
+                }
+                (void)sendDatagram(redirect);
+                (void)sendDatagram(forward);
+            }
+        } else if (!transaction.forward_delivered && transaction.forward_retries_remaining != 0u &&
+                   transaction.forward_retry_at_ms <= now_ms) {
+            PreparedDatagram datagram = {};
+            datagram.socket           = &primary_socket_;
+            datagram.peer             = transaction.target_socket_address;
+            datagram.peer_length      = transaction.target_socket_length;
+            datagram.packet           = transaction.forward_packet;
+            datagram.packet_length    = transaction.forward_packet_length;
+            if (sendDatagram(datagram)) {
+                --transaction.forward_retries_remaining;
+                transaction.forward_retry_at_ms = now_ms + transaction.forward_retry_delay_ms;
+                if (transaction.forward_retry_delay_ms < k_forward_retry_max_delay_ms / 2u)
+                    transaction.forward_retry_delay_ms *= 2u;
+                else
+                    transaction.forward_retry_delay_ms = k_forward_retry_max_delay_ms;
+            } else {
+                transaction.forward_retry_at_ms = now_ms + k_forward_retry_send_failure_delay_ms;
+            }
+        }
+        ++entry;
     }
 }
 
@@ -1928,42 +2086,6 @@ void NtrsServer::onControlTimer()
                 registration.last_keepalive_ping_ms  = now_ms;
             }
         }
-    }
-    for (std::unordered_map<std::string, PendingRendezvous>::iterator entry = shared_state_->pending_rendezvous.begin();
-         entry != shared_state_->pending_rendezvous.end();) {
-        PendingRendezvous& transaction = entry->second;
-
-        if (now_ms - transaction.created_at_ms >= k_pending_rendezvous_lifetime_ms) {
-            entry = shared_state_->pending_rendezvous.erase(entry);
-            continue;
-        }
-        if (transaction.calibration_pending && transaction.calibration_deadline_ms <= now_ms) {
-            PreparedDatagram redirect = {};
-            PreparedDatagram forward  = {};
-            if (preparePendingRendezvous(&transaction, &redirect, &forward)) {
-                (void)sendDatagram(redirect);
-                (void)sendDatagram(forward);
-            }
-        } else if (!transaction.forward_delivered && transaction.forward_retries_remaining != 0u &&
-                   transaction.forward_retry_at_ms <= now_ms) {
-            PreparedDatagram datagram = {};
-            datagram.socket           = &primary_socket_;
-            datagram.peer             = transaction.target_socket_address;
-            datagram.peer_length      = transaction.target_socket_length;
-            datagram.packet           = transaction.forward_packet;
-            datagram.packet_length    = transaction.forward_packet_length;
-            if (sendDatagram(datagram)) {
-                --transaction.forward_retries_remaining;
-                transaction.forward_retry_at_ms = now_ms + transaction.forward_retry_delay_ms;
-                if (transaction.forward_retry_delay_ms < k_forward_retry_max_delay_ms / 2u)
-                    transaction.forward_retry_delay_ms *= 2u;
-                else
-                    transaction.forward_retry_delay_ms = k_forward_retry_max_delay_ms;
-            } else {
-                transaction.forward_retry_at_ms = now_ms + k_forward_retry_send_failure_delay_ms;
-            }
-        }
-        ++entry;
     }
 }
 
@@ -2010,29 +2132,32 @@ void NtrsServer::onWrite(UdpSocket* socket)
 
 bool NtrsServer::start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_endpoint_t& advertised_endpoint,
                        const char* interface_name, const std::vector<uint16_t>& calibration_ports,
-                       uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms)
+                       uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms,
+                       size_t output_queue_capacity, size_t worker_queue_capacity)
 {
     int worker_pair[2] = {-1, -1};
 
     if (bind_endpoint.family != advertised_endpoint.family || public_candidate_count == 0u ||
         registration_timeout_ms == 0u || keepalive_interval_ms == 0u ||
-        keepalive_interval_ms >= registration_timeout_ms ||
-        public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
+        keepalive_interval_ms >= registration_timeout_ms || output_queue_capacity == 0u ||
+        worker_queue_capacity == 0u || public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
         calibration_ports.size() > calibration_sockets_.size() ||
-        (!calibration_ports.empty() && endpoint_is_unspecified(advertised_endpoint)) ||
-        (base_ = event_base_new()) == NULL ||
+        (!calibration_ports.empty() && endpoint_is_unspecified(advertised_endpoint)))
+        return false;
+    output_queue_capacity_ = output_queue_capacity;
+    if (!worker_queue_.create(worker_queue_capacity) || (base_ = event_base_new()) == NULL ||
         !createSocket(&primary_socket_, bind_endpoint, interface_name, k_primary_socket_index) ||
         (timer_event_ = event_new(base_, -1, EV_PERSIST, OnTimerEvent, this)) == NULL ||
-        socketpair(AF_UNIX, SOCK_DGRAM, 0, worker_pair) != 0 ||
-        evutil_make_socket_nonblocking(worker_pair[0]) != 0 || evutil_make_socket_nonblocking(worker_pair[1]) != 0 ||
+        socketpair(AF_UNIX, SOCK_DGRAM, 0, worker_pair) != 0 || evutil_make_socket_nonblocking(worker_pair[0]) != 0 ||
+        evutil_make_socket_nonblocking(worker_pair[1]) != 0 ||
         (worker_event_ = event_new(base_, worker_pair[0], EV_READ | EV_PERSIST, OnWorkerEvent, this)) == NULL ||
         event_add(worker_event_, NULL) != 0) {
         if (worker_pair[0] >= 0) close(worker_pair[0]);
         if (worker_pair[1] >= 0) close(worker_pair[1]);
         return false;
     }
-    worker_notify_fd_       = worker_pair[0];
-    worker_notify_write_fd_ = worker_pair[1];
+    worker_notify_fd_        = worker_pair[0];
+    worker_notify_write_fd_  = worker_pair[1];
     public_candidate_count_  = public_candidate_count;
     registration_timeout_ms_ = registration_timeout_ms;
     keepalive_interval_ms_   = keepalive_interval_ms;
@@ -2137,11 +2262,19 @@ public:
     bool start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_endpoint_t& advertised_endpoint,
                const char* interface_name, const std::vector<uint16_t>& calibration_ports,
                uint8_t public_candidate_count, uint32_t registration_timeout_ms, uint32_t keepalive_interval_ms,
-               uint16_t worker_count)
+               uint16_t worker_count, size_t control_queue_capacity, size_t output_queue_capacity,
+               size_t worker_queue_capacity)
     {
-        int control_pair[2] = {-1, -1};
+        int          control_pair[2] = {-1, -1};
+        const size_t lifecycle_queue_capacity =
+            control_queue_capacity / 4u + (control_queue_capacity % 4u == 0u ? 0u : 1u);
+        const size_t keepalive_queue_capacity = control_queue_capacity - lifecycle_queue_capacity;
 
-        if (worker_count == 0u || shared_state_->control_notify_fd >= 0) return false;
+        if (worker_count == 0u || control_queue_capacity < 2u || output_queue_capacity == 0u ||
+            worker_queue_capacity == 0u || shared_state_->control_notify_fd >= 0 ||
+            !shared_state_->lifecycle_control_queue.create(lifecycle_queue_capacity) ||
+            !shared_state_->keepalive_control_queue.create(keepalive_queue_capacity))
+            return false;
         if (socketpair(AF_UNIX, SOCK_DGRAM, 0, control_pair) != 0) return false;
         if (evutil_make_socket_nonblocking(control_pair[0]) != 0 ||
             evutil_make_socket_nonblocking(control_pair[1]) != 0) {
@@ -2151,12 +2284,12 @@ public:
         }
         shared_state_->control_notify_fd       = control_pair[0];
         shared_state_->control_notify_write_fd = control_pair[1];
-        mpscq_create(&shared_state_->control_queue);
         for (uint16_t index = 0u; index < worker_count; ++index) {
             std::unique_ptr<NtrsServer> worker(new NtrsServer(shared_state_, index));
 
             if (!worker->start(bind_endpoint, advertised_endpoint, interface_name, calibration_ports,
-                               public_candidate_count, registration_timeout_ms, keepalive_interval_ms)) {
+                               public_candidate_count, registration_timeout_ms, keepalive_interval_ms,
+                               output_queue_capacity, worker_queue_capacity)) {
                 close(shared_state_->control_notify_fd);
                 close(shared_state_->control_notify_write_fd);
                 shared_state_->control_notify_fd       = -1;
@@ -2194,9 +2327,10 @@ public:
         for (size_t index = 0u; index < threads_.size(); ++index) {
             threads_[index].join();
         }
-        while (mpscq_node_t* const node = mpscq_pop(&shared_state_->control_queue)) {
-            shared_state_->control_queue_size.fetch_sub(1u, std::memory_order_relaxed);
-            delete mpscq_entry(node, ControlTask, node);
+        ControlTask task = {};
+        while (shared_state_->lifecycle_control_queue.pop(&task)) {
+        }
+        while (shared_state_->keepalive_control_queue.pop(&task)) {
         }
         close(shared_state_->control_notify_fd);
         close(shared_state_->control_notify_write_fd);
@@ -2226,6 +2360,9 @@ int main(int argc, char** argv)
     uint32_t              public_candidate_count  = UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES;
     uint32_t              registration_timeout_ms = k_registration_timeout_default_ms;
     uint32_t              keepalive_interval_ms   = k_keepalive_interval_default_ms;
+    size_t                control_queue_capacity  = k_control_queue_capacity_default;
+    size_t                output_queue_capacity   = k_output_queue_capacity_default;
+    size_t                worker_queue_capacity   = k_worker_queue_capacity_default;
     uint16_t              port                    = 24000u;
     uint32_t              worker_count            = 1u;
     cli.add_option("-a", bind_address, "Bind IP");
@@ -2237,6 +2374,9 @@ int main(int argc, char** argv)
     cli.add_option("-t", registration_timeout_ms, "Registration timeout ms");
     cli.add_option("-k", keepalive_interval_ms, "NTRS keepalive interval ms");
     cli.add_option("-w,--workers", worker_count, "UDP SO_REUSEPORT worker count");
+    cli.add_option("--control-queue-capacity", control_queue_capacity, "Control task queue capacity");
+    cli.add_option("--output-queue-capacity", output_queue_capacity, "Per UDP socket output queue capacity");
+    cli.add_option("--worker-queue-capacity", worker_queue_capacity, "Per Worker task queue capacity");
     CLI11_PARSE(cli, argc, argv);
 
     const std::string bind_endpoint_text = make_endpoint_text(bind_address, port);
@@ -2249,11 +2389,13 @@ int main(int argc, char** argv)
     if (public_candidate_count == 0u || public_candidate_count > UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
         worker_count == 0u || worker_count > UINT16_MAX || registration_timeout_ms == 0u ||
         keepalive_interval_ms == 0u || keepalive_interval_ms >= registration_timeout_ms ||
+        control_queue_capacity < 2u || output_queue_capacity == 0u || worker_queue_capacity == 0u ||
         !utp_ntrs_endpoint_parse(bind_endpoint_text.c_str(), &bind_endpoint) ||
         !utp_ntrs_endpoint_parse(advertised_endpoint_text.c_str(), &advertised_endpoint) ||
         !server.start(bind_endpoint, advertised_endpoint, interface_name.empty() ? NULL : interface_name.c_str(),
                       calibration_ports, static_cast<uint8_t>(public_candidate_count), registration_timeout_ms,
-                      keepalive_interval_ms, static_cast<uint16_t>(worker_count)))
+                      keepalive_interval_ms, static_cast<uint16_t>(worker_count), control_queue_capacity,
+                      output_queue_capacity, worker_queue_capacity))
         return 1;
     utp_ntrs_app_log_init("ntrs");
     signal(SIGINT, on_signal);
