@@ -1,5 +1,6 @@
 #include "rendezvous/rendezvous.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "proto/wire.h"
@@ -728,6 +729,8 @@ utp_internal_error_t utp_rendezvous_rejected_decode(utp_rendezvous_rejected_t* r
 
 static bool utp_rendezvous_address_equal(const utp_address_t* left, const utp_address_t* right)
 {
+    assert(left != NULL);
+    assert(right != NULL);
     const size_t address_length = utp_rendezvous_address_length(left->family);
 
     return address_length != 0u && left->family == right->family && left->port == right->port &&

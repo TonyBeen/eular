@@ -1,5 +1,6 @@
 #include "congestion/bbr.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
@@ -122,7 +123,7 @@ static void update_recovery_window(utp_bbr_t* b, uint64_t inflight)
 static uint64_t get_cwnd(void* s)
 {
     utp_bbr_t* b = s;
-    if (b == NULL) return 0u;
+    assert(b != NULL);
     if (b->mode == UTP_BBR_PROBE_RTT) return probe_rtt_cwnd(b);
     return in_recovery(b) ? min64(b->cwnd, b->recovery_window) : b->cwnd;
 }
@@ -130,21 +131,22 @@ static uint64_t get_rate(void* s, int32_t r)
 {
     utp_bbr_t* b = s;
     (void)r;
-    return b == NULL ? 0u : b->pacing_rate;
+    assert(b != NULL);
+    return b->pacing_rate;
 }
 static void on_init(void* s, const utp_rtt_stats_t* rtt)
 {
     utp_bbr_t* b = s;
-    if (b != NULL) {
-        b->rtt_stats = rtt;
-        b->cwnd      = b->initial_cwnd;
-        set_startup(b);
-    }
+    assert(b != NULL);
+    b->rtt_stats = rtt;
+    b->cwnd      = b->initial_cwnd;
+    set_startup(b);
 }
 static void on_sent(void* s, utp_congestion_packet_info_t* p, uint64_t in, int32_t app)
 {
     utp_bbr_t* b = s;
-    if (b == NULL || p == NULL) return;
+    assert(b != NULL);
+    assert(p != NULL);
     utp_bw_sampler_on_packet_sent(&b->sampler, p->state, p->packet_number, p->packet_size, p->sent_time_us);
     b->last_sent_packet_number = p->packet_number;
     if (app && in < get_cwnd(b)) {
@@ -155,18 +157,17 @@ static void on_sent(void* s, utp_congestion_packet_info_t* p, uint64_t in, int32
 static void begin_ack(void* s, uint64_t now, uint64_t in)
 {
     utp_bbr_t* b = s;
-    if (b != NULL) {
-        b->in_ack                  = true;
-        b->ack_time_us             = now;
-        b->inflight_bytes          = in;
-        b->acked_bytes             = 0;
-        b->ack_max_bandwidth       = 0u;
-        b->lost_bytes              = 0;
-        b->ack_has_losses          = false;
-        b->ack_has_sample          = false;
-        b->min_rtt_expired_in_ack  = false;
-        b->max_acked_packet_number = 0u;
-    }
+    assert(b != NULL);
+    b->in_ack                  = true;
+    b->ack_time_us             = now;
+    b->inflight_bytes          = in;
+    b->acked_bytes              = 0;
+    b->ack_max_bandwidth        = 0u;
+    b->lost_bytes               = 0;
+    b->ack_has_losses           = false;
+    b->ack_has_sample           = false;
+    b->min_rtt_expired_in_ack   = false;
+    b->max_acked_packet_number  = 0u;
 }
 static void on_ack(void* s, utp_congestion_packet_info_t* p, uint64_t now, int32_t app)
 {
@@ -174,7 +175,8 @@ static void on_ack(void* s, utp_congestion_packet_info_t* p, uint64_t now, int32
     utp_bw_sample_t x;
     bool            min_rtt_expired;
     (void)app;
-    if (b == NULL || p == NULL) return;
+    assert(b != NULL);
+    assert(p != NULL);
     b->acked_bytes             = sat_add(b->acked_bytes, p->packet_size);
     b->max_acked_packet_number = max64(b->max_acked_packet_number, p->packet_number);
     if (utp_bw_sampler_on_packet_acked(&b->sampler, p->state, p->packet_number, now, &x)) {
@@ -200,17 +202,18 @@ static void on_ack(void* s, utp_congestion_packet_info_t* p, uint64_t now, int32
 static void on_lost(void* s, utp_congestion_packet_info_t* p)
 {
     utp_bbr_t* b = s;
-    if (b != NULL && p != NULL) {
-        utp_bw_sampler_on_packet_lost(&b->sampler, p->state);
-        b->lost_bytes     = sat_add(b->lost_bytes, p->packet_size);
-        b->ack_has_losses = true;
-    }
+    assert(b != NULL);
+    assert(p != NULL);
+    utp_bw_sampler_on_packet_lost(&b->sampler, p->state);
+    b->lost_bytes     = sat_add(b->lost_bytes, p->packet_size);
+    b->ack_has_losses = true;
 }
 static void end_ack(void* s, uint64_t in)
 {
     utp_bbr_t* b = s;
     uint64_t   expected, excess = 0;
-    if (b == NULL || !b->in_ack) return;
+    assert(b != NULL);
+    if (!b->in_ack) return;
     b->in_ack = false;
     if (b->acked_bytes > 0u) {
         int32_t round =
@@ -286,7 +289,7 @@ void                              utp_bbr_init(utp_bbr_t* b, const utp_bbr_confi
                                       : 1.25;
     const double* pacing_gains  = c == NULL ? k_bbr_default_pacing_gains : c->pacing_gains;
     uint32_t      index;
-    if (b == NULL) return;
+    assert(b != NULL);
     memset(b, 0, sizeof(*b));
     b->initial_cwnd          = max64((uint64_t)i * BBR_MSS, (uint64_t)m * BBR_MSS);
     b->minimum_cwnd          = (uint64_t)m * BBR_MSS;

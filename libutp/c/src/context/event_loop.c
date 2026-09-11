@@ -1,5 +1,6 @@
 #include "context/event_loop.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include <event2/event.h>
@@ -8,7 +9,8 @@
 
 static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval* timeout)
 {
-    if (timeout == NULL || delay_us > UTP_EVENT_MAX_TIMER_DELAY_US) {
+    assert(timeout != NULL);
+    if (delay_us > UTP_EVENT_MAX_TIMER_DELAY_US) {
         return false;
     }
     timeout->tv_sec = (time_t)(delay_us / UINT64_C(1000000));
@@ -26,6 +28,7 @@ static void utp_event_native_callback(evutil_socket_t file_descriptor, short nat
     uint32_t     events = 0u;
 
     (void)file_descriptor;
+    assert(event != NULL);
     if ((native_events & EV_READ) != 0) {
         events |= UTP_EVENT_READABLE;
     }
@@ -35,7 +38,7 @@ static void utp_event_native_callback(evutil_socket_t file_descriptor, short nat
     if ((native_events & EV_TIMEOUT) != 0) {
         events |= UTP_EVENT_TIMEOUT;
     }
-    if (events != 0u && event != NULL && event->callback != NULL) {
+    if (events != 0u && event->callback != NULL) {
         event->callback(events, event->user_data);
     }
 }

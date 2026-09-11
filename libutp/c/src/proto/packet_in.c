@@ -1,9 +1,12 @@
 #include "proto/packet_in.h"
 
+#include <assert.h>
 #include <limits.h>
 
 static void utp_packet_in_pool_free_block(utp_packet_in_pool_t* pool, utp_packet_in_block_t* block)
 {
+    assert(pool != NULL);
+    assert(block != NULL);
     utp_allocator_free(pool->allocator, block->storage);
     utp_allocator_free(pool->allocator, block->packets);
     utp_allocator_free(pool->allocator, block);
@@ -13,6 +16,9 @@ static void                 utp_packet_in_pool_trim(utp_packet_in_pool_t* pool);
 
 static utp_internal_error_t utp_packet_in_pool_add_block(utp_packet_in_pool_t* pool, size_t packet_capacity)
 {
+    assert(pool != NULL);
+    assert(pool->allocator != NULL);
+    assert(pool->buffer_capacity != 0u);
     if (packet_capacity == 0u || packet_capacity > SIZE_MAX / sizeof(utp_packet_in_t) ||
         packet_capacity > SIZE_MAX / pool->buffer_capacity || pool->packet_capacity > SIZE_MAX - packet_capacity) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -59,6 +65,9 @@ static utp_internal_error_t utp_packet_in_pool_add_block(utp_packet_in_pool_t* p
 
 static utp_internal_error_t utp_packet_in_pool_grow(utp_packet_in_pool_t* pool)
 {
+    assert(pool != NULL);
+    assert(pool->grow_capacity != 0u);
+    assert(pool->block_capacity != 0u);
     size_t               remaining = pool->grow_capacity;
     utp_internal_error_t error     = UTP_INTERNAL_ERROR_OK;
 
@@ -178,6 +187,8 @@ utp_internal_error_t utp_packet_in_pool_reserve(utp_packet_in_pool_t* pool, size
 
 static void utp_packet_in_pool_remove_block_free_packets(utp_packet_in_pool_t* pool, const utp_packet_in_block_t* block)
 {
+    assert(pool != NULL);
+    assert(block != NULL);
     utp_packet_in_t** link = &pool->free_packets;
 
     while (*link != NULL) {
@@ -191,6 +202,7 @@ static void utp_packet_in_pool_remove_block_free_packets(utp_packet_in_pool_t* p
 
 static void utp_packet_in_pool_trim(utp_packet_in_pool_t* pool)
 {
+    assert(pool != NULL);
     utp_packet_in_block_t** link = &pool->blocks;
 
     while (pool->free_count > pool->max_free_capacity && *link != NULL) {

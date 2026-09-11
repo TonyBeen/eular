@@ -1,5 +1,6 @@
 #include "crypto/token.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include <openssl/aead.h>
@@ -12,6 +13,7 @@ static const uint8_t k_zero_rtt_aad[] = "UTP-0RTTToken-AAD";
 
 static void          utp_token_store_u32(uint8_t* output, uint32_t value)
 {
+    assert(output != NULL);
     output[0] = (uint8_t)(value >> 24u);
     output[1] = (uint8_t)(value >> 16u);
     output[2] = (uint8_t)(value >> 8u);
@@ -20,11 +22,14 @@ static void          utp_token_store_u32(uint8_t* output, uint32_t value)
 
 static uint32_t utp_token_load_u32(const uint8_t* input)
 {
+    assert(input != NULL);
     return ((uint32_t)input[0] << 24u) | ((uint32_t)input[1] << 16u) | ((uint32_t)input[2] << 8u) | input[3];
 }
 
 static void utp_token_encode_meta(const utp_token_meta_t* meta, uint8_t output[UTP_TOKEN_META_SIZE])
 {
+    assert(meta != NULL);
+    assert(output != NULL);
     output[0] = meta->token_type;
     utp_token_store_u32(output + 1u, meta->timestamp_seconds);
     utp_token_store_u32(output + 5u, meta->cid);
@@ -38,6 +43,8 @@ static void utp_token_encode_meta(const utp_token_meta_t* meta, uint8_t output[U
 
 static void utp_token_decode_meta(utp_token_meta_t* meta, const uint8_t input[UTP_TOKEN_META_SIZE])
 {
+    assert(meta != NULL);
+    assert(input != NULL);
     meta->token_type        = input[0];
     meta->timestamp_seconds = utp_token_load_u32(input + 1u);
     meta->cid               = utp_token_load_u32(input + 5u);
@@ -50,6 +57,7 @@ static void utp_token_decode_meta(utp_token_meta_t* meta, const uint8_t input[UT
 
 static utp_internal_error_t utp_token_auth_rotate(utp_token_auth_t* auth, uint64_t now_seconds)
 {
+    assert(auth != NULL);
     if (!auth->initialized || now_seconds < auth->key_updated_seconds ||
         now_seconds - auth->key_updated_seconds < UTP_TOKEN_KEY_ROTATION_SECONDS) {
         return UTP_INTERNAL_ERROR_OK;
@@ -93,6 +101,10 @@ static utp_internal_error_t utp_token_auth_crypt(const uint8_t key[UTP_TOKEN_KEY
     size_t       output_length = 0u;
     int          result;
 
+    assert(key != NULL);
+    assert(nonce != NULL);
+    assert(input != NULL);
+    assert(output != NULL);
     EVP_AEAD_CTX_zero(&context);
     result = EVP_AEAD_CTX_init(&context, EVP_aead_aes_256_gcm(), key, UTP_TOKEN_KEY_SIZE, UTP_TOKEN_TAG_SIZE, NULL);
     if (result == 1) {

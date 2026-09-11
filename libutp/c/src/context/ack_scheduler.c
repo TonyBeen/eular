@@ -1,11 +1,13 @@
 #include "context/ack_scheduler.h"
 
+#include <assert.h>
 #include <stddef.h>
 
 utp_internal_error_t utp_ack_scheduler_init(utp_ack_scheduler_t* scheduler, uint8_t ack_eliciting_threshold,
                                             uint8_t reordering_threshold, uint32_t max_ack_delay_ms)
 {
-    if (scheduler == NULL || ack_eliciting_threshold == 0u || reordering_threshold == 0u || max_ack_delay_ms == 0u) {
+    assert(scheduler != NULL);
+    if (ack_eliciting_threshold == 0u || reordering_threshold == 0u || max_ack_delay_ms == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     scheduler->ack_eliciting_threshold = ack_eliciting_threshold;
@@ -20,7 +22,8 @@ utp_ack_schedule_decision_t utp_ack_scheduler_on_packet(utp_ack_scheduler_t* sch
                                                         uint64_t largest_before, bool ack_eliciting,
                                                         bool has_handshake_done, uint64_t now)
 {
-    if (scheduler == NULL || !ack_eliciting) {
+    assert(scheduler != NULL);
+    if (!ack_eliciting) {
         return UTP_ACK_SCHEDULE_NONE;
     }
     if (scheduler->pending_count != UINT32_MAX) {
@@ -39,18 +42,19 @@ utp_ack_schedule_decision_t utp_ack_scheduler_on_packet(utp_ack_scheduler_t* sch
 
 void utp_ack_scheduler_on_ack_sent(utp_ack_scheduler_t* scheduler)
 {
-    if (scheduler != NULL) {
-        scheduler->pending_count = 0u;
-        scheduler->deadline      = 0u;
-    }
+    assert(scheduler != NULL);
+    scheduler->pending_count = 0u;
+    scheduler->deadline      = 0u;
 }
 
 uint32_t utp_ack_scheduler_pending_count(const utp_ack_scheduler_t* scheduler)
 {
-    return scheduler == NULL ? 0u : scheduler->pending_count;
+    assert(scheduler != NULL);
+    return scheduler->pending_count;
 }
 
 uint64_t utp_ack_scheduler_deadline(const utp_ack_scheduler_t* scheduler)
 {
-    return scheduler == NULL ? 0u : scheduler->deadline;
+    assert(scheduler != NULL);
+    return scheduler->deadline;
 }

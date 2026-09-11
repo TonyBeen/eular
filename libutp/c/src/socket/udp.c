@@ -4,6 +4,7 @@
 
 #include "socket/udp.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
@@ -59,9 +60,8 @@ static utp_internal_error_t utp_udp_socket_load_extension_functions(utp_udp_sock
     SOCKET native_handle;
     DWORD  bytes_returned = 0u;
 
-    if (!utp_udp_socket_is_open(udp_socket)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(udp_socket != NULL);
+    assert(utp_udp_socket_is_open(udp_socket));
     if (udp_socket->wsa_recv_msg != NULL && udp_socket->wsa_send_msg != NULL) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -96,9 +96,8 @@ static bool utp_udp_socket_interface_index_from_name(const char* ifname, uint32_
     NET_LUID    luid;
     NET_IFINDEX interface_index = 0u;
 
-    if (ifname == NULL || out_index == NULL) {
-        return false;
-    }
+    assert(ifname != NULL);
+    assert(out_index != NULL);
     if (ConvertInterfaceNameToLuidA(ifname, &luid) != NO_ERROR ||
         ConvertInterfaceLuidToIndex(&luid, &interface_index) != NO_ERROR) {
         return false;
@@ -112,7 +111,9 @@ static utp_internal_error_t utp_udp_socket_set_windows_pktinfo(WSAMSG* message, 
 {
     WSACMSGHDR* cmsg;
 
-    if (message == NULL || control == NULL || !utp_udp_socket_source_is_usable(local, peer)) {
+    assert(message != NULL);
+    assert(control != NULL);
+    if (!utp_udp_socket_source_is_usable(local, peer)) {
         return UTP_INTERNAL_ERROR_OK;
     }
     memset(control, 0, sizeof(*control));
@@ -191,7 +192,8 @@ static bool utp_udp_socket_align_control_length(size_t length, size_t* aligned_l
 {
     const size_t alignment = sizeof(size_t);
 
-    if (aligned_length == NULL || length > SIZE_MAX - (alignment - 1u)) {
+    assert(aligned_length != NULL);
+    if (length > SIZE_MAX - (alignment - 1u)) {
         return false;
     }
     *aligned_length = (length + alignment - 1u) & ~(alignment - 1u);
@@ -247,14 +249,13 @@ static bool utp_udp_socket_source_is_usable(const utp_address_t* local, const ut
 
 static utp_internal_error_t utp_udp_socket_enable_packet_info(utp_udp_socket_t* udp_socket, uint8_t address_family)
 {
+    assert(udp_socket != NULL);
+    assert(utp_udp_socket_is_open(udp_socket));
 #if defined(_WIN32)
     BOOL                 enabled = TRUE;
     SOCKET               native_handle;
     utp_internal_error_t error;
 
-    if (!utp_udp_socket_is_open(udp_socket)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     error = utp_udp_socket_load_extension_functions(udp_socket);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -283,9 +284,6 @@ static utp_internal_error_t utp_udp_socket_enable_packet_info(utp_udp_socket_t* 
     const int enabled = 1;
     int       native_handle;
 
-    if (!utp_udp_socket_is_open(udp_socket)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
     native_handle = (int)udp_socket->native_handle;
     if (address_family == UTP_ADDRESS_FAMILY_IPV4) {
 #if defined(__APPLE__) && defined(IP_PKTINFO)
@@ -337,9 +335,8 @@ static utp_internal_error_t utp_udp_socket_bind_interface(utp_udp_socket_t* udp_
     if (utp_udp_socket_ifname_empty(ifname)) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (!utp_udp_socket_is_open(udp_socket)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(udp_socket != NULL);
+    assert(utp_udp_socket_is_open(udp_socket));
 #if defined(_WIN32)
     {
         uint32_t interface_index;
@@ -422,9 +419,8 @@ static utp_internal_error_t utp_udp_socket_bind_interface(utp_udp_socket_t* udp_
 
 static utp_internal_error_t utp_udp_socket_enable_dont_fragment(utp_udp_socket_t* udp_socket, uint8_t address_family)
 {
-    if (!utp_udp_socket_is_open(udp_socket)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(udp_socket != NULL);
+    assert(utp_udp_socket_is_open(udp_socket));
 #if defined(_WIN32)
     {
         SOCKET native_handle = (SOCKET)udp_socket->native_handle;

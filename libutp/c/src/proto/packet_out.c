@@ -13,6 +13,7 @@ static const uint16_t k_packet_out_bucket_sizes[] = {1280u, 1500u, 4096u, 9000u,
 
 static void bucket_init(utp_packet_out_bucket_t* bucket, uint16_t size)
 {
+    assert(bucket != NULL);
     memset(bucket, 0, sizeof(*bucket));
     bucket->size = size;
     TAILQ_INIT(&bucket->free_buffers);
@@ -23,6 +24,8 @@ static void bucket_cleanup(utp_packet_out_bucket_t* bucket, const utp_allocator_
 {
     utp_packet_out_buffer_block_t* block;
 
+    assert(bucket != NULL);
+    assert(allocator != NULL);
     while ((block = TAILQ_FIRST(&bucket->blocks)) != NULL) {
         TAILQ_REMOVE(&bucket->blocks, block, link);
         utp_allocator_free(allocator, block);
@@ -34,6 +37,7 @@ static void bucket_cleanup(utp_packet_out_bucket_t* bucket, const utp_allocator_
 
 static size_t choose_bucket(const utp_packet_out_buffer_pool_t* pool, uint16_t requested_size)
 {
+    assert(pool != NULL);
     for (size_t index = 0u; index < pool->bucket_count; ++index) {
         if (pool->buckets[index].size >= requested_size) {
             return index;
@@ -44,11 +48,13 @@ static size_t choose_bucket(const utp_packet_out_buffer_pool_t* pool, uint16_t r
 
 static bool bucket_has_new_sample(const utp_packet_out_bucket_t* bucket)
 {
+    assert(bucket != NULL);
     return bucket->sample_calls != 0u && bucket->sample_calls % UTP_PACKET_OUT_POOL_SAMPLE_PERIOD == 0u;
 }
 
 static void bucket_record_activity(utp_packet_out_bucket_t* bucket)
 {
+    assert(bucket != NULL);
     ++bucket->sample_calls;
     if (bucket->in_use_count > bucket->sample_max_in_use) {
         bucket->sample_max_in_use = bucket->in_use_count;
@@ -70,6 +76,8 @@ static void bucket_shrink(utp_packet_out_bucket_t* bucket, const utp_allocator_t
     utp_packet_out_buffer_block_t* block;
     size_t                         target_count;
 
+    assert(bucket != NULL);
+    assert(allocator != NULL);
     if (bucket->sample_max_average >= bucket->allocated_count / 4u ||
         bucket->allocated_count <= UTP_PACKET_OUT_GROW_COUNT) {
         return;
@@ -96,6 +104,8 @@ static utp_internal_error_t bucket_grow(utp_packet_out_bucket_t* bucket, const u
     const size_t                   storage_size = (size_t)bucket->size * UTP_PACKET_OUT_GROW_COUNT;
     utp_packet_out_buffer_block_t* block;
 
+    assert(bucket != NULL);
+    assert(allocator != NULL);
     block = utp_allocator_alloc(allocator, sizeof(*block) + storage_size);
     if (block == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
@@ -115,6 +125,10 @@ static utp_internal_error_t bucket_grow(utp_packet_out_bucket_t* bucket, const u
 static utp_internal_error_t bucket_acquire(utp_packet_out_buffer_pool_t* buffer_pool, size_t bucket_index,
                                            utp_packet_out_buffer_node_t** out)
 {
+    assert(buffer_pool != NULL);
+    assert(buffer_pool->allocator != NULL);
+    assert(bucket_index < buffer_pool->bucket_count);
+    assert(out != NULL);
     utp_packet_out_bucket_t*      bucket = &buffer_pool->buckets[bucket_index];
     utp_packet_out_buffer_node_t* node;
     utp_internal_error_t          error;
@@ -140,6 +154,11 @@ static utp_internal_error_t bucket_acquire(utp_packet_out_buffer_pool_t* buffer_
 static void bucket_release(utp_packet_out_buffer_pool_t* buffer_pool, size_t bucket_index,
                            utp_packet_out_buffer_node_t* node)
 {
+    assert(buffer_pool != NULL);
+    assert(buffer_pool->allocator != NULL);
+    assert(bucket_index < buffer_pool->bucket_count);
+    assert(node != NULL);
+    assert(node->block != NULL);
     utp_packet_out_bucket_t* bucket = &buffer_pool->buckets[bucket_index];
 
     ++node->block->free_count;
@@ -223,6 +242,8 @@ static utp_internal_error_t packet_out_pool_grow(utp_packet_out_pool_t* pool)
 {
     utp_packet_out_block_t* block;
 
+    assert(pool != NULL);
+    assert(pool->allocator != NULL);
     block = utp_allocator_alloc(pool->allocator, sizeof(*block));
     if (block == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
@@ -239,6 +260,10 @@ static utp_internal_error_t packet_out_pool_grow(utp_packet_out_pool_t* pool)
 static void reset_packet_out_for_acquire(utp_packet_out_t* pkt, utp_packet_out_buffer_node_t* node,
                                          const utp_packet_out_bucket_t* bucket, size_t bucket_index)
 {
+    assert(pkt != NULL);
+    assert(node != NULL);
+    assert(bucket != NULL);
+    assert(bucket_index < sizeof(k_packet_out_bucket_sizes) / sizeof(k_packet_out_bucket_sizes[0]));
     pkt->sent_time_us                = 0u;
     pkt->packet_number               = 0u;
     pkt->ack_number                  = 0u;

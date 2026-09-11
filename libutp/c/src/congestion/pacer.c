@@ -1,26 +1,24 @@
 #include "congestion/pacer.h"
 
+#include <assert.h>
 #include <stddef.h>
 
 void utp_pacer_init(utp_pacer_t* pacer, uint32_t clock_granularity_us)
 {
-    if (pacer != NULL) {
-        pacer->next_scheduled_time_us = 0u;
-        pacer->last_delayed_time_us   = 0u;
-        pacer->now_us                 = 0u;
-        pacer->clock_granularity_us   = clock_granularity_us;
-        pacer->burst_tokens           = UTP_PACER_BURST_TOKENS;
-        pacer->scheduled_count        = 0u;
-        pacer->last_schedule_delayed  = false;
-        pacer->delayed_on_tick_in     = false;
-    }
+    assert(pacer != NULL);
+    pacer->next_scheduled_time_us = 0u;
+    pacer->last_delayed_time_us   = 0u;
+    pacer->now_us                 = 0u;
+    pacer->clock_granularity_us   = clock_granularity_us;
+    pacer->burst_tokens           = UTP_PACER_BURST_TOKENS;
+    pacer->scheduled_count        = 0u;
+    pacer->last_schedule_delayed  = false;
+    pacer->delayed_on_tick_in     = false;
 }
 
 void utp_pacer_tick_in(utp_pacer_t* pacer, uint64_t now_us)
 {
-    if (pacer == NULL) {
-        return;
-    }
+    assert(pacer != NULL);
     if (now_us > pacer->now_us) {
         pacer->now_us = now_us;
     }
@@ -32,9 +30,7 @@ void utp_pacer_tick_in(utp_pacer_t* pacer, uint64_t now_us)
 
 void utp_pacer_tick_out(utp_pacer_t* pacer)
 {
-    if (pacer == NULL) {
-        return;
-    }
+    assert(pacer != NULL);
     if (pacer->delayed_on_tick_in && pacer->scheduled_count == 0u && pacer->now_us > pacer->next_scheduled_time_us) {
         pacer->last_schedule_delayed = false;
     }
@@ -43,9 +39,7 @@ void utp_pacer_tick_out(utp_pacer_t* pacer)
 
 bool utp_pacer_can_schedule(utp_pacer_t* pacer, uint64_t inflight_packet_count)
 {
-    if (pacer == NULL) {
-        return false;
-    }
+    assert(pacer != NULL);
     if (pacer->burst_tokens != 0u || inflight_packet_count == 0u) {
         return true;
     }
@@ -59,9 +53,7 @@ bool utp_pacer_can_schedule(utp_pacer_t* pacer, uint64_t inflight_packet_count)
 void utp_pacer_packet_scheduled(utp_pacer_t* pacer, uint64_t inflight_packet_count, bool in_recovery,
                                 uint64_t transmit_interval_us)
 {
-    if (pacer == NULL) {
-        return;
-    }
+    assert(pacer != NULL);
     ++pacer->scheduled_count;
     if (inflight_packet_count == 0u && !in_recovery) {
         pacer->burst_tokens = UTP_PACER_BURST_TOKENS;
@@ -101,14 +93,18 @@ void utp_pacer_packet_scheduled(utp_pacer_t* pacer, uint64_t inflight_packet_cou
 
 void utp_pacer_on_loss(utp_pacer_t* pacer)
 {
-    if (pacer != NULL) {
-        pacer->burst_tokens = 0u;
-    }
+    assert(pacer != NULL);
+    pacer->burst_tokens = 0u;
 }
 
-bool     utp_pacer_delayed(const utp_pacer_t* pacer) { return pacer != NULL && pacer->last_schedule_delayed; }
+bool     utp_pacer_delayed(const utp_pacer_t* pacer)
+{
+    assert(pacer != NULL);
+    return pacer->last_schedule_delayed;
+}
 
 uint64_t utp_pacer_next_scheduled_time(const utp_pacer_t* pacer)
 {
-    return pacer == NULL ? 0u : pacer->next_scheduled_time_us;
+    assert(pacer != NULL);
+    return pacer->next_scheduled_time_us;
 }

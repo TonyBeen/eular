@@ -1,5 +1,6 @@
 #include "context/context.h"
 
+#include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -75,9 +76,8 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
 {
     utp_internal_error_t error;
 
-    if (context == NULL || connection == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(connection != NULL);
     connection->context = context;
     error = utp_connection_set_congestion_algorithm(connection, context->cc_algorithm, &context->bbr_config,
                                                     &context->cubic_config, context->clock_granularity_us);
@@ -115,6 +115,7 @@ static uint64_t utp_context_now_us(void);
 /** @brief 返回当前 Context 主动连接 REQUEST 帧的精确空间需求。 */
 static size_t   utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length)
 {
+    assert(context != NULL);
     const size_t address_length = context->bound_address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
 
     return UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ID_SIZE + 1u + context->peer_id_length + 1u +
@@ -135,6 +136,10 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
     size_t                   body_length;
     utp_internal_error_t     error;
 
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(buffer != NULL);
+    assert(offset != NULL);
     if (*offset > capacity ||
         capacity - *offset < utp_context_request_frame_size(context, slot->target_peer_id_length)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
@@ -175,10 +180,12 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
 static utp_internal_error_t utp_context_append_zero_rtt_parameters(uint8_t* buffer, size_t capacity, size_t* offset,
                                                                    bool include_delay, uint32_t delay_us)
 {
-    if (buffer == NULL || offset == NULL || *offset > capacity ||
-        capacity - *offset < sizeof(k_zero_rtt_version_frame) + sizeof(k_zero_rtt_transport_params_frame) +
-                                 sizeof(k_zero_rtt_ack_frequency_frame) +
-                                 (include_delay ? UTP_FRAME_HANDSHAKE_DELAY_SIZE : 0u)) {
+    assert(buffer != NULL);
+    assert(offset != NULL);
+    if (*offset > capacity || capacity - *offset < sizeof(k_zero_rtt_version_frame) +
+                                                       sizeof(k_zero_rtt_transport_params_frame) +
+                                                       sizeof(k_zero_rtt_ack_frequency_frame) +
+                                                       (include_delay ? UTP_FRAME_HANDSHAKE_DELAY_SIZE : 0u)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     memcpy(buffer + *offset, k_zero_rtt_version_frame, sizeof(k_zero_rtt_version_frame));
@@ -212,9 +219,13 @@ static utp_internal_error_t utp_context_append_handshake_feedback(uint8_t* buffe
     uint64_t                    delay_us;
     utp_internal_error_t        error;
 
-    if (buffer == NULL || offset == NULL || *offset > capacity || request_packet_number == 0u ||
-        request_received_us == 0u || now_us == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    assert(buffer != NULL);
+    assert(offset != NULL);
+    assert(request_packet_number != 0u);
+    assert(request_received_us != 0u);
+    assert(now_us != 0u);
+    if (*offset > capacity) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     delay_us           = now_us > request_received_us ? now_us - request_received_us : 0u;
     range.low          = request_packet_number;
@@ -245,9 +256,11 @@ static utp_internal_error_t utp_context_pad_zero_rtt_payload(utp_connection_t* c
     uint16_t target_size;
     size_t   required_padding;
 
-    if (connection == NULL || payload == NULL || payload_length == NULL || prefix_length > *payload_length) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(connection != NULL);
+    assert(payload != NULL);
+    assert(payload_length != NULL);
+    assert(*payload_length <= capacity);
+    assert(prefix_length <= *payload_length);
     target_size           = utp_mtu_packet_size_from_mtu(connection->mtu_discovery.mtu_min, connection->peer.family);
     const size_t tag_size = encrypted ? UTP_CRYPTO_AEAD_TAG_SIZE : 0u;
 
@@ -297,22 +310,27 @@ static bool utp_context_connection_slot_matches(const utp_hash_node_t* node, con
 {
     const utp_context_connection_slot_t* slot;
 
+    assert(node != NULL);
+    assert(key != NULL);
     (void)user_data;
     slot = (const utp_context_connection_slot_t*)((const uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
-    return key != NULL && slot->connection.local_cid == *(const uint32_t*)key;
+    return slot->connection.local_cid == *(const uint32_t*)key;
 }
 
 /** @brief 按来源地址和对端 CID 比较被动连接槽位。 */
 static bool utp_context_connection_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
 {
     const utp_context_connection_slot_t* slot;
-    const utp_context_peer_index_key_t*  peer_key = key;
+    const utp_context_peer_index_key_t*  peer_key;
 
+    assert(node != NULL);
+    peer_key = key;
+    assert(peer_key != NULL);
+    assert(peer_key->peer != NULL);
     (void)user_data;
     slot = (const utp_context_connection_slot_t*)((const uint8_t*)node -
                                                   offsetof(utp_context_connection_slot_t, peer_node));
-    return peer_key != NULL && peer_key->peer != NULL && slot->connection.peer_cid == peer_key->peer_cid &&
-           utp_address_equal(&slot->connection.peer, peer_key->peer);
+    return slot->connection.peer_cid == peer_key->peer_cid && utp_address_equal(&slot->connection.peer, peer_key->peer);
 }
 
 /** @brief 从哈希节点取得动态 pending 槽位。 */
@@ -335,21 +353,26 @@ static bool utp_context_pending_slot_matches(const utp_hash_node_t* node, const 
 {
     const utp_context_pending_slot_t* slot;
 
+    assert(node != NULL);
+    assert(key != NULL);
     (void)user_data;
     slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
-    return key != NULL && slot->pending.local_cid == *(const uint32_t*)key;
+    return slot->pending.local_cid == *(const uint32_t*)key;
 }
 
 /** @brief 按来源地址和对端 CID 比较 pending 槽位。 */
 static bool utp_context_pending_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
 {
     const utp_context_pending_slot_t*   slot;
-    const utp_context_peer_index_key_t* peer_key = key;
+    const utp_context_peer_index_key_t* peer_key;
 
+    assert(node != NULL);
+    peer_key = key;
+    assert(peer_key != NULL);
+    assert(peer_key->peer != NULL);
     (void)user_data;
     slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, peer_node));
-    return peer_key != NULL && peer_key->peer != NULL && slot->pending.peer_cid == peer_key->peer_cid &&
-           utp_address_equal(&slot->pending.peer, peer_key->peer);
+    return slot->pending.peer_cid == peer_key->peer_cid && utp_address_equal(&slot->pending.peer, peer_key->peer);
 }
 
 /** @brief 为来源地址和对端 CID 生成稳定的 64 位哈希。 */
@@ -359,6 +382,7 @@ static uint64_t utp_context_peer_index_hash(const utp_address_t* peer, uint32_t 
     size_t   address_length;
     size_t   index;
 
+    assert(peer != NULL);
     address_length  = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
     hash           ^= peer->family;
     hash           *= UINT64_C(1099511628211);
@@ -381,9 +405,7 @@ static void utp_context_invalidate_resumption_state(utp_context_t* context)
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL) {
-        return;
-    }
+    assert(context != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot       = utp_context_connection_slot_from_node(node);
@@ -416,10 +438,12 @@ static bool utp_context_replay_matches(const utp_hash_node_t* node, const void* 
 {
     const utp_context_zero_rtt_replay_entry_t* entry;
 
+    assert(node != NULL);
+    assert(key != NULL);
     (void)user_data;
     entry = (const utp_context_zero_rtt_replay_entry_t*)((const uint8_t*)node -
                                                          offsetof(utp_context_zero_rtt_replay_entry_t, node));
-    return key != NULL && memcmp(entry->key, key, sizeof(entry->key)) == 0;
+    return memcmp(entry->key, key, sizeof(entry->key)) == 0;
 }
 
 /** @brief 为 replay 哈希表生成稳定的 64 位分桶哈希。 */
@@ -428,6 +452,7 @@ static uint64_t utp_context_replay_hash(const uint8_t key[UTP_CONTEXT_ZERO_RTT_R
     uint64_t hash = UINT64_C(1469598103934665603);
     size_t   index;
 
+    assert(key != NULL);
     for (index = 0u; index < UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE; ++index) {
         hash ^= key[index];
         hash *= UINT64_C(1099511628211);
@@ -438,6 +463,7 @@ static uint64_t utp_context_replay_hash(const uint8_t key[UTP_CONTEXT_ZERO_RTT_R
 /** @brief 删除 replay 记录时释放其动态内存。 */
 static void utp_context_free_replay_entry(utp_hash_node_t* node, void* user_data)
 {
+    assert(node != NULL);
     (void)user_data;
     utp_allocator_free(NULL, utp_context_replay_entry_from_node(node));
 }
@@ -445,9 +471,8 @@ static void utp_context_free_replay_entry(utp_hash_node_t* node, void* user_data
 /** @brief 清空 replay cache，Context root 替换和销毁均调用。 */
 static void utp_context_clear_zero_rtt_replay(utp_context_t* context)
 {
-    if (context != NULL) {
-        utp_hash_table_clear(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
-    }
+    assert(context != NULL);
+    utp_hash_table_clear(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
 }
 
 /** @brief 仅在容量耗尽时惰性回收已过期 replay 记录。 */
@@ -456,6 +481,7 @@ static void utp_context_purge_expired_zero_rtt_replay(utp_context_t* context, ui
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
+    assert(context != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->zero_rtt_replay, &iter)) != NULL) {
         utp_context_zero_rtt_replay_entry_t* entry = utp_context_replay_entry_from_node(node);
@@ -477,8 +503,10 @@ static bool utp_context_remember_zero_rtt_replay(
     uint8_t              key[UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE];
     utp_internal_error_t error;
 
-    if (context == NULL || encrypted_server_info == NULL || early_attempt_nonce == NULL ||
-        expires_at_seconds <= now_seconds) {
+    assert(context != NULL);
+    assert(encrypted_server_info != NULL);
+    assert(early_attempt_nonce != NULL);
+    if (expires_at_seconds <= now_seconds) {
         return false;
     }
     error = utp_crypto_sha256(encrypted_server_info, UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE, digest);
@@ -514,7 +542,9 @@ static bool utp_context_remember_zero_rtt_replay(
 
 static void utp_context_log(utp_context_t* context, utp_log_level_t level, const char* message)
 {
-    if (context == NULL || message == NULL || !utp_internal_log_enabled(&context->logger, level)) {
+    assert(context != NULL);
+    assert(message != NULL);
+    if (!utp_internal_log_enabled(&context->logger, level)) {
         return;
     }
     utp_internal_log(&context->logger, &context->tag, level, message);
@@ -523,7 +553,9 @@ static void utp_context_log(utp_context_t* context, utp_log_level_t level, const
 static void utp_context_log_ids(utp_context_t* context, utp_log_level_t level, const char* event, uint32_t local_cid,
                                 uint32_t peer_cid)
 {
-    if (context == NULL || event == NULL || !utp_internal_log_enabled(&context->logger, level)) {
+    assert(context != NULL);
+    assert(event != NULL);
+    if (!utp_internal_log_enabled(&context->logger, level)) {
         return;
     }
     char message[160];
@@ -536,7 +568,9 @@ static void utp_context_log_close(utp_context_t* context, const utp_context_conn
                                   utp_status_t status, uint16_t peer_error_code, bool peer_initiated)
 {
     const utp_log_level_t level = status == UTP_STATUS_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING;
-    if (context == NULL || slot == NULL || !utp_internal_log_enabled(&context->logger, level)) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (!utp_internal_log_enabled(&context->logger, level)) {
         return;
     }
     char message[256];
@@ -577,6 +611,9 @@ static void utp_context_log_nat_endpoint(utp_context_t* context, const char* eve
     char address[UTP_ADDRESS_TEXT_MAX_LENGTH];
     char message[256];
 
+    assert(context != NULL);
+    assert(event != NULL);
+    assert(endpoint != NULL);
     if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG)) {
         return;
     }
@@ -616,6 +653,9 @@ static void utp_context_log_nat_response(utp_context_t* context, uint8_t step, c
     char local_ifname[64u];
     char message[448];
 
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(response != NULL);
     if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG) ||
         utp_address_format(peer, peer_address, sizeof(peer_address)) != UTP_INTERNAL_ERROR_OK ||
         utp_address_format(&response->mapped, mapped_address, sizeof(mapped_address)) != UTP_INTERNAL_ERROR_OK) {
@@ -642,6 +682,9 @@ static void utp_context_log_nat_response_rejected(utp_context_t* context, uint8_
     char local_ifname[64u];
     char message[400];
 
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(reason != NULL);
     if (!utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_DEBUG) ||
         utp_address_format(peer, peer_address, sizeof(peer_address)) != UTP_INTERNAL_ERROR_OK) {
         return;
@@ -675,6 +718,8 @@ static uint64_t utp_context_unix_now_ms(void)
 
 static void utp_context_endpoint_from_address(utp_endpoint_t* endpoint, const utp_address_t* address)
 {
+    assert(endpoint != NULL);
+    assert(address != NULL);
     endpoint->family   = address->family;
     endpoint->port     = address->port;
     endpoint->scope_id = address->scope_id;
@@ -689,9 +734,7 @@ static bool utp_context_encryption_mode_is_valid(utp_encryption_mode_t encryptio
 
 static bool utp_context_crypto_type_from_encryption(utp_encryption_mode_t encryption, uint8_t* crypto_type)
 {
-    if (crypto_type == NULL) {
-        return false;
-    }
+    assert(crypto_type != NULL);
     if (encryption == UTP_ENCRYPTION_AES_GCM_128) {
         *crypto_type = UTP_FRAME_CRYPTO_TYPE_AES_GCM_128;
         return true;
@@ -711,9 +754,10 @@ static utp_encryption_mode_t utp_context_encryption_from_crypto_type(uint8_t cry
 /** @brief 为已建立的被动连接签发统一的加密恢复凭证。 */
 static utp_internal_error_t utp_context_queue_session_token(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
-    if (context == NULL || slot == NULL || !slot->used || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE ||
-        slot->connection.session_token_issued || context->zero_rtt_token_max_lifetime_seconds == 0u ||
-        !context->resumption_keys_ready) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (!slot->used || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE || slot->connection.session_token_issued ||
+        context->zero_rtt_token_max_lifetime_seconds == 0u || !context->resumption_keys_ready) {
         return UTP_INTERNAL_ERROR_OK;
     }
     if (slot->connection.crypto_configured && !slot->connection.crypto_ready) {
@@ -764,6 +808,7 @@ static bool utp_context_log_level_is_valid(utp_log_level_t level)
 
 static bool utp_context_cid_in_use(const utp_context_t* context, uint32_t cid)
 {
+    assert(context != NULL);
     if (cid == 0u) {
         return true;
     }
@@ -776,9 +821,8 @@ static utp_internal_error_t utp_context_alloc_cid(utp_context_t* context, uint32
     uint32_t candidate;
     uint32_t attempts;
 
-    if (context == NULL || out_cid == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(out_cid != NULL);
     // CID 为 0 时仅用于尚未完成解复用的 Initial 包；已分配连接必须跳过该值。
     candidate = context->next_cid == 0u ? 1u : context->next_cid;
     for (attempts = 0u; attempts < UINT32_MAX; ++attempts) {
@@ -800,7 +844,8 @@ static utp_context_connection_slot_t* utp_context_find_connection_slot(utp_conte
 {
     utp_hash_node_t* node;
 
-    if (context == NULL || local_cid == 0u) {
+    assert(context != NULL);
+    if (local_cid == 0u) {
         return NULL;
     }
     node = utp_hash_table_find(&context->connections, local_cid, &local_cid, utp_context_connection_slot_matches, NULL);
@@ -813,9 +858,8 @@ static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_co
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL || peer == NULL) {
-        return NULL;
-    }
+    assert(context != NULL);
+    assert(peer != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -835,7 +879,9 @@ static utp_context_connection_slot_t* utp_context_find_passive_connection_by_pee
     const utp_context_peer_index_key_t key = {peer, peer_cid};
     utp_hash_node_t*                   node;
 
-    if (context == NULL || peer == NULL || peer_cid == 0u) {
+    assert(context != NULL);
+    assert(peer != NULL);
+    if (peer_cid == 0u) {
         return NULL;
     }
     node = utp_hash_table_find(&context->passive_connections_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
@@ -851,9 +897,9 @@ static utp_context_connection_slot_t* utp_context_find_zero_rtt_response(
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL || peer == NULL || token_payload == NULL) {
-        return NULL;
-    }
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(token_payload != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -871,9 +917,7 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
 {
     utp_context_connection_slot_t* slot;
 
-    if (context == NULL) {
-        return NULL;
-    }
+    assert(context != NULL);
     slot = TAILQ_FIRST(&context->free_connection_slots);
     if (slot != NULL) {
         TAILQ_REMOVE(&context->free_connection_slots, slot, free_next);
@@ -928,13 +972,15 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
 static utp_internal_error_t utp_context_register_connection_slot(utp_context_t*                 context,
                                                                  utp_context_connection_slot_t* slot)
 {
-    const uint32_t       local_cid = slot == NULL ? 0u : slot->connection.local_cid;
+    const uint32_t       local_cid = slot->connection.local_cid;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL ||
-        (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->peer_node.table != NULL)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(local_cid != 0u);
+    assert(slot->node.table == NULL);
+    assert(slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE || slot->peer_node.table == NULL);
     error = utp_hash_table_insert(&context->connections, &slot->node, local_cid, &local_cid,
                                   utp_context_connection_slot_matches, NULL);
     if (error != UTP_INTERNAL_ERROR_OK || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE) {
@@ -956,62 +1002,65 @@ static utp_internal_error_t utp_context_register_connection_slot(utp_context_t* 
 /** @brief 从 CID 哈希表摘除 Connection，但保留槽位供重试重新初始化。 */
 static void utp_context_unregister_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
-    if (context != NULL && slot != NULL && slot->peer_node.table == &context->passive_connections_by_peer) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (slot->peer_node.table == &context->passive_connections_by_peer) {
         (void)utp_hash_table_remove(&context->passive_connections_by_peer, &slot->peer_node);
     }
-    if (context != NULL && slot != NULL && slot->node.table == &context->connections) {
+    if (slot->node.table == &context->connections) {
         (void)utp_hash_table_remove(&context->connections, &slot->node);
     }
 }
 
 static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
-    if (context != NULL && slot != NULL && slot->used) {
-        if (slot->terminal_error_queued) {
-            TAILQ_REMOVE(&context->terminal_error_slots, slot, terminal_error_next);
-            slot->terminal_error_queued = false;
-        }
-        utp_context_unregister_connection_slot(context, slot);
-        if (slot->connection.local_cid != 0u) {
-            utp_connection_cleanup(&slot->connection);
-        }
-        slot->connected_reported        = false;
-        slot->connection_error_reported = false;
-        slot->connect_deadline_us       = 0u;
-        slot->connect_retries_remaining = 0;
-        slot->connect_pending           = false;
-        if (slot->zero_rtt_early_packet != NULL) {
-            utp_packet_in_release(slot->zero_rtt_early_packet);
-            slot->zero_rtt_early_packet = NULL;
-        }
-        utp_allocator_free(NULL, slot->zero_rtt_early_data);
-        slot->zero_rtt_early_data = NULL;
-        utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
-        slot->zero_rtt_early_wire_size        = 0u;
-        slot->zero_rtt_request_packet_number  = 0u;
-        slot->zero_rtt_request_received_us    = 0u;
-        slot->zero_rtt_response_deadline_us   = 0u;
-        slot->zero_rtt_expire_deadline_us     = 0u;
-        slot->zero_rtt_amplification_rx_bytes = 0u;
-        slot->zero_rtt_amplification_tx_bytes = 0u;
-        slot->zero_rtt_response_retries       = 0u;
-        slot->zero_rtt_early_data_size        = 0u;
-        slot->zero_rtt_expires_at_seconds     = 0u;
-        slot->terminal_error_status           = UTP_STATUS_OK;
-        slot->terminal_error_reason           = NULL;
-        slot->terminal_error_reason_length    = 0u;
-        slot->zero_rtt_early_fin              = false;
-        slot->zero_rtt_awaiting_accept        = false;
-        slot->zero_rtt_accepted               = false;
-        slot->zero_rtt_response_active        = false;
-        slot->zero_rtt_response_queued        = false;
-        slot->zero_rtt_response_sent          = false;
-        slot->zero_rtt_early_delivered        = false;
-        slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-        slot->terminal_error_suppressed       = false;
-        slot->used                            = false;
-        TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    if (slot->terminal_error_queued) {
+        TAILQ_REMOVE(&context->terminal_error_slots, slot, terminal_error_next);
+        slot->terminal_error_queued = false;
     }
+    utp_context_unregister_connection_slot(context, slot);
+    if (slot->connection.local_cid != 0u) {
+        utp_connection_cleanup(&slot->connection);
+    }
+    slot->connected_reported        = false;
+    slot->connection_error_reported = false;
+    slot->connect_deadline_us       = 0u;
+    slot->connect_retries_remaining = 0;
+    slot->connect_pending           = false;
+    if (slot->zero_rtt_early_packet != NULL) {
+        utp_packet_in_release(slot->zero_rtt_early_packet);
+        slot->zero_rtt_early_packet = NULL;
+    }
+    utp_allocator_free(NULL, slot->zero_rtt_early_data);
+    slot->zero_rtt_early_data = NULL;
+    utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
+    slot->zero_rtt_early_wire_size        = 0u;
+    slot->zero_rtt_request_packet_number  = 0u;
+    slot->zero_rtt_request_received_us    = 0u;
+    slot->zero_rtt_response_deadline_us   = 0u;
+    slot->zero_rtt_expire_deadline_us     = 0u;
+    slot->zero_rtt_amplification_rx_bytes = 0u;
+    slot->zero_rtt_amplification_tx_bytes = 0u;
+    slot->zero_rtt_response_retries       = 0u;
+    slot->zero_rtt_early_data_size        = 0u;
+    slot->zero_rtt_expires_at_seconds     = 0u;
+    slot->terminal_error_status           = UTP_STATUS_OK;
+    slot->terminal_error_reason           = NULL;
+    slot->terminal_error_reason_length    = 0u;
+    slot->zero_rtt_early_fin              = false;
+    slot->zero_rtt_awaiting_accept        = false;
+    slot->zero_rtt_accepted               = false;
+    slot->zero_rtt_response_active        = false;
+    slot->zero_rtt_response_queued        = false;
+    slot->zero_rtt_response_sent          = false;
+    slot->zero_rtt_early_delivered        = false;
+    slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->terminal_error_suppressed       = false;
+    slot->used                            = false;
+    TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
 }
 
 static bool utp_context_is_peer_protocol_error(utp_internal_error_t error)
@@ -1045,7 +1094,8 @@ static utp_context_pending_slot_t* utp_context_find_pending_slot(utp_context_t* 
 {
     utp_hash_node_t* node;
 
-    if (context == NULL || local_cid == 0u) {
+    assert(context != NULL);
+    if (local_cid == 0u) {
         return NULL;
     }
     node =
@@ -1059,7 +1109,9 @@ static utp_context_pending_slot_t* utp_context_find_pending_by_peer(utp_context_
     const utp_context_peer_index_key_t key = {peer, peer_cid};
     utp_hash_node_t*                   node;
 
-    if (context == NULL || peer == NULL || peer_cid == 0u) {
+    assert(context != NULL);
+    assert(peer != NULL);
+    if (peer_cid == 0u) {
         return NULL;
     }
     node = utp_hash_table_find(&context->pending_incoming_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
@@ -1071,7 +1123,8 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
 {
     utp_context_pending_slot_t* slot;
 
-    if (context == NULL || utp_hash_table_count(&context->pending_incoming) >= context->pending_incoming.max_entries) {
+    assert(context != NULL);
+    if (utp_hash_table_count(&context->pending_incoming) >= context->pending_incoming.max_entries) {
         return NULL;
     }
     slot = TAILQ_FIRST(&context->free_pending_slots);
@@ -1094,13 +1147,15 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
 /** @brief 将 pending 注册到 CID 哈希表并计入配置的容量。 */
 static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
-    const uint32_t       local_cid = slot == NULL ? 0u : slot->pending.local_cid;
+    const uint32_t       local_cid = slot->pending.local_cid;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || local_cid == 0u || slot->node.table != NULL ||
-        slot->peer_node.table != NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(local_cid != 0u);
+    assert(slot->node.table == NULL);
+    assert(slot->peer_node.table == NULL);
     error = utp_hash_table_insert(&context->pending_incoming, &slot->node, local_cid, &local_cid,
                                   utp_context_pending_slot_matches, NULL);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -1121,18 +1176,19 @@ static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* con
 
 static void utp_context_release_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot)
 {
-    if (context != NULL && slot != NULL && slot->used) {
-        if (slot->peer_node.table == &context->pending_incoming_by_peer) {
-            (void)utp_hash_table_remove(&context->pending_incoming_by_peer, &slot->peer_node);
-        }
-        if (slot->node.table == &context->pending_incoming) {
-            (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
-        }
-        utp_pending_incoming_reset(&slot->pending);
-        slot->queued = false;
-        slot->used   = false;
-        TAILQ_INSERT_TAIL(&context->free_pending_slots, slot, free_next);
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    if (slot->peer_node.table == &context->pending_incoming_by_peer) {
+        (void)utp_hash_table_remove(&context->pending_incoming_by_peer, &slot->peer_node);
     }
+    if (slot->node.table == &context->pending_incoming) {
+        (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
+    }
+    utp_pending_incoming_reset(&slot->pending);
+    slot->queued = false;
+    slot->used   = false;
+    TAILQ_INSERT_TAIL(&context->free_pending_slots, slot, free_next);
 }
 
 static utp_internal_error_t utp_context_send_raw(utp_context_t* context, const utp_address_t* peer,
@@ -1141,6 +1197,10 @@ static utp_internal_error_t utp_context_send_raw(utp_context_t* context, const u
 {
     size_t sent_length = 0u;
 
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
     return utp_udp_socket_send_from_to(&context->udp_socket, packet, packet_length, peer, local, &sent_length);
 }
 
@@ -1151,10 +1211,11 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
     size_t                                 index;
     utp_internal_error_t                   error;
 
-    if (context == NULL || peer == NULL || packet == NULL || packet_length == 0u ||
-        packet_length > UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
+    assert(packet_length <= UTP_CONTEXT_RENDEZVOUS_PACKET_CAPACITY);
     if (context->rendezvous_output_count == 0u) {
         error = utp_context_send_raw(context, peer, NULL, packet, packet_length);
         if (error == UTP_INTERNAL_ERROR_OK) {
@@ -1179,9 +1240,7 @@ static utp_internal_error_t utp_context_send_rendezvous_output(utp_context_t* co
 
 static utp_internal_error_t utp_context_drain_rendezvous_output(utp_context_t* context)
 {
-    if (context == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
     while (context->rendezvous_output_count != 0u) {
         utp_context_rendezvous_output_entry_t* entry = &context->rendezvous_output[context->rendezvous_output_head];
         const utp_internal_error_t             error =
@@ -1230,6 +1289,8 @@ static bool utp_context_rendezvous_token_is_zero(const uint8_t token[UTP_RENDEZV
 static bool utp_context_rendezvous_candidate_exists(const utp_context_connection_slot_t* slot,
                                                     const utp_address_t*                 endpoint)
 {
+    assert(slot != NULL);
+    assert(endpoint != NULL);
     for (uint8_t index = 0u; index < slot->rendezvous_candidate_count; ++index) {
         if (utp_address_equal(&slot->rendezvous_candidates[index], endpoint)) {
             return true;
@@ -1240,6 +1301,7 @@ static bool utp_context_rendezvous_candidate_exists(const utp_context_connection
 
 static void utp_context_purge_rendezvous_punch_cache(utp_context_t* context, uint64_t now_us)
 {
+    assert(context != NULL);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
 
@@ -1255,6 +1317,9 @@ static void utp_context_cache_rendezvous_punch(utp_context_t*       context,
 {
     utp_context_rendezvous_punch_cache_entry_t* selected = NULL;
 
+    assert(context != NULL);
+    assert(token != NULL);
+    assert(peer != NULL);
     utp_context_purge_rendezvous_punch_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
@@ -1284,6 +1349,9 @@ static bool utp_context_take_rendezvous_punch(utp_context_t* context,
                                               const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE], uint64_t now_us,
                                               utp_address_t* endpoint)
 {
+    assert(context != NULL);
+    assert(token != NULL);
+    assert(endpoint != NULL);
     utp_context_purge_rendezvous_punch_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
@@ -1299,6 +1367,7 @@ static bool utp_context_take_rendezvous_punch(utp_context_t* context,
 
 static void utp_context_purge_rendezvous_forward_cache(utp_context_t* context, uint64_t now_us)
 {
+    assert(context != NULL);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_forward_cache_entry_t* entry = &context->rendezvous_forward_cache[index];
 
@@ -1311,6 +1380,8 @@ static void utp_context_purge_rendezvous_forward_cache(utp_context_t* context, u
 static bool utp_context_rendezvous_forward_seen(utp_context_t* context,
                                                 const uint8_t rendezvous_id[UTP_RENDEZVOUS_ID_SIZE], uint64_t now_us)
 {
+    assert(context != NULL);
+    assert(rendezvous_id != NULL);
     utp_context_purge_rendezvous_forward_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY; ++index) {
         const utp_context_rendezvous_forward_cache_entry_t* entry = &context->rendezvous_forward_cache[index];
@@ -1328,6 +1399,8 @@ static void utp_context_remember_rendezvous_forward(utp_context_t* context,
 {
     utp_context_rendezvous_forward_cache_entry_t* selected = NULL;
 
+    assert(context != NULL);
+    assert(rendezvous_id != NULL);
     utp_context_purge_rendezvous_forward_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_forward_cache_entry_t* entry = &context->rendezvous_forward_cache[index];
@@ -1352,7 +1425,9 @@ static void utp_context_remember_rendezvous_forward(utp_context_t* context,
 static utp_internal_error_t utp_context_add_rendezvous_candidate(utp_context_connection_slot_t* slot,
                                                                  const utp_address_t*           endpoint)
 {
-    if (slot == NULL || endpoint == NULL || endpoint->port == 0u || endpoint->family != slot->connection.peer.family) {
+    assert(slot != NULL);
+    assert(endpoint != NULL);
+    if (endpoint->port == 0u || endpoint->family != slot->connection.peer.family) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (utp_context_rendezvous_candidate_exists(slot, endpoint)) {
@@ -1373,7 +1448,10 @@ static utp_internal_error_t utp_context_send_rendezvous_punch(utp_context_t* con
     const utp_frame_rendezvous_t frame = {token, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE, UTP_RENDEZVOUS_MESSAGE_PUNCH};
     utp_internal_error_t         error;
 
-    if (context == NULL || peer == NULL || peer->port == 0u || peer->family != context->bound_address.family ||
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(token != NULL);
+    if (peer->port == 0u || peer->family != context->bound_address.family ||
         utp_context_rendezvous_token_is_zero(token) || context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -1407,8 +1485,10 @@ static utp_internal_error_t utp_context_send_rendezvous_calibration_ping(
     uint8_t                packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
     utp_internal_error_t   error;
 
-    if (context == NULL || peer == NULL || token == NULL || peer->port == 0u ||
-        peer->family != context->bound_address.family || utp_context_ntrs_token_is_zero(token) ||
+    assert(context != NULL);
+    assert(peer != NULL);
+    assert(token != NULL);
+    if (peer->port == 0u || peer->family != context->bound_address.family || utp_context_ntrs_token_is_zero(token) ||
         calibration_id == 0u || context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -1439,14 +1519,17 @@ static utp_internal_error_t utp_context_send_rendezvous_calibration_ping(
 /** @brief 空闲时主动发送半连接 PING，等待对应 PONG 前不重复发送。 */
 static utp_internal_error_t utp_context_send_ntrs_keepalive_ping(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
-    utp_rendezvous_ping_t            ping         = {0};
+    utp_context_ntrs_registration_t* registration;
+    utp_rendezvous_ping_t            ping = {0};
     utp_packet_header_t              header;
     utp_frame_rendezvous_t           frame;
     uint8_t                          body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
     uint8_t                          packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
     utp_internal_error_t             error;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    registration = &context->ntrs_registration;
     if (!registration->registered || registration->pending || registration->keepalive_pending ||
         utp_context_ntrs_token_is_zero(registration->registration_token) ||
         context->next_rendezvous_packet_number == 0u ||
@@ -1488,8 +1571,9 @@ static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, c
     uint8_t                packet[UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + sizeof(body)];
     utp_internal_error_t   error;
 
-    if (context == NULL || peer == NULL || !context->ntrs_registration.registered ||
-        !utp_address_equal(peer, &context->ntrs_registration.endpoint) ||
+    assert(context != NULL);
+    assert(peer != NULL);
+    if (!context->ntrs_registration.registered || !utp_address_equal(peer, &context->ntrs_registration.endpoint) ||
         utp_context_ntrs_token_is_zero(context->ntrs_registration.registration_token) ||
         acknowledged_packet_number == 0u || context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
@@ -1526,9 +1610,8 @@ static utp_context_connection_slot_t* utp_context_find_rendezvous_slot(
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL || rendezvous_id == NULL) {
-        return NULL;
-    }
+    assert(context != NULL);
+    assert(rendezvous_id != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -1547,9 +1630,8 @@ static utp_context_connection_slot_t* utp_context_find_rendezvous_punch_slot(
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL || token == NULL) {
-        return NULL;
-    }
+    assert(context != NULL);
+    assert(token != NULL);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -1567,9 +1649,10 @@ static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t* 
 {
     utp_packet_out_t* packet;
 
-    if (context == NULL || slot == NULL || !slot->rendezvous_active || slot->rendezvous_candidate_count == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->rendezvous_active);
+    assert(slot->rendezvous_candidate_count != 0u);
     TAILQ_FOREACH(packet, &slot->connection.send_control.ledger.unacked_packets, po_next)
     {
         if (packet->packet_type != UTP_PACKET_TYPE_INITIAL && packet->packet_type != UTP_PACKET_TYPE_0RTT) {
@@ -1591,11 +1674,12 @@ static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t*  
                                                                 const utp_context_connection_slot_t* slot,
                                                                 const utp_packet_out_t*              packet)
 {
-    if (context == NULL || slot == NULL || packet == NULL || !slot->rendezvous_active ||
-        slot->rendezvous_candidate_count == 0u ||
-        (packet->packet_type != UTP_PACKET_TYPE_INITIAL && packet->packet_type != UTP_PACKET_TYPE_0RTT)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(packet != NULL);
+    assert(slot->rendezvous_active);
+    assert(slot->rendezvous_candidate_count != 0u);
+    assert(packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT);
     for (uint8_t index = 0u; index < slot->rendezvous_candidate_count; ++index) {
         const utp_internal_error_t error =
             utp_context_send_packet(context, &slot->connection, &slot->rendezvous_candidates[index], packet);
@@ -1612,8 +1696,10 @@ static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connec
 {
     utp_internal_error_t error;
 
-    if (slot == NULL || plan == NULL || plan->family != slot->connection.peer.family ||
-        plan->public_candidates == NULL || plan->public_candidate_count == 0u) {
+    assert(slot != NULL);
+    assert(plan != NULL);
+    if (plan->family != slot->connection.peer.family || plan->public_candidates == NULL ||
+        plan->public_candidate_count == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     slot->rendezvous_candidate_count = 0u;
@@ -1635,9 +1721,8 @@ static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connec
 static bool utp_context_rendezvous_plan_contains(const utp_rendezvous_candidate_plan_t* plan,
                                                  const utp_address_t*                   endpoint)
 {
-    if (plan == NULL || endpoint == NULL) {
-        return false;
-    }
+    assert(plan != NULL);
+    assert(endpoint != NULL);
     for (uint8_t index = 0u; index < plan->local_candidate_count; ++index) {
         if (utp_address_equal(&plan->local_candidates[index], endpoint)) {
             return true;
@@ -1655,6 +1740,9 @@ static utp_internal_error_t utp_context_send_rendezvous_punches(utp_context_t* c
                                                                 uint8_t       candidate_count,
                                                                 const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE])
 {
+    assert(context != NULL);
+    assert(candidates != NULL);
+    assert(token != NULL);
     for (uint8_t index = 0u; index < candidate_count; ++index) {
         const utp_internal_error_t error = utp_context_send_rendezvous_punch(context, &candidates[index], token);
 
@@ -1668,9 +1756,11 @@ static utp_internal_error_t utp_context_send_rendezvous_punches(utp_context_t* c
 /** @brief 重发已构造的 REGISTER；同一逻辑包始终保留 packet number 与 payload。 */
 static utp_internal_error_t utp_context_send_ntrs_registration(utp_context_t* context)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
     utp_internal_error_t             error;
 
+    assert(context != NULL);
+    registration = &context->ntrs_registration;
     if (!registration->pending || registration->packet_length == 0u) {
         return UTP_INTERNAL_ERROR_STATE;
     }
@@ -1689,9 +1779,11 @@ static utp_internal_error_t utp_context_send_ntrs_registration(utp_context_t* co
 /** @brief 重发已构造的 ADDRESS_UPDATE；同一逻辑包始终保留 update_id、包号和 payload。 */
 static utp_internal_error_t utp_context_send_ntrs_address_update(utp_context_t* context)
 {
-    utp_context_ntrs_address_update_t* update = &context->ntrs_address_update;
+    utp_context_ntrs_address_update_t* update;
     utp_internal_error_t               error;
 
+    assert(context != NULL);
+    update = &context->ntrs_address_update;
     if (!update->pending || update->packet_length == 0u || !context->ntrs_registration.registered) {
         return UTP_INTERNAL_ERROR_STATE;
     }
@@ -1710,7 +1802,7 @@ static utp_internal_error_t utp_context_send_ntrs_address_update(utp_context_t* 
 /** @brief 以待上报样本构造一个新的 ADDRESS_UPDATE，并将发送期间的新样本留给下一批。 */
 static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_address_update_t* update  = &context->ntrs_address_update;
+    utp_context_ntrs_address_update_t* update;
     utp_rendezvous_address_update_t    message = {0};
     utp_packet_header_t                header;
     utp_frame_rendezvous_t             frame;
@@ -1718,9 +1810,11 @@ static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t*
     size_t  body_length;
     utp_internal_error_t error;
 
-    if (context == NULL || !context->ntrs_registration.registered || context->ntrs_registration.pending ||
-        update->pending || context->observed_address_count == 0u ||
-        context->observed_address_count > UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES ||
+    assert(context != NULL);
+    assert(now_us != 0u);
+    update = &context->ntrs_address_update;
+    if (!context->ntrs_registration.registered || context->ntrs_registration.pending || update->pending ||
+        context->observed_address_count == 0u || context->observed_address_count > UTP_RENDEZVOUS_MAX_ADDRESS_SAMPLES ||
         context->next_rendezvous_packet_number == 0u ||
         context->next_rendezvous_packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_STATE;
@@ -1790,9 +1884,12 @@ static utp_internal_error_t utp_context_start_ntrs_address_update(utp_context_t*
 /** @brief 处理 ADDRESS_UPDATED 等待和未发送样本的聚合期限。 */
 static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_address_update_t* update = &context->ntrs_address_update;
+    utp_context_ntrs_address_update_t* update;
     utp_internal_error_t               error;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    update = &context->ntrs_address_update;
     if (update->pending) {
         if (update->deadline_us == 0u || update->deadline_us > now_us) {
             return UTP_INTERNAL_ERROR_OK;
@@ -1830,9 +1927,11 @@ static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_co
 
 static void utp_context_report_ntrs_registered(utp_context_t* context)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
     utp_ntrs_registered_info_t       info;
 
+    assert(context != NULL);
+    registration = &context->ntrs_registration;
     if (registration->callback == NULL) {
         return;
     }
@@ -1843,6 +1942,7 @@ static void utp_context_report_ntrs_registered(utp_context_t* context)
 
 static void utp_context_finish_ntrs_unregistration(utp_context_t* context)
 {
+    assert(context != NULL);
     utp_on_ntrs_unregistered_fn callback  = context->ntrs_registration.unregister_callback;
     void*                       user_data = context->ntrs_registration.unregister_user_data;
 
@@ -1854,10 +1954,13 @@ static void utp_context_finish_ntrs_unregistration(utp_context_t* context)
 
 static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
-    const uint32_t                   keepalive_interval_ms =
-        registration->keepalive_interval_ms == 0u ? 30000u : registration->keepalive_interval_ms;
+    utp_context_ntrs_registration_t* registration;
+    uint32_t                         keepalive_interval_ms;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    registration          = &context->ntrs_registration;
+    keepalive_interval_ms = registration->keepalive_interval_ms == 0u ? 30000u : registration->keepalive_interval_ms;
     registration->last_activity_us        = now_us;
     registration->keepalive_packet_number = 0u;
     registration->keepalive_pending       = false;
@@ -1874,8 +1977,10 @@ static bool utp_context_rendezvous_reference_matches_u64(const uint8_t reference
 
 static void utp_context_finish_ntrs_calibration(utp_context_t* context)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
 
+    assert(context != NULL);
+    registration                                 = &context->ntrs_registration;
     registration->calibration_active             = false;
     registration->calibration_pending_mask       = 0u;
     registration->calibration_write_pending_mask = 0u;
@@ -1886,10 +1991,12 @@ static void utp_context_finish_ntrs_calibration(utp_context_t* context)
 
 static utp_internal_error_t utp_context_send_ntrs_calibration_ping(utp_context_t* context, uint8_t index)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
-    const uint8_t                    mask         = (uint8_t)(UINT8_C(1) << index);
+    utp_context_ntrs_registration_t* registration;
+    const uint8_t                    mask = (uint8_t)(UINT8_C(1) << index);
     utp_internal_error_t             error;
 
+    assert(context != NULL);
+    registration = &context->ntrs_registration;
     if (!registration->calibration_active || index >= UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES ||
         (registration->calibration_pending_mask & mask) == 0u) {
         return UTP_INTERNAL_ERROR_STATE;
@@ -1911,12 +2018,16 @@ static utp_internal_error_t utp_context_start_ntrs_calibration(utp_context_t*   
                                                                const utp_rendezvous_registered_t* registered,
                                                                uint64_t                           now_us)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
     utp_rendezvous_ping_t            ping;
     uint8_t                          body[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE + sizeof(uint64_t)];
     size_t                           body_length;
     utp_internal_error_t             error;
 
+    assert(context != NULL);
+    assert(registered != NULL);
+    assert(now_us != 0u);
+    registration = &context->ntrs_registration;
     if (registered->calibration_endpoint_count == 0u) {
         utp_context_report_ntrs_registered(context);
         return UTP_INTERNAL_ERROR_OK;
@@ -1988,26 +2099,25 @@ static utp_internal_error_t utp_context_resolve_packet_slice(const utp_packet_ou
                                                              const utp_packet_out_slice_t* slice,
                                                              utp_udp_send_slice_t*         out_slice)
 {
-    if (slice->length == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(packet != NULL);
+    assert(slice != NULL);
+    assert(out_slice != NULL);
+    assert(slice->length != 0u);
     out_slice->length = slice->length;
     if (slice->source == UTP_PACKET_OUT_SLICE_RAW_OFFSET) {
-        if (packet->raw_data == NULL || slice->offset > packet->alloc_size ||
-            slice->length > packet->alloc_size - slice->offset) {
-            return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-        }
+        assert(packet->raw_data != NULL);
+        assert(slice->offset <= packet->alloc_size);
+        assert(slice->length <= packet->alloc_size - slice->offset);
         out_slice->data = packet->raw_data + slice->offset;
         return UTP_INTERNAL_ERROR_OK;
     }
     if (slice->source == UTP_PACKET_OUT_SLICE_EXTERNAL) {
-        if (slice->data == NULL) {
-            return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-        }
+        assert(slice->data != NULL);
         out_slice->data = slice->data;
         return UTP_INTERNAL_ERROR_OK;
     }
-    return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    assert(0);
+    return UTP_INTERNAL_ERROR_STATE;
 }
 
 /** @brief 将未加密 PacketOut 映射为可供 sendmmsg 使用的零拷贝消息。 */
@@ -2018,34 +2128,32 @@ static utp_internal_error_t utp_context_prepare_packet_send_message(const utp_co
 {
     size_t total_length = 0u;
 
+    assert(connection != NULL);
+    assert(packet != NULL);
+    assert(slices != NULL);
+    assert(message != NULL);
     message->peer = packet->has_destination ? &packet->destination : &connection->peer;
     message->local =
         (packet->po_flags & UTP_PO_PATH_VALIDATION) != 0u ? &connection->candidate_local : &connection->local;
     message->slices = slices;
     if (packet->slice_count == 0u) {
+        assert(packet->raw_data != NULL);
         slices[0].data       = packet->raw_data;
         slices[0].length     = packet->data_size;
         message->slice_count = 1u;
         message->sent_length = 0u;
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (packet->slice_count > UTP_PACKET_OUT_MAX_SLICES) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(packet->slice_count <= UTP_PACKET_OUT_MAX_SLICES);
     for (uint8_t index = 0u; index < packet->slice_count; ++index) {
         utp_internal_error_t error = utp_context_resolve_packet_slice(packet, &packet->slices[index], &slices[index]);
 
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-        if (slices[index].length > SIZE_MAX - total_length) {
-            return UTP_INTERNAL_ERROR_OVERFLOW;
-        }
         total_length += slices[index].length;
     }
-    if (total_length != packet->data_size) {
-        return UTP_INTERNAL_ERROR_PROTOCOL;
-    }
+    assert(total_length == packet->data_size);
     message->slice_count = packet->slice_count;
     message->sent_length = 0u;
     return UTP_INTERNAL_ERROR_OK;
@@ -2056,6 +2164,11 @@ static utp_internal_error_t utp_context_complete_packet_send(utp_context_t*     
                                                              utp_context_connection_slot_t* slot,
                                                              utp_packet_out_t* packet, uint64_t sent_at_us)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(packet != NULL);
+    assert(sent_at_us != 0u);
     const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
     const uint64_t packet_size =
         (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
@@ -2075,9 +2188,12 @@ static utp_internal_error_t utp_context_send_packet(utp_context_t* context, cons
 {
     const utp_address_t* local;
 
-    if (packet == NULL || packet->raw_data == NULL || packet->data_size == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(connection != NULL);
+    assert(peer != NULL);
+    assert(packet != NULL);
+    assert(packet->raw_data != NULL);
+    assert(packet->data_size != 0u);
     local = (packet->po_flags & UTP_PO_PATH_VALIDATION) != 0u ? &connection->candidate_local : &connection->local;
     if ((packet->po_flags & UTP_PO_ENCRYPTED) != 0u) {
         size_t               wire_length;
@@ -2108,7 +2224,9 @@ static void utp_context_send_destroy_close(utp_context_t* context, utp_context_c
     utp_connection_t*    connection;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || !utp_udp_socket_is_open(&context->udp_socket)) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (!slot->used || !utp_udp_socket_is_open(&context->udp_socket)) {
         return;
     }
     // destroy 路径绕过普通队列，只尝试一次 UDP 写入，失败也不能阻塞同步资源释放。
@@ -2130,7 +2248,9 @@ static void utp_context_send_destroy_close(utp_context_t* context, utp_context_c
 static void utp_context_report_terminal_send_error(utp_context_t* context, utp_context_connection_slot_t* slot,
                                                    utp_internal_error_t error, const char* reason)
 {
-    if (context == NULL || slot == NULL || !slot->used || slot->terminal_error_queued) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (!slot->used || slot->terminal_error_queued) {
         return;
     }
     // 本地永久发送错误后立即屏蔽收发；回调和资源释放必须等到当前 Context 调度边界。
@@ -2148,7 +2268,8 @@ static void utp_context_report_terminal_send_error(utp_context_t* context, utp_c
 /** @brief 在 Context 调度边界投递本地永久发送错误，并释放对应连接。 */
 static void utp_context_drain_terminal_errors(utp_context_t* context)
 {
-    while (context != NULL && !TAILQ_EMPTY(&context->terminal_error_slots)) {
+    assert(context != NULL);
+    while (!TAILQ_EMPTY(&context->terminal_error_slots)) {
         utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->terminal_error_slots);
 
         TAILQ_REMOVE(&context->terminal_error_slots, slot, terminal_error_next);
@@ -2187,9 +2308,7 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if (context == NULL) {
-        return false;
-    }
+    assert(context != NULL);
     if (context->ntrs_registration.write_pending || context->ntrs_registration.calibration_write_pending_mask != 0u) {
         return true;
     }
@@ -2220,9 +2339,7 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
 
 static utp_internal_error_t utp_context_enable_udp_write_event(utp_context_t* context)
 {
-    if (context == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
     if (context->udp_write_event.active) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -2232,7 +2349,8 @@ static utp_internal_error_t utp_context_enable_udp_write_event(utp_context_t* co
 
 static void utp_context_disable_udp_write_event_if_idle(utp_context_t* context)
 {
-    if (context != NULL && !utp_context_has_pending_udp_write(context)) {
+    assert(context != NULL);
+    if (!utp_context_has_pending_udp_write(context)) {
         utp_event_remove(&context->udp_write_event);
     }
 }
@@ -2241,6 +2359,8 @@ static bool utp_context_address_same_ip(const utp_address_t* left, const utp_add
 {
     size_t address_length;
 
+    assert(left != NULL);
+    assert(right != NULL);
     if (left->family != right->family) {
         return false;
     }
@@ -2256,6 +2376,8 @@ static bool utp_context_address_same_ip(const utp_address_t* left, const utp_add
 
 static bool utp_context_endpoint_equal_address(const utp_endpoint_t* endpoint, const utp_address_t* address)
 {
+    assert(endpoint != NULL);
+    assert(address != NULL);
     const size_t address_length = address->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
 
     return endpoint->family == address->family && endpoint->port == address->port &&
@@ -2267,6 +2389,8 @@ static bool utp_context_endpoint_matches_local_address(const utp_endpoint_t* end
 {
     size_t address_length;
 
+    assert(endpoint != NULL);
+    assert(address != NULL);
     if (endpoint->family != address->family || endpoint->port != address->port) {
         return false;
     }
@@ -2278,6 +2402,8 @@ static bool utp_context_endpoint_equal(const utp_endpoint_t* left, const utp_end
 {
     size_t address_length;
 
+    assert(left != NULL);
+    assert(right != NULL);
     if (left->family != right->family || left->port != right->port || left->scope_id != right->scope_id) {
         return false;
     }
@@ -2290,6 +2416,8 @@ static bool utp_context_endpoint_same_ip(const utp_endpoint_t* left, const utp_e
 {
     size_t address_length;
 
+    assert(left != NULL);
+    assert(right != NULL);
     if (left->family != right->family) {
         return false;
     }
@@ -2308,6 +2436,7 @@ static bool utp_context_address_is_unspecified(const utp_address_t* address)
 {
     size_t address_length;
 
+    assert(address != NULL);
     if (address->family == UTP_ADDRESS_FAMILY_IPV4) {
         address_length = 4u;
     } else if (address->family == UTP_ADDRESS_FAMILY_IPV6) {
@@ -2326,7 +2455,9 @@ static bool utp_context_address_is_unspecified(const utp_address_t* address)
 /** @brief 记录 pktinfo 或显式 bind 提供的本地候选地址，最多保留四个同族地址。 */
 static void utp_context_remember_local_candidate(utp_context_t* context, const utp_address_t* candidate)
 {
-    if (candidate == NULL || candidate->family != context->bound_address.family || candidate->port == 0u ||
+    assert(context != NULL);
+    assert(candidate != NULL);
+    if (candidate->family != context->bound_address.family || candidate->port == 0u ||
         utp_context_address_is_unspecified(candidate)) {
         return;
     }
@@ -2378,6 +2509,7 @@ void utp_context_remember_observed_address(utp_context_t* context, const utp_add
 
 static void utp_context_nat_clear_records(utp_nat_probe_task_t* task)
 {
+    assert(task != NULL);
     for (uint8_t index = 0u; index < UTP_NAT_PROBE_MAX_IN_FLIGHT; ++index) {
         task->records[index] = (utp_nat_probe_record_t){0};
     }
@@ -2388,6 +2520,7 @@ static void utp_context_nat_clear_records(utp_nat_probe_task_t* task)
 
 static void utp_context_nat_add_port_sample(utp_nat_probe_result_t* result, uint16_t port)
 {
+    assert(result != NULL);
     for (uint8_t index = 0u; index < result->port_sample_count; ++index) {
         if (result->port_samples[index] == port) {
             return;
@@ -2401,9 +2534,11 @@ static void utp_context_nat_add_port_sample(utp_nat_probe_result_t* result, uint
 
 static void utp_context_nat_update_classification(utp_context_t* context)
 {
-    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_nat_probe_task_t* task;
     const utp_address_t*  local_address;
 
+    assert(context != NULL);
+    task = &context->nat_probe;
     if (task->primary_response_count == 0u) {
         // 无响应无法区分 UDP 被阻断、路径丢包或服务端故障，不能据此提前判定不可达。
         task->result.nat_class = UTP_NAT_CLASS_UNKNOWN;
@@ -2450,11 +2585,14 @@ static void utp_context_nat_update_classification(utp_context_t* context)
 
 static void utp_context_finish_nat_probe(utp_context_t* context, utp_status_t status, uint64_t now_us)
 {
-    utp_nat_probe_task_t*  task = &context->nat_probe;
+    utp_nat_probe_task_t*  task;
     utp_on_nat_probe_fn    callback;
     void*                  user_data;
     utp_nat_probe_result_t result;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task = &context->nat_probe;
     if (!task->active) {
         return;
     }
@@ -2489,9 +2627,11 @@ static void utp_context_finish_nat_probe(utp_context_t* context, utp_status_t st
 
 static uint64_t utp_context_nat_round_deadline(const utp_nat_probe_task_t* task)
 {
-    const uint64_t total_us = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
-    uint64_t       elapsed_us;
+    uint64_t total_us;
+    uint64_t elapsed_us;
 
+    assert(task != NULL);
+    total_us = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
     if (task->round == 1u) {
         elapsed_us = total_us / UINT64_C(6);
     } else if (task->round == 2u) {
@@ -2504,9 +2644,12 @@ static uint64_t utp_context_nat_round_deadline(const utp_nat_probe_task_t* task)
 
 static utp_internal_error_t utp_context_send_nat_probe_batch(utp_context_t* context, uint64_t now_us)
 {
-    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_nat_probe_task_t* task;
     const utp_address_t*  target;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task = &context->nat_probe;
     if (!task->active || task->batch_sent_count >= UTP_NAT_PROBE_BATCH_SIZE) {
         return UTP_INTERNAL_ERROR_STATE;
     }
@@ -2560,9 +2703,13 @@ static utp_internal_error_t utp_context_send_nat_probe_batch(utp_context_t* cont
 /** @brief 开始一个 NAT 探测步骤，并立即发送该步骤的首轮两个请求。 */
 static utp_internal_error_t utp_context_start_nat_step(utp_context_t* context, uint8_t step, uint64_t now_us)
 {
-    utp_nat_probe_task_t* task       = &context->nat_probe;
-    const uint64_t        timeout_us = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
+    utp_nat_probe_task_t* task;
+    uint64_t              timeout_us;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task                    = &context->nat_probe;
+    timeout_us              = (uint64_t)task->phase_timeout_ms * UINT64_C(1000);
     task->step              = step;
     task->phase_started_us  = now_us;
     task->phase_deadline_us = now_us > UINT64_MAX - timeout_us ? UINT64_MAX : now_us + timeout_us;
@@ -2582,8 +2729,11 @@ static utp_internal_error_t utp_context_start_nat_step(utp_context_t* context, u
 /** @brief 根据当前阶段已获得的证据进入下一阶段或结束探测。 */
 static utp_internal_error_t utp_context_advance_nat_probe(utp_context_t* context, uint64_t now_us)
 {
-    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_nat_probe_task_t* task;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task = &context->nat_probe;
     if (task->step == UTP_NAT_PROBE_STEP_PRIMARY_BINDING) {
         if (task->primary_response_count == 0u || !task->alternate_valid) {
             utp_context_finish_nat_probe(context, UTP_STATUS_OK, now_us);
@@ -2602,12 +2752,15 @@ static utp_internal_error_t utp_context_advance_nat_probe(utp_context_t* context
 /** @brief 处理 NAT 探测中的不可恢复本地错误，并交付一次失败回调。 */
 static void utp_context_fail_nat_probe(utp_context_t* context, utp_internal_error_t error, uint64_t now_us)
 {
+    assert(context != NULL);
+    assert(now_us != 0u);
     utp_context_finish_nat_probe(context, utp_internal_error_to_status(error), now_us);
 }
 
 /** @brief 在当前步骤按 UTP 包号查找探测记录。 */
 static utp_nat_probe_record_t* utp_context_find_nat_probe_record(utp_nat_probe_task_t* task, uint64_t packet_number)
 {
+    assert(task != NULL);
     for (uint8_t index = 0u; index < task->record_count; ++index) {
         utp_nat_probe_record_t* record = &task->records[index];
 
@@ -2622,6 +2775,9 @@ static utp_nat_probe_record_t* utp_context_find_nat_probe_record(utp_nat_probe_t
 static bool utp_context_nat_response_source_is_valid(const utp_nat_probe_task_t* task, const utp_address_t* peer,
                                                      const utp_nat_probe_response_t* response)
 {
+    assert(task != NULL);
+    assert(peer != NULL);
+    assert(response != NULL);
     if (!utp_address_equal(peer, &response->origin)) {
         return false;
     }
@@ -2655,6 +2811,8 @@ static uint8_t utp_context_nat_response_mask(uint8_t change_flags)
 
 static bool utp_context_nat_accept_alternate(utp_nat_probe_task_t* task, const utp_nat_probe_response_t* response)
 {
+    assert(task != NULL);
+    assert(response != NULL);
     if (!response->has_alternate) {
         return response->change_flags != UTP_NAT_PROBE_CHANGE_BOTH;
     }
@@ -2689,6 +2847,11 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
     uint8_t                  response_mask;
     uint64_t                 rtt_us;
 
+    assert(context != NULL);
+    assert(header != NULL);
+    assert(payload != NULL);
+    assert(peer != NULL);
+    assert(now_us != 0u);
     if (!task->active) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -2789,9 +2952,12 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
 /** @brief 推进 NAT 探测的两轮证据窗口及阶段总超时。 */
 static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* context, uint64_t now_us)
 {
-    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_nat_probe_task_t* task;
     utp_internal_error_t  error;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task = &context->nat_probe;
     if (context->nat_result_valid && context->nat_result.expires_at_us <= now_us) {
         context->nat_result_valid = false;
     }
@@ -2842,9 +3008,12 @@ static utp_internal_error_t utp_context_process_nat_probe_timer(utp_context_t* c
 /** @brief 在 UDP 重新可写后继续当前 NAT 探测轮次的未发送请求。 */
 static utp_internal_error_t utp_context_retry_nat_probe_send(utp_context_t* context, uint64_t now_us)
 {
-    utp_nat_probe_task_t* task = &context->nat_probe;
+    utp_nat_probe_task_t* task;
     utp_internal_error_t  error;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    task = &context->nat_probe;
     if (!task->active || !task->write_pending) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -2861,10 +3030,12 @@ static utp_internal_error_t utp_context_retry_nat_probe_send(utp_context_t* cont
 /** @brief 在 UDP 重获可写时补发尚未入内核的 REGISTER。 */
 static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
     utp_internal_error_t             error;
 
-    (void)now_us;
+    assert(context != NULL);
+    assert(now_us != 0u);
+    registration = &context->ntrs_registration;
     if (registration->pending && registration->write_pending) {
         error = utp_context_send_ntrs_registration(context);
         if (error != UTP_INTERNAL_ERROR_OK) {
@@ -2888,9 +3059,11 @@ static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context
 /** @brief 在 UDP 重获可写时补发尚未入内核的 ADDRESS_UPDATE。 */
 static utp_internal_error_t utp_context_retry_ntrs_address_update_send(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_address_update_t* update = &context->ntrs_address_update;
+    utp_context_ntrs_address_update_t* update;
 
-    (void)now_us;
+    assert(context != NULL);
+    assert(now_us != 0u);
+    update = &context->ntrs_address_update;
     return update->pending && update->write_pending ? utp_context_send_ntrs_address_update(context)
                                                     : UTP_INTERNAL_ERROR_OK;
 }
@@ -2898,9 +3071,12 @@ static utp_internal_error_t utp_context_retry_ntrs_address_update_send(utp_conte
 /** @brief 处理 REGISTERED 等待超时；重传保持同一 request id、token、包号和字节内容。 */
 static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_context_t* context, uint64_t now_us)
 {
-    utp_context_ntrs_registration_t* registration = &context->ntrs_registration;
+    utp_context_ntrs_registration_t* registration;
     utp_internal_error_t             error;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
+    registration = &context->ntrs_registration;
     if (!registration->pending || registration->deadline_us == 0u || registration->deadline_us > now_us) {
         if (registration->registered && registration->keepalive_deadline_us != 0u &&
             registration->keepalive_deadline_us <= now_us) {
@@ -2948,6 +3124,8 @@ static bool utp_context_zero_rtt_amplification_allows(const utp_context_connecti
     uint64_t limit;
     uint64_t packet_size;
 
+    assert(slot != NULL);
+    assert(packet != NULL);
     if (!slot->zero_rtt_response_active || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE) {
         return true;
     }
@@ -2964,9 +3142,10 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
 {
     utp_connection_t* connection;
 
-    if (context == NULL || slot == NULL || !slot->used) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(now_us != 0u);
     connection = &slot->connection;
     utp_send_control_pacer_tick_in(&connection->send_control, now_us);
     for (;;) {
@@ -3174,6 +3353,8 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
 
 static utp_internal_error_t utp_context_flush_connection(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
     return utp_context_flush_connection_at(context, slot, utp_context_now_us());
 }
 
@@ -3216,9 +3397,8 @@ static utp_internal_error_t utp_context_encode_version_frame(uint8_t* buffer, si
     const utp_frame_version_t version = {UTP_PROTOCOL_VERSION};
     utp_internal_error_t      error;
 
-    if (out_length == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(buffer != NULL);
+    assert(out_length != NULL);
     *out_length = 0u;
     error       = utp_frame_version_encode(buffer, capacity, &version);
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -3243,10 +3423,11 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
     if (out_packet_number != NULL) {
         *out_packet_number = 0u;
     }
-    if (context == NULL || pending == NULL || pending->next_packet_number == 0u ||
-        pending->next_packet_number > UTP_PACKET_NUMBER_MAX || (payload == NULL && payload_length != 0u)) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(pending != NULL);
+    assert(pending->next_packet_number != 0u);
+    assert(pending->next_packet_number <= UTP_PACKET_NUMBER_MAX);
+    assert(payload != NULL || payload_length == 0u);
     packet_number = pending->next_packet_number;
     // Handshake 发出前对端尚无服务端公钥；发出后 pending 的关闭包必须与数据面一样经过 AEAD。
     encrypt = pending->crypto_ready && pending->handshake_sent && packet_type != UTP_PACKET_TYPE_INITIAL &&
@@ -3292,9 +3473,9 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
     size_t  payload_length;
     utp_internal_error_t error;
 
-    if (out_packet_number == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(pending != NULL);
+    assert(out_packet_number != NULL);
     error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -3339,9 +3520,10 @@ static utp_internal_error_t utp_context_send_or_defer_pending_handshake(utp_cont
     uint64_t             packet_number = 0u;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || now_us == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(now_us != 0u);
     error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
     if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
         slot->pending.handshake_write_pending = true;
@@ -3359,6 +3541,8 @@ static void utp_context_send_pending_close(utp_context_t* context, utp_pending_i
     uint8_t                            payload[UTP_FRAME_CONNECTION_CLOSE_HEADER_SIZE];
     const utp_frame_connection_close_t close = {error_code, NULL, 0u};
 
+    assert(context != NULL);
+    assert(pending != NULL);
     if (utp_frame_connection_close_encode(payload, sizeof(payload), &close) == UTP_INTERNAL_ERROR_OK) {
         (void)utp_context_send_pending_packet(context, pending, UTP_PACKET_TYPE_CONNECTION_CLOSE, payload,
                                               sizeof(payload), NULL);
@@ -3371,7 +3555,9 @@ static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* conte
     utp_internal_error_t error;
     uint64_t             now_us;
 
-    if (context == NULL || slot == NULL || !slot->used || !slot->queued) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (!slot->used || !slot->queued) {
         return UTP_INTERNAL_ERROR_NOT_FOUND;
     }
     slot->queued = false;
@@ -3402,6 +3588,8 @@ static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* conte
 
 static void utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
     if (!slot->connected_reported && utp_connection_is_connected(&slot->connection)) {
         slot->connect_pending     = false;
         slot->connect_deadline_us = 0u;
@@ -3422,6 +3610,8 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
 static utp_internal_error_t utp_context_complete_connected_side_effects(utp_context_t*                 context,
                                                                         utp_context_connection_slot_t* slot)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
     if (!utp_connection_is_connected(&slot->connection)) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -3435,6 +3625,7 @@ static utp_internal_error_t utp_context_complete_connected_side_effects(utp_cont
 /** @brief 计算 0-RTT 响应的指数退避间隔，指数按已经完成的重传次数增长。 */
 static uint64_t utp_context_zero_rtt_response_delay(const utp_context_t* context, uint8_t retries)
 {
+    assert(context != NULL);
     uint64_t delay_us = (uint64_t)context->handshake_timeout_ms * UINT64_C(1000);
     uint8_t  exponent = retries > 8u ? 8u : retries;
 
@@ -3450,6 +3641,8 @@ static uint64_t utp_context_zero_rtt_expire_deadline(const utp_context_t* contex
     uint64_t deadline = now_us;
     uint16_t attempt;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
     for (attempt = 0u; attempt <= (uint16_t)context->handshake_max_retries; ++attempt) {
         const uint64_t delay_us =
             utp_context_zero_rtt_response_delay(context, attempt > UINT8_MAX ? UINT8_MAX : (uint8_t)attempt);
@@ -3468,8 +3661,11 @@ static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t
 {
     utp_internal_error_t error = UTP_INTERNAL_ERROR_OK;
 
-    if (context == NULL || slot == NULL || !slot->used || now_us == 0u || !slot->zero_rtt_response_active ||
-        !slot->zero_rtt_response_queued || !utp_connection_is_connected(&slot->connection)) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(now_us != 0u);
+    if (!slot->used || !slot->zero_rtt_response_active || !slot->zero_rtt_response_queued ||
+        !utp_connection_is_connected(&slot->connection)) {
         return UTP_INTERNAL_ERROR_STATE;
     }
     slot->zero_rtt_response_queued = false;
@@ -3527,6 +3723,8 @@ static void utp_context_report_connection_error(utp_context_t* context, utp_cont
                                                 utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
                                                 size_t reason_length, bool peer_initiated)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
     if (!slot->connection_error_reported) {
         // reason 可能直接引用当前 PacketIn，必须在释放接收包之前同步完成回调。
         const utp_connection_error_info_t info = {
@@ -3544,6 +3742,8 @@ static void utp_context_report_connection_error(utp_context_t* context, utp_cont
 static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
                                              const utp_connect_attempt_info_t* attempt)
 {
+    assert(context != NULL);
+    assert(attempt != NULL);
     if (context->on_connect_error == NULL) {
         return;
     }
@@ -3569,9 +3769,10 @@ static utp_internal_error_t utp_context_start_connect_attempt(utp_context_t*    
     uint32_t             local_cid;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || peer == NULL || now_us == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(peer != NULL);
+    assert(now_us != 0u);
     payload          = context->encrypt_send_buffer;
     payload_capacity = sizeof(context->encrypt_send_buffer);
     if (slot->connection.local_cid != 0u) {
@@ -3764,9 +3965,9 @@ static utp_internal_error_t utp_context_retry_connect_attempt(utp_context_t*    
 {
     utp_internal_error_t error = UTP_INTERNAL_ERROR_OK;
 
-    if (context == NULL || slot == NULL || now_us == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(now_us != 0u);
     if (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
         // 0-RTT 重试必须带回 SESSION_TOKEN，不能复用普通发送账本中的裸包。
@@ -3789,6 +3990,8 @@ static utp_internal_error_t utp_context_retry_connect_attempt(utp_context_t*    
 static void utp_context_fail_pending_connect(utp_context_t* context, utp_context_connection_slot_t* slot,
                                              utp_status_t status, const char* message)
 {
+    assert(context != NULL);
+    assert(slot != NULL);
     utp_context_log(context, UTP_LOG_LEVEL_WARNING, "connection attempt failed");
     utp_context_report_connect_error(context, status, message, &slot->connect_attempt);
     utp_context_release_connection_slot(context, slot);
@@ -3802,9 +4005,9 @@ static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* conte
     utp_frame_handshake_delay_t delay;
     utp_internal_error_t        error;
 
-    if (context == NULL || slot == NULL || !slot->used) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
     connection                       = &slot->connection;
     done.ack_handshake_packet_number = connection->peer_handshake_packet_number;
     const uint64_t now_us            = utp_context_now_us();
@@ -3828,6 +4031,7 @@ static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* conte
 
 static utp_internal_error_t utp_context_queue_ack_if_due(utp_connection_t* connection, uint64_t now_us)
 {
+    assert(connection != NULL);
     const uint64_t deadline = utp_connection_ack_deadline(connection);
 
     if (utp_connection_ack_pending_count(connection) == 0u || (deadline != 0u && deadline > now_us)) {
@@ -3841,6 +4045,7 @@ static void utp_context_timer_callback(uint32_t events, void* user_data);
 
 static void utp_context_take_deadline(uint64_t* deadline, uint64_t candidate)
 {
+    assert(deadline != NULL);
     if (candidate != 0u && (*deadline == 0u || candidate < *deadline)) {
         *deadline = candidate;
     }
@@ -3852,6 +4057,8 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
     utp_hash_node_t* node;
     uint64_t         deadline = 0u;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
     if (!TAILQ_EMPTY(&context->terminal_error_slots)) {
         return now_us;
     }
@@ -3925,9 +4132,8 @@ static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, ui
     uint64_t deadline;
     uint64_t delay_us;
 
-    if (context == NULL || now_us == 0u) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(now_us != 0u);
     deadline = utp_context_next_deadline(context, now_us);
     if (deadline == 0u) {
         utp_event_remove(&context->timer_event);
@@ -3948,8 +4154,14 @@ static utp_internal_error_t utp_context_replay_pending_packet(const uint8_t* pac
     utp_packet_in_t*      packet_in;
     utp_internal_error_t  error;
 
-    if (replay == NULL || replay->context == NULL || packet == NULL || packet_length > UINT16_MAX) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    assert(replay != NULL);
+    assert(replay->context != NULL);
+    assert(replay->connection != NULL);
+    assert(replay->peer != NULL);
+    assert(packet != NULL);
+    assert(replay->now_us != 0u);
+    if (packet_length > UINT16_MAX) {
+        return UTP_INTERNAL_ERROR_LIMIT;
     }
     error = utp_packet_in_pool_acquire(&replay->context->packet_in_pool, &packet_in);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -3972,6 +4184,13 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     utp_internal_error_t           error;
     bool                           promotion_committed;
 
+    assert(context != NULL);
+    assert(pending_slot != NULL);
+    assert(pending_slot->used);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
+    assert(wire_packet_length >= packet_length);
+    assert(peer != NULL);
     promotion_committed = false;
     slot                = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
@@ -4075,9 +4294,19 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
                                                              const utp_address_t* peer, const utp_address_t* local,
                                                              uint64_t* inout_now_us)
 {
-    uint64_t             now_us = *inout_now_us;
+    uint64_t             now_us;
     utp_internal_error_t error;
 
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(header != NULL);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
+    assert(peer != NULL);
+    assert(inout_now_us != NULL);
+    assert(*inout_now_us != 0u);
+    now_us = *inout_now_us;
     if (slot->connect_pending && slot->rendezvous_active && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
         header->type == UTP_PACKET_TYPE_HANDSHAKE && !utp_address_equal(peer, &slot->connection.peer) &&
         utp_context_rendezvous_candidate_exists(slot, peer)) {
@@ -4209,6 +4438,12 @@ static utp_internal_error_t utp_context_on_pending_packet(utp_context_t* context
     utp_pending_incoming_result_t result;
     utp_internal_error_t          error;
 
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
+    assert(peer != NULL);
     if (!slot->pending.accepted) {
         return UTP_INTERNAL_ERROR_OK;
     }
@@ -4247,6 +4482,9 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     bool                        rendezvous_seen;
     utp_internal_error_t        error;
 
+    assert(context != NULL);
+    assert(view != NULL);
+    assert(peer != NULL);
     if (view->header.scid == 0u || view->header.dcid != 0u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
@@ -4422,9 +4660,9 @@ static utp_internal_error_t utp_context_validate_zero_rtt_client_frames(
     bool   ping_seen    = false;
     bool   padding_seen = false;
 
-    if (payload == NULL || client_public_key == NULL || post_offset == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(payload != NULL);
+    assert(client_public_key != NULL);
+    assert(post_offset != NULL);
     for (size_t index = 0u; index < sizeof(required); ++index) {
         uint8_t              type;
         size_t               length;
@@ -4493,9 +4731,11 @@ static utp_internal_error_t utp_context_queue_zero_rtt_response(utp_context_t*  
     bool                 encrypted;
     utp_internal_error_t error;
 
-    if (context == NULL || slot == NULL || !slot->used || now_us == 0u || !slot->zero_rtt_response_active ||
-        slot->zero_rtt_response_queued || slot->zero_rtt_request_packet_number == 0u ||
-        slot->zero_rtt_request_received_us == 0u) {
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(now_us != 0u);
+    if (!slot->used || !slot->zero_rtt_response_active || slot->zero_rtt_response_queued ||
+        slot->zero_rtt_request_packet_number == 0u || slot->zero_rtt_request_received_us == 0u) {
         return UTP_INTERNAL_ERROR_STATE;
     }
     response          = context->encrypt_send_buffer;
@@ -4549,10 +4789,12 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     uint64_t                       now_us;
     utp_internal_error_t           error;
 
-    if (context == NULL || packet_in == NULL || peer == NULL || view == NULL || session_token == NULL ||
-        resumption_psk == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(packet_in != NULL);
+    assert(peer != NULL);
+    assert(view != NULL);
+    assert(session_token != NULL);
+    assert(resumption_psk != NULL);
     if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_128 &&
         encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256) {
         return UTP_INTERNAL_ERROR_AUTH;
@@ -4702,9 +4944,9 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
 {
     uint16_t minimum_packet_size;
 
-    if (context == NULL || packet_in == NULL || peer == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(context != NULL);
+    assert(packet_in != NULL);
+    assert(peer != NULL);
     minimum_packet_size = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer->family);
     utp_packet_view_t    view;
     utp_internal_error_t error = utp_proto_decode_header(&view.header, packet_in->data, packet_in->length);
@@ -4931,8 +5173,13 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
     bool    ntrs_ping_seen                = false;
     size_t  offset                        = 0u;
 
-    if (context == NULL || peer == NULL || header->scid != 0u || header->dcid != 0u || header->packet_number == 0u ||
-        header->reserve != 0u || payload_length == 0u) {
+    assert(context != NULL);
+    assert(header != NULL);
+    assert(payload != NULL);
+    assert(peer != NULL);
+    assert(now_us != 0u);
+    if (header->scid != 0u || header->dcid != 0u || header->packet_number == 0u || header->reserve != 0u ||
+        payload_length == 0u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     while (offset < payload_length) {
@@ -5260,8 +5507,14 @@ static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, 
                                                         const utp_address_t* local, uint64_t now_us)
 {
     utp_packet_header_t  header;
-    utp_internal_error_t error = utp_proto_decode_header(&header, packet, packet_length);
+    utp_internal_error_t error;
 
+    assert(context != NULL);
+    assert(packet != NULL);
+    assert(packet_length != 0u);
+    assert(peer != NULL);
+    assert(now_us != 0u);
+    error = utp_proto_decode_header(&header, packet, packet_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
@@ -5312,7 +5565,8 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
 {
     utp_context_t* context = user_data;
 
-    if ((events & UTP_EVENT_READABLE) == 0u || context == NULL) {
+    assert(context != NULL);
+    if ((events & UTP_EVENT_READABLE) == 0u) {
         return;
     }
 #if defined(UTP_HAVE_RECVMMSG)
@@ -5425,7 +5679,8 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
-    if ((events & UTP_EVENT_WRITABLE) == 0u || context == NULL) {
+    assert(context != NULL);
+    if ((events & UTP_EVENT_WRITABLE) == 0u) {
         return;
     }
     {
@@ -5506,6 +5761,8 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
         utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
@@ -5639,6 +5896,8 @@ static utp_internal_error_t utp_context_process_pending_timers(utp_context_t* co
     utp_hash_iter_t  iter;
     utp_hash_node_t* node;
 
+    assert(context != NULL);
+    assert(now_us != 0u);
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
         utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
@@ -5669,7 +5928,8 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
     uint64_t             now_us;
     utp_internal_error_t error;
 
-    if (context == NULL || (events & UTP_EVENT_TIMEOUT) == 0u) {
+    assert(context != NULL);
+    if ((events & UTP_EVENT_TIMEOUT) == 0u) {
         return;
     }
     now_us = utp_context_now_us();

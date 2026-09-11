@@ -1,5 +1,6 @@
 #include "util/hash.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 
@@ -11,9 +12,7 @@ static utp_internal_error_t normalize_bucket_count(size_t requested, size_t* buc
 {
     size_t normalized = 1u;
 
-    if (bucket_count == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(bucket_count != NULL);
     if (requested == 0u) {
         *bucket_count = 0u;
         return UTP_INTERNAL_ERROR_OK;
@@ -33,11 +32,16 @@ static utp_internal_error_t normalize_bucket_count(size_t requested, size_t* buc
 
 static size_t bucket_index(const utp_hash_table_t* table, uint64_t hash)
 {
+    assert(table != NULL);
+    assert(table->bucket_count != 0u);
     return (size_t)hash & (table->bucket_count - 1u);
 }
 
 static void link_node(utp_hash_node_t** head, utp_hash_node_t* node)
 {
+    assert(head != NULL);
+    assert(node != NULL);
+    assert(node->prev_next == NULL);
     node->next      = *head;
     node->prev_next = head;
     if (*head != NULL) {
@@ -48,9 +52,8 @@ static void link_node(utp_hash_node_t** head, utp_hash_node_t* node)
 
 static void unlink_node(utp_hash_node_t* node)
 {
-    if (node->prev_next == NULL) {
-        return;
-    }
+    assert(node != NULL);
+    assert(node->prev_next != NULL);
     *node->prev_next = node->next;
     if (node->next != NULL) {
         node->next->prev_next = node->prev_next;
@@ -62,6 +65,8 @@ static void unlink_node(utp_hash_node_t* node)
 
 static utp_internal_error_t rehash(utp_hash_table_t* table, size_t bucket_count)
 {
+    assert(table != NULL);
+    assert(table->allocator != NULL);
     if (!is_power_of_two(bucket_count) || bucket_count > SIZE_MAX / sizeof(utp_hash_node_t*)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }

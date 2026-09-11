@@ -1,5 +1,6 @@
 #include "connection/stream.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "connection/connection.h"
@@ -7,15 +8,16 @@
 
 static bool utp_stream_send_side_is_closed(const utp_stream_t* stream)
 {
-    return stream != NULL && stream->connection != NULL &&
-           (stream->connection->state == UTP_CONNECTION_STATE_CLOSING ||
-            stream->connection->state == UTP_CONNECTION_STATE_DRAINING ||
-            stream->connection->state == UTP_CONNECTION_STATE_CLOSED);
+    assert(stream != NULL);
+    return stream->connection != NULL && (stream->connection->state == UTP_CONNECTION_STATE_CLOSING ||
+                                          stream->connection->state == UTP_CONNECTION_STATE_DRAINING ||
+                                          stream->connection->state == UTP_CONNECTION_STATE_CLOSED);
 }
 
 static bool utp_stream_is_local_initiated(const utp_stream_t* stream)
 {
-    if (stream == NULL || stream->connection == NULL) {
+    assert(stream != NULL);
+    if (stream->connection == NULL) {
         return true;
     }
     uint32_t local_initiator = stream->connection->role == UTP_CONNECTION_ROLE_ACTIVE ? UTP_STREAM_CLIENT_INITIATED
@@ -49,7 +51,8 @@ static uint64_t utp_stream_fragment_read_offset(const utp_stream_recv_fragment_t
 
 static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 {
-    if (stream == NULL || !utp_stream_local_can_receive(stream) || stream->local_read_shutdown || stream->peer_reset) {
+    assert(stream != NULL);
+    if (!utp_stream_local_can_receive(stream) || stream->local_read_shutdown || stream->peer_reset) {
         return false;
     }
     if (utp_stream_readable_bytes(stream) != 0u || stream->peer_fin) {
@@ -62,7 +65,8 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 
 static bool utp_stream_is_writable(const utp_stream_t* stream)
 {
-    return stream != NULL && stream->used && utp_stream_local_can_send(stream) &&
+    assert(stream != NULL);
+    return stream->used && utp_stream_local_can_send(stream) &&
            !utp_stream_send_side_is_closed(stream) && !stream->local_write_reset && !stream->local_fin_queued &&
            stream->send_buffer_length < UTP_STREAM_SEND_BUFFER_CAPACITY;
 }
@@ -88,7 +92,8 @@ static void utp_stream_leave_user_callback(utp_stream_t* stream)
 
 static void utp_stream_notify_readable(utp_stream_t* stream)
 {
-    if (stream == NULL || stream->defer_user_notifications || stream->read_cb == NULL || stream->notifying_readable ||
+    assert(stream != NULL);
+    if (stream->defer_user_notifications || stream->read_cb == NULL || stream->notifying_readable ||
         !utp_stream_has_readable_event(stream)) {
         return;
     }
@@ -101,7 +106,8 @@ static void utp_stream_notify_readable(utp_stream_t* stream)
 
 static void utp_stream_notify_writable(utp_stream_t* stream)
 {
-    if (stream == NULL || stream->defer_user_notifications || stream->write_cb == NULL || stream->notifying_writable ||
+    assert(stream != NULL);
+    if (stream->defer_user_notifications || stream->write_cb == NULL || stream->notifying_writable ||
         !utp_stream_is_writable(stream)) {
         return;
     }
@@ -114,7 +120,8 @@ static void utp_stream_notify_writable(utp_stream_t* stream)
 
 static void utp_stream_notify_closed(utp_stream_t* stream)
 {
-    if (stream == NULL || stream->defer_user_notifications || stream->closed_notified ||
+    assert(stream != NULL);
+    if (stream->defer_user_notifications || stream->closed_notified ||
         !utp_stream_is_closed(stream) || stream->recv_buffered_bytes != 0u) {
         return;
     }
@@ -159,9 +166,9 @@ static void utp_stream_copy_into_send_buffer(utp_stream_t* stream, const uint8_t
 
 static const uint8_t* utp_stream_unsent_data(const utp_stream_t* stream, size_t* contiguous_length)
 {
-    if (contiguous_length == NULL || stream->send_buffer_length < stream->send_in_flight_bytes) {
-        return NULL;
-    }
+    assert(stream != NULL);
+    assert(contiguous_length != NULL);
+    assert(stream->send_buffer_length >= stream->send_in_flight_bytes);
     size_t unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
     if (unsent_length == 0u) {
         *contiguous_length = 0u;
@@ -195,9 +202,7 @@ static void utp_stream_remove_ack_range(utp_stream_t* stream, size_t index)
 
 static size_t utp_stream_recv_fragment_memory_cost(const utp_stream_recv_fragment_t* fragment)
 {
-    if (fragment == NULL) {
-        return 0u;
-    }
+    assert(fragment != NULL);
     return sizeof(*fragment) +
            (fragment->packet != NULL && fragment->length != 0u ? (size_t)fragment->packet->capacity : 0u);
 }
@@ -205,10 +210,12 @@ static size_t utp_stream_recv_fragment_memory_cost(const utp_stream_recv_fragmen
 static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_recv_fragment_t* fragment,
                                              const utp_stream_recv_account_t* account)
 {
+    assert(stream != NULL);
+    assert(fragment != NULL);
     size_t stream_memory_limit   = UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT;
     size_t stream_fragment_limit = UTP_STREAM_RECV_FRAGMENT_LIMIT;
-    if (stream == NULL || fragment == NULL || fragment->accounted) {
-        return stream != NULL && fragment != NULL;
+    if (fragment->accounted) {
+        return true;
     }
     // PacketIn 被 fragment 持有期间不能回池，容量而非有效载荷才是真实内存成本。
     size_t new_cost = utp_stream_recv_fragment_memory_cost(fragment);
@@ -246,7 +253,9 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
 
 static void utp_stream_unaccount_recv_fragment(utp_stream_t* stream, utp_stream_recv_fragment_t* fragment)
 {
-    if (stream == NULL || fragment == NULL || !fragment->accounted) {
+    assert(stream != NULL);
+    assert(fragment != NULL);
+    if (!fragment->accounted) {
         return;
     }
     size_t cost = fragment->memory_cost;
@@ -342,9 +351,9 @@ static void utp_stream_clear_recv_fragments(utp_stream_t* stream)
 static void utp_stream_rollback_frame_fragments(utp_stream_t* stream, utp_packet_in_t* packet,
                                                 const uint64_t* inserted_offsets, size_t inserted_count)
 {
-    if (stream == NULL || packet == NULL || inserted_offsets == NULL) {
-        return;
-    }
+    assert(stream != NULL);
+    assert(packet != NULL);
+    assert(inserted_offsets != NULL);
     for (size_t offset_index = inserted_count; offset_index != 0u; --offset_index) {
         uint64_t offset = inserted_offsets[offset_index - 1u];
 
@@ -420,54 +429,53 @@ static utp_internal_error_t utp_stream_mark_fin(utp_stream_t* stream, uint64_t f
 
 void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
 {
-    if (stream != NULL) {
-        stream->connection                       = NULL;
-        stream->connection_consumed_total        = NULL;
-        stream->send_buffer_offset               = 0u;
-        stream->next_send_offset                 = 0u;
-        stream->recv_offset                      = 0u;
-        stream->local_max_stream_offset_received = 0u;
-        stream->local_stream_offset_consumed     = 0u;
-        stream->local_max_stream_offset_sent     = 0u;
-        stream->peer_final_size                  = 0u;
-        stream->stream_id                        = stream_id;
-        stream->peer_max_stream_data             = UTP_STREAM_DEFAULT_FLOW_WINDOW;
-        stream->local_max_stream_data_advertised = UTP_STREAM_DEFAULT_FLOW_WINDOW;
-        stream->last_max_stream_data_sent_us     = 0u;
-        stream->last_stream_data_blocked_sent_us = 0u;
-        stream->drr_deficit                      = 0u;
-        stream->send_buffer_length               = 0u;
-        stream->send_buffer_start                = 0u;
-        stream->send_in_flight_bytes             = 0u;
-        stream->recv_buffered_bytes              = 0u;
-        stream->recv_pinned_memory_bytes         = 0u;
-        stream->recv_fragment_count              = 0u;
-        stream->recv_accounted_fragment_count    = 0u;
-        stream->send_ack_range_count             = 0u;
-        stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
-        stream->strict_wait_rounds               = 0u;
-        stream->read_cb                          = NULL;
-        stream->write_cb                         = NULL;
-        stream->close_cb                         = NULL;
-        stream->read_cb_data                     = NULL;
-        stream->write_cb_data                    = NULL;
-        stream->close_cb_data                    = NULL;
-        stream->used                             = true;
-        stream->local_fin_queued                 = false;
-        stream->local_fin_sent                   = false;
-        stream->local_fin_transmitted            = false;
-        stream->peer_fin                         = false;
-        stream->local_read_shutdown              = false;
-        stream->local_write_reset                = false;
-        stream->peer_reset                       = false;
-        stream->peer_stop_sending_received       = false;
-        stream->peer_final_size_known            = false;
-        stream->stream_limit_released            = false;
-        stream->notifying_readable               = false;
-        stream->notifying_writable               = false;
-        stream->closed_notified                  = false;
-        stream->defer_user_notifications         = false;
-    }
+    assert(stream != NULL);
+    stream->connection                       = NULL;
+    stream->connection_consumed_total        = NULL;
+    stream->send_buffer_offset               = 0u;
+    stream->next_send_offset                 = 0u;
+    stream->recv_offset                      = 0u;
+    stream->local_max_stream_offset_received = 0u;
+    stream->local_stream_offset_consumed     = 0u;
+    stream->local_max_stream_offset_sent     = 0u;
+    stream->peer_final_size                  = 0u;
+    stream->stream_id                        = stream_id;
+    stream->peer_max_stream_data             = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    stream->local_max_stream_data_advertised = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    stream->last_max_stream_data_sent_us     = 0u;
+    stream->last_stream_data_blocked_sent_us = 0u;
+    stream->drr_deficit                      = 0u;
+    stream->send_buffer_length               = 0u;
+    stream->send_buffer_start                = 0u;
+    stream->send_in_flight_bytes             = 0u;
+    stream->recv_buffered_bytes              = 0u;
+    stream->recv_pinned_memory_bytes         = 0u;
+    stream->recv_fragment_count              = 0u;
+    stream->recv_accounted_fragment_count    = 0u;
+    stream->send_ack_range_count             = 0u;
+    stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
+    stream->strict_wait_rounds               = 0u;
+    stream->read_cb                          = NULL;
+    stream->write_cb                         = NULL;
+    stream->close_cb                         = NULL;
+    stream->read_cb_data                     = NULL;
+    stream->write_cb_data                    = NULL;
+    stream->close_cb_data                    = NULL;
+    stream->used                             = true;
+    stream->local_fin_queued                 = false;
+    stream->local_fin_sent                   = false;
+    stream->local_fin_transmitted            = false;
+    stream->peer_fin                         = false;
+    stream->local_read_shutdown              = false;
+    stream->local_write_reset                = false;
+    stream->peer_reset                       = false;
+    stream->peer_stop_sending_received       = false;
+    stream->peer_final_size_known            = false;
+    stream->stream_limit_released            = false;
+    stream->notifying_readable               = false;
+    stream->notifying_writable               = false;
+    stream->closed_notified                  = false;
+    stream->defer_user_notifications         = false;
 }
 
 utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset)
@@ -576,7 +584,8 @@ void utp_stream_cleanup(utp_stream_t* stream)
 
 void utp_stream_set_read_callback(utp_stream_t* stream, utp_stream_read_cb_t callback, void* user_data)
 {
-    if (stream != NULL && stream->used) {
+    assert(stream != NULL);
+    if (stream->used) {
         stream->read_cb      = callback;
         stream->read_cb_data = user_data;
         utp_stream_notify_readable(stream);
@@ -585,7 +594,8 @@ void utp_stream_set_read_callback(utp_stream_t* stream, utp_stream_read_cb_t cal
 
 void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t callback, void* user_data)
 {
-    if (stream != NULL && stream->used) {
+    assert(stream != NULL);
+    if (stream->used) {
         stream->write_cb      = callback;
         stream->write_cb_data = user_data;
         utp_stream_notify_writable(stream);
@@ -594,7 +604,8 @@ void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t c
 
 void utp_stream_set_close_callback(utp_stream_t* stream, utp_stream_close_cb_t callback, void* user_data)
 {
-    if (stream != NULL && stream->used) {
+    assert(stream != NULL);
+    if (stream->used) {
         stream->close_cb      = callback;
         stream->close_cb_data = user_data;
     }
@@ -768,8 +779,8 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     size_t         contiguous_length = 0u;
-    const uint8_t* data        = utp_stream_unsent_data(stream, &contiguous_length);
-    size_t         data_length = contiguous_length;
+    const uint8_t* data              = utp_stream_unsent_data(stream, &contiguous_length);
+    size_t         data_length       = contiguous_length;
     if (data_length > capacity - UTP_FRAME_STREAM_HEADER_SIZE) {
         data_length = capacity - UTP_FRAME_STREAM_HEADER_SIZE;
     }
@@ -831,9 +842,9 @@ utp_internal_error_t utp_stream_build_frame_view_limited(utp_stream_t* stream, u
     }
     // 只编码 STREAM header，payload 直接引用环形发送缓冲，交给 PacketOut 的 slice 发送。
     size_t         contiguous_length = 0u;
-    const uint8_t* data          = utp_stream_unsent_data(stream, &contiguous_length);
-    size_t         data_length   = contiguous_length;
-    size_t         unsent_length = stream->send_buffer_length - stream->send_in_flight_bytes;
+    const uint8_t* data              = utp_stream_unsent_data(stream, &contiguous_length);
+    size_t         data_length       = contiguous_length;
+    size_t         unsent_length     = stream->send_buffer_length - stream->send_in_flight_bytes;
     if (data_length > max_data_length) {
         data_length = max_data_length;
     }

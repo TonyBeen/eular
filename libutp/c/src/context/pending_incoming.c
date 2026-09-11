@@ -1,5 +1,6 @@
 #include "context/pending_incoming.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "proto/proto.h"
@@ -15,6 +16,11 @@ static utp_internal_error_t utp_pending_incoming_find_handshake_done(const utp_p
 {
     size_t offset = 0u;
 
+    assert(view != NULL);
+    assert(ack_packet_number != NULL);
+    assert(handshake_delay_us != NULL);
+    assert(found != NULL);
+    assert(delay_found != NULL);
     *found       = false;
     *delay_found = false;
     while (offset < view->payload_length) {
@@ -98,47 +104,47 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
 
 void utp_pending_incoming_set_local(utp_pending_incoming_t* pending, const utp_address_t* local)
 {
-    if (pending != NULL && local != NULL) {
+    assert(pending != NULL);
+    if (local != NULL) {
         pending->local = *local;
     }
 }
 
 void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
 {
-    if (pending != NULL) {
-        utp_crypto_aead_cleanup(&pending->tx_aead);
-        utp_crypto_aead_cleanup(&pending->rx_aead);
-        utp_crypto_key_pair_clear(&pending->crypto_key_pair);
-        pending->local                                = (utp_address_t){0};
-        pending->storage                              = NULL;
-        pending->storage_capacity                     = 0u;
-        pending->storage_length                       = 0u;
-        pending->packet_limit                         = 0u;
-        pending->packet_count                         = 0u;
-        pending->local_cid                            = 0u;
-        pending->peer_cid                             = 0u;
-        pending->first_handshake_packet_number        = 0u;
-        pending->last_handshake_packet_number         = 0u;
-        pending->next_packet_number                   = 0u;
-        pending->latest_initial_packet_number         = 0u;
-        pending->latest_initial_received_us           = 0u;
-        pending->last_handshake_sent_us               = 0u;
-        pending->handshake_rtt_sample_us              = 0u;
-        pending->handshake_retransmission_deadline_us = 0u;
-        pending->handshake_base_delay_us              = 0u;
-        pending->handshake_retransmission_count       = 0u;
-        pending->crypto_type                          = 0u;
-        pending->handshake_max_retries                = 0u;
-        pending->peer_transport_params                = (utp_frame_transport_params_t){0};
-        pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
-        pending->crypto_configured                    = false;
-        pending->crypto_ready                         = false;
-        pending->accepted                             = false;
-        pending->handshake_sent                       = false;
-        pending->handshake_write_pending              = false;
-        pending->peer_transport_params_received       = false;
-        pending->peer_ack_frequency_received          = false;
-    }
+    assert(pending != NULL);
+    utp_crypto_aead_cleanup(&pending->tx_aead);
+    utp_crypto_aead_cleanup(&pending->rx_aead);
+    utp_crypto_key_pair_clear(&pending->crypto_key_pair);
+    pending->local                                = (utp_address_t){0};
+    pending->storage                              = NULL;
+    pending->storage_capacity                     = 0u;
+    pending->storage_length                       = 0u;
+    pending->packet_limit                         = 0u;
+    pending->packet_count                         = 0u;
+    pending->local_cid                            = 0u;
+    pending->peer_cid                             = 0u;
+    pending->first_handshake_packet_number        = 0u;
+    pending->last_handshake_packet_number         = 0u;
+    pending->next_packet_number                   = 0u;
+    pending->latest_initial_packet_number         = 0u;
+    pending->latest_initial_received_us           = 0u;
+    pending->last_handshake_sent_us               = 0u;
+    pending->handshake_rtt_sample_us              = 0u;
+    pending->handshake_retransmission_deadline_us = 0u;
+    pending->handshake_base_delay_us              = 0u;
+    pending->handshake_retransmission_count       = 0u;
+    pending->crypto_type                          = 0u;
+    pending->handshake_max_retries                = 0u;
+    pending->peer_transport_params                = (utp_frame_transport_params_t){0};
+    pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
+    pending->crypto_configured                    = false;
+    pending->crypto_ready                         = false;
+    pending->accepted                             = false;
+    pending->handshake_sent                       = false;
+    pending->handshake_write_pending              = false;
+    pending->peer_transport_params_received       = false;
+    pending->peer_ack_frequency_received          = false;
 }
 
 utp_internal_error_t utp_pending_incoming_record_initial(utp_pending_incoming_t* pending, uint64_t packet_number,
@@ -227,9 +233,7 @@ utp_internal_error_t utp_pending_incoming_decrypt_packet(const utp_pending_incom
 
 utp_internal_error_t utp_pending_incoming_accept(utp_pending_incoming_t* pending)
 {
-    if (pending == NULL) {
-        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
-    }
+    assert(pending != NULL);
     pending->accepted = true;
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -288,9 +292,8 @@ utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incomi
 
 uint64_t utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t* pending)
 {
-    return pending == NULL || !pending->accepted || !pending->handshake_sent
-               ? 0u
-               : pending->handshake_retransmission_deadline_us;
+    assert(pending != NULL);
+    return !pending->accepted || !pending->handshake_sent ? 0u : pending->handshake_retransmission_deadline_us;
 }
 
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pending, const uint8_t* packet,

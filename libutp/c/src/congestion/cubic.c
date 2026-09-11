@@ -6,6 +6,7 @@
 
 #include "congestion/cubic.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
@@ -131,7 +132,11 @@ static uint64_t utp_cubic_reno_increment(const utp_cubic_t* cubic, uint64_t acke
     return utp_cubic_max(UINT64_C(1), (acked_bytes * UTP_CUBIC_DEFAULT_MSS) / cwnd);
 }
 
-static uint64_t utp_cubic_get_cwnd(void* state) { return state == NULL ? 0u : ((const utp_cubic_t*)state)->cwnd; }
+static uint64_t utp_cubic_get_cwnd(void* state)
+{
+    assert(state != NULL);
+    return ((const utp_cubic_t*)state)->cwnd;
+}
 
 static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery)
 {
@@ -140,9 +145,7 @@ static uint64_t utp_cubic_get_pacing_rate(void* state, int32_t in_recovery)
     uint64_t           base_rate;
     uint64_t           gain_percent;
 
-    if (cubic == NULL) {
-        return 0u;
-    }
+    assert(cubic != NULL);
     srtt          = utp_cubic_smoothed_rtt(cubic);
     base_rate     = cubic->cwnd > UINT64_MAX / UINT64_C(1000000) ? UINT64_MAX : cubic->cwnd * UINT64_C(1000000);
     base_rate    /= srtt;
@@ -154,9 +157,7 @@ static void utp_cubic_on_init(void* state, const utp_rtt_stats_t* rtt_stats)
 {
     utp_cubic_t* cubic = state;
 
-    if (cubic == NULL) {
-        return;
-    }
+    assert(cubic != NULL);
     cubic->rtt_stats     = rtt_stats;
     cubic->cwnd          = cubic->initial_cwnd;
     cubic->ssthresh      = UTP_CUBIC_MAX_CWND;
@@ -173,9 +174,8 @@ static void utp_cubic_on_ack(void* state, utp_congestion_packet_info_t* packet, 
     uint64_t     increment;
 
     (void)app_limited;
-    if (cubic == NULL || packet == NULL) {
-        return;
-    }
+    assert(cubic != NULL);
+    assert(packet != NULL);
     acked_bytes        = packet->packet_size == 0u ? UINT64_C(1) : packet->packet_size;
     cubic->acked_bytes = cubic->acked_bytes > UINT64_MAX - acked_bytes ? UINT64_MAX : cubic->acked_bytes + acked_bytes;
     if (cubic->cwnd < cubic->ssthresh) {
@@ -194,9 +194,7 @@ static void utp_cubic_on_lost(void* state, utp_congestion_packet_info_t* packet)
     utp_cubic_t* cubic = state;
 
     (void)packet;
-    if (cubic == NULL) {
-        return;
-    }
+    assert(cubic != NULL);
     if (cubic->cwnd < cubic->last_max_cwnd) {
         cubic->last_max_cwnd = (uint64_t)((double)cubic->cwnd * (2.0 - cubic->beta) / 2.0);
     } else {
@@ -212,7 +210,8 @@ static void utp_cubic_was_quiet(void* state, uint64_t now_us, uint64_t inflight_
     utp_cubic_t* cubic = state;
 
     (void)now_us;
-    if (cubic != NULL && inflight_bytes == 0u) {
+    assert(cubic != NULL);
+    if (inflight_bytes == 0u) {
         utp_cubic_reset_epoch(cubic);
     }
 }
@@ -221,9 +220,7 @@ static void utp_cubic_on_timeout(void* state)
 {
     utp_cubic_t* cubic = state;
 
-    if (cubic == NULL) {
-        return;
-    }
+    assert(cubic != NULL);
     cubic->last_max_cwnd = cubic->cwnd;
     cubic->ssthresh      = utp_cubic_max((uint64_t)((double)cubic->cwnd * cubic->beta), cubic->minimum_cwnd);
     cubic->cwnd          = cubic->minimum_cwnd;
@@ -241,9 +238,7 @@ void utp_cubic_init(utp_cubic_t* cubic, const utp_cubic_config_t* config)
     uint64_t minimum_cwnd;
     uint64_t initial_cwnd;
 
-    if (cubic == NULL) {
-        return;
-    }
+    assert(cubic != NULL);
     memset(cubic, 0, sizeof(*cubic));
     cubic->beta = config != NULL && config->beta > 0.0 && config->beta < 1.0 ? config->beta : UTP_CUBIC_DEFAULT_BETA;
     cubic->cubic_c =

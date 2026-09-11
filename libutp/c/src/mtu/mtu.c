@@ -1,5 +1,6 @@
 #include "mtu/mtu.h"
 
+#include <assert.h>
 #include <limits.h>
 
 #include "proto/proto.h"
@@ -30,6 +31,7 @@ static uint64_t utp_mtu_add_ms(uint64_t now_ms, uint64_t delay_ms)
 
 static uint16_t utp_mtu_next_ladder_target(const utp_mtu_discovery_t* discovery)
 {
+    assert(discovery != NULL);
     for (size_t index = 0u; index < sizeof(utp_mtu_probe_ladder) / sizeof(utp_mtu_probe_ladder[0]); ++index) {
         const uint16_t candidate = utp_mtu_probe_ladder[index];
 
@@ -43,6 +45,7 @@ static uint16_t utp_mtu_next_ladder_target(const utp_mtu_discovery_t* discovery)
 
 static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
 {
+    assert(discovery != NULL);
     if ((uint32_t)discovery->search_high_mtu <= (uint32_t)discovery->search_low_mtu + discovery->probe_step) {
         /* 最后一次直接确认配置上限，避免 probe_step 让 mtu_max 永远不被探测。 */
         if (discovery->search_high_mtu == discovery->mtu_max) {
@@ -60,6 +63,7 @@ static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
 
 static void utp_mtu_clear_in_flight_probe(utp_mtu_discovery_t* discovery)
 {
+    assert(discovery != NULL);
     discovery->has_in_flight_probe           = false;
     discovery->in_flight_probe_packet_number = 0u;
     discovery->in_flight_probe_mtu           = 0u;
@@ -68,6 +72,7 @@ static void utp_mtu_clear_in_flight_probe(utp_mtu_discovery_t* discovery)
 
 static void utp_mtu_clear_probe_retry(utp_mtu_discovery_t* discovery)
 {
+    assert(discovery != NULL);
     discovery->retry_pending     = false;
     discovery->retry_probe_mtu   = 0u;
     discovery->probe_retry_count = 0u;
@@ -75,6 +80,8 @@ static void utp_mtu_clear_probe_retry(utp_mtu_discovery_t* discovery)
 
 static bool utp_mtu_discovery_record_probe_failure(utp_mtu_discovery_t* discovery, uint16_t probe_mtu, uint64_t now_ms)
 {
+    assert(discovery != NULL);
+    assert(probe_mtu > discovery->search_low_mtu);
     const uint16_t high = (uint16_t)(probe_mtu - 1u);
 
     utp_mtu_clear_probe_retry(discovery);
@@ -146,9 +153,7 @@ void utp_mtu_discovery_init(utp_mtu_discovery_t* discovery, const utp_mtu_config
     const uint16_t configured_base = config == NULL ? UTP_MTU_DEFAULT_BASE : config->mtu_base;
     uint64_t       configured_interval_ms;
 
-    if (discovery == NULL) {
-        return;
-    }
+    assert(discovery != NULL);
     discovery->enabled  = config == NULL || config->enabled;
     discovery->family   = family == UTP_ADDRESS_FAMILY_IPV6 ? UTP_ADDRESS_FAMILY_IPV6 : UTP_ADDRESS_FAMILY_IPV4;
     discovery->mtu_min  = utp_mtu_normalize(configured_min, discovery->family);
@@ -189,9 +194,7 @@ void utp_mtu_discovery_init(utp_mtu_discovery_t* discovery, const utp_mtu_config
 
 void utp_mtu_discovery_on_path_validated(utp_mtu_discovery_t* discovery, uint64_t now_ms)
 {
-    if (discovery == NULL) {
-        return;
-    }
+    assert(discovery != NULL);
     discovery->current_mtu                 = discovery->mtu_base;
     discovery->last_large_ack_ms           = 0u;
     discovery->last_large_loss_ms          = 0u;
@@ -216,27 +219,35 @@ void utp_mtu_discovery_on_path_validated(utp_mtu_discovery_t* discovery, uint64_
 
 void utp_mtu_discovery_set_address_family(utp_mtu_discovery_t* discovery, uint8_t family)
 {
-    if (discovery != NULL && (family == UTP_ADDRESS_FAMILY_IPV4 || family == UTP_ADDRESS_FAMILY_IPV6)) {
+    assert(discovery != NULL);
+    if (family == UTP_ADDRESS_FAMILY_IPV4 || family == UTP_ADDRESS_FAMILY_IPV6) {
         discovery->family = family;
     }
 }
 
-bool utp_mtu_discovery_enabled(const utp_mtu_discovery_t* discovery) { return discovery != NULL && discovery->enabled; }
+bool utp_mtu_discovery_enabled(const utp_mtu_discovery_t* discovery)
+{
+    assert(discovery != NULL);
+    return discovery->enabled;
+}
 
 bool utp_mtu_discovery_has_in_flight_probe(const utp_mtu_discovery_t* discovery)
 {
-    return discovery != NULL && discovery->has_in_flight_probe;
+    assert(discovery != NULL);
+    return discovery->has_in_flight_probe;
 }
 
 uint16_t utp_mtu_discovery_path_mtu(const utp_mtu_discovery_t* discovery)
 {
-    return discovery == NULL ? 0u : discovery->current_mtu;
+    assert(discovery != NULL);
+    return discovery->current_mtu;
 }
 
 uint16_t utp_mtu_discovery_next_probe_mtu(const utp_mtu_discovery_t* discovery)
 {
-    if (discovery == NULL || !discovery->enabled) {
-        return discovery == NULL ? 0u : discovery->search_low_mtu;
+    assert(discovery != NULL);
+    if (!discovery->enabled) {
+        return discovery->search_low_mtu;
     }
     if (discovery->retry_pending) {
         return discovery->retry_probe_mtu;
@@ -257,26 +268,29 @@ uint16_t utp_mtu_discovery_next_probe_mtu(const utp_mtu_discovery_t* discovery)
 
 uint16_t utp_mtu_discovery_current_max_packet_size(const utp_mtu_discovery_t* discovery)
 {
-    return discovery == NULL ? 0u : utp_mtu_packet_size_from_mtu(discovery->current_mtu, discovery->family);
+    assert(discovery != NULL);
+    return utp_mtu_packet_size_from_mtu(discovery->current_mtu, discovery->family);
 }
 
 uint16_t utp_mtu_discovery_absolute_max_packet_size(const utp_mtu_discovery_t* discovery)
 {
-    return discovery == NULL ? 0u : utp_mtu_packet_size_from_mtu(discovery->ceiling_mtu, discovery->family);
+    assert(discovery != NULL);
+    return utp_mtu_packet_size_from_mtu(discovery->ceiling_mtu, discovery->family);
 }
 
 bool utp_mtu_discovery_should_probe(const utp_mtu_discovery_t* discovery, uint64_t now_ms)
 {
-    return discovery != NULL && discovery->enabled && !discovery->has_in_flight_probe &&
-           now_ms >= discovery->blackhole_cooldown_until_ms && now_ms >= discovery->next_probe_time_ms &&
+    assert(discovery != NULL);
+    return discovery->enabled && !discovery->has_in_flight_probe && now_ms >= discovery->blackhole_cooldown_until_ms &&
+           now_ms >= discovery->next_probe_time_ms &&
            utp_mtu_discovery_next_probe_mtu(discovery) > discovery->search_low_mtu;
 }
 
 bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint16_t probe_mtu,
                                      uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->enabled || packet_number == 0u ||
-        discovery->search_low_mtu >= discovery->ceiling_mtu) {
+    assert(discovery != NULL);
+    if (!discovery->enabled || packet_number == 0u || discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
     uint16_t clamped_probe =
@@ -307,8 +321,8 @@ bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t pa
 
 bool utp_mtu_discovery_on_probe_ack(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->has_in_flight_probe ||
-        packet_number != discovery->in_flight_probe_packet_number) {
+    assert(discovery != NULL);
+    if (!discovery->has_in_flight_probe || packet_number != discovery->in_flight_probe_packet_number) {
         return false;
     }
     if (discovery->in_flight_probe_mtu > discovery->search_low_mtu) {
@@ -358,8 +372,8 @@ bool utp_mtu_discovery_on_probe_ack(utp_mtu_discovery_t* discovery, uint64_t pac
 
 bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->has_in_flight_probe ||
-        packet_number != discovery->in_flight_probe_packet_number) {
+    assert(discovery != NULL);
+    if (!discovery->has_in_flight_probe || packet_number != discovery->in_flight_probe_packet_number) {
         return false;
     }
     uint16_t probe_mtu = discovery->in_flight_probe_mtu;
@@ -377,8 +391,8 @@ bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t pa
 
 bool utp_mtu_discovery_on_probe_send_failed(utp_mtu_discovery_t* discovery, uint16_t probe_mtu, uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->enabled || discovery->has_in_flight_probe ||
-        discovery->search_low_mtu >= discovery->ceiling_mtu) {
+    assert(discovery != NULL);
+    if (!discovery->enabled || discovery->has_in_flight_probe || discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
     uint16_t clamped_probe =
@@ -389,13 +403,15 @@ bool utp_mtu_discovery_on_probe_send_failed(utp_mtu_discovery_t* discovery, uint
 
 bool utp_mtu_discovery_on_probe_timeout(utp_mtu_discovery_t* discovery, uint64_t now_ms)
 {
-    return discovery != NULL && discovery->has_in_flight_probe && now_ms >= discovery->in_flight_probe_deadline_ms &&
+    assert(discovery != NULL);
+    return discovery->has_in_flight_probe && now_ms >= discovery->in_flight_probe_deadline_ms &&
            utp_mtu_discovery_on_probe_lost(discovery, discovery->in_flight_probe_packet_number, now_ms);
 }
 
 bool utp_mtu_discovery_on_data_packet_ack(utp_mtu_discovery_t* discovery, uint16_t packet_size, uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->enabled ||
+    assert(discovery != NULL);
+    if (!discovery->enabled ||
         (uint32_t)packet_size + discovery->probe_step < utp_mtu_discovery_current_max_packet_size(discovery)) {
         return false;
     }
@@ -406,7 +422,8 @@ bool utp_mtu_discovery_on_data_packet_ack(utp_mtu_discovery_t* discovery, uint16
 
 bool utp_mtu_discovery_on_data_packet_loss(utp_mtu_discovery_t* discovery, uint16_t packet_size, uint64_t now_ms)
 {
-    if (discovery == NULL || !discovery->enabled ||
+    assert(discovery != NULL);
+    if (!discovery->enabled ||
         (uint32_t)packet_size + discovery->probe_step < utp_mtu_discovery_current_max_packet_size(discovery)) {
         return false;
     }

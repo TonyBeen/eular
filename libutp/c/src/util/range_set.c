@@ -1,10 +1,13 @@
 #include "util/range_set.h"
 
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 
 static utp_internal_error_t reserve_ranges(utp_range_set_t* set, size_t required)
 {
+    assert(set != NULL);
+    assert(set->allocator != NULL);
     if (required > set->max_ranges) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }

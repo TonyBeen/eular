@@ -1,16 +1,20 @@
 #include "context/send_ledger.h"
 
+#include <assert.h>
 #include <limits.h>
 
 #include "proto/proto.h"
 
 static uint64_t utp_send_ledger_packet_size(const utp_packet_out_t* packet)
 {
+    assert(packet != NULL);
     return (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
 }
 
 static bool utp_send_ledger_is_retransmittable(const utp_send_ledger_t* ledger, const utp_packet_out_t* packet)
 {
+    assert(ledger != NULL);
+    assert(packet != NULL);
     return (packet->frame_types & ledger->retransmittable_frame_mask) != 0u;
 }
 
