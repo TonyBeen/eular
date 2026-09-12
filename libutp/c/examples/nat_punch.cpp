@@ -18,6 +18,13 @@
 
 static const size_t kPayloadSize = 16384u;
 
+#define LOG(...)                      \
+    do {                              \
+        fprintf(stdout, __VA_ARGS__); \
+        fprintf(stdout, "\n");        \
+        fflush(stdout);               \
+    } while (0)
+
 struct NatPunchApp {
     event_base*                 base;
     event*                      timeout_event;
@@ -28,6 +35,7 @@ struct NatPunchApp {
     utp_stream_t*               stream;
     utp_ntrs_register_options_t register_options;
     utp_connect_options_t       connect_options;
+    const char*                 peer_id;
     const char*                 ntrs_address;
     const char*                 target_peer_id;
     uint16_t                    ntrs_port;
@@ -46,6 +54,7 @@ struct NatPunchApp {
     size_t                      payload_offset;
     bool                        register_requested;
     bool                        listen_requested;
+    bool                        rendezvous_connect;
     bool                        initiator;
     bool                        nat_finished;
     bool                        register_started;
@@ -90,6 +99,41 @@ static const char* nat_punch_nat_name(utp_nat_class_t nat_class)
     default:
         return "UNKNOWN";
     }
+}
+
+static const char* nat_punch_encryption_name(utp_encryption_mode_t encryption)
+{
+    switch (encryption) {
+    case UTP_ENCRYPTION_NONE:
+        return "none";
+    case UTP_ENCRYPTION_AES_GCM_128:
+        return "aes128";
+    case UTP_ENCRYPTION_AES_GCM_256:
+        return "aes256";
+    default:
+        return "unknown";
+    }
+}
+
+static const char* nat_punch_endpoint_format(const utp_endpoint_t* endpoint, char output[80])
+{
+    char address[INET6_ADDRSTRLEN];
+
+    if ((endpoint->family == 4u || endpoint->family == static_cast<uint8_t>(AF_INET)) &&
+        inet_ntop(AF_INET, endpoint->address, address, sizeof(address)) != NULL) {
+        snprintf(output, 80u, "%s:%" PRIu16, address, endpoint->port);
+        return output;
+    }
+    if ((endpoint->family == 6u || endpoint->family == static_cast<uint8_t>(AF_INET6)) &&
+        inet_ntop(AF_INET6, endpoint->address, address, sizeof(address)) != NULL) {
+        if (endpoint->scope_id != 0u)
+            snprintf(output, 80u, "[%s%%%" PRIu32 "]:%" PRIu16, address, endpoint->scope_id, endpoint->port);
+        else
+            snprintf(output, 80u, "[%s]:%" PRIu16, address, endpoint->port);
+        return output;
+    }
+    snprintf(output, 80u, "<none>");
+    return output;
 }
 
 static bool nat_punch_parse_u64(const char* text, uint64_t* value)
@@ -237,6 +281,8 @@ static void nat_punch_fill(uint8_t* destination, size_t length, size_t* offset)
 
 static void nat_punch_try_write(NatPunchApp* app)
 {
+    const uint64_t sent_before = app->sent_bytes;
+
     if (app->stream == NULL || app->writing || app->finished || !app->initiator) return;
     app->writing = true;
     while (!app->finished) {
@@ -250,6 +296,8 @@ static void nat_punch_try_write(NatPunchApp* app)
                 break;
             }
             app->request_sent = true;
+            LOG("nat_punch peer=%s -> Peer [StreamWrite] id=%" PRIu32 " header=\"DATA %" PRIu64 "\\n\"", app->peer_id,
+                utp_stream_id(app->stream), app->send_bytes);
             continue;
         }
         if (app->sent_bytes == app->send_bytes) {
@@ -260,6 +308,8 @@ static void nat_punch_try_write(NatPunchApp* app)
                     break;
                 }
                 app->write_shutdown = true;
+                LOG("nat_punch peer=%s -> Peer [StreamFin] id=%" PRIu32 " sent=%" PRIu64, app->peer_id,
+                    utp_stream_id(app->stream), app->sent_bytes);
             }
             break;
         }
@@ -288,6 +338,9 @@ static void nat_punch_try_write(NatPunchApp* app)
         app->sent_bytes += static_cast<uint64_t>(to_write);
     }
     app->writing = false;
+    if (app->sent_bytes != sent_before)
+        LOG("nat_punch peer=%s -> Peer [StreamWrite] id=%" PRIu32 " bytes=%" PRIu64 " total=%" PRIu64 "/%" PRIu64,
+            app->peer_id, utp_stream_id(app->stream), app->sent_bytes - sent_before, app->sent_bytes, app->send_bytes);
 }
 
 static void nat_punch_flush_response(NatPunchApp* app)
@@ -303,7 +356,9 @@ static void nat_punch_flush_response(NatPunchApp* app)
     }
     app->response_pending = false;
     app->response_sent    = true;
-    status                = utp_stream_shutdown(app->stream, UTP_STREAM_SHUTDOWN_WRITE);
+    LOG("nat_punch peer=%s -> Peer [StreamWrite] id=%" PRIu32 " response=\"DONE %" PRIu64 "\\n\"", app->peer_id,
+        utp_stream_id(app->stream), app->received_bytes);
+    status = utp_stream_shutdown(app->stream, UTP_STREAM_SHUTDOWN_WRITE);
     if (status != UTP_STATUS_OK && status != UTP_STATUS_CLOSED) {
         nat_punch_fail(app, "response_shutdown_failed");
         return;
@@ -326,6 +381,8 @@ static void nat_punch_finish_input(NatPunchApp* app)
     }
     app->response_length  = static_cast<size_t>(count);
     app->response_pending = true;
+    LOG("nat_punch peer=%s [PayloadReceived] id=%" PRIu32 " bytes=%" PRIu64 "/%" PRIu64, app->peer_id,
+        utp_stream_id(app->stream), app->received_bytes, app->expected_bytes);
     nat_punch_flush_response(app);
 }
 
@@ -345,6 +402,8 @@ static void nat_punch_consume_input(NatPunchApp* app, const uint8_t* data, size_
                 }
                 app->expected_bytes        = expected;
                 app->input_header_finished = true;
+                LOG("nat_punch peer=%s <- Peer [DataHeader] id=%" PRIu32 " expected_bytes=%" PRIu64, app->peer_id,
+                    utp_stream_id(app->stream), app->expected_bytes);
                 continue;
             }
             if (app->input_header_length + 1u >= sizeof(app->input_header)) {
@@ -382,6 +441,8 @@ static void nat_punch_consume_response(NatPunchApp* app, const uint8_t* data, si
         return;
     }
     app->response_received = true;
+    LOG("nat_punch peer=%s <- Peer [TransferComplete] id=%" PRIu32 " bytes=%" PRIu64, app->peer_id,
+        utp_stream_id(app->stream), done_bytes);
     nat_punch_finish(app, "transfer_complete");
 }
 
@@ -396,6 +457,7 @@ static void nat_punch_stream_readable(utp_stream_t* stream, void* user_data)
         if (status == UTP_STATUS_WOULD_BLOCK) return;
         if (status == UTP_STATUS_CLOSED) {
             app->input_fin_received = true;
+            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
             if (!app->initiator) nat_punch_finish_input(app);
             return;
         }
@@ -403,6 +465,8 @@ static void nat_punch_stream_readable(utp_stream_t* stream, void* user_data)
             nat_punch_fail(app, "read_view_failed");
             return;
         }
+        LOG("nat_punch peer=%s <- Peer [StreamRead] id=%" PRIu32 " bytes=%zu offset=%" PRIu64 " fin=%s", app->peer_id,
+            utp_stream_id(stream), view.length, view.offset, view.fin ? "true" : "false");
         if (app->initiator)
             nat_punch_consume_response(app, view.data, view.length);
         else
@@ -414,6 +478,7 @@ static void nat_punch_stream_readable(utp_stream_t* stream, void* user_data)
         }
         if (view.fin) {
             app->input_fin_received = true;
+            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
             if (!app->initiator) nat_punch_finish_input(app);
             return;
         }
@@ -436,6 +501,7 @@ static void nat_punch_stream_closed(utp_stream_t* stream, void* user_data)
     NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
 
     if (app->stream != stream || app->finished) return;
+    LOG("nat_punch peer=%s [StreamClosed] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
     if (!app->initiator && app->response_pending)
         nat_punch_fail(app, "stream_closed_before_response");
     else if (!app->initiator)
@@ -444,12 +510,19 @@ static void nat_punch_stream_closed(utp_stream_t* stream, void* user_data)
 
 static void nat_punch_connected(utp_connection_t* connection, void* user_data)
 {
-    NatPunchApp* app       = static_cast<NatPunchApp*>(user_data);
-    uint32_t     stream_id = 0u;
+    NatPunchApp*                 app       = static_cast<NatPunchApp*>(user_data);
+    uint32_t                     stream_id = 0u;
+    utp_connection_description_t description;
 
     app->connection = connection;
     app->connected  = true;
-    fprintf(stdout, "nat_punch connected role=%s\n", app->initiator ? "active" : "passive");
+    if (utp_connection_get_description(connection, &description) == UTP_STATUS_OK) {
+        LOG("nat_punch peer=%s [Connected] role=%s remote=%s:%" PRIu16 " local_cid=%" PRIu32 " peer_cid=%" PRIu32,
+            app->peer_id, app->initiator ? "active" : "passive", description.remote_host, description.remote_port,
+            description.local_cid, description.peer_cid);
+    } else {
+        LOG("nat_punch peer=%s [Connected] role=%s", app->peer_id, app->initiator ? "active" : "passive");
+    }
     if (!app->initiator) {
         utp_connection_set_on_incoming_stream(connection, nat_punch_incoming_stream, app);
         return;
@@ -463,6 +536,7 @@ static void nat_punch_connected(utp_connection_t* connection, void* user_data)
         nat_punch_fail(app, "get_stream_failed");
         return;
     }
+    LOG("nat_punch peer=%s [StreamCreated] id=%" PRIu32, app->peer_id, stream_id);
     utp_stream_set_on_readable(app->stream, nat_punch_stream_readable, app);
     utp_stream_set_on_writable(app->stream, nat_punch_stream_writable, app);
     utp_stream_set_on_closed(app->stream, nat_punch_stream_closed, app);
@@ -478,26 +552,59 @@ static void nat_punch_incoming_stream(utp_connection_t* connection, utp_stream_t
     utp_stream_set_on_readable(stream, nat_punch_stream_readable, app);
     utp_stream_set_on_writable(stream, nat_punch_stream_writable, app);
     utp_stream_set_on_closed(stream, nat_punch_stream_closed, app);
-    fprintf(stdout, "nat_punch stream_received id=%" PRIu32 "\n", utp_stream_id(stream));
+    LOG("nat_punch peer=%s <- Peer [IncomingStream] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
 }
 
-static bool nat_punch_new_connection(const utp_new_connection_info_t*, void* user_data)
+static bool nat_punch_new_connection(const utp_new_connection_info_t* info, void* user_data)
 {
     NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
-    return utp_context_accept(app->context) == UTP_STATUS_OK;
+    char         remote[80];
+
+    LOG("nat_punch peer=%s <- Peer=%s [NewConnection] local_cid=%" PRIu32 " peer_cid=%" PRIu32 " encryption=%s",
+        app->peer_id, nat_punch_endpoint_format(&info->remote, remote), info->local_cid, info->peer_cid,
+        nat_punch_encryption_name(info->encryption));
+    if (utp_context_accept(app->context) != UTP_STATUS_OK) {
+        fprintf(stderr, "nat_punch peer=%s [ConnectionRejected] reason=accept_failed\n", app->peer_id);
+        return false;
+    }
+    LOG("nat_punch peer=%s [ConnectionAccepted]", app->peer_id);
+    return true;
 }
 
-static void nat_punch_connection_error(utp_connection_t*, const utp_connection_error_info_t* info, void* user_data)
+static void nat_punch_connection_error(utp_connection_t* connection, const utp_connection_error_info_t* info,
+                                       void* user_data)
 {
-    NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
+    NatPunchApp*                 app = static_cast<NatPunchApp*>(user_data);
+    utp_connection_description_t description;
+    const char*                  remote      = "<unknown>";
+    uint16_t                     remote_port = 0u;
+
+    if (utp_connection_get_description(connection, &description) == UTP_STATUS_OK) {
+        remote      = description.remote_host;
+        remote_port = description.remote_port;
+    }
+    if (info != NULL) {
+        fprintf(stderr,
+                "nat_punch peer=%s <- Peer=%s:%" PRIu16 " [ConnectionError] status=%s peer_error=%" PRIu16
+                " peer_initiated=%s reason=%.*s\n",
+                app->peer_id, remote, remote_port, utp_status_string(info->status), info->peer_error_code,
+                info->peer_initiated ? "true" : "false", static_cast<int>(info->reason_length),
+                info->reason == NULL ? "" : reinterpret_cast<const char*>(info->reason));
+    } else {
+        fprintf(stderr, "nat_punch peer=%s [ConnectionError] status=unknown\n", app->peer_id);
+    }
 
     if (!app->finished && (info == NULL || info->status != UTP_STATUS_OK))
         nat_punch_fail(app, info == NULL ? "connection_error" : utp_status_string(info->status));
 }
 
-static void nat_punch_registered(utp_context_t*, const utp_ntrs_registered_info_t*, void*)
+static void nat_punch_registered(utp_context_t*, const utp_ntrs_registered_info_t* info, void* user_data)
 {
-    fprintf(stdout, "nat_punch ntrs_registered\n");
+    NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
+    char         endpoint[80];
+
+    LOG("nat_punch peer=%s <- NTRS=%s [Registered]", app->peer_id,
+        nat_punch_endpoint_format(&info->ntrs_endpoint, endpoint));
 }
 
 static void nat_punch_start_actions(NatPunchApp* app)
@@ -506,6 +613,7 @@ static void nat_punch_start_actions(NatPunchApp* app)
 
     if (app->register_requested && !app->register_started) {
         app->register_started = true;
+        LOG("nat_punch peer=%s -> NTRS=%s:%" PRIu16 " [Register]", app->peer_id, app->ntrs_address, app->ntrs_port);
         status = utp_context_register_ntrs(app->context, &app->register_options, nat_punch_registered, app);
         if (status != UTP_STATUS_OK) {
             nat_punch_fail(app, "register_ntrs_failed");
@@ -514,7 +622,11 @@ static void nat_punch_start_actions(NatPunchApp* app)
     }
     if (app->target_peer_id != NULL && !app->connect_started) {
         app->connect_started = true;
-        status               = utp_context_connect(app->context, &app->connect_options);
+        LOG("nat_punch peer=%s -> %s=%s:%" PRIu16 " [%s] target=%s encryption=%s", app->peer_id,
+            app->rendezvous_connect ? "NTRS" : "Peer", app->connect_options.address, app->connect_options.port,
+            app->rendezvous_connect ? "RendezvousConnect" : "Connect", app->target_peer_id,
+            nat_punch_encryption_name(app->connect_options.encryption));
+        status = utp_context_connect(app->context, &app->connect_options);
         if (status != UTP_STATUS_OK) nat_punch_fail(app, "connect_start_failed");
     }
     if (!app->register_requested && !app->listen_requested && app->target_peer_id == NULL)
@@ -527,11 +639,17 @@ static void nat_punch_nat_complete(utp_context_t*, utp_status_t status, const ut
     NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
 
     app->nat_finished = true;
-    if (status == UTP_STATUS_OK && result != NULL)
-        fprintf(stdout, "nat_punch nat class=%s mapped_port=%" PRIu16 " samples=%u\n",
-                nat_punch_nat_name(result->nat_class), result->primary_mapped_endpoint.port,
-                static_cast<unsigned>(result->port_sample_count));
-    else {
+    if (status == UTP_STATUS_OK && result != NULL) {
+        char primary[80];
+        char secondary[80];
+
+        LOG("nat_punch peer=%s [NatDetected] class=%s primary=%s secondary=%s samples=%u primary_rtt_ms=%" PRId32
+            " secondary_rtt_ms=%" PRId32,
+            app->peer_id, nat_punch_nat_name(result->nat_class),
+            nat_punch_endpoint_format(&result->primary_mapped_endpoint, primary),
+            nat_punch_endpoint_format(&result->secondary_mapped_endpoint, secondary),
+            static_cast<unsigned>(result->port_sample_count), result->primary_rtt_ms, result->secondary_rtt_ms);
+    } else {
         fprintf(stderr, "nat_punch nat_probe_failed status=%s; continue as UNKNOWN\n", utp_status_string(status));
         if (!app->register_requested && !app->listen_requested && app->target_peer_id == NULL) {
             nat_punch_fail(app, "nat_probe_failed");
@@ -631,8 +749,7 @@ int main(int argc, char** argv)
     if (peer_id.empty() || peer_id.size() > UTP_PEER_ID_MAX_LENGTH || nat_address.empty() || nat_port == 0u ||
         ((register_requested || rendezvous_connect) && (ntrs_address.empty() || ntrs_port == 0u)) ||
         target_peer_id.size() > UTP_PEER_ID_MAX_LENGTH ||
-        (has_direct_peer && (peer_address.empty() || peer_port == 0u)) ||
-        (target_peer_id.empty() && has_direct_peer) ||
+        (has_direct_peer && (peer_address.empty() || peer_port == 0u)) || (target_peer_id.empty() && has_direct_peer) ||
         (listen_requested && (!target_peer_id.empty() || register_requested)) || timeout_ms == 0u ||
         nat_timeout_ms == 0u)
         goto usage;
@@ -689,12 +806,14 @@ int main(int argc, char** argv)
             return EXIT_FAILURE;
         }
         app.base                                       = base;
+        app.peer_id                                    = peer_id.c_str();
         app.ntrs_address                               = ntrs_required ? ntrs_numeric.c_str() : NULL;
         app.target_peer_id                             = target_peer_id.empty() ? NULL : target_peer_id.c_str();
         app.ntrs_port                                  = ntrs_port;
         app.send_bytes                                 = send_bytes;
         app.register_requested                         = register_requested;
         app.listen_requested                           = listen_requested;
+        app.rendezvous_connect                         = rendezvous_connect;
         app.initiator                                  = !target_peer_id.empty();
         app.start_ms                                   = nat_punch_now_ms();
         app.register_options                           = utp_ntrs_register_options_t();
@@ -707,14 +826,13 @@ int main(int argc, char** argv)
         app.register_options.keepalive_interval_ms     = 30000u;
         app.register_options.keepalive_timeout_ms      = 3000u;
         app.connect_options                            = utp_connect_options_t();
-        app.connect_options.address = target_peer_id.empty()
-                                          ? NULL
-                                          : (rendezvous_connect ? ntrs_numeric.c_str() : peer_numeric.c_str());
-        app.connect_options.target_peer_id             = app.target_peer_id;
-        app.connect_options.port                       = rendezvous_connect ? ntrs_port : peer_port;
-        app.connect_options.timeout_ms                 = 1000u;
-        app.connect_options.retries                    = 5;
-        app.connect_options.encryption                 = encryption;
+        app.connect_options.address =
+            target_peer_id.empty() ? NULL : (rendezvous_connect ? ntrs_numeric.c_str() : peer_numeric.c_str());
+        app.connect_options.target_peer_id = app.target_peer_id;
+        app.connect_options.port           = rendezvous_connect ? ntrs_port : peer_port;
+        app.connect_options.timeout_ms     = 1000u;
+        app.connect_options.retries        = 5;
+        app.connect_options.encryption     = encryption;
         app.request_length =
             static_cast<size_t>(snprintf(app.request, sizeof(app.request), "DATA %" PRIu64 "\n", send_bytes));
         if (app.request_length >= sizeof(app.request)) {
@@ -726,8 +844,14 @@ int main(int argc, char** argv)
         utp_context_set_on_connected(app.context, nat_punch_connected, &app);
         utp_context_set_on_connect_error(
             app.context,
-            [](utp_status_t, const char*, const utp_connect_attempt_info_t*, void* data) {
-                nat_punch_fail(static_cast<NatPunchApp*>(data), "connect_error");
+            [](utp_status_t status, const char* message, const utp_connect_attempt_info_t* attempt, void* data) {
+                NatPunchApp* app = static_cast<NatPunchApp*>(data);
+                char         remote[80];
+
+                fprintf(stderr, "nat_punch peer=%s <- %s=%s [ConnectError] status=%s reason=%s\n", app->peer_id,
+                        app->rendezvous_connect ? "NTRS" : "Peer", nat_punch_endpoint_format(&attempt->remote, remote),
+                        utp_status_string(status), message);
+                nat_punch_fail(app, "connect_error");
             },
             &app);
         utp_context_set_on_new_connection(app.context, nat_punch_new_connection, &app);
@@ -748,8 +872,14 @@ int main(int argc, char** argv)
             fprintf(stderr, "nat_punch signal_setup_failed\n");
             return EXIT_FAILURE;
         }
-        fprintf(stdout, "nat_punch bind=%s:%" PRIu16 " nat=%s:%" PRIu16 " ntrs=%s:%" PRIu16 "\n", bind_ip, actual_port,
-                nat_numeric.c_str(), nat_port, ntrs_numeric.c_str(), ntrs_port);
+        LOG("nat_punch peer=%s [Bound] local=%s:%" PRIu16 " interface=%s mode=%s nat=%s:%" PRIu16 " ntrs=%s:%" PRIu16,
+            app.peer_id, bind_ip, actual_port, interface_name.empty() ? "<any>" : interface_name.c_str(),
+            register_requested
+                ? "register"
+                : (rendezvous_connect ? "rendezvous-connect" : (listen_requested ? "listen" : "nat-probe")),
+            nat_numeric.c_str(), nat_port, ntrs_required ? ntrs_numeric.c_str() : "<none>",
+            ntrs_required ? ntrs_port : 0u);
+        LOG("nat_punch peer=%s -> NAT=%s:%" PRIu16 " [PrimaryBinding]", app.peer_id, nat_numeric.c_str(), nat_port);
         status = utp_context_probe_nat(app.context, &probe_options, nat_punch_nat_complete, &app);
         if (status != UTP_STATUS_OK) {
             fprintf(stderr, "nat_punch nat_probe_start_failed status=%s; continue as UNKNOWN\n",
