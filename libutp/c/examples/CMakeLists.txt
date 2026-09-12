@@ -44,4 +44,5 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 target_include_directories(ntrsc SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
+target_include_directories(nat_punch SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
 target_compile_features(ntrsc PRIVATE cxx_std_11)

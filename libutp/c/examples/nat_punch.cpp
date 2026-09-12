@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <event2/event.h>
 #include <event2/util.h>
+#include <utils/CLI11.hpp>
 #include <utp/utp.h>
 
 static const size_t kPayloadSize = 16384u;
@@ -136,45 +137,6 @@ static const char* nat_punch_endpoint_format(const utp_endpoint_t* endpoint, cha
     return output;
 }
 
-static bool nat_punch_parse_u64(const char* text, uint64_t* value)
-{
-    char*              end = NULL;
-    unsigned long long parsed;
-
-    if (text == NULL || value == NULL || *text == '\0') return false;
-    errno  = 0;
-    parsed = strtoull(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') return false;
-    *value = static_cast<uint64_t>(parsed);
-    return true;
-}
-
-static bool nat_punch_parse_u16(const char* text, uint16_t* value)
-{
-    uint64_t parsed;
-
-    if (!nat_punch_parse_u64(text, &parsed) || parsed == 0u || parsed > UINT16_MAX) return false;
-    *value = static_cast<uint16_t>(parsed);
-    return true;
-}
-
-static bool nat_punch_parse_encryption(const char* text, utp_encryption_mode_t* mode)
-{
-    if (strcmp(text, "none") == 0) {
-        *mode = UTP_ENCRYPTION_NONE;
-        return true;
-    }
-    if (strcmp(text, "aes128") == 0) {
-        *mode = UTP_ENCRYPTION_AES_GCM_128;
-        return true;
-    }
-    if (strcmp(text, "aes256") == 0) {
-        *mode = UTP_ENCRYPTION_AES_GCM_256;
-        return true;
-    }
-    return false;
-}
-
 static bool nat_punch_resolve(const std::string& input, int family, std::string* output)
 {
     addrinfo  hints  = {};
@@ -207,34 +169,6 @@ static uint64_t nat_punch_now_ms()
 
     if (evutil_gettimeofday(&value, NULL) != 0) return 0u;
     return static_cast<uint64_t>(value.tv_sec) * UINT64_C(1000) + static_cast<uint64_t>(value.tv_usec) / UINT64_C(1000);
-}
-
-static void nat_punch_usage(const char* program)
-{
-    LOG("Usage: %s -i ID -n IP [-N PORT]", program);
-    LOG("          [-s IP [-S PORT] -r]");
-    LOG("          [-l | -t ID (-a IP -p PORT | -s IP [-S PORT])] [-b IP -P PORT]");
-    LOG("          [-I NAME] [-d N] [-T N] [-M N]");
-    LOG("          [-e none|aes128|aes256] [-6]");
-    LOG("");
-    LOG("  -i, --peer-id ID             Local Context peer id");
-    LOG("  -n, --nat-address IP         NAT probe service address");
-    LOG("  -N, --nat-port PORT          NAT probe service port (default: 24001)");
-    LOG("  -s, --ntrs-address IP        NTRS address; required by -r or NTRS rendezvous");
-    LOG("  -S, --ntrs-port PORT         NTRS port (default: 24000)");
-    LOG("  -r, --register               Register this Context at NTRS");
-    LOG("  -l, --listen                 Wait for one direct incoming connection");
-    LOG("  -t, --target-peer-id ID      Peer id to connect to");
-    LOG("  -a, --peer-address IP        Direct peer address");
-    LOG("  -p, --peer-port PORT         Direct peer port");
-    LOG("  -b, --bind-ip IP             Local bind address");
-    LOG("  -P, --bind-port PORT         Local bind port");
-    LOG("  -I, --bind-interface NAME    Local network interface");
-    LOG("  -d, --send-bytes N            Payload bytes to send");
-    LOG("  -T, --timeout-ms N           Direct connection and transfer timeout");
-    LOG("  -M, --nat-timeout-ms N       NAT probe phase timeout");
-    LOG("  -e, --encryption MODE        none, aes128, or aes256");
-    LOG("  -6, --ipv6                   Use IPv6");
 }
 
 static bool nat_punch_parse_header(const char* header, const char* prefix, uint64_t* value)
@@ -667,6 +601,7 @@ static void nat_punch_signal(evutil_socket_t, short, void* user_data)
 
 int main(int argc, char** argv)
 {
+    CLI::App              cli{"libutp NAT detection and rendezvous client"};
     std::string           peer_id;
     std::string           nat_address;
     std::string           ntrs_address;
@@ -674,6 +609,7 @@ int main(int argc, char** argv)
     std::string           bind_address;
     std::string           interface_name;
     std::string           target_peer_id;
+    std::string           encryption_name    = "none";
     uint16_t              nat_port           = 24001u;
     uint16_t              ntrs_port          = 24000u;
     uint16_t              peer_port          = 0u;
@@ -685,70 +621,60 @@ int main(int argc, char** argv)
     bool                  register_requested = false;
     bool                  listen_requested   = false;
     bool                  use_ipv6           = false;
-    bool                  has_direct_peer    = false;
-    bool                  rendezvous_connect = false;
-    int                   index;
 
-    for (index = 1; index < argc; ++index) {
-        const char* argument = argv[index];
-        if (strcmp(argument, "-i") == 0 || strcmp(argument, "--peer-id") == 0) {
-            if (++index >= argc) goto usage;
-            peer_id = argv[index];
-        } else if (strcmp(argument, "-n") == 0 || strcmp(argument, "--nat-address") == 0) {
-            if (++index >= argc) goto usage;
-            nat_address = argv[index];
-        } else if (strcmp(argument, "-N") == 0 || strcmp(argument, "--nat-port") == 0) {
-            if (++index >= argc || !nat_punch_parse_u16(argv[index], &nat_port)) goto usage;
-        } else if (strcmp(argument, "-s") == 0 || strcmp(argument, "--ntrs-address") == 0) {
-            if (++index >= argc) goto usage;
-            ntrs_address = argv[index];
-        } else if (strcmp(argument, "-S") == 0 || strcmp(argument, "--ntrs-port") == 0) {
-            if (++index >= argc || !nat_punch_parse_u16(argv[index], &ntrs_port)) goto usage;
-        } else if (strcmp(argument, "-t") == 0 || strcmp(argument, "--target-peer-id") == 0) {
-            if (++index >= argc) goto usage;
-            target_peer_id = argv[index];
-        } else if (strcmp(argument, "-a") == 0 || strcmp(argument, "--peer-address") == 0) {
-            if (++index >= argc) goto usage;
-            peer_address = argv[index];
-        } else if (strcmp(argument, "-p") == 0 || strcmp(argument, "--peer-port") == 0) {
-            if (++index >= argc || !nat_punch_parse_u16(argv[index], &peer_port)) goto usage;
-        } else if (strcmp(argument, "-b") == 0 || strcmp(argument, "--bind-ip") == 0) {
-            if (++index >= argc) goto usage;
-            bind_address = argv[index];
-        } else if (strcmp(argument, "-P") == 0 || strcmp(argument, "--bind-port") == 0) {
-            if (++index >= argc || !nat_punch_parse_u16(argv[index], &bind_port)) goto usage;
-        } else if (strcmp(argument, "-I") == 0 || strcmp(argument, "--bind-interface") == 0 ||
-                   strcmp(argument, "--interface") == 0) {
-            if (++index >= argc) goto usage;
-            interface_name = argv[index];
-        } else if (strcmp(argument, "-d") == 0 || strcmp(argument, "--send-bytes") == 0) {
-            if (++index >= argc || !nat_punch_parse_u64(argv[index], &send_bytes)) goto usage;
-        } else if (strcmp(argument, "-T") == 0 || strcmp(argument, "--timeout-ms") == 0) {
-            if (++index >= argc || !nat_punch_parse_u64(argv[index], &timeout_ms)) goto usage;
-        } else if (strcmp(argument, "-M") == 0 || strcmp(argument, "--nat-timeout-ms") == 0) {
-            if (++index >= argc || !nat_punch_parse_u64(argv[index], &nat_timeout_ms)) goto usage;
-        } else if (strcmp(argument, "-e") == 0 || strcmp(argument, "--encryption") == 0) {
-            if (++index >= argc || !nat_punch_parse_encryption(argv[index], &encryption)) goto usage;
-        } else if (strcmp(argument, "-r") == 0 || strcmp(argument, "--register") == 0) {
-            register_requested = true;
-        } else if (strcmp(argument, "-l") == 0 || strcmp(argument, "--listen") == 0) {
-            listen_requested = true;
-        } else if (strcmp(argument, "-6") == 0 || strcmp(argument, "--ipv6") == 0) {
-            use_ipv6 = true;
-        } else {
-            goto usage;
-        }
+    cli.add_option("-i,--peer-id", peer_id, "Local Context peer ID (1-128 bytes)")->required();
+    cli.add_option("-n,--nat-address", nat_address, "NAT probe service address")->required();
+    cli.add_option("-N,--nat-port", nat_port, "NAT probe service port (default: 24001)")
+        ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
+    cli.add_option("-s,--ntrs-address", ntrs_address, "NTRS address");
+    cli.add_option("-S,--ntrs-port", ntrs_port, "NTRS port (default: 24000)")
+        ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
+    cli.add_flag("-r,--register", register_requested, "Register this Context at NTRS");
+    cli.add_flag("-l,--listen", listen_requested, "Wait for one direct incoming connection");
+    cli.add_option("-t,--target-peer-id", target_peer_id, "Peer ID to connect to");
+    cli.add_option("-a,--peer-address", peer_address, "Direct peer address");
+    cli.add_option("-p,--peer-port", peer_port, "Direct peer port")
+        ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
+    cli.add_option("-b,--bind-ip", bind_address, "Local bind address");
+    cli.add_option("-P,--bind-port", bind_port, "Local bind port")
+        ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
+    cli.add_option("-I,--bind-interface,--interface", interface_name, "Local network interface");
+    cli.add_option("-d,--send-bytes", send_bytes, "Payload bytes to send");
+    cli.add_option("-T,--timeout-ms", timeout_ms, "Direct connection and transfer timeout")->check(CLI::PositiveNumber);
+    cli.add_option("-M,--nat-timeout-ms", nat_timeout_ms, "NAT probe phase timeout")->check(CLI::PositiveNumber);
+    cli.add_option("-e,--encryption", encryption_name, "Encryption mode: none, aes128, or aes256")
+        ->check(CLI::IsMember({"none", "aes128", "aes256"}));
+    cli.add_flag("-6,--ipv6", use_ipv6, "Use IPv6");
+
+    try {
+        cli.parse(argc, argv);
+    } catch (const CLI::CallForHelp&) {
+        LOG("%s", cli.help().c_str());
+        return EXIT_SUCCESS;
+    } catch (const CLI::ParseError& error) {
+        LOG("nat_punch argument_parse_failed: %s", error.what());
+        LOG("%s", cli.help().c_str());
+        return error.get_exit_code();
     }
-    has_direct_peer    = !peer_address.empty() || peer_port != 0u;
-    rendezvous_connect = !target_peer_id.empty() && !has_direct_peer;
+
+    if (encryption_name == "aes128")
+        encryption = UTP_ENCRYPTION_AES_GCM_128;
+    else if (encryption_name == "aes256")
+        encryption = UTP_ENCRYPTION_AES_GCM_256;
+
+    const bool has_direct_peer    = !peer_address.empty() || peer_port != 0u;
+    const bool rendezvous_connect = !target_peer_id.empty() && !has_direct_peer;
 
     if (peer_id.empty() || peer_id.size() > UTP_PEER_ID_MAX_LENGTH || nat_address.empty() || nat_port == 0u ||
         ((register_requested || rendezvous_connect) && (ntrs_address.empty() || ntrs_port == 0u)) ||
         target_peer_id.size() > UTP_PEER_ID_MAX_LENGTH ||
         (has_direct_peer && (peer_address.empty() || peer_port == 0u)) || (target_peer_id.empty() && has_direct_peer) ||
         (listen_requested && (!target_peer_id.empty() || register_requested)) || timeout_ms == 0u ||
-        nat_timeout_ms == 0u)
-        goto usage;
+        nat_timeout_ms == 0u) {
+        LOG("nat_punch argument_invalid");
+        LOG("%s", cli.help().c_str());
+        return 2;
+    }
 
     {
         const int               family = use_ipv6 ? AF_INET6 : AF_INET;
@@ -890,8 +816,4 @@ int main(int argc, char** argv)
         event_base_free(base);
         return app.failed ? EXIT_FAILURE : EXIT_SUCCESS;
     }
-
-usage:
-    nat_punch_usage(argv[0]);
-    return 2;
 }
