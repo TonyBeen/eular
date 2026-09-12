@@ -23,7 +23,7 @@ set(UTP_NTRS_SERVICE_SOURCES
     src/service_util.c
     src/tls_stream.c)
 
-add_library(utp_ntrs_service_core STATIC ${UTP_NTRS_SERVICE_SOURCES})
+add_library(utp_ntrs_service_core OBJECT ${UTP_NTRS_SERVICE_SOURCES})
 target_compile_features(utp_ntrs_service_core PUBLIC c_std_11)
 target_include_directories(utp_ntrs_service_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -62,7 +62,7 @@ add_library(utp_ntrs_service_runtime INTERFACE)
 target_link_libraries(utp_ntrs_service_runtime INTERFACE event_core event_pthreads Threads::Threads)
 target_link_libraries(utp_ntrs_service_core PUBLIC utp_ntrs_service_runtime)
 
-add_library(utp_ntrs_node_udp STATIC src/udp_probe.c)
+add_library(utp_ntrs_node_udp OBJECT src/udp_probe.c)
 target_compile_features(utp_ntrs_node_udp PUBLIC c_std_11)
 target_include_directories(utp_ntrs_node_udp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(utp_ntrs_node_udp PRIVATE
@@ -83,7 +83,7 @@ endif()
 
 if(UTP_NTRS_BUILD_SERVICES)
     add_executable(ntrs app/ntrs.cpp app/app_log.c)
-    target_link_libraries(ntrs PRIVATE utp_ntrs_service_core utp_ntrs_service_runtime)
+    target_link_libraries(ntrs PRIVATE utp_ntrs_service_core utp_ntrs_service_runtime ssl crypto)
     target_include_directories(ntrs PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/../c/src"
@@ -98,10 +98,8 @@ if(UTP_NTRS_BUILD_SERVICES)
     target_link_libraries(nat_detect_hub PRIVATE
         utp_ntrs_service_core
         utp_ntrs_service_runtime
-        -Wl,--start-group
         ssl
-        crypto
-        -Wl,--end-group)
+        crypto)
     target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_include_directories(nat_detect_hub SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
     target_compile_features(nat_detect_hub PRIVATE cxx_std_11)
@@ -116,13 +114,10 @@ if(UTP_NTRS_BUILD_SERVICES)
     add_executable(nat_detect_node app/nat_detect_node.cpp app/app_log.c)
     target_link_libraries(nat_detect_node PRIVATE
         utp_ntrs_service_runtime
-        -Wl,--start-group
-        $<TARGET_FILE:utp_ntrs_node_udp>
-        $<TARGET_FILE:utp_ntrs_service_core>
+        utp_ntrs_node_udp
+        utp_ntrs_service_core
         ssl
-        crypto
-        -Wl,--end-group)
-    add_dependencies(nat_detect_node utp_ntrs_node_udp utp_ntrs_service_core)
+        crypto)
     target_include_directories(nat_detect_node PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -141,13 +136,10 @@ if(BUILD_TESTING AND UTP_NTRS_BUILD_TESTS)
     add_executable(utp_ntrs_service_test test/test_service.c)
     target_link_libraries(utp_ntrs_service_test PRIVATE
         utp_ntrs_service_runtime
-        -Wl,--start-group
-        $<TARGET_FILE:utp_ntrs_node_udp>
-        $<TARGET_FILE:utp_ntrs_service_core>
+        utp_ntrs_node_udp
+        utp_ntrs_service_core
         ssl
-        crypto
-        -Wl,--end-group)
-    add_dependencies(utp_ntrs_service_test utp_ntrs_node_udp utp_ntrs_service_core)
+        crypto)
     target_include_directories(utp_ntrs_service_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -166,11 +158,8 @@ if(BUILD_TESTING AND UTP_NTRS_BUILD_TESTS)
         target_link_libraries(utp_ntrs_rendezvous_test PRIVATE
             utp_ntrs_service_core
             utp_ntrs_service_runtime
-            -Wl,--start-group
             ssl
-            crypto
-            -Wl,--end-group)
-        add_dependencies(utp_ntrs_rendezvous_test ntrs)
+            crypto)
         target_include_directories(utp_ntrs_rendezvous_test PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/../c/src"
             "${CMAKE_CURRENT_SOURCE_DIR}/../c/include")

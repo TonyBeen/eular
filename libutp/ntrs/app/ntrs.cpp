@@ -2316,14 +2316,12 @@ bool NtrsServer::start(const utp_ntrs_endpoint_t& bind_endpoint, const utp_ntrs_
     registration_timeout_ms_ = registration_timeout_ms;
     keepalive_interval_ms_   = keepalive_interval_ms;
     for (size_t index = 0u; index < calibration_ports.size(); ++index) {
-        utp_ntrs_endpoint_t calibration_bind_endpoint       = bind_endpoint;
         utp_ntrs_endpoint_t calibration_advertised_endpoint = advertised_endpoint;
 
         if (calibration_ports[index] == 0u || calibration_ports[index] == bind_endpoint.port) return false;
         for (size_t previous = 0u; previous < index; ++previous) {
             if (calibration_ports[previous] == calibration_ports[index]) return false;
         }
-        calibration_bind_endpoint.port       = calibration_ports[index];
         calibration_advertised_endpoint.port = calibration_ports[index];
         if (!endpoint_to_address(calibration_advertised_endpoint, &calibration_endpoints_[index]))
             return false;
