@@ -4,11 +4,13 @@ set(UTP_C_EXAMPLES
     utp_c_echo_server
     utp_c_echo_client
     ntrsc
+    nat_punch
 )
 
 add_executable(utp_c_echo_server echo_server.c)
 add_executable(utp_c_echo_client echo_client.c)
 add_executable(ntrsc ntrsc.cpp)
+add_executable(nat_punch nat_punch.cpp)
 
 foreach(example_target IN LISTS UTP_C_EXAMPLES)
     target_link_libraries(${example_target} PRIVATE utp_c event_core Threads::Threads)
@@ -33,6 +35,11 @@ foreach(example_target IN LISTS UTP_C_EXAMPLES)
         target_compile_options(${example_target} PRIVATE /W4 /WX)
     endif()
 endforeach()
+
+target_compile_features(nat_punch PRIVATE cxx_std_11)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(nat_punch PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
+endif()
 
 target_include_directories(ntrsc SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
 target_compile_features(ntrsc PRIVATE cxx_std_11)
