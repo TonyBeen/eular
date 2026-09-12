@@ -21,12 +21,14 @@ foreach(example_target IN LISTS UTP_C_EXAMPLES)
         target_link_options(${example_target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
     endif()
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        if(example_target STREQUAL "ntrsc")
+        if(example_target STREQUAL "ntrsc" OR example_target STREQUAL "nat_punch")
             target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
                 -Wformat=2)
-            # C 日志桥接到 C++ 时需要透传受控的可变格式串。
-            set_source_files_properties(ntrsc.cpp PROPERTIES
-                COMPILE_OPTIONS "-Wno-format-nonliteral")
+            if(example_target STREQUAL "ntrsc")
+                # C 日志桥接到 C++ 时需要透传受控的可变格式串。
+                set_source_files_properties(ntrsc.cpp PROPERTIES
+                    COMPILE_OPTIONS "-Wno-format-nonliteral")
+            endif()
         else()
             target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
                 -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
