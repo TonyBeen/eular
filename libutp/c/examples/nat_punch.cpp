@@ -168,17 +168,17 @@ static uint64_t nat_punch_now_ms()
 static void nat_punch_usage(const char* program)
 {
     fprintf(stderr,
-            "Usage: %s -i ID -n IP -N PORT\n"
-            "          [-s IP -S PORT -r]\n"
-            "          [-l | -t ID -a IP -p PORT] [-b IP -P PORT]\n"
+            "Usage: %s -i ID -n IP [-N PORT]\n"
+            "          [-s IP [-S PORT] -r]\n"
+            "          [-l | -t ID (-a IP -p PORT | -s IP [-S PORT])] [-b IP -P PORT]\n"
             "          [-I NAME] [-d N] [-T N] [-M N]\n"
             "          [-e none|aes128|aes256] [-6]\n"
             "\n"
             "  -i, --peer-id ID             Local Context peer id\n"
             "  -n, --nat-address IP         NAT probe service address\n"
-            "  -N, --nat-port PORT          NAT probe service port\n"
-            "  -s, --ntrs-address IP        NTRS address (required by -r)\n"
-            "  -S, --ntrs-port PORT         NTRS port (required by -r)\n"
+            "  -N, --nat-port PORT          NAT probe service port (default: 24001)\n"
+            "  -s, --ntrs-address IP        NTRS address; required by -r or NTRS rendezvous\n"
+            "  -S, --ntrs-port PORT         NTRS port (default: 24000)\n"
             "  -r, --register               Register this Context at NTRS\n"
             "  -l, --listen                 Wait for one direct incoming connection\n"
             "  -t, --target-peer-id ID      Peer id to connect to\n"
@@ -560,8 +560,8 @@ int main(int argc, char** argv)
     std::string           bind_address;
     std::string           interface_name;
     std::string           target_peer_id;
-    uint16_t              nat_port           = 0u;
-    uint16_t              ntrs_port          = 0u;
+    uint16_t              nat_port           = 24001u;
+    uint16_t              ntrs_port          = 24000u;
     uint16_t              peer_port          = 0u;
     uint16_t              bind_port          = 0u;
     uint64_t              send_bytes         = 0u;
@@ -571,6 +571,8 @@ int main(int argc, char** argv)
     bool                  register_requested = false;
     bool                  listen_requested   = false;
     bool                  use_ipv6           = false;
+    bool                  has_direct_peer    = false;
+    bool                  rendezvous_connect = false;
     int                   index;
 
     for (index = 1; index < argc; ++index) {
@@ -623,11 +625,14 @@ int main(int argc, char** argv)
             goto usage;
         }
     }
+    has_direct_peer    = !peer_address.empty() || peer_port != 0u;
+    rendezvous_connect = !target_peer_id.empty() && !has_direct_peer;
+
     if (peer_id.empty() || peer_id.size() > UTP_PEER_ID_MAX_LENGTH || nat_address.empty() || nat_port == 0u ||
-        (register_requested && (ntrs_address.empty() || ntrs_port == 0u)) ||
+        ((register_requested || rendezvous_connect) && (ntrs_address.empty() || ntrs_port == 0u)) ||
         target_peer_id.size() > UTP_PEER_ID_MAX_LENGTH ||
-        ((!target_peer_id.empty()) != (!peer_address.empty() && peer_port != 0u)) ||
-        (target_peer_id.empty() && (!peer_address.empty() || peer_port != 0u)) ||
+        (has_direct_peer && (peer_address.empty() || peer_port == 0u)) ||
+        (target_peer_id.empty() && has_direct_peer) ||
         (listen_requested && (!target_peer_id.empty() || register_requested)) || timeout_ms == 0u ||
         nat_timeout_ms == 0u)
         goto usage;
@@ -646,10 +651,10 @@ int main(int argc, char** argv)
         uint16_t                actual_port     = 0u;
         utp_status_t            status;
 
-        const bool              ntrs_required = register_requested;
+        const bool              ntrs_required = register_requested || rendezvous_connect;
         if (!nat_punch_resolve(nat_address, family, &nat_numeric) ||
             (ntrs_required && !nat_punch_resolve(ntrs_address, family, &ntrs_numeric)) ||
-            (!target_peer_id.empty() && !nat_punch_resolve(peer_address, family, &peer_numeric))) {
+            (has_direct_peer && !nat_punch_resolve(peer_address, family, &peer_numeric))) {
             fprintf(stderr, "nat_punch address_resolve_failed\n");
             return EXIT_FAILURE;
         }
@@ -702,9 +707,11 @@ int main(int argc, char** argv)
         app.register_options.keepalive_interval_ms     = 30000u;
         app.register_options.keepalive_timeout_ms      = 3000u;
         app.connect_options                            = utp_connect_options_t();
-        app.connect_options.address                    = target_peer_id.empty() ? NULL : peer_numeric.c_str();
+        app.connect_options.address = target_peer_id.empty()
+                                          ? NULL
+                                          : (rendezvous_connect ? ntrs_numeric.c_str() : peer_numeric.c_str());
         app.connect_options.target_peer_id             = app.target_peer_id;
-        app.connect_options.port                       = peer_port;
+        app.connect_options.port                       = rendezvous_connect ? ntrs_port : peer_port;
         app.connect_options.timeout_ms                 = 1000u;
         app.connect_options.retries                    = 5;
         app.connect_options.encryption                 = encryption;
