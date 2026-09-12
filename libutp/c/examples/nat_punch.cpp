@@ -211,32 +211,30 @@ static uint64_t nat_punch_now_ms()
 
 static void nat_punch_usage(const char* program)
 {
-    fprintf(stderr,
-            "Usage: %s -i ID -n IP [-N PORT]\n"
-            "          [-s IP [-S PORT] -r]\n"
-            "          [-l | -t ID (-a IP -p PORT | -s IP [-S PORT])] [-b IP -P PORT]\n"
-            "          [-I NAME] [-d N] [-T N] [-M N]\n"
-            "          [-e none|aes128|aes256] [-6]\n"
-            "\n"
-            "  -i, --peer-id ID             Local Context peer id\n"
-            "  -n, --nat-address IP         NAT probe service address\n"
-            "  -N, --nat-port PORT          NAT probe service port (default: 24001)\n"
-            "  -s, --ntrs-address IP        NTRS address; required by -r or NTRS rendezvous\n"
-            "  -S, --ntrs-port PORT         NTRS port (default: 24000)\n"
-            "  -r, --register               Register this Context at NTRS\n"
-            "  -l, --listen                 Wait for one direct incoming connection\n"
-            "  -t, --target-peer-id ID      Peer id to connect to\n"
-            "  -a, --peer-address IP        Direct peer address\n"
-            "  -p, --peer-port PORT         Direct peer port\n"
-            "  -b, --bind-ip IP             Local bind address\n"
-            "  -P, --bind-port PORT         Local bind port\n"
-            "  -I, --bind-interface NAME    Local network interface\n"
-            "  -d, --send-bytes N            Payload bytes to send\n"
-            "  -T, --timeout-ms N           Direct connection and transfer timeout\n"
-            "  -M, --nat-timeout-ms N       NAT probe phase timeout\n"
-            "  -e, --encryption MODE        none, aes128, or aes256\n"
-            "  -6, --ipv6                   Use IPv6\n",
-            program);
+    LOG("Usage: %s -i ID -n IP [-N PORT]", program);
+    LOG("          [-s IP [-S PORT] -r]");
+    LOG("          [-l | -t ID (-a IP -p PORT | -s IP [-S PORT])] [-b IP -P PORT]");
+    LOG("          [-I NAME] [-d N] [-T N] [-M N]");
+    LOG("          [-e none|aes128|aes256] [-6]");
+    LOG("");
+    LOG("  -i, --peer-id ID             Local Context peer id");
+    LOG("  -n, --nat-address IP         NAT probe service address");
+    LOG("  -N, --nat-port PORT          NAT probe service port (default: 24001)");
+    LOG("  -s, --ntrs-address IP        NTRS address; required by -r or NTRS rendezvous");
+    LOG("  -S, --ntrs-port PORT         NTRS port (default: 24000)");
+    LOG("  -r, --register               Register this Context at NTRS");
+    LOG("  -l, --listen                 Wait for one direct incoming connection");
+    LOG("  -t, --target-peer-id ID      Peer id to connect to");
+    LOG("  -a, --peer-address IP        Direct peer address");
+    LOG("  -p, --peer-port PORT         Direct peer port");
+    LOG("  -b, --bind-ip IP             Local bind address");
+    LOG("  -P, --bind-port PORT         Local bind port");
+    LOG("  -I, --bind-interface NAME    Local network interface");
+    LOG("  -d, --send-bytes N            Payload bytes to send");
+    LOG("  -T, --timeout-ms N           Direct connection and transfer timeout");
+    LOG("  -M, --nat-timeout-ms N       NAT probe phase timeout");
+    LOG("  -e, --encryption MODE        none, aes128, or aes256");
+    LOG("  -6, --ipv6                   Use IPv6");
 }
 
 static bool nat_punch_parse_header(const char* header, const char* prefix, uint64_t* value)
@@ -258,9 +256,8 @@ static void nat_punch_break(NatPunchApp* app, bool failed, const char* reason)
     if (app->finished) return;
     app->finished = true;
     app->failed   = failed;
-    fprintf(failed ? stderr : stdout,
-            "nat_punch result=%s reason=%s sent_bytes=%" PRIu64 " received_bytes=%" PRIu64 " elapsed_ms=%" PRIu64 "\n",
-            failed ? "FAIL" : "PASS", reason, app->sent_bytes, app->received_bytes, nat_punch_now_ms() - app->start_ms);
+    LOG("nat_punch result=%s reason=%s sent_bytes=%" PRIu64 " received_bytes=%" PRIu64 " elapsed_ms=%" PRIu64,
+        failed ? "FAIL" : "PASS", reason, app->sent_bytes, app->received_bytes, nat_punch_now_ms() - app->start_ms);
     if (app->timeout_event != NULL) event_del(app->timeout_event);
     if (app->connection != NULL && failed) utp_connection_close(app->connection);
     event_base_loopbreak(app->base);
@@ -564,7 +561,7 @@ static bool nat_punch_new_connection(const utp_new_connection_info_t* info, void
         app->peer_id, nat_punch_endpoint_format(&info->remote, remote), info->local_cid, info->peer_cid,
         nat_punch_encryption_name(info->encryption));
     if (utp_context_accept(app->context) != UTP_STATUS_OK) {
-        fprintf(stderr, "nat_punch peer=%s [ConnectionRejected] reason=accept_failed\n", app->peer_id);
+        LOG("nat_punch peer=%s [ConnectionRejected] reason=accept_failed", app->peer_id);
         return false;
     }
     LOG("nat_punch peer=%s [ConnectionAccepted]", app->peer_id);
@@ -584,14 +581,13 @@ static void nat_punch_connection_error(utp_connection_t* connection, const utp_c
         remote_port = description.remote_port;
     }
     if (info != NULL) {
-        fprintf(stderr,
-                "nat_punch peer=%s <- Peer=%s:%" PRIu16 " [ConnectionError] status=%s peer_error=%" PRIu16
-                " peer_initiated=%s reason=%.*s\n",
-                app->peer_id, remote, remote_port, utp_status_string(info->status), info->peer_error_code,
-                info->peer_initiated ? "true" : "false", static_cast<int>(info->reason_length),
-                info->reason == NULL ? "" : reinterpret_cast<const char*>(info->reason));
+        LOG("nat_punch peer=%s <- Peer=%s:%" PRIu16 " [ConnectionError] status=%s peer_error=%" PRIu16
+            " peer_initiated=%s reason=%.*s",
+            app->peer_id, remote, remote_port, utp_status_string(info->status), info->peer_error_code,
+            info->peer_initiated ? "true" : "false", static_cast<int>(info->reason_length),
+            info->reason == NULL ? "" : reinterpret_cast<const char*>(info->reason));
     } else {
-        fprintf(stderr, "nat_punch peer=%s [ConnectionError] status=unknown\n", app->peer_id);
+        LOG("nat_punch peer=%s [ConnectionError] status=unknown", app->peer_id);
     }
 
     if (!app->finished && (info == NULL || info->status != UTP_STATUS_OK))
@@ -650,7 +646,7 @@ static void nat_punch_nat_complete(utp_context_t*, utp_status_t status, const ut
             nat_punch_endpoint_format(&result->secondary_mapped_endpoint, secondary),
             static_cast<unsigned>(result->port_sample_count), result->primary_rtt_ms, result->secondary_rtt_ms);
     } else {
-        fprintf(stderr, "nat_punch nat_probe_failed status=%s; continue as UNKNOWN\n", utp_status_string(status));
+        LOG("nat_punch nat_probe_failed status=%s; continue as UNKNOWN", utp_status_string(status));
         if (!app->register_requested && !app->listen_requested && app->target_peer_id == NULL) {
             nat_punch_fail(app, "nat_probe_failed");
             return;
@@ -772,21 +768,21 @@ int main(int argc, char** argv)
         if (!nat_punch_resolve(nat_address, family, &nat_numeric) ||
             (ntrs_required && !nat_punch_resolve(ntrs_address, family, &ntrs_numeric)) ||
             (has_direct_peer && !nat_punch_resolve(peer_address, family, &peer_numeric))) {
-            fprintf(stderr, "nat_punch address_resolve_failed\n");
+            LOG("nat_punch address_resolve_failed");
             return EXIT_FAILURE;
         }
         if (bind_address.empty()) {
             bind_ip = use_ipv6 ? "::" : "0.0.0.0";
         } else {
             if (!nat_punch_resolve(bind_address, family, &bind_numeric)) {
-                fprintf(stderr, "nat_punch bind_address_resolve_failed\n");
+                LOG("nat_punch bind_address_resolve_failed");
                 return EXIT_FAILURE;
             }
             bind_ip = bind_numeric.c_str();
         }
         base = event_base_new();
         if (base == NULL) {
-            fprintf(stderr, "nat_punch event_base_create_failed\n");
+            LOG("nat_punch event_base_create_failed");
             return EXIT_FAILURE;
         }
         context_options.event_base = base;
@@ -800,7 +796,7 @@ int main(int argc, char** argv)
                                       interface_name.empty() ? NULL : interface_name.c_str(), &actual_port);
         }
         if (status != UTP_STATUS_OK) {
-            fprintf(stderr, "nat_punch context_setup_failed status=%s\n", utp_status_string(status));
+            LOG("nat_punch context_setup_failed status=%s", utp_status_string(status));
             if (app.context != NULL) utp_context_destroy(app.context);
             event_base_free(base);
             return EXIT_FAILURE;
@@ -836,7 +832,7 @@ int main(int argc, char** argv)
         app.request_length =
             static_cast<size_t>(snprintf(app.request, sizeof(app.request), "DATA %" PRIu64 "\n", send_bytes));
         if (app.request_length >= sizeof(app.request)) {
-            fprintf(stderr, "nat_punch request_format_failed\n");
+            LOG("nat_punch request_format_failed");
             utp_context_destroy(app.context);
             event_base_free(base);
             return EXIT_FAILURE;
@@ -844,14 +840,14 @@ int main(int argc, char** argv)
         utp_context_set_on_connected(app.context, nat_punch_connected, &app);
         utp_context_set_on_connect_error(
             app.context,
-            [](utp_status_t status, const char* message, const utp_connect_attempt_info_t* attempt, void* data) {
-                NatPunchApp* app = static_cast<NatPunchApp*>(data);
+            [](utp_status_t error_status, const char* message, const utp_connect_attempt_info_t* attempt, void* data) {
+                NatPunchApp* callback_app = static_cast<NatPunchApp*>(data);
                 char         remote[80];
 
-                fprintf(stderr, "nat_punch peer=%s <- %s=%s [ConnectError] status=%s reason=%s\n", app->peer_id,
-                        app->rendezvous_connect ? "NTRS" : "Peer", nat_punch_endpoint_format(&attempt->remote, remote),
-                        utp_status_string(status), message);
-                nat_punch_fail(app, "connect_error");
+                LOG("nat_punch peer=%s <- %s=%s [ConnectError] status=%s reason=%s", callback_app->peer_id,
+                    callback_app->rendezvous_connect ? "NTRS" : "Peer",
+                    nat_punch_endpoint_format(&attempt->remote, remote), utp_status_string(error_status), message);
+                nat_punch_fail(callback_app, "connect_error");
             },
             &app);
         utp_context_set_on_new_connection(app.context, nat_punch_new_connection, &app);
@@ -869,7 +865,7 @@ int main(int argc, char** argv)
         app.signal_term = evsignal_new(base, SIGTERM, nat_punch_signal, &app);
         if (app.signal_int == NULL || app.signal_term == NULL || event_add(app.signal_int, NULL) != 0 ||
             event_add(app.signal_term, NULL) != 0) {
-            fprintf(stderr, "nat_punch signal_setup_failed\n");
+            LOG("nat_punch signal_setup_failed");
             return EXIT_FAILURE;
         }
         LOG("nat_punch peer=%s [Bound] local=%s:%" PRIu16 " interface=%s mode=%s nat=%s:%" PRIu16 " ntrs=%s:%" PRIu16,
@@ -882,8 +878,7 @@ int main(int argc, char** argv)
         LOG("nat_punch peer=%s -> NAT=%s:%" PRIu16 " [PrimaryBinding]", app.peer_id, nat_numeric.c_str(), nat_port);
         status = utp_context_probe_nat(app.context, &probe_options, nat_punch_nat_complete, &app);
         if (status != UTP_STATUS_OK) {
-            fprintf(stderr, "nat_punch nat_probe_start_failed status=%s; continue as UNKNOWN\n",
-                    utp_status_string(status));
+            LOG("nat_punch nat_probe_start_failed status=%s; continue as UNKNOWN", utp_status_string(status));
             if (!app.nat_finished) nat_punch_nat_complete(app.context, status, NULL, &app);
         }
         if (!app.finished) event_base_dispatch(base);
