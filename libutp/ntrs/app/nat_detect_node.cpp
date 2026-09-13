@@ -122,7 +122,7 @@ static bool nat_detect_node_send_assignment_request(nat_detect_node_t* node, uin
 
         char hub[64];
 
-        (void)fprintf(stderr, "nat_detect_node %s -> hub=%s [AssignmentRequest] family=%u version=%llu roles=%u\n",
+        (void)fprintf(stderr, "%s -> hub=%s [AssignmentRequest] family=%u version=%llu roles=%u\n",
                       nat_detect_node_instance(&node->registration.instance, local),
                       utp_ntrs_endpoint_format(&node->hub_endpoint, hub, sizeof(hub)), (uint32_t)assignment->family,
                       (unsigned long long)assignment->version, (uint32_t)failed_roles);
@@ -159,7 +159,7 @@ static void nat_detect_node_on_peer_failed(void* user_data, const utp_ntrs_node_
         char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
         char peer[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
-        (void)fprintf(stderr, "nat_detect_node event=peer_link_failed node=%s peer=%s\n",
+        (void)fprintf(stderr, "event=peer_link_failed node=%s peer=%s\n",
                       nat_detect_node_instance(&node->registration.instance, local),
                       nat_detect_node_instance(remote, peer));
     }
@@ -168,7 +168,7 @@ static void nat_detect_node_on_peer_failed(void* user_data, const utp_ntrs_node_
 
         if (assignment->has_primary && utp_ntrs_node_instance_equal(&assignment->primary, remote)) {
             utp_ntrs_udp_server_set_primary(node->udp_server, NULL, NULL);
-            (void)fprintf(stderr, "nat_detect_node event=alternate_probe_disabled family=%u\n",
+            (void)fprintf(stderr, "event=alternate_probe_disabled family=%u\n",
                           (uint32_t)assignment->family);
             break;
         }
@@ -191,7 +191,7 @@ static void nat_detect_node_on_peer_active(void* user_data, const utp_ntrs_node_
 
             utp_ntrs_udp_server_set_primary(node->udp_server, remote, &assignment->primary_probe);
             (void)fprintf(stderr,
-                          "nat_detect_node %s <-> node=%s [ControlActive] family=%u alternate_probe=%s\n",
+                          "%s <-> node=%s [ControlActive] family=%u alternate_probe=%s\n",
                           nat_detect_node_instance(&node->registration.instance, local),
                           nat_detect_node_instance(remote, peer), (uint32_t)assignment->family,
                           utp_ntrs_endpoint_format(&assignment->primary_probe, endpoint, sizeof(endpoint)));
@@ -263,7 +263,7 @@ static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_node
 
     if (nat_detect_node_forward_seen(node, forward->forward_id)) {
         (void)fprintf(stderr,
-                      "nat_detect_node %s <- node=%s [ForwardBindingResponse] client=%s pn=%llu ignored=duplicate\n",
+                      "%s <- node=%s [ForwardBindingResponse] client=%s pn=%llu ignored=duplicate\n",
                       nat_detect_node_binding_label(forward->step), nat_detect_node_instance(source, source_text),
                       utp_ntrs_endpoint_format(&forward->client, client, sizeof(client)),
                       (unsigned long long)forward->packet_number);
@@ -271,7 +271,7 @@ static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_node
     }
     if (!utp_ntrs_udp_server_send_binding_response(node->udp_server, forward)) {
         (void)fprintf(stderr,
-                      "nat_detect_node %s <- node=%s [ForwardBindingResponse] client=%s; %s -> %s failed pn=%llu\n",
+                      "%s <- node=%s [ForwardBindingResponse] client=%s; %s -> %s failed pn=%llu\n",
                       nat_detect_node_binding_label(forward->step), nat_detect_node_instance(source, source_text),
                       utp_ntrs_endpoint_format(&forward->client, client, sizeof(client)),
                       nat_detect_node_instance(&node->registration.instance, local_text),
@@ -280,7 +280,7 @@ static void nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_node
         return;
     }
     (void)fprintf(stderr,
-                  "nat_detect_node %s <- node=%s [ForwardBindingResponse] client=%s; %s -> %s -> client=%s pn=%llu\n",
+                  "%s <- node=%s [ForwardBindingResponse] client=%s; %s -> %s -> client=%s pn=%llu\n",
                   nat_detect_node_binding_label(forward->step), nat_detect_node_instance(source, source_text),
                   utp_ntrs_endpoint_format(&forward->client, client, sizeof(client)),
                   nat_detect_node_instance(&node->registration.instance, local_text),
@@ -325,7 +325,7 @@ static void nat_detect_node_disconnect(nat_detect_node_t* node)
     if (node->hub_stream != NULL) {
         char local[UTP_NTRS_NODE_ID_TEXT_SIZE];
 
-        (void)fprintf(stderr, "nat_detect_node node=%s [HubDisconnected] registered=%u\n",
+        (void)fprintf(stderr, "node=%s [HubDisconnected] registered=%u\n",
                       nat_detect_node_instance(&node->registration.instance, local), node->registered ? 1u : 0u);
     }
     if (node->hub_stream != NULL) {
@@ -346,7 +346,7 @@ static void nat_detect_node_disconnect(nat_detect_node_t* node)
 static bool nat_detect_node_send(nat_detect_node_t* node, const uint8_t* message, size_t length)
 {
     if (node->hub_stream == NULL || !utp_ntrs_tls_stream_send(node->hub_stream, message, length)) {
-        (void)fprintf(stderr, "nat_detect_node event=hub_send_failed\n");
+        (void)fprintf(stderr, "event=hub_send_failed\n");
         nat_detect_node_schedule_disconnect(node);
         return false;
     }
@@ -367,7 +367,7 @@ static void nat_detect_node_on_ready(void* user_data)
         char node_id[UTP_NTRS_NODE_ID_TEXT_SIZE];
         char hub[64];
 
-        (void)fprintf(stderr, "nat_detect_node %s -> hub=%s [NodeRegister]\n",
+        (void)fprintf(stderr, "%s -> hub=%s [NodeRegister]\n",
                       nat_detect_node_instance(&node->registration.instance, node_id),
                       utp_ntrs_endpoint_format(&node->hub_endpoint, hub, sizeof(hub)));
     }
@@ -380,7 +380,7 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
     size_t                   length;
 
     if (!nat_detect_node_message_from_payload(type, payload, payload_length, message, &length)) {
-        (void)fprintf(stderr, "nat_detect_node event=hub_message_overflow type=%u\n", (uint32_t)type);
+        (void)fprintf(stderr, "event=hub_message_overflow type=%u\n", (uint32_t)type);
         nat_detect_node_schedule_disconnect(node);
         return;
     }
@@ -389,7 +389,7 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
 
         if (type != UTP_NTRS_CONTROL_NODE_REGISTER_OK ||
             !utp_ntrs_control_decode_registration_ok(message, length, &registration_ok)) {
-            (void)fprintf(stderr, "nat_detect_node event=hub_registration_rejected type=%u\n", (uint32_t)type);
+            (void)fprintf(stderr, "event=hub_registration_rejected type=%u\n", (uint32_t)type);
             nat_detect_node_schedule_disconnect(node);
             return;
         }
@@ -399,7 +399,7 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
             char public_endpoint[64];
 
             if (registration_ok.public_endpoint.family != family->family) {
-                (void)fprintf(stderr, "nat_detect_node event=hub_registration_family_mismatch\n");
+                (void)fprintf(stderr, "event=hub_registration_family_mismatch\n");
                 nat_detect_node_schedule_disconnect(node);
                 return;
             }
@@ -417,7 +417,7 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
                 char node_id[UTP_NTRS_NODE_ID_TEXT_SIZE];
                 char hub[64];
 
-                (void)fprintf(stderr, "nat_detect_node %s <- hub=%s [NodeRegisterOk] observed_public=%s\n",
+                (void)fprintf(stderr, "%s <- hub=%s [NodeRegisterOk] observed_public=%s\n",
                               nat_detect_node_instance(&node->registration.instance, node_id),
                               utp_ntrs_endpoint_format(&node->hub_endpoint, hub, sizeof(hub)),
                               utp_ntrs_endpoint_address_format(&family->public_endpoint, public_endpoint,
@@ -432,13 +432,13 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
         uint8_t               slot;
 
         if (!utp_ntrs_control_decode_assignment(message, length, &assignment)) {
-            (void)fprintf(stderr, "nat_detect_node event=assignment_invalid\n");
+            (void)fprintf(stderr, "event=assignment_invalid\n");
             nat_detect_node_schedule_disconnect(node);
             return;
         }
         if ((assignment.family == (uint8_t)AF_INET && !node->registration.ipv4.valid) ||
             (assignment.family == (uint8_t)AF_INET6 && !node->registration.ipv6.valid)) {
-            (void)fprintf(stderr, "nat_detect_node event=assignment_family_mismatch family=%u\n",
+            (void)fprintf(stderr, "event=assignment_family_mismatch family=%u\n",
                           (uint32_t)assignment.family);
             nat_detect_node_schedule_disconnect(node);
             return;
@@ -453,25 +453,25 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
             utp_ntrs_udp_server_set_primary(node->udp_server, NULL, NULL);
             if (assignment.has_primary &&
                 !utp_ntrs_peer_manager_connect(node->peers, &assignment.primary, &assignment.primary_control)) {
-                (void)fprintf(stderr, "nat_detect_node event=primary_link_connect_failed family=%u\n",
+                (void)fprintf(stderr, "event=primary_link_connect_failed family=%u\n",
                               (uint32_t)assignment.family);
                 nat_detect_node_request_replacement(node, &assignment.primary);
             }
             if (assignment.has_backup &&
                 !utp_ntrs_peer_manager_connect(node->peers, &assignment.backup, &assignment.backup_control)) {
-                (void)fprintf(stderr, "nat_detect_node event=backup_link_connect_failed family=%u\n",
+                (void)fprintf(stderr, "event=backup_link_connect_failed family=%u\n",
                               (uint32_t)assignment.family);
                 nat_detect_node_request_replacement(node, &assignment.backup);
             }
             (void)fprintf(stderr,
-                          "nat_detect_node <- hub [Assignment] family=%u version=%llu primary=%s backup=%s\n",
+                          "<- hub [Assignment] family=%u version=%llu primary=%s backup=%s\n",
                           (uint32_t)assignment.family, (unsigned long long)assignment.version,
                           assignment.has_primary ? nat_detect_node_instance(&assignment.primary, primary) : "none",
                           assignment.has_backup ? nat_detect_node_instance(&assignment.backup, backup) : "none");
         }
         return;
     }
-    (void)fprintf(stderr, "nat_detect_node event=unexpected_hub_message type=%u\n", (uint32_t)type);
+    (void)fprintf(stderr, "event=unexpected_hub_message type=%u\n", (uint32_t)type);
     nat_detect_node_schedule_disconnect(node);
 }
 
@@ -480,14 +480,14 @@ static void nat_detect_node_on_plaintext(void* user_data, const uint8_t* data, s
     nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
 
     if (!utp_ntrs_control_stream_feed(&node->control, data, length, nat_detect_node_on_message, node)) {
-        (void)fprintf(stderr, "nat_detect_node event=invalid_hub_control_stream\n");
+        (void)fprintf(stderr, "event=invalid_hub_control_stream\n");
         nat_detect_node_schedule_disconnect(node);
     }
 }
 
 static void nat_detect_node_on_closed(void* user_data)
 {
-    (void)fprintf(stderr, "nat_detect_node [HubControlClosed]\n");
+    (void)fprintf(stderr, "[HubControlClosed]\n");
     nat_detect_node_schedule_disconnect(static_cast<nat_detect_node_t*>(user_data));
 }
 
@@ -511,20 +511,20 @@ static void nat_detect_node_connect(nat_detect_node_t* node)
         if (fd >= 0) {
             (void)close(fd);
         }
-        (void)fprintf(stderr, "nat_detect_node event=hub_socket_create_failed\n");
+        (void)fprintf(stderr, "event=hub_socket_create_failed\n");
         return;
     }
     {
         char endpoint[64];
 
-        (void)fprintf(stderr, "nat_detect_node event=hub_connecting endpoint=%s\n",
+        (void)fprintf(stderr, "event=hub_connecting endpoint=%s\n",
                       utp_ntrs_endpoint_format(&node->hub_endpoint, endpoint, sizeof(endpoint)));
     }
     node->hub_stream = utp_ntrs_tls_stream_new(node->base, fd, node->hub_tls_context, false, &callbacks, node);
     if (node->hub_stream == NULL ||
         bufferevent_socket_connect(utp_ntrs_tls_stream_transport(node->hub_stream), (const struct sockaddr*)&address,
                                    (int32_t)address_length) != 0) {
-        (void)fprintf(stderr, "nat_detect_node event=hub_connect_failed\n");
+        (void)fprintf(stderr, "event=hub_connect_failed\n");
         nat_detect_node_disconnect(node);
     }
 }
@@ -552,7 +552,7 @@ static void nat_detect_node_on_heartbeat(evutil_socket_t fd, int16_t events, voi
     heartbeat.load     = node->registration.load;
     length             = utp_ntrs_control_encode_heartbeat(message, sizeof(message), &heartbeat);
     if (length == 0u || !nat_detect_node_send(node, message, length)) {
-        (void)fprintf(stderr, "nat_detect_node event=heartbeat_send_failed\n");
+        (void)fprintf(stderr, "event=heartbeat_send_failed\n");
         nat_detect_node_schedule_disconnect(node);
     }
 }
@@ -568,7 +568,7 @@ static void nat_detect_node_on_signal(evutil_socket_t fd, int16_t events, void* 
 {
     (void)fd;
     (void)events;
-    (void)fprintf(stderr, "nat_detect_node event=stopping\n");
+    (void)fprintf(stderr, "event=stopping\n");
     (void)event_base_loopbreak(static_cast<struct event_base*>(user_data));
 }
 
@@ -671,7 +671,7 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
             node.registration.ipv4.valid ? &node.registration.ipv4 : &node.registration.ipv6;
 
         (void)fprintf(stderr,
-                      "nat_detect_node event=starting node_name=%s node=%s hub=%s probe=%s "
+                      "event=starting node_name=%s node=%s hub=%s probe=%s "
                       "change_port=%u "
                       "control=%s workers=%u transport=%s interface=%s\n",
                       node.node_name, nat_detect_node_instance(&node.registration.instance, local),
