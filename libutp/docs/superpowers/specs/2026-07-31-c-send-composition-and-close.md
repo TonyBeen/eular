@@ -55,8 +55,10 @@ cpp 现有 `PacketEditor::StripTransientAckPayload()` 使用 payload 内存搬�
 - external STREAM slice 的指针和长度保持不变，**MUST NOT** 因 transient strip 移动或复制。
 - 若未来启用加密，剥离后废弃旧密文，使用新的 packet number 与新的 payload 重新加密。
 
-ACK scheduler 仅在携带 ACK 的 UDP 包实际发送成功时才能清除 pending；若包在发送前失败、被取消或被 close
-屏障丢弃，ACK 必须继续 pending 或重新置 pending。
+ACK scheduler 在携带 ACK 的 PacketOut 成功构造并进入发送队列时消费当前 ACK generation，而不是等 UDP
+实际发送成功后再清 pending。PacketOut 已持有该 generation 的 ACK 内容；`WOULD_BLOCK` 时重排同一个
+PacketOut，不重新构造 ACK。若入队后又收到需要确认的新包，新 generation 独立置 pending，旧 PacketOut
+实际发送时不得清除它。
 
 ## 3. ACK + single STREAM 合包
 
@@ -142,8 +144,9 @@ ACK 由 ack_scheduler 持有，不占 control slot
 - `MAX_DATA`/`MAX_STREAM_DATA` 保存最大待发送值；blocked 保存最新限制值；同 stream 的 reset 只保留一个
   终止状态。`MAX_STREAMS`/`STREAMS_BLOCKED` 以双向、单向两个方向分别合并。
 - 小 control 丢失时，恢复对应语义 pending 项并与新 control 合包；不复制旧 packet 的 frame bytes。
-- 每项状态分为 `desired`、`queued`、`sent`：仅 UDP 实际发送成功才更新 advertised 值、发送时间戳、限速
-  时间戳或清除 ACK pending。
+- 每项可靠 control 状态分为 `desired`、`queued`、`sent`：仅 UDP 实际发送成功才更新 advertised 值、发送
+  时间戳或限速时间戳。ACK 是 transient frame，不占 control slot；其当前 generation 在 PacketOut 成功入队时
+  消费。
 - 已编码但未写出的 PacketOut 因发送失败、关闭屏障或队列取消而释放时，相关语义项必须恢复为 pending。
 
 该模型消除过时窗口更新的重复发送，保证 close/UDP 失败时不会提前认为状态已通告。新 stream 或新的 control

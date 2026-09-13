@@ -33,7 +33,8 @@ TEST_CASE("mtu discovery confirms a configured jumbo ceiling", "[mtu]")
         const uint16_t probe_mtu = utp_mtu_discovery_next_probe_mtu(&discovery);
 
         REQUIRE(probe_mtu > discovery.search_low_mtu);
-        REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, packet_number, probe_mtu, packet_number));
+        REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, packet_number, probe_mtu));
+        REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, packet_number, packet_number));
         REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, packet_number, packet_number));
         if (probe_mtu == config.mtu_max) {
             break;
@@ -54,13 +55,16 @@ TEST_CASE("mtu discovery converges through ladder probes", "[mtu]")
     REQUIRE(utp_mtu_discovery_current_max_packet_size(&discovery) == 1372u);
     REQUIRE(utp_mtu_discovery_should_probe(&discovery, 0u));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1450u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 1u, 1450u, 0u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 1u, 1450u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 1u, 0u));
     REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, 1u, 10u));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1492u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 2u, 1492u, 11u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 2u, 1492u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 2u, 11u));
     REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, 2u, 20u));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1500u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 3u, 1500u, 21u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 3u, 1500u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 3u, 21u));
     REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, 3u, 30u));
     REQUIRE(utp_mtu_discovery_path_mtu(&discovery) == 1500u);
     REQUIRE(!utp_mtu_discovery_should_probe(&discovery, 31u));
@@ -73,13 +77,16 @@ TEST_CASE("mtu discovery narrows a failed probe with binary search", "[mtu]")
 
     config.probe_retries = 0u;
     utp_mtu_discovery_init(&discovery, &config, UTP_ADDRESS_FAMILY_IPV4);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 11u, 1450u, 100u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 11u, 1450u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 11u, 100u));
     REQUIRE(utp_mtu_discovery_on_probe_lost(&discovery, 11u, 101u));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1425u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 12u, 1425u, 102u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 12u, 1425u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 12u, 102u));
     REQUIRE(utp_mtu_discovery_on_probe_lost(&discovery, 12u, 103u));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1412u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 13u, 1412u, 104u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 13u, 1412u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 13u, 104u));
     REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, 13u, 105u));
     REQUIRE(utp_mtu_discovery_path_mtu(&discovery) == 1412u);
     REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&discovery));
@@ -91,7 +98,8 @@ TEST_CASE("mtu discovery rebuilds a lost probe before narrowing the search", "[m
 
     utp_mtu_discovery_init(&discovery, nullptr, UTP_ADDRESS_FAMILY_IPV4);
     REQUIRE(discovery.probe_retries == 1u);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 11u, 1450u, 100u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 11u, 1450u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 11u, 100u));
     REQUIRE(utp_mtu_discovery_on_probe_lost(&discovery, 11u, 101u));
     REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&discovery));
     REQUIRE(discovery.retry_pending);
@@ -99,7 +107,8 @@ TEST_CASE("mtu discovery rebuilds a lost probe before narrowing the search", "[m
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1450u);
     REQUIRE(utp_mtu_discovery_should_probe(&discovery, 102u));
 
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 12u, 1450u, 102u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 12u, 1450u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 12u, 102u));
     REQUIRE(!discovery.retry_pending);
     REQUIRE(discovery.probe_retry_count == 1u);
     REQUIRE(utp_mtu_discovery_on_probe_lost(&discovery, 12u, 103u));
@@ -114,6 +123,7 @@ TEST_CASE("mtu discovery immediately narrows an oversized local probe write", "[
 
     utp_mtu_discovery_init(&discovery, nullptr, UTP_ADDRESS_FAMILY_IPV4);
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1450u);
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 11u, 1450u));
     REQUIRE(utp_mtu_discovery_on_probe_send_failed(&discovery, 1450u, 100u));
     REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&discovery));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&discovery) == 1425u);
@@ -126,7 +136,8 @@ TEST_CASE("mtu discovery times out probes and backs off black holes", "[mtu]")
     const uint16_t      packet_size = 1372u;
 
     utp_mtu_discovery_init(&discovery, nullptr, UTP_ADDRESS_FAMILY_IPV4);
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 21u, 1450u, 100u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 21u, 1450u));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 21u, 100u));
     REQUIRE(!utp_mtu_discovery_on_probe_timeout(&discovery, 2099u));
     REQUIRE(utp_mtu_discovery_on_probe_timeout(&discovery, 2100u));
     REQUIRE(!utp_mtu_discovery_on_data_packet_loss(&discovery, packet_size, 10000u));
@@ -152,7 +163,8 @@ TEST_CASE("mtu discovery confirms base before searching upward after a black hol
     REQUIRE(discovery.probe_phase == UTP_MTU_PROBE_PHASE_BLACKHOLE_BASE);
     REQUIRE(utp_mtu_discovery_path_mtu(&discovery) == config.mtu_min);
     REQUIRE(utp_mtu_discovery_should_probe(&discovery, 17000u));
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 31u, config.mtu_base, 17000u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 31u, config.mtu_base));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 31u, 17000u));
     REQUIRE(utp_mtu_discovery_on_probe_ack(&discovery, 31u, 17001u));
     REQUIRE(utp_mtu_discovery_path_mtu(&discovery) == config.mtu_base);
     REQUIRE(discovery.probe_phase == UTP_MTU_PROBE_PHASE_LADDER);
@@ -170,7 +182,8 @@ TEST_CASE("mtu discovery restricts a failed black-hole base probe below base", "
     REQUIRE(!utp_mtu_discovery_on_data_packet_loss(&discovery, packet_size, 10000u));
     REQUIRE(!utp_mtu_discovery_on_data_packet_loss(&discovery, packet_size, 11000u));
     REQUIRE(utp_mtu_discovery_on_data_packet_loss(&discovery, packet_size, 12000u));
-    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 41u, config.mtu_base, 17000u));
+    REQUIRE(utp_mtu_discovery_on_probe_queued(&discovery, 41u, config.mtu_base));
+    REQUIRE(utp_mtu_discovery_on_probe_sent(&discovery, 41u, 17000u));
     REQUIRE(utp_mtu_discovery_on_probe_lost(&discovery, 41u, 17001u));
     REQUIRE(utp_mtu_discovery_path_mtu(&discovery) == config.mtu_min);
     REQUIRE(discovery.probe_phase == UTP_MTU_PROBE_PHASE_BINARY);

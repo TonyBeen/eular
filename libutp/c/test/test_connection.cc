@@ -737,9 +737,10 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
     REQUIRE(utp_send_control_unacked_packet_count(&active.send_control) == 2u);
 
     REQUIRE(utp_connection_queue_ack(&passive, 300u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_ack_pending_count(&passive) == 2u);
+    REQUIRE(utp_connection_ack_pending_count(&passive) == 0u);
     packet = utp_connection_next_packet_to_send(&passive);
     REQUIRE(packet != nullptr);
+    REQUIRE(utp_connection_next_packet_to_send_at(&passive, 300u) == nullptr);
     REQUIRE(packet->data_size <= ack_wire.size());
     std::memcpy(ack_wire.data(), packet->raw_data, packet->data_size);
     ack_wire_length = packet->data_size;
@@ -751,6 +752,46 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
 
     utp_connection_cleanup(&passive);
     utp_connection_cleanup(&active);
+}
+
+TEST_CASE("connection gives a queued ACK ownership of its receive generation", "[connection][ack]")
+{
+    const utp_address_t                              peer       = loopback_address(10028u);
+    const uint8_t                                    ping       = UTP_FRAME_TYPE_PING;
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> incoming   = {};
+    utp_packet_header_t                              header     = {33u, 44u, 1u, 1u, UTP_PACKET_TYPE_CTRL, 0u};
+    utp_connection_t                                 connection = {};
+    utp_packet_out_t*                                first_ack;
+    utp_packet_out_t*                                second_ack;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 44u, 33u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    incoming[UTP_PACKET_HEADER_SIZE] = ping;
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
+
+    first_ack = utp_connection_next_packet_to_send_at(&connection, 101u);
+    REQUIRE(first_ack != nullptr);
+    REQUIRE(first_ack->transient_ack_size != 0u);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 0u);
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, 101u) == nullptr);
+
+    header.packet_number = 2u;
+    REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 102u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, first_ack, 103u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
+
+    second_ack = utp_connection_next_packet_to_send_at(&connection, 104u);
+    REQUIRE(second_ack != nullptr);
+    REQUIRE(second_ack->transient_ack_size != 0u);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 0u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, second_ack, 105u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&connection);
 }
 
 TEST_CASE("encrypted connections reject plaintext Handshake packets with non-handshake frames", "[connection][crypto]")
@@ -1403,11 +1444,14 @@ TEST_CASE("connection sends a ladder MTU probe and immediately backs off on EMSG
     packet = utp_connection_next_packet_to_send_at(&connection, UINT64_C(1000000));
     REQUIRE(packet != nullptr);
     REQUIRE((packet->po_flags & UTP_PO_MTU_PROBE) != 0u);
+    REQUIRE(connection.mtu_discovery.probe_state == UTP_MTU_PROBE_STATE_QUEUED);
+    REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&connection.mtu_discovery));
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, UINT64_C(1000000)) == nullptr);
     REQUIRE(packet->data_size == 1422u);
     REQUIRE(packet->raw_data[UTP_PACKET_HEADER_SIZE] == UTP_FRAME_TYPE_PING);
     REQUIRE(packet->raw_data[UTP_PACKET_HEADER_SIZE + 1u] == UTP_FRAME_TYPE_PADDING);
 
-    utp_connection_on_packet_send_error(&connection, packet, UTP_INTERNAL_ERROR_OVERFLOW, UINT64_C(1000000));
+    REQUIRE(utp_connection_on_packet_send_error(&connection, packet, UTP_INTERNAL_ERROR_OVERFLOW, UINT64_C(1000000)));
     REQUIRE(!utp_mtu_discovery_has_in_flight_probe(&connection.mtu_discovery));
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&connection.mtu_discovery) == 1425u);
     utp_connection_on_packet_abandoned(&connection, packet);
@@ -1432,6 +1476,8 @@ TEST_CASE("connection promotes a successfully acknowledged ladder MTU probe", "[
     packet = utp_connection_next_packet_to_send_at(&connection, UINT64_C(1000000));
     REQUIRE(packet != nullptr);
     REQUIRE(packet->packet_number == 1u);
+    REQUIRE(connection.mtu_discovery.probe_state == UTP_MTU_PROBE_STATE_QUEUED);
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, UINT64_C(1000000)) == nullptr);
     REQUIRE(utp_connection_on_packet_sent(&connection, packet, UINT64_C(1000000)) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_mtu_discovery_has_in_flight_probe(&connection.mtu_discovery));
     REQUIRE(utp_ack_encode(ack_payload.data(), ack_payload.size(), &ack, 0u, &ack_length) == UTP_INTERNAL_ERROR_OK);

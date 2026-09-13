@@ -67,8 +67,17 @@
 
 ### 3.2 单次探测事件流
 
-- `shouldProbe(now)`（`:175`）：`m_enabled && !m_hasInFlightProbe && now >= m_blackholeCooldownUntilMs && now >= m_nextProbeTimeMs && nextProbeMtu() > m_searchLowMtu`。
-- `onProbeSent(packNo, probeMtu, now)`（`:189`）：`packNo==0` 拒绝；把 `probeMtu` clamp 到 `[searchLow+1, ceiling]`；置在途标记与截止时间 `now + m_probeTimeoutMs`；若梯队目标不匹配则切到 Binary。
+- C 实现将单个探测包的发送生命周期明确分为 `IDLE -> QUEUED -> IN_FLIGHT`。`shouldProbe(now)` 仅在
+  `IDLE` 时允许生成新探测，避免同一次发送批处理中反复构造相同大小的探测包。
+- `onProbeQueued(packNo, probeMtu)`：PacketOut 成功构造并进入发送队列后转为 `QUEUED`，绑定包号和探测
+  MTU，但不启动超时。UDP 返回 `WOULD_BLOCK` 时重排同一个 PacketOut，不生成新探测。
+- `onProbeSent(packNo, now)`：只有匹配当前 `QUEUED` 包号的 PacketOut 实际写入 UDP 后才转为
+  `IN_FLIGHT`，并设置截止时间 `now + probeTimeoutMs`。
+- MTU Probe 保持为独立 UDP 发送，不与普通 PacketOut 进入同一次批量发送。若本地 UDP 返回 `EMSGSIZE`，
+  该错误作为有效的 MTU 负反馈由探测器内部消费：丢弃当前 Probe、收缩搜索上界并调度更小的目标，不向应用
+  返回发送错误，也不影响其他待发送包。
+- C++ 参考实现的 `shouldProbe(now)`（`:175`）使用 `!m_hasInFlightProbe`；`onProbeSent(packNo,
+  probeMtu, now)`（`:189`）合并完成 C 实现上述 queued/sent 两个转换。
 - `onProbeAck(packNo, now)`（`:215`）：`m_searchLowMtu = max(searchLow, 探测MTU)`；刷新大包 ACK；若达到 `m_mtuMax` 或二分已收敛（`searchHigh <= searchLow + probeStep`）则提交 `m_currentMtu` 并进入 Stable、推迟到 `now + interval`；否则 `now + 1`（尽快下一轮）。
 - `onProbeLost(packNo, now)`（`:252`）：把 `m_searchHighMtu` 收到 `探测MTU - 1`，同步压低 ceiling，切 Binary；若已收敛则提交 `m_currentMtu = m_searchLowMtu` 进 Stable，否则 `now + 1`。
 - `onProbeTimeout(now)`（`:280`）：`now >= 截止时间` 时等价于 `onProbeLost`。
@@ -79,7 +88,11 @@
 
 - MUST：MTU 值始终被 clamp 到 `[m_mtuMin, UTP_ETHERNET_MTU(1500)]`；`NormalizeMtu`（`:95`）下界为 `MinimumSupportedMtu`，上界 1500。
 - MUST：`m_mtuMax = clamp(cfgMax, m_mtuMin, 1500)`；`m_mtuBase = clamp(cfgBase, m_mtuMin, m_mtuMax)`（`cpp/src/mtu/mtu.cpp:49-51`）。因此即使配置乱填也不会越界。
-- MUST：同一时刻至多一个在途探测（`m_hasInFlightProbe`）；`shouldProbe` 有在途探测时返回 false。
+- MUST：同一时刻至多一个已排队或在途探测；C 实现处于 `QUEUED` 或 `IN_FLIGHT` 时，`shouldProbe`
+  均返回 false。
+- MUST：探测超时只从 PacketOut 实际写入 UDP、状态进入 `IN_FLIGHT` 后开始计算，排队和
+  `WOULD_BLOCK` 等待时间不计入探测 RTT。
+- MUST：仅 MTU Probe 的 `EMSGSIZE` 可由探测器内部消费；普通数据包的 `EMSGSIZE` 仍是应用可见的发送错误。
 - MUST：探测包 payload 首字节为 PING，其余为 PADDING；`packetSize <= UTP_HEADER_SIZE + 1` 时不构造（`send_ctl.cpp:616`、`mtu.cpp` 换算返回 0 的分支）。
 - MUST：非探测数据包线上长度 `> currentMaxPacketSize` 时拒绝发送（`connection_impl.cpp:2666`）；探测包只受 `absoluteMaxPacketSize`（ceiling）约束（`:2670`）。
 - MUST：探测收敛/黑洞回退后提交的 `m_currentMtu` 必须是“最后确认可达”的 MTU（ACK 提升 low、丢失压低 high，最终取 low）。
@@ -120,7 +133,9 @@
 
 - 生命周期：`init(config, family)`、`onPathValidated(nowMs)`、`setAddressFamily(family)`。
 - 查询：`enabled()`、`hasInFlightProbe()`、`pathMtu()`、`nextProbeMtu()`、`currentMaxPacketSize()`、`absoluteMaxPacketSize()`、`shouldProbe(nowMs)`。
-- 事件回调（返回 bool 表示是否消费/状态变化）：`onProbeSent(packNo, probeMtu, nowMs)`、`onProbeAck(packNo, nowMs)`、`onProbeLost(packNo, nowMs)`、`onProbeTimeout(nowMs)`、`onDataPacketAck(packetSize, nowMs)`、`onDataPacketLoss(packetSize, nowMs)`。
+- C++ 事件回调（返回 bool 表示是否消费/状态变化）：`onProbeSent(packNo, probeMtu, nowMs)`、`onProbeAck(packNo, nowMs)`、`onProbeLost(packNo, nowMs)`、`onProbeTimeout(nowMs)`、`onDataPacketAck(packetSize, nowMs)`、`onDataPacketLoss(packetSize, nowMs)`。
+- C 实现将发送回调拆为 `utp_mtu_discovery_on_probe_queued(packNo, probeMtu)` 与
+  `utp_mtu_discovery_on_probe_sent(packNo, nowMs)`，其余事件保持同一语义。
 - 静态换算：`MinimumSupportedMtu`、`NormalizeMtu`、`PacketSizeFromMtu`、`MtuFromPacketSize`。
 
 外部消费点：

@@ -2304,6 +2304,9 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
         selected[index]->pending = false;
         selected[index]->queued  = true;
     }
+    if (include_ack) {
+        utp_ack_scheduler_on_ack_queued(&connection->ack_scheduler);
+    }
     *queued = true;
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -2697,6 +2700,9 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                 selected[control_index]->pending = false;
                 selected[control_index]->queued  = true;
             }
+            if (include_ack) {
+                utp_ack_scheduler_on_ack_queued(&connection->ack_scheduler);
+            }
         }
         if (error != UTP_INTERNAL_ERROR_OK && packet != NULL && stream_committed) {
             (void)utp_stream_abandon_built_frame(stream, packet->stream_offset, packet->stream_data_size, fin);
@@ -2769,6 +2775,11 @@ static utp_internal_error_t utp_connection_queue_mtu_probe(utp_connection_t* con
         utp_connection_packet_release(connection, packet);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
+        const bool probe_queued =
+            utp_mtu_discovery_on_probe_queued(&connection->mtu_discovery, packet_number, probe_mtu);
+
+        assert(probe_queued);
+        (void)probe_queued;
         *queued = true;
     }
     return error;
@@ -3999,10 +4010,11 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
         return error;
     }
     if ((packet->po_flags & UTP_PO_MTU_PROBE) != 0u) {
-        (void)utp_mtu_discovery_on_probe_sent(
-            &connection->mtu_discovery, packet->packet_number,
-            utp_mtu_from_packet_size(utp_connection_packet_wire_size(packet), connection->peer.family),
-            now_us / UINT64_C(1000));
+        const bool probe_sent =
+            utp_mtu_discovery_on_probe_sent(&connection->mtu_discovery, packet->packet_number, now_us / UINT64_C(1000));
+
+        assert(probe_sent);
+        (void)probe_sent;
     }
     wire_size = (uint64_t)utp_connection_packet_wire_size(packet);
     connection->tx_bytes =
@@ -4039,9 +4051,6 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
                 }
             }
         }
-    }
-    if (packet->transient_ack_size != 0u) {
-        utp_ack_scheduler_on_ack_sent(&connection->ack_scheduler);
     }
     if ((packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT) &&
         connection->role == UTP_CONNECTION_ROLE_ACTIVE && connection->state == UTP_CONNECTION_STATE_NEW) {
@@ -4111,16 +4120,16 @@ static bool utp_connection_is_mtu_write_error(utp_internal_error_t error)
 #endif
 }
 
-void utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
+bool utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
                                          utp_internal_error_t error, uint64_t now_us)
 {
     assert(connection != NULL);
     assert(packet != NULL);
     assert(now_us != 0u);
     if ((packet->po_flags & UTP_PO_MTU_PROBE) == 0u || !utp_connection_is_mtu_write_error(error)) {
-        return;
+        return false;
     }
-    (void)utp_mtu_discovery_on_probe_send_failed(
+    return utp_mtu_discovery_on_probe_send_failed(
         &connection->mtu_discovery,
         utp_mtu_from_packet_size(utp_connection_packet_wire_size(packet), connection->peer.family),
         now_us / UINT64_C(1000));
@@ -5049,7 +5058,9 @@ uint64_t utp_connection_mtu_deadline(const utp_connection_t* connection, uint64_
         return 0u;
     }
     if (utp_mtu_discovery_has_in_flight_probe(discovery)) {
-        deadline_ms = discovery->in_flight_probe_deadline_ms;
+        deadline_ms = discovery->probe_deadline_ms;
+    } else if (discovery->probe_state == UTP_MTU_PROBE_STATE_QUEUED) {
+        return 0u;
     } else if (utp_mtu_discovery_should_probe(discovery, now_us / UINT64_C(1000))) {
         return now_us;
     } else {
@@ -5078,10 +5089,10 @@ utp_internal_error_t utp_connection_on_mtu_timeout(utp_connection_t* connection,
     }
     if (connection->state != UTP_CONNECTION_STATE_CONNECTED ||
         !utp_mtu_discovery_has_in_flight_probe(&connection->mtu_discovery) ||
-        now_us / UINT64_C(1000) < connection->mtu_discovery.in_flight_probe_deadline_ms) {
+        now_us / UINT64_C(1000) < connection->mtu_discovery.probe_deadline_ms) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    packet_number = connection->mtu_discovery.in_flight_probe_packet_number;
+    packet_number = connection->mtu_discovery.probe_packet_number;
     if (!utp_mtu_discovery_on_probe_timeout(&connection->mtu_discovery, now_us / UINT64_C(1000))) {
         return UTP_INTERNAL_ERROR_STATE;
     }

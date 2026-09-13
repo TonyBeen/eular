@@ -3174,7 +3174,9 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
             return UTP_INTERNAL_ERROR_OK;
         }
 #if defined(UTP_HAVE_SENDMMSG)
-        if ((packet->po_flags & UTP_PO_ENCRYPTED) == 0u && !utp_connection_is_close_packet(connection, packet) &&
+        // MTU Probe 单独发送，确保 EMSGSIZE 只作为当前探测包的 MTU 负反馈。
+        if ((packet->po_flags & (UTP_PO_ENCRYPTED | UTP_PO_MTU_PROBE)) == 0u &&
+            !utp_connection_is_close_packet(connection, packet) &&
             !(slot->rendezvous_active &&
               (packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
             utp_packet_out_t*      packets[UTP_UDP_SOCKET_BATCH_SIZE];
@@ -3193,9 +3195,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 }
                 packets[packet_count] = packet;
                 ++packet_count;
-                // NOTE MTU probe 发送成功后才会进入 in-flight 状态; 继续构建本批会重复生成 probe
-                // 此处只结束当前批次, 外层 flush 会继续发送队列中的后续包
-                if (packet_count == UTP_UDP_SOCKET_BATCH_SIZE || (packet->po_flags & UTP_PO_MTU_PROBE) != 0u) {
+                if (packet_count == UTP_UDP_SOCKET_BATCH_SIZE) {
                     break;
                 }
                 packet = utp_connection_next_packet_to_send_at(connection, now_us);
@@ -3205,7 +3205,8 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 if (!utp_context_zero_rtt_amplification_allows(slot, packet) ||
                     (slot->zero_rtt_response_active && slot->zero_rtt_response_sent &&
                      (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) == 0u) ||
-                    (packet->po_flags & UTP_PO_ENCRYPTED) != 0u || utp_connection_is_close_packet(connection, packet) ||
+                    (packet->po_flags & (UTP_PO_ENCRYPTED | UTP_PO_MTU_PROBE)) != 0u ||
+                    utp_connection_is_close_packet(connection, packet) ||
                     (slot->rendezvous_active &&
                      (packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT))) {
                     error = utp_send_control_reschedule_packet(&connection->send_control, packet);
@@ -3331,13 +3332,17 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
             utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
             return error;
         } else {
-            const bool close_packet = utp_connection_is_close_packet(connection, packet);
+            const bool close_packet   = utp_connection_is_close_packet(connection, packet);
+            bool       error_consumed = false;
 
             if (!close_packet) {
-                utp_connection_on_packet_send_error(connection, packet, error, now_us);
+                error_consumed = utp_connection_on_packet_send_error(connection, packet, error, now_us);
                 utp_connection_on_packet_abandoned(connection, packet);
                 utp_send_control_forget_packet_attempts(&connection->send_control, packet);
                 utp_packet_out_pool_release(&connection->packet_pool, connection->packet_buffer_pool, packet);
+            }
+            if (error_consumed) {
+                error = UTP_INTERNAL_ERROR_OK;
             }
             if (error == UTP_INTERNAL_ERROR_NOBUFS || close_packet) {
                 const char* reason =

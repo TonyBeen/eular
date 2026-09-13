@@ -25,7 +25,7 @@ utp_internal_error_t        utp_ack_scheduler_init(utp_ack_scheduler_t* schedule
 utp_ack_schedule_decision_t utp_ack_scheduler_on_packet(utp_ack_scheduler_t* scheduler, uint64_t packet_number,
                                                         uint64_t largest_before, bool ack_eliciting,
                                                         bool has_handshake_done, uint64_t now);
-void                        utp_ack_scheduler_on_ack_sent(utp_ack_scheduler_t* scheduler);
+void                        utp_ack_scheduler_on_ack_queued(utp_ack_scheduler_t* scheduler);
 uint32_t                    utp_ack_scheduler_pending_count(const utp_ack_scheduler_t* scheduler);
 uint64_t                    utp_ack_scheduler_deadline(const utp_ack_scheduler_t* scheduler);
 

@@ -40,7 +40,7 @@ utp_ack_schedule_decision_t utp_ack_scheduler_on_packet(utp_ack_scheduler_t* sch
     return UTP_ACK_SCHEDULE_DELAYED;
 }
 
-void utp_ack_scheduler_on_ack_sent(utp_ack_scheduler_t* scheduler)
+void utp_ack_scheduler_on_ack_queued(utp_ack_scheduler_t* scheduler)
 {
     assert(scheduler != NULL);
     scheduler->pending_count = 0u;

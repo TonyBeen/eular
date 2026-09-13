@@ -61,13 +61,13 @@ static uint16_t utp_mtu_next_binary_target(const utp_mtu_discovery_t* discovery)
     return candidate <= discovery->search_low_mtu ? discovery->search_low_mtu : candidate;
 }
 
-static void utp_mtu_clear_in_flight_probe(utp_mtu_discovery_t* discovery)
+static void utp_mtu_clear_probe(utp_mtu_discovery_t* discovery)
 {
     assert(discovery != NULL);
-    discovery->has_in_flight_probe           = false;
-    discovery->in_flight_probe_packet_number = 0u;
-    discovery->in_flight_probe_mtu           = 0u;
-    discovery->in_flight_probe_deadline_ms   = 0u;
+    discovery->probe_state         = UTP_MTU_PROBE_STATE_IDLE;
+    discovery->probe_packet_number = 0u;
+    discovery->probe_mtu           = 0u;
+    discovery->probe_deadline_ms   = 0u;
 }
 
 static void utp_mtu_clear_probe_retry(utp_mtu_discovery_t* discovery)
@@ -188,7 +188,7 @@ void utp_mtu_discovery_init(utp_mtu_discovery_t* discovery, const utp_mtu_config
     discovery->last_large_loss_ms          = 0u;
     discovery->blackhole_cooldown_until_ms = 0u;
     discovery->large_loss_streak           = 0u;
-    utp_mtu_clear_in_flight_probe(discovery);
+    utp_mtu_clear_probe(discovery);
     utp_mtu_clear_probe_retry(discovery);
 }
 
@@ -200,7 +200,7 @@ void utp_mtu_discovery_on_path_validated(utp_mtu_discovery_t* discovery, uint64_
     discovery->last_large_loss_ms          = 0u;
     discovery->large_loss_streak           = 0u;
     discovery->blackhole_cooldown_until_ms = 0u;
-    utp_mtu_clear_in_flight_probe(discovery);
+    utp_mtu_clear_probe(discovery);
     utp_mtu_clear_probe_retry(discovery);
     if (!discovery->enabled) {
         discovery->ceiling_mtu        = discovery->current_mtu;
@@ -234,7 +234,7 @@ bool utp_mtu_discovery_enabled(const utp_mtu_discovery_t* discovery)
 bool utp_mtu_discovery_has_in_flight_probe(const utp_mtu_discovery_t* discovery)
 {
     assert(discovery != NULL);
-    return discovery->has_in_flight_probe;
+    return discovery->probe_state == UTP_MTU_PROBE_STATE_IN_FLIGHT;
 }
 
 uint16_t utp_mtu_discovery_path_mtu(const utp_mtu_discovery_t* discovery)
@@ -281,16 +281,16 @@ uint16_t utp_mtu_discovery_absolute_max_packet_size(const utp_mtu_discovery_t* d
 bool utp_mtu_discovery_should_probe(const utp_mtu_discovery_t* discovery, uint64_t now_ms)
 {
     assert(discovery != NULL);
-    return discovery->enabled && !discovery->has_in_flight_probe && now_ms >= discovery->blackhole_cooldown_until_ms &&
-           now_ms >= discovery->next_probe_time_ms &&
+    return discovery->enabled && discovery->probe_state == UTP_MTU_PROBE_STATE_IDLE &&
+           now_ms >= discovery->blackhole_cooldown_until_ms && now_ms >= discovery->next_probe_time_ms &&
            utp_mtu_discovery_next_probe_mtu(discovery) > discovery->search_low_mtu;
 }
 
-bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint16_t probe_mtu,
-                                     uint64_t now_ms)
+bool utp_mtu_discovery_on_probe_queued(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint16_t probe_mtu)
 {
     assert(discovery != NULL);
-    if (!discovery->enabled || packet_number == 0u || discovery->search_low_mtu >= discovery->ceiling_mtu) {
+    if (!discovery->enabled || discovery->probe_state != UTP_MTU_PROBE_STATE_IDLE || packet_number == 0u ||
+        discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
     uint16_t clamped_probe =
@@ -312,25 +312,36 @@ bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t pa
         (ladder_target == discovery->search_low_mtu || clamped_probe != ladder_target)) {
         discovery->probe_phase = UTP_MTU_PROBE_PHASE_BINARY;
     }
-    discovery->has_in_flight_probe           = true;
-    discovery->in_flight_probe_packet_number = packet_number;
-    discovery->in_flight_probe_mtu           = clamped_probe;
-    discovery->in_flight_probe_deadline_ms   = utp_mtu_add_ms(now_ms, discovery->probe_timeout_ms);
+    discovery->probe_state         = UTP_MTU_PROBE_STATE_QUEUED;
+    discovery->probe_packet_number = packet_number;
+    discovery->probe_mtu           = clamped_probe;
+    discovery->probe_deadline_ms   = 0u;
+    return true;
+}
+
+bool utp_mtu_discovery_on_probe_sent(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
+{
+    assert(discovery != NULL);
+    if (discovery->probe_state != UTP_MTU_PROBE_STATE_QUEUED || packet_number != discovery->probe_packet_number) {
+        return false;
+    }
+    discovery->probe_state       = UTP_MTU_PROBE_STATE_IN_FLIGHT;
+    discovery->probe_deadline_ms = utp_mtu_add_ms(now_ms, discovery->probe_timeout_ms);
     return true;
 }
 
 bool utp_mtu_discovery_on_probe_ack(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
 {
     assert(discovery != NULL);
-    if (!discovery->has_in_flight_probe || packet_number != discovery->in_flight_probe_packet_number) {
+    if (discovery->probe_state != UTP_MTU_PROBE_STATE_IN_FLIGHT || packet_number != discovery->probe_packet_number) {
         return false;
     }
-    if (discovery->in_flight_probe_mtu > discovery->search_low_mtu) {
-        discovery->search_low_mtu = discovery->in_flight_probe_mtu;
+    if (discovery->probe_mtu > discovery->search_low_mtu) {
+        discovery->search_low_mtu = discovery->probe_mtu;
     }
     discovery->last_large_ack_ms = now_ms;
     discovery->large_loss_streak = 0u;
-    utp_mtu_clear_in_flight_probe(discovery);
+    utp_mtu_clear_probe(discovery);
     utp_mtu_clear_probe_retry(discovery);
     if (discovery->probe_phase == UTP_MTU_PROBE_PHASE_BLACKHOLE_BASE) {
         discovery->current_mtu     = discovery->mtu_base;
@@ -373,11 +384,11 @@ bool utp_mtu_discovery_on_probe_ack(utp_mtu_discovery_t* discovery, uint64_t pac
 bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t packet_number, uint64_t now_ms)
 {
     assert(discovery != NULL);
-    if (!discovery->has_in_flight_probe || packet_number != discovery->in_flight_probe_packet_number) {
+    if (discovery->probe_state != UTP_MTU_PROBE_STATE_IN_FLIGHT || packet_number != discovery->probe_packet_number) {
         return false;
     }
-    uint16_t probe_mtu = discovery->in_flight_probe_mtu;
-    utp_mtu_clear_in_flight_probe(discovery);
+    uint16_t probe_mtu = discovery->probe_mtu;
+    utp_mtu_clear_probe(discovery);
     if (probe_mtu > discovery->search_low_mtu && discovery->probe_retry_count < discovery->probe_retries) {
         ++discovery->probe_retry_count;
         discovery->retry_probe_mtu    = probe_mtu;
@@ -392,20 +403,24 @@ bool utp_mtu_discovery_on_probe_lost(utp_mtu_discovery_t* discovery, uint64_t pa
 bool utp_mtu_discovery_on_probe_send_failed(utp_mtu_discovery_t* discovery, uint16_t probe_mtu, uint64_t now_ms)
 {
     assert(discovery != NULL);
-    if (!discovery->enabled || discovery->has_in_flight_probe || discovery->search_low_mtu >= discovery->ceiling_mtu) {
+    if (!discovery->enabled || discovery->probe_state != UTP_MTU_PROBE_STATE_QUEUED ||
+        discovery->search_low_mtu >= discovery->ceiling_mtu) {
         return false;
     }
     uint16_t clamped_probe =
         utp_mtu_clamp(probe_mtu, (uint16_t)(discovery->search_low_mtu + 1u), discovery->ceiling_mtu);
-    return clamped_probe > discovery->search_low_mtu &&
-           utp_mtu_discovery_record_probe_failure(discovery, clamped_probe, now_ms);
+    if (clamped_probe != discovery->probe_mtu) {
+        return false;
+    }
+    utp_mtu_clear_probe(discovery);
+    return utp_mtu_discovery_record_probe_failure(discovery, clamped_probe, now_ms);
 }
 
 bool utp_mtu_discovery_on_probe_timeout(utp_mtu_discovery_t* discovery, uint64_t now_ms)
 {
     assert(discovery != NULL);
-    return discovery->has_in_flight_probe && now_ms >= discovery->in_flight_probe_deadline_ms &&
-           utp_mtu_discovery_on_probe_lost(discovery, discovery->in_flight_probe_packet_number, now_ms);
+    return discovery->probe_state == UTP_MTU_PROBE_STATE_IN_FLIGHT && now_ms >= discovery->probe_deadline_ms &&
+           utp_mtu_discovery_on_probe_lost(discovery, discovery->probe_packet_number, now_ms);
 }
 
 bool utp_mtu_discovery_on_data_packet_ack(utp_mtu_discovery_t* discovery, uint16_t packet_size, uint64_t now_ms)
@@ -446,7 +461,7 @@ bool utp_mtu_discovery_on_data_packet_loss(utp_mtu_discovery_t* discovery, uint1
     discovery->search_high_mtu = discovery->ceiling_mtu;
     discovery->probe_phase =
         discovery->mtu_base > discovery->mtu_min ? UTP_MTU_PROBE_PHASE_BLACKHOLE_BASE : UTP_MTU_PROBE_PHASE_LADDER;
-    utp_mtu_clear_in_flight_probe(discovery);
+    utp_mtu_clear_probe(discovery);
     utp_mtu_clear_probe_retry(discovery);
     discovery->blackhole_cooldown_until_ms = utp_mtu_add_ms(now_ms, discovery->blackhole_cooldown_ms);
     discovery->next_probe_time_ms          = discovery->blackhole_cooldown_until_ms;

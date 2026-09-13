@@ -1,7 +1,8 @@
 #define CATCH_CONFIG_MAIN
 
-#include <catch2/catch.hpp>
 #include <cstdlib>
+
+#include <catch2/catch.hpp>
 
 extern "C" {
 #include "context/ack_scheduler.h"
@@ -18,22 +19,25 @@ struct allocation_tracker {
     size_t frees       = 0u;
 };
 
-void *tracked_alloc(void *user_data, size_t size) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void* tracked_alloc(void* user_data, size_t size)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
 
     ++tracker->allocations;
     return std::malloc(size);
 }
 
-void *tracked_realloc(void *user_data, void *pointer, size_t size) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void* tracked_realloc(void* user_data, void* pointer, size_t size)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
 
     ++tracker->allocations;
     return std::realloc(pointer, size);
 }
 
-void tracked_free(void *user_data, void *pointer) {
-    auto *tracker = static_cast<allocation_tracker *>(user_data);
+void tracked_free(void* user_data, void* pointer)
+{
+    auto* tracker = static_cast<allocation_tracker*>(user_data);
 
     ++tracker->frees;
     std::free(pointer);
@@ -41,9 +45,10 @@ void tracked_free(void *user_data, void *pointer) {
 
 }  // namespace
 
-TEST_CASE("receive history records a singleton packet range", "[receive_history]") {
+TEST_CASE("receive history records a singleton packet range", "[receive_history]")
+{
     utp_receive_history_t      history = {};
-    const utp_receive_range_t *range;
+    const utp_receive_range_t* range;
 
     REQUIRE(utp_receive_history_init(&history, nullptr, 4u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_receive_history_insert(&history, 10u, 1234u) == UTP_INTERNAL_ERROR_OK);
@@ -59,10 +64,10 @@ TEST_CASE("receive history records a singleton packet range", "[receive_history]
     utp_receive_history_cleanup(&history);
 }
 
-TEST_CASE("receive history merges adjacent packets and orders ranges by descending packet number",
-          "[receive_history]") {
+TEST_CASE("receive history merges adjacent packets and orders ranges by descending packet number", "[receive_history]")
+{
     utp_receive_history_t      history = {};
-    const utp_receive_range_t *range;
+    const utp_receive_range_t* range;
 
     REQUIRE(utp_receive_history_init(&history, nullptr, 4u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_receive_history_insert(&history, 10u, 10u) == UTP_INTERNAL_ERROR_OK);
@@ -92,9 +97,10 @@ TEST_CASE("receive history merges adjacent packets and orders ranges by descendi
     utp_receive_history_cleanup(&history);
 }
 
-TEST_CASE("receive history prunes old packets and treats them as duplicates", "[receive_history]") {
+TEST_CASE("receive history prunes old packets and treats them as duplicates", "[receive_history]")
+{
     utp_receive_history_t      history = {};
-    const utp_receive_range_t *range;
+    const utp_receive_range_t* range;
 
     REQUIRE(utp_receive_history_init(&history, nullptr, 3u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_receive_history_insert(&history, 10u, 10u) == UTP_INTERNAL_ERROR_OK);
@@ -121,7 +127,8 @@ TEST_CASE("receive history prunes old packets and treats them as duplicates", "[
     utp_receive_history_cleanup(&history);
 }
 
-TEST_CASE("receive history allocates only during initialization", "[receive_history][allocation]") {
+TEST_CASE("receive history allocates only during initialization", "[receive_history][allocation]")
+{
     allocation_tracker    tracker   = {};
     const utp_allocator_t allocator = {tracked_alloc, tracked_realloc, tracked_free, &tracker};
     utp_receive_history_t history   = {};
@@ -141,7 +148,8 @@ TEST_CASE("receive history allocates only during initialization", "[receive_hist
     REQUIRE(tracker.frees == 1u);
 }
 
-TEST_CASE("receive history projects its newest ranges into an ACK", "[receive_history][ack]") {
+TEST_CASE("receive history projects its newest ranges into an ACK", "[receive_history][ack]")
+{
     utp_receive_history_t history           = {};
     utp_ack_range_t       ranges[2]         = {};
     utp_ack_info_t        ack               = {0u, 0u, ranges, 0u, 2u};
@@ -172,19 +180,21 @@ TEST_CASE("receive history projects its newest ranges into an ACK", "[receive_hi
     utp_receive_history_cleanup(&history);
 }
 
-TEST_CASE("ACK scheduler sends immediately for thresholds and otherwise exposes a deadline", "[ack_scheduler]") {
+TEST_CASE("ACK scheduler sends immediately for thresholds and otherwise exposes a deadline", "[ack_scheduler]")
+{
     utp_ack_scheduler_t scheduler = {};
 
     REQUIRE(utp_ack_scheduler_init(&scheduler, 2u, 3u, 25u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_ack_scheduler_on_packet(&scheduler, 10u, 9u, true, false, 100u) == UTP_ACK_SCHEDULE_DELAYED);
     REQUIRE(utp_ack_scheduler_deadline(&scheduler) == 25100u);
     REQUIRE(utp_ack_scheduler_on_packet(&scheduler, 11u, 10u, true, false, 200u) == UTP_ACK_SCHEDULE_IMMEDIATE);
-    utp_ack_scheduler_on_ack_sent(&scheduler);
+    utp_ack_scheduler_on_ack_queued(&scheduler);
     REQUIRE(utp_ack_scheduler_pending_count(&scheduler) == 0u);
     REQUIRE(utp_ack_scheduler_on_packet(&scheduler, 20u, 10u, true, false, 300u) == UTP_ACK_SCHEDULE_IMMEDIATE);
 }
 
-TEST_CASE("send history advances monotonically and records one packet-number gap", "[send_history]") {
+TEST_CASE("send history advances monotonically and records one packet-number gap", "[send_history]")
+{
     utp_send_history_t history = {};
 
     utp_send_history_init(&history, 5u);
@@ -198,7 +208,8 @@ TEST_CASE("send history advances monotonically and records one packet-number gap
     REQUIRE(utp_send_history_largest(&history) == 7u);
 }
 
-TEST_CASE("RTT statistics use RFC 6298 smoothing", "[rtt]") {
+TEST_CASE("RTT statistics use RFC 6298 smoothing", "[rtt]")
+{
     utp_rtt_stats_t stats = {};
 
     REQUIRE(utp_rtt_stats_update(&stats, 100u) == UTP_INTERNAL_ERROR_OK);
@@ -211,7 +222,8 @@ TEST_CASE("RTT statistics use RFC 6298 smoothing", "[rtt]") {
     REQUIRE(utp_rtt_stats_minimum(&stats) == 100u);
 }
 
-TEST_CASE("RTT statistics cap and subtract peer ACK delay", "[rtt]") {
+TEST_CASE("RTT statistics cap and subtract peer ACK delay", "[rtt]")
+{
     utp_rtt_stats_t stats  = {};
     uint64_t        sample = 0u;
 

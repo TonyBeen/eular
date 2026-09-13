@@ -1395,7 +1395,7 @@ TEST_CASE("macOS send hook retries one EAGAIN without data loss", "[transport][i
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][integration][socket][mtu]")
+TEST_CASE("macOS send hook internally consumes MTU probe EMSGSIZE", "[transport][integration][socket][mtu]")
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
@@ -1404,7 +1404,6 @@ TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][
     utp_connection_t*            connection;
     uint32_t                     stream_id = UINT32_MAX;
     utp_stream_t*                stream;
-    utp_internal_error_t         error;
 
     transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
     transport_pair_connect(&pair);
@@ -1416,8 +1415,7 @@ TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][
     mtu_config.probe_interval_seconds = 1u;
     utp_mtu_discovery_init(&connection->mtu_discovery, &mtu_config, connection->peer.family);
     REQUIRE(utp_test_send_hook_configure((int32_t)pair.client->udp_socket.native_handle, EMSGSIZE, 1u));
-    error = utp_context_flush_public_connection(pair.client, connection);
-    REQUIRE(utp_internal_error_to_errno(error) == EMSGSIZE);
+    REQUIRE(utp_context_flush_public_connection(pair.client, connection) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_test_send_hook_remaining() == 0u);
     REQUIRE(connection->mtu_discovery.search_high_mtu == 1449u);
     REQUIRE(utp_mtu_discovery_next_probe_mtu(&connection->mtu_discovery) == 1425u);
@@ -1432,6 +1430,26 @@ TEST_CASE("macOS send hook backs off an MTU probe after EMSGSIZE", "[transport][
         return pair.server_probe.incoming_stream != nullptr &&
                utp_stream_readable_bytes(pair.server_probe.incoming_stream) == payload.size();
     });
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("macOS send hook exposes non-probe EMSGSIZE", "[transport][integration][socket]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const uint8_t    ping    = UTP_FRAME_TYPE_PING;
+    utp_internal_error_t error;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    pair.client_probe.connection->mtu_discovery.enabled = false;
+    REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
+                                        true) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_send_hook_configure((int32_t)pair.client->udp_socket.native_handle, EMSGSIZE, 1u));
+    error = utp_context_flush_public_connection(pair.client, pair.client_probe.connection);
+    REQUIRE(utp_internal_error_to_errno(error) == EMSGSIZE);
+    REQUIRE(utp_test_send_hook_remaining() == 0u);
     REQUIRE(pair.client_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
 }
@@ -1485,8 +1503,7 @@ TEST_CASE("macOS local close suppresses deferred ENOBUFS terminal error", "[tran
 #endif
 
 #if defined(__linux__) && defined(UTP_HAVE_SENDMMSG)
-TEST_CASE("Linux sendmmsg sends one MTU probe and continues with queued packets",
-          "[transport][integration][socket][mtu]")
+TEST_CASE("Linux sends an MTU probe separately from queued packet batches", "[transport][integration][socket][mtu]")
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
@@ -1517,9 +1534,8 @@ TEST_CASE("Linux sendmmsg sends one MTU probe and continues with queued packets"
     REQUIRE(utp_test_batch_hook_observe_send((int32_t)pair.client->udp_socket.native_handle));
 
     REQUIRE(utp_context_flush_public_connection(pair.client, connection) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_test_batch_hook_send_call_count() == 2u);
-    REQUIRE(utp_test_batch_hook_request_count(0u) == 1u);
-    REQUIRE(utp_test_batch_hook_request_count(1u) == 3u);
+    REQUIRE(utp_test_batch_hook_send_call_count() == 1u);
+    REQUIRE(utp_test_batch_hook_request_count(0u) == 3u);
     REQUIRE(utp_mtu_discovery_has_in_flight_probe(&connection->mtu_discovery));
     REQUIRE(pair.client_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);

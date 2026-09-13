@@ -323,8 +323,8 @@ utp_packet_out_t*    utp_connection_next_packet_to_send_at(utp_connection_t* con
 /** @brief 标记 PacketOut 已成功写入 UDP；无需跟踪的包会在此归还对象池。 */
 utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection, utp_packet_out_t* packet,
                                                    uint64_t now_us);
-/** @brief 处理 UDP 发送失败，决定重试、MTU 回退或本地关闭。 */
-void                 utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
+/** @brief 处理 UDP 发送失败；返回该错误是否已被协议内部消费。 */
+bool                 utp_connection_on_packet_send_error(utp_connection_t* connection, const utp_packet_out_t* packet,
                                                          utp_internal_error_t error, uint64_t now_us);
 /** @brief 判断给定 PacketOut 是否为本连接的 CONNECTION_CLOSE。 */
 bool                 utp_connection_is_close_packet(const utp_connection_t* connection, const utp_packet_out_t* packet);

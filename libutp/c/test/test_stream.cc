@@ -850,7 +850,7 @@ TEST_CASE("connection piggybacks a pending ACK on one zero-copy STREAM packet", 
     REQUIRE(packet->transient_ack_size != 0u);
     REQUIRE(packet->slice_count == 2u);
     REQUIRE(packet->slices[1].source == UTP_PACKET_OUT_SLICE_EXTERNAL);
-    REQUIRE(utp_connection_ack_pending_count(&active) == 1u);
+    REQUIRE(utp_connection_ack_pending_count(&active) == 0u);
     REQUIRE(utp_packet_out_flatten(packet, wire.data(), wire.size(), &length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_packet_view_decode(&view, wire.data(), length) == UTP_INTERNAL_ERROR_OK);
     offset = 0u;
