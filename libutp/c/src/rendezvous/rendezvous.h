@@ -90,7 +90,7 @@ typedef struct utp_rendezvous_unregister {
 
 typedef struct utp_rendezvous_rejected {
     uint8_t  reference_id[UTP_RENDEZVOUS_ID_SIZE];  // REGISTER/UNREGISTER 为 8，REQUEST 为 16
-    uint16_t reason_code;                           // NTRS 私有原因码，Context 不暴露
+    uint16_t reason_code;                           // NTRS 原因码，由 Context 注册结果回调透传
     uint8_t  rejected_message_type;
     uint8_t  reference_length;
 } utp_rendezvous_rejected_t;

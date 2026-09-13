@@ -111,14 +111,16 @@ static void test_on_session_token_ready(utp_connection_t* connection, void* user
             UTP_STATUS_OK);
 }
 
-static void test_on_ntrs_registered(utp_context_t* context, const utp_ntrs_registered_info_t* info, void* user_data)
+static void test_on_ntrs_registered(utp_context_t* context, utp_status_t status,
+                                    const utp_ntrs_register_result_t* result, void* user_data)
 {
     integration_probe_t* probe = static_cast<integration_probe_t*>(user_data);
 
     REQUIRE(context != NULL);
-    REQUIRE(info != NULL);
-    REQUIRE(info->peer_id != NULL);
-    REQUIRE(strcmp(info->peer_id, "node-b") == 0);
+    REQUIRE(status == UTP_STATUS_OK);
+    REQUIRE(result != NULL);
+    REQUIRE(result->peer_id != NULL);
+    REQUIRE(strcmp(result->peer_id, "node-b") == 0);
     REQUIRE(probe != NULL);
     ++probe->registered_count;
 }

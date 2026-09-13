@@ -43,7 +43,7 @@
 
 typedef struct utp_context_ntrs_registration {
     utp_address_t               endpoint;   // 当前 NTRS 目标或已注册 endpoint
-    utp_on_ntrs_registered_fn   callback;   // 注册成功回调
+    utp_on_ntrs_register_fn     callback;   // 注册结果回调
     void*                       user_data;  // 回调用户数据
     utp_on_ntrs_unregistered_fn unregister_callback;
     void*                       unregister_user_data;

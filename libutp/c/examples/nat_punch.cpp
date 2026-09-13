@@ -31,6 +31,7 @@ struct NatPunchApp {
     event*                      timeout_event;
     event*                      signal_int;
     event*                      signal_term;
+    event*                      unregister_timeout_event;
     utp_context_t*              context;
     utp_connection_t*           connection;
     utp_stream_t*               stream;
@@ -53,12 +54,14 @@ struct NatPunchApp {
     size_t                      input_header_length;
     uint8_t                     payload[kPayloadSize];
     size_t                      payload_offset;
+    const char*                 finish_reason;
     bool                        register_requested;
     bool                        listen_requested;
     bool                        rendezvous_connect;
     bool                        initiator;
     bool                        nat_finished;
     bool                        register_started;
+    bool                        ntrs_registered;
     bool                        connect_started;
     bool                        connected;
     bool                        request_sent;
@@ -69,6 +72,8 @@ struct NatPunchApp {
     bool                        input_header_finished;
     bool                        input_fin_received;
     bool                        writing;
+    bool                        stopping;
+    bool                        finish_failed;
     bool                        finished;
     bool                        failed;
 };
@@ -185,16 +190,58 @@ static bool nat_punch_parse_header(const char* header, const char* prefix, uint6
     return true;
 }
 
-static void nat_punch_break(NatPunchApp* app, bool failed, const char* reason)
+static void nat_punch_complete(NatPunchApp* app)
 {
     if (app->finished) return;
     app->finished = true;
-    app->failed   = failed;
+    app->failed   = app->finish_failed;
     LOG("nat_punch result=%s reason=%s sent_bytes=%" PRIu64 " received_bytes=%" PRIu64 " elapsed_ms=%" PRIu64,
-        failed ? "FAIL" : "PASS", reason, app->sent_bytes, app->received_bytes, nat_punch_now_ms() - app->start_ms);
+        app->failed ? "FAIL" : "PASS", app->finish_reason, app->sent_bytes, app->received_bytes,
+        nat_punch_now_ms() - app->start_ms);
+    event_base_loopbreak(app->base);
+}
+
+static void nat_punch_unregistered(utp_context_t*, void* user_data)
+{
+    NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
+
+    app->ntrs_registered = false;
+    if (app->unregister_timeout_event != NULL) event_del(app->unregister_timeout_event);
+    LOG("nat_punch peer=%s <- NTRS=%s:%" PRIu16 " [Unregistered]", app->peer_id, app->ntrs_address, app->ntrs_port);
+    nat_punch_complete(app);
+}
+
+static void nat_punch_unregister_timeout(evutil_socket_t, short, void* user_data)
+{
+    NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
+
+    LOG("nat_punch peer=%s <- NTRS=%s:%" PRIu16 " [UnregisterFailed] status=timeout reason=unregister_timeout",
+        app->peer_id, app->ntrs_address, app->ntrs_port);
+    nat_punch_complete(app);
+}
+
+static void nat_punch_break(NatPunchApp* app, bool failed, const char* reason)
+{
+    if (app->finished || app->stopping) return;
+    app->stopping      = true;
+    app->finish_failed = failed;
+    app->finish_reason = reason;
     if (app->timeout_event != NULL) event_del(app->timeout_event);
     if (app->connection != NULL && failed) utp_connection_close(app->connection);
-    event_base_loopbreak(app->base);
+    if (app->ntrs_registered) {
+        const timeval      timeout = {3, 0};
+        const utp_status_t status  = utp_context_unregister_ntrs(app->context, nat_punch_unregistered, app);
+
+        if (status == UTP_STATUS_OK) {
+            LOG("nat_punch peer=%s -> NTRS=%s:%" PRIu16 " [Unregister]", app->peer_id, app->ntrs_address,
+                app->ntrs_port);
+            event_add(app->unregister_timeout_event, &timeout);
+            return;
+        }
+        LOG("nat_punch peer=%s -> NTRS=%s:%" PRIu16 " [UnregisterFailed] status=%s", app->peer_id, app->ntrs_address,
+            app->ntrs_port, utp_status_string(status));
+    }
+    nat_punch_complete(app);
 }
 
 static void nat_punch_fail(NatPunchApp* app, const char* reason) { nat_punch_break(app, true, reason); }
@@ -528,13 +575,42 @@ static void nat_punch_connection_error(utp_connection_t* connection, const utp_c
         nat_punch_fail(app, info == NULL ? "connection_error" : utp_status_string(info->status));
 }
 
-static void nat_punch_registered(utp_context_t*, const utp_ntrs_registered_info_t* info, void* user_data)
+static const char* nat_punch_rejection_reason(uint16_t reason_code)
+{
+    switch (reason_code) {
+    case 2u:
+        return "peer_not_found";
+    case 3u:
+        return "peer_id_exists";
+    case 4u:
+        return "token_invalid";
+    default:
+        return "unknown";
+    }
+}
+
+static void nat_punch_register_result(utp_context_t*, utp_status_t status, const utp_ntrs_register_result_t* result,
+                                      void* user_data)
 {
     NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
     char         endpoint[80];
 
-    LOG("nat_punch peer=%s <- NTRS=%s [Registered]", app->peer_id,
-        nat_punch_endpoint_format(&info->ntrs_endpoint, endpoint));
+    if (status == UTP_STATUS_OK) {
+        app->ntrs_registered = true;
+        LOG("nat_punch peer=%s <- NTRS=%s [Registered]", app->peer_id,
+            nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint));
+        return;
+    }
+    if (status == UTP_STATUS_RENDEZVOUS_REJECTED) {
+        LOG("nat_punch peer=%s <- NTRS=%s [RegisterFailed] status=rejected reason=%s code=%" PRIu16, app->peer_id,
+            nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint),
+            nat_punch_rejection_reason(result->reason_code), result->reason_code);
+        nat_punch_fail(app, "register_rejected");
+        return;
+    }
+    LOG("nat_punch peer=%s <- NTRS=%s [RegisterFailed] status=%s reason=register_timeout", app->peer_id,
+        nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint), utp_status_string(status));
+    nat_punch_fail(app, "register_timeout");
 }
 
 static void nat_punch_start_actions(NatPunchApp* app)
@@ -544,7 +620,7 @@ static void nat_punch_start_actions(NatPunchApp* app)
     if (app->register_requested && !app->register_started) {
         app->register_started = true;
         LOG("nat_punch peer=%s -> NTRS=%s:%" PRIu16 " [Register]", app->peer_id, app->ntrs_address, app->ntrs_port);
-        status = utp_context_register_ntrs(app->context, &app->register_options, nat_punch_registered, app);
+        status = utp_context_register_ntrs(app->context, &app->register_options, nat_punch_register_result, app);
         if (status != UTP_STATUS_OK) {
             nat_punch_fail(app, "register_ntrs_failed");
             return;
@@ -745,7 +821,7 @@ int main(int argc, char** argv)
         app.register_options.retries                   = 3u;
         app.register_options.address_update_timeout_ms = 1000u;
         app.register_options.address_update_retries    = 3u;
-        app.register_options.keepalive_interval_ms     = 30000u;
+        app.register_options.keepalive_interval_ms     = 15000u;
         app.register_options.keepalive_timeout_ms      = 3000u;
         app.connect_options                            = utp_connect_options_t();
         app.connect_options.address =
@@ -787,10 +863,11 @@ int main(int argc, char** argv)
                                static_cast<suseconds_t>((timeout_ms % 1000u) * 1000u)};
             event_add(app.timeout_event, &timeout);
         }
-        app.signal_int  = evsignal_new(base, SIGINT, nat_punch_signal, &app);
-        app.signal_term = evsignal_new(base, SIGTERM, nat_punch_signal, &app);
-        if (app.signal_int == NULL || app.signal_term == NULL || event_add(app.signal_int, NULL) != 0 ||
-            event_add(app.signal_term, NULL) != 0) {
+        app.signal_int               = evsignal_new(base, SIGINT, nat_punch_signal, &app);
+        app.signal_term              = evsignal_new(base, SIGTERM, nat_punch_signal, &app);
+        app.unregister_timeout_event = evtimer_new(base, nat_punch_unregister_timeout, &app);
+        if (app.signal_int == NULL || app.signal_term == NULL || app.unregister_timeout_event == NULL ||
+            event_add(app.signal_int, NULL) != 0 || event_add(app.signal_term, NULL) != 0) {
             LOG("nat_punch signal_setup_failed");
             return EXIT_FAILURE;
         }
@@ -812,6 +889,7 @@ int main(int argc, char** argv)
         if (app.signal_int != NULL) event_free(app.signal_int);
         if (app.signal_term != NULL) event_free(app.signal_term);
         if (app.timeout_event != NULL) event_free(app.timeout_event);
+        if (app.unregister_timeout_event != NULL) event_free(app.unregister_timeout_event);
         utp_context_destroy(app.context);
         event_base_free(base);
         return app.failed ? EXIT_FAILURE : EXIT_SUCCESS;

@@ -67,9 +67,9 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
 static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context_t* context, uint64_t now_us);
 static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_context_t* context, uint64_t now_us);
 static utp_internal_error_t utp_context_retry_ntrs_address_update_send(utp_context_t* context, uint64_t now_us);
-static void                 utp_context_report_ntrs_registered(utp_context_t* context);
-static void                 utp_context_finish_ntrs_unregistration(utp_context_t* context);
-static void                 utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us);
+static void utp_context_report_ntrs_register_result(utp_context_t* context, utp_status_t status, uint16_t reason_code);
+static void utp_context_finish_ntrs_unregistration(utp_context_t* context);
+static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us);
 static void utp_context_remember_local_candidate(utp_context_t* context, const utp_address_t* candidate);
 /** @brief 将 Context 固定配置应用至新建连接，所有建连路径必须调用。 */
 static utp_internal_error_t utp_context_configure_connection(utp_context_t* context, utp_connection_t* connection)
@@ -1925,19 +1925,18 @@ static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_co
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static void utp_context_report_ntrs_registered(utp_context_t* context)
+static void utp_context_report_ntrs_register_result(utp_context_t* context, utp_status_t status, uint16_t reason_code)
 {
     utp_context_ntrs_registration_t* registration;
-    utp_ntrs_registered_info_t       info;
+    utp_ntrs_register_result_t       result;
 
     assert(context != NULL);
     registration = &context->ntrs_registration;
-    if (registration->callback == NULL) {
-        return;
-    }
-    info.peer_id = context->peer_id;
-    utp_context_endpoint_from_address(&info.ntrs_endpoint, &registration->endpoint);
-    registration->callback(context, &info, registration->user_data);
+    if (registration->callback == NULL) return;
+    result.peer_id     = context->peer_id;
+    result.reason_code = reason_code;
+    utp_context_endpoint_from_address(&result.ntrs_endpoint, &registration->endpoint);
+    registration->callback(context, status, &result, registration->user_data);
 }
 
 static void utp_context_finish_ntrs_unregistration(utp_context_t* context)
@@ -1960,7 +1959,7 @@ static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_
     assert(context != NULL);
     assert(now_us != 0u);
     registration          = &context->ntrs_registration;
-    keepalive_interval_ms = registration->keepalive_interval_ms == 0u ? 30000u : registration->keepalive_interval_ms;
+    keepalive_interval_ms = registration->keepalive_interval_ms == 0u ? 15000u : registration->keepalive_interval_ms;
     registration->last_activity_us        = now_us;
     registration->keepalive_packet_number = 0u;
     registration->keepalive_pending       = false;
@@ -1986,7 +1985,7 @@ static void utp_context_finish_ntrs_calibration(utp_context_t* context)
     registration->calibration_write_pending_mask = 0u;
     registration->calibration_deadline_us        = 0u;
     utp_context_disable_udp_write_event_if_idle(context);
-    utp_context_report_ntrs_registered(context);
+    utp_context_report_ntrs_register_result(context, UTP_STATUS_OK, 0u);
 }
 
 static utp_internal_error_t utp_context_send_ntrs_calibration_ping(utp_context_t* context, uint8_t index)
@@ -2029,7 +2028,7 @@ static utp_internal_error_t utp_context_start_ntrs_calibration(utp_context_t*   
     assert(now_us != 0u);
     registration = &context->ntrs_registration;
     if (registered->calibration_endpoint_count == 0u) {
-        utp_context_report_ntrs_registered(context);
+        utp_context_report_ntrs_register_result(context, UTP_STATUS_OK, 0u);
         return UTP_INTERNAL_ERROR_OK;
     }
     registration->calibration_active             = true;
@@ -3097,6 +3096,8 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
         return UTP_INTERNAL_ERROR_OK;
     }
     if (registration->retries_remaining == 0u) {
+        const bool register_timed_out = !registration->unregistering;
+
         registration->pending       = false;
         registration->write_pending = false;
         registration->deadline_us   = 0u;
@@ -3104,6 +3105,7 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
         utp_context_log(context, UTP_LOG_LEVEL_ERROR,
                         registration->unregistering ? "NTRS UNREGISTER timed out" : "NTRS REGISTER timed out");
         if (registration->unregistering) registration->unregistering = false;
+        if (register_timed_out) utp_context_report_ntrs_register_result(context, UTP_STATUS_TIMEOUT, 0u);
         return UTP_INTERNAL_ERROR_OK;
     }
     --registration->retries_remaining;
@@ -5332,7 +5334,12 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     registration->deadline_us   = 0u;
                     utp_context_disable_udp_write_event_if_idle(context);
                     utp_context_log(context, UTP_LOG_LEVEL_WARNING, "NTRS registration request rejected");
-                    if (registration->unregistering) utp_context_finish_ntrs_unregistration(context);
+                    if (registration->unregistering) {
+                        utp_context_finish_ntrs_unregistration(context);
+                    } else {
+                        utp_context_report_ntrs_register_result(context, UTP_STATUS_RENDEZVOUS_REJECTED,
+                                                                rejected.reason_code);
+                    }
                 } else if (rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
                            rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE) {
                     utp_context_connection_slot_t* slot =
@@ -6330,7 +6337,7 @@ utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_o
 }
 
 utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
-                                       utp_on_ntrs_registered_fn callback, void* user_data)
+                                       utp_on_ntrs_register_fn callback, void* user_data)
 {
     utp_context_ntrs_registration_t previous;
     utp_context_ntrs_registration_t registration     = {0};
@@ -6370,7 +6377,7 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
     registration.timeout_ms            = options->timeout_ms == 0u ? 1000u : options->timeout_ms;
     registration.retries               = options->retries;
     registration.retries_remaining     = options->retries;
-    registration.keepalive_interval_ms = options->keepalive_interval_ms == 0u ? 30000u : options->keepalive_interval_ms;
+    registration.keepalive_interval_ms = options->keepalive_interval_ms == 0u ? 15000u : options->keepalive_interval_ms;
     registration.keepalive_timeout_ms  = options->keepalive_timeout_ms == 0u ? 3000u : options->keepalive_timeout_ms;
     registration.pending               = true;
     registration.registered            = previous.registered && utp_address_equal(&previous.endpoint, &endpoint);

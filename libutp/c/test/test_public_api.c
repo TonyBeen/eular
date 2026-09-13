@@ -47,8 +47,11 @@ typedef struct public_api_probe {
 } public_api_probe_t;
 
 typedef struct ntrs_registration_probe {
+    int32_t        result_count;
     int32_t        registered_count;
     int32_t        unregistered_count;
+    utp_status_t   last_status;
+    uint16_t       last_reason_code;
     utp_context_t* context;
     char           peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];
     utp_endpoint_t endpoint;
@@ -157,17 +160,21 @@ static void test_on_connect_error(utp_status_t status, const char* message, cons
     probe->last_connect_retries    = attempt->retries;
 }
 
-static void test_on_ntrs_registered(utp_context_t* context, const utp_ntrs_registered_info_t* info, void* user_data)
+static void test_on_ntrs_registered(utp_context_t* context, utp_status_t status,
+                                    const utp_ntrs_register_result_t* result, void* user_data)
 {
     ntrs_registration_probe_t* probe = user_data;
 
     assert(context != NULL);
-    assert(info != NULL);
-    assert(info->peer_id != NULL);
-    ++probe->registered_count;
-    probe->context  = context;
-    probe->endpoint = info->ntrs_endpoint;
-    (void)snprintf(probe->peer_id, sizeof(probe->peer_id), "%s", info->peer_id);
+    assert(result != NULL);
+    assert(result->peer_id != NULL);
+    ++probe->result_count;
+    if (status == UTP_STATUS_OK) ++probe->registered_count;
+    probe->last_status      = status;
+    probe->last_reason_code = result->reason_code;
+    probe->context          = context;
+    probe->endpoint         = result->ntrs_endpoint;
+    (void)snprintf(probe->peer_id, sizeof(probe->peer_id), "%s", result->peer_id);
 }
 
 static void test_on_ntrs_unregistered(utp_context_t* context, void* user_data)
@@ -1354,6 +1361,7 @@ int main(void)
         utp_rendezvous_registered_t      registered = {0};
         utp_rendezvous_address_update_t  address_update;
         utp_rendezvous_address_updated_t address_updated;
+        utp_rendezvous_rejected_t        rejected;
         utp_packet_header_t              response_header;
         utp_address_t                    observed_address;
         utp_address_t                    refreshed_address;
@@ -1520,6 +1528,65 @@ int main(void)
         assert(probe.unregistered_count == 1);
         assert(!ntrs_context->ntrs_registration.registered);
         assert(utp_context_update_address(ntrs_context) == UTP_STATUS_RENDEZVOUS_UNAVAILABLE);
+
+        register_options.timeout_ms = 100u;
+        register_options.retries    = 0u;
+        assert(utp_context_register_ntrs(ntrs_context, &register_options, test_on_ntrs_registered, &probe) ==
+               UTP_STATUS_OK);
+        receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+        for (uint8_t attempt = 0u; attempt < 10u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+            receive_error =
+                utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+            if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                assert(event_base_loopexit(event_base, &retry_delay) == 0);
+                assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+            }
+        }
+        assert(receive_error == UTP_INTERNAL_ERROR_OK);
+        assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(utp_rendezvous_register_decode(&registration, frame.payload, frame.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        memset(&rejected, 0, sizeof(rejected));
+        rejected.rejected_message_type = UTP_RENDEZVOUS_MESSAGE_REGISTER;
+        rejected.reference_length      = sizeof(registration.registration_request_id);
+        rejected.reason_code           = 3u;
+        for (size_t index = 0u; index < sizeof(registration.registration_request_id); ++index) {
+            rejected.reference_id[index] =
+                (uint8_t)(registration.registration_request_id >>
+                          ((sizeof(registration.registration_request_id) - index - 1u) * 8u));
+        }
+        assert(utp_rendezvous_rejected_encode(response_body, sizeof(response_body), &rejected, &response_body_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        response_header = (utp_packet_header_t){0u,
+                                                0u,
+                                                UINT64_C(10),
+                                                (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
+                                                UTP_PACKET_TYPE_RENDEZVOUS,
+                                                0u};
+        assert(utp_proto_encode_header(response, sizeof(response), &response_header) == UTP_INTERNAL_ERROR_OK);
+        frame =
+            (utp_frame_rendezvous_t){response_body, (uint16_t)response_body_length, UTP_RENDEZVOUS_MESSAGE_REJECTED};
+        assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                           &frame) == UTP_INTERNAL_ERROR_OK);
+        response_length = UTP_PACKET_HEADER_SIZE + response_header.payload_length;
+        assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        pump_event_loop(event_base, 4);
+        assert(probe.result_count == 2);
+        assert(probe.last_status == UTP_STATUS_RENDEZVOUS_REJECTED);
+        assert(probe.last_reason_code == 3u);
+
+        register_options.timeout_ms = 1u;
+        assert(utp_context_register_ntrs(ntrs_context, &register_options, test_on_ntrs_registered, &probe) ==
+               UTP_STATUS_OK);
+        for (uint8_t attempt = 0u; attempt < 16u && probe.result_count != 3; ++attempt) {
+            assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+        }
+        assert(probe.result_count == 3);
+        assert(probe.last_status == UTP_STATUS_TIMEOUT);
+        assert(probe.last_reason_code == 0u);
 
         utp_udp_socket_close(&ntrs_socket);
         utp_context_destroy(ntrs_context);
