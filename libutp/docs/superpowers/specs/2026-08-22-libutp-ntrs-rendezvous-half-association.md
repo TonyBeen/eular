@@ -214,6 +214,11 @@ acknowledged_packet_number:u64
 只因本地 `send` 成功不得延长对端存活判定。哪一侧本地保活周期更短，通常由哪一侧先发起，另一侧
 回 `PONG` 即可。`PING` 未得到对应 `PONG` 时，发送方按自己的超时/重试配置失效该关联。
 
+NTRS 默认在关联空闲 15 秒后发送第一次普通保活 `PING`。未收到匹配 `(registration_token,
+acknowledged_packet_number)` 的 `PONG` 时，每隔 1 秒重发相同包号的 `PING`，总计发送 3 次；第三次
+发送后再等待 1 秒仍无有效响应，立即删除注册。收到匹配 `PONG` 或该 token 的其他有效关联报文会
+取消本轮探测并重新计算 15 秒空闲期。注册租约默认 30 秒，作为无活动注册的最终有效期上限。
+
 仅 `UTP_NAT_CLASS_SYMMETRIC` 在首次注册后进入本轮 calibration：
 
 ```text

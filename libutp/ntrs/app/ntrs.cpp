@@ -55,6 +55,7 @@ struct Registration {
     uint8_t                                                        observed_address_count;
     uint8_t                                                        calibration_endpoint_count;
     uint8_t                                                        calibration_received_mask;
+    uint8_t                                                        keepalive_probes_sent;
     bool                                                           has_reported_public_endpoint;
     bool                                                           last_register_was_initial;
     bool                                                           calibration_ip_consistent;
@@ -367,8 +368,10 @@ private:
 
 static const uint64_t        k_pending_rendezvous_lifetime_ms       = 30000u;
 static const uint64_t        k_unregistration_tombstone_lifetime_ms = 30000u;
-static const uint32_t        k_registration_timeout_default_ms      = 90000u;
-static const uint32_t        k_keepalive_interval_default_ms        = 30000u;
+static const uint32_t        k_registration_timeout_default_ms      = 30000u;
+static const uint32_t        k_keepalive_interval_default_ms        = 15000u;
+static const uint32_t        k_keepalive_retry_interval_ms          = 1000u;
+static const uint8_t         k_keepalive_probe_count                = 3u;
 static const uint32_t        k_forward_retry_initial_delay_ms       = 1000u;
 static const uint32_t        k_forward_retry_max_delay_ms           = 8000u;
 static const uint32_t        k_forward_retry_send_failure_delay_ms  = 100u;
@@ -738,6 +741,7 @@ void Registration::touch(uint64_t now_ms)
     last_activity_ms        = now_ms;
     keepalive_packet_number = 0u;
     last_keepalive_ping_ms  = 0u;
+    keepalive_probes_sent   = 0u;
 }
 
 void Registration::update(const utp_rendezvous_register_t& request, const utp_ntrs_endpoint_t& observed)
@@ -1132,7 +1136,8 @@ bool NtrsServer::encodeFrames(UdpSocket* socket, const sockaddr_storage& peer, s
         payload_length += UTP_FRAME_RENDEZVOUS_HEADER_SIZE + frames[index].body_length;
     }
     if (UTP_PACKET_HEADER_SIZE + payload_length > sizeof(packet)) return false;
-    header.packet_number = shared_state_->nextPacketNumber();
+    header.packet_number =
+        packet_number != NULL && *packet_number != 0u ? *packet_number : shared_state_->nextPacketNumber();
     if (header.packet_number == 0u) return false;
     header.payload_length = static_cast<uint16_t>(payload_length);
     header.type           = UTP_PACKET_TYPE_RENDEZVOUS;
@@ -1295,7 +1300,11 @@ void NtrsServer::expireRegistrations(uint64_t now_ms)
 {
     for (std::unordered_map<std::string, Registration>::iterator entry = shared_state_->registrations.begin();
          entry != shared_state_->registrations.end();) {
-        if (now_ms - entry->second.last_activity_ms >= registration_timeout_ms_) {
+        const Registration& registration = entry->second;
+        const bool keepalive_expired = registration.keepalive_probes_sent >= k_keepalive_probe_count &&
+                                       now_ms - registration.last_keepalive_ping_ms >= k_keepalive_retry_interval_ms;
+
+        if (now_ms - registration.last_activity_ms >= registration_timeout_ms_ || keepalive_expired) {
             const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token = entry->second.token;
             shared_state_->active_registration_tokens.erase(registration_token_key(token.data()));
             entry = shared_state_->registrations.erase(entry);
@@ -1571,11 +1580,8 @@ void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame
          entry != shared_state_->registrations.end(); ++entry) {
         Registration& registration = entry->second;
 
-        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token)) {
-            if (registration.keepalive_packet_number == pong.acknowledged_packet_number) {
-                registration.keepalive_packet_number = 0u;
-                registration.last_keepalive_ping_ms  = 0u;
-            }
+        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token) &&
+            registration.keepalive_packet_number == pong.acknowledged_packet_number) {
             registration.touch(utp_ntrs_now_ms());
             return;
         }
@@ -1968,7 +1974,10 @@ void NtrsServer::onRead(UdpSocket* socket)
                 if (utp_rendezvous_ping_decode(&ping, frame.payload, frame.payload_length) !=
                     UTP_INTERNAL_ERROR_OK)
                     continue;
-                if (ping.calibration_id != 0u)
+                std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token;
+
+                memcpy(token.data(), ping.registration_token, token.size());
+                if (ping.calibration_id != 0u && !isRegistrationTokenActive(token))
                     handleCalibrationPing(socket, peer, peer_length, observed, header, frame);
                 else
                     handlePing(socket, peer, peer_length, observed, header, frame);
@@ -2222,15 +2231,19 @@ void NtrsServer::onControlTimer()
          entry != shared_state_->registrations.end(); ++entry) {
         Registration& registration = entry->second;
 
-        if (now_ms - registration.last_activity_ms >= keepalive_interval_ms_ &&
-            (registration.last_keepalive_ping_ms == 0u ||
-             now_ms - registration.last_keepalive_ping_ms >= keepalive_interval_ms_)) {
+        const bool    first_probe = registration.keepalive_probes_sent == 0u;
+        const bool    probe_due   = first_probe
+                                        ? now_ms - registration.last_activity_ms >= keepalive_interval_ms_
+                                        : now_ms - registration.last_keepalive_ping_ms >= k_keepalive_retry_interval_ms;
+
+        if (probe_due && registration.keepalive_probes_sent < k_keepalive_probe_count) {
             PreparedDatagram datagram      = {};
-            uint64_t         packet_number = 0u;
+            uint64_t         packet_number = registration.keepalive_packet_number;
 
             if (prepareKeepalivePing(registration, &datagram, &packet_number) && sendDatagram(datagram)) {
                 registration.keepalive_packet_number = packet_number;
                 registration.last_keepalive_ping_ms  = now_ms;
+                ++registration.keepalive_probes_sent;
             }
         }
     }

@@ -515,9 +515,10 @@ private:
 
 static void test_registered_symmetric_prediction(uint16_t service_port)
 {
-    PortSequence                target                                = open_port_sequence();
-    const int                   source                                = open_socket(0u);
-    const uint8_t               rendezvous_id[UTP_RENDEZVOUS_ID_SIZE] = {1u};
+    PortSequence                target                                    = open_port_sequence();
+    const int                   source                                    = open_socket(0u);
+    const uint8_t               rendezvous_id[UTP_RENDEZVOUS_ID_SIZE]     = {1u};
+    const uint8_t               unacknowledged_id[UTP_RENDEZVOUS_ID_SIZE] = {7u};
     utp_rendezvous_registered_t registered;
     utp_rendezvous_redirect_t   redirect;
     utp_rendezvous_forward_t    forward = {};
@@ -587,7 +588,6 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
         CHECK(rejected.reason_code == 4u);
     }
     {
-        const uint8_t            unacknowledged_id[UTP_RENDEZVOUS_ID_SIZE] = {7u};
         std::vector<uint8_t>     body;
         uint64_t                 packet_number          = 0u;
         utp_rendezvous_forward_t unacknowledged_forward = {};
@@ -732,6 +732,43 @@ static void test_registration_timeout(const char* executable)
     (void)close(target);
 }
 
+static void test_keepalive_retry_timeout(const char* executable)
+{
+    const uint16_t service_port                          = find_service_port();
+    const int      target                                = open_socket(0u);
+    const int      source                                = open_socket(0u);
+    const uint8_t  rendezvous_id[UTP_RENDEZVOUS_ID_SIZE] = {6u};
+    const Datagram request = make_request("keepalive-source", "unresponsive-target", UTP_NAT_CLASS_PORT_RESTRICTED,
+                                          socket_port(source), rendezvous_id);
+    std::vector<uint8_t> body;
+    uint64_t             keepalive_packet_number = 0u;
+
+    NtrsProcess          server(executable, service_port, 10000u, 100u);
+    (void)register_peer(target, service_port, "unresponsive-target", UTP_NAT_CLASS_PORT_RESTRICTED, 7u);
+    for (uint8_t probe = 0u; probe < 3u; ++probe) {
+        uint64_t packet_number = 0u;
+
+        CHECK(receive_message(target, UTP_RENDEZVOUS_MESSAGE_PING, 1500u, &packet_number, &body));
+        if (probe == 0u)
+            keepalive_packet_number = packet_number;
+        else
+            CHECK(packet_number == keepalive_packet_number);
+    }
+    poll(NULL, 0u, 1200);
+    send_packet(source, service_port, request);
+    {
+        uint64_t                  packet_number = 0u;
+        utp_rendezvous_rejected_t rejected      = {};
+
+        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
+        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
+        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
+        CHECK(rejected.reason_code == 2u);
+    }
+    (void)close(source);
+    (void)close(target);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -747,5 +784,6 @@ int main(int argc, char** argv)
         test_temporary_calibration_timeout(service_port);
     }
     test_registration_timeout(argv[1]);
+    test_keepalive_retry_timeout(argv[1]);
     return 0;
 }
