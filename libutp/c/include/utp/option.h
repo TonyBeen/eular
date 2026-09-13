@@ -25,7 +25,7 @@ typedef enum utp_congestion_algorithm {
 typedef struct utp_context_options {
     struct event_base*          event_base;                  // 由调用方创建并驱动, Context 仅借用该事件循环
     utp_log_sink_fn             log_sink;                    // 为空时关闭日志, 回调由协议处理线程同步调用
-    uint64_t                    context_id;                  // 用于日志标签和 CID 初始值, 0 会自动跳过无效 CID
+    uint64_t                    context_id;                  // 用于日志标签，不参与随机 CID 生成
     utp_log_level_t             log_level;                   // 最低输出级别, 低于该级别的日志会被过滤
     utp_stream_scheduler_mode_t stream_scheduler_mode;       // 新建连接采用的流发送调度策略
     utp_congestion_algorithm_t  cc_algorithm;                // 新建连接采用的拥塞控制算法
@@ -87,7 +87,7 @@ typedef struct utp_context_options {
     uint64_t                    initial_max_data;                     // 连接级接收窗口，0 时采用 8 MiB
     uint64_t                    initial_max_stream_data_bidi_local;   // 对端发起双向流的接收窗口，0 时采用 256 KiB
     uint64_t                    initial_max_stream_data_bidi_remote;  // 本端发起双向流的接收窗口，0 时采用 256 KiB
-    const char*                 peer_id;  // Context 路由标识，必须为 1..128 字节的字符串
+    const char*                 peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
 } utp_context_options_t;
 
 // Context 配置的完整默认值；创建 Context 前必须由调用方设置 event_base。
@@ -95,7 +95,7 @@ typedef struct utp_context_options {
     {                                                                                                             \
         NULL,                                       /* event_base: 调用方提供的事件循环 */                        \
         NULL,                                       /* log_sink: 默认关闭日志 */                                  \
-        0u,                                         /* context_id: 自动生成 CID 起点 */                           \
+        0u,                                         /* context_id: 日志标识 */                                    \
         UTP_LOG_LEVEL_INFO,                         /* log_level: 最低日志级别 */                                 \
         UTP_STREAM_SCHEDULER_STRICT,                /* stream_scheduler_mode: Strict 调度 */                      \
         UTP_CONGESTION_DEFAULT,                     /* cc_algorithm: 默认 BBR */                                  \

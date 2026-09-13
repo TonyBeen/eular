@@ -202,7 +202,6 @@ struct utp_context {
     utp_hash_table_t                         pending_incoming;                 // 等待 accept 的被动握手表
     utp_hash_table_t                         pending_incoming_by_peer;         // pending 来源地址和对端 CID 表
     struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
-    uint32_t                                 next_cid;                         // 下一个自动分配 CID
     uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
     uint64_t                                 next_rendezvous_packet_number;    // Context 半连接包号命名空间
     utp_address_t                            local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 已知本地候选地址

@@ -19,6 +19,8 @@
 #include "util/error.h"
 #include "util/time.h"
 
+#define UTP_CONTEXT_CID_ALLOCATION_ATTEMPTS 8u
+
 typedef struct utp_context_replay {
     utp_context_t*       context;     // 所属 Context，不拥有
     utp_connection_t*    connection;  // 被重放入站包的连接，不拥有
@@ -818,23 +820,19 @@ static bool utp_context_cid_in_use(const utp_context_t* context, uint32_t cid)
 
 static utp_internal_error_t utp_context_alloc_cid(utp_context_t* context, uint32_t* out_cid)
 {
-    uint32_t candidate;
-    uint32_t attempts;
+    uint32_t             candidate;
+    utp_internal_error_t error;
 
     assert(context != NULL);
     assert(out_cid != NULL);
-    // CID 为 0 时仅用于尚未完成解复用的 Initial 包；已分配连接必须跳过该值。
-    candidate = context->next_cid == 0u ? 1u : context->next_cid;
-    for (attempts = 0u; attempts < UINT32_MAX; ++attempts) {
+    for (uint8_t attempt = 0u; attempt < UTP_CONTEXT_CID_ALLOCATION_ATTEMPTS; ++attempt) {
+        error = utp_crypto_random_bytes((uint8_t*)&candidate, sizeof(candidate));
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
         if (!utp_context_cid_in_use(context, candidate)) {
             *out_cid = candidate;
-            ++candidate;
-            context->next_cid = candidate == 0u ? 1u : candidate;
             return UTP_INTERNAL_ERROR_OK;
-        }
-        ++candidate;
-        if (candidate == 0u) {
-            candidate = 1u;
         }
     }
     return UTP_INTERNAL_ERROR_LIMIT;
@@ -6044,8 +6042,6 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->callback_accept_pending       = NULL;
     context->callback_accept_zero_rtt      = NULL;
     context->callback_accept_requested     = false;
-    context->next_cid                      = (uint32_t)options->context_id;
-    context->next_cid                      = context->next_cid == 0u ? 1u : context->next_cid;
     context->stream_scheduler_mode         = options->stream_scheduler_mode;
     context->cc_algorithm                  = options->cc_algorithm;
     context->clock_granularity_us          = options->clock_granularity_us == 0u ? 1u : options->clock_granularity_us;
