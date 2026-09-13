@@ -412,6 +412,9 @@ node_id, boot_id, load, heartbeat_interval
 - Hub 以 `node_id + boot_id` 标识一个 Node 实例。相同 `node_id` 的新 `boot_id` 替换旧实例，Hub
   关闭旧 Hub 控制连接。Node 的 Hub 控制连接断开或心跳超时后，Hub 只从成员表清理该实例，既不向其他
   Node 广播下线，也不主动改写已有 assignment；该实例之后不能再被新分配。
+- Node 连接 Hub 失败或控制连接断开后，按 `1/2/4/8/16/30` 秒指数退避重连，达到 30 秒后固定每
+  30 秒重试。只有收到 `NODE_REGISTER_OK` 才将下一次重连等待时间恢复为 1 秒，TCP 建连成功但注册失败
+  不得重置退避状态。
 
 Hub 对每个 Node、每个地址族独立分配至多两个协同 Node：`primary` 与 `backup`。候选必须在线、
 地址族匹配、不等于自身，且公网 IP 与本 Node 不同；`primary` 和 `backup` 之间同样必须使用不同

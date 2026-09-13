@@ -24,6 +24,8 @@
 
 #define UTP_NTRS_FORWARD_DEDUP_CAPACITY    1024u
 #define UTP_NTRS_FORWARD_DEDUP_LIFETIME_MS 30000u
+#define UTP_NTRS_RECONNECT_INITIAL_DELAY_MS 1000u
+#define UTP_NTRS_RECONNECT_MAX_DELAY_MS     30000u
 
 typedef struct nat_detect_node_forward_dedup {
     uint64_t forward_id;     // 已处理的转发标识
@@ -48,8 +50,10 @@ typedef struct nat_detect_node {
     utp_ntrs_assignment_t           assignments[2];           // IPv4、IPv6 当前 assignment
     nat_detect_node_forward_dedup_t forward_dedup[UTP_NTRS_FORWARD_DEDUP_CAPACITY];  // 协同回包短期去重表
     uint64_t                        assignment_versions[2];  // IPv4、IPv6 已接受 assignment 版本
+    uint32_t                        reconnect_delay_ms;      // 下次 Hub 重连等待时间
     bool                            registered : 1;          // Hub 已接受注册
     bool                            close_scheduled : 1;
+    bool                            reconnect_scheduled : 1;
 } nat_detect_node_t;
 
 typedef struct nat_detect_node_options {
@@ -72,6 +76,7 @@ typedef struct nat_detect_node_options {
 
 static void        nat_detect_node_disconnect(nat_detect_node_t* node);
 static void        nat_detect_node_schedule_disconnect(nat_detect_node_t* node);
+static void        nat_detect_node_schedule_reconnect(nat_detect_node_t* node);
 static bool        nat_detect_node_send(nat_detect_node_t* node, const uint8_t* message, size_t length);
 static void        nat_detect_node_on_udp_forward(void* user_data, const utp_ntrs_forward_binding_response_t* forward);
 static void        nat_detect_node_on_peer_forward(void* user_data, const utp_ntrs_node_instance_t* source,
@@ -308,6 +313,7 @@ static void nat_detect_node_disconnect_deferred(evutil_socket_t fd, int16_t even
     (void)events;
     node->close_scheduled = false;
     nat_detect_node_disconnect(node);
+    nat_detect_node_schedule_reconnect(node);
 }
 
 static void nat_detect_node_schedule_disconnect(nat_detect_node_t* node)
@@ -341,6 +347,22 @@ static void nat_detect_node_disconnect(nat_detect_node_t* node)
     if (node->udp_server != NULL) {
         utp_ntrs_udp_server_set_primary(node->udp_server, NULL, NULL);
     }
+}
+
+static void nat_detect_node_schedule_reconnect(nat_detect_node_t* node)
+{
+    struct timeval delay;
+
+    if (node->reconnect_scheduled) return;
+    delay.tv_sec  = (int32_t)(node->reconnect_delay_ms / 1000u);
+    delay.tv_usec = (int32_t)((node->reconnect_delay_ms % 1000u) * 1000u);
+    (void)event_add(node->reconnect_event, &delay);
+    node->reconnect_scheduled = true;
+    (void)fprintf(stderr, "event=hub_reconnect_scheduled delay_ms=%u\n", node->reconnect_delay_ms);
+    if (node->reconnect_delay_ms < UTP_NTRS_RECONNECT_MAX_DELAY_MS / 2u)
+        node->reconnect_delay_ms *= 2u;
+    else
+        node->reconnect_delay_ms = UTP_NTRS_RECONNECT_MAX_DELAY_MS;
 }
 
 static bool nat_detect_node_send(nat_detect_node_t* node, const uint8_t* message, size_t length)
@@ -425,6 +447,7 @@ static void nat_detect_node_on_message(void* user_data, uint8_t type, const uint
             }
         }
         node->registered = true;
+        node->reconnect_delay_ms = UTP_NTRS_RECONNECT_INITIAL_DELAY_MS;
         return;
     }
     if (type == UTP_NTRS_CONTROL_NODE_ASSIGNMENT) {
@@ -512,6 +535,7 @@ static void nat_detect_node_connect(nat_detect_node_t* node)
             (void)close(fd);
         }
         (void)fprintf(stderr, "event=hub_socket_create_failed\n");
+        nat_detect_node_schedule_reconnect(node);
         return;
     }
     {
@@ -526,14 +550,18 @@ static void nat_detect_node_connect(nat_detect_node_t* node)
                                    (int32_t)address_length) != 0) {
         (void)fprintf(stderr, "event=hub_connect_failed\n");
         nat_detect_node_disconnect(node);
+        nat_detect_node_schedule_reconnect(node);
     }
 }
 
 static void nat_detect_node_on_reconnect(evutil_socket_t fd, int16_t events, void* user_data)
 {
+    nat_detect_node_t* const node = static_cast<nat_detect_node_t*>(user_data);
+
     (void)fd;
     (void)events;
-    nat_detect_node_connect(static_cast<nat_detect_node_t*>(user_data));
+    node->reconnect_scheduled = false;
+    nat_detect_node_connect(node);
 }
 
 static void nat_detect_node_on_heartbeat(evutil_socket_t fd, int16_t events, void* user_data)
@@ -578,7 +606,6 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
     utp_ntrs_udp_server_options_t   udp_options      = {};
     struct event*                   signal_int       = NULL;
     struct event*                   signal_term      = NULL;
-    struct timeval                  reconnect_period = {1, 0};
     struct timeval                  heartbeat_period;
     const struct timeval            peer_tick_period = {10, 0};
     utp_ntrs_peer_manager_options_t peer_options     = {};
@@ -599,6 +626,7 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
 
     node.registration.load         = options->load;
     node.registration.heartbeat_ms = options->heartbeat_ms;
+    node.reconnect_delay_ms        = UTP_NTRS_RECONNECT_INITIAL_DELAY_MS;
     if (hub == NULL || node_id == NULL || node_id[0] == '\0' || strlen(node_id) > UTP_NTRS_NODE_ID_SIZE ||
         workers == 0u || workers > UINT16_MAX || node.registration.heartbeat_ms == 0u ||
         ((certificate == NULL) != (private_key == NULL)) ||
@@ -685,15 +713,15 @@ static int32_t nat_detect_node_run(const nat_detect_node_options_t* options)
     utp_ntrs_control_stream_init(&node.control);
     heartbeat_period.tv_sec  = (int32_t)(node.registration.heartbeat_ms / 1000u);
     heartbeat_period.tv_usec = (int32_t)((node.registration.heartbeat_ms % 1000u) * 1000u);
-    node.reconnect_event     = event_new(node.base, -1, EV_PERSIST, nat_detect_node_on_reconnect, &node);
+    node.reconnect_event     = evtimer_new(node.base, nat_detect_node_on_reconnect, &node);
     node.heartbeat_event     = event_new(node.base, -1, EV_PERSIST, nat_detect_node_on_heartbeat, &node);
     node.peer_tick_event     = event_new(node.base, -1, EV_PERSIST, nat_detect_node_on_peer_tick, &node);
     signal_int               = evsignal_new(node.base, SIGINT, nat_detect_node_on_signal, node.base);
     signal_term              = evsignal_new(node.base, SIGTERM, nat_detect_node_on_signal, node.base);
     if (node.reconnect_event == NULL || node.heartbeat_event == NULL || node.peer_tick_event == NULL ||
-        signal_int == NULL || signal_term == NULL || event_add(node.reconnect_event, &reconnect_period) != 0 ||
-        event_add(node.heartbeat_event, &heartbeat_period) != 0 || event_add(signal_int, NULL) != 0 ||
-        event_add(signal_term, NULL) != 0 || event_add(node.peer_tick_event, &peer_tick_period) != 0) {
+        signal_int == NULL || signal_term == NULL || event_add(node.heartbeat_event, &heartbeat_period) != 0 ||
+        event_add(signal_int, NULL) != 0 || event_add(signal_term, NULL) != 0 ||
+        event_add(node.peer_tick_event, &peer_tick_period) != 0) {
         goto cleanup;
     }
     nat_detect_node_connect(&node);
