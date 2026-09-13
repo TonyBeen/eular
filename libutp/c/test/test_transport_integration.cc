@@ -1485,6 +1485,46 @@ TEST_CASE("macOS local close suppresses deferred ENOBUFS terminal error", "[tran
 #endif
 
 #if defined(__linux__) && defined(UTP_HAVE_SENDMMSG)
+TEST_CASE("Linux sendmmsg sends one MTU probe and continues with queued packets",
+          "[transport][integration][socket][mtu]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const uint8_t    ping    = UTP_FRAME_TYPE_PING;
+    utp_mtu_config_t mtu_config = UTP_MTU_CONFIG_INIT;
+    utp_connection_t* connection;
+    utp_packet_out_t* probe;
+    const uint64_t    now_us = utp_clock_now_us(nullptr);
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    connection                        = pair.client_probe.connection;
+    mtu_config.mtu_min                = 1280u;
+    mtu_config.mtu_base               = 1400u;
+    mtu_config.mtu_max                = 1450u;
+    mtu_config.probe_interval_seconds = 1u;
+    utp_mtu_discovery_init(&connection->mtu_discovery, &mtu_config, connection->peer.family);
+    probe = utp_connection_next_packet_to_send_at(connection, now_us);
+    REQUIRE(probe != nullptr);
+    REQUIRE((probe->po_flags & UTP_PO_MTU_PROBE) != 0u);
+    REQUIRE(utp_send_control_reschedule_packet(&connection->send_control, probe) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_batch_hook_observe_send((int32_t)pair.client->udp_socket.native_handle));
+
+    REQUIRE(utp_context_flush_public_connection(pair.client, connection) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_test_batch_hook_send_call_count() == 2u);
+    REQUIRE(utp_test_batch_hook_request_count(0u) == 1u);
+    REQUIRE(utp_test_batch_hook_request_count(1u) == 3u);
+    REQUIRE(utp_mtu_discovery_has_in_flight_probe(&connection->mtu_discovery));
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix", "[transport][integration][socket]")
 {
     transport_pair   pair    = {};
@@ -1493,6 +1533,7 @@ TEST_CASE("Linux sendmmsg partial success reschedules its unsent packet suffix",
 
     transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
     transport_pair_connect(&pair);
+    pair.client_probe.connection->mtu_discovery.enabled = false;
     REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),
                                         true) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_queue_packet(pair.client_probe.connection, UTP_PACKET_TYPE_CTRL, &ping, sizeof(ping),

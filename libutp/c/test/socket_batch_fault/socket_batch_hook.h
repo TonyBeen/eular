@@ -6,8 +6,11 @@
 
 #if defined(UTP_HAVE_SENDMMSG)
 bool     utp_test_batch_hook_configure_partial_send(int32_t native_socket, uint32_t sent_count);
+bool     utp_test_batch_hook_observe_send(int32_t native_socket);
 uint32_t utp_test_batch_hook_intercept_count(void);
 uint32_t utp_test_batch_hook_last_request_count(void);
+uint32_t utp_test_batch_hook_send_call_count(void);
+uint32_t utp_test_batch_hook_request_count(uint32_t index);
 #endif
 #if defined(UTP_HAVE_RECVMMSG)
 bool     utp_test_batch_hook_configure_truncated_receive(int32_t native_socket);

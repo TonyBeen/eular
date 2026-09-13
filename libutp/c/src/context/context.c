@@ -3193,7 +3193,9 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 }
                 packets[packet_count] = packet;
                 ++packet_count;
-                if (packet_count == UTP_UDP_SOCKET_BATCH_SIZE) {
+                // NOTE MTU probe 发送成功后才会进入 in-flight 状态; 继续构建本批会重复生成 probe
+                // 此处只结束当前批次, 外层 flush 会继续发送队列中的后续包
+                if (packet_count == UTP_UDP_SOCKET_BATCH_SIZE || (packet->po_flags & UTP_PO_MTU_PROBE) != 0u) {
                     break;
                 }
                 packet = utp_connection_next_packet_to_send_at(connection, now_us);
