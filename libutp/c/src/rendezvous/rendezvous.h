@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define UTP_RENDEZVOUS_ID_SIZE                 16u
+#define UTP_RENDEZVOUS_ATTEMPT_ID_SIZE         16u
 #define UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE 8u
 #define UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE        8u
 #define UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES    4u
@@ -55,7 +55,7 @@ typedef struct utp_rendezvous_ping {
 /* CALIBRATE：NTRS 要求本轮主动连接从指定副端口发出 PING，以采集对称 NAT 端口样本。 */
 typedef struct utp_rendezvous_calibrate {
     const utp_address_t* endpoints;  // 1..4 个 NTRS 副端口
-    uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
+    uint8_t              attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];
     uint8_t              calibration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
     utp_address_t        decoded_endpoints[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
     uint64_t             calibration_id;
@@ -89,20 +89,20 @@ typedef struct utp_rendezvous_unregister {
 } utp_rendezvous_unregister_t;
 
 typedef struct utp_rendezvous_rejected {
-    uint8_t  reference_id[UTP_RENDEZVOUS_ID_SIZE];  // REGISTER/UNREGISTER 为 8，REQUEST 为 16
-    uint16_t reason_code;                           // NTRS 原因码，由 Context 注册结果回调透传
+    uint8_t  reference_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];  // REGISTER/UNREGISTER 为 8，REQUEST 为 16
+    uint16_t reason_code;                                   // NTRS 原因码，由 Context 注册结果回调透传
     uint8_t  rejected_message_type;
     uint8_t  reference_length;
 } utp_rendezvous_rejected_t;
 
-/* REQUEST：rendezvous_id(16), source_id, target_id, NAT 信息和本地候选地址。 */
+/* REQUEST：attempt_id(16), source_id, target_id, NAT 信息和本地候选地址。 */
 typedef struct utp_rendezvous_request {
-    const uint8_t*       source_peer_id;                         // 请求方 Context peer_id 的字节视图
-    const uint8_t*       target_peer_id;                         // 目标节点 peer_id 的字节视图
-    const utp_address_t* local_candidates;                       // 最多四个本地候选地址
-    const utp_address_t* reported_public_endpoint;               // NAT 探测得出的公网 endpoint，可为空
-    uint8_t              rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 本轮幂等键
-    utp_address_t        decoded_reported_public_endpoint;       // 解码存储
+    const uint8_t*       source_peer_id;                              // 请求方 Context peer_id 的字节视图
+    const uint8_t*       target_peer_id;                              // 目标节点 peer_id 的字节视图
+    const utp_address_t* local_candidates;                            // 最多四个本地候选地址
+    const utp_address_t* reported_public_endpoint;                    // NAT 探测得出的公网 endpoint，可为空
+    uint8_t              attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];  // 本次连接尝试的随机幂等键
+    utp_address_t        decoded_reported_public_endpoint;            // 解码存储
     utp_address_t        decoded_local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 解码存储
     uint16_t             local_port;                                                     // Context 已绑定 UDP 端口
     uint8_t              source_peer_id_length;                                          // 1..128
@@ -124,17 +124,17 @@ typedef struct utp_rendezvous_candidate_plan {
     uint8_t              public_candidate_count;                                          // 1..4
 } utp_rendezvous_candidate_plan_t;
 
-/* REDIRECT：rendezvous_id(16) 加目标 CandidatePlan。 */
+/* REDIRECT：attempt_id(16) 加目标 CandidatePlan。 */
 typedef struct utp_rendezvous_redirect {
-    uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
+    uint8_t                         attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];  // 对应 REQUEST 幂等键
     uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     utp_rendezvous_candidate_plan_t target_plan;  // 目标 B 的候选计划
 } utp_rendezvous_redirect_t;
 
-/* FORWARD：rendezvous_id(16)、请求方 peer_id 与请求方 CandidatePlan。 */
+/* FORWARD：attempt_id(16)、请求方 peer_id 与请求方 CandidatePlan。 */
 typedef struct utp_rendezvous_forward {
-    const uint8_t*                  source_peer_id;                         // 请求方 peer_id 的输入视图
-    uint8_t                         rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];  // 对应 REQUEST 幂等键
+    const uint8_t*                  source_peer_id;                              // 请求方 peer_id 的输入视图
+    uint8_t                         attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];  // 对应 REQUEST 幂等键
     uint8_t                         punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     uint8_t                         source_peer_id_length;  // 1..128
     utp_rendezvous_candidate_plan_t source_plan;            // 请求方 A 的候选计划
@@ -217,10 +217,6 @@ utp_internal_error_t utp_rendezvous_forward_encode(uint8_t* buffer, size_t capac
 /** @brief 解码 FORWARD 消息体；source_peer_id 借用输入缓冲。 */
 utp_internal_error_t utp_rendezvous_forward_decode(utp_rendezvous_forward_t* forward, const uint8_t* buffer,
                                                    size_t length);
-/** @brief 校验 INTRODUCTION 消息体必须恰为一个 rendezvous_id。 */
-utp_internal_error_t utp_rendezvous_introduction_decode(uint8_t        rendezvous_id[UTP_RENDEZVOUS_ID_SIZE],
-                                                        const uint8_t* buffer, size_t length);
-
 #ifdef __cplusplus
 }
 #endif

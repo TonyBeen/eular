@@ -179,6 +179,7 @@ typedef struct utp_connection {
     uint64_t                           scheduler_drr_consumes;                    // DRR 配额消耗次数
     uint64_t                           peer_handshake_packet_number;              // 已接收对端握手包号
     uint64_t                           peer_handshake_received_us;                // 对端握手接收时刻
+    uint64_t                           peer_handshake_done_packet_number;         // 当前包确认的对端握手包号
     uint64_t                           retransmission_deadline_us;                // 普通数据重传截止时刻
     uint64_t                           close_deadline_us;                         // draining 结束时刻
     uint64_t                           close_last_sent_us;                        // 最近 CLOSE 发送时刻

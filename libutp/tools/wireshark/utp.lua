@@ -53,7 +53,6 @@ local rendezvous_message_names = {
     [8] = "REQUEST",
     [9] = "REDIRECT",
     [10] = "FORWARD",
-    [11] = "INTRODUCTION",
     [12] = "UNREGISTER",
     [13] = "UNREGISTERED",
     [14] = "REJECTED",
@@ -196,7 +195,7 @@ f.rendezvous_message_type = ProtoField.uint8("eular_utp.rendezvous.message_type"
     rendezvous_message_names)
 f.rendezvous_payload_len = ProtoField.uint16("eular_utp.rendezvous.payload_len", "Rendezvous Payload Length", base.DEC)
 f.rendezvous_payload = ProtoField.bytes("eular_utp.rendezvous.payload", "Rendezvous Payload")
-f.rendezvous_id = ProtoField.bytes("eular_utp.rendezvous.id", "Rendezvous ID")
+f.attempt_id = ProtoField.bytes("eular_utp.rendezvous.attempt_id", "Attempt ID")
 f.rendezvous_punch_token = ProtoField.bytes("eular_utp.rendezvous.punch_token", "Punch Token")
 f.rendezvous_registration_request_id = ProtoField.uint64("eular_utp.rendezvous.registration_request_id",
     "Registration Request ID", base.DEC)
@@ -541,7 +540,7 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
     end
     if message_type == 5 then
         if payload_len < 33 then return "truncated CALIBRATE payload" end
-        tree:add(f.rendezvous_id, payload(0, 16))
+        tree:add(f.attempt_id, payload(0, 16))
         tree:add(f.rendezvous_calibration_token, payload(16, 8))
         tree:add(f.rendezvous_calibration_id, payload(24, 8))
         local endpoint_count = payload(32, 1):uint()
@@ -583,20 +582,12 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         append_summary(summaries, "RENDEZVOUS ADDRESS_UPDATED")
         return nil
     end
-    if message_type == 11 then
-        if payload_len ~= 16 then
-            return "INTRODUCTION payload must be 16 bytes"
-        end
-        tree:add(f.rendezvous_id, payload(0, 16))
-        append_summary(summaries, "RENDEZVOUS INTRODUCTION")
-        return nil
-    end
     if message_type == 8 then
         if payload_len < 27 then
             return "truncated REQUEST payload"
         end
         local offset = 0
-        tree:add(f.rendezvous_id, payload(offset, 16))
+        tree:add(f.attempt_id, payload(offset, 16))
         offset = offset + 16
         local source_length = payload(offset, 1):uint()
         offset = offset + 1
@@ -651,7 +642,7 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         if payload_len < 35 then
             return "truncated REDIRECT payload"
         end
-        tree:add(f.rendezvous_id, payload(0, 16))
+        tree:add(f.attempt_id, payload(0, 16))
         tree:add(f.rendezvous_punch_token, payload(16, 8))
         local next_offset, error = parse_rendezvous_candidate_plan(payload, 24, payload_len, tree)
         if next_offset == nil or next_offset ~= payload_len then
@@ -664,7 +655,7 @@ local function parse_rendezvous_payload(payload, tree, message_type, summaries)
         if payload_len < 37 then
             return "truncated FORWARD payload"
         end
-        tree:add(f.rendezvous_id, payload(0, 16))
+        tree:add(f.attempt_id, payload(0, 16))
         tree:add(f.rendezvous_punch_token, payload(16, 8))
         local source_length = payload(24, 1):uint()
         if source_length == 0 or source_length > 128 or 25 + source_length >= payload_len then

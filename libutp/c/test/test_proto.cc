@@ -812,13 +812,13 @@ TEST_CASE("rendezvous REQUEST round trips peer IDs and local candidates", "[rend
     request.decoded_reported_public_endpoint.address[2] = 113u;
     request.decoded_reported_public_endpoint.address[3] = 12u;
     request.reported_public_endpoint                    = &request.decoded_reported_public_endpoint;
-    for (size_t index = 0u; index < sizeof(request.rendezvous_id); ++index) {
-        request.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
+    for (size_t index = 0u; index < sizeof(request.attempt_id); ++index) {
+        request.attempt_id[index] = static_cast<uint8_t>(index + 1u);
     }
 
     REQUIRE(utp_rendezvous_request_encode(body.data(), body.size(), &request, &body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_request_decode(&decoded, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(std::memcmp(decoded.rendezvous_id, request.rendezvous_id, sizeof(request.rendezvous_id)) == 0);
+    REQUIRE(std::memcmp(decoded.attempt_id, request.attempt_id, sizeof(request.attempt_id)) == 0);
     REQUIRE(decoded.source_peer_id_length == source_id.size());
     REQUIRE(decoded.target_peer_id_length == target_id.size());
     REQUIRE(std::memcmp(decoded.source_peer_id, source_id.data(), source_id.size()) == 0);
@@ -866,8 +866,8 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
     redirect.target_plan.family                 = UTP_ADDRESS_FAMILY_IPV4;
     redirect.target_plan.local_candidate_count  = static_cast<uint8_t>(candidates.size());
     redirect.target_plan.public_candidate_count = static_cast<uint8_t>(public_candidates.size());
-    for (size_t index = 0u; index < sizeof(redirect.rendezvous_id); ++index) {
-        redirect.rendezvous_id[index] = static_cast<uint8_t>(index + 1u);
+    for (size_t index = 0u; index < sizeof(redirect.attempt_id); ++index) {
+        redirect.attempt_id[index] = static_cast<uint8_t>(index + 1u);
     }
     for (size_t index = 0u; index < sizeof(redirect.punch_token); ++index) {
         redirect.punch_token[index] = static_cast<uint8_t>(index + 9u);
@@ -875,7 +875,7 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
 
     REQUIRE(utp_rendezvous_redirect_encode(body.data(), body.size(), &redirect, &body_length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_redirect_decode(&decoded_redirect, body.data(), body_length) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(std::memcmp(decoded_redirect.rendezvous_id, redirect.rendezvous_id, sizeof(redirect.rendezvous_id)) == 0);
+    REQUIRE(std::memcmp(decoded_redirect.attempt_id, redirect.attempt_id, sizeof(redirect.attempt_id)) == 0);
     REQUIRE(decoded_redirect.target_plan.local_candidate_count == candidates.size());
     REQUIRE(std::memcmp(decoded_redirect.punch_token, redirect.punch_token, sizeof(redirect.punch_token)) == 0);
     REQUIRE(decoded_redirect.target_plan.public_candidate_count == public_candidates.size());
@@ -884,7 +884,7 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
 
     forward.source_peer_id        = source_id.data();
     forward.source_peer_id_length = static_cast<uint8_t>(source_id.size());
-    std::memcpy(forward.rendezvous_id, redirect.rendezvous_id, sizeof(forward.rendezvous_id));
+    std::memcpy(forward.attempt_id, redirect.attempt_id, sizeof(forward.attempt_id));
     std::memcpy(forward.punch_token, redirect.punch_token, sizeof(forward.punch_token));
     forward.source_plan = redirect.target_plan;
     REQUIRE(utp_rendezvous_forward_encode(body.data(), body.size(), &forward, &body_length) == UTP_INTERNAL_ERROR_OK);
@@ -894,17 +894,6 @@ TEST_CASE("rendezvous CandidatePlan REDIRECT and FORWARD round trip", "[rendezvo
     REQUIRE(std::memcmp(decoded_forward.punch_token, forward.punch_token, sizeof(forward.punch_token)) == 0);
     REQUIRE(decoded_forward.source_plan.public_candidates[0].port == UINT16_C(40001));
     REQUIRE(decoded_forward.source_plan.public_candidates[0].address[3] == 8u);
-}
-
-TEST_CASE("rendezvous INTRODUCTION requires exactly one rendezvous ID", "[rendezvous]")
-{
-    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE>      rendezvous_id = {};
-    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE - 1u> truncated     = {};
-
-    REQUIRE(utp_rendezvous_introduction_decode(rendezvous_id.data(), truncated.data(), truncated.size()) ==
-            UTP_INTERNAL_ERROR_PROTOCOL);
-    REQUIRE(utp_rendezvous_introduction_decode(rendezvous_id.data(), rendezvous_id.data(), rendezvous_id.size()) ==
-            UTP_INTERNAL_ERROR_OK);
 }
 
 TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezvous]")
@@ -987,15 +976,15 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
     calibrate.calibration_token[7] = 8u;
     calibrate.calibration_id       = UINT64_C(0x8877665544332211);
     calibrate.endpoint_count       = static_cast<uint8_t>(local_candidates.size());
-    calibrate.rendezvous_id[0]     = 1u;
-    calibrate.rendezvous_id[15]    = 16u;
+    calibrate.attempt_id[0]        = 1u;
+    calibrate.attempt_id[15]       = 16u;
     REQUIRE(utp_rendezvous_calibrate_encode(buffer.data(), buffer.size(), &calibrate, &length) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(decoded_calibrate.calibration_id == calibrate.calibration_id);
     REQUIRE(decoded_calibrate.endpoint_count == local_candidates.size());
     REQUIRE(decoded_calibrate.endpoints[1].port == UINT16_C(34000));
-    REQUIRE(decoded_calibrate.rendezvous_id[15] == 16u);
+    REQUIRE(decoded_calibrate.attempt_id[15] == 16u);
     REQUIRE(utp_rendezvous_calibrate_decode(&decoded_calibrate, buffer.data(), length - 1u) != UTP_INTERNAL_ERROR_OK);
 
     pong.registration_token[0]      = 1u;
@@ -1010,12 +999,12 @@ TEST_CASE("rendezvous registration and keepalive payloads round trip", "[rendezv
 
 TEST_CASE("rendezvous registration lifecycle payloads are strict", "[rendezvous]")
 {
-    std::array<uint8_t, UTP_RENDEZVOUS_ID_SIZE + 4u> buffer             = {};
-    utp_rendezvous_unregister_t                      unregister_message = {};
-    utp_rendezvous_unregister_t                      decoded_unregister = {};
-    utp_rendezvous_rejected_t                        rejected           = {};
-    utp_rendezvous_rejected_t                        decoded_rejected   = {};
-    size_t                                           length             = 0u;
+    std::array<uint8_t, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 4u> buffer             = {};
+    utp_rendezvous_unregister_t                              unregister_message = {};
+    utp_rendezvous_unregister_t                              decoded_unregister = {};
+    utp_rendezvous_rejected_t                                rejected           = {};
+    utp_rendezvous_rejected_t                                decoded_rejected   = {};
+    size_t                                                   length             = 0u;
 
     for (size_t index = 0u; index < sizeof(unregister_message.registration_token); ++index) {
         unregister_message.registration_token[index] = static_cast<uint8_t>(index + 1u);
@@ -1031,16 +1020,16 @@ TEST_CASE("rendezvous registration lifecycle payloads are strict", "[rendezvous]
             UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
 
     rejected.rejected_message_type = UTP_RENDEZVOUS_MESSAGE_REQUEST;
-    rejected.reference_length      = UTP_RENDEZVOUS_ID_SIZE;
+    rejected.reference_length      = UTP_RENDEZVOUS_ATTEMPT_ID_SIZE;
     rejected.reason_code           = 2u;
     for (size_t index = 0u; index < sizeof(rejected.reference_id); ++index) {
         rejected.reference_id[index] = static_cast<uint8_t>(index + 1u);
     }
     REQUIRE(utp_rendezvous_rejected_encode(buffer.data(), buffer.size(), &rejected, &length) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(length == UTP_RENDEZVOUS_ID_SIZE + 4u);
+    REQUIRE(length == UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 4u);
     REQUIRE(utp_rendezvous_rejected_decode(&decoded_rejected, buffer.data(), length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(decoded_rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
-    REQUIRE(decoded_rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE);
+    REQUIRE(decoded_rejected.reference_length == UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
     REQUIRE(decoded_rejected.reason_code == rejected.reason_code);
     REQUIRE(std::memcmp(decoded_rejected.reference_id, rejected.reference_id, sizeof(rejected.reference_id)) == 0);
 

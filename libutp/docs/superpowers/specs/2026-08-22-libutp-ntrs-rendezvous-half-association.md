@@ -16,7 +16,7 @@
 - 普通 peer-to-peer UTP connection 仍使用既有 `PING` 帧与 `ACK` 帧保活；不得与本规格的
   `FrameRendezvous(PING/PONG)` 混用。
 - NTRS 不根据 NAT 类型交换 A/B 的 UTP 握手角色。A 永远发送最终 `INITIAL` 或 `0RTT`，B 永远
-  响应 `HANDSHAKE` 或 0-RTT 的 `HANDSHAKE_DONE`。
+  响应 `HANDSHAKE`；0-RTT 中 A 收到该响应后再发送 `HANDSHAKE_DONE` 确认。
 - NAT 类型仅影响 CandidatePlan 的端口来源和候选发送调度。NTRS 生成端口候选，Peer 不自行预测。
 - NTRS 请求方 A 可以注册也可以不注册。注册只决定节点能否作为目标 B 被查找、接收 `FORWARD`、
   保存端口样本；NTRS 不因 A 未注册拒绝 `REQUEST`。
@@ -30,7 +30,7 @@ NTRS 进程由多个 UDP Worker 和一个 control thread 组成。所有 Worker 
 ```text
 Worker:
   recv/decode UDP datagram
-  REQUEST 按 rendezvous_id 哈希到固定 owner Worker
+  REQUEST 按 attempt_id 哈希到固定 owner Worker
   非 owner 通过目标 Worker 的有界 MPSC 转交
   owner Worker 独占执行 REQUEST、pending、临时校准和 Forward 重试
   校准 PING 按 (calibration_token, calibration_id)、Forward PONG 按 (registration_token, acknowledged_packet_number) 路由到 owner
@@ -42,9 +42,9 @@ control thread:
 ```
 
 `registrations`、活动 registration token 索引和注销 tombstone 只由 control thread 管理。每个 owner Worker 私有
-`pending_rendezvous`；同一个 `rendezvous_id` 始终只会落到同一个 owner，因此重复 REQUEST、
+`pending_rendezvous`；同一个 `attempt_id` 始终只会落到同一个 owner，因此重复 REQUEST、
 校准截止、Forward 重试和生命周期淘汰都无需共享锁。固定 owner 保证同一
-`rendezvous_id` 的处理顺序一致。
+`attempt_id` 的处理顺序一致。
 
 共享互斥锁只保护 control 状态快照及两个短时路由索引：`(calibration_token, calibration_id) -> owner` 和
 `(registration_token, acknowledged_packet_number) -> owner`。Worker 读取目标注册时复制快照，
@@ -92,7 +92,7 @@ type:u8 | message_type:u8 | payload_length:u16 | payload
 ```text
 1 REGISTER          2 REGISTERED        3 PING             4 PONG
 5 CALIBRATE         6 ADDRESS_UPDATE    7 ADDRESS_UPDATED  8 REQUEST
-9 REDIRECT          10 FORWARD          11 INTRODUCTION(废弃保留) 12 UNREGISTER
+9 REDIRECT          10 FORWARD          12 UNREGISTER
 13 UNREGISTERED     14 REJECTED          15 PUNCH
 ```
 
@@ -356,23 +356,24 @@ FrameRendezvous(PUNCH):
   punch_token:8
 ```
 
-`PUNCH` 仅用于创建出向 NAT 映射和过滤规则；它不是连接级 `PATH_CHALLENGE`，不得回复
-`PATH_RESPONSE`。消息体必须恰为非零的 8 字节 token。每个候选每轮只发送一次；临时本地发送阻塞可在
-attempt 期限内重试。收到匹配本轮
-`punch_token` 的 PUNCH 时，接收端不创建 connection，但将 UDP 源 endpoint 去重后提升为对应 peer 的
-首选候选。未知 token 的 PUNCH 在一个有界、短时缓存中按 token 保存源 endpoint；随后收到匹配
-`REDIRECT` 或 `FORWARD` 时同样提升该 endpoint，超时则静默删除。最终 `INITIAL/0RTT` 的正常握手 PTO
-重传负责后续可达性，不重发零 CID 打洞包。
+`PUNCH` 仅用于创建出向 NAT 映射、过滤规则和提供路径反馈；它不是连接级 `PATH_CHALLENGE`，不得回复
+`PATH_RESPONSE`。消息体必须恰为非零的 8 字节 token。local/public 候选先按完整 endpoint 去重，IPv6
+链路本地地址的 scope 也参与比较，每个候选每轮只发送一次。未知 token 的 PUNCH 直接静默丢弃，不做
+提前缓存。收到匹配本轮 `punch_token` 的 PUNCH 时，接收端不创建 connection，也不回复 PUNCH；它记录
+该 UDP 源 endpoint 已提供路径反馈，并只向这个 endpoint 立即重发保留的原始 `INITIAL/0RTT`。后续握手
+PTO 也只使用已反馈路径，不再向所有候选 fanout；零 CID 打洞包本身不重发。
 
 ## 6. REQUEST、REDIRECT、FORWARD 与握手
 
-A 调用带目标 `peer_id` 的 `utp_context_connect()` 或 `utp_context_connect_0rtt()` 时，目标 endpoint
-可以是直接 peer，也可以是 NTRS。调用方不需要选择另一套 punch API。
+Context 创建时的本地 `peer_id` 始终必填；`utp_context_connect()` 与
+`utp_context_connect_0rtt()` 的 `target_peer_id` 也始终必填。每次主动连接独立生成 `local_cid` 和
+`attempt_id`，Initial/0-RTT 始终携带下述 `REQUEST`。目标 `address:port` 可以是 NTRS，也可以是普通
+peer，调用方和传输协议不选择另一套 direct 或 punch API。
 
 `REQUEST` 消息体：
 
 ```text
-rendezvous_id:16
+attempt_id:16
 source_peer_id_length:u8
 source_peer_id:bytes             // 1..128，取 A Context peer_id
 target_peer_id_length:u8
@@ -387,7 +388,7 @@ local_candidate_count:u8         // 0..4
 local_addresses[count]:4 或 16
 ```
 
-`rendezvous_id` 是 128 位随机值，是 REQUEST 重传幂等键和 B 侧 pending 归并键。NTRS 以
+`attempt_id` 是每次连接调用生成的 128 位随机值，是 REQUEST 重传幂等键和 B 侧 pending 归并键。NTRS 以
 `target_peer_id` 查找已注册 B；A 是否注册不参与请求接受条件。`source_reported_public_*` 是 A 的 NAT
 探测结果；NTRS 同时从 REQUEST 承载 UDP 包的源地址取得 A 的当前服务端观测 endpoint。两者代表不同
 目的地址上的映射，均不得覆盖对方。
@@ -396,19 +397,19 @@ NTRS 的下行消息体：
 
 ```text
 REDIRECT:
-  rendezvous_id:16
+  attempt_id:16
   punch_token:8
   target_plan:CandidatePlan       // B 的候选计划
 
 FORWARD:
-  rendezvous_id:16
+  attempt_id:16
   punch_token:8
   source_peer_id_length:u8
   source_peer_id:bytes
   source_plan:CandidatePlan       // A 的候选计划
 ```
 
-NTRS 为每个新 `rendezvous_id` 分配 8 字节随机 `punch_token`。A 的 `source_plan` 只包含 A 的 local
+NTRS 为每个新 `attempt_id` 分配 8 字节随机 `punch_token`。A 的 `source_plan` 只包含 A 的 local
 candidates、A 在 REQUEST 中携带的 NAT 探测公网 endpoint，以及 NTRS 当前观察到的 A 公网 endpoint；两个
 公网 endpoint 相同则去重。NTRS 不预测 A 的端口。B 的 `target_plan` 先纳入 B 注册时携带的 NAT 探测
 endpoint 和 NTRS 当前观察 endpoint，去重后再按剩余容量加入 B 的端口预测候选；整个计划仍最多四个公网
@@ -417,15 +418,15 @@ endpoint 和 NTRS 当前观察 endpoint，去重后再按剩余容量加入 B �
 NTRS 收到 REQUEST 后先向 A 发送 REDIRECT，再向 B 发送合包的 `PING + FORWARD`；这只是本地发送顺序，
 UDP 不保证 A、B 的实际到达先后。重复 REQUEST 重发相同 REDIRECT，不重复创建 FORWARD 事务。向 B 的
 FORWARD 与 PING 合包；B PONG 回显该包号后，NTRS 才移除待投递项。PONG 丢失时重投同一个
-`PING + FORWARD`，B 以 `rendezvous_id` 去重、仅发送一次 PUNCH 并再次 PONG。
+`PING + FORWARD`，B 以 `attempt_id` 去重、仅发送一次 PUNCH 并再次 PONG。
 
 帧顺序固定：
 
 ```text
-A -> NTRS 的 INITIAL：
+A 发出的 INITIAL：
   FrameRendezvous(REQUEST) 必须为第一个帧；后面保留普通 Initial 握手帧。
 
-A -> NTRS 的 0-RTT：
+A 发出的 0-RTT：
   明文 FrameRendezvous(REQUEST) 必须为第一个帧；
   明文 SESSION_TOKEN 紧随其后；后面保留既有加密 0-RTT 帧与 early data。
 
@@ -434,19 +435,35 @@ A -> B candidate：
   SESSION_TOKEN 或 early data。
 ```
 
-同一个 `connect()` 接口不区分目标 endpoint 是 NTRS 还是普通 peer。目标是普通 direct peer 时，它忽略
-第一个 `REQUEST` 并继续普通握手；目标是 NTRS 时，NTRS 只解析 REQUEST，不创建 UTP connection。B 收到
-Initial/0-RTT 时也继续普通握手；若其中 REQUEST 的 `rendezvous_id` 已命中 FORWARD pending，则将两者归并
-到同一轮打洞状态。FORWARD 先到或 Initial/0-RTT 先到均可归并。
+同一个 `connect()` 接口不区分目标 endpoint 是 NTRS 还是普通 peer。普通 peer 校验 REQUEST 中的
+`target_peer_id` 等于自身 Context ID 后继续握手；NTRS 以该 ID 查找注册并执行 REDIRECT/FORWARD，不创建
+UTP connection。是否触发 NTRS 协调由接收程序的职责决定，不改变 Initial/0-RTT 的传输格式。
 
-A 收到 REDIRECT 后立即向 B 候选发送一次 PUNCH，并将保留的原始 INITIAL/0-RTT 向相同候选 fanout；B
-收到 FORWARD 后立即向 A 候选发送一次 PUNCH。若 A 收到 B 的匹配 PUNCH，它以该 UDP 源 endpoint 替换
-本轮首选目标并立刻向其重发原始 INITIAL/0-RTT。旧候选不删除，后续握手 PTO 仍向未排除候选 fanout。
-NTRS 不转发 Initial/0-RTT，也不进入 A/B 的 UTP 连接状态。
+所有被动握手统一按 `attempt_id` 查找，并额外要求后到副本的 `active_scid` 与首包一致。同一 attempt 从
+不同 endpoint 到达时复用同一个 pending、`local_cid`、密钥和接收缓存，不重复通知应用；相同
+`attempt_id` 携带不同 `active_scid` 的包直接丢弃。首个合法 Initial 确定协商参数，后到副本不再比较加密
+模式、公钥、TransportParams 或 AckFrequency。连接晋升后正常流量只按 DCID 查找，不再保留按
+`attempt_id` 查找 Connection 的辅助索引；晋升时将 `(attempt_id, active_scid)` 写入覆盖握手最大重试窗口
+的短期 completed-attempt 缓存，以抑制迟到的零 DCID Initial，重复包不得延长缓存期限。
+
+A 收到 REDIRECT 后立即向 B 的去重候选各发送一次 PUNCH，并将保留的原始 INITIAL/0-RTT 向相同候选
+fanout；B 收到 FORWARD 后先合并、去重 A 的 local/public 候选，再向每个候选各发送一次 PUNCH。若 A
+收到 B 的匹配 PUNCH，它将该 UDP 源 endpoint 记为路径反馈并只向该 endpoint 重发原始
+INITIAL/0-RTT。NTRS 不转发 Initial/0-RTT，也不进入 A/B 的 UTP 连接状态。
 
 同一轮 candidate fanout 中，A 向所有候选发送字节完全相同的 `INITIAL/0RTT` 数据报，仅 UDP 目标地址
-不同；相同的包号、ciphertext、early nonce、stream offset 使副本按既有包号与流重组规则去重。后续握手
-PTO 仍向未排除候选 fanout，收到合法握手响应后由既有连接状态固定实际对端 endpoint。
+不同；相同的包号、ciphertext、early nonce、stream offset 使副本按既有包号与流重组规则去重。在尚无
+路径反馈时，握手 PTO 继续 fanout；收到合法 PUNCH 或握手响应后，后续发送只使用反馈 endpoint。
+
+被动端对每份合法 Initial 都把 HANDSHAKE 返回到触发它的 `peer/local`。UDP 暂不可写时，待发送项保存
+该路径、Initial 包号和接收时刻，后续 writable 不得被另一份 Initial 改写目标。真正发送成功时才消耗
+HANDSHAKE 包号并计算 HandshakeDelay；响应重复 Initial 不计入 PTO 重试次数，只有定时器触发的重传才
+增加次数。第一个通过 DCID、SCID、HANDSHAKE 包号和适用 AEAD 校验的 HANDSHAKE_DONE 以其来源路径晋升
+Connection，pending 中只回放同一获胜 `peer/local` 上缓存的数据。连接建立后，另一候选上的迟到握手包
+不得触发路径迁移。0-RTT 的首个合法 Initial 固定响应 `peer/local`；后到的同一 attempt 多路径副本可增加
+防放大额度并触发响应重建，但不得覆盖该路径。客户端收到 Handshake 后发送 `HANDSHAKE_DONE`，其中
+`ack_handshake_packet_number` 必须命中服务端本轮实际发出的任一 Handshake 包号；确认丢失时由重复
+Handshake 触发客户端再次确认。正常迁移仍由既有 PATH_CHALLENGE/PATH_RESPONSE 完成。
 
 ### 6.1 NAT 组合的开洞边界
 
@@ -517,7 +534,7 @@ registration_token -> active/inactive
 ```
 
 注册表及 tombstone 仅由 control thread 写入；Worker 读取时在短锁内复制 Registration 快照。每个
-`rendezvous_id` 对应的 `ForwardPending` 是其 owner Worker 的本地状态，不进入共享表。非 owner 收到
+`attempt_id` 对应的 `ForwardPending` 是其 owner Worker 的本地状态，不进入共享表。非 owner 收到
 REQUEST、临时 calibration PING 或 Forward PONG 时，通过有界 MPSC 转交 owner；owner 在自己的事件循环
 中处理、重传和回收。进程级包号使 PONG 可以用
 `(registration_token, acknowledged_packet_number)` 全局定位 owner，无需跨线程转发 UDP 数据报。
@@ -526,8 +543,8 @@ REQUEST、临时 calibration PING 或 Forward PONG 时，通过有界 MPSC 转�
 
 - 公开注册、反注册、地址更新、peer_id 设置及回调都在 Context 所属事件循环线程调用，不支持跨线程。
 - NTRS 逻辑和 `UTP_TYPE_NAT_PROBE` 分流必须在普通 connection/pending 查找之前处理。
-- `UTP_TYPE_RENDEZVOUS` 的未知或非法消息、非法零 CID 组合和无匹配 token/rendezvous_id 的包均静默丢弃；
-  未匹配但格式合法的 PUNCH 仅可按第 5 节写入有界短时缓存。
+- `UTP_TYPE_RENDEZVOUS` 的未知或非法消息、非法零 CID 组合和无匹配 token/attempt_id 的包均静默丢弃；
+  未匹配但格式合法的 PUNCH 也不缓存。
 - 预连接零 CID `PUNCH` 是唯一例外：它是合法但无响应的打洞包；已建连后的 PATH 挑战/响应仍走既有
   connection 路径。
 - NTRS 不分片。注册、CandidatePlan、FORWARD 和请求帧必须受当前 MTU 限制；local candidates 与

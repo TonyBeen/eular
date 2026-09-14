@@ -40,7 +40,7 @@ typedef struct utp_endpoint {
 } utp_endpoint_t;
 
 typedef struct utp_connect_options {
-    const char*           address;         // 对端 IP 文本地址
+    const char*           address;         // 对端或 NTRS IP 文本地址
     const char*           target_peer_id;  // 目标 Context 路由标识，必须为 1..128 字节的字符串
     uint16_t              port;            // 对端端口号
     uint32_t              timeout_ms;      // 单次握手超时，单位 ms
@@ -52,7 +52,7 @@ typedef struct utp_connect_options {
 #define UTP_CONNECT_OPTIONS_INIT {NULL, NULL, 0u, 3000u, 0, UTP_ENCRYPTION_NONE}
 
 typedef struct utp_connect_0rtt_options {
-    const char*    address;             // 对端 IP 文本地址
+    const char*    address;             // 对端或 NTRS IP 文本地址
     const char*    target_peer_id;      // 目标 Context 路由标识，必须为 1..128 字节的字符串
     uint16_t       port;                // 对端端口号
     uint32_t       timeout_ms;          // 单次握手超时，单位 ms

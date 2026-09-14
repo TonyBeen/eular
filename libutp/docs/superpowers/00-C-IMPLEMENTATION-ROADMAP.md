@@ -100,7 +100,7 @@
 | 编号 | 决策(C 内建) | 落点 C 模块 | 出处 |
 |---|---|---|---|
 | **C1** | **不设无条件 `SO_REUSEPORT`**。UDP 顺序 rebind 只需 `SO_REUSEADDR` 处理竞态。REUSEPORT 的多 socket 同端口负载均衡会破坏 `(IP+端口+scid)` 解复用；NTRS server 多 worker 是受控例外。 | socket(步4) | 半连接规格 §8;index C1 |
-| **C2** | **普通 1-RTT** 保持 server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected；**加密恢复 0-RTT** 例外：server 验证后以 early_s2c 加密 `HANDSHAKE_DONE`，客户端验证该响应即 connected，server 成功写出即 connected。两者都不得由任意非 Initial 包 promote。 | connection/context(步5) | utp-10 §10.6;index C2 |
+| **C2** | **普通 1-RTT** 保持 server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected；**加密恢复 0-RTT** 例外：server 验证后以 early_s2c 加密 `HANDSHAKE`，客户端验证该响应即 connected，并发送 `HANDSHAKE_DONE` 确认；server 成功写出响应即可 connected，但在收到确认前保留响应重传状态。两者都不得由任意非 Initial 包 promote。 | connection/context(步5) | utp-10 §10.6;index C2 |
 | **C3** | 抗放大 credit 常量 **`3×MTU`(≈3840)**；多候选地址分别跟踪收/发字节并独立计算额度，直连保持整连接模型。 | path-validation(步4)+ NTRS(步5) | index C3 |
 | **C4** | **握手/打洞/RENDEZVOUS 包 MTU floor = 1280**(置 DF,IPv6 min);连接后 PLPMTUD 从 `mtu_base` 经 `{1380,1450,1492,1500}` 梯队后继续二分至配置的 `mtu_max`。`1500` 是默认值和梯队节点，不是 C 端硬上限。 | proto(步2)+ mtu(步4) | 半连接规格 §5;index C4 |
 | **C5** | **公共 API 直接返错误码 + 出参**:`0`=成功;**所有错误 < 0**;`>0` 仅返值接口(如 createStream 返流 ID)。断连/拒绝经回调抛出的错误也为负。**C 里原生如此**(`utp_status_t` 已是负值),无需 cpp 的 0/-1 归一。 | 全公共 API(步1) | utp-12;`c/ERRORS.md` |
@@ -115,21 +115,21 @@
 |---|---|---|
 | **H1** | 握手方向固定：调用 `utp_context_connect()` 的 A 始终发 `INITIAL`/`0RTT`，B 始终响应；NAT 类型不参与角色交换。 | 2026-08-22 半连接规格 §1/§6 |
 | **H2** | A/B 都按 CandidatePlan 向对端每个候选 endpoint 单次发送零 CID `PUNCH` 开洞包；不等待响应、不周期重发。 | 2026-08-22 半连接规格 §5 |
-| **H3** | `registration_token` 仅标识目标 B 与 NTRS 的注册关联；请求归并使用 `rendezvous_id`。 | 2026-08-22 半连接规格 §3/§6 |
+| **H3** | `registration_token` 仅标识目标 B 与 NTRS 的注册关联；请求归并使用 `attempt_id`。 | 2026-08-22 半连接规格 §3/§6 |
 | **H4** | 未验证地址的发送额度遵循 **`3×MTU`** 反放大限制。 | C3 |
-| **H5** | FORWARD/REDIRECT 与直连 Initial 的**归并键 = `rendezvous_id`(128 位)**,CID 只做 transport demux,不做匹配键。 | 2026-08-22 半连接规格 §3/§6 |
+| **H5** | FORWARD/REDIRECT 与 Initial 的**归并键 = `attempt_id`(128 位)**,CID 只做 transport demux,不做匹配键。 | 2026-08-22 半连接规格 §3/§6 |
 
 ### 5.3 边界/安全 #1–#12(全部定稿)
 
 | # | 决策要点 | 落点 | 出处 |
 |---|---|---|---|
-| 1 | `rendezvous_id` 归并 REQUEST/FORWARD/REDIRECT 与直连 Initial；握手方向固定为 A 发起、B 响应。 | NTRS/connection | 2026-08-22 §1/§6 |
+| 1 | `attempt_id` 归并 REQUEST/FORWARD/REDIRECT 与 Initial；握手方向固定为 A 发起、B 响应。 | NTRS/connection | 2026-08-22 §1/§6 |
 | 2 | 对称 NAT 的公网端口预测仅由 NTRS 完成；Peer 按 CandidatePlan 发送。 | NTRS | 2026-08-22 §4/§5 |
-| 3 | 一次打洞 attempt 以一个 `rendezvous_id` 归并；最终 Initial/0RTT 的 CID 由正常握手分配，重复逻辑消息按其请求标识去重。 | connection | 2026-08-22 §2/§6 |
+| 3 | 每次连接 attempt 以一个 `attempt_id` 归并；最终 Initial/0RTT 的 CID 由正常握手分配，重复逻辑消息按其请求标识去重。 | connection | 2026-08-22 §2/§6 |
 | 4 | NTRS 不转发业务数据；Rendezvous 的未知、非法或无匹配关联报文静默丢弃。 | NTRS | 2026-08-22 §1/§9 |
 | 5 | 未验证地址前主动发**必须有界**(3×收+credit,按候选地址)。 | path/NTRS | C3 |
 | 6 | 0-RTT early_data **向应用暴露"可重放"**;抗重放窗口覆盖直连+打洞两路 | crypto/0rtt(P3) | §9.1 |
-| 7 | 半连接关联、注册记录和 `rendezvous_id` pending 均必须有本地超时回收；重复 REQUEST/FORWARD 使用既有记录重投，不重复创建。 | NTRS | 2026-08-22 §3/§6 |
+| 7 | 半连接关联、注册记录和 `attempt_id` pending 均必须有本地超时回收；重复 REQUEST/FORWARD 使用既有记录重投，不重复创建。 | NTRS | 2026-08-22 §3/§6 |
 | 8 | opener 包 ≤ 保守 MTU(1280)；每个 CandidatePlan 的 local candidate ≤4，公网候选端口默认 ≤4 且服务端可配置。 | proto/NTRS | 2026-08-22 §5 |
 | 9 | 加密握手 HandshakeDone 打洞丢包下重传;绑提交路由;密钥清零 | crypto/connection(P3) | §10.1 |
 | 10 | Peer-to-peer connection 使用既有 `PING + ACK`；Peer-NTRS 半连接使用 `FrameRendezvous(PING/PONG)`，两侧各自配置保活周期和超时。 | keepalive/NTRS | 2026-08-22 §1/§3 |
@@ -147,7 +147,7 @@
 - **开洞包**:`scid==0 && dcid==0` 的包**静默丢弃,绝不回 Reset**。
 - **帧目录**(0..22,`UTP_FRAME_TYPE_MAX=23`):Invalid/Stream/Ack/Padding/ConnectionClose/Ping/ResetStream/StreamsBlocked/MaxStreams/PathChallenge/PathResponse/Crypto/SessionToken/AckFrequency/Version/HandshakeDone/TransportParams/HandshakeDelay/MaxData/MaxStreamData/DataBlocked/StreamDataBlocked/StopSending。逐帧线格式见 utp-01 §2.4;不变量见 utp-01 §4。
   - C 版已实现 StreamsBlocked(7)、MaxStreams(8) 和 StopSending(22)；Ping 采用定长 1 字节直接构造。
-- **punch 新增 `FrameRendezvous`**:用于注册、PING/PONG 与协调；打洞 attempt 的归并键为 128 位 `rendezvous_id`，具体线格式以 `2026-08-22-libutp-ntrs-rendezvous-half-association.md` 为准。
+- **punch 新增 `FrameRendezvous`**:用于注册、PING/PONG 与协调；连接 attempt 的归并键为 128 位 `attempt_id`，具体线格式以 `2026-08-22-libutp-ntrs-rendezvous-half-association.md` 为准。
 - **MTU floor 1280**(C4);**反放大 credit 3×MTU**(C3);**PN space 单一 App 语义**(utp-04:Init/Hsk/App 分离**未落地**,C 复刻单空间)。
 
 ---
@@ -172,7 +172,7 @@
 
 ## 8. 未决 / 后续
 
-- **crypto spec(独立)**:peer↔peer 身份、抗主动 MITM、显式 Finished/双向 key confirmation、`doc/全包加密与无状态可验证CID混淆方案.md` 的全包加密 + opaque CID(SipHash mask/tag)—— 均**未实现**,是目标架构。加密恢复 0-RTT 的两消息规则已在 `utp-10` §10 另行确定。
+- **crypto spec(独立)**:peer↔peer 身份、抗主动 MITM、显式 Finished/双向 key confirmation、`doc/全包加密与无状态可验证CID混淆方案.md` 的全包加密 + opaque CID(SipHash mask/tag)—— 均**未实现**,是目标架构。加密恢复 0-RTT 的三报文确认规则已在 `utp-10` §10 另行确定。
 - **relay/TURN spec(独立)**:双对称 NAT、UDP 阻断兜底转发。
 - **调参 TBD**:端口预测置信阈值。
 - **NTRS 认证**:基于半连接专项冻结服务端认证、凭据保护和根密钥轮换协议。

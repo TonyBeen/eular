@@ -24,14 +24,10 @@
 typedef struct utp_context_replay {
     utp_context_t*       context;     // 所属 Context，不拥有
     utp_connection_t*    connection;  // 被重放入站包的连接，不拥有
-    const utp_address_t* peer;        // 入站包来源地址，不拥有
+    const utp_address_t* peer;        // 晋升采用的对端地址，不拥有
+    const utp_address_t* local;       // 晋升采用的本地地址，不拥有
     uint64_t             now_us;      // 重放使用的接收时刻
 } utp_context_replay_t;
-
-typedef struct utp_context_peer_index_key {
-    const utp_address_t* peer;      // 来源地址，不拥有
-    uint32_t             peer_cid;  // 对端连接 ID
-} utp_context_peer_index_key_t;
 
 static void utp_context_report_connection_error(utp_context_t* context, utp_context_connection_slot_t* slot,
                                                 utp_status_t status, uint16_t peer_error_code, const uint8_t* reason,
@@ -115,13 +111,14 @@ static const uint8_t k_zero_rtt_ack_frequency_frame[UTP_FRAME_ACK_FREQUENCY_SIZE
 static uint64_t utp_context_now_us(void);
 
 /** @brief 返回当前 Context 主动连接 REQUEST 帧的精确空间需求。 */
-static size_t   utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length)
+static size_t   utp_context_request_frame_size(const utp_context_t* context, uint8_t target_peer_id_length,
+                                               bool has_reported_public_endpoint)
 {
     assert(context != NULL);
     const size_t address_length = context->bound_address.family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
 
-    return UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ID_SIZE + 1u + context->peer_id_length + 1u +
-           target_peer_id_length + 1u + 1u + 1u + address_length + 2u + 2u + 1u +
+    return UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 1u + context->peer_id_length + 1u +
+           target_peer_id_length + 1u + 1u + 1u + (has_reported_public_endpoint ? address_length + 2u : 0u) + 2u + 1u +
            address_length * (size_t)context->local_candidate_count;
 }
 
@@ -130,20 +127,26 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
                                                              const utp_context_connection_slot_t* slot, uint8_t* buffer,
                                                              size_t capacity, size_t* offset)
 {
-    uint8_t body[UTP_RENDEZVOUS_ID_SIZE + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + 1u + 1u +
-                 16u + 2u + 2u + 1u + UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 16u];
+    uint8_t body[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + UTP_PEER_ID_MAX_LENGTH + 1u + 1u +
+                 1u + 16u + 2u + 2u + 1u + UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES * 16u];
     utp_rendezvous_request_t request = {0};
     utp_frame_rendezvous_t   frame;
     utp_address_t            reported_public_endpoint = {0};
     size_t                   body_length;
-    utp_internal_error_t     error;
+    const uint64_t           now_us = utp_context_now_us();
+    const bool               has_reported_public_endpoint =
+        context->nat_result_valid && context->nat_result.expires_at_us > now_us &&
+        context->nat_result.primary_mapped_endpoint.family == context->bound_address.family &&
+        context->nat_result.primary_mapped_endpoint.port != 0u;
+    utp_internal_error_t error;
 
     assert(context != NULL);
     assert(slot != NULL);
     assert(buffer != NULL);
     assert(offset != NULL);
-    if (*offset > capacity ||
-        capacity - *offset < utp_context_request_frame_size(context, slot->target_peer_id_length)) {
+    assert(slot->target_peer_id_length != 0u);
+    if (*offset > capacity || capacity - *offset < utp_context_request_frame_size(context, slot->target_peer_id_length,
+                                                                                  has_reported_public_endpoint)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     request.source_peer_id        = (const uint8_t*)context->peer_id;
@@ -154,9 +157,7 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
     request.target_peer_id_length = slot->target_peer_id_length;
     request.source_nat_class =
         context->nat_result_valid ? (uint8_t)context->nat_result.nat_class : (uint8_t)UTP_NAT_CLASS_UNKNOWN;
-    if (context->nat_result_valid && context->nat_result.expires_at_us > utp_context_now_us() &&
-        context->nat_result.primary_mapped_endpoint.family == context->bound_address.family &&
-        context->nat_result.primary_mapped_endpoint.port != 0u) {
+    if (has_reported_public_endpoint) {
         reported_public_endpoint.family = context->nat_result.primary_mapped_endpoint.family;
         reported_public_endpoint.port   = context->nat_result.primary_mapped_endpoint.port;
         memcpy(reported_public_endpoint.address, context->nat_result.primary_mapped_endpoint.address,
@@ -165,7 +166,7 @@ static utp_internal_error_t utp_context_append_request_frame(const utp_context_t
     }
     request.local_family          = context->bound_address.family;
     request.local_candidate_count = context->local_candidate_count;
-    memcpy(request.rendezvous_id, slot->rendezvous_id, sizeof(request.rendezvous_id));
+    memcpy(request.attempt_id, slot->attempt_id, sizeof(request.attempt_id));
     error = utp_rendezvous_request_encode(body, sizeof(body), &request, &body_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -299,12 +300,26 @@ static utp_context_connection_slot_t* utp_context_connection_slot_from_node(utp_
                : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
 }
 
-/** @brief 从来源地址和对端 CID 哈希节点取得被动连接槽位。 */
-static utp_context_connection_slot_t* utp_context_connection_slot_from_peer_node(utp_hash_node_t* node)
+/** @brief 从 attempt_id 哈希节点取得未确认 0-RTT 连接槽位。 */
+static utp_context_connection_slot_t* utp_context_connection_slot_from_zero_rtt_attempt_node(utp_hash_node_t* node)
+{
+    return node == NULL ? NULL
+                        : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t,
+                                                                                     zero_rtt_attempt_node));
+}
+
+static utp_context_connection_slot_t* utp_context_connection_slot_from_attempt_node(utp_hash_node_t* node)
+{
+    return node == NULL ? NULL
+                        : (utp_context_connection_slot_t*)((uint8_t*)node -
+                                                           offsetof(utp_context_connection_slot_t, attempt_node));
+}
+
+static utp_context_connection_slot_t* utp_context_connection_slot_from_punch_node(utp_hash_node_t* node)
 {
     return node == NULL
                ? NULL
-               : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, peer_node));
+               : (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, punch_node));
 }
 
 /** @brief 按本地 CID 比较 Connection 槽位。 */
@@ -319,20 +334,37 @@ static bool utp_context_connection_slot_matches(const utp_hash_node_t* node, con
     return slot->connection.local_cid == *(const uint32_t*)key;
 }
 
-/** @brief 按来源地址和对端 CID 比较被动连接槽位。 */
-static bool utp_context_connection_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+/** @brief 按 attempt_id 比较未确认的 0-RTT 连接。 */
+static bool utp_context_zero_rtt_attempt_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
 {
     const utp_context_connection_slot_t* slot;
-    const utp_context_peer_index_key_t*  peer_key;
 
     assert(node != NULL);
-    peer_key = key;
-    assert(peer_key != NULL);
-    assert(peer_key->peer != NULL);
+    assert(key != NULL);
     (void)user_data;
     slot = (const utp_context_connection_slot_t*)((const uint8_t*)node -
-                                                  offsetof(utp_context_connection_slot_t, peer_node));
-    return slot->connection.peer_cid == peer_key->peer_cid && utp_address_equal(&slot->connection.peer, peer_key->peer);
+                                                  offsetof(utp_context_connection_slot_t, zero_rtt_attempt_node));
+    return memcmp(slot->attempt_id, key, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) == 0;
+}
+
+static utp_context_completed_attempt_entry_t* utp_context_completed_attempt_from_node(utp_hash_node_t* node)
+{
+    return node == NULL
+               ? NULL
+               : (utp_context_completed_attempt_entry_t*)((uint8_t*)node -
+                                                          offsetof(utp_context_completed_attempt_entry_t, node));
+}
+
+static bool utp_context_completed_attempt_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_completed_attempt_entry_t* entry;
+
+    assert(node != NULL);
+    assert(key != NULL);
+    (void)user_data;
+    entry = (const utp_context_completed_attempt_entry_t*)((const uint8_t*)node -
+                                                           offsetof(utp_context_completed_attempt_entry_t, node));
+    return memcmp(entry->attempt_id, key, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) == 0;
 }
 
 /** @brief 从哈希节点取得动态 pending 槽位。 */
@@ -342,12 +374,12 @@ static utp_context_pending_slot_t* utp_context_pending_slot_from_node(utp_hash_n
                         : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, node));
 }
 
-/** @brief 从来源地址和对端 CID 哈希节点取得 pending 槽位。 */
-static utp_context_pending_slot_t* utp_context_pending_slot_from_peer_node(utp_hash_node_t* node)
+/** @brief 从 attempt_id 哈希节点取得 pending 槽位。 */
+static utp_context_pending_slot_t* utp_context_pending_slot_from_attempt_node(utp_hash_node_t* node)
 {
     return node == NULL
                ? NULL
-               : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, peer_node));
+               : (utp_context_pending_slot_t*)((uint8_t*)node - offsetof(utp_context_pending_slot_t, attempt_node));
 }
 
 /** @brief 按本地 CID 比较 pending 槽位。 */
@@ -362,43 +394,45 @@ static bool utp_context_pending_slot_matches(const utp_hash_node_t* node, const 
     return slot->pending.local_cid == *(const uint32_t*)key;
 }
 
-/** @brief 按来源地址和对端 CID 比较 pending 槽位。 */
-static bool utp_context_pending_peer_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+/** @brief 按 attempt_id 比较 pending 槽位。 */
+static bool utp_context_pending_attempt_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
 {
-    const utp_context_pending_slot_t*   slot;
-    const utp_context_peer_index_key_t* peer_key;
+    const utp_context_pending_slot_t* slot;
 
     assert(node != NULL);
-    peer_key = key;
-    assert(peer_key != NULL);
-    assert(peer_key->peer != NULL);
+    assert(key != NULL);
     (void)user_data;
-    slot = (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, peer_node));
-    return slot->pending.peer_cid == peer_key->peer_cid && utp_address_equal(&slot->pending.peer, peer_key->peer);
+    slot =
+        (const utp_context_pending_slot_t*)((const uint8_t*)node - offsetof(utp_context_pending_slot_t, attempt_node));
+    return memcmp(slot->attempt_id, key, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) == 0;
 }
 
-/** @brief 为来源地址和对端 CID 生成稳定的 64 位哈希。 */
-static uint64_t utp_context_peer_index_hash(const utp_address_t* peer, uint32_t peer_cid)
+static uint64_t utp_context_bytes_hash(const uint8_t* bytes, size_t length)
 {
     uint64_t hash = UINT64_C(1469598103934665603);
-    size_t   address_length;
-    size_t   index;
 
-    assert(peer != NULL);
-    address_length  = peer->family == UTP_ADDRESS_FAMILY_IPV4 ? 4u : 16u;
-    hash           ^= peer->family;
-    hash           *= UINT64_C(1099511628211);
-    hash           ^= peer->port;
-    hash           *= UINT64_C(1099511628211);
-    hash           ^= peer->scope_id;
-    hash           *= UINT64_C(1099511628211);
-    for (index = 0u; index < address_length; ++index) {
-        hash ^= peer->address[index];
+    assert(bytes != NULL);
+    for (size_t index = 0u; index < length; ++index) {
+        hash ^= bytes[index];
         hash *= UINT64_C(1099511628211);
     }
-    hash ^= peer_cid;
-    hash *= UINT64_C(1099511628211);
     return hash;
+}
+
+static bool utp_context_attempt_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_attempt_node((utp_hash_node_t*)node);
+
+    (void)user_data;
+    return memcmp(slot->attempt_id, key, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) == 0;
+}
+
+static bool utp_context_punch_slot_matches(const utp_hash_node_t* node, const void* key, void* user_data)
+{
+    const utp_context_connection_slot_t* slot = utp_context_connection_slot_from_punch_node((utp_hash_node_t*)node);
+
+    (void)user_data;
+    return memcmp(slot->rendezvous_punch_token, key, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) == 0;
 }
 
 /** @brief 使所有已缓存的恢复凭证失效，根密钥替换后不得继续导出或使用旧状态。 */
@@ -540,6 +574,88 @@ static bool utp_context_remember_zero_rtt_replay(
         return false;
     }
     return true;
+}
+
+static void utp_context_free_completed_attempt(utp_hash_node_t* node, void* user_data)
+{
+    (void)user_data;
+    utp_allocator_free(NULL, utp_context_completed_attempt_from_node(node));
+}
+
+static void utp_context_purge_completed_attempts(utp_context_t* context, uint64_t now_us)
+{
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
+
+    assert(context != NULL);
+    assert(now_us != 0u);
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->completed_attempts, &iter)) != NULL) {
+        utp_context_completed_attempt_entry_t* entry = utp_context_completed_attempt_from_node(node);
+
+        if (entry->expires_at_us <= now_us) {
+            (void)utp_hash_table_remove(&context->completed_attempts, node);
+            utp_allocator_free(NULL, entry);
+        }
+    }
+}
+
+static utp_context_completed_attempt_entry_t* utp_context_find_completed_attempt(
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE], uint64_t now_us)
+{
+    utp_hash_node_t* node;
+
+    assert(context != NULL);
+    assert(attempt_id != NULL);
+    assert(now_us != 0u);
+    node = utp_hash_table_find(&context->completed_attempts,
+                               utp_context_bytes_hash(attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE), attempt_id,
+                               utp_context_completed_attempt_matches, NULL);
+    if (node != NULL) {
+        utp_context_completed_attempt_entry_t* entry = utp_context_completed_attempt_from_node(node);
+
+        if (entry->expires_at_us <= now_us) {
+            (void)utp_hash_table_remove(&context->completed_attempts, node);
+            utp_allocator_free(NULL, entry);
+            return NULL;
+        }
+    }
+    return utp_context_completed_attempt_from_node(node);
+}
+
+/** @brief 记录已晋升握手；相同 attempt 的迟到 Initial 不得延长固定去重窗口。 */
+static utp_internal_error_t utp_context_remember_completed_attempt(
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE], uint32_t active_scid,
+    uint64_t expires_at_us, uint64_t now_us)
+{
+    utp_context_completed_attempt_entry_t* entry;
+    utp_internal_error_t                   error;
+
+    assert(context != NULL);
+    assert(attempt_id != NULL);
+    assert(active_scid != 0u);
+    if (expires_at_us <= now_us) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    entry = utp_context_find_completed_attempt(context, attempt_id, now_us);
+    if (entry != NULL) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    entry = utp_allocator_alloc(NULL, sizeof(*entry));
+    if (entry == NULL) {
+        return UTP_INTERNAL_ERROR_NOMEM;
+    }
+    utp_hash_node_init(&entry->node);
+    memcpy(entry->attempt_id, attempt_id, sizeof(entry->attempt_id));
+    entry->active_scid   = active_scid;
+    entry->expires_at_us = expires_at_us;
+    error = utp_hash_table_insert(&context->completed_attempts, &entry->node,
+                                  utp_context_bytes_hash(attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE), attempt_id,
+                                  utp_context_completed_attempt_matches, NULL);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_allocator_free(NULL, entry);
+    }
+    return error;
 }
 
 static void utp_context_log(utp_context_t* context, utp_log_level_t level, const char* message)
@@ -850,65 +966,44 @@ static utp_context_connection_slot_t* utp_context_find_connection_slot(utp_conte
     return utp_context_connection_slot_from_node(node);
 }
 
-static utp_context_connection_slot_t* utp_context_find_connection_by_peer(utp_context_t*       context,
-                                                                          const utp_address_t* peer)
+/** @brief 按 attempt_id 查找已晋升的被动连接。 */
+static utp_context_connection_slot_t* utp_context_find_zero_rtt_response_by_attempt(
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE])
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
-
     assert(context != NULL);
-    assert(peer != NULL);
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
-        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
-
-        if (utp_address_equal(&slot->connection.peer, peer)) {
-            return slot;
-        }
-    }
-    return NULL;
-}
-
-/** @brief 按来源地址和对端 CID 查找已晋升的被动连接。 */
-static utp_context_connection_slot_t* utp_context_find_passive_connection_by_peer(utp_context_t*       context,
-                                                                                  const utp_address_t* peer,
-                                                                                  uint32_t             peer_cid)
-{
-    const utp_context_peer_index_key_t key = {peer, peer_cid};
-    utp_hash_node_t*                   node;
-
-    assert(context != NULL);
-    assert(peer != NULL);
-    if (peer_cid == 0u) {
-        return NULL;
-    }
-    node = utp_hash_table_find(&context->passive_connections_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
-                               utp_context_connection_peer_slot_matches, NULL);
-    return utp_context_connection_slot_from_peer_node(node);
+    assert(attempt_id != NULL);
+    utp_hash_node_t* node = utp_hash_table_find(&context->zero_rtt_responses_by_attempt,
+                                                utp_context_bytes_hash(attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE),
+                                                attempt_id, utp_context_zero_rtt_attempt_slot_matches, NULL);
+    return utp_context_connection_slot_from_zero_rtt_attempt_node(node);
 }
 
 /** @brief 查找可响应重复加密 0-RTT 的短期握手缓存，匹配必须同时绑定来源和完整 token payload。 */
 static utp_context_connection_slot_t* utp_context_find_zero_rtt_response(
-    utp_context_t* context, const utp_address_t* peer,
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE], uint32_t peer_cid,
     const uint8_t token_payload[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE])
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
-
     assert(context != NULL);
-    assert(peer != NULL);
+    assert(attempt_id != NULL);
     assert(token_payload != NULL);
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
-        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
+    utp_context_connection_slot_t* slot = utp_context_find_zero_rtt_response_by_attempt(context, attempt_id);
 
-        if (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->zero_rtt_response_active &&
-            utp_address_equal(&slot->connection.peer, peer) &&
-            memcmp(slot->zero_rtt_session_token, token_payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE) == 0) {
-            return slot;
-        }
+    if (slot != NULL && slot->zero_rtt_response_active && slot->connection.peer_cid == peer_cid &&
+        memcmp(slot->zero_rtt_session_token, token_payload, UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE) == 0) {
+        return slot;
     }
     return NULL;
+}
+
+static bool utp_context_zero_rtt_response_was_sent(const utp_context_connection_slot_t* slot, uint64_t packet_number)
+{
+    assert(slot != NULL);
+    for (uint16_t index = 0u; index < slot->zero_rtt_response_packet_count; ++index) {
+        if (slot->zero_rtt_response_packet_numbers[index] == packet_number) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_context_t* context)
@@ -926,24 +1021,33 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
         }
     }
     utp_hash_node_init(&slot->node);
-    utp_hash_node_init(&slot->peer_node);
-    slot->connection.local_cid            = 0u;
-    slot->connection.peer_cid             = 0u;
-    slot->connect_deadline_us             = 0u;
-    slot->zero_rtt_early_packet           = NULL;
-    slot->zero_rtt_early_wire_size        = 0u;
-    slot->zero_rtt_request_packet_number  = 0u;
-    slot->zero_rtt_request_received_us    = 0u;
-    slot->zero_rtt_response_deadline_us   = 0u;
-    slot->zero_rtt_expire_deadline_us     = 0u;
-    slot->zero_rtt_amplification_rx_bytes = 0u;
-    slot->zero_rtt_amplification_tx_bytes = 0u;
-    slot->connect_retries_remaining       = 0;
-    slot->zero_rtt_response_retries       = 0u;
-    slot->zero_rtt_early_data             = NULL;
-    slot->zero_rtt_early_data_size        = 0u;
-    slot->zero_rtt_expires_at_seconds     = 0u;
-    slot->rendezvous_candidate_count      = 0u;
+    utp_hash_node_init(&slot->zero_rtt_attempt_node);
+    utp_hash_node_init(&slot->attempt_node);
+    utp_hash_node_init(&slot->punch_node);
+    slot->connection.local_cid              = 0u;
+    slot->connection.peer_cid               = 0u;
+    slot->connect_deadline_us               = 0u;
+    slot->zero_rtt_early_packet             = NULL;
+    slot->zero_rtt_early_wire_size          = 0u;
+    slot->zero_rtt_request_packet_number    = 0u;
+    slot->zero_rtt_request_received_us      = 0u;
+    slot->zero_rtt_response_deadline_us     = 0u;
+    slot->zero_rtt_expire_deadline_us       = 0u;
+    slot->zero_rtt_confirm_deadline_us      = 0u;
+    slot->zero_rtt_amplification_rx_bytes   = 0u;
+    slot->zero_rtt_amplification_tx_bytes   = 0u;
+    slot->connect_retries_remaining         = 0;
+    slot->zero_rtt_response_retries         = 0u;
+    slot->zero_rtt_early_data               = NULL;
+    slot->zero_rtt_response_packet_numbers  = NULL;
+    slot->zero_rtt_response_packet_count    = 0u;
+    slot->zero_rtt_response_packet_capacity = 0u;
+    slot->zero_rtt_early_data_size          = 0u;
+    slot->zero_rtt_expires_at_seconds       = 0u;
+    slot->rendezvous_candidate_count        = 0u;
+    memset(slot->attempt_id, 0, sizeof(slot->attempt_id));
+    slot->target_peer_id[0]     = '\0';
+    slot->target_peer_id_length = 0u;
     memset(slot->rendezvous_punch_token, 0, sizeof(slot->rendezvous_punch_token));
     slot->terminal_error_status        = UTP_STATUS_OK;
     slot->terminal_error_reason        = NULL;
@@ -955,6 +1059,7 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
     slot->zero_rtt_response_queued     = false;
     slot->zero_rtt_response_sent       = false;
     slot->zero_rtt_early_delivered     = false;
+    slot->zero_rtt_confirm_active      = false;
     slot->zero_rtt_encryption_mode     = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
     slot->used                         = true;
     slot->connected_reported           = false;
@@ -963,6 +1068,7 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
     slot->terminal_error_queued        = false;
     slot->terminal_error_suppressed    = false;
     slot->rendezvous_active            = false;
+    slot->rendezvous_path_feedback     = false;
     return slot;
 }
 
@@ -978,21 +1084,34 @@ static utp_internal_error_t utp_context_register_connection_slot(utp_context_t* 
     assert(slot->used);
     assert(local_cid != 0u);
     assert(slot->node.table == NULL);
-    assert(slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE || slot->peer_node.table == NULL);
     error = utp_hash_table_insert(&context->connections, &slot->node, local_cid, &local_cid,
                                   utp_context_connection_slot_matches, NULL);
-    if (error != UTP_INTERNAL_ERROR_OK || slot->connection.role != UTP_CONNECTION_ROLE_PASSIVE) {
-        return error;
-    }
-    {
-        const utp_context_peer_index_key_t key = {&slot->connection.peer, slot->connection.peer_cid};
+    return error;
+}
 
-        error = utp_hash_table_insert(&context->passive_connections_by_peer, &slot->peer_node,
-                                      utp_context_peer_index_hash(key.peer, key.peer_cid), &key,
-                                      utp_context_connection_peer_slot_matches, NULL);
+static utp_internal_error_t utp_context_register_zero_rtt_response(utp_context_t*                 context,
+                                                                   utp_context_connection_slot_t* slot)
+{
+    const uint16_t       packet_capacity = (uint16_t)context->handshake_max_retries + 1u;
+    utp_internal_error_t error;
+
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    assert(slot->zero_rtt_attempt_node.table == NULL);
+    slot->zero_rtt_response_packet_numbers =
+        utp_allocator_alloc(NULL, (size_t)packet_capacity * sizeof(*slot->zero_rtt_response_packet_numbers));
+    if (slot->zero_rtt_response_packet_numbers == NULL) {
+        return UTP_INTERNAL_ERROR_NOMEM;
     }
+    slot->zero_rtt_response_packet_capacity = packet_capacity;
+    error = utp_hash_table_insert(&context->zero_rtt_responses_by_attempt, &slot->zero_rtt_attempt_node,
+                                  utp_context_bytes_hash(slot->attempt_id, sizeof(slot->attempt_id)), slot->attempt_id,
+                                  utp_context_zero_rtt_attempt_slot_matches, NULL);
     if (error != UTP_INTERNAL_ERROR_OK) {
-        (void)utp_hash_table_remove(&context->connections, &slot->node);
+        utp_allocator_free(NULL, slot->zero_rtt_response_packet_numbers);
+        slot->zero_rtt_response_packet_numbers  = NULL;
+        slot->zero_rtt_response_packet_capacity = 0u;
     }
     return error;
 }
@@ -1002,8 +1121,8 @@ static void utp_context_unregister_connection_slot(utp_context_t* context, utp_c
 {
     assert(context != NULL);
     assert(slot != NULL);
-    if (slot->peer_node.table == &context->passive_connections_by_peer) {
-        (void)utp_hash_table_remove(&context->passive_connections_by_peer, &slot->peer_node);
+    if (slot->zero_rtt_attempt_node.table == &context->zero_rtt_responses_by_attempt) {
+        (void)utp_hash_table_remove(&context->zero_rtt_responses_by_attempt, &slot->zero_rtt_attempt_node);
     }
     if (slot->node.table == &context->connections) {
         (void)utp_hash_table_remove(&context->connections, &slot->node);
@@ -1018,6 +1137,12 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
     if (slot->terminal_error_queued) {
         TAILQ_REMOVE(&context->terminal_error_slots, slot, terminal_error_next);
         slot->terminal_error_queued = false;
+    }
+    if (slot->punch_node.table == &context->rendezvous_punch_attempts) {
+        (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
+    }
+    if (slot->attempt_node.table == &context->connect_attempts_by_id) {
+        (void)utp_hash_table_remove(&context->connect_attempts_by_id, &slot->attempt_node);
     }
     utp_context_unregister_connection_slot(context, slot);
     if (slot->connection.local_cid != 0u) {
@@ -1034,30 +1159,36 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
     }
     utp_allocator_free(NULL, slot->zero_rtt_early_data);
     slot->zero_rtt_early_data = NULL;
+    utp_allocator_free(NULL, slot->zero_rtt_response_packet_numbers);
+    slot->zero_rtt_response_packet_numbers = NULL;
     utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
-    slot->zero_rtt_early_wire_size        = 0u;
-    slot->zero_rtt_request_packet_number  = 0u;
-    slot->zero_rtt_request_received_us    = 0u;
-    slot->zero_rtt_response_deadline_us   = 0u;
-    slot->zero_rtt_expire_deadline_us     = 0u;
-    slot->zero_rtt_amplification_rx_bytes = 0u;
-    slot->zero_rtt_amplification_tx_bytes = 0u;
-    slot->zero_rtt_response_retries       = 0u;
-    slot->zero_rtt_early_data_size        = 0u;
-    slot->zero_rtt_expires_at_seconds     = 0u;
-    slot->terminal_error_status           = UTP_STATUS_OK;
-    slot->terminal_error_reason           = NULL;
-    slot->terminal_error_reason_length    = 0u;
-    slot->zero_rtt_early_fin              = false;
-    slot->zero_rtt_awaiting_accept        = false;
-    slot->zero_rtt_accepted               = false;
-    slot->zero_rtt_response_active        = false;
-    slot->zero_rtt_response_queued        = false;
-    slot->zero_rtt_response_sent          = false;
-    slot->zero_rtt_early_delivered        = false;
-    slot->zero_rtt_encryption_mode        = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-    slot->terminal_error_suppressed       = false;
-    slot->used                            = false;
+    slot->zero_rtt_early_wire_size          = 0u;
+    slot->zero_rtt_request_packet_number    = 0u;
+    slot->zero_rtt_request_received_us      = 0u;
+    slot->zero_rtt_response_deadline_us     = 0u;
+    slot->zero_rtt_expire_deadline_us       = 0u;
+    slot->zero_rtt_confirm_deadline_us      = 0u;
+    slot->zero_rtt_amplification_rx_bytes   = 0u;
+    slot->zero_rtt_amplification_tx_bytes   = 0u;
+    slot->zero_rtt_response_retries         = 0u;
+    slot->zero_rtt_response_packet_count    = 0u;
+    slot->zero_rtt_response_packet_capacity = 0u;
+    slot->zero_rtt_early_data_size          = 0u;
+    slot->zero_rtt_expires_at_seconds       = 0u;
+    slot->terminal_error_status             = UTP_STATUS_OK;
+    slot->terminal_error_reason             = NULL;
+    slot->terminal_error_reason_length      = 0u;
+    slot->zero_rtt_early_fin                = false;
+    slot->zero_rtt_awaiting_accept          = false;
+    slot->zero_rtt_accepted                 = false;
+    slot->zero_rtt_response_active          = false;
+    slot->zero_rtt_response_queued          = false;
+    slot->zero_rtt_response_sent            = false;
+    slot->zero_rtt_early_delivered          = false;
+    slot->zero_rtt_confirm_active           = false;
+    slot->zero_rtt_encryption_mode          = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->terminal_error_suppressed         = false;
+    slot->used                              = false;
     TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
 }
 
@@ -1101,20 +1232,15 @@ static utp_context_pending_slot_t* utp_context_find_pending_slot(utp_context_t* 
     return utp_context_pending_slot_from_node(node);
 }
 
-static utp_context_pending_slot_t* utp_context_find_pending_by_peer(utp_context_t* context, uint32_t peer_cid,
-                                                                    const utp_address_t* peer)
+static utp_context_pending_slot_t* utp_context_find_pending_by_attempt(
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE])
 {
-    const utp_context_peer_index_key_t key = {peer, peer_cid};
-    utp_hash_node_t*                   node;
-
     assert(context != NULL);
-    assert(peer != NULL);
-    if (peer_cid == 0u) {
-        return NULL;
-    }
-    node = utp_hash_table_find(&context->pending_incoming_by_peer, utp_context_peer_index_hash(peer, peer_cid), &key,
-                               utp_context_pending_peer_slot_matches, NULL);
-    return utp_context_pending_slot_from_peer_node(node);
+    assert(attempt_id != NULL);
+    utp_hash_node_t* node = utp_hash_table_find(&context->pending_incoming_by_attempt,
+                                                utp_context_bytes_hash(attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE),
+                                                attempt_id, utp_context_pending_attempt_slot_matches, NULL);
+    return utp_context_pending_slot_from_attempt_node(node);
 }
 
 static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t* context)
@@ -1135,10 +1261,11 @@ static utp_context_pending_slot_t* utp_context_alloc_pending_slot(utp_context_t*
         }
     }
     utp_hash_node_init(&slot->node);
-    utp_hash_node_init(&slot->peer_node);
+    utp_hash_node_init(&slot->attempt_node);
     slot->pending.local_cid = 0u;
-    slot->used              = true;
-    slot->queued            = false;
+    memset(slot->attempt_id, 0, sizeof(slot->attempt_id));
+    slot->used   = true;
+    slot->queued = false;
     return slot;
 }
 
@@ -1153,18 +1280,16 @@ static utp_internal_error_t utp_context_register_pending_slot(utp_context_t* con
     assert(slot->used);
     assert(local_cid != 0u);
     assert(slot->node.table == NULL);
-    assert(slot->peer_node.table == NULL);
+    assert(slot->attempt_node.table == NULL);
     error = utp_hash_table_insert(&context->pending_incoming, &slot->node, local_cid, &local_cid,
                                   utp_context_pending_slot_matches, NULL);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
     {
-        const utp_context_peer_index_key_t key = {&slot->pending.peer, slot->pending.peer_cid};
-
-        error = utp_hash_table_insert(&context->pending_incoming_by_peer, &slot->peer_node,
-                                      utp_context_peer_index_hash(key.peer, key.peer_cid), &key,
-                                      utp_context_pending_peer_slot_matches, NULL);
+        error = utp_hash_table_insert(&context->pending_incoming_by_attempt, &slot->attempt_node,
+                                      utp_context_bytes_hash(slot->attempt_id, sizeof(slot->attempt_id)),
+                                      slot->attempt_id, utp_context_pending_attempt_slot_matches, NULL);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
@@ -1177,8 +1302,8 @@ static void utp_context_release_pending_slot(utp_context_t* context, utp_context
     assert(context != NULL);
     assert(slot != NULL);
     assert(slot->used);
-    if (slot->peer_node.table == &context->pending_incoming_by_peer) {
-        (void)utp_hash_table_remove(&context->pending_incoming_by_peer, &slot->peer_node);
+    if (slot->attempt_node.table == &context->pending_incoming_by_attempt) {
+        (void)utp_hash_table_remove(&context->pending_incoming_by_attempt, &slot->attempt_node);
     }
     if (slot->node.table == &context->pending_incoming) {
         (void)utp_hash_table_remove(&context->pending_incoming, &slot->node);
@@ -1284,79 +1409,13 @@ static bool utp_context_rendezvous_token_is_zero(const uint8_t token[UTP_RENDEZV
     return value == 0u;
 }
 
-static bool utp_context_rendezvous_candidate_exists(const utp_context_connection_slot_t* slot,
-                                                    const utp_address_t*                 endpoint)
+static bool utp_context_rendezvous_candidate_exists(const utp_address_t* candidates, uint8_t candidate_count,
+                                                    const utp_address_t* endpoint)
 {
-    assert(slot != NULL);
+    assert(candidates != NULL);
     assert(endpoint != NULL);
-    for (uint8_t index = 0u; index < slot->rendezvous_candidate_count; ++index) {
-        if (utp_address_equal(&slot->rendezvous_candidates[index], endpoint)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void utp_context_purge_rendezvous_punch_cache(utp_context_t* context, uint64_t now_us)
-{
-    assert(context != NULL);
-    for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
-        utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
-
-        if (entry->used && entry->expires_at_us <= now_us) {
-            entry->used = false;
-        }
-    }
-}
-
-static void utp_context_cache_rendezvous_punch(utp_context_t*       context,
-                                               const uint8_t        token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE],
-                                               const utp_address_t* peer, uint64_t now_us)
-{
-    utp_context_rendezvous_punch_cache_entry_t* selected = NULL;
-
-    assert(context != NULL);
-    assert(token != NULL);
-    assert(peer != NULL);
-    utp_context_purge_rendezvous_punch_cache(context, now_us);
-    for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
-        utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
-
-        if (entry->used && memcmp(entry->token, token, sizeof(entry->token)) == 0) {
-            selected = entry;
-            break;
-        }
-        if (!entry->used && selected == NULL) {
-            selected = entry;
-        }
-        if (selected == NULL || (entry->used && entry->expires_at_us < selected->expires_at_us)) {
-            selected = entry;
-        }
-    }
-    if (selected != NULL) {
-        selected->endpoint = *peer;
-        memcpy(selected->token, token, sizeof(selected->token));
-        selected->expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US
-                                      ? UINT64_MAX
-                                      : now_us + UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_LIFETIME_US;
-        selected->used          = true;
-    }
-}
-
-static bool utp_context_take_rendezvous_punch(utp_context_t* context,
-                                              const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE], uint64_t now_us,
-                                              utp_address_t* endpoint)
-{
-    assert(context != NULL);
-    assert(token != NULL);
-    assert(endpoint != NULL);
-    utp_context_purge_rendezvous_punch_cache(context, now_us);
-    for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_PUNCH_CACHE_CAPACITY; ++index) {
-        utp_context_rendezvous_punch_cache_entry_t* entry = &context->rendezvous_punch_cache[index];
-
-        if (entry->used && memcmp(entry->token, token, sizeof(entry->token)) == 0) {
-            *endpoint   = entry->endpoint;
-            entry->used = false;
+    for (uint8_t index = 0u; index < candidate_count; ++index) {
+        if (utp_address_equal(&candidates[index], endpoint)) {
             return true;
         }
     }
@@ -1376,15 +1435,16 @@ static void utp_context_purge_rendezvous_forward_cache(utp_context_t* context, u
 }
 
 static bool utp_context_rendezvous_forward_seen(utp_context_t* context,
-                                                const uint8_t rendezvous_id[UTP_RENDEZVOUS_ID_SIZE], uint64_t now_us)
+                                                const uint8_t  attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE],
+                                                uint64_t       now_us)
 {
     assert(context != NULL);
-    assert(rendezvous_id != NULL);
+    assert(attempt_id != NULL);
     utp_context_purge_rendezvous_forward_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY; ++index) {
         const utp_context_rendezvous_forward_cache_entry_t* entry = &context->rendezvous_forward_cache[index];
 
-        if (entry->used && memcmp(entry->rendezvous_id, rendezvous_id, sizeof(entry->rendezvous_id)) == 0) {
+        if (entry->used && memcmp(entry->attempt_id, attempt_id, sizeof(entry->attempt_id)) == 0) {
             return true;
         }
     }
@@ -1392,13 +1452,13 @@ static bool utp_context_rendezvous_forward_seen(utp_context_t* context,
 }
 
 static void utp_context_remember_rendezvous_forward(utp_context_t* context,
-                                                    const uint8_t  rendezvous_id[UTP_RENDEZVOUS_ID_SIZE],
+                                                    const uint8_t  attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE],
                                                     uint64_t       now_us)
 {
     utp_context_rendezvous_forward_cache_entry_t* selected = NULL;
 
     assert(context != NULL);
-    assert(rendezvous_id != NULL);
+    assert(attempt_id != NULL);
     utp_context_purge_rendezvous_forward_cache(context, now_us);
     for (size_t index = 0u; index < UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_CAPACITY; ++index) {
         utp_context_rendezvous_forward_cache_entry_t* entry = &context->rendezvous_forward_cache[index];
@@ -1412,7 +1472,7 @@ static void utp_context_remember_rendezvous_forward(utp_context_t* context,
         }
     }
     if (selected != NULL) {
-        memcpy(selected->rendezvous_id, rendezvous_id, sizeof(selected->rendezvous_id));
+        memcpy(selected->attempt_id, attempt_id, sizeof(selected->attempt_id));
         selected->expires_at_us = now_us > UINT64_MAX - UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US
                                       ? UINT64_MAX
                                       : now_us + UTP_CONTEXT_RENDEZVOUS_FORWARD_CACHE_LIFETIME_US;
@@ -1420,21 +1480,22 @@ static void utp_context_remember_rendezvous_forward(utp_context_t* context,
     }
 }
 
-static utp_internal_error_t utp_context_add_rendezvous_candidate(utp_context_connection_slot_t* slot,
-                                                                 const utp_address_t*           endpoint)
+static utp_internal_error_t utp_context_add_rendezvous_candidate(utp_address_t* candidates, uint8_t* candidate_count,
+                                                                 uint8_t family, const utp_address_t* endpoint)
 {
-    assert(slot != NULL);
+    assert(candidates != NULL);
+    assert(candidate_count != NULL);
     assert(endpoint != NULL);
-    if (endpoint->port == 0u || endpoint->family != slot->connection.peer.family) {
+    if (endpoint->port == 0u || endpoint->family != family) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (utp_context_rendezvous_candidate_exists(slot, endpoint)) {
+    if (utp_context_rendezvous_candidate_exists(candidates, *candidate_count, endpoint)) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (slot->rendezvous_candidate_count >= UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES) {
+    if (*candidate_count >= UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    slot->rendezvous_candidates[slot->rendezvous_candidate_count++] = *endpoint;
+    candidates[(*candidate_count)++] = *endpoint;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -1602,44 +1663,24 @@ static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, c
     return error;
 }
 
-static utp_context_connection_slot_t* utp_context_find_rendezvous_slot(
-    utp_context_t* context, const uint8_t rendezvous_id[UTP_RENDEZVOUS_ID_SIZE])
+static utp_context_connection_slot_t* utp_context_find_connect_attempt(
+    utp_context_t* context, const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE])
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
-
     assert(context != NULL);
-    assert(rendezvous_id != NULL);
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
-        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
-
-        if (slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
-            memcmp(slot->rendezvous_id, rendezvous_id, UTP_RENDEZVOUS_ID_SIZE) == 0) {
-            return slot;
-        }
-    }
-    return NULL;
+    assert(attempt_id != NULL);
+    return utp_context_connection_slot_from_attempt_node(utp_hash_table_find(
+        &context->connect_attempts_by_id, utp_context_bytes_hash(attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE),
+        attempt_id, utp_context_attempt_slot_matches, NULL));
 }
 
 static utp_context_connection_slot_t* utp_context_find_rendezvous_punch_slot(
     utp_context_t* context, const uint8_t token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE])
 {
-    utp_hash_iter_t  iter;
-    utp_hash_node_t* node;
-
     assert(context != NULL);
     assert(token != NULL);
-    utp_hash_iter_init(&iter);
-    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
-        utp_context_connection_slot_t* slot = utp_context_connection_slot_from_node(node);
-
-        if (slot->connect_pending && slot->rendezvous_active &&
-            memcmp(slot->rendezvous_punch_token, token, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) == 0) {
-            return slot;
-        }
-    }
-    return NULL;
+    return utp_context_connection_slot_from_punch_node(utp_hash_table_find(
+        &context->rendezvous_punch_attempts, utp_context_bytes_hash(token, UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE), token,
+        utp_context_punch_slot_matches, NULL));
 }
 
 static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t*                 context,
@@ -1668,6 +1709,29 @@ static utp_internal_error_t utp_context_send_rendezvous_initials(utp_context_t* 
     return UTP_INTERNAL_ERROR_OK;
 }
 
+static utp_internal_error_t utp_context_send_rendezvous_initials_to_peer(utp_context_t*                 context,
+                                                                         utp_context_connection_slot_t* slot,
+                                                                         const utp_address_t*           peer)
+{
+    utp_packet_out_t* packet;
+
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(peer != NULL);
+    assert(slot->rendezvous_active);
+    TAILQ_FOREACH(packet, &slot->connection.send_control.ledger.unacked_packets, po_next)
+    {
+        if (packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT) {
+            const utp_internal_error_t error = utp_context_send_packet(context, &slot->connection, peer, packet);
+
+            if (error != UTP_INTERNAL_ERROR_OK && error != UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                return error;
+            }
+        }
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
 static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t*                       context,
                                                                 const utp_context_connection_slot_t* slot,
                                                                 const utp_packet_out_t*              packet)
@@ -1678,6 +1742,9 @@ static utp_internal_error_t utp_context_send_rendezvous_initial(utp_context_t*  
     assert(slot->rendezvous_active);
     assert(slot->rendezvous_candidate_count != 0u);
     assert(packet->packet_type == UTP_PACKET_TYPE_INITIAL || packet->packet_type == UTP_PACKET_TYPE_0RTT);
+    if (slot->rendezvous_path_feedback) {
+        return utp_context_send_packet(context, &slot->connection, &slot->connection.peer, packet);
+    }
     for (uint8_t index = 0u; index < slot->rendezvous_candidate_count; ++index) {
         const utp_internal_error_t error =
             utp_context_send_packet(context, &slot->connection, &slot->rendezvous_candidates[index], packet);
@@ -1702,36 +1769,20 @@ static utp_internal_error_t utp_context_apply_rendezvous_plan(utp_context_connec
     }
     slot->rendezvous_candidate_count = 0u;
     for (uint8_t index = 0u; index < plan->local_candidate_count; ++index) {
-        error = utp_context_add_rendezvous_candidate(slot, &plan->local_candidates[index]);
+        error = utp_context_add_rendezvous_candidate(slot->rendezvous_candidates, &slot->rendezvous_candidate_count,
+                                                     slot->connection.peer.family, &plan->local_candidates[index]);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
     }
     for (uint8_t index = 0u; index < plan->public_candidate_count; ++index) {
-        error = utp_context_add_rendezvous_candidate(slot, &plan->public_candidates[index]);
+        error = utp_context_add_rendezvous_candidate(slot->rendezvous_candidates, &slot->rendezvous_candidate_count,
+                                                     slot->connection.peer.family, &plan->public_candidates[index]);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
     }
     return slot->rendezvous_candidate_count == 0u ? UTP_INTERNAL_ERROR_PROTOCOL : UTP_INTERNAL_ERROR_OK;
-}
-
-static bool utp_context_rendezvous_plan_contains(const utp_rendezvous_candidate_plan_t* plan,
-                                                 const utp_address_t*                   endpoint)
-{
-    assert(plan != NULL);
-    assert(endpoint != NULL);
-    for (uint8_t index = 0u; index < plan->local_candidate_count; ++index) {
-        if (utp_address_equal(&plan->local_candidates[index], endpoint)) {
-            return true;
-        }
-    }
-    for (uint8_t index = 0u; index < plan->public_candidate_count; ++index) {
-        if (utp_address_equal(&plan->public_candidates[index], endpoint)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static utp_internal_error_t utp_context_send_rendezvous_punches(utp_context_t* context, const utp_address_t* candidates,
@@ -2167,6 +2218,7 @@ static utp_internal_error_t utp_context_complete_packet_send(utp_context_t*     
     assert(packet != NULL);
     assert(sent_at_us != 0u);
     const bool     zero_rtt_response = (packet->po_flags & UTP_PO_ZERO_RTT_RESPONSE) != 0u;
+    const uint64_t packet_number     = packet->packet_number;
     const uint64_t packet_size =
         (packet->po_flags & UTP_PO_ENCRYPTED) != 0u ? packet->encrypt_data_size : packet->data_size;
     utp_internal_error_t error = utp_connection_on_packet_sent(&slot->connection, packet, sent_at_us);
@@ -2175,6 +2227,8 @@ static utp_internal_error_t utp_context_complete_packet_send(utp_context_t*     
         slot->zero_rtt_amplification_tx_bytes += packet_size;
     }
     if (error == UTP_INTERNAL_ERROR_OK && zero_rtt_response) {
+        assert(slot->zero_rtt_response_packet_count < slot->zero_rtt_response_packet_capacity);
+        slot->zero_rtt_response_packet_numbers[slot->zero_rtt_response_packet_count++] = packet_number;
         error = utp_context_complete_zero_rtt_response(context, slot, sent_at_us);
     }
     return error;
@@ -2327,7 +2381,7 @@ static bool utp_context_has_pending_udp_write(const utp_context_t* context)
     while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
         const utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
 
-        if (slot->pending.handshake_write_pending) {
+        if (slot->pending.handshake_output_count != 0u) {
             return true;
         }
     }
@@ -3415,6 +3469,7 @@ static utp_internal_error_t utp_context_encode_version_frame(uint8_t* buffer, si
 }
 
 static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* context, utp_pending_incoming_t* pending,
+                                                            const utp_pending_handshake_path_t* path,
                                                             uint8_t packet_type, const uint8_t* payload,
                                                             size_t payload_length, uint64_t* out_packet_number)
 {
@@ -3432,6 +3487,7 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
     }
     assert(context != NULL);
     assert(pending != NULL);
+    assert(path != NULL);
     assert(pending->next_packet_number != 0u);
     assert(pending->next_packet_number <= UTP_PACKET_NUMBER_MAX);
     assert(payload != NULL || payload_length == 0u);
@@ -3460,7 +3516,7 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
         memcpy(packet + UTP_PACKET_HEADER_SIZE, payload, payload_length);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_send_raw(context, &pending->peer, &pending->local, packet,
+        error = utp_context_send_raw(context, &path->peer, &path->local, packet,
                                      UTP_PACKET_HEADER_SIZE + wire_payload_length);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
@@ -3473,7 +3529,8 @@ static utp_internal_error_t utp_context_send_pending_packet(utp_context_t* conte
 }
 
 static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* context, utp_pending_incoming_t* pending,
-                                                               uint64_t* out_packet_number)
+                                                               const utp_pending_handshake_path_t* path,
+                                                               uint64_t*                           out_packet_number)
 {
     uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
@@ -3482,6 +3539,7 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
 
     assert(context != NULL);
     assert(pending != NULL);
+    assert(path != NULL);
     assert(out_packet_number != NULL);
     error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -3506,23 +3564,47 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
             }
         }
     }
-    if (pending->latest_initial_packet_number == 0u || pending->latest_initial_received_us == 0u) {
+    if (path->initial_packet_number == 0u || path->initial_received_us == 0u) {
         return UTP_INTERNAL_ERROR_STATE;
     }
-    error = utp_context_append_handshake_feedback(payload, sizeof(payload), &payload_length,
-                                                  pending->latest_initial_packet_number,
-                                                  pending->latest_initial_received_us, utp_context_now_us());
+    error =
+        utp_context_append_handshake_feedback(payload, sizeof(payload), &payload_length, path->initial_packet_number,
+                                              path->initial_received_us, utp_context_now_us());
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return utp_context_send_pending_packet(context, pending, UTP_PACKET_TYPE_HANDSHAKE, payload, payload_length,
+    return utp_context_send_pending_packet(context, pending, path, UTP_PACKET_TYPE_HANDSHAKE, payload, payload_length,
                                            out_packet_number);
 }
 
-/** @brief 发送普通被动 HANDSHAKE；UDP 暂不可写时保留 pending，等待 writable 事件重试。 */
-static utp_internal_error_t utp_context_send_or_defer_pending_handshake(utp_context_t*              context,
-                                                                        utp_context_pending_slot_t* slot,
-                                                                        uint64_t                    now_us)
+static utp_internal_error_t utp_context_queue_pending_handshake(utp_pending_incoming_t*             pending,
+                                                                const utp_pending_handshake_path_t* path)
+{
+    assert(pending != NULL);
+    assert(path != NULL);
+    for (uint8_t index = 0u; index < pending->handshake_output_count; ++index) {
+        utp_pending_handshake_path_t* queued = &pending->handshake_outputs[index];
+
+        if (utp_address_equal(&queued->peer, &path->peer) && utp_address_equal(&queued->local, &path->local)) {
+            const bool timeout_retransmission = queued->timeout_retransmission || path->timeout_retransmission;
+
+            *queued                        = *path;
+            queued->timeout_retransmission = timeout_retransmission;
+            return UTP_INTERNAL_ERROR_OK;
+        }
+    }
+    if (pending->handshake_output_count >= UTP_PENDING_HANDSHAKE_OUTPUT_CAPACITY) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+    pending->handshake_outputs[pending->handshake_output_count++] = *path;
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+/** @brief 向触发当前 Initial 的原路径响应 HANDSHAKE。 */
+static utp_internal_error_t utp_context_send_or_defer_pending_handshake(utp_context_t*                      context,
+                                                                        utp_context_pending_slot_t*         slot,
+                                                                        const utp_pending_handshake_path_t* path,
+                                                                        uint64_t                            now_us)
 {
     uint64_t             packet_number = 0u;
     utp_internal_error_t error;
@@ -3530,17 +3612,54 @@ static utp_internal_error_t utp_context_send_or_defer_pending_handshake(utp_cont
     assert(context != NULL);
     assert(slot != NULL);
     assert(slot->used);
+    assert(path != NULL);
     assert(now_us != 0u);
-    error = utp_context_send_pending_handshake(context, &slot->pending, &packet_number);
+    if (slot->pending.handshake_output_count != 0u) {
+        error = utp_context_queue_pending_handshake(&slot->pending, path);
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_enable_udp_write_event(context) : error;
+    }
+    error = utp_context_send_pending_handshake(context, &slot->pending, path, &packet_number);
     if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
-        slot->pending.handshake_write_pending = true;
-        return utp_context_enable_udp_write_event(context);
+        error = utp_context_queue_pending_handshake(&slot->pending, path);
+        return error == UTP_INTERNAL_ERROR_OK ? utp_context_enable_udp_write_event(context) : error;
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    slot->pending.handshake_write_pending = false;
-    return utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us);
+    return utp_pending_incoming_mark_handshake_sent(&slot->pending, packet_number, now_us,
+                                                    path->timeout_retransmission);
+}
+
+static utp_internal_error_t utp_context_drain_pending_handshakes(utp_context_t*              context,
+                                                                 utp_context_pending_slot_t* slot)
+{
+    utp_pending_incoming_t* pending = &slot->pending;
+
+    assert(context != NULL);
+    assert(slot != NULL);
+    while (pending->handshake_output_count != 0u) {
+        const utp_pending_handshake_path_t path = pending->handshake_outputs[0];
+        uint64_t                           packet_number;
+        const uint64_t                     now_us = utp_context_now_us();
+        utp_internal_error_t error = utp_context_send_pending_handshake(context, pending, &path, &packet_number);
+
+        if (error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+            return utp_context_enable_udp_write_event(context);
+        }
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        error = utp_pending_incoming_mark_handshake_sent(pending, packet_number, now_us, path.timeout_retransmission);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+        --pending->handshake_output_count;
+        if (pending->handshake_output_count != 0u) {
+            memmove(pending->handshake_outputs, pending->handshake_outputs + 1,
+                    pending->handshake_output_count * sizeof(pending->handshake_outputs[0]));
+        }
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 static void utp_context_send_pending_close(utp_context_t* context, utp_pending_incoming_t* pending, uint16_t error_code)
@@ -3551,7 +3670,11 @@ static void utp_context_send_pending_close(utp_context_t* context, utp_pending_i
     assert(context != NULL);
     assert(pending != NULL);
     if (utp_frame_connection_close_encode(payload, sizeof(payload), &close) == UTP_INTERNAL_ERROR_OK) {
-        (void)utp_context_send_pending_packet(context, pending, UTP_PACKET_TYPE_CONNECTION_CLOSE, payload,
+        const utp_pending_handshake_path_t path = {pending->latest_initial_peer, pending->latest_initial_local,
+                                                   pending->latest_initial_packet_number,
+                                                   pending->latest_initial_received_us, false};
+
+        (void)utp_context_send_pending_packet(context, pending, &path, UTP_PACKET_TYPE_CONNECTION_CLOSE, payload,
                                               sizeof(payload), NULL);
     }
 }
@@ -3571,7 +3694,11 @@ static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* conte
     error        = utp_pending_incoming_accept(&slot->pending);
     now_us       = utp_context_now_us();
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
+        const utp_pending_handshake_path_t path = {
+            slot->pending.latest_initial_peer, slot->pending.latest_initial_local,
+            slot->pending.latest_initial_packet_number, slot->pending.latest_initial_received_us, false};
+
+        error = utp_context_send_or_defer_pending_handshake(context, slot, &path, now_us);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_refresh_timer(context, now_us);
@@ -3601,6 +3728,12 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
         slot->connect_pending     = false;
         slot->connect_deadline_us = 0u;
         slot->connected_reported  = true;
+        if (slot->punch_node.table == &context->rendezvous_punch_attempts) {
+            (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
+        }
+        if (slot->attempt_node.table == &context->connect_attempts_by_id) {
+            (void)utp_hash_table_remove(&context->connect_attempts_by_id, &slot->attempt_node);
+        }
         utp_context_log_ids(context, UTP_LOG_LEVEL_INFO, "connection established", slot->connection.local_cid,
                             slot->connection.peer_cid);
         // 握手已完成，不再需要保存用于构造 0-RTT 重传的应用数据。
@@ -4124,12 +4257,21 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
             utp_context_take_deadline(&deadline, slot->zero_rtt_response_deadline_us);
             utp_context_take_deadline(&deadline, slot->zero_rtt_expire_deadline_us);
         }
+        if (slot->zero_rtt_confirm_active) {
+            utp_context_take_deadline(&deadline, slot->zero_rtt_confirm_deadline_us);
+        }
     }
     utp_hash_iter_init(&iter);
     while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
         const utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
 
         utp_context_take_deadline(&deadline, utp_pending_incoming_handshake_deadline(&slot->pending));
+    }
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->completed_attempts, &iter)) != NULL) {
+        const utp_context_completed_attempt_entry_t* entry = utp_context_completed_attempt_from_node(node);
+
+        utp_context_take_deadline(&deadline, entry->expires_at_us);
     }
     return deadline;
 }
@@ -4155,7 +4297,8 @@ static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, ui
 }
 
 static utp_internal_error_t utp_context_replay_pending_packet(const uint8_t* packet, size_t packet_length,
-                                                              size_t wire_packet_length, void* user_data)
+                                                              size_t wire_packet_length, const utp_address_t* peer,
+                                                              const utp_address_t* local, void* user_data)
 {
     utp_context_replay_t* replay = user_data;
     utp_packet_in_t*      packet_in;
@@ -4165,8 +4308,12 @@ static utp_internal_error_t utp_context_replay_pending_packet(const uint8_t* pac
     assert(replay->context != NULL);
     assert(replay->connection != NULL);
     assert(replay->peer != NULL);
+    assert(replay->local != NULL);
     assert(packet != NULL);
     assert(replay->now_us != 0u);
+    if (!utp_address_equal(replay->peer, peer) || !utp_address_equal(replay->local, local)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
     if (packet_length > UINT16_MAX) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
@@ -4185,7 +4332,8 @@ static utp_internal_error_t utp_context_replay_pending_packet(const uint8_t* pac
 static utp_internal_error_t utp_context_promote_pending(utp_context_t*              context,
                                                         utp_context_pending_slot_t* pending_slot, uint8_t* packet,
                                                         size_t packet_length, size_t wire_packet_length,
-                                                        utp_packet_in_t* packet_in, const utp_address_t* peer)
+                                                        utp_packet_in_t* packet_in, const utp_address_t* peer,
+                                                        const utp_address_t* local)
 {
     utp_context_connection_slot_t* slot;
     utp_internal_error_t           error;
@@ -4203,11 +4351,13 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     if (slot == NULL) {
         return UTP_INTERNAL_ERROR_NOMEM;
     }
+    memcpy(slot->attempt_id, pending_slot->attempt_id, sizeof(slot->attempt_id));
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, pending_slot->pending.local_cid,
                                 pending_slot->pending.peer_cid, peer, UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX,
                                 &context->packet_out_buffer_pool);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        slot->connection.local = pending_slot->pending.local;
+        slot->connection.local =
+            local == NULL || local->family == UTP_ADDRESS_FAMILY_UNSPECIFIED ? (utp_address_t){0} : *local;
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_configure_connection(context, &slot->connection);
@@ -4271,10 +4421,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         utp_context_replay_t replay = {
-            context,
-            &slot->connection,
-            peer,
-            now_us,
+            context, &slot->connection, peer, &slot->connection.local, now_us,
         };
 
         error = utp_pending_incoming_replay(&pending_slot->pending, utp_context_replay_pending_packet, &replay);
@@ -4282,6 +4429,13 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(context, slot);
         // 已开始处理 HandshakeDone，pending 已经不再是可重试的完整握手状态。
+        utp_context_release_pending_slot(context, pending_slot);
+        return error;
+    }
+    error = utp_context_remember_completed_attempt(context, pending_slot->attempt_id, pending_slot->pending.peer_cid,
+                                                   utp_context_zero_rtt_expire_deadline(context, now_us), now_us);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_context_release_connection_slot(context, slot);
         utp_context_release_pending_slot(context, pending_slot);
         return error;
     }
@@ -4303,6 +4457,13 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
 {
     uint64_t             now_us;
     utp_internal_error_t error;
+    bool                 rendezvous_handshake;
+    bool                 rendezvous_peer_changed;
+    bool                 zero_rtt_peer_changed;
+    bool                 handshake_peer_changed;
+    utp_address_t        previous_peer;
+    utp_address_t        previous_candidate_peer;
+    utp_endpoint_t       previous_remote;
 
     assert(context != NULL);
     assert(slot != NULL);
@@ -4314,22 +4475,40 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     assert(inout_now_us != NULL);
     assert(*inout_now_us != 0u);
     now_us = *inout_now_us;
-    if (slot->connect_pending && slot->rendezvous_active && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
-        header->type == UTP_PACKET_TYPE_HANDSHAKE && !utp_address_equal(peer, &slot->connection.peer) &&
-        utp_context_rendezvous_candidate_exists(slot, peer)) {
+    rendezvous_handshake =
+        slot->connect_pending && slot->rendezvous_active && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE &&
+        (utp_address_equal(peer, &slot->connection.peer) ||
+         utp_context_rendezvous_candidate_exists(slot->rendezvous_candidates, slot->rendezvous_candidate_count, peer));
+    rendezvous_peer_changed = rendezvous_handshake && !utp_address_equal(peer, &slot->connection.peer);
+    zero_rtt_peer_changed =
+        slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->zero_rtt_response_active &&
+        (header->type == UTP_PACKET_TYPE_CTRL || header->type == UTP_PACKET_TYPE_CONNECTION_CLOSE) &&
+        !utp_address_equal(peer, &slot->connection.peer);
+    handshake_peer_changed = rendezvous_peer_changed || zero_rtt_peer_changed;
+    if (!slot->connect_pending && slot->rendezvous_active && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE && !utp_address_equal(peer, &slot->connection.peer)) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (handshake_peer_changed) {
+        previous_peer                   = slot->connection.peer;
+        previous_candidate_peer         = slot->connection.candidate_peer;
+        previous_remote                 = slot->connect_attempt.remote;
         slot->connection.peer           = *peer;
         slot->connection.candidate_peer = *peer;
-        utp_context_endpoint_from_address(&slot->connect_attempt.remote, peer);
+        if (rendezvous_peer_changed) {
+            utp_context_endpoint_from_address(&slot->connect_attempt.remote, peer);
+        }
     }
     if (!slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
         (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
          slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
-        header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+        header->type == UTP_PACKET_TYPE_HANDSHAKE && !slot->zero_rtt_confirm_active) {
         // 完成后的迟到响应属于已退休的 early epoch，不能交给 1-RTT 明文握手解析。
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (slot->connect_pending && slot->connection.zero_rtt_encrypted &&
-        slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && header->type == UTP_PACKET_TYPE_HANDSHAKE) {
+    if (slot->connection.zero_rtt_encrypted && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
+        header->type == UTP_PACKET_TYPE_HANDSHAKE && (slot->connect_pending || slot->zero_rtt_confirm_active)) {
         size_t decrypted_length = packet_length;
 
         error = utp_connection_on_zero_rtt_handshake(&slot->connection, packet_in == NULL ? packet : packet_in->data,
@@ -4338,22 +4517,30 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
             packet_in->length = (uint16_t)decrypted_length;
         }
         if (error != UTP_INTERNAL_ERROR_OK) {
+            if (handshake_peer_changed) {
+                slot->connection.peer           = previous_peer;
+                slot->connection.candidate_peer = previous_candidate_peer;
+                slot->connect_attempt.remote    = previous_remote;
+            }
             return error == UTP_INTERNAL_ERROR_AUTH || error == UTP_INTERNAL_ERROR_CRYPTO ? UTP_INTERNAL_ERROR_OK
                                                                                           : error;
+        }
+        if (rendezvous_handshake) {
+            slot->rendezvous_path_feedback = true;
         }
         if (local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
             slot->connection.local = *local;
         }
-        error = utp_connection_queue_ack(&slot->connection, now_us);
+        if (!slot->zero_rtt_confirm_active) {
+            slot->zero_rtt_confirm_active      = true;
+            slot->zero_rtt_confirm_deadline_us = utp_context_zero_rtt_expire_deadline(context, now_us);
+        }
+        error = utp_context_send_handshake_done(context, slot);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-        error = utp_context_complete_connected_side_effects(context, slot);
-        if (error == UTP_INTERNAL_ERROR_OK) {
-            utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
-            utp_crypto_aead_cleanup(&slot->connection.early_tx_aead);
-            utp_crypto_aead_cleanup(&slot->connection.early_rx_aead);
-            slot->connection.zero_rtt_encrypted = false;
+        if (!slot->connected_reported) {
+            error = utp_context_complete_connected_side_effects(context, slot);
         }
         return error == UTP_INTERNAL_ERROR_OK ? utp_context_flush_connection(context, slot) : error;
     }
@@ -4364,6 +4551,11 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         error = utp_connection_on_packet_received(&slot->connection, packet, packet_length, peer, now_us);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
+        if (handshake_peer_changed) {
+            slot->connection.peer           = previous_peer;
+            slot->connection.candidate_peer = previous_candidate_peer;
+            slot->connect_attempt.remote    = previous_remote;
+        }
         if (error == UTP_INTERNAL_ERROR_AUTH || error == UTP_INTERNAL_ERROR_CRYPTO) {
             return UTP_INTERNAL_ERROR_OK;
         }
@@ -4372,13 +4564,22 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         }
         return error;
     }
+    if (rendezvous_handshake) {
+        slot->rendezvous_path_feedback = true;
+    }
     if (local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED &&
         utp_address_equal(peer, &slot->connection.peer)) {
         slot->connection.local = *local;
     }
     if (slot->connection.role == UTP_CONNECTION_ROLE_PASSIVE && slot->zero_rtt_response_active &&
-        (header->type == UTP_PACKET_TYPE_CTRL || header->type == UTP_PACKET_TYPE_CONNECTION_CLOSE)) {
-        // 首个有效 1-RTT 包证明客户端已收到响应，立即退休所有未发出的响应副本。
+        slot->connection.peer_handshake_done_packet_number != 0u &&
+        utp_context_zero_rtt_response_was_sent(slot, slot->connection.peer_handshake_done_packet_number)) {
+        // HANDSHAKE_DONE 明确确认一份已发送响应，立即退休其余响应副本。
+        error = utp_context_remember_completed_attempt(context, slot->attempt_id, slot->connection.peer_cid,
+                                                       slot->zero_rtt_expire_deadline_us, now_us);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
         error = utp_connection_retire_handshake_flight(&slot->connection, now_us);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
@@ -4387,6 +4588,13 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         slot->zero_rtt_response_queued      = false;
         slot->zero_rtt_response_deadline_us = 0u;
         slot->zero_rtt_expire_deadline_us   = 0u;
+        utp_allocator_free(NULL, slot->zero_rtt_response_packet_numbers);
+        slot->zero_rtt_response_packet_numbers  = NULL;
+        slot->zero_rtt_response_packet_count    = 0u;
+        slot->zero_rtt_response_packet_capacity = 0u;
+        if (slot->zero_rtt_attempt_node.table == &context->zero_rtt_responses_by_attempt) {
+            (void)utp_hash_table_remove(&context->zero_rtt_responses_by_attempt, &slot->zero_rtt_attempt_node);
+        }
         if (slot->connection.zero_rtt_encrypted) {
             utp_crypto_aead_cleanup(&slot->connection.early_tx_aead);
             utp_crypto_aead_cleanup(&slot->connection.early_rx_aead);
@@ -4394,19 +4602,14 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         }
     }
     if (slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE && header->type == UTP_PACKET_TYPE_HANDSHAKE &&
-        slot->connection.peer_handshake_packet_number == header->packet_number &&
-        slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN &&
-        slot->connect_attempt.type != UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) {
-        error = utp_context_send_handshake_done(context, slot);
-        if (error != UTP_INTERNAL_ERROR_OK) {
-            return error;
+        slot->connection.peer_handshake_packet_number == header->packet_number) {
+        if ((slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
+             slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
+            !slot->zero_rtt_confirm_active) {
+            slot->zero_rtt_confirm_active      = true;
+            slot->zero_rtt_confirm_deadline_us = utp_context_zero_rtt_expire_deadline(context, now_us);
         }
-    }
-    if (slot->connect_pending && slot->connection.role == UTP_CONNECTION_ROLE_ACTIVE &&
-        (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
-         slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE) &&
-        header->type == UTP_PACKET_TYPE_HANDSHAKE) {
-        error = utp_connection_queue_ack(&slot->connection, now_us);
+        error = utp_context_send_handshake_done(context, slot);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -4464,7 +4667,7 @@ static utp_internal_error_t utp_context_on_pending_packet(utp_context_t* context
             packet_in->length = (uint16_t)packet_length;
         }
     }
-    error = utp_pending_incoming_on_packet(&slot->pending, packet, packet_length, wire_packet_length, peer,
+    error = utp_pending_incoming_on_packet(&slot->pending, packet, packet_length, wire_packet_length, peer, local,
                                            utp_context_now_us(), &result);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -4473,7 +4676,49 @@ static utp_internal_error_t utp_context_on_pending_packet(utp_context_t* context
         utp_pending_incoming_set_local(&slot->pending, local);
     }
     if (result == UTP_PENDING_INCOMING_PROMOTE) {
-        error = utp_context_promote_pending(context, slot, packet, packet_length, wire_packet_length, packet_in, peer);
+        error = utp_context_promote_pending(context, slot, packet, packet_length, wire_packet_length, packet_in, peer,
+                                            local);
+    }
+    return error;
+}
+
+static utp_internal_error_t utp_context_decode_initial_request(const utp_context_t*     context,
+                                                               const utp_packet_view_t* view,
+                                                               uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE],
+                                                               size_t* request_frame_length)
+{
+    size_t  frame_length;
+    uint8_t frame_type;
+
+    assert(context != NULL);
+    assert(view != NULL);
+    assert(attempt_id != NULL);
+    assert(request_frame_length != NULL);
+    if (view->payload_length == 0u || view->payload[0] != UTP_FRAME_TYPE_RENDEZVOUS) {
+        return UTP_INTERNAL_ERROR_PROTOCOL;
+    }
+    utp_internal_error_t error = utp_frame_measure(view->payload, view->payload_length, &frame_type, &frame_length);
+
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        utp_frame_rendezvous_t   rendezvous;
+        utp_rendezvous_request_t request;
+
+        error = utp_frame_rendezvous_decode(&rendezvous, view->payload, frame_length);
+        if (error == UTP_INTERNAL_ERROR_OK && rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST) {
+            error = UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_rendezvous_request_decode(&request, rendezvous.payload, rendezvous.payload_length);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK &&
+            (request.target_peer_id_length != context->peer_id_length ||
+             memcmp(request.target_peer_id, context->peer_id, context->peer_id_length) != 0)) {
+            error = UTP_INTERNAL_ERROR_PROTOCOL;
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            memcpy(attempt_id, request.attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
+            *request_frame_length = frame_length;
+        }
     }
     return error;
 }
@@ -4483,10 +4728,12 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
 {
     utp_context_pending_slot_t* slot;
     utp_frame_crypto_t          peer_crypto;
+    uint8_t                     attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE] = {0u};
     uint32_t                    local_cid;
     size_t                      frame_offset;
     bool                        has_crypto;
     bool                        rendezvous_seen;
+    size_t                      request_frame_length;
     utp_internal_error_t        error;
 
     assert(context != NULL);
@@ -4495,9 +4742,21 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     if (view->header.scid == 0u || view->header.dcid != 0u) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    slot = utp_context_find_pending_by_peer(context, view->header.scid, peer);
+    error = utp_context_decode_initial_request(context, view, attempt_id, &request_frame_length);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    slot = utp_context_find_pending_by_attempt(context, attempt_id);
     if (slot != NULL) {
-        error = utp_pending_incoming_record_initial(&slot->pending, view->header.packet_number, utp_context_now_us());
+        const uint64_t                     received_at_us = utp_context_now_us();
+        const utp_pending_handshake_path_t path           = {*peer, local == NULL ? (utp_address_t){0} : *local,
+                                                             view->header.packet_number, received_at_us, false};
+
+        if (slot->pending.peer_cid != view->header.scid) {
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        error = utp_pending_incoming_record_initial(&slot->pending, peer, local, view->header.packet_number,
+                                                    received_at_us);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -4507,13 +4766,7 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         if (slot->pending.handshake_sent) {
             uint64_t now_us = utp_context_now_us();
 
-            if (slot->pending.handshake_retransmission_count > slot->pending.handshake_max_retries) {
-                utp_context_log_ids(context, UTP_LOG_LEVEL_WARNING, "incoming handshake response retries exhausted",
-                                    slot->pending.local_cid, slot->pending.peer_cid);
-                utp_context_release_pending_slot(context, slot);
-                return UTP_INTERNAL_ERROR_OK;
-            }
-            error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
+            error = utp_context_send_or_defer_pending_handshake(context, slot, &path, now_us);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = utp_context_refresh_timer(context, now_us);
             }
@@ -4521,8 +4774,8 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         }
         return UTP_INTERNAL_ERROR_OK;
     }
-    // 服务端 HANDSHAKE 丢失时，客户端会重传 Initial；已晋升的同一来源地址和 SCID 不得再次交给应用 accept。
-    if (utp_context_find_passive_connection_by_peer(context, peer, view->header.scid) != NULL) {
+    // 已晋升握手只在最大重试窗口内抑制迟到 Initial，不把 attempt_id 带入 Connection 数据期。
+    if (utp_context_find_completed_attempt(context, attempt_id, utp_context_now_us()) != NULL) {
         return UTP_INTERNAL_ERROR_OK;
     }
     slot = utp_context_alloc_pending_slot(context);
@@ -4531,6 +4784,7 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
     }
     error = utp_context_alloc_cid(context, &local_cid);
     if (error == UTP_INTERNAL_ERROR_OK) {
+        memcpy(slot->attempt_id, attempt_id, sizeof(slot->attempt_id));
         error = utp_pending_incoming_init(&slot->pending, local_cid, view->header.scid, peer, slot->storage,
                                           sizeof(slot->storage), UTP_CONTEXT_PENDING_PACKET_LIMIT);
         if (error == UTP_INTERNAL_ERROR_OK && local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
@@ -4549,22 +4803,10 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
 
         error = utp_packet_view_next_frame(view, &frame_offset, &frame_type, &frame, &frame_length);
         if (error == UTP_INTERNAL_ERROR_OK && frame_type == UTP_FRAME_TYPE_RENDEZVOUS) {
-            utp_frame_rendezvous_t rendezvous;
-            uint8_t                rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
-
-            if (rendezvous_seen || frame_offset_before != 0u) {
+            if (rendezvous_seen || frame_offset_before != 0u || frame_length != request_frame_length) {
                 error = UTP_INTERNAL_ERROR_PROTOCOL;
             } else {
-                error = utp_frame_rendezvous_decode(&rendezvous, frame, frame_length);
-                if (error == UTP_INTERNAL_ERROR_OK && rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-                    rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) {
-                    error = UTP_INTERNAL_ERROR_PROTOCOL;
-                }
-                if (error == UTP_INTERNAL_ERROR_OK && rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) {
-                    error = utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload,
-                                                               rendezvous.payload_length);
-                }
-                rendezvous_seen = error == UTP_INTERNAL_ERROR_OK;
+                rendezvous_seen = true;
             }
         } else if (error == UTP_INTERNAL_ERROR_OK && frame_type == UTP_FRAME_TYPE_CRYPTO) {
             if (has_crypto) {
@@ -4593,7 +4835,8 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
         error = utp_pending_incoming_configure_crypto(&slot->pending, &peer_crypto);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_pending_incoming_record_initial(&slot->pending, view->header.packet_number, utp_context_now_us());
+        error = utp_pending_incoming_record_initial(&slot->pending, peer, local, view->header.packet_number,
+                                                    utp_context_now_us());
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         {
@@ -4782,7 +5025,8 @@ static utp_internal_error_t utp_context_queue_zero_rtt_response(utp_context_t*  
 static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     utp_context_t* context, utp_packet_in_t* packet_in, const utp_address_t* peer, const utp_packet_view_t* view,
     const utp_frame_session_token_t* session_token, const uint8_t resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE],
-    uint8_t encryption_mode, size_t rendezvous_prefix_length, const utp_address_t* local)
+    uint8_t encryption_mode, size_t request_frame_length, const utp_address_t* local,
+    const uint8_t attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE])
 {
     utp_crypto_aead_t              early_rx = {0};
     utp_context_connection_slot_t* slot;
@@ -4802,14 +5046,14 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     assert(view != NULL);
     assert(session_token != NULL);
     assert(resumption_psk != NULL);
+    assert(attempt_id != NULL);
     if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_128 &&
         encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256) {
         return UTP_INTERNAL_ERROR_AUTH;
     }
-    crypto_type = encryption_mode == UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256 ? UTP_CRYPTO_TYPE_AES_GCM_256
-                                                                            : UTP_CRYPTO_TYPE_AES_GCM_128;
-    token_length =
-        rendezvous_prefix_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)session_token->payload_length;
+    crypto_type  = encryption_mode == UTP_CRYPTO_ENCRYPTION_MODE_AES_GCM_256 ? UTP_CRYPTO_TYPE_AES_GCM_256
+                                                                             : UTP_CRYPTO_TYPE_AES_GCM_128;
+    token_length = request_frame_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE + (size_t)session_token->payload_length;
     if (token_length >= view->payload_length || view->payload_length - token_length < UTP_CRYPTO_AEAD_TAG_SIZE) {
         return UTP_INTERNAL_ERROR_AUTH;
     }
@@ -4836,18 +5080,15 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     if (!utp_context_remember_zero_rtt_replay(context, session_token->payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
                                               session_token->payload, utp_context_now_seconds(),
                                               session_token->expires_at_seconds)) {
-        slot = utp_context_find_zero_rtt_response(context, peer, session_token->payload);
+        slot = utp_context_find_zero_rtt_response(context, attempt_id, view->header.scid, session_token->payload);
         if (slot == NULL) {
             return UTP_INTERNAL_ERROR_AUTH;
-        }
-        if (local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
-            slot->connection.local = *local;
         }
         if ((uint64_t)packet_in->length > UINT64_MAX - slot->zero_rtt_amplification_rx_bytes) {
             return UTP_INTERNAL_ERROR_OVERFLOW;
         }
         slot->zero_rtt_amplification_rx_bytes += (uint64_t)packet_in->length;
-        if (view->header.packet_number > slot->zero_rtt_request_packet_number) {
+        if (view->header.packet_number >= slot->zero_rtt_request_packet_number && !slot->zero_rtt_response_queued) {
             slot->zero_rtt_request_packet_number = view->header.packet_number;
             slot->zero_rtt_request_received_us   = received_at_us;
         }
@@ -4868,6 +5109,9 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     }
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view->header.scid, peer,
                                 UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX, &context->packet_out_buffer_pool);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        memcpy(slot->attempt_id, attempt_id, sizeof(slot->attempt_id));
+    }
     if (error == UTP_INTERNAL_ERROR_OK && local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
         slot->connection.local = *local;
     }
@@ -4934,7 +5178,10 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
         slot->zero_rtt_response_active        = true;
         slot->zero_rtt_amplification_rx_bytes = (uint64_t)slot->zero_rtt_early_wire_size;
         slot->zero_rtt_expire_deadline_us     = utp_context_zero_rtt_expire_deadline(context, now_us);
-        error                                 = utp_context_queue_zero_rtt_response(context, slot, now_us);
+        error                                 = utp_context_register_zero_rtt_response(context, slot);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_queue_zero_rtt_response(context, slot, now_us);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_flush_connection(context, slot);
@@ -4963,33 +5210,18 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         packet_in->length < minimum_packet_size) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    view.payload        = packet_in->data + UTP_PACKET_HEADER_SIZE;
-    view.payload_length = view.header.payload_length;
-    view.frame_types    = 0u;
+    view.payload                                                         = packet_in->data + UTP_PACKET_HEADER_SIZE;
+    view.payload_length                                                  = view.header.payload_length;
+    view.frame_types                                                     = 0u;
+    uint8_t                   attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE] = {0u};
     utp_frame_session_token_t session_token;
     size_t                    token_offset;
     size_t                    token_length;
 
-    token_offset = 0u;
-    if (view.payload_length != 0u && view.payload[0] == UTP_FRAME_TYPE_RENDEZVOUS) {
-        utp_frame_rendezvous_t rendezvous;
-        uint8_t                rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
-        size_t                 rendezvous_length;
-        uint8_t                frame_type;
-
-        error = utp_frame_measure(view.payload, view.payload_length, &frame_type, &rendezvous_length);
-        if (error != UTP_INTERNAL_ERROR_OK ||
-            utp_frame_rendezvous_decode(&rendezvous, view.payload, rendezvous_length) != UTP_INTERNAL_ERROR_OK ||
-            (rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-             rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) ||
-            (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_INTRODUCTION &&
-             utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload, rendezvous.payload_length) !=
-                 UTP_INTERNAL_ERROR_OK)) {
-            return UTP_INTERNAL_ERROR_PROTOCOL;
-        }
-        token_offset = rendezvous_length;
+    error = utp_context_decode_initial_request(context, &view, attempt_id, &token_offset);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
     }
-
     error =
         utp_frame_session_token_decode(&session_token, view.payload + token_offset, view.payload_length - token_offset);
     if (error != UTP_INTERNAL_ERROR_OK) {
@@ -5003,6 +5235,18 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     if (session_token.payload_length != UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE ||
         session_token.expires_at_seconds < now_seconds) {
         return UTP_INTERNAL_ERROR_AUTH;
+    }
+    const uint64_t received_at_us = utp_context_now_us();
+
+    if (utp_context_find_completed_attempt(context, attempt_id, received_at_us) != NULL) {
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    utp_context_connection_slot_t* existing = utp_context_find_zero_rtt_response_by_attempt(context, attempt_id);
+
+    if (existing != NULL && (existing->connection.peer_cid != view.header.scid ||
+                             memcmp(existing->zero_rtt_session_token, session_token.payload,
+                                    sizeof(existing->zero_rtt_session_token)) != 0)) {
+        return UTP_INTERNAL_ERROR_OK;
     }
     if (!context->resumption_keys_ready) {
         return UTP_INTERNAL_ERROR_AUTH;
@@ -5018,8 +5262,9 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         return UTP_INTERNAL_ERROR_AUTH;
     }
     if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
-        error = utp_context_on_encrypted_zero_rtt_packet(context, packet_in, peer, &view, &session_token,
-                                                         resumption_psk, encryption_mode, token_offset, local);
+        error =
+            utp_context_on_encrypted_zero_rtt_packet(context, packet_in, peer, &view, &session_token, resumption_psk,
+                                                     encryption_mode, token_offset, local, attempt_id);
         utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
         return error;
     }
@@ -5059,25 +5304,21 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
     }
-    const uint64_t received_at_us = utp_context_now_us();
-
     if (!utp_context_remember_zero_rtt_replay(context, session_token.payload + UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE,
                                               session_token.payload, now_seconds, session_token.expires_at_seconds)) {
         utp_context_connection_slot_t* duplicate =
-            utp_context_find_zero_rtt_response(context, peer, session_token.payload);
+            utp_context_find_zero_rtt_response(context, attempt_id, view.header.scid, session_token.payload);
 
         utp_crypto_secure_clear(resumption_psk, sizeof(resumption_psk));
         if (duplicate == NULL) {
             return UTP_INTERNAL_ERROR_AUTH;
         }
-        if (local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
-            duplicate->connection.local = *local;
-        }
         if ((uint64_t)packet_in->length > UINT64_MAX - duplicate->zero_rtt_amplification_rx_bytes) {
             return UTP_INTERNAL_ERROR_OVERFLOW;
         }
         duplicate->zero_rtt_amplification_rx_bytes += (uint64_t)packet_in->length;
-        if (view.header.packet_number > duplicate->zero_rtt_request_packet_number) {
+        if (view.header.packet_number >= duplicate->zero_rtt_request_packet_number &&
+            !duplicate->zero_rtt_response_queued) {
             duplicate->zero_rtt_request_packet_number = view.header.packet_number;
             duplicate->zero_rtt_request_received_us   = received_at_us;
         }
@@ -5118,6 +5359,9 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
     slot->zero_rtt_encryption_mode    = encryption_mode;
     error = utp_connection_init(&slot->connection, UTP_CONNECTION_ROLE_PASSIVE, local_cid, view.header.scid, peer,
                                 UTP_CONTEXT_PACKET_LIMIT, UINT16_MAX, &context->packet_out_buffer_pool);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        memcpy(slot->attempt_id, attempt_id, sizeof(slot->attempt_id));
+    }
     if (error == UTP_INTERNAL_ERROR_OK && local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
         slot->connection.local = *local;
     }
@@ -5158,7 +5402,10 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
         slot->zero_rtt_response_active        = true;
         slot->zero_rtt_amplification_rx_bytes = (uint64_t)packet_in->length;
         slot->zero_rtt_expire_deadline_us     = utp_context_zero_rtt_expire_deadline(context, now_us);
-        error                                 = utp_context_queue_zero_rtt_response(context, slot, now_us);
+        error                                 = utp_context_register_zero_rtt_response(context, slot);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_context_queue_zero_rtt_response(context, slot, now_us);
     }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(context, slot);
@@ -5262,7 +5509,7 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 if (error != UTP_INTERNAL_ERROR_OK) {
                     return error;
                 }
-                slot = utp_context_find_rendezvous_slot(context, calibrate.rendezvous_id);
+                slot = utp_context_find_connect_attempt(context, calibrate.attempt_id);
                 if (slot != NULL && !slot->rendezvous_active && utp_address_equal(peer, &slot->connection.peer)) {
                     for (uint8_t index = 0u; index < calibrate.endpoint_count; ++index) {
                         if (calibrate.endpoints[index].family != context->bound_address.family) {
@@ -5346,9 +5593,9 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                                                                 rejected.reason_code);
                     }
                 } else if (rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-                           rejected.reference_length == UTP_RENDEZVOUS_ID_SIZE) {
+                           rejected.reference_length == UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) {
                     utp_context_connection_slot_t* slot =
-                        utp_context_find_rendezvous_slot(context, rejected.reference_id);
+                        utp_context_find_connect_attempt(context, rejected.reference_id);
 
                     if (slot != NULL && slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
                         utp_address_equal(peer, &slot->connection.peer)) {
@@ -5409,32 +5656,30 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_REDIRECT) {
                 utp_rendezvous_redirect_t      redirect;
                 utp_context_connection_slot_t* slot;
-                utp_address_t                  cached_peer;
-                bool                           has_cached_peer;
 
                 error = utp_rendezvous_redirect_decode(&redirect, rendezvous.payload, rendezvous.payload_length);
                 if (error != UTP_INTERNAL_ERROR_OK) {
                     return error;
                 }
-                slot = utp_context_find_rendezvous_slot(context, redirect.rendezvous_id);
+                slot = utp_context_find_connect_attempt(context, redirect.attempt_id);
                 if (slot != NULL && !slot->rendezvous_active && utp_address_equal(peer, &slot->connection.peer)) {
                     error = utp_context_apply_rendezvous_plan(slot, &redirect.target_plan);
-                    has_cached_peer =
-                        error == UTP_INTERNAL_ERROR_OK &&
-                        utp_context_take_rendezvous_punch(context, redirect.punch_token, now_us, &cached_peer);
-                    if (error == UTP_INTERNAL_ERROR_OK && has_cached_peer) {
-                        error = utp_context_add_rendezvous_candidate(slot, &cached_peer);
-                    }
                     if (error == UTP_INTERNAL_ERROR_OK) {
                         memcpy(slot->rendezvous_punch_token, redirect.punch_token,
                                sizeof(slot->rendezvous_punch_token));
+                        error = utp_hash_table_insert(
+                            &context->rendezvous_punch_attempts, &slot->punch_node,
+                            utp_context_bytes_hash(slot->rendezvous_punch_token, sizeof(slot->rendezvous_punch_token)),
+                            slot->rendezvous_punch_token, utp_context_punch_slot_matches, NULL);
+                    }
+                    if (error == UTP_INTERNAL_ERROR_OK) {
                         error = utp_context_send_rendezvous_punches(context, slot->rendezvous_candidates,
                                                                     slot->rendezvous_candidate_count,
                                                                     slot->rendezvous_punch_token);
                     }
                     if (error == UTP_INTERNAL_ERROR_OK) {
-                        slot->rendezvous_active = true;
-                        slot->connection.peer   = has_cached_peer ? cached_peer : slot->rendezvous_candidates[0];
+                        slot->rendezvous_active         = true;
+                        slot->connection.peer           = slot->rendezvous_candidates[0];
                         slot->connection.candidate_peer = slot->connection.peer;
                         utp_context_endpoint_from_address(&slot->connect_attempt.remote, &slot->connection.peer);
                         error = utp_context_send_rendezvous_initials(context, slot);
@@ -5445,8 +5690,8 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 }
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_FORWARD) {
                 utp_rendezvous_forward_t forward;
-                utp_address_t            cached_peer;
-                bool                     has_cached_peer;
+                utp_address_t            candidates[UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES];
+                uint8_t                  candidate_count = 0u;
 
                 if (!ntrs_ping_seen) {
                     return UTP_INTERNAL_ERROR_PROTOCOL;
@@ -5458,25 +5703,28 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                 if (forward.source_plan.family != context->bound_address.family) {
                     return UTP_INTERNAL_ERROR_PROTOCOL;
                 }
-                if (!utp_context_rendezvous_forward_seen(context, forward.rendezvous_id, now_us)) {
-                    has_cached_peer =
-                        utp_context_take_rendezvous_punch(context, forward.punch_token, now_us, &cached_peer);
-                    error = utp_context_send_rendezvous_punches(context, forward.source_plan.local_candidates,
-                                                                forward.source_plan.local_candidate_count,
-                                                                forward.punch_token);
-                    if (error == UTP_INTERNAL_ERROR_OK) {
-                        error = utp_context_send_rendezvous_punches(context, forward.source_plan.public_candidates,
-                                                                    forward.source_plan.public_candidate_count,
-                                                                    forward.punch_token);
+                if (!utp_context_rendezvous_forward_seen(context, forward.attempt_id, now_us)) {
+                    for (uint8_t index = 0u;
+                         error == UTP_INTERNAL_ERROR_OK && index < forward.source_plan.local_candidate_count; ++index) {
+                        error = utp_context_add_rendezvous_candidate(candidates, &candidate_count,
+                                                                     forward.source_plan.family,
+                                                                     &forward.source_plan.local_candidates[index]);
                     }
-                    if (error == UTP_INTERNAL_ERROR_OK && has_cached_peer &&
-                        !utp_context_rendezvous_plan_contains(&forward.source_plan, &cached_peer)) {
-                        error = utp_context_send_rendezvous_punch(context, &cached_peer, forward.punch_token);
+                    for (uint8_t index = 0u;
+                         error == UTP_INTERNAL_ERROR_OK && index < forward.source_plan.public_candidate_count;
+                         ++index) {
+                        error = utp_context_add_rendezvous_candidate(candidates, &candidate_count,
+                                                                     forward.source_plan.family,
+                                                                     &forward.source_plan.public_candidates[index]);
+                    }
+                    if (error == UTP_INTERNAL_ERROR_OK) {
+                        error = utp_context_send_rendezvous_punches(context, candidates, candidate_count,
+                                                                    forward.punch_token);
                     }
                     if (error != UTP_INTERNAL_ERROR_OK) {
                         return error;
                     }
-                    utp_context_remember_rendezvous_forward(context, forward.rendezvous_id, now_us);
+                    utp_context_remember_rendezvous_forward(context, forward.attempt_id, now_us);
                 }
             } else if (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_PUNCH) {
                 utp_context_connection_slot_t* slot;
@@ -5486,19 +5734,21 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     return UTP_INTERNAL_ERROR_PROTOCOL;
                 }
                 slot = utp_context_find_rendezvous_punch_slot(context, rendezvous.payload);
-                if (slot != NULL) {
-                    error = utp_context_add_rendezvous_candidate(slot, peer);
+                if (slot != NULL && !slot->rendezvous_path_feedback) {
+                    error = utp_context_add_rendezvous_candidate(slot->rendezvous_candidates,
+                                                                 &slot->rendezvous_candidate_count,
+                                                                 slot->connection.peer.family, peer);
                     if (error == UTP_INTERNAL_ERROR_OK) {
+                        slot->rendezvous_path_feedback  = true;
                         slot->connection.peer           = *peer;
                         slot->connection.candidate_peer = *peer;
                         utp_context_endpoint_from_address(&slot->connect_attempt.remote, peer);
-                        error = utp_context_send_rendezvous_initials(context, slot);
+                        (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
+                        error = utp_context_send_rendezvous_initials_to_peer(context, slot, peer);
                     }
                     if (error != UTP_INTERNAL_ERROR_OK) {
                         return error;
                     }
-                } else {
-                    utp_context_cache_rendezvous_punch(context, rendezvous.payload, peer, now_us);
                 }
             }
         }
@@ -5746,9 +5996,8 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
     while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
         utp_context_pending_slot_t* slot = utp_context_pending_slot_from_node(node);
 
-        if (slot->pending.handshake_write_pending) {
-            const utp_internal_error_t error =
-                utp_context_send_or_defer_pending_handshake(context, slot, utp_context_now_us());
+        if (slot->pending.handshake_output_count != 0u) {
+            const utp_internal_error_t error = utp_context_drain_pending_handshakes(context, slot);
 
             if (error != UTP_INTERNAL_ERROR_OK) {
                 utp_internal_log_error(&context->logger, &context->tag, error,
@@ -5781,6 +6030,16 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         uint64_t                       deadline;
         utp_internal_error_t           error;
 
+        if (slot->zero_rtt_confirm_active && slot->zero_rtt_confirm_deadline_us <= now_us) {
+            utp_crypto_secure_clear(slot->zero_rtt_resumption_psk, sizeof(slot->zero_rtt_resumption_psk));
+            if (slot->connection.zero_rtt_encrypted) {
+                utp_crypto_aead_cleanup(&slot->connection.early_tx_aead);
+                utp_crypto_aead_cleanup(&slot->connection.early_rx_aead);
+                slot->connection.zero_rtt_encrypted = false;
+            }
+            slot->zero_rtt_confirm_active      = false;
+            slot->zero_rtt_confirm_deadline_us = 0u;
+        }
         if (slot->zero_rtt_response_active &&
             ((slot->zero_rtt_expire_deadline_us != 0u && slot->zero_rtt_expire_deadline_us <= now_us) ||
              (slot->zero_rtt_response_deadline_us != 0u && slot->zero_rtt_response_deadline_us <= now_us &&
@@ -5919,13 +6178,17 @@ static utp_internal_error_t utp_context_process_pending_timers(utp_context_t* co
         if (deadline != 0u && deadline <= now_us) {
             utp_internal_error_t error;
 
-            if (slot->pending.handshake_retransmission_count > slot->pending.handshake_max_retries) {
+            if (slot->pending.handshake_retransmission_count >= slot->pending.handshake_max_retries) {
                 utp_context_log_ids(context, UTP_LOG_LEVEL_WARNING, "incoming handshake response timeout",
                                     slot->pending.local_cid, slot->pending.peer_cid);
                 utp_context_release_pending_slot(context, slot);
                 continue;
             }
-            error = utp_context_send_or_defer_pending_handshake(context, slot, now_us);
+            const utp_pending_handshake_path_t path = {
+                slot->pending.latest_initial_peer, slot->pending.latest_initial_local,
+                slot->pending.latest_initial_packet_number, slot->pending.latest_initial_received_us, true};
+
+            error = utp_context_send_or_defer_pending_handshake(context, slot, &path, now_us);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 return error;
             }
@@ -5945,7 +6208,8 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
         return;
     }
     now_us = utp_context_now_us();
-    error  = utp_context_process_connection_timers(context, now_us);
+    utp_context_purge_completed_attempts(context, now_us);
+    error = utp_context_process_connection_timers(context, now_us);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_process_pending_timers(context, now_us);
     }
@@ -5994,11 +6258,14 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (context == NULL) {
         return UTP_STATUS_NOMEM;
     }
-    context->connections                 = (utp_hash_table_t){0};
-    context->passive_connections_by_peer = (utp_hash_table_t){0};
-    context->pending_incoming            = (utp_hash_table_t){0};
-    context->pending_incoming_by_peer    = (utp_hash_table_t){0};
-    context->zero_rtt_replay             = (utp_hash_table_t){0};
+    context->connections                   = (utp_hash_table_t){0};
+    context->zero_rtt_responses_by_attempt = (utp_hash_table_t){0};
+    context->connect_attempts_by_id        = (utp_hash_table_t){0};
+    context->rendezvous_punch_attempts     = (utp_hash_table_t){0};
+    context->pending_incoming              = (utp_hash_table_t){0};
+    context->pending_incoming_by_attempt   = (utp_hash_table_t){0};
+    context->completed_attempts            = (utp_hash_table_t){0};
+    context->zero_rtt_replay               = (utp_hash_table_t){0};
     TAILQ_INIT(&context->free_connection_slots);
     TAILQ_INIT(&context->terminal_error_slots);
     TAILQ_INIT(&context->free_pending_slots);
@@ -6129,7 +6396,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     utp_crypto_default_resumption_key(context->resumption_root_key);
     utp_internal_error_t error = utp_hash_table_init(&context->connections, NULL, SIZE_MAX);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_hash_table_init(&context->passive_connections_by_peer, NULL, SIZE_MAX);
+        error = utp_hash_table_init(&context->zero_rtt_responses_by_attempt, NULL, SIZE_MAX);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->connect_attempts_by_id, NULL, SIZE_MAX);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->rendezvous_punch_attempts, NULL, SIZE_MAX);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&context->pending_incoming, NULL,
@@ -6137,7 +6410,10 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
                                                                           : options->pending_incoming_limit);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_hash_table_init(&context->pending_incoming_by_peer, NULL, context->pending_incoming.max_entries);
+        error = utp_hash_table_init(&context->pending_incoming_by_attempt, NULL, context->pending_incoming.max_entries);
+    }
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_init(&context->completed_attempts, NULL, SIZE_MAX);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_hash_table_init(&context->zero_rtt_replay, NULL, context->zero_rtt_replay_cache_capacity);
@@ -6154,9 +6430,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     int32_t fragment_length = snprintf(fragment, sizeof(fragment), "context %" PRIu64, options->context_id);
     if (fragment_length < 0 || (size_t)fragment_length >= sizeof(fragment)) {
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
-        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->zero_rtt_responses_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->connect_attempts_by_id, NULL, NULL);
+        utp_hash_table_cleanup(&context->rendezvous_punch_attempts, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
-        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->completed_attempts, utp_context_free_completed_attempt, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -6189,9 +6468,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         utp_packet_in_pool_cleanup(&context->packet_in_pool);
         utp_packet_out_buffer_pool_cleanup(&context->packet_out_buffer_pool);
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
-        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->zero_rtt_responses_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->connect_attempts_by_id, NULL, NULL);
+        utp_hash_table_cleanup(&context->rendezvous_punch_attempts, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
-        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->completed_attempts, utp_context_free_completed_attempt, NULL);
         utp_hash_table_cleanup(&context->zero_rtt_replay, utp_context_free_replay_entry, NULL);
         utp_crypto_secure_clear(context->resumption_root_key, sizeof(context->resumption_root_key));
         utp_crypto_resumption_keys_clear(&context->resumption_keys);
@@ -6229,9 +6511,12 @@ void utp_context_destroy(utp_context_t* context)
             utp_context_release_pending_slot(context, utp_context_pending_slot_from_node(node));
         }
         utp_hash_table_cleanup(&context->connections, NULL, NULL);
-        utp_hash_table_cleanup(&context->passive_connections_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->zero_rtt_responses_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->connect_attempts_by_id, NULL, NULL);
+        utp_hash_table_cleanup(&context->rendezvous_punch_attempts, NULL, NULL);
         utp_hash_table_cleanup(&context->pending_incoming, NULL, NULL);
-        utp_hash_table_cleanup(&context->pending_incoming_by_peer, NULL, NULL);
+        utp_hash_table_cleanup(&context->pending_incoming_by_attempt, NULL, NULL);
+        utp_hash_table_cleanup(&context->completed_attempts, utp_context_free_completed_attempt, NULL);
         while (!TAILQ_EMPTY(&context->free_connection_slots)) {
             utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->free_connection_slots);
 
@@ -6633,11 +6918,11 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
 {
     size_t target_peer_id_length;
 
-    if (context == NULL || options == NULL || options->address == NULL || options->port == 0u ||
-        !utp_context_encryption_mode_is_valid(options->encryption)) {
+    if (context == NULL || options == NULL || options->address == NULL || options->target_peer_id == NULL ||
+        options->port == 0u || !utp_context_encryption_mode_is_valid(options->encryption)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
-    target_peer_id_length = options->target_peer_id == NULL ? 0u : strlen(options->target_peer_id);
+    target_peer_id_length = strlen(options->target_peer_id);
     if (target_peer_id_length == 0u || target_peer_id_length > UTP_PEER_ID_MAX_LENGTH) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
@@ -6649,12 +6934,6 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
 
     if (error != UTP_INTERNAL_ERROR_OK) {
         return utp_internal_error_to_status(error);
-    }
-    utp_context_connection_slot_t* existing = utp_context_find_connection_by_peer(context, &peer);
-
-    if (existing != NULL) {
-        return utp_connection_is_connected(&existing->connection) ? UTP_STATUS_SOCKET_CONNECTED
-                                                                  : UTP_STATUS_IN_PROGRESS;
     }
     utp_context_connection_slot_t* slot = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
@@ -6674,7 +6953,12 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     memcpy(slot->target_peer_id, options->target_peer_id, target_peer_id_length);
     slot->target_peer_id[target_peer_id_length] = '\0';
     slot->target_peer_id_length                 = (uint8_t)target_peer_id_length;
-    error = utp_crypto_random_bytes(slot->rendezvous_id, sizeof(slot->rendezvous_id));
+    error                                       = utp_crypto_random_bytes(slot->attempt_id, sizeof(slot->attempt_id));
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_insert(&context->connect_attempts_by_id, &slot->attempt_node,
+                                      utp_context_bytes_hash(slot->attempt_id, sizeof(slot->attempt_id)),
+                                      slot->attempt_id, utp_context_attempt_slot_matches, NULL);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(context, slot);
         return utp_internal_error_to_status(error);
@@ -6707,12 +6991,12 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
 {
     size_t target_peer_id_length;
 
-    if (context == NULL || options == NULL || options->address == NULL || options->port == 0u ||
-        options->session_token == NULL || options->session_token_size == 0u ||
+    if (context == NULL || options == NULL || options->address == NULL || options->target_peer_id == NULL ||
+        options->port == 0u || options->session_token == NULL || options->session_token_size == 0u ||
         (options->early_data == NULL && options->early_data_size != 0u)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
-    target_peer_id_length = options->target_peer_id == NULL ? 0u : strlen(options->target_peer_id);
+    target_peer_id_length = strlen(options->target_peer_id);
     if (target_peer_id_length == 0u || target_peer_id_length > UTP_PEER_ID_MAX_LENGTH) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
@@ -6751,11 +7035,16 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
         return utp_internal_error_to_status(error);
     }
     {
-        const uint16_t target_size    = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
-        const size_t   request_length = utp_context_request_frame_size(context, (uint8_t)target_peer_id_length);
-        size_t         fixed_length   = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                                        UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        size_t         first_data_capacity;
+        const bool has_reported_public_endpoint =
+            context->nat_result_valid && context->nat_result.expires_at_us > utp_context_now_us() &&
+            context->nat_result.primary_mapped_endpoint.family == context->bound_address.family &&
+            context->nat_result.primary_mapped_endpoint.port != 0u;
+        const uint16_t target_size = utp_mtu_packet_size_from_mtu(context->mtu_config.mtu_min, peer.family);
+        const size_t   request_length =
+            utp_context_request_frame_size(context, (uint8_t)target_peer_id_length, has_reported_public_endpoint);
+        size_t fixed_length = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
+                              UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        size_t first_data_capacity;
 
         if (encryption_mode != UTP_CRYPTO_ENCRYPTION_MODE_NONE) {
             fixed_length += UTP_CRYPTO_AEAD_TAG_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_VERSION_SIZE +
@@ -6770,12 +7059,6 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
             utp_crypto_secure_clear(state_payload, state_payload_length);
             return UTP_STATUS_OVERFLOW;
         }
-    }
-    utp_context_connection_slot_t* existing = utp_context_find_connection_by_peer(context, &peer);
-    if (existing != NULL) {
-        utp_crypto_secure_clear(state_payload, state_payload_length);
-        return utp_connection_is_connected(&existing->connection) ? UTP_STATUS_SOCKET_CONNECTED
-                                                                  : UTP_STATUS_IN_PROGRESS;
     }
     utp_context_connection_slot_t* slot = utp_context_alloc_connection_slot(context);
     if (slot == NULL) {
@@ -6818,7 +7101,12 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
     memcpy(slot->target_peer_id, options->target_peer_id, target_peer_id_length);
     slot->target_peer_id[target_peer_id_length] = '\0';
     slot->target_peer_id_length                 = (uint8_t)target_peer_id_length;
-    error = utp_crypto_random_bytes(slot->rendezvous_id, sizeof(slot->rendezvous_id));
+    error                                       = utp_crypto_random_bytes(slot->attempt_id, sizeof(slot->attempt_id));
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_hash_table_insert(&context->connect_attempts_by_id, &slot->attempt_node,
+                                      utp_context_bytes_hash(slot->attempt_id, sizeof(slot->attempt_id)),
+                                      slot->attempt_id, utp_context_attempt_slot_matches, NULL);
+    }
     if (error != UTP_INTERNAL_ERROR_OK) {
         utp_context_release_connection_slot(context, slot);
         return utp_internal_error_to_status(error);

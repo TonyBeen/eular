@@ -114,7 +114,7 @@
 | DataBlocked | `FRAME_DATA_BLOCKED_SIZE` (`data_blocked.h:13`) | 9 | type(1), data_limit(8) |
 | StreamDataBlocked | `FRAME_STREAM_DATA_BLOCKED_SIZE` (`stream_data_blocked.h:13`) | 13 | type(1), stream_id(4), stream_data_limit(8) |
 
-> C 版加密恢复 0-RTT 是后续协议目标，不等同于本节反推的 C++ 现状：其 `SESSION_TOKEN` 线格式、双向 early AEAD 与两消息收敛规则以 `utp-10` §10 为准。服务端完成响应复用 header `types = UTP_TYPE_HANDSHAKE`，但不携带旧 `HandshakeDone` 帧；由客户端 pending 尝试类型选择解密与解析路径。
+> C 版加密恢复 0-RTT 不等同于本节反推的 C++ 现状：其 `SESSION_TOKEN` 线格式、双向 early AEAD 与三报文确认规则以 `utp-10` §10 为准。服务端响应复用 header `types = UTP_TYPE_HANDSHAKE`，客户端以 1-RTT `HANDSHAKE_DONE` 确认实际收到的响应包号；由客户端 pending 尝试类型选择 Handshake 的解密与解析路径。
 
 ### 2.5 帧类型位图与重传掩码
 

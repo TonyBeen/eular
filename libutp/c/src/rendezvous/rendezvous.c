@@ -400,7 +400,7 @@ utp_internal_error_t utp_rendezvous_calibrate_encode(uint8_t* buffer, size_t cap
     if (error != UTP_INTERNAL_ERROR_OK) return error;
     error = utp_wire_writer_init(&writer, buffer, capacity);
     if (error == UTP_INTERNAL_ERROR_OK)
-        error = utp_rendezvous_write_bytes(&writer, calibrate->rendezvous_id, sizeof(calibrate->rendezvous_id));
+        error = utp_rendezvous_write_bytes(&writer, calibrate->attempt_id, sizeof(calibrate->attempt_id));
     if (error == UTP_INTERNAL_ERROR_OK)
         error = utp_rendezvous_write_bytes(&writer, calibrate->calibration_token, sizeof(calibrate->calibration_token));
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, calibrate->calibration_id);
@@ -429,7 +429,7 @@ utp_internal_error_t utp_rendezvous_calibrate_decode(utp_rendezvous_calibrate_t*
     if (calibrate == NULL || buffer == NULL) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     error = utp_wire_reader_init(&reader, buffer, length);
     if (error == UTP_INTERNAL_ERROR_OK)
-        error = utp_rendezvous_read_bytes(&reader, decoded.rendezvous_id, sizeof(decoded.rendezvous_id));
+        error = utp_rendezvous_read_bytes(&reader, decoded.attempt_id, sizeof(decoded.attempt_id));
     if (error == UTP_INTERNAL_ERROR_OK)
         error = utp_rendezvous_read_bytes(&reader, decoded.calibration_token, sizeof(decoded.calibration_token));
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &decoded.calibration_id);
@@ -682,7 +682,7 @@ utp_internal_error_t utp_rendezvous_rejected_encode(uint8_t* buffer, size_t capa
          rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
          rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_UNREGISTER) ||
         ((rejected->rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-          rejected->reference_length != UTP_RENDEZVOUS_ID_SIZE) ||
+          rejected->reference_length != UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) ||
          (rejected->rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
           rejected->reference_length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE))) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -712,11 +712,10 @@ utp_internal_error_t utp_rendezvous_rejected_decode(utp_rendezvous_rejected_t* r
                                            decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
                                            decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_UNREGISTER))
         error = UTP_INTERNAL_ERROR_PROTOCOL;
-    if (error == UTP_INTERNAL_ERROR_OK &&
-        ((decoded.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-          decoded.reference_length != UTP_RENDEZVOUS_ID_SIZE) ||
-         (decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-          decoded.reference_length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE)))
+    if (error == UTP_INTERNAL_ERROR_OK && ((decoded.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                                            decoded.reference_length != UTP_RENDEZVOUS_ATTEMPT_ID_SIZE) ||
+                                           (decoded.rejected_message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
+                                            decoded.reference_length != UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE)))
         error = UTP_INTERNAL_ERROR_PROTOCOL;
     if (error == UTP_INTERNAL_ERROR_OK)
         error = utp_rendezvous_read_bytes(&reader, decoded.reference_id, decoded.reference_length);
@@ -815,8 +814,8 @@ utp_internal_error_t utp_rendezvous_request_encode(uint8_t* buffer, size_t capac
     }
     address_length = utp_rendezvous_address_length(request->local_family);
     error          = utp_wire_writer_init(&writer, buffer, capacity);
-    for (index = 0u; index < sizeof(request->rendezvous_id) && error == UTP_INTERNAL_ERROR_OK; ++index) {
-        error = utp_wire_write_u8(&writer, request->rendezvous_id[index]);
+    for (index = 0u; index < sizeof(request->attempt_id) && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_write_u8(&writer, request->attempt_id[index]);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u8(&writer, request->source_peer_id_length);
@@ -877,8 +876,8 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_wire_reader_init(&reader, buffer, length);
-    for (index = 0u; index < sizeof(decoded.rendezvous_id) && error == UTP_INTERNAL_ERROR_OK; ++index) {
-        error = utp_wire_read_u8(&reader, &decoded.rendezvous_id[index]);
+    for (index = 0u; index < sizeof(decoded.attempt_id) && error == UTP_INTERNAL_ERROR_OK; ++index) {
+        error = utp_wire_read_u8(&reader, &decoded.attempt_id[index]);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_read_u8(&reader, &decoded.source_peer_id_length);
@@ -1076,16 +1075,17 @@ utp_internal_error_t utp_rendezvous_redirect_encode(uint8_t* buffer, size_t capa
         utp_rendezvous_bytes_are_zero(redirect->punch_token, sizeof(redirect->punch_token))) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (capacity < UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token)) {
+    if (capacity < UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(redirect->punch_token)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    memcpy(buffer, redirect->rendezvous_id, UTP_RENDEZVOUS_ID_SIZE);
-    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE, redirect->punch_token, sizeof(redirect->punch_token));
-    error = utp_rendezvous_candidate_plan_encode(buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token),
-                                                 capacity - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token),
-                                                 &redirect->target_plan, &plan_length);
+    memcpy(buffer, redirect->attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
+    memcpy(buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE, redirect->punch_token, sizeof(redirect->punch_token));
+    error =
+        utp_rendezvous_candidate_plan_encode(buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(redirect->punch_token),
+                                             capacity - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(redirect->punch_token),
+                                             &redirect->target_plan, &plan_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        *out_length = UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token) + plan_length;
+        *out_length = UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(redirect->punch_token) + plan_length;
     }
     return error;
 }
@@ -1096,23 +1096,25 @@ utp_internal_error_t utp_rendezvous_redirect_decode(utp_rendezvous_redirect_t* r
     size_t               consumed;
     utp_internal_error_t error;
 
-    if (redirect == NULL || buffer == NULL || length < UTP_RENDEZVOUS_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
+    if (redirect == NULL || buffer == NULL ||
+        length < UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     *redirect = (utp_rendezvous_redirect_t){0};
-    memcpy(redirect->rendezvous_id, buffer, UTP_RENDEZVOUS_ID_SIZE);
-    memcpy(redirect->punch_token, buffer + UTP_RENDEZVOUS_ID_SIZE, sizeof(redirect->punch_token));
+    memcpy(redirect->attempt_id, buffer, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
+    memcpy(redirect->punch_token, buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE, sizeof(redirect->punch_token));
     if (utp_rendezvous_bytes_are_zero(redirect->punch_token, sizeof(redirect->punch_token))) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     error = utp_rendezvous_candidate_plan_decode(
-        &redirect->target_plan, buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(redirect->punch_token),
-        length - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token), &consumed);
+        &redirect->target_plan, buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(redirect->punch_token),
+        length - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(redirect->punch_token), &consumed);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return consumed == length - UTP_RENDEZVOUS_ID_SIZE - sizeof(redirect->punch_token) ? UTP_INTERNAL_ERROR_OK
-                                                                                       : UTP_INTERNAL_ERROR_PROTOCOL;
+    return consumed == length - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(redirect->punch_token)
+               ? UTP_INTERNAL_ERROR_OK
+               : UTP_INTERNAL_ERROR_PROTOCOL;
 }
 
 utp_internal_error_t utp_rendezvous_forward_encode(uint8_t* buffer, size_t capacity,
@@ -1124,21 +1126,22 @@ utp_internal_error_t utp_rendezvous_forward_encode(uint8_t* buffer, size_t capac
     if (buffer == NULL || forward == NULL || out_length == NULL || forward->source_peer_id == NULL ||
         forward->source_peer_id_length == 0u || forward->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
         utp_rendezvous_bytes_are_zero(forward->punch_token, sizeof(forward->punch_token)) ||
-        capacity < UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
+        capacity <
+            UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    memcpy(buffer, forward->rendezvous_id, UTP_RENDEZVOUS_ID_SIZE);
-    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE, forward->punch_token, sizeof(forward->punch_token));
-    buffer[UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token)] = forward->source_peer_id_length;
-    memcpy(buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u, forward->source_peer_id,
+    memcpy(buffer, forward->attempt_id, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
+    memcpy(buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE, forward->punch_token, sizeof(forward->punch_token));
+    buffer[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token)] = forward->source_peer_id_length;
+    memcpy(buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u, forward->source_peer_id,
            forward->source_peer_id_length);
     error = utp_rendezvous_candidate_plan_encode(
-        buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length,
-        capacity - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
+        buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length,
+        capacity - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
         &forward->source_plan, &plan_length);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        *out_length =
-            UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length + plan_length;
+        *out_length = UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u +
+                      forward->source_peer_id_length + plan_length;
     }
     return error;
 }
@@ -1149,40 +1152,31 @@ utp_internal_error_t utp_rendezvous_forward_decode(utp_rendezvous_forward_t* for
     size_t               consumed;
     utp_internal_error_t error;
 
-    if (forward == NULL || buffer == NULL || length <= UTP_RENDEZVOUS_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
+    if (forward == NULL || buffer == NULL ||
+        length <= UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
     *forward = (utp_rendezvous_forward_t){0};
-    memcpy(forward->rendezvous_id, buffer, UTP_RENDEZVOUS_ID_SIZE);
-    memcpy(forward->punch_token, buffer + UTP_RENDEZVOUS_ID_SIZE, sizeof(forward->punch_token));
+    memcpy(forward->attempt_id, buffer, UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
+    memcpy(forward->punch_token, buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE, sizeof(forward->punch_token));
     if (utp_rendezvous_bytes_are_zero(forward->punch_token, sizeof(forward->punch_token))) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    forward->source_peer_id_length = buffer[UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token)];
+    forward->source_peer_id_length = buffer[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token)];
     if (forward->source_peer_id_length == 0u || forward->source_peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
-        length <= UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
+        length <= UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u + forward->source_peer_id_length) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    forward->source_peer_id = buffer + UTP_RENDEZVOUS_ID_SIZE + sizeof(forward->punch_token) + 1u;
+    forward->source_peer_id = buffer + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + sizeof(forward->punch_token) + 1u;
     error                   = utp_rendezvous_candidate_plan_decode(
         &forward->source_plan, forward->source_peer_id + forward->source_peer_id_length,
-        length - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
+        length - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length,
         &consumed);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    return consumed ==
-                   length - UTP_RENDEZVOUS_ID_SIZE - sizeof(forward->punch_token) - 1u - forward->source_peer_id_length
+    return consumed == length - UTP_RENDEZVOUS_ATTEMPT_ID_SIZE - sizeof(forward->punch_token) - 1u -
+                           forward->source_peer_id_length
                ? UTP_INTERNAL_ERROR_OK
                : UTP_INTERNAL_ERROR_PROTOCOL;
-}
-
-utp_internal_error_t utp_rendezvous_introduction_decode(uint8_t        rendezvous_id[UTP_RENDEZVOUS_ID_SIZE],
-                                                        const uint8_t* buffer, size_t length)
-{
-    if (length != UTP_RENDEZVOUS_ID_SIZE) {
-        return UTP_INTERNAL_ERROR_PROTOCOL;
-    }
-    memcpy(rendezvous_id, buffer, UTP_RENDEZVOUS_ID_SIZE);
-    return UTP_INTERNAL_ERROR_OK;
 }

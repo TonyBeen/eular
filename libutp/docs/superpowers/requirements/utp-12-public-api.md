@@ -298,7 +298,7 @@ C 版已将下表中标为“支持”的参数下沉至 `utp_context_options_t`
 
 - **收敛出口统一**：`handleConnectionState` 是所有连接状态回调的单一出口（`context_impl.cpp:398`）。connected→只走 `OnConnected`；handshake 期 close/timedwait 且无重试剩余→`OnConnectError`；disconnected 且非 pending→`OnConnectionClosed`；disconnected 且仍 pending 且有重试→重发不回调。`context_impl.cpp:413-492`
 
-> C 版目标语义：普通连接和 0-RTT 的 `utp_on_new_connection_fn` 都必须在回调内部调用 `utp_context_accept()`；调用成功后返回 `true`，拒绝或调用失败返回 `false`。0-RTT 的两消息响应只由成功的 `utp_context_accept()` 触发。
+> C 版语义：普通连接和 0-RTT 的 `utp_on_new_connection_fn` 都必须在回调内部调用 `utp_context_accept()`；调用成功后返回 `true`，拒绝或调用失败返回 `false`。0-RTT Handshake 响应只由成功的 `utp_context_accept()` 触发，并由客户端的 `HANDSHAKE_DONE` 完成确认。
 
 ### 7.3 Connection 级回调
 | 回调 | 签名 | 触发时机 | 位置 |

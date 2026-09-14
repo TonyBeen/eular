@@ -74,7 +74,9 @@ struct udp_relay {
     std::array<relay_client_route, 4u>          client_routes                 = {};
     relay_rule                                  rule                          = {};
     std::array<uint8_t, kRelayDatagramCapacity> held                          = {};
+    std::array<uint8_t, kRelayDatagramCapacity> last_zero_rtt                 = {};
     size_t                                      held_length                   = 0u;
+    size_t                                      last_zero_rtt_length          = 0u;
     uint64_t                                    held_packet_number            = 0u;
     utp_address_t                               held_destination              = {};
     uint32_t                                    held_stream_id                = UINT32_MAX;
@@ -84,6 +86,8 @@ struct udp_relay {
     uint64_t                                    stream_packet_number          = 0u;
     uint32_t                                    stream_packet_transmissions   = 0u;
     uint32_t                                    forwarded_stream_acks         = 0u;
+    uint32_t                                    forwarded_server_handshakes   = 0u;
+    uint32_t                                    migration_server_handshakes   = 0u;
     uint32_t                                    forwarded_client_frame_types  = 0u;
     uint32_t                                    forwarded_server_frame_types  = 0u;
     uint64_t                                    target_packet_number          = 0u;
@@ -391,6 +395,11 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
             REQUIRE(utp_proto_decode_header(&header, packet.data(), packet_length) == UTP_INTERNAL_ERROR_OK);
             if (direction == relay_direction::client_to_server) {
                 relay_remember_client(relay, header.scid, &source);
+                if (header.type == UTP_PACKET_TYPE_0RTT) {
+                    std::copy(packet.begin(), packet.begin() + static_cast<std::ptrdiff_t>(packet_length),
+                              relay->last_zero_rtt.begin());
+                    relay->last_zero_rtt_length = packet_length;
+                }
             } else {
                 destination = relay_find_client(relay, header.dcid);
                 REQUIRE(destination != nullptr);
@@ -477,6 +486,17 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
                 utp_packet_view_decode(&view, packet.data(), packet_length) == UTP_INTERNAL_ERROR_OK &&
                 (view.frame_types & UTP_FRAME_BIT(UTP_FRAME_TYPE_STREAM)) != 0u) {
                 ++relay->forwarded_stream_packets;
+            }
+        }
+        if (direction == relay_direction::server_to_client) {
+            utp_packet_header_t header = {};
+
+            if (utp_proto_decode_header(&header, packet.data(), packet_length) == UTP_INTERNAL_ERROR_OK &&
+                header.type == UTP_PACKET_TYPE_HANDSHAKE) {
+                ++relay->forwarded_server_handshakes;
+                if (migration_socket) {
+                    ++relay->migration_server_handshakes;
+                }
             }
         }
         if (target_stream_ack) {
@@ -702,23 +722,68 @@ TEST_CASE("encrypted handshake retransmission keeps the same accept decision", "
 
 TEST_CASE("late duplicate INITIAL is not accepted after passive promotion", "[transport][integration]")
 {
+    transport_pair        pair           = {};
+    utp_context_options_t server_options = UTP_CONTEXT_OPTIONS_INIT;
+    server_options.peer_id               = "test";
+    const relay_rule rule                = {
+        relay_direction::client_to_server, relay_action::hold, UTP_PACKET_TYPE_INITIAL, 0u, true, 0u, false, false};
+
+    server_options.handshake_timeout     = 50u;
+    server_options.handshake_max_retries = 1u;
+    transport_pair_init_with_options(&pair, rule, UTP_ENCRYPTION_NONE, nullptr, &server_options);
+    drive_until(pair.event_base, [&pair] { return pair.relay.held_valid; });
+    relay_release_held(&pair.relay);
+    transport_pair_connect(&pair);
+    REQUIRE(utp_hash_table_count(&pair.server->completed_attempts) == 1u);
+    utp_hash_iter_t  iter = {};
+    utp_hash_node_t* node = utp_hash_iter_next(&pair.server->completed_attempts, &iter);
+    REQUIRE(node != nullptr);
+    auto* entry = reinterpret_cast<utp_context_completed_attempt_entry_t*>(
+        reinterpret_cast<uint8_t*>(node) - offsetof(utp_context_completed_attempt_entry_t, node));
+    const uint64_t expires_at_us = entry->expires_at_us;
+
+    relay_forward(&pair.relay, pair.relay.held.data(), pair.relay.held_length, &pair.relay.held_destination);
+    drive_for(pair.event_base, std::chrono::milliseconds(20));
+    REQUIRE(pair.server_probe.new_connections == 1);
+    REQUIRE(pair.server_probe.connected == 1);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    REQUIRE(entry->expires_at_us == expires_at_us);
+    drive_until(pair.event_base, [&pair] { return utp_hash_table_count(&pair.server->completed_attempts) == 0u; });
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("same attempt merges endpoints and rejects a conflicting active SCID", "[transport][integration]")
+{
     transport_pair   pair = {};
     const relay_rule rule = {
         relay_direction::client_to_server, relay_action::hold, UTP_PACKET_TYPE_INITIAL, 0u, true, 0u, false, false};
 
     transport_pair_init(&pair, rule, UTP_ENCRYPTION_NONE);
     drive_until(pair.event_base, [&pair] { return pair.relay.held_valid; });
+    relay_enable_migration(&pair.relay);
     relay_release_held(&pair.relay);
+    relay_forward_from(&pair.relay.migration_socket, pair.relay.held.data(), pair.relay.held_length,
+                       &pair.relay.held_destination);
+
+    std::array<uint8_t, kRelayDatagramCapacity> conflicting = {};
+    utp_packet_header_t                         header      = {};
+
+    REQUIRE(pair.relay.held_length <= conflicting.size());
+    std::copy(pair.relay.held.begin(), pair.relay.held.begin() + static_cast<std::ptrdiff_t>(pair.relay.held_length),
+              conflicting.begin());
+    REQUIRE(utp_proto_decode_header(&header, conflicting.data(), pair.relay.held_length) == UTP_INTERNAL_ERROR_OK);
+    header.scid = header.scid == 1u ? 2u : 1u;
+    REQUIRE(utp_proto_encode_header(conflicting.data(), pair.relay.held_length, &header) == UTP_INTERNAL_ERROR_OK);
+    relay_forward_from(&pair.relay.migration_socket, conflicting.data(), pair.relay.held_length,
+                       &pair.relay.held_destination);
     transport_pair_connect(&pair);
-    relay_forward(&pair.relay, pair.relay.held.data(), pair.relay.held_length, &pair.relay.held_destination);
-    drive_for(pair.event_base, std::chrono::milliseconds(20));
     REQUIRE(pair.server_probe.new_connections == 1);
     REQUIRE(pair.server_probe.connected == 1);
-    REQUIRE(pair.server_probe.connection_errors == 0);
+    REQUIRE(utp_hash_table_count(&pair.server->pending_incoming) == 0u);
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("same relay address with distinct SCIDs creates distinct passive connections", "[transport][integration]")
+TEST_CASE("same relay address with distinct attempts creates distinct passive connections", "[transport][integration]")
 {
     transport_pair        pair           = {};
     endpoint_probe        second_probe   = {};
@@ -754,6 +819,58 @@ TEST_CASE("same relay address with distinct SCIDs creates distinct passive conne
     transport_pair_cleanup(&pair);
 }
 
+TEST_CASE("one context can open concurrent direct connections to the same endpoint", "[transport][integration]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    utp_connect_options_t connect = UTP_CONNECT_OPTIONS_INIT;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    connect.address        = "127.0.0.1";
+    connect.target_peer_id = "test";
+    connect.port           = pair.relay.address.port;
+    connect.timeout_ms     = 10u;
+    connect.retries        = 3;
+    connect.encryption     = UTP_ENCRYPTION_NONE;
+    REQUIRE(utp_context_connect(pair.client, &connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base,
+                [&pair] { return pair.client_probe.connected == 2 && pair.server_probe.connected == 2; });
+    REQUIRE(pair.server_probe.new_connections == 2);
+    REQUIRE(pair.client_probe.connect_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("direct connection rejects a request for another peer id", "[transport][integration]")
+{
+    transport_pair        pair           = {};
+    endpoint_probe        second_probe   = {};
+    utp_context_options_t second_options = UTP_CONTEXT_OPTIONS_INIT;
+    second_options.peer_id               = "second-client";
+    utp_context_t*   second_client       = nullptr;
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    utp_connect_options_t connect = UTP_CONNECT_OPTIONS_INIT;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    second_options.event_base = pair.event_base;
+    second_options.context_id = 5003u;
+    REQUIRE(utp_context_create(&second_options, &second_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(second_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connect_error(second_client, on_connect_error, &second_probe);
+    connect.address        = "127.0.0.1";
+    connect.target_peer_id = "another-peer";
+    connect.port           = pair.relay.address.port;
+    connect.timeout_ms     = 10u;
+    connect.encryption     = UTP_ENCRYPTION_NONE;
+    REQUIRE(utp_context_connect(second_client, &connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&second_probe] { return second_probe.connect_errors == 1; });
+    REQUIRE(pair.server_probe.new_connections == 1);
+    REQUIRE(pair.server_probe.connected == 1);
+    utp_context_destroy(second_client);
+    transport_pair_cleanup(&pair);
+}
+
 TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[transport][integration][0rtt]")
 {
     transport_pair   pair    = {};
@@ -783,17 +900,18 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
     utp_context_set_on_connected(early_client, on_connected, &early_probe);
     utp_context_set_on_connection_error(early_client, on_connection_error, &early_probe);
-    pair.relay.rule                  = drop_done;
-    early_connect.address            = "127.0.0.1";
-    early_connect.target_peer_id     = "test";
-    early_connect.port               = pair.relay.address.port;
-    early_connect.timeout_ms         = 10u;
-    early_connect.retries            = 3;
-    early_connect.session_token      = token.token.data();
-    early_connect.session_token_size = token.length;
-    early_connect.early_data         = early_data.data();
-    early_connect.early_data_size    = early_data.size();
-    early_connect.early_fin          = true;
+    pair.relay.rule                         = drop_done;
+    pair.relay.forwarded_client_frame_types = 0u;
+    early_connect.address                   = "127.0.0.1";
+    early_connect.target_peer_id            = "test";
+    early_connect.port                      = pair.relay.address.port;
+    early_connect.timeout_ms                = 10u;
+    early_connect.retries                   = 3;
+    early_connect.session_token             = token.token.data();
+    early_connect.session_token_size        = token.length;
+    early_connect.early_data                = early_data.data();
+    early_connect.early_data_size           = early_data.size();
+    early_connect.early_fin                 = true;
     REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
     drive_until(pair.event_base, [&pair] { return pair.relay.rule.hits == 1u; });
     drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
@@ -811,6 +929,109 @@ TEST_CASE("0-RTT response loss retransmits without duplicate early delivery", "[
     REQUIRE(utp_stream_read(stream, received.data(), received.size(), &received_length) == UTP_STATUS_CLOSED);
     REQUIRE(early_probe.connection_errors == 0);
     REQUIRE(pair.server_probe.connection_errors == 0);
+    utp_context_destroy(early_client);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("0-RTT confirmation loss converges without application data", "[transport][integration][0rtt]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const relay_rule drop_confirmation       = {relay_direction::client_to_server,
+                                                relay_action::drop,
+                                                UTP_PACKET_TYPE_CTRL,
+                                                UTP_FRAME_BIT(UTP_FRAME_TYPE_HANDSHAKE_DONE),
+                                                true,
+                                                0u,
+                                                false,
+                                                false};
+    session_token_probe   token              = {};
+    endpoint_probe        early_probe        = {};
+    utp_context_options_t early_options      = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                    = "test";
+    utp_connect_0rtt_options_t early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*             early_client  = nullptr;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_session_token_ready(pair.client_probe.connection, on_session_token_ready, &token);
+    drive_until(pair.event_base, [&token] { return token.ready_count == 1; });
+    REQUIRE(token.length > 0u);
+
+    early_options.event_base = pair.event_base;
+    early_options.context_id = 6004u;
+    REQUIRE(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connected(early_client, on_connected, &early_probe);
+    utp_context_set_on_connection_error(early_client, on_connection_error, &early_probe);
+    pair.relay.rule                        = drop_confirmation;
+    pair.relay.forwarded_server_handshakes = 0u;
+    early_connect.address                  = "127.0.0.1";
+    early_connect.target_peer_id           = "test";
+    early_connect.port                     = pair.relay.address.port;
+    early_connect.timeout_ms               = 10u;
+    early_connect.retries                  = 3;
+    early_connect.session_token            = token.token.data();
+    early_connect.session_token_size       = token.length;
+    REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
+    REQUIRE(pair.relay.rule.hits == 1u);
+    drive_until(pair.event_base, [&pair] {
+        return pair.relay.forwarded_server_handshakes >= 2u &&
+               utp_hash_table_count(&pair.server->zero_rtt_responses_by_attempt) == 0u;
+    });
+    REQUIRE(pair.server_probe.new_connections == 2);
+    REQUIRE(pair.server_probe.connected == 2);
+    REQUIRE(early_probe.connected == 1);
+    REQUIRE(early_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    utp_context_destroy(early_client);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("0-RTT duplicate path does not replace the first response path", "[transport][integration][0rtt]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    const relay_rule drop_handshake = {
+        relay_direction::server_to_client, relay_action::drop, UTP_PACKET_TYPE_HANDSHAKE, 0u, true, 0u, false, false};
+    session_token_probe   token              = {};
+    endpoint_probe        early_probe        = {};
+    utp_context_options_t early_options      = UTP_CONTEXT_OPTIONS_INIT;
+    early_options.peer_id                    = "test";
+    utp_connect_0rtt_options_t early_connect = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_context_t*             early_client  = nullptr;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_session_token_ready(pair.client_probe.connection, on_session_token_ready, &token);
+    drive_until(pair.event_base, [&token] { return token.ready_count == 1; });
+
+    early_options.event_base = pair.event_base;
+    early_options.context_id = 6005u;
+    REQUIRE(utp_context_create(&early_options, &early_client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_bind(early_client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
+    utp_context_set_on_connected(early_client, on_connected, &early_probe);
+    pair.relay.rule                        = drop_handshake;
+    pair.relay.forwarded_server_handshakes = 0u;
+    pair.relay.migration_server_handshakes = 0u;
+    early_connect.address                  = "127.0.0.1";
+    early_connect.target_peer_id           = "test";
+    early_connect.port                     = pair.relay.address.port;
+    early_connect.timeout_ms               = 1000u;
+    early_connect.retries                  = 3;
+    early_connect.session_token            = token.token.data();
+    early_connect.session_token_size       = token.length;
+    REQUIRE(utp_context_connect_0rtt(early_client, &early_connect) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair] { return pair.relay.rule.hits == 1u; });
+    REQUIRE(pair.relay.last_zero_rtt_length != 0u);
+    relay_enable_migration(&pair.relay);
+    relay_forward_from(&pair.relay.migration_socket, pair.relay.last_zero_rtt.data(), pair.relay.last_zero_rtt_length,
+                       &pair.relay.server);
+    drive_until(pair.event_base, [&early_probe] { return early_probe.connected == 1; });
+    REQUIRE(pair.server_probe.new_connections == 2);
+    REQUIRE(pair.relay.forwarded_server_handshakes >= 1u);
+    REQUIRE(pair.relay.migration_server_handshakes == 0u);
     utp_context_destroy(early_client);
     transport_pair_cleanup(&pair);
 }

@@ -2894,6 +2894,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->scheduler_drr_consumes                 = 0u;
     connection->peer_handshake_packet_number           = 0u;
     connection->peer_handshake_received_us             = 0u;
+    connection->peer_handshake_done_packet_number      = 0u;
     connection->retransmission_deadline_us             = 0u;
     connection->close_deadline_us                      = 0u;
     connection->close_last_sent_us                     = 0u;
@@ -3579,6 +3580,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->tx_bytes                                                = 0u;
     connection->peer_handshake_packet_number                            = 0u;
     connection->peer_handshake_received_us                              = 0u;
+    connection->peer_handshake_done_packet_number                       = 0u;
     connection->retransmission_deadline_us                              = 0u;
     connection->close_deadline_us                                       = 0u;
     connection->close_last_sent_us                                      = 0u;
@@ -4208,6 +4210,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
            view.header.dcid == 0u))) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
+    connection->peer_handshake_done_packet_number = 0u;
     if (view.header.type == UTP_PACKET_TYPE_INITIAL && connection->crypto_configured) {
         return utp_connection_untrusted_packet_error(connection);
     }
@@ -4238,7 +4241,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     // UDP 可能重复投递同一个已认证数据报；重复包不得再次执行帧副作用或计入连接统计。
-    if (!candidate_path && utp_receive_history_contains(&connection->receive_history, view.header.packet_number)) {
+    if (utp_receive_history_contains(&connection->receive_history, view.header.packet_number)) {
         return UTP_INTERNAL_ERROR_OK;
     }
     if (connection->state == UTP_CONNECTION_STATE_DRAINING) {
@@ -4342,19 +4345,13 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
         }
         if (frame_type == UTP_FRAME_TYPE_RENDEZVOUS) {
             utp_frame_rendezvous_t rendezvous;
-            uint8_t                rendezvous_id[UTP_RENDEZVOUS_ID_SIZE];
 
             if ((view.header.type != UTP_PACKET_TYPE_INITIAL && view.header.type != UTP_PACKET_TYPE_0RTT) ||
                 rendezvous_seen || frame_offset != 0u) {
                 return UTP_INTERNAL_ERROR_PROTOCOL;
             }
             error = utp_frame_rendezvous_decode(&rendezvous, frame, frame_length);
-            if (error != UTP_INTERNAL_ERROR_OK ||
-                (rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST &&
-                 rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_INTRODUCTION) ||
-                (rendezvous.message_type == UTP_RENDEZVOUS_MESSAGE_INTRODUCTION &&
-                 utp_rendezvous_introduction_decode(rendezvous_id, rendezvous.payload, rendezvous.payload_length) !=
-                     UTP_INTERNAL_ERROR_OK)) {
+            if (error != UTP_INTERNAL_ERROR_OK || rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST) {
                 return UTP_INTERNAL_ERROR_PROTOCOL;
             }
             rendezvous_seen = true;
@@ -4422,7 +4419,14 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 return UTP_INTERNAL_ERROR_PROTOCOL;
             }
         } else if (frame_type == UTP_FRAME_TYPE_HANDSHAKE_DONE) {
-            handshake_done = true;
+            utp_frame_handshake_done_t done;
+
+            error = utp_frame_handshake_done_decode(&done, frame, frame_length);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
+            connection->peer_handshake_done_packet_number = done.ack_handshake_packet_number;
+            handshake_done                                = true;
         } else if (frame_type == UTP_FRAME_TYPE_TRANSPORT_PARAMS) {
             utp_frame_transport_params_t params;
 
@@ -5537,7 +5541,8 @@ utp_internal_error_t utp_connection_on_zero_rtt_handshake(utp_connection_t* conn
 
     if (connection == NULL || packet == NULL || packet_length == NULL || peer == NULL || now_us == 0u ||
         !connection->zero_rtt_encrypted || connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
-        connection->state != UTP_CONNECTION_STATE_INITIAL_SENT) {
+        (connection->state != UTP_CONNECTION_STATE_INITIAL_SENT &&
+         connection->state != UTP_CONNECTION_STATE_CONNECTED)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_proto_decode_header(&header, packet, *packet_length);
@@ -5559,8 +5564,13 @@ utp_internal_error_t utp_connection_on_zero_rtt_handshake(utp_connection_t* conn
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    connection->peer_cid = header.scid;
-    error                = utp_connection_complete_zero_rtt_crypto(connection, peer_public_key);
+    if (connection->peer_cid == 0u) {
+        connection->peer_cid = header.scid;
+    } else if (connection->peer_cid != header.scid) {
+        return UTP_INTERNAL_ERROR_AUTH;
+    }
+    error = connection->crypto_ready ? UTP_INTERNAL_ERROR_OK
+                                     : utp_connection_complete_zero_rtt_crypto(connection, peer_public_key);
     if (error == UTP_INTERNAL_ERROR_OK) {
         header.payload_length = (uint16_t)plaintext_length;
         error                 = utp_proto_encode_header(packet, *packet_length, &header);

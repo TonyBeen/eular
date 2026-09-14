@@ -63,7 +63,7 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
                                                size_t packet_limit)
 {
     if (pending == NULL || peer == NULL || storage == NULL || local_cid == 0u || peer_cid == 0u ||
-        storage_capacity < UTP_PACKET_HEADER_SIZE + 2u * sizeof(uint16_t) || packet_limit == 0u) {
+        storage_capacity < UTP_PACKET_HEADER_SIZE + sizeof(uint8_t) + 2u * sizeof(uint16_t) || packet_limit == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     pending->peer                                 = *peer;
@@ -80,6 +80,8 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     pending->next_packet_number                   = 1u;
     pending->latest_initial_packet_number         = 0u;
     pending->latest_initial_received_us           = 0u;
+    pending->latest_initial_peer                  = *peer;
+    pending->latest_initial_local                 = (utp_address_t){0};
     pending->last_handshake_sent_us               = 0u;
     pending->handshake_rtt_sample_us              = 0u;
     pending->handshake_retransmission_deadline_us = 0u;
@@ -89,6 +91,8 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     pending->rx_aead                              = (utp_crypto_aead_t){0};
     pending->crypto_type                          = 0u;
     pending->handshake_max_retries                = UINT8_MAX;
+    pending->handshake_output_count               = 0u;
+    pending->packet_path_count                    = 0u;
     pending->peer_transport_params                = (utp_frame_transport_params_t){0};
     pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
     pending->crypto_configured                    = false;
@@ -96,7 +100,6 @@ utp_internal_error_t utp_pending_incoming_init(utp_pending_incoming_t* pending, 
     utp_crypto_key_pair_clear(&pending->crypto_key_pair);
     pending->accepted                       = false;
     pending->handshake_sent                 = false;
-    pending->handshake_write_pending        = false;
     pending->peer_transport_params_received = false;
     pending->peer_ack_frequency_received    = false;
     return UTP_INTERNAL_ERROR_OK;
@@ -129,6 +132,8 @@ void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
     pending->next_packet_number                   = 0u;
     pending->latest_initial_packet_number         = 0u;
     pending->latest_initial_received_us           = 0u;
+    pending->latest_initial_peer                  = (utp_address_t){0};
+    pending->latest_initial_local                 = (utp_address_t){0};
     pending->last_handshake_sent_us               = 0u;
     pending->handshake_rtt_sample_us              = 0u;
     pending->handshake_retransmission_deadline_us = 0u;
@@ -136,26 +141,31 @@ void utp_pending_incoming_reset(utp_pending_incoming_t* pending)
     pending->handshake_retransmission_count       = 0u;
     pending->crypto_type                          = 0u;
     pending->handshake_max_retries                = 0u;
+    pending->handshake_output_count               = 0u;
+    pending->packet_path_count                    = 0u;
     pending->peer_transport_params                = (utp_frame_transport_params_t){0};
     pending->peer_ack_frequency                   = (utp_frame_ack_frequency_t){0};
     pending->crypto_configured                    = false;
     pending->crypto_ready                         = false;
     pending->accepted                             = false;
     pending->handshake_sent                       = false;
-    pending->handshake_write_pending              = false;
     pending->peer_transport_params_received       = false;
     pending->peer_ack_frequency_received          = false;
 }
 
-utp_internal_error_t utp_pending_incoming_record_initial(utp_pending_incoming_t* pending, uint64_t packet_number,
+utp_internal_error_t utp_pending_incoming_record_initial(utp_pending_incoming_t* pending, const utp_address_t* peer,
+                                                         const utp_address_t* local, uint64_t packet_number,
                                                          uint64_t received_at_us)
 {
-    if (pending == NULL || packet_number == 0u || received_at_us == 0u) {
+    if (pending == NULL || peer == NULL || packet_number == 0u || received_at_us == 0u) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (packet_number > pending->latest_initial_packet_number) {
+    if (packet_number >= pending->latest_initial_packet_number) {
         pending->latest_initial_packet_number = packet_number;
         pending->latest_initial_received_us   = received_at_us;
+        pending->latest_initial_peer          = *peer;
+        pending->latest_initial_local =
+            local == NULL || local->family == UTP_ADDRESS_FAMILY_UNSPECIFIED ? (utp_address_t){0} : *local;
     }
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -249,14 +259,15 @@ utp_internal_error_t utp_pending_incoming_set_handshake_policy(utp_pending_incom
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static uint64_t utp_pending_incoming_next_handshake_delay(const utp_pending_incoming_t* pending)
+static uint64_t utp_pending_incoming_next_handshake_delay(const utp_pending_incoming_t* pending,
+                                                          uint32_t                      retransmission_count)
 {
     uint64_t delay = pending->handshake_base_delay_us > UTP_PENDING_HANDSHAKE_MAX_DELAY_US
                          ? UTP_PENDING_HANDSHAKE_MAX_DELAY_US
                          : pending->handshake_base_delay_us;
     uint32_t exponent;
 
-    exponent = pending->handshake_retransmission_count > 8u ? 8u : pending->handshake_retransmission_count;
+    exponent = retransmission_count > 8u ? 8u : retransmission_count;
     while (exponent-- != 0u) {
         if (delay > UTP_PENDING_HANDSHAKE_MAX_DELAY_US / 2u) {
             return UTP_PENDING_HANDSHAKE_MAX_DELAY_US;
@@ -267,13 +278,18 @@ static uint64_t utp_pending_incoming_next_handshake_delay(const utp_pending_inco
 }
 
 utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incoming_t* pending,
-                                                              uint64_t handshake_packet_number, uint64_t now_us)
+                                                              uint64_t handshake_packet_number, uint64_t now_us,
+                                                              bool timeout_retransmission)
 {
     if (pending == NULL || !pending->accepted || handshake_packet_number == 0u || now_us == 0u ||
         (pending->handshake_sent && handshake_packet_number <= pending->last_handshake_packet_number)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    uint64_t delay_us = utp_pending_incoming_next_handshake_delay(pending);
+    const uint32_t retransmission_count =
+        timeout_retransmission && pending->handshake_retransmission_count != UINT32_MAX
+            ? pending->handshake_retransmission_count + 1u
+            : pending->handshake_retransmission_count;
+    uint64_t delay_us = utp_pending_incoming_next_handshake_delay(pending, retransmission_count);
     if (delay_us > UINT64_MAX - now_us) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
@@ -284,25 +300,25 @@ utp_internal_error_t utp_pending_incoming_mark_handshake_sent(utp_pending_incomi
     pending->last_handshake_packet_number         = handshake_packet_number;
     pending->last_handshake_sent_us               = now_us;
     pending->handshake_retransmission_deadline_us = now_us + delay_us;
-    if (pending->handshake_retransmission_count != UINT32_MAX) {
-        ++pending->handshake_retransmission_count;
-    }
+    pending->handshake_retransmission_count       = retransmission_count;
     return UTP_INTERNAL_ERROR_OK;
 }
 
 uint64_t utp_pending_incoming_handshake_deadline(const utp_pending_incoming_t* pending)
 {
     assert(pending != NULL);
-    return !pending->accepted || !pending->handshake_sent ? 0u : pending->handshake_retransmission_deadline_us;
+    return !pending->accepted || !pending->handshake_sent || pending->handshake_output_count != 0u
+               ? 0u
+               : pending->handshake_retransmission_deadline_us;
 }
 
 utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pending, const uint8_t* packet,
                                                     size_t packet_length, size_t wire_packet_length,
-                                                    const utp_address_t* peer, uint64_t received_at_us,
-                                                    utp_pending_incoming_result_t* result)
+                                                    const utp_address_t* peer, const utp_address_t* local,
+                                                    uint64_t received_at_us, utp_pending_incoming_result_t* result)
 {
     if (pending == NULL || packet == NULL || peer == NULL || result == NULL || received_at_us == 0u ||
-        !pending->accepted || wire_packet_length < packet_length || !utp_address_equal(&pending->peer, peer)) {
+        !pending->accepted || wire_packet_length < packet_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     utp_packet_view_t    view;
@@ -312,7 +328,7 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
         view.header.scid != pending->peer_cid) {
         return UTP_INTERNAL_ERROR_PROTOCOL;
     }
-    uint64_t ack_packet_number = 0u;
+    uint64_t ack_packet_number  = 0u;
     uint32_t handshake_delay_us = 0u;
     bool     has_handshake_done;
     bool     has_handshake_delay;
@@ -335,16 +351,38 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
         *result = UTP_PENDING_INCOMING_PROMOTE;
         return UTP_INTERNAL_ERROR_OK;
     }
+    utp_address_t normalized_local =
+        local == NULL || local->family == UTP_ADDRESS_FAMILY_UNSPECIFIED ? (utp_address_t){0} : *local;
+    uint8_t path_index = pending->packet_path_count;
+
+    for (uint8_t index = 0u; index < pending->packet_path_count; ++index) {
+        if (utp_address_equal(&pending->packet_paths[index].peer, peer) &&
+            utp_address_equal(&pending->packet_paths[index].local, &normalized_local)) {
+            path_index = index;
+            break;
+        }
+    }
+    if (path_index == pending->packet_path_count &&
+        pending->packet_path_count >= UTP_PENDING_HANDSHAKE_OUTPUT_CAPACITY) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
     if (packet_length > UINT16_MAX || wire_packet_length > UINT16_MAX ||
         pending->packet_count >= pending->packet_limit ||
         packet_length > pending->storage_capacity - pending->storage_length ||
-        2u * sizeof(uint16_t) > pending->storage_capacity - pending->storage_length - packet_length) {
+        sizeof(uint8_t) + 2u * sizeof(uint16_t) > pending->storage_capacity - pending->storage_length - packet_length) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
-    size_t            required = pending->storage_length + 2u * sizeof(uint16_t) + packet_length;
+    if (path_index == pending->packet_path_count) {
+        pending->packet_paths[path_index] = (utp_pending_packet_path_t){*peer, normalized_local};
+        ++pending->packet_path_count;
+    }
+    size_t            required = pending->storage_length + sizeof(uint8_t) + 2u * sizeof(uint16_t) + packet_length;
     utp_wire_writer_t writer;
     error = utp_wire_writer_init(&writer, pending->storage + pending->storage_length,
                                  pending->storage_capacity - pending->storage_length);
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        error = utp_wire_write_u8(&writer, path_index);
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_wire_write_u16(&writer, (uint16_t)packet_length);
     }
@@ -354,7 +392,7 @@ utp_internal_error_t utp_pending_incoming_on_packet(utp_pending_incoming_t* pend
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
-    memcpy(pending->storage + pending->storage_length + 2u * sizeof(uint16_t), packet, packet_length);
+    memcpy(pending->storage + pending->storage_length + sizeof(uint8_t) + 2u * sizeof(uint16_t), packet, packet_length);
     pending->storage_length = required;
     ++pending->packet_count;
     *result = UTP_PENDING_INCOMING_BUFFERED;
@@ -371,27 +409,34 @@ utp_internal_error_t utp_pending_incoming_replay(const utp_pending_incoming_t*  
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     while (offset < pending->storage_length) {
+        uint8_t              path_index;
         uint16_t             packet_length;
         uint16_t             wire_packet_length;
         utp_internal_error_t error;
 
         error = utp_wire_reader_init(&reader, pending->storage + offset, pending->storage_length - offset);
         if (error == UTP_INTERNAL_ERROR_OK) {
+            error = utp_wire_read_u8(&reader, &path_index);
+        }
+        if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_wire_read_u16(&reader, &packet_length);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_wire_read_u16(&reader, &wire_packet_length);
         }
-        if (error != UTP_INTERNAL_ERROR_OK ||
-            (size_t)packet_length > pending->storage_length - offset - 2u * sizeof(uint16_t) ||
+        if (error != UTP_INTERNAL_ERROR_OK || path_index >= pending->packet_path_count ||
+            (size_t)packet_length > pending->storage_length - offset - sizeof(uint8_t) - 2u * sizeof(uint16_t) ||
             wire_packet_length < packet_length) {
             return UTP_INTERNAL_ERROR_PROTOCOL;
         }
-        error = replay(pending->storage + offset + 2u * sizeof(uint16_t), packet_length, wire_packet_length, user_data);
+        const utp_pending_packet_path_t* path = &pending->packet_paths[path_index];
+
+        error = replay(pending->storage + offset + sizeof(uint8_t) + 2u * sizeof(uint16_t), packet_length,
+                       wire_packet_length, &path->peer, &path->local, user_data);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-        offset += 2u * sizeof(uint16_t) + packet_length;
+        offset += sizeof(uint8_t) + 2u * sizeof(uint16_t) + packet_length;
     }
     return UTP_INTERNAL_ERROR_OK;
 }
