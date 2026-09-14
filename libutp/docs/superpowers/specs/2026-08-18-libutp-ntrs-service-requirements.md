@@ -404,7 +404,7 @@ node_id, boot_id, load, heartbeat_interval
 - Hub 必须以 `accept()` 获得的 Node 控制 TCP 连接源地址为准，覆盖该 Node 注册中
   `public_endpoint`、`probe_endpoint`、`change_port_endpoint` 和 `control_endpoint` 的 IP，端口保持 Node
   注册值。Hub 下发 assignment 时只能使用该观测地址；这避免 Node 伪造服务地址，也能匹配绑定网卡后的实际出口。
-- `nat_detect_hub --listen` 与 `nat_detect_node --hub` 均接受 `HOST:PORT` 或 `[HOST]:PORT`，在服务启动期
+- `natd_hub --listen` 与 `natd_node --hub` 均接受 `HOST:PORT` 或 `[HOST]:PORT`，在服务启动期
   同步解析为一个数字地址。默认 IPv4 实例只选择 A 记录，`-6` 实例只选择 AAAA 记录，不能回退到异族地址。
   Node 的三个本地监听 endpoint 仍必须为数字 IP，且必须与 Hub 控制连接使用相同地址族。`node_id` 命令行
   参数是线上唯一的可读文本标识，长度为 1 至 128 字节；服务端将其直接写入固定长度协议字段，未使用的

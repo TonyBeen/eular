@@ -1,8 +1,10 @@
 # libutp C Migration Workspace
 
-This directory is an isolated C11 migration workspace. It is intentionally not
-included by the repository root CMake build yet. The current C++ implementation
-remains the behavioral baseline until a C module has equivalent tests.
+This directory contains the C11 implementation of libutp. Functional details,
+module ownership, and the migration mapping from the historical C++ code are
+documented in [../doc/功能实现细节.md](../doc/功能实现细节.md). The C headers and
+sources are the implementation authority; the historical C++ tree is not a
+runtime dependency.
 
 The binding C11 design and code rules are in [STYLE.md](STYLE.md). They adapt
 the Google C++ Style Guide to C and add transport-specific memory, hot-path,

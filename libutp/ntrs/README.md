@@ -11,8 +11,8 @@ ctest --preset ntrs-linux
 
 Linux 服务产物固定在 `../build/ntrs-linux/`：
 
-- `nat_detect_hub`
-- `nat_detect_node`
+- `natd_hub`
+- `natd_node`
 
 musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 
@@ -20,8 +20,8 @@ musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 `0.0.0.0:24000`，Node 默认监听 `0.0.0.0:24001`、`0.0.0.0:24002`、`0.0.0.0:24003`：
 
 ```sh
-../build/ntrs-linux/nat_detect_hub --interface eth0
-../build/ntrs-linux/nat_detect_node --hub hub.example.com:24000 --node-id node-a --interface eth0
+../build/ntrs-linux/natd_hub --interface eth0
+../build/ntrs-linux/natd_node --hub hub.example.com:24000 --node-id node-a --interface eth0
 ```
 
 `--node-id` 是 Node 在线上唯一的可读标识，长度为 1 至 128 字节；它直接写入控制协议并出现在服务日志中。
@@ -35,8 +35,8 @@ IPv6 使用独立的 IPv6-only 服务实例，不能与 IPv4 共用 socket。Hub
 endpoint 校验：
 
 ```sh
-../build/ntrs-linux/nat_detect_hub -6 -i eth0
-../build/ntrs-linux/nat_detect_node -6 -H hub.example.com:24000 -n node-a -i eth0
+../build/ntrs-linux/natd_hub -6 -i eth0
+../build/ntrs-linux/natd_node -6 -H hub.example.com:24000 -n node-a -i eth0
 ```
 
 `ntrs_natc` 默认强制解析 IPv4 A 记录；使用 `-6` 时只解析 AAAA 记录、绑定 `::`，并以 IPv6 探测：
