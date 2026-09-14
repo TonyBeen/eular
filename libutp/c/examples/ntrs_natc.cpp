@@ -37,7 +37,7 @@
 #include <utils/CLI11.hpp>
 #include <utp/utp.h>
 
-static uint64_t ntrsc_kernel_thread_id()
+static uint64_t ntrs_natc_kernel_thread_id()
 {
 #if defined(_WIN32)
     return static_cast<uint64_t>(GetCurrentThreadId());
@@ -53,7 +53,7 @@ static uint64_t ntrsc_kernel_thread_id()
 #endif
 }
 
-static int32_t ntrsc_log_printf(FILE* stream, const char* source, int32_t line, const char* format, ...)
+static int32_t ntrs_natc_log_printf(FILE* stream, const char* source, int32_t line, const char* format, ...)
 {
     char        message[1024];
     std::string content;
@@ -73,7 +73,7 @@ static int32_t ntrsc_log_printf(FILE* stream, const char* source, int32_t line, 
     if (written < 0) return written;
     message[std::strcspn(message, "\r\n")] = '\0';
     content                                = message;
-    if (content.compare(0u, 12u, "ntrsc event=") == 0) content.erase(0u, 12u);
+    if (content.compare(0u, 16u, "ntrs_natc event=") == 0) content.erase(0u, 16u);
     if (content.find("level=debug") != std::string::npos)
         level = "D";
     else if (content.find("level=warning") != std::string::npos)
@@ -89,15 +89,15 @@ static int32_t ntrsc_log_printf(FILE* stream, const char* source, int32_t line, 
 #endif
     file_name = std::strrchr(source, '/');
     return static_cast<int32_t>(std::fprintf(
-        stream, "%04d-%02d-%02d %02d:%02d:%02d.%03lld %5" PRIu64 " %s ntrsc: %s    %s:%" PRId32 "\n",
+        stream, "%04d-%02d-%02d %02d:%02d:%02d.%03lld %5" PRIu64 " %s ntrs_natc: %s    %s:%" PRId32 "\n",
         local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday, local_time.tm_hour, local_time.tm_min,
-        local_time.tm_sec, static_cast<long long>(milliseconds), ntrsc_kernel_thread_id(), level, content.c_str(),
+        local_time.tm_sec, static_cast<long long>(milliseconds), ntrs_natc_kernel_thread_id(), level, content.c_str(),
         file_name == nullptr ? source : file_name + 1, line));
 }
 
-#define fprintf(stream, ...) ntrsc_log_printf(stream, __FILE__, __LINE__, __VA_ARGS__)
+#define fprintf(stream, ...) ntrs_natc_log_printf(stream, __FILE__, __LINE__, __VA_ARGS__)
 
-typedef struct ntrsc_app {
+typedef struct ntrs_natc_app {
     struct event_base* base;  // 调用方持有的 libevent loop
 #if !defined(_WIN32)
     struct event* signal_int;   // SIGINT 退出事件
@@ -106,9 +106,9 @@ typedef struct ntrsc_app {
     utp_context_t* context;    // NAT 探测使用的 Context
     bool           completed;  // 是否收到 NAT 探测完成回调
     int32_t        exit_code;  // 进程最终退出码
-} ntrsc_app_t;
+} ntrs_natc_app_t;
 
-static const char* ntrsc_log_level_name(utp_log_level_t level)
+static const char* ntrs_natc_log_level_name(utp_log_level_t level)
 {
     switch (level) {
     case UTP_LOG_LEVEL_DEBUG:
@@ -126,12 +126,12 @@ static const char* ntrsc_log_level_name(utp_log_level_t level)
     }
 }
 
-static void ntrsc_log_sink(utp_log_level_t level, const char* message)
+static void ntrs_natc_log_sink(utp_log_level_t level, const char* message)
 {
-    (void)fprintf(stderr, "ntrsc event=libutp_log level=%s message=%s\n", ntrsc_log_level_name(level), message);
+    (void)fprintf(stderr, "ntrs_natc event=libutp_log level=%s message=%s\n", ntrs_natc_log_level_name(level), message);
 }
 
-static const char* ntrsc_nat_class_name(utp_nat_class_t nat_class)
+static const char* ntrs_natc_nat_class_name(utp_nat_class_t nat_class)
 {
     switch (nat_class) {
     case UTP_NAT_CLASS_UNKNOWN:
@@ -157,7 +157,7 @@ static const char* ntrsc_nat_class_name(utp_nat_class_t nat_class)
     }
 }
 
-static const char* ntrsc_family_name(uint8_t family)
+static const char* ntrs_natc_family_name(uint8_t family)
 {
     if (family == 4u || family == (uint8_t)AF_INET) {
         return "ipv4";
@@ -168,7 +168,7 @@ static const char* ntrsc_family_name(uint8_t family)
     return "unknown";
 }
 
-static const char* ntrsc_endpoint_format(const utp_endpoint_t* endpoint, char output[80])
+static const char* ntrs_natc_endpoint_format(const utp_endpoint_t* endpoint, char output[80])
 {
     char address[INET6_ADDRSTRLEN];
 
@@ -190,7 +190,7 @@ static const char* ntrsc_endpoint_format(const utp_endpoint_t* endpoint, char ou
     return output;
 }
 
-static void ntrsc_print_port_samples(const utp_nat_probe_result_t* result)
+static void ntrs_natc_print_port_samples(const utp_nat_probe_result_t* result)
 {
     char    values[UTP_NAT_PORT_SAMPLE_CAPACITY * 6u + 1u] = {0};
     size_t  offset                                         = 0u;
@@ -212,16 +212,16 @@ static void ntrsc_print_port_samples(const utp_nat_probe_result_t* result)
     (void)fprintf(stdout, "port samples: %s\n", values);
 }
 
-static void ntrsc_on_probe_complete(utp_context_t* context, utp_status_t status, const utp_nat_probe_result_t* result,
-                                    void* user_data)
+static void ntrs_natc_on_probe_complete(utp_context_t* context, utp_status_t status,
+                                        const utp_nat_probe_result_t* result, void* user_data)
 {
-    ntrsc_app_t* app = static_cast<ntrsc_app_t*>(user_data);
+    ntrs_natc_app_t* app = static_cast<ntrs_natc_app_t*>(user_data);
 
     (void)context;
     app->completed = true;
     if (status != UTP_STATUS_OK || result == NULL) {
         app->exit_code = EXIT_FAILURE;
-        (void)fprintf(stderr, "ntrsc event=probe_failed status=%s\n", utp_status_string(status));
+        (void)fprintf(stderr, "ntrs_natc event=probe_failed status=%s\n", utp_status_string(status));
         event_base_loopbreak(app->base);
         return;
     }
@@ -230,37 +230,37 @@ static void ntrsc_on_probe_complete(utp_context_t* context, utp_status_t status,
         char secondary[80];
 
         (void)fprintf(stdout,
-                      "ntrsc event=probe_complete status=ok class=%s family=%s primary_mapped=%s "
+                      "ntrs_natc event=probe_complete status=ok class=%s family=%s primary_mapped=%s "
                       "secondary_mapped=%s primary_rtt_ms=%" PRId32 " secondary_rtt_ms=%" PRId32
                       " "
                       "probe_time_us=%" PRIu64 " expires_at_us=%" PRIu64 "\n",
-                      ntrsc_nat_class_name(result->nat_class), ntrsc_family_name(result->address_family),
-                      ntrsc_endpoint_format(&result->primary_mapped_endpoint, primary),
-                      ntrsc_endpoint_format(&result->secondary_mapped_endpoint, secondary), result->primary_rtt_ms,
+                      ntrs_natc_nat_class_name(result->nat_class), ntrs_natc_family_name(result->address_family),
+                      ntrs_natc_endpoint_format(&result->primary_mapped_endpoint, primary),
+                      ntrs_natc_endpoint_format(&result->secondary_mapped_endpoint, secondary), result->primary_rtt_ms,
                       result->secondary_rtt_ms, result->probe_time_us, result->expires_at_us);
     }
-    ntrsc_print_port_samples(result);
+    ntrs_natc_print_port_samples(result);
     app->exit_code = EXIT_SUCCESS;
     event_base_loopbreak(app->base);
 }
 
 #if !defined(_WIN32)
-static void ntrsc_on_signal(evutil_socket_t fd, int16_t events, void* user_data)
+static void ntrs_natc_on_signal(evutil_socket_t fd, int16_t events, void* user_data)
 {
-    ntrsc_app_t* app = static_cast<ntrsc_app_t*>(user_data);
+    ntrs_natc_app_t* app = static_cast<ntrs_natc_app_t*>(user_data);
 
     (void)fd;
     (void)events;
     if (!app->completed) {
         (void)utp_context_cancel_nat_probe(app->context);
-        (void)fprintf(stderr, "ntrsc event=probe_cancelled reason=signal\n");
+        (void)fprintf(stderr, "ntrs_natc event=probe_cancelled reason=signal\n");
     }
     app->exit_code = EXIT_FAILURE;
     event_base_loopbreak(app->base);
 }
 #endif
 
-static bool ntrsc_address_is_ipv6(const char* address)
+static bool ntrs_natc_address_is_ipv6(const char* address)
 {
     struct in6_addr parsed;
 
@@ -268,7 +268,7 @@ static bool ntrsc_address_is_ipv6(const char* address)
 }
 
 /** @brief 将 NAT 服务主机名解析为指定地址族的数字 IP。 */
-static bool ntrsc_resolve_nat_address(const char* input, int32_t family, char output[INET6_ADDRSTRLEN])
+static bool ntrs_natc_resolve_nat_address(const char* input, int32_t family, char output[INET6_ADDRSTRLEN])
 {
     struct evutil_addrinfo  hints     = {};
     struct evutil_addrinfo* addresses = NULL;
@@ -299,10 +299,10 @@ static bool ntrsc_resolve_nat_address(const char* input, int32_t family, char ou
     return false;
 }
 
-static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char* bind_address, uint16_t bind_port,
-                         const char* interface_name, uint32_t phase_timeout_ms, bool verbose, bool use_ipv6)
+static int32_t ntrs_natc_run(const char* nat_address, uint16_t nat_port, const char* bind_address, uint16_t bind_port,
+                             const char* interface_name, uint32_t phase_timeout_ms, bool verbose, bool use_ipv6)
 {
-    ntrsc_app_t             app             = {};
+    ntrs_natc_app_t         app             = {};
     utp_context_options_t   context_options = UTP_CONTEXT_OPTIONS_INIT;
     utp_nat_probe_options_t probe_options   = UTP_NAT_PROBE_OPTIONS_INIT;
     char                    nat_numeric_address[INET6_ADDRSTRLEN];
@@ -319,63 +319,62 @@ static int32_t ntrsc_run(const char* nat_address, uint16_t nat_port, const char*
     probe_options.phase_timeout_ms = phase_timeout_ms;
 #if defined(_WIN32)
     if (WSAStartup(MAKEWORD(2, 2), &winsock_data) != 0) {
-        (void)fprintf(stderr, "ntrsc event=winsock_start_failed\n");
+        (void)fprintf(stderr, "ntrs_natc event=winsock_start_failed\n");
         return EXIT_FAILURE;
     }
     winsock_started = true;
 #endif
-    if (!ntrsc_resolve_nat_address(nat_address, use_ipv6 ? AF_INET6 : AF_INET, nat_numeric_address)) {
-        (void)fprintf(stderr, "ntrsc event=nat_address_resolve_failed address=%s family=%s\n", nat_address,
+    if (!ntrs_natc_resolve_nat_address(nat_address, use_ipv6 ? AF_INET6 : AF_INET, nat_numeric_address)) {
+        (void)fprintf(stderr, "ntrs_natc event=nat_address_resolve_failed address=%s family=%s\n", nat_address,
                       use_ipv6 ? "ipv6" : "ipv4");
         goto cleanup;
     }
     if (bind_address == NULL) {
         bind_address = use_ipv6 ? "::" : "0.0.0.0";
-    } else if (ntrsc_address_is_ipv6(bind_address) != use_ipv6) {
-        (void)fprintf(stderr, "ntrsc event=bind_address_family_mismatch address=%s family=%s\n", bind_address,
+    } else if (ntrs_natc_address_is_ipv6(bind_address) != use_ipv6) {
+        (void)fprintf(stderr, "ntrs_natc event=bind_address_family_mismatch address=%s family=%s\n", bind_address,
                       use_ipv6 ? "ipv6" : "ipv4");
         goto cleanup;
     }
     app.exit_code = EXIT_FAILURE;
     app.base      = event_base_new();
     if (app.base == NULL) {
-        (void)fprintf(stderr, "ntrsc event=event_base_create_failed\n");
+        (void)fprintf(stderr, "ntrs_natc event=event_base_create_failed\n");
         goto cleanup;
     }
     context_options.event_base = app.base;
-    context_options.peer_id    = "ntrsc";
-    context_options.log_sink   = verbose ? ntrsc_log_sink : NULL;
+    context_options.peer_id    = "ntrs_natc";
+    context_options.log_sink   = verbose ? ntrs_natc_log_sink : NULL;
     context_options.log_level  = verbose ? UTP_LOG_LEVEL_DEBUG : UTP_LOG_LEVEL_SILENCE;
     status                     = utp_context_create(&context_options, &app.context);
     if (status != UTP_STATUS_OK) {
-        (void)fprintf(stderr, "ntrsc event=context_create_failed status=%s\n", utp_status_string(status));
+        (void)fprintf(stderr, "ntrs_natc event=context_create_failed status=%s\n", utp_status_string(status));
         goto cleanup;
     }
     status = utp_context_bind(app.context, bind_address, bind_port, interface_name, &local_port);
     if (status != UTP_STATUS_OK) {
-        (void)fprintf(stderr, "ntrsc event=context_bind_failed address=%s port=%" PRIu16 " status=%s\n", bind_address,
-                      bind_port, utp_status_string(status));
+        (void)fprintf(stderr, "ntrs_natc event=context_bind_failed address=%s port=%" PRIu16 " status=%s\n",
+                      bind_address, bind_port, utp_status_string(status));
         goto cleanup;
     }
     probe_options.nat_service_address = nat_numeric_address;
     probe_options.nat_service_port    = nat_port;
 #if !defined(_WIN32)
-    app.signal_int  = evsignal_new(app.base, SIGINT, ntrsc_on_signal, &app);
-    app.signal_term = evsignal_new(app.base, SIGTERM, ntrsc_on_signal, &app);
+    app.signal_int  = evsignal_new(app.base, SIGINT, ntrs_natc_on_signal, &app);
+    app.signal_term = evsignal_new(app.base, SIGTERM, ntrs_natc_on_signal, &app);
     if (app.signal_int == NULL || app.signal_term == NULL || event_add(app.signal_int, NULL) != 0 ||
         event_add(app.signal_term, NULL) != 0) {
-        (void)fprintf(stderr, "ntrsc event=signal_event_create_failed\n");
+        (void)fprintf(stderr, "ntrs_natc event=signal_event_create_failed\n");
         goto cleanup;
     }
 #endif
-    (void)fprintf(stdout,
-                  "ntrsc [NAT Probe] bind=%s:%" PRIu16 " -> node=%s:%" PRIu16 " resolved=%s timeout_ms=%" PRIu32
-                  "\n",
-                  bind_address, local_port, nat_address, nat_port, nat_numeric_address,
-                  probe_options.phase_timeout_ms == 0u ? 3000u : probe_options.phase_timeout_ms);
-    status = utp_context_probe_nat(app.context, &probe_options, ntrsc_on_probe_complete, &app);
+    (void)fprintf(
+        stdout, "ntrs_natc [NAT Probe] bind=%s:%" PRIu16 " -> node=%s:%" PRIu16 " resolved=%s timeout_ms=%" PRIu32 "\n",
+        bind_address, local_port, nat_address, nat_port, nat_numeric_address,
+        probe_options.phase_timeout_ms == 0u ? 3000u : probe_options.phase_timeout_ms);
+    status = utp_context_probe_nat(app.context, &probe_options, ntrs_natc_on_probe_complete, &app);
     if (status != UTP_STATUS_OK) {
-        (void)fprintf(stderr, "ntrsc event=probe_start_failed status=%s\n", utp_status_string(status));
+        (void)fprintf(stderr, "ntrs_natc event=probe_start_failed status=%s\n", utp_status_string(status));
         goto cleanup;
     }
     // 本地发送错误可在启动调用内同步交付回调，此时尚未进入 libevent loop。
@@ -428,6 +427,6 @@ int main(int argc, char** argv)
     cli.add_flag("-v", verbose, "Print the complete NAT probe process");
     CLI11_PARSE(cli, argc, argv);
 
-    return ntrsc_run(nat_address.c_str(), nat_port, bind_address.empty() ? NULL : bind_address.c_str(), bind_port,
-                     interface_name.empty() ? NULL : interface_name.c_str(), phase_timeout_ms, verbose, use_ipv6);
+    return ntrs_natc_run(nat_address.c_str(), nat_port, bind_address.empty() ? NULL : bind_address.c_str(), bind_port,
+                         interface_name.empty() ? NULL : interface_name.c_str(), phase_timeout_ms, verbose, use_ipv6);
 }

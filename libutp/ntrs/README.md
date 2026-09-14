@@ -39,8 +39,8 @@ endpoint 校验：
 ../build/ntrs-linux/nat_detect_node -6 -H hub.example.com:24000 -n node-a -i eth0
 ```
 
-`ntrsc` 默认强制解析 IPv4 A 记录；使用 `-6` 时只解析 AAAA 记录、绑定 `::`，并以 IPv6 探测：
+`ntrs_natc` 默认强制解析 IPv4 A 记录；使用 `-6` 时只解析 AAAA 记录、绑定 `::`，并以 IPv6 探测：
 
 ```sh
-./ntrsc -6 -a www.eular.top -p 24001 -i eth0 -v
+./ntrs_natc -6 -a www.eular.top -p 24001 -i eth0 -v
 ```

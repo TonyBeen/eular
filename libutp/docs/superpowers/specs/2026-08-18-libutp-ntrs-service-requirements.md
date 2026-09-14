@@ -99,7 +99,7 @@ IDLE -> PROBING -> IDLE
 - 当前探测以 Context 已 bind socket 的地址族为准：绑定 IPv4 只探测 IPv4，绑定 IPv6 只探测
   IPv6。libutp 不支持双栈 bind，所有 IPv6 socket 均必须设置 `IPV6_V6ONLY=1` 并拒绝 IPv4
   数据报；调用方需要双栈时创建两个独立 Context。两个 Context 的 NAT 记录彼此独立。
-- 示例客户端 `ntrsc -6` 强制从 NAT 服务域名选择 AAAA 记录并绑定 `::`；默认仅选择 A 记录并绑定
+- 示例客户端 `ntrs_natc -6` 强制从 NAT 服务域名选择 AAAA 记录并绑定 `::`；默认仅选择 A 记录并绑定
   `0.0.0.0`。NTRS Node 的 IPv6 UDP 探测使用独立 IPv6-only socket，Hub、Node 的控制连接、
   `probe`、`change_port`、`control` endpoint 必须同族。
 - NAT 记录过期后不得继续用于打洞方向早失败、候选优先级或端口预测；使用过期记录时等价于 `UNKNOWN`。
