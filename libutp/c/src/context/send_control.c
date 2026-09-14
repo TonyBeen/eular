@@ -1189,6 +1189,7 @@ utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_
     assert(control != NULL);
     assert(retired_packets != NULL);
     assert(now_us != 0u);
+    (void)now_us;
     for (packet = TAILQ_FIRST(&control->scheduled_packets); packet != NULL; packet = next) {
         uint64_t packet_size;
 

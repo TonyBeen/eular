@@ -264,6 +264,7 @@ static utp_internal_error_t utp_context_pad_zero_rtt_payload(utp_connection_t* c
     assert(payload_length != NULL);
     assert(*payload_length <= capacity);
     assert(prefix_length <= *payload_length);
+    (void)prefix_length;
     target_size           = utp_mtu_packet_size_from_mtu(connection->mtu_discovery.mtu_min, connection->peer.family);
     const size_t tag_size = encrypted ? UTP_CRYPTO_AEAD_TAG_SIZE : 0u;
 
@@ -2202,6 +2203,7 @@ static utp_internal_error_t utp_context_prepare_packet_send_message(const utp_co
         total_length += slices[index].length;
     }
     assert(total_length == packet->data_size);
+    (void)total_length;
     message->slice_count = packet->slice_count;
     message->sent_length = 0u;
     return UTP_INTERNAL_ERROR_OK;
@@ -3086,6 +3088,7 @@ static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context
 
     assert(context != NULL);
     assert(now_us != 0u);
+    (void)now_us;
     registration = &context->ntrs_registration;
     if (registration->pending && registration->write_pending) {
         error = utp_context_send_ntrs_registration(context);
@@ -3114,6 +3117,7 @@ static utp_internal_error_t utp_context_retry_ntrs_address_update_send(utp_conte
 
     assert(context != NULL);
     assert(now_us != 0u);
+    (void)now_us;
     update = &context->ntrs_address_update;
     return update->pending && update->write_pending ? utp_context_send_ntrs_address_update(context)
                                                     : UTP_INTERNAL_ERROR_OK;
