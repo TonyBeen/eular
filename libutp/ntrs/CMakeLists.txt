@@ -94,41 +94,41 @@ if(UTP_NTRS_BUILD_SERVICES)
         target_compile_options(ntrs PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
         set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
     endif()
-    add_executable(nat_detect_hub app/nat_detect_hub.cpp app/app_log.c)
-    target_link_libraries(nat_detect_hub PRIVATE
+    add_executable(natd_hub app/natd_hub.cpp app/app_log.c)
+    target_link_libraries(natd_hub PRIVATE
         utp_ntrs_service_core
         utp_ntrs_service_runtime
         ssl
         crypto)
-    target_include_directories(nat_detect_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_include_directories(nat_detect_hub SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
-    target_compile_features(nat_detect_hub PRIVATE cxx_std_11)
+    target_include_directories(natd_hub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(natd_hub SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_compile_features(natd_hub PRIVATE cxx_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(nat_detect_hub PRIVATE
+        target_compile_options(natd_hub PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
         set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
     elseif(MSVC)
-        target_compile_options(nat_detect_hub PRIVATE /utf-8 /W4 /WX)
+        target_compile_options(natd_hub PRIVATE /utf-8 /W4 /WX)
     endif()
 
-    add_executable(nat_detect_node app/nat_detect_node.cpp app/app_log.c)
-    target_link_libraries(nat_detect_node PRIVATE
+    add_executable(natd_node app/natd_node.cpp app/app_log.c)
+    target_link_libraries(natd_node PRIVATE
         utp_ntrs_service_runtime
         utp_ntrs_node_udp
         utp_ntrs_service_core
         ssl
         crypto)
-    target_include_directories(nat_detect_node PRIVATE
+    target_include_directories(natd_node PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_include_directories(nat_detect_node SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
-    target_compile_features(nat_detect_node PRIVATE cxx_std_11)
+    target_include_directories(natd_node SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../utils/include")
+    target_compile_features(natd_node PRIVATE cxx_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(nat_detect_node PRIVATE
+        target_compile_options(natd_node PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
         set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
     elseif(MSVC)
-        target_compile_options(nat_detect_node PRIVATE /utf-8 /W4 /WX)
+        target_compile_options(natd_node PRIVATE /utf-8 /W4 /WX)
     endif()
 endif()
 
