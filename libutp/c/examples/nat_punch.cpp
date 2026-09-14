@@ -745,7 +745,7 @@ int main(int argc, char** argv)
         ((register_requested || rendezvous_connect) && (ntrs_address.empty() || ntrs_port == 0u)) ||
         target_peer_id.size() > UTP_PEER_ID_MAX_LENGTH ||
         (has_direct_peer && (peer_address.empty() || peer_port == 0u)) || (target_peer_id.empty() && has_direct_peer) ||
-        (listen_requested && (!target_peer_id.empty() || register_requested)) || timeout_ms == 0u ||
+        (listen_requested && (!target_peer_id.empty() || register_requested || has_direct_peer)) || timeout_ms == 0u ||
         nat_timeout_ms == 0u) {
         LOG("nat_punch argument_invalid");
         LOG("%s", cli.help().c_str());
@@ -873,9 +873,10 @@ int main(int argc, char** argv)
         }
         LOG("nat_punch peer=%s [Bound] local=%s:%" PRIu16 " interface=%s mode=%s nat=%s:%" PRIu16 " ntrs=%s:%" PRIu16,
             app.peer_id, bind_ip, actual_port, interface_name.empty() ? "<any>" : interface_name.c_str(),
-            register_requested
-                ? "register"
-                : (rendezvous_connect ? "rendezvous-connect" : (listen_requested ? "listen" : "nat-probe")),
+            register_requested ? "register"
+                               : (rendezvous_connect ? "rendezvous-connect"
+                                                     : (has_direct_peer ? "direct-connect"
+                                                                        : (listen_requested ? "listen" : "nat-probe"))),
             nat_numeric.c_str(), nat_port, ntrs_required ? ntrs_numeric.c_str() : "<none>",
             ntrs_required ? ntrs_port : 0u);
         LOG("nat_punch peer=%s -> NAT=%s:%" PRIu16 " [PrimaryBinding]", app.peer_id, nat_numeric.c_str(), nat_port);
