@@ -409,7 +409,7 @@ int main(int argc, char** argv)
 {
     CLI::App    cli{"libutp NAT detection client"};
     std::string nat_address;
-    uint16_t    nat_port = 0u;
+    uint16_t    nat_port = 7800u;
     std::string bind_address;
     uint16_t    bind_port = 0u;
     std::string interface_name;
@@ -418,7 +418,8 @@ int main(int argc, char** argv)
     bool        use_ipv6         = false;
 
     cli.add_option("-a,--nat-address", nat_address, "NAT Node probe hostname or IP")->required();
-    cli.add_option("-p,--nat-port", nat_port, "NAT Node probe UDP port")->required();
+    cli.add_option("-p,--nat-port", nat_port, "NAT Node probe UDP port (default: 7800)")
+        ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
     cli.add_option("-b,--bind-address", bind_address, "Local bind IP");
     cli.add_option("-P,--bind-port", bind_port, "Local bind UDP port");
     cli.add_option("-i,--interface", interface_name, "Bind UDP socket to this interface");

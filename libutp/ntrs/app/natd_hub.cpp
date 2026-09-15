@@ -573,7 +573,7 @@ int main(int argc, char** argv)
     CLI11_PARSE(cli, argc, argv);
 
     if (listen.empty()) {
-        listen = use_ipv6 ? "[::]:24000" : "0.0.0.0:24000";
+        listen = use_ipv6 ? "[::]:7700" : "0.0.0.0:7700";
     }
 
     utp_ntrs_app_log_init("natd_hub");

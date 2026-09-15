@@ -17,18 +17,18 @@ Linux 服务产物固定在 `../build/ntrs-linux/`：
 
 musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 
-`ntrs` 是 UDP Rendezvous 服务，默认监听 `0.0.0.0:24000`，不使用 cert/key：
+`ntrs` 是 UDP Rendezvous 服务，默认监听 `0.0.0.0:6600`，不使用 cert/key：
 
 ```sh
-../build/ntrs-linux/ntrs -a 0.0.0.0 -p 24000
+../build/ntrs-linux/ntrs -a 0.0.0.0 -p 6600
 ```
 
 `natd_hub` 与 `natd_node` 的控制连接默认使用明文 TCP；同时传入 `--cert` 与 `--key` 时启用 TLS 1.3。Hub 默认监听
-`0.0.0.0:24000`，Node 默认监听 UDP probe `24001`、UDP change-port `24002` 和 TCP control `24003`：
+`0.0.0.0:7700`，Node 默认监听 UDP probe `7800`、UDP change-port `7801` 和 TCP control `7900`：
 
 ```sh
 ../build/ntrs-linux/natd_hub --interface eth0
-../build/ntrs-linux/natd_node --hub hub.example.com:24000 --node-id node-a --interface eth0
+../build/ntrs-linux/natd_node --hub hub.example.com:7700 --node-id node-a --interface eth0
 ```
 
 Node 也可以显式指定三个 endpoint：`-p/--probe`、`-q/--change-port` 和 `-C/--control`。
@@ -45,11 +45,11 @@ endpoint 校验：
 
 ```sh
 ../build/ntrs-linux/natd_hub -6 -i eth0
-../build/ntrs-linux/natd_node -6 -H hub.example.com:24000 -n node-a -i eth0
+../build/ntrs-linux/natd_node -6 -H hub.example.com:7700 -n node-a -i eth0
 ```
 
 `ntrs_natc` 默认强制解析 IPv4 A 记录；使用 `-6` 时只解析 AAAA 记录、绑定 `::`，并以 IPv6 探测：
 
 ```sh
-./ntrs_natc -6 -a www.eular.top -p 24001 -i eth0 -v
+./ntrs_natc -6 -a www.eular.top -p 7800 -i eth0 -v
 ```

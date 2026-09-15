@@ -5,9 +5,9 @@
 
 ## 1. 服务和数据对象
 
-- `ntrs` 默认监听 `0.0.0.0:24000`，只处理 UDP Rendezvous/保活/候选协调，不转发业务数据。
-- `natd_hub` 默认监听 TCP `0.0.0.0:24000`，可通过 cert/key 为控制连接启用 TLS。
-- `natd_node` 默认提供 TCP control `24003`、UDP probe `24001`、UDP change-port `24002`。
+- `ntrs` 默认监听 UDP `0.0.0.0:6600`，只处理 Rendezvous/保活/候选协调，不转发业务数据。
+- `natd_hub` 默认监听 TCP `0.0.0.0:7700`，可通过 cert/key 为控制连接启用 TLS。
+- `natd_node` 默认提供 UDP probe `7800`、UDP change-port `7801`、TCP control `7900`。
 - `ntrs_natc` 是 NAT 探测客户端；`nat_punch` 是联调示例。
 
 注册对象按 peer-id 建立，包含当前 UDP endpoint、8 字节 registration token、NAT 分类、本地候选、公网映射、地址样本和保活状态。一次 Rendezvous 使用 16 字节 `attempt_id` 和 8 字节 punch token；CALIBRATE 使用 8 字节 calibration token 和 64 位 calibration id。

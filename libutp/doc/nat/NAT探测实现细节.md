@@ -40,4 +40,4 @@ NAT 结果不会改变 UTP 的普通握手语义。注册 NTRS 或发送 Rendezv
 
 ## 5. 工具
 
-NAT 探测客户端为 `ntrs_natc`；Hub/Node 服务为 `natd_hub` 和 `natd_node`。构建和默认端口见 `ntrs/README.md`。
+NAT 探测客户端为 `ntrs_natc`；Hub/Node 服务为 `natd_hub` 和 `natd_node`。构建和默认端口见 `ntrs/README.md`。Node 主探测默认使用 UDP `7800`。

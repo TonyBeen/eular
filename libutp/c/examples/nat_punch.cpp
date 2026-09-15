@@ -686,8 +686,8 @@ int main(int argc, char** argv)
     std::string           interface_name;
     std::string           target_peer_id;
     std::string           encryption_name    = "none";
-    uint16_t              nat_port           = 24001u;
-    uint16_t              ntrs_port          = 24000u;
+    uint16_t              nat_port           = 7800u;
+    uint16_t              ntrs_port          = 6600u;
     uint16_t              peer_port          = 0u;
     uint16_t              bind_port          = 0u;
     uint64_t              send_bytes         = 0u;
@@ -700,10 +700,10 @@ int main(int argc, char** argv)
 
     cli.add_option("-i,--peer-id", peer_id, "Local Context peer ID (1-128 bytes)")->required();
     cli.add_option("-n,--nat-address", nat_address, "NAT probe service address")->required();
-    cli.add_option("-N,--nat-port", nat_port, "NAT probe service port (default: 24001)")
+    cli.add_option("-N,--nat-port", nat_port, "NAT probe service port (default: 7800)")
         ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
     cli.add_option("-s,--ntrs-address", ntrs_address, "NTRS address");
-    cli.add_option("-S,--ntrs-port", ntrs_port, "NTRS port (default: 24000)")
+    cli.add_option("-S,--ntrs-port", ntrs_port, "NTRS port (default: 6600)")
         ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
     cli.add_flag("-r,--register", register_requested, "Register this Context at NTRS");
     cli.add_flag("-l,--listen", listen_requested, "Wait for one direct incoming connection");

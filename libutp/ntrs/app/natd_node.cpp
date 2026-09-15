@@ -800,13 +800,13 @@ int main(int argc, char** argv)
     CLI11_PARSE(cli, argc, argv);
 
     if (probe.empty()) {
-        probe = use_ipv6 ? "[::]:24001" : "0.0.0.0:24001";
+        probe = use_ipv6 ? "[::]:7800" : "0.0.0.0:7800";
     }
     if (change_port.empty()) {
-        change_port = use_ipv6 ? "[::]:24002" : "0.0.0.0:24002";
+        change_port = use_ipv6 ? "[::]:7801" : "0.0.0.0:7801";
     }
     if (control.empty()) {
-        control = use_ipv6 ? "[::]:24003" : "0.0.0.0:24003";
+        control = use_ipv6 ? "[::]:7900" : "0.0.0.0:7900";
     }
 
     natd_node_options_t options = {};

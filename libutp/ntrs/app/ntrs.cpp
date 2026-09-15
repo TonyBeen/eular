@@ -2539,7 +2539,7 @@ int main(int argc, char** argv)
     size_t                control_queue_capacity  = k_control_queue_capacity_default;
     size_t                output_queue_capacity   = k_output_queue_capacity_default;
     size_t                worker_queue_capacity   = k_worker_queue_capacity_default;
-    uint16_t              port                    = 24000u;
+    uint16_t              port                    = 6600u;
     uint32_t              worker_count            = 1u;
     cli.add_option("-a", bind_address, "Bind IP");
     cli.add_option("-e", advertised_address, "Advertised public IP");
