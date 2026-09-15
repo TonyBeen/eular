@@ -6,7 +6,7 @@
 
 ## 2. NTRS 路径
 
-REQUEST -> REDIRECT -> FORWARD -> PUNCH 是协调顺序。REDIRECT 和 FORWARD 只提供候选及 token，不承载业务数据。收到合法 PUNCH 后，主动端向触发它的 endpoint 重发保留的 Initial；之后按普通 Initial/Handshake/HandshakeDone 处理。
+REQUEST -> REDIRECT -> FORWARD -> PUNCH 是协调顺序。REDIRECT 和 FORWARD 只提供候选及 token，不承载业务数据。收到合法 PUNCH 后，主动端向触发它的 endpoint 重发保留的 Initial，并以该 PUNCH 的本地目的地址作为 UDP 源地址；之后按普通 Initial/Handshake/HandshakeDone 处理。
 
 握手阶段使用 `attempt_id`、本地 active CID 和候选 endpoint 验证来源；同一 Context 可以并发向多个 peer 建连。连接成功后，数据面主要按 DCID/SCID 解复用，attempt_id 仅用于握手完成、0-RTT 和 Rendezvous 短期清理。
 

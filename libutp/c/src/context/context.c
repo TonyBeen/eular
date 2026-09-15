@@ -60,7 +60,8 @@ static utp_internal_error_t utp_context_on_nat_probe_packet(utp_context_t* conte
                                                             uint64_t now_us);
 static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* context, const utp_packet_header_t* header,
                                                              const uint8_t* payload, size_t payload_length,
-                                                             const utp_address_t* peer, uint64_t now_us);
+                                                             const utp_address_t* peer, const utp_address_t* local,
+                                                             uint64_t now_us);
 static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_context_t* context, uint64_t now_us);
 static utp_internal_error_t utp_context_retry_ntrs_registration_send(utp_context_t* context, uint64_t now_us);
 static utp_internal_error_t utp_context_process_ntrs_address_update_timer(utp_context_t* context, uint64_t now_us);
@@ -5425,7 +5426,8 @@ static utp_internal_error_t utp_context_on_zero_rtt_packet(utp_context_t* contex
 /** @brief 严格处理零 CID 半连接包；未知消息按长度跳过，已知消息仅匹配当前关联后生效。 */
 static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* context, const utp_packet_header_t* header,
                                                              const uint8_t* payload, size_t payload_length,
-                                                             const utp_address_t* peer, uint64_t now_us)
+                                                             const utp_address_t* peer, const utp_address_t* local,
+                                                             uint64_t now_us)
 {
     uint8_t seen_messages[UINT8_MAX + 1u] = {0};
     bool    ntrs_ping_seen                = false;
@@ -5746,6 +5748,9 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                         slot->rendezvous_path_feedback  = true;
                         slot->connection.peer           = *peer;
                         slot->connection.candidate_peer = *peer;
+                        if (local != NULL && local->family != UTP_ADDRESS_FAMILY_UNSPECIFIED) {
+                            slot->connection.local = *local;
+                        }
                         utp_context_endpoint_from_address(&slot->connect_attempt.remote, peer);
                         (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
                         error = utp_context_send_rendezvous_initials_to_peer(context, slot, peer);
@@ -5800,7 +5805,7 @@ static utp_internal_error_t utp_context_dispatch_packet(utp_context_t* context, 
         }
         // 半连接报文必须在 CID 查表前分流；非法报文按协议静默丢弃。
         (void)utp_context_on_rendezvous_packet(context, &header, packet + UTP_PACKET_HEADER_SIZE, header.payload_length,
-                                               peer, now_us);
+                                               peer, local, now_us);
         return UTP_INTERNAL_ERROR_OK;
     }
     if (packet_length != UTP_PACKET_HEADER_SIZE + header.payload_length || header.packet_number == 0u) {
@@ -6579,7 +6584,12 @@ utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint1
         *out_port = local.port;
     }
     context->bound_address = local;
-    utp_context_remember_local_candidate(context, &local);
+    if (utp_context_address_is_unspecified(&local)) {
+        context->local_candidate_count = (uint8_t)utp_address_collect_local_candidates(
+            local.family, local.port, ifname, context->local_candidates, UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES);
+    } else {
+        utp_context_remember_local_candidate(context, &local);
+    }
     utp_context_log(context, UTP_LOG_LEVEL_INFO, "udp socket bound");
     return UTP_STATUS_OK;
 }

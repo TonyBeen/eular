@@ -36,6 +36,9 @@ utp_internal_error_t utp_address_to_sockaddr(const utp_address_t* address, struc
                                              size_t* storage_length);
 bool                 utp_address_equal(const utp_address_t* left, const utp_address_t* right);
 bool                 utp_address_is_unspecified_ipv6(const utp_address_t* address);
+/** @brief 枚举可用于本地出站的同族单播地址，优先覆盖不同接口和稳定地址。 */
+size_t utp_address_collect_local_candidates(utp_address_family_t family, uint16_t port, const char* ifname,
+                                            utp_address_t* candidates, size_t capacity);
 /** @brief 将 IPv4 或 IPv6 地址格式化为 NUL 结尾文本，不包含端口和 scope ID。 */
 utp_internal_error_t utp_address_format(const utp_address_t* address, char* text, size_t capacity);
 

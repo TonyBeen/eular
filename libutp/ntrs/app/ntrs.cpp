@@ -325,6 +325,7 @@ private:
     bool enqueueControlOutput(const PreparedDatagram& datagram);
     bool enqueueWorker(const WorkerTask& task);
     void handleControlTask(const ControlTask& task);
+    void drainControlQueues();
     void onControlEvent();
     void onControlOutput(UdpSocket* socket);
     void onWorkerEvent();
@@ -2103,9 +2104,16 @@ void NtrsServer::onControlEvent()
     assert(shared_state_ != NULL);
     while (read(shared_state_->control_notify_fd, &discarded, sizeof(discarded)) < 0 && errno == EINTR) {
     }
+    drainControlQueues();
+}
+
+void NtrsServer::drainControlQueues()
+{
+    assert(shared_state_ != NULL);
     for (;;) {
         ControlTask task = {};
-        if (shared_state_->lifecycle_control_queue.pop(&task) || shared_state_->keepalive_control_queue.pop(&task)) {
+
+        if (shared_state_->keepalive_control_queue.pop(&task) || shared_state_->lifecycle_control_queue.pop(&task)) {
             handleControlTask(task);
             continue;
         }
@@ -2188,13 +2196,14 @@ void NtrsServer::onTimer()
 
 void NtrsServer::onControlTimer()
 {
-    const uint64_t now_ms = utp_ntrs_now_ms();
-
     assert(shared_state_ != NULL);
     if (g_stop_requested != 0 || shared_state_->fatal_socket_error.load(std::memory_order_relaxed)) {
         event_base_loopbreak(control_base_);
         return;
     }
+    // Worker 已投递的 PING/PONG 必须先刷新注册活跃时间，避免与本轮保活探测交错。
+    drainControlQueues();
+    const uint64_t now_ms = utp_ntrs_now_ms();
     for (std::unordered_map<std::string, CalibrationSession>::iterator entry = calibration_sessions_.begin();
          entry != calibration_sessions_.end();) {
         CalibrationSession& session = entry->second;

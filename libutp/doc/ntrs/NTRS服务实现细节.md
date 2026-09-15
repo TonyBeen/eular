@@ -41,7 +41,7 @@
 
 ## 5. 线程模型和队列
 
-每个 UDP Worker 负责收包、协议头/FrameRendezvous 解码和一次性请求处理；相同 attempt_id 通过哈希稳定分派到同一 Worker。Control 线程独占注册、反注册、保活、地址更新和 CalibrationSession 全局表；Worker 通过 MPSC 队列和 socketpair 通知 Control，Control 的结果再投递到拥有请求的 Worker。Worker 的 socket 发送使用本地输出队列，其他线程不直接改动其事件循环。
+每个 UDP Worker 负责收包、协议头/FrameRendezvous 解码和一次性请求处理；相同 attempt_id 通过哈希稳定分派到同一 Worker。Control 线程独占注册、反注册、保活、地址更新和 CalibrationSession 全局表；Worker 通过 MPSC 队列和一对共享 socketpair 通知 Control，Control 的结果再投递到拥有请求的 Worker。Control 在保活扫描前优先排空 PING/PONG 队列，已到达 Worker 的保活包先刷新注册活跃时间，避免双方同时到期时发送冗余 PING。Worker 的 socket 发送使用本地输出队列，其他线程不直接改动其事件循环。
 
 队列容量是启动参数。满时丢弃新的可重试请求并记录日志；注册、反注册和保活任务不能静默丢弃，应用层应通过重试/超时观察结果。socketpair 通知写失败、socket 非 WOULD_BLOCK 致命错误和 event loop 启动失败记录错误码后退出进程，由外部服务管理器重启。
 

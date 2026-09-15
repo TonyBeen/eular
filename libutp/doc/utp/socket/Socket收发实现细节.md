@@ -11,6 +11,12 @@
 - 出站 PacketOut 携带显式 destination 时按该地址发送，否则使用 Connection 当前 peer。
 - 本地地址信息用于多网卡和 IPv6 scope 选择，不能用 endpoint 文本替代完整地址比较。
 
-## 3. 错误处理
+## 3. 本地候选采集
+
+`utp_context_bind()` 绑定明确 IP 时只记录该地址。绑定 ANY 时，它调用 socket 地址模块枚举已启用且链路可用的同族单播地址；loopback、未指定地址、IPv6 link-local 和 multicast 不作为 Rendezvous 候选。
+
+候选总数保持协议上限四个。选择先覆盖每个接口的最佳地址，再用剩余位置补充地址。Linux 读取 rtnetlink 的 IPv6 地址 flags：稳定全球单播地址优先，temporary 及 ULA 依次降级，deprecated、tentative 和 DAD failed 地址排除。IPv6 候选保留接口 index，出站时通过 `IPV6_PKTINFO` 固定源地址与接口。
+
+## 4. 错误处理
 
 `WOULD_BLOCK` 只表示当前 I/O 时机不可用，保留队列并等待统一 writable 事件。`EMSGSIZE` 由 MTU 探测路径消费；其他 socket 致命错误映射为内部错误，由上层统一处理。
