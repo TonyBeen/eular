@@ -1,22 +1,25 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -Eeuo pipefail
+
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 INSTALL_ROOT="${NTRS_INSTALL_ROOT:-/opt/eular/ntrs}"
 STATE_ROOT="${NTRS_STATE_ROOT:-/var/lib/eular-ntrs}"
 LOG_ROOT="${NTRS_LOG_ROOT:-/var/log/eular-ntrs}"
 RELEASE_ROOT="${INSTALL_ROOT}/releases"
-CURRENT_LINK="${INSTALL_ROOT}/current"
+CURRENT_ROOT="${INSTALL_ROOT}/current"
 
 readonly SERVICES=(ntrs natd_hub natd_node)
 
 usage() {
     cat <<'EOF'
 Usage:
-  deploy_ntrs.sh install --url URL [--version VERSION]
-  deploy_ntrs.sh start SERVICE [-- SERVICE_ARGS...]
+  deploy_ntrs.sh install SERVICE [--url URL] [--version VERSION]
+  deploy_ntrs.sh install all [--version VERSION]
+  deploy_ntrs.sh start SERVICE [SERVICE_ARGS...]
   deploy_ntrs.sh stop SERVICE|all
-  deploy_ntrs.sh restart SERVICE [-- SERVICE_ARGS...]
+  deploy_ntrs.sh restart SERVICE [SERVICE_ARGS...]
   deploy_ntrs.sh status SERVICE|all
 
 Environment:
@@ -24,11 +27,16 @@ Environment:
   NTRS_STATE_ROOT    PID/state directory (default: /var/lib/eular-ntrs)
   NTRS_LOG_ROOT      Log directory (default: /var/log/eular-ntrs)
 
+When SERVICE is not installed, start downloads its binary from the built-in URL
+before launching it. Service stdout and stderr are appended to SERVICE.log.
+When SERVICE_ARGS contains -h or --help, the service runs in the foreground.
+
 Examples:
-  sudo ./tools/deploy_ntrs.sh install --url https://host/releases/ntrs-linux.tar.gz
-  sudo ./tools/deploy_ntrs.sh start ntrs -- -a 0.0.0.0 -p 6600 -w 4
-  sudo ./tools/deploy_ntrs.sh start natd_hub -- --listen 0.0.0.0:7700 -i eth0
-  sudo ./tools/deploy_ntrs.sh start natd_node -- --hub hub.example.com:7700 --node-id node-1 -i eth0
+  sudo ./tools/deploy_ntrs.sh install ntrs
+  sudo ./tools/deploy_ntrs.sh install all
+  sudo ./tools/deploy_ntrs.sh start ntrs -a 0.0.0.0 -p 6600 -w 4
+  sudo ./tools/deploy_ntrs.sh start natd_hub --listen 0.0.0.0:7700 -i eth0
+  sudo ./tools/deploy_ntrs.sh start natd_node --hub hub.example.com:7700 --node-id node-1 -i eth0
 EOF
 }
 
@@ -54,7 +62,16 @@ service_log_file() {
 
 service_binary() {
     case "$1" in
-        ntrs|natd_hub|natd_node) printf '%s/%s\n' "$CURRENT_LINK" "$1" ;;
+        ntrs|natd_hub|natd_node) printf '%s/%s\n' "$CURRENT_ROOT" "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
+service_url() {
+    case "$1" in
+        ntrs) printf '%s\n' 'https://www.heular.cn:1443/filebrowser/api/public/dl/7SNy23Ou/ntrs/ntrs' ;;
+        natd_node) printf '%s\n' 'https://www.heular.cn:1443/filebrowser/api/public/dl/_jxpBwuP/ntrs/natd_node' ;;
+        natd_hub) printf '%s\n' 'https://www.heular.cn:1443/filebrowser/api/public/dl/AuGj1Pyz/ntrs/natd_hub' ;;
         *) return 1 ;;
     esac
 }
@@ -72,16 +89,40 @@ download_file() {
     fi
 }
 
+install_one() {
+    local service="$1"
+    local url="$2"
+    local version="$3"
+    local temp_dir
+    local release_dir
+    local binary_path
+
+    is_service "$service" || die "unknown service: $service"
+    mkdir -p "$RELEASE_ROOT/$service" "$STATE_ROOT" "$LOG_ROOT" "$CURRENT_ROOT"
+    temp_dir="$(mktemp -d "${STATE_ROOT}/download.XXXXXX")"
+    release_dir="${RELEASE_ROOT}/${service}/${version}"
+    binary_path="${temp_dir}/${service}"
+    [[ ! -e "$release_dir" ]] || die "release already exists: $release_dir"
+
+    printf 'Downloading %s from %s\n' "$service" "$url"
+    download_file "$url" "$binary_path"
+    [[ -s "$binary_path" ]] || die "downloaded binary is empty: $service"
+    mkdir -p "$release_dir"
+    install -m 0755 "$binary_path" "${release_dir}/${service}"
+    chmod 0755 "${release_dir}/${service}"
+    ln -sfn "${release_dir}/${service}" "${CURRENT_ROOT}/${service}"
+    rm -rf "$temp_dir"
+    printf 'Installed %s release %s at %s\n' "$service" "$version" "$release_dir"
+}
+
 install_release() {
+    local service="${1:-}"
     local url=''
     local version="$(date -u +%Y%m%d%H%M%S)"
     local option
-    local value
-    local temp_dir
-    local archive
-    local release_dir
-    local binary
-    local source
+
+    [[ -n "$service" ]] || die 'install requires SERVICE or all'
+    shift
 
     while (($# > 0)); do
         option="$1"
@@ -100,38 +141,17 @@ install_release() {
             *) die "unknown install option: $option" ;;
         esac
     done
-    [[ -n "$url" ]] || die 'install requires --url URL'
     [[ "$version" =~ ^[A-Za-z0-9._-]+$ ]] || die 'version contains unsupported characters'
-
-    mkdir -p "$RELEASE_ROOT" "$STATE_ROOT" "$LOG_ROOT"
-    temp_dir="$(mktemp -d "${STATE_ROOT}/download.XXXXXX")"
-    trap 'rm -rf "${temp_dir:-}"' EXIT
-    archive="${temp_dir}/release.tar"
-    release_dir="${RELEASE_ROOT}/${version}"
-
-    printf 'Downloading %s\n' "$url"
-    download_file "$url" "$archive"
-    mkdir -p "${temp_dir}/extract"
-    tar -xf "$archive" -C "${temp_dir}/extract"
-    [[ ! -e "$release_dir" ]] || die "release already exists: $release_dir"
-    mkdir -p "$release_dir"
-
-    for binary in "${SERVICES[@]}"; do
-        source="$(find "${temp_dir}/extract" -type f -name "$binary" -print -quit)"
-        [[ -n "$source" ]] || die "release does not contain required binary: $binary"
-        install -m 0755 "$source" "${release_dir}/${binary}"
-    done
-    for binary in nat_punch ntrs_natc; do
-        source="$(find "${temp_dir}/extract" -type f -name "$binary" -print -quit)"
-        if [[ -n "$source" ]]; then
-            install -m 0755 "$source" "${release_dir}/${binary}"
-        fi
-    done
-    chmod 0755 "${release_dir}"/*
-    ln -sfn "$release_dir" "$CURRENT_LINK"
-    rm -rf "$temp_dir"
-    trap - EXIT
-    printf 'Installed release %s at %s\n' "$version" "$release_dir"
+    if [[ "$service" == all ]]; then
+        [[ -z "$url" ]] || die '--url can only be used when installing one service'
+        for service in "${SERVICES[@]}"; do
+            install_one "$service" "$(service_url "$service")" "$version"
+        done
+        return 0
+    fi
+    is_service "$service" || die "unknown service: $service"
+    [[ -n "$url" ]] || url="$(service_url "$service")"
+    install_one "$service" "$url" "$version"
 }
 
 read_pid() {
@@ -165,15 +185,9 @@ daemon() {
 
     shift
     is_service "$service" || die "unknown service: $service"
-    while (($# > 0)); do
-        if [[ "$1" == '--' ]]; then
-            shift
-            break
-        fi
-        service_args+=("$1")
-        shift
-    done
-    service_args+=("$@")
+    if (($# > 0)); then
+        service_args=("$@")
+    fi
 
     binary="$(service_binary "$service")"
     [[ -x "$binary" ]] || die "missing executable: $binary; run install first"
@@ -197,10 +211,16 @@ daemon() {
     trap 'exit 143' TERM INT
 
     printf '%s supervisor started: %s' "$(date -u +%FT%TZ)" "$binary"
-    printf ' %q' "${service_args[@]}"
+    if ((${#service_args[@]} > 0)); then
+        printf ' %q' "${service_args[@]}"
+    fi
     printf '\n'
     while :; do
-        "$binary" "${service_args[@]}" &
+        if ((${#service_args[@]} > 0)); then
+            "$binary" "${service_args[@]}" &
+        else
+            "$binary" &
+        fi
         child_pid="$!"
         set +e
         wait "$child_pid"
@@ -226,17 +246,34 @@ start_service() {
     if is_running "$service"; then
         die "$service is already running"
     fi
+    if [[ ! -x "$(service_binary "$service")" ]]; then
+        install_release "$service"
+    fi
     pid_file="$(service_pid_file "$service")"
     rm -f "$pid_file"
-    nohup "$0" daemon "$service" -- "$@" >/dev/null 2>&1 &
+    nohup /bin/bash "$SCRIPT_PATH" daemon "$service" "$@" >/dev/null 2>&1 &
     for _ in {1..20}; do
-        if pid="$(read_pid "$service" 2>/dev/null || true)"; then
+        pid="$(read_pid "$service" 2>/dev/null || true)"
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             printf '%s started, supervisor pid=%s, log=%s\n' "$service" "$pid" "$(service_log_file "$service")"
             return 0
         fi
         sleep 0.1
     done
     die "failed to start $service; inspect $(service_log_file "$service")"
+}
+
+run_service_foreground() {
+    local service="$1"
+    local binary
+
+    shift
+    is_service "$service" || die "unknown service: $service"
+    binary="$(service_binary "$service")"
+    if [[ ! -x "$binary" ]]; then
+        install_release "$service"
+    fi
+    "$binary" "$@"
 }
 
 stop_service() {
@@ -281,6 +318,8 @@ status_service() {
 main() {
     local command="${1:-}"
     local service
+    local help_requested
+    local service_arg
 
     [[ -n "$command" ]] || { usage; exit 2; }
     shift
@@ -290,8 +329,17 @@ main() {
             (($# > 0)) || die 'start requires a service'
             service="$1"
             shift
-            [[ "${1:-}" != '--' ]] || shift
-            start_service "$service" "$@"
+            help_requested=false
+            for service_arg in "$@"; do
+                case "$service_arg" in
+                    -h|--help) help_requested=true; break ;;
+                esac
+            done
+            if [[ "$help_requested" == true ]]; then
+                run_service_foreground "$service" "$@"
+            else
+                start_service "$service" "$@"
+            fi
             ;;
         stop|status)
             (($# == 1)) || die "$command requires SERVICE or all"
@@ -310,7 +358,6 @@ main() {
             (($# > 0)) || die 'restart requires a service'
             service="$1"
             shift
-            [[ "${1:-}" != '--' ]] || shift
             stop_service "$service"
             start_service "$service" "$@"
             ;;
