@@ -11,9 +11,9 @@ configure_file(cmake/utp_version.h.in "${UTP_C_GENERATED_INCLUDE_DIR}/utp_versio
 include(CTest)
 include(CheckSymbolExists)
 
-option(UTP_C_BUILD_TESTS "Build libutp C migration tests" ON)
+option(UTP_C_BUILD_TESTS "Build libutp C migration tests" OFF)
 option(UTP_C_BUILD_BENCHMARKS "Build libutp C migration benchmarks" OFF)
-option(UTP_C_BUILD_EXAMPLES "Build libutp C examples" OFF)
+option(UTP_C_BUILD_EXAMPLES "Build libutp C examples" ON)
 option(UTP_C_ENABLE_FORMAT_CHECK "Run the clang-format gate during the default build" OFF)
 option(UTP_C_ENABLE_SANITIZERS "Instrument libutp C and its tests with AddressSanitizer and UBSan" OFF)
 option(UTP_C_BUILD_FUZZERS "Build libFuzzer targets for packet-facing parsers" OFF)
