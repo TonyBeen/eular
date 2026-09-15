@@ -23,6 +23,12 @@ musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 ../build/ntrs-linux/ntrs -a 0.0.0.0 -p 6600
 ```
 
+IPv6 使用 `-6` 启动独立实例，默认监听 `[::]:6600`；IPv4 和 IPv6 可以在同一台机器上使用相同端口：
+
+```sh
+../build/ntrs-linux/ntrs -6 -p 6600
+```
+
 `natd_hub` 与 `natd_node` 的控制连接默认使用明文 TCP；同时传入 `--cert` 与 `--key` 时启用 TLS 1.3。Hub 默认监听
 `0.0.0.0:7700`，Node 默认监听 UDP probe `7800`、UDP change-port `7801` 和 TCP control `7900`：
 

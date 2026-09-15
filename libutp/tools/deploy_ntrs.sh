@@ -35,6 +35,7 @@ Examples:
   sudo ./tools/deploy_ntrs.sh install ntrs
   sudo ./tools/deploy_ntrs.sh install all
   sudo ./tools/deploy_ntrs.sh start ntrs -a 0.0.0.0 -p 6600 -w 4
+  sudo ./tools/deploy_ntrs.sh start ntrs -6 -p 6600 -w 4
   sudo ./tools/deploy_ntrs.sh start natd_hub --listen 0.0.0.0:7700 -i eth0
   sudo ./tools/deploy_ntrs.sh start natd_node --hub hub.example.com:7700 --node-id node-1 -i eth0
   sudo ./tools/deploy_ntrs.sh start natd_node -6 --hub hub.example.com:7700 --node-id node-1 -i eth0

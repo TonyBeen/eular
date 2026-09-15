@@ -21,6 +21,7 @@
 #include <event2/event.h>
 #include <event2/util.h>
 #include <ntrs/service.h>
+#include <netinet/in.h>
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <utils/CLI11.hpp>
@@ -525,6 +526,8 @@ bool NtrsServer::createSocket(UdpSocket* socket, const utp_ntrs_endpoint_t& endp
     const int reuse_port = 1;
     if ((socket->fd = ::socket(endpoint.family, SOCK_DGRAM, 0)) < 0 ||
         setsockopt(socket->fd, SOL_SOCKET, SO_REUSEPORT, &reuse_port, sizeof(reuse_port)) != 0 ||
+        (endpoint.family == AF_INET6 &&
+         setsockopt(socket->fd, IPPROTO_IPV6, IPV6_V6ONLY, &reuse_port, sizeof(reuse_port)) != 0) ||
         !utp_ntrs_socket_bind_interface(socket->fd, interface_name) ||
         bind(socket->fd, reinterpret_cast<const sockaddr*>(&socket_address), socket_length) != 0 ||
         evutil_make_socket_nonblocking(socket->fd) != 0 || socketpair(AF_UNIX, SOCK_DGRAM, 0, socket_pair) != 0) {
@@ -2529,7 +2532,7 @@ private:
 int main(int argc, char** argv)
 {
     CLI::App              cli{"NTRS rendezvous service"};
-    std::string           bind_address = "0.0.0.0";
+    std::string           bind_address;
     std::string           advertised_address;
     std::string           interface_name;
     std::vector<uint16_t> calibration_ports;
@@ -2541,6 +2544,7 @@ int main(int argc, char** argv)
     size_t                worker_queue_capacity   = k_worker_queue_capacity_default;
     uint16_t              port                    = 6600u;
     uint32_t              worker_count            = 1u;
+    bool                  use_ipv6                = false;
     cli.add_option("-a", bind_address, "Bind IP");
     cli.add_option("-e", advertised_address, "Advertised public IP");
     cli.add_option("-p", port, "Bind UDP port");
@@ -2553,8 +2557,11 @@ int main(int argc, char** argv)
     cli.add_option("--control-queue-capacity", control_queue_capacity, "Control task queue capacity");
     cli.add_option("--output-queue-capacity", output_queue_capacity, "Per UDP socket output queue capacity");
     cli.add_option("--worker-queue-capacity", worker_queue_capacity, "Per Worker task queue capacity");
+    cli.add_flag("-6", use_ipv6, "Use IPv6 only");
     CLI11_PARSE(cli, argc, argv);
 
+    if (bind_address.empty()) bind_address = use_ipv6 ? "::" : "0.0.0.0";
+    const uint8_t expected_family = use_ipv6 ? static_cast<uint8_t>(AF_INET6) : static_cast<uint8_t>(AF_INET);
     const std::string bind_endpoint_text = make_endpoint_text(bind_address, port);
     const std::string advertised_endpoint_text =
         make_endpoint_text(advertised_address.empty() ? bind_address : advertised_address, port);
@@ -2568,6 +2575,7 @@ int main(int argc, char** argv)
         control_queue_capacity < 2u || output_queue_capacity == 0u || worker_queue_capacity == 0u ||
         !utp_ntrs_endpoint_parse(bind_endpoint_text.c_str(), &bind_endpoint) ||
         !utp_ntrs_endpoint_parse(advertised_endpoint_text.c_str(), &advertised_endpoint) ||
+        bind_endpoint.family != expected_family || advertised_endpoint.family != expected_family ||
         !server.start(bind_endpoint, advertised_endpoint, interface_name.empty() ? NULL : interface_name.c_str(),
                       calibration_ports, static_cast<uint8_t>(public_candidate_count), registration_timeout_ms,
                       keepalive_interval_ms, static_cast<uint16_t>(worker_count), control_queue_capacity,

@@ -5,7 +5,7 @@
 
 ## 1. 服务和数据对象
 
-- `ntrs` 默认监听 UDP `0.0.0.0:6600`，只处理 Rendezvous/保活/候选协调，不转发业务数据。
+- `ntrs` 默认监听 UDP `0.0.0.0:6600`；使用 `-6` 时监听 IPv6 `[::]:6600`。IPv4 和 IPv6 使用独立实例，可在同一主机复用端口。服务只处理 Rendezvous/保活/候选协调，不转发业务数据。
 - `natd_hub` 默认监听 TCP `0.0.0.0:7700`，可通过 cert/key 为控制连接启用 TLS。
 - `natd_node` 默认提供 UDP probe `7800`、UDP change-port `7801`、TCP control `7900`。
 - `ntrs_natc` 是 NAT 探测客户端；`nat_punch` 是联调示例。
