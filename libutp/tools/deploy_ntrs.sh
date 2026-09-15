@@ -18,9 +18,9 @@ Usage:
   deploy_ntrs.sh install SERVICE [--url URL] [--version VERSION]
   deploy_ntrs.sh install all [--version VERSION]
   deploy_ntrs.sh start SERVICE [SERVICE_ARGS...]
-  deploy_ntrs.sh stop SERVICE|all
+  deploy_ntrs.sh stop SERVICE [-6]|all
   deploy_ntrs.sh restart SERVICE [SERVICE_ARGS...]
-  deploy_ntrs.sh status SERVICE|all
+  deploy_ntrs.sh status SERVICE [-6]|all
 
 Environment:
   NTRS_INSTALL_ROOT  Install root (default: /opt/eular/ntrs)
@@ -37,6 +37,7 @@ Examples:
   sudo ./tools/deploy_ntrs.sh start ntrs -a 0.0.0.0 -p 6600 -w 4
   sudo ./tools/deploy_ntrs.sh start natd_hub --listen 0.0.0.0:7700 -i eth0
   sudo ./tools/deploy_ntrs.sh start natd_node --hub hub.example.com:7700 --node-id node-1 -i eth0
+  sudo ./tools/deploy_ntrs.sh start natd_node -6 --hub hub.example.com:7700 --node-id node-1 -i eth0
 EOF
 }
 
@@ -50,6 +51,20 @@ is_service() {
         ntrs|natd_hub|natd_node) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+service_instance() {
+    local service="$1"
+    local service_arg
+
+    shift
+    for service_arg in "$@"; do
+        if [[ "$service_arg" == '-6' ]]; then
+            printf '%s-v6\n' "$service"
+            return 0
+        fi
+    done
+    printf '%s\n' "$service"
 }
 
 service_pid_file() {
@@ -174,6 +189,7 @@ is_running() {
 
 daemon() {
     local service="$1"
+    local instance
     local binary
     local pid_file
     local log_file
@@ -191,8 +207,13 @@ daemon() {
 
     binary="$(service_binary "$service")"
     [[ -x "$binary" ]] || die "missing executable: $binary; run install first"
-    pid_file="$(service_pid_file "$service")"
-    log_file="$(service_log_file "$service")"
+    if ((${#service_args[@]} > 0)); then
+        instance="$(service_instance "$service" "${service_args[@]}")"
+    else
+        instance="$(service_instance "$service")"
+    fi
+    pid_file="$(service_pid_file "$instance")"
+    log_file="$(service_log_file "$instance")"
     mkdir -p "$STATE_ROOT" "$LOG_ROOT"
     printf '%s\n' "$$" > "$pid_file"
     exec >> "$log_file" 2>&1
@@ -227,7 +248,7 @@ daemon() {
         exit_code="$?"
         set -e
         child_pid=''
-        printf '%s child exited: service=%s status=%s\n' "$(date -u +%FT%TZ)" "$service" "$exit_code"
+        printf '%s child exited: service=%s status=%s\n' "$(date -u +%FT%TZ)" "$instance" "$exit_code"
         sleep "$restart_delay"
         if ((restart_delay < max_restart_delay)); then
             restart_delay=$((restart_delay * 2))
@@ -238,29 +259,31 @@ daemon() {
 
 start_service() {
     local service="$1"
+    local instance
     local pid
     local pid_file
 
     shift
     is_service "$service" || die "unknown service: $service"
-    if is_running "$service"; then
-        die "$service is already running"
+    instance="$(service_instance "$service" "$@")"
+    if is_running "$instance"; then
+        die "$instance is already running"
     fi
     if [[ ! -x "$(service_binary "$service")" ]]; then
         install_release "$service"
     fi
-    pid_file="$(service_pid_file "$service")"
+    pid_file="$(service_pid_file "$instance")"
     rm -f "$pid_file"
     nohup /bin/bash "$SCRIPT_PATH" daemon "$service" "$@" >/dev/null 2>&1 &
     for _ in {1..20}; do
-        pid="$(read_pid "$service" 2>/dev/null || true)"
+        pid="$(read_pid "$instance" 2>/dev/null || true)"
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            printf '%s started, supervisor pid=%s, log=%s\n' "$service" "$pid" "$(service_log_file "$service")"
+            printf '%s started, supervisor pid=%s, log=%s\n' "$instance" "$pid" "$(service_log_file "$instance")"
             return 0
         fi
         sleep 0.1
     done
-    die "failed to start $service; inspect $(service_log_file "$service")"
+    die "failed to start $instance; inspect $(service_log_file "$instance")"
 }
 
 run_service_foreground() {
@@ -278,40 +301,46 @@ run_service_foreground() {
 
 stop_service() {
     local service="$1"
+    local instance
     local pid
 
+    shift
     is_service "$service" || die "unknown service: $service"
-    if ! pid="$(read_pid "$service" 2>/dev/null)"; then
-        printf '%s is not running\n' "$service"
+    instance="$(service_instance "$service" "$@")"
+    if ! pid="$(read_pid "$instance" 2>/dev/null)"; then
+        printf '%s is not running\n' "$instance"
         return 0
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$(service_pid_file "$service")"
-        printf '%s is not running\n' "$service"
+        rm -f "$(service_pid_file "$instance")"
+        printf '%s is not running\n' "$instance"
         return 0
     fi
     kill "$pid"
     for _ in {1..50}; do
         if ! kill -0 "$pid" 2>/dev/null; then
-            printf '%s stopped\n' "$service"
+            printf '%s stopped\n' "$instance"
             return 0
         fi
         sleep 0.1
     done
     kill -KILL "$pid" 2>/dev/null || true
-    rm -f "$(service_pid_file "$service")"
-    printf '%s stopped forcefully\n' "$service"
+    rm -f "$(service_pid_file "$instance")"
+    printf '%s stopped forcefully\n' "$instance"
 }
 
 status_service() {
     local service="$1"
+    local instance
     local pid
 
+    shift
     is_service "$service" || die "unknown service: $service"
-    if pid="$(read_pid "$service" 2>/dev/null)" && kill -0 "$pid" 2>/dev/null; then
-        printf '%s running supervisor_pid=%s log=%s\n' "$service" "$pid" "$(service_log_file "$service")"
+    instance="$(service_instance "$service" "$@")"
+    if pid="$(read_pid "$instance" 2>/dev/null)" && kill -0 "$pid" 2>/dev/null; then
+        printf '%s running supervisor_pid=%s log=%s\n' "$instance" "$pid" "$(service_log_file "$instance")"
     else
-        printf '%s stopped\n' "$service"
+        printf '%s stopped\n' "$instance"
     fi
 }
 
@@ -342,23 +371,38 @@ main() {
             fi
             ;;
         stop|status)
-            (($# == 1)) || die "$command requires SERVICE or all"
+            (($# >= 1 && $# <= 2)) || die "$command requires SERVICE, optional -6, or all"
             service="$1"
+            shift
             if [[ "$service" == all ]]; then
+                (($# == 0)) || die "$command all does not accept -6"
                 for service in "${SERVICES[@]}"; do
-                    if [[ "$command" == stop ]]; then stop_service "$service"; else status_service "$service"; fi
+                    if [[ "$command" == stop ]]; then
+                        stop_service "$service"
+                    else
+                        status_service "$service"
+                    fi
+                done
+                for service in natd_hub natd_node; do
+                    if [[ "$command" == stop ]]; then
+                        stop_service "$service" -6
+                    else
+                        status_service "$service" -6
+                    fi
                 done
             elif [[ "$command" == stop ]]; then
-                stop_service "$service"
+                (($# == 0 || ( $# == 1 && "$1" == '-6' ))) || die "$command accepts only -6"
+                stop_service "$service" "$@"
             else
-                status_service "$service"
+                (($# == 0 || ( $# == 1 && "$1" == '-6' ))) || die "$command accepts only -6"
+                status_service "$service" "$@"
             fi
             ;;
         restart)
             (($# > 0)) || die 'restart requires a service'
             service="$1"
             shift
-            stop_service "$service"
+            stop_service "$service" "$@"
             start_service "$service" "$@"
             ;;
         daemon)
