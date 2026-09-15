@@ -1,10 +1,9 @@
 # libutp C Migration Workspace
 
-This directory contains the C11 implementation of libutp. Functional details,
-module ownership, and the migration mapping from the historical C++ code are
-documented in [../doc/功能实现细节.md](../doc/功能实现细节.md). The C headers and
-sources are the implementation authority; the historical C++ tree is not a
-runtime dependency.
+This directory contains the C11 implementation of libutp. Functional details
+and module ownership are documented in the [implementation documentation
+index](../doc/README.md). The C headers and sources are the implementation
+authority; the historical C++ tree is not a runtime dependency.
 
 The binding C11 design and code rules are in [STYLE.md](STYLE.md). They adapt
 the Google C++ Style Guide to C and add transport-specific memory, hot-path,
@@ -28,7 +27,7 @@ are implementation details and are not ABI contracts.
 - Callbacks receive explicit user data and must document event-loop affinity.
 - Allocation, parsing, and reassembly paths must have bounded memory limits.
 
-## Migration Order
+## Module Order
 
 1. Public status codes, configuration, opaque handles, and callback contracts.
 2. Small value modules: address parsing, time, packet headers, frame codecs,
@@ -36,10 +35,12 @@ are implementation details and are not ABI contracts.
 3. Crypto wrappers and key schedule with explicit cleanup.
 4. Socket, event-loop, memory-manager, congestion-control, and scheduler code.
 5. Stream, connection, and context state machines.
-6. C API parity tests, integration tests, sanitizers, and performance checks.
+6. C API tests, integration tests, sanitizers, and performance checks.
 
-The C library starts at semantic version 1.0.0. Its public API is still only a
-build and ABI probe and is not the final public API.
+The public C API is implemented in `include/utp/` and used by the examples and
+tests. It is still evolving, so applications should compile against the
+headers and check `utp_version()` rather than treating internal structures as
+an ABI.
 
 ## Container Policy
 

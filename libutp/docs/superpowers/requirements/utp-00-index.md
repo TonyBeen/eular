@@ -1,8 +1,9 @@
 # utp 现有实现需求 — 索引 / 依赖图 / 统一 spec 拆分
 
 - 日期:2026-07-27
-- 来源:反推自 `cpp/`(**代码为唯一 ground truth**),`doc/` 仅交叉参考。
-- **目标已定:用 C11 在 `c/` 重写传输核心**(不再改 `cpp/`),再 C++ 薄封装。本 12 份需求 = **C 要复刻的行为蓝图**,非 cpp 补丁清单。
+- 状态：历史迁移索引快照，不是当前实现状态或排期依据。
+- 来源：历史上反推自 `cpp/`；该目录不再是当前实现的 ground truth。
+- 当前实现以 `c/` C11 源码和 `doc/` 模块文档为准。本目录的 12 份需求保留为迁移过程和协议决策参考，不能作为当前 C API、配置或实现状态的直接说明。
 - **单一入口见 [`../00-C-IMPLEMENTATION-ROADMAP.md`](../00-C-IMPLEMENTATION-ROADMAP.md)**(总纲 + 决策汇总 + 迁移顺序 + P0–P3 分期)。
 - 目的:把现有 utp 实现落成需求基线,消除 punch spec 里"复用现有 X"的二义性,并给出统一 spec 拆分。
 
@@ -46,12 +47,12 @@
 
 ---
 
-## 3. 统一 spec 拆分表
+## 3. 统一 spec 拆分表（历史快照）
 
 | Spec | 覆盖需求模块 | 状态 |
 |---|---|---|
-| **utp-core**(现有传输基线) | 01/02/03/04/05/06/09/11/12 | 已实现,本次反推为需求 |
-| **NTRS rendezvous**(`specs/2026-08-22-libutp-ntrs-rendezvous-half-association.md`) | 在 core 之上新增 RENDEZVOUS/FrameRendezvous、注册、保活、候选开洞与握手归并；**依赖并修改** 02/07/08/09/10/11 | 设计定稿，待实现 |
+| **utp-core**(现有传输基线) | 01/02/03/04/05/06/09/11/12 | 历史迁移期的实现基线 |
+| **NTRS rendezvous**(`specs/2026-08-22-libutp-ntrs-rendezvous-half-association.md`) | 在 core 之上新增 RENDEZVOUS/FrameRendezvous、注册、保活、候选开洞与握手归并；**依赖并修改** 02/07/08/09/10/11 | 历史设计定稿；当前状态见 `doc/ntrs/` 和 `doc/设计实现文档.md` |
 | **NTRS 认证** | 基于半连接重新设计服务端认证、凭据保护和根密钥轮换；不复用已删除的常驻连接握手。 | 待设计 |
 | **crypto**(后续) | 扩展 10:**peer 身份**/Ed25519/显式 Finished/全包加密+CID 混淆(`doc/全包加密...` 是其目标方案,未实现)。加密恢复 0-RTT 已在 utp-10 §10 确定三报文确认目标 | 未开始 |
 | **relay**(后续) | 双对称 / UDP 阻断兜底转发 | 未开始 |
@@ -76,7 +77,7 @@
 > 这些决策约束 C 实现，不要求修改冻结的 C++ 实现。汇总权威表见
 > [总纲 §5.1](../00-C-IMPLEMENTATION-ROADMAP.md)。
 
-**决策状态(2026-07-27 后续更新)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ 普通 1-RTT 和恢复 0-RTT 都由 client→server `HANDSHAKE_DONE` 驱动确认（详见 utp-10 §10.6）/ C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**,"须"改为 **C 实现要内建的目标**。
+**决策状态(2026-07-27 后续更新，历史)**:C1 ✅ 不设无条件 SO_REUSEPORT / C2 ✅ 普通 1-RTT 和恢复 0-RTT 都由 client→server `HANDSHAKE_DONE` 驱动确认（详见 utp-10 §10.6）/ C3 ✅ credit 3×MTU + 按候选地址额度 / C4 ✅ MTU floor 1280 / C5 ✅ 公共 API 直接返负错误码(C 原生,`utp_status_t` 已负值)。下文各条描述的"现状/矛盾"是 **cpp 的行为记录**和迁移期目标，不是当前实现状态。
 
 **C1 [P0] SO_REUSEPORT 与 scid 解复用矛盾**
 - 现状:`bind()` **无条件设 `SO_REUSEPORT`**(`socket/udp.cpp:225`);一个 Context = 一个 socket/端口(`context_impl.h:226`)。
@@ -118,9 +119,9 @@
 
 ---
 
-## 6. 下一步(C 迁移,详见 [总纲 §4/§7](../00-C-IMPLEMENTATION-ROADMAP.md))
+## 6. 当时的 C 迁移计划（历史快照）
 
-1. **C1–C5 已定稿并内建进总纲 §5.1**,实现时照做,无需再"收口 cpp"。
-2. **立即下一步 = 迁移第 2 步 proto 模块**(包头 + 帧编解码,总纲 §7 的 task #13–#19):纯值模块、零分配、可单测。
-3. 之后按迁移顺序:地址/时间 → crypto 封装 → socket/事件循环/拥塞/MTU → stream/connection/context。
-4. crypto / relay 各自另立 spec(依赖 utp-10 / 07);punch(P1)在 connection/context 就绪后叠加。
+1. C1–C5 是迁移期决策，保留用于追溯当时的设计取舍。
+2. 当时的迁移顺序是：proto → 地址/时间 → crypto 封装 → socket/事件循环/拥塞/MTU → stream/connection/context。
+3. crypto / relay 曾计划各自另立 spec；当前功能状态以 `doc/README.md` 和 C11 源码为准。
+> 维护边界：本目录中的部分需求文档来自旧 C++ 实现迁移过程。当前实现审核和公共行为以 `c/include/utp/`、`c/src/` 及 `doc/` 为准；文档中的 `cpp/` 引用仅表示历史来源，不能作为当前 API 或实现状态依据。

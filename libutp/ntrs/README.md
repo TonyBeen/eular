@@ -11,18 +11,27 @@ ctest --preset ntrs-linux
 
 Linux 服务产物固定在 `../build/ntrs-linux/`：
 
+- `ntrs`
 - `natd_hub`
 - `natd_node`
 
 musl 构建使用 `ntrs-musl` preset，产物固定在 `../build/ntrs-musl/`。
 
-服务端默认以明文 TCP 运行；同时传入 `--cert` 与 `--key` 时启用 TLS 1.3。Hub 默认监听
-`0.0.0.0:24000`，Node 默认监听 `0.0.0.0:24001`、`0.0.0.0:24002`、`0.0.0.0:24003`：
+`ntrs` 是 UDP Rendezvous 服务，默认监听 `0.0.0.0:24000`，不使用 cert/key：
+
+```sh
+../build/ntrs-linux/ntrs -a 0.0.0.0 -p 24000
+```
+
+`natd_hub` 与 `natd_node` 的控制连接默认使用明文 TCP；同时传入 `--cert` 与 `--key` 时启用 TLS 1.3。Hub 默认监听
+`0.0.0.0:24000`，Node 默认监听 UDP probe `24001`、UDP change-port `24002` 和 TCP control `24003`：
 
 ```sh
 ../build/ntrs-linux/natd_hub --interface eth0
 ../build/ntrs-linux/natd_node --hub hub.example.com:24000 --node-id node-a --interface eth0
 ```
+
+Node 也可以显式指定三个 endpoint：`-p/--probe`、`-q/--change-port` 和 `-C/--control`。
 
 `--node-id` 是 Node 在线上唯一的可读标识，长度为 1 至 128 字节；它直接写入控制协议并出现在服务日志中。
 

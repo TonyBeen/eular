@@ -1,14 +1,15 @@
 # libutp C 重写实现路线图(总纲 / 单一入口)
 
 - 日期:2026-07-27
-- 状态:实现前基线冻结。本文是**唯一入口**,串起 需求基线 / punch / NTRS 认证 / 全部设计决策 / c 迁移顺序 / P0–P3 分期。
-- 读法:先读本文 §0–§4 建立全局观,实现某模块时再点开 §5 决策表 + 对应需求文档。
+- 状态:历史迁移基线，已冻结。本文不描述当前实现状态、API 或构建产物。
+- 当前权威来源：`c/include/utp/`、`c/src/`、`doc/README.md` 及其模块文档；本文和同目录需求/spec 仅用于追溯当时的设计决策。
+- 读法:需要了解迁移背景时再读本文 §0–§4；实现或审核模块时不要按本文的未完成清单排期。
 
 ---
 
 ## 0. 为什么用 C 重写 + 本文定位
 
-**背景**:现有 `cpp/` 是完整、行为正确的传输实现,但其**异常处理 / 资源收尾无法挽救**(RAII + 异常控制流与网络热路径的确定性/有界性目标冲突)。因此决定:
+**背景（历史）**:当时的 `cpp/` 是传输行为参考，项目据此决定:
 
 1. **用 C11 在 `c/` 中重写传输核心**(不再改 `cpp/`)。
 2. `cpp/` 冻结为**行为 ground truth + 交叉参考**;12 份反推需求文档(utp-01..12)是"C 要复刻的行为蓝图"。
@@ -51,20 +52,20 @@
 | **C 工程规范** | `c/STYLE.md` / `c/ERRORS.md` / `c/README.md` | 强制约束 + 迁移顺序 + 容器策略 |
 | **C 数据拷贝策略** | `docs/superpowers/02-C-ZERO-COPY-COPY-REDUCTION.md` | `memcpy/memset` 使用边界、零拷贝演进顺序、当前可删项 |
 | **C 发送/关闭决策** | `docs/superpowers/specs/2026-07-31-c-send-composition-and-close.md` | close 屏障、transient strip、ACK+STREAM 合包、frame priority |
-| **交叉参考** | `cpp/`(冻结) / `doc/`(可能过时,以代码为准) | 行为 ground truth |
+| **历史交叉参考** | `cpp/`(冻结) / `doc/`(当时可能过时) | 仅用于追溯迁移依据，当前以 `c/` 和现行 `doc/` 为准 |
 
-12 需求模块速查:01 包/帧 · 02 连接生命周期/CID/HandshakeDone · 03 流 · 04 可靠性/ACK · 05 流控 · 06 拥塞(BBR/CUBIC) · 07 路径验证/抗放大 · 08 keepalive · 09 MTU/PLPMTUD · 10 加密/0-RTT · 11 socket · 12 公共 API/配置/错误码。
+12 需求模块速查（历史）:01 包/帧 · 02 连接生命周期/CID/HandshakeDone · 03 流 · 04 可靠性/ACK · 05 流控 · 06 拥塞(BBR/CUBIC) · 07 路径验证/抗放大 · 08 keepalive · 09 MTU/PLPMTUD · 10 加密/0-RTT · 11 socket · 12 公共 API/配置/错误码。
 
 ---
 
 ## 3. C 迁移顺序 × 需求模块映射
 
-来源:`c/README.md` 的 6 步迁移顺序。现状据 `c/src/` 实际文件。
+来源:`c/README.md` 的 6 步迁移顺序；以下状态是 2026-07-27 的历史快照，不代表当前 `c/src/` 状态。
 
 | 步 | 迁移顺序(README) | 对应需求 | 现状 |
 |---:|---|---|---|
 | 1 | 公共 status / 配置 / opaque handle / 回调契约 | utp-12 | **部分**:`status.h` 负值枚举、`log.h` 已在;config/handle/回调待补 |
-| 2 | 小值模块:地址、时间、**包头、帧编解码**、ACK 范围、容器 | utp-01, 04(range) | 容器**已完成**(allocator/buffer/hash/ring/range_set/error/log);**包头+帧编解码=立即下一步**(§7);地址/时间待补 |
+| 2 | 小值模块:地址、时间、**包头、帧编解码**、ACK 范围、容器 | utp-01, 04(range) | 历史快照：容器已完成，包头/帧编解码当时列为下一步，地址/时间待补 |
 | 3 | crypto 封装 + key schedule + 显式清零 | utp-10 | 未开始 |
 | 4 | socket / 事件循环 / 内存管理 / 拥塞 / 调度 | utp-06,07,09,11 | 未开始 |
 | 5 | stream / connection / context 状态机 | utp-02,03,05,08 | 未开始 |
@@ -85,7 +86,7 @@
 | **P2** | **NTRS 认证**:基于半连接重新冻结服务端认证、凭据保护与根密钥轮换协议 | 叠于 P0 crypto + P1 NTRS | P0,P1 | 信任根/MITM/降级/轮换/DNS 投毒 用例 |
 | **P3** | **punch 加密 + 0-RTT**:加密握手叠加打洞、统一 `connect0Rtt`(加密/非加密)、加密 0-RTT 放行、抗重放覆盖双路 | 叠于 P0 crypto | P0,P1 | 0-RTT 命中/降级/拒绝重放/加密门控(§13) |
 
-> **后续另立 spec(不在 P0–P3)**:crypto spec(peer↔peer 身份/抗主动 MITM、全包加密 + opaque CID 混淆);relay/TURN(双对称、UDP 阻断兜底转发)。
+> **后续另立 spec(不在 P0–P3，历史计划)**:crypto spec(peer↔peer 身份/抗主动 MITM、全包加密 + opaque CID 混淆);relay/TURN(双对称、UDP 阻断兜底转发)。
 
 **今晚额度限制说明**:P0 单独就是数周量级(从零实现可靠传输)。本路线图冻结后,实现按 §7 的 proto 模块里程碑起步,逐模块推进。
 
@@ -152,11 +153,11 @@
 
 ---
 
-## 7. 当前 c/ 状态 + 立即下一步:proto 模块里程碑
+## 7. 迁移期 c/ 状态与 proto 里程碑（历史快照）
 
-**下一步 = 迁移第 2 步的"包头 + 帧编解码"**(纯值模块、解析零分配、可单测,最适合独立推进)。已冻结的子任务(task #13–#19):
+以下内容是当时冻结的迁移任务记录，不是当前排期或实现缺口：
 
-> 2026-08-01 状态补丁：`c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。当前已具备 PacketIn 池化接收、PacketOut scatter/gather STREAM 发送、connection/context 基础建连、ACK/retransmission 基线、stream ring send buffer、PacketIn-backed recv fragment、连接级/流级 MAX_DATA 更新接收，以及 C 侧连接级/流级字节流控校验与应用消费后的 MAX_DATA / MAX_STREAM_DATA 排包。主动建连已支持 `timeout_ms` 驱动的握手期限、`retries` 驱动的新 CID 重试及握手期 close 的失败回调。发送侧已具备 Strict/DRR 多流调度，Context 固定模式，priority `0..7`，Strict 同级轮转与等待提升、DRR 权重量子/deficit 限制均已落地。路径验证已具备保守 active/candidate 双路径、候选地址 PATH_CHALLENGE/PATH_RESPONSE、单包目的地址、候选流量隔离、1500ms 三次重试和按候选地址的 `3*received + 3*MTU` 抗放大门控。Keepalive 已按默认 C++ 参数接入：活跃路径收包重置 30 秒空闲期，单帧 Ping 经 ACK 判活，1.5 秒间隔最多 3 次探测，超限本地中止。MTU 已接入 `PING + PADDING` 阶梯/二分探测、ACK/丢失/超时回灌和 Context 定时器；`mtu_max` 在 C 端可配置至 `65535`。UDP 在 Linux、Windows 与 macOS 均强制不分片；Darwin C11 严格模式须在包含 `<netinet/in.h>` 前定义 `__APPLE_USE_RFC_3542`，以暴露并使用 `IPV6_DONTFRAG`。单次 probe 丢失会退休旧 PacketOut、由状态机重新构造相同大小的新 probe；`mtu_probe_retries` 默认 `1`，本地 `EMSGSIZE`/`WSAEMSGSIZE` 不重试而立即收窄上界。黑洞会先把业务 MTU 降至 `mtu_min`，冷却后先验证 `mtu_base`：成功即恢复 base 并向上探测，最终失败仅在 `[mtu_min, mtu_base-1]` 二分。主动 `close` 不回调；对端 close 与本地传输异常经 `on_connection_error` 仅通知一次，对端关闭码 `0` 表示正常关闭，reason 使用回调期零拷贝视图。未来 MTU/路径探测仅在判定无可用路径并终止连接时触发此回调，单次探测丢失、MTU 降级和候选路径失败不触发。后续继续按 `docs/superpowers/requirements/` 的 03/04/05/06/09/11/12 补齐，不以 `doc/` 旧文档为准。
+> 2026-08-01 状态补丁（历史）：当时 `c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。该段只保留迁移过程中的阶段记录；当前能力和缺口请以 `doc/设计实现文档.md` 及模块文档为准。
 
 1. **wire 底座**:`src/internal/wire.h` 有界大端 read/write u8/u16/u32/u64(游标 + capacity 检查,溢出返 `INTERNAL_ERROR_OVERFLOW`)。
 2. **包头 + 常量**:`src/internal/proto.h` + `src/proto.c`:头 encode/decode、包类型(含 RENDEZVOUS)、版本、packno 上限、MTU floor 1280。
@@ -170,7 +171,7 @@
 
 ---
 
-## 8. 未决 / 后续
+## 8. 迁移期未决项（历史快照）
 
 - **crypto spec(独立)**:peer↔peer 身份、抗主动 MITM、显式 Finished/双向 key confirmation、`doc/全包加密与无状态可验证CID混淆方案.md` 的全包加密 + opaque CID(SipHash mask/tag)—— 均**未实现**,是目标架构。加密恢复 0-RTT 的三报文确认规则已在 `utp-10` §10 另行确定。
 - **relay/TURN spec(独立)**:双对称 NAT、UDP 阻断兜底转发。
