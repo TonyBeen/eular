@@ -391,10 +391,14 @@ main() {
                     fi
                 done
             elif [[ "$command" == stop ]]; then
-                (($# == 0 || ( $# == 1 && "$1" == '-6' ))) || die "$command accepts only -6"
+                if (($# == 1)) && [[ "$1" != '-6' ]]; then
+                    die "$command accepts only -6"
+                fi
                 stop_service "$service" "$@"
             else
-                (($# == 0 || ( $# == 1 && "$1" == '-6' ))) || die "$command accepts only -6"
+                if (($# == 1)) && [[ "$1" != '-6' ]]; then
+                    die "$command accepts only -6"
+                fi
                 status_service "$service" "$@"
             fi
             ;;
