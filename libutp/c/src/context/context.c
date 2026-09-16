@@ -3746,7 +3746,11 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
         slot->zero_rtt_early_data      = NULL;
         slot->zero_rtt_early_data_size = 0u;
         if (context->on_connected != NULL) {
+            utp_connection_enter_user_callback(&slot->connection);
             context->on_connected(&slot->connection, context->on_connected_user_data);
+            if (utp_connection_leave_user_callback(&slot->connection)) {
+                (void)utp_context_flush_connection(context, slot);
+            }
         }
     }
 }
