@@ -386,6 +386,8 @@ utp_internal_error_t utp_connection_set_stream_scheduler_mode(utp_connection_t* 
 /** @brief 设置对端首次创建流时的同步通知回调。 */
 void utp_connection_set_on_incoming_stream_internal(utp_connection_t* connection, utp_on_incoming_stream_fn callback,
                                                     void* user_data);
+/** @brief 同步通知尚未上报的对端发起流；每次回调均读取当前 callback 和用户数据。 */
+void utp_connection_notify_pending_incoming_streams(utp_connection_t* connection);
 /** @brief 设置本地恢复状态就绪时的同步通知回调。 */
 void utp_connection_set_session_token_callback(utp_connection_t* connection, utp_session_token_cb_t callback,
                                                void* user_data);

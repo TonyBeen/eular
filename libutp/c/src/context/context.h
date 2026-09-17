@@ -106,24 +106,26 @@ typedef struct utp_context_completed_attempt_entry {
 } utp_context_completed_attempt_entry_t;
 
 typedef struct utp_context_connection_slot {
-    utp_hash_node_t node;                                          // 按本端 CID 索引的哈希节点
-    utp_hash_node_t zero_rtt_attempt_node;                         // 未确认 0-RTT 按 attempt_id 索引的哈希节点
-    utp_hash_node_t attempt_node;                                  // 主动连接尝试按 attempt_id 索引的哈希节点
-    utp_hash_node_t punch_node;                                    // 主动打洞尝试按 punch_token 索引的哈希节点
-    TAILQ_ENTRY(utp_context_connection_slot) free_next;            // 空闲槽位链表节点
-    TAILQ_ENTRY(utp_context_connection_slot) terminal_error_next;  // 延迟终止事件链表节点
-    utp_connection_t           connection;                         // 槽位持有的连接对象
-    utp_connect_attempt_info_t connect_attempt;                    // 主动建连尝试描述
-    uint64_t                   connect_deadline_us;                // 主动连接超时截止时刻
-    utp_packet_in_t*           zero_rtt_early_packet;              // 被动 0-RTT 早数据 PacketIn 引用
-    size_t                     zero_rtt_early_wire_size;           // 早数据原始 UDP 长度
-    uint64_t                   zero_rtt_request_packet_number;     // 收到的 0-RTT 请求包号
-    uint64_t                   zero_rtt_request_received_us;       // 0-RTT 请求接收时刻
-    uint64_t                   zero_rtt_response_deadline_us;      // 0-RTT 响应重试截止时刻
-    uint64_t                   zero_rtt_expire_deadline_us;        // 被动 0-RTT 状态清理时刻
-    uint64_t                   zero_rtt_confirm_deadline_us;       // 主动端保留 early epoch 的截止时刻
-    uint64_t                   zero_rtt_amplification_rx_bytes;    // 0-RTT 防放大接收额度
-    uint64_t                   zero_rtt_amplification_tx_bytes;    // 0-RTT 防放大已发送字节
+    utp_hash_node_t node;                                                  // 按本端 CID 索引的哈希节点
+    utp_hash_node_t zero_rtt_attempt_node;                                 // 未确认 0-RTT 按 attempt_id 索引的哈希节点
+    utp_hash_node_t attempt_node;                                          // 主动连接尝试按 attempt_id 索引的哈希节点
+    utp_hash_node_t punch_node;                                            // 主动打洞尝试按 punch_token 索引的哈希节点
+    TAILQ_ENTRY(utp_context_connection_slot) free_next;                    // 空闲槽位链表节点
+    TAILQ_ENTRY(utp_context_connection_slot) terminal_error_next;          // 延迟终止事件链表节点
+    TAILQ_ENTRY(utp_context_connection_slot) connected_notification_next;  // 延迟连接成功通知链表节点
+    TAILQ_ENTRY(utp_context_connection_slot) error_notification_next;      // 延迟连接失败或断连通知链表节点
+    utp_connection_t           connection;                                 // 槽位持有的连接对象
+    utp_connect_attempt_info_t connect_attempt;                            // 主动建连尝试描述
+    uint64_t                   connect_deadline_us;                        // 主动连接超时截止时刻
+    utp_packet_in_t*           zero_rtt_early_packet;                      // 被动 0-RTT 早数据 PacketIn 引用
+    size_t                     zero_rtt_early_wire_size;                   // 早数据原始 UDP 长度
+    uint64_t                   zero_rtt_request_packet_number;             // 收到的 0-RTT 请求包号
+    uint64_t                   zero_rtt_request_received_us;               // 0-RTT 请求接收时刻
+    uint64_t                   zero_rtt_response_deadline_us;              // 0-RTT 响应重试截止时刻
+    uint64_t                   zero_rtt_expire_deadline_us;                // 被动 0-RTT 状态清理时刻
+    uint64_t                   zero_rtt_confirm_deadline_us;               // 主动端保留 early epoch 的截止时刻
+    uint64_t                   zero_rtt_amplification_rx_bytes;            // 0-RTT 防放大接收额度
+    uint64_t                   zero_rtt_amplification_tx_bytes;            // 0-RTT 防放大已发送字节
     uint8_t                    zero_rtt_session_token[UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE];  // 原始票据 payload
     uint8_t                    zero_rtt_resumption_psk[UTP_CRYPTO_RESUMPTION_PSK_SIZE];          // 早期 AEAD PSK
     uint8_t                    attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];  // 本次连接尝试的随机幂等键
@@ -137,6 +139,11 @@ typedef struct utp_context_connection_slot {
     utp_status_t               terminal_error_status;                        // 待投递的本地终止错误
     const char*                terminal_error_reason;                        // 待投递错误原因，只借用静态字符串
     size_t                     terminal_error_reason_length;                 // 待投递错误原因长度
+    uint8_t*                   error_notification_reason;                    // 延迟断连通知持有的关闭原因副本
+    size_t                     error_notification_reason_length;             // 延迟断连通知关闭原因长度
+    const char*                error_notification_message;                   // 延迟主动连接失败说明，只借用静态字符串
+    utp_status_t               error_notification_status;                    // 延迟通知状态
+    uint16_t                   error_notification_peer_error_code;           // 延迟通知对端关闭码
     int8_t                     connect_retries_remaining;                    // 主动连接剩余重试次数
     uint8_t                    zero_rtt_response_retries;                    // 0-RTT 响应已重试次数
     uint16_t                   zero_rtt_response_packet_count;
@@ -144,17 +151,22 @@ typedef struct utp_context_connection_slot {
     uint8_t                    zero_rtt_encryption_mode;  // 票据指定加密模式
     uint8_t                    target_peer_id_length;
     uint8_t                    rendezvous_candidate_count;
-    bool                       zero_rtt_early_fin : 1;         // 早期流数据是否带 FIN
-    bool                       zero_rtt_awaiting_accept : 1;   // 是否等待 on_new_connection 决策
-    bool                       zero_rtt_accepted : 1;          // 应用是否已接受 0-RTT
-    bool                       zero_rtt_response_active : 1;   // 是否维护 0-RTT 响应重传状态
-    bool                       zero_rtt_response_queued : 1;   // 0-RTT Handshake 响应是否已排队
-    bool                       zero_rtt_response_sent : 1;     // 0-RTT Handshake 响应是否已实际发送
-    bool                       zero_rtt_early_delivered : 1;   // 是否已将早数据投递给流
-    bool                       zero_rtt_confirm_active : 1;    // 主动端是否仍接受重复 0-RTT HANDSHAKE
-    bool                       used : 1;                       // 槽位是否正在使用
-    bool                       connected_reported : 1;         // 是否已调用 on_connected
-    bool                       connection_error_reported : 1;  // 是否已调用 connection error 回调
+    bool                       zero_rtt_early_fin : 1;              // 早期流数据是否带 FIN
+    bool                       zero_rtt_awaiting_accept : 1;        // 是否等待 on_new_connection 决策
+    bool                       zero_rtt_accepted : 1;               // 应用是否已接受 0-RTT
+    bool                       zero_rtt_response_active : 1;        // 是否维护 0-RTT 响应重传状态
+    bool                       zero_rtt_response_queued : 1;        // 0-RTT Handshake 响应是否已排队
+    bool                       zero_rtt_response_sent : 1;          // 0-RTT Handshake 响应是否已实际发送
+    bool                       zero_rtt_early_delivered : 1;        // 是否已将早数据投递给流
+    bool                       zero_rtt_confirm_active : 1;         // 主动端是否仍接受重复 0-RTT HANDSHAKE
+    bool                       used : 1;                            // 槽位是否正在使用
+    bool                       connected_reported : 1;              // 是否已调用 on_connected
+    bool                       connected_notification_pending : 1;  // 是否等待下一轮事件循环调用 on_connected
+    bool                       connection_error_reported : 1;       // 是否已调用 connection error 回调
+    bool                       error_notification_pending : 1;      // 是否等待下一轮事件循环调用错误回调
+    bool                       error_notification_is_connect : 1;   // 延迟事件是否为主动连接失败
+    bool                       error_notification_peer_initiated : 1;
+    bool                       release_after_error_notification : 1;
     bool                       connect_pending : 1;            // 是否有主动连接等待完成
     bool                       terminal_error_queued : 1;      // 是否已进入延迟终止事件队列
     bool                       terminal_error_suppressed : 1;  // 本地 close 是否取消该错误回调
@@ -162,6 +174,14 @@ typedef struct utp_context_connection_slot {
     bool                       rendezvous_path_feedback : 1;   // 已由 PUNCH 或握手包确认具体路径
 } utp_context_connection_slot_t;
 TAILQ_HEAD(utp_context_connection_slot_tailq, utp_context_connection_slot);
+
+typedef struct utp_context_connect_error_notification {
+    TAILQ_ENTRY(utp_context_connect_error_notification) next;
+    utp_connect_attempt_info_t attempt;
+    utp_status_t               status;
+    const char*                message;
+} utp_context_connect_error_notification_t;
+TAILQ_HEAD(utp_context_connect_error_notification_tailq, utp_context_connect_error_notification);
 
 typedef struct utp_context_rendezvous_forward_cache_entry {
     uint8_t  attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE];
@@ -208,13 +228,16 @@ struct utp_context {
     utp_hash_table_t                         rendezvous_punch_attempts;        // 已获取 token 的主动打洞尝试表
     struct utp_context_connection_slot_tailq free_connection_slots;            // 空闲连接槽位
     struct utp_context_connection_slot_tailq terminal_error_slots;             // 待调度边界投递的本地终止事件
-    utp_hash_table_t                         pending_incoming;                 // 等待 accept 的被动握手表
-    utp_hash_table_t                         pending_incoming_by_attempt;      // pending 握手 attempt 表
-    utp_hash_table_t                         completed_attempts;               // 已完成被动握手短期去重表
-    struct utp_context_pending_slot_tailq    free_pending_slots;               // 空闲 pending 槽位
-    uint64_t                                 next_nat_probe_packet_number;     // Context NAT 探测包号命名空间
-    uint64_t                                 next_rendezvous_packet_number;    // Context 半连接包号命名空间
-    utp_address_t                            local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];  // 已知本地候选地址
+    struct utp_context_connection_slot_tailq connected_notification_slots;     // 待下一轮事件循环投递的连接成功事件
+    struct utp_context_connection_slot_tailq error_notification_slots;  // 待下一轮事件循环投递的连接失败或断连事件
+    struct utp_context_connect_error_notification_tailq orphan_connect_error_notifications;
+    utp_hash_table_t                                    pending_incoming;               // 等待 accept 的被动握手表
+    utp_hash_table_t                                    pending_incoming_by_attempt;    // pending 握手 attempt 表
+    utp_hash_table_t                                    completed_attempts;             // 已完成被动握手短期去重表
+    struct utp_context_pending_slot_tailq               free_pending_slots;             // 空闲 pending 槽位
+    uint64_t                                            next_nat_probe_packet_number;   // Context NAT 探测包号命名空间
+    uint64_t                                            next_rendezvous_packet_number;  // Context 半连接包号命名空间
+    utp_address_t local_candidates[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];                // 已知本地候选地址
     utp_context_observed_address_t
                                  observed_addresses[UTP_CONTEXT_OBSERVED_ADDRESS_CAPACITY];  // 对端观察到的本端公网地址
     char                         peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 创建时复制的 Context 路由标识

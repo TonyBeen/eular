@@ -45,8 +45,13 @@ static void                 utp_context_disable_udp_write_event_if_idle(utp_cont
 static void                 utp_context_on_udp_writable(uint32_t events, void* user_data);
 static utp_internal_error_t utp_context_accept_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot);
 static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot);
+static void utp_context_finalize_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot);
 static void utp_context_release_pending_slot(utp_context_t* context, utp_context_pending_slot_t* slot);
 static void utp_context_report_connected(utp_context_t* context, utp_context_connection_slot_t* slot);
+static void utp_context_dispatch_connected_notifications(utp_context_t* context);
+static void utp_context_dispatch_error_notifications(utp_context_t* context);
+static void utp_context_queue_connect_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                            utp_status_t status, const char* message);
 static utp_internal_error_t utp_context_queue_session_token(utp_context_t*                 context,
                                                             utp_context_connection_slot_t* slot);
 static utp_internal_error_t utp_context_complete_zero_rtt_response(utp_context_t*                 context,
@@ -455,9 +460,7 @@ static void utp_context_invalidate_resumption_state(utp_context_t* context)
         connection->session_token_issued             = false;
         if (slot->connect_pending && (slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_TOKEN ||
                                       slot->connect_attempt.type == UTP_CONNECT_ATTEMPT_ZERO_RTT_STATE)) {
-            const utp_connect_attempt_info_t attempt = slot->connect_attempt;
-
-            utp_context_report_connect_error(context, UTP_STATUS_CANCELLED, "resumption key replaced", &attempt);
+            utp_context_queue_connect_error(context, slot, UTP_STATUS_CANCELLED, "resumption key replaced");
             utp_context_release_connection_slot(context, slot);
         }
     }
@@ -1051,26 +1054,36 @@ static utp_context_connection_slot_t* utp_context_alloc_connection_slot(utp_cont
     slot->target_peer_id[0]     = '\0';
     slot->target_peer_id_length = 0u;
     memset(slot->rendezvous_punch_token, 0, sizeof(slot->rendezvous_punch_token));
-    slot->terminal_error_status        = UTP_STATUS_OK;
-    slot->terminal_error_reason        = NULL;
-    slot->terminal_error_reason_length = 0u;
-    slot->zero_rtt_early_fin           = false;
-    slot->zero_rtt_awaiting_accept     = false;
-    slot->zero_rtt_accepted            = false;
-    slot->zero_rtt_response_active     = false;
-    slot->zero_rtt_response_queued     = false;
-    slot->zero_rtt_response_sent       = false;
-    slot->zero_rtt_early_delivered     = false;
-    slot->zero_rtt_confirm_active      = false;
-    slot->zero_rtt_encryption_mode     = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-    slot->used                         = true;
-    slot->connected_reported           = false;
-    slot->connection_error_reported    = false;
-    slot->connect_pending              = false;
-    slot->terminal_error_queued        = false;
-    slot->terminal_error_suppressed    = false;
-    slot->rendezvous_active            = false;
-    slot->rendezvous_path_feedback     = false;
+    slot->terminal_error_status              = UTP_STATUS_OK;
+    slot->terminal_error_reason              = NULL;
+    slot->terminal_error_reason_length       = 0u;
+    slot->error_notification_reason          = NULL;
+    slot->error_notification_reason_length   = 0u;
+    slot->error_notification_message         = NULL;
+    slot->error_notification_status          = UTP_STATUS_OK;
+    slot->error_notification_peer_error_code = 0u;
+    slot->zero_rtt_early_fin                 = false;
+    slot->zero_rtt_awaiting_accept           = false;
+    slot->zero_rtt_accepted                  = false;
+    slot->zero_rtt_response_active           = false;
+    slot->zero_rtt_response_queued           = false;
+    slot->zero_rtt_response_sent             = false;
+    slot->zero_rtt_early_delivered           = false;
+    slot->zero_rtt_confirm_active            = false;
+    slot->zero_rtt_encryption_mode           = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->used                               = true;
+    slot->connected_reported                 = false;
+    slot->connected_notification_pending     = false;
+    slot->connection_error_reported          = false;
+    slot->error_notification_pending         = false;
+    slot->error_notification_is_connect      = false;
+    slot->error_notification_peer_initiated  = false;
+    slot->release_after_error_notification   = false;
+    slot->connect_pending                    = false;
+    slot->terminal_error_queued              = false;
+    slot->terminal_error_suppressed          = false;
+    slot->rendezvous_active                  = false;
+    slot->rendezvous_path_feedback           = false;
     return slot;
 }
 
@@ -1131,7 +1144,7 @@ static void utp_context_unregister_connection_slot(utp_context_t* context, utp_c
     }
 }
 
-static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
+static void utp_context_finalize_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
 {
     assert(context != NULL);
     assert(slot != NULL);
@@ -1139,6 +1152,14 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
     if (slot->terminal_error_queued) {
         TAILQ_REMOVE(&context->terminal_error_slots, slot, terminal_error_next);
         slot->terminal_error_queued = false;
+    }
+    if (slot->connected_notification_pending) {
+        TAILQ_REMOVE(&context->connected_notification_slots, slot, connected_notification_next);
+        slot->connected_notification_pending = false;
+    }
+    if (slot->error_notification_pending) {
+        TAILQ_REMOVE(&context->error_notification_slots, slot, error_notification_next);
+        slot->error_notification_pending = false;
     }
     if (slot->punch_node.table == &context->rendezvous_punch_attempts) {
         (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
@@ -1150,11 +1171,12 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
     if (slot->connection.local_cid != 0u) {
         utp_connection_cleanup(&slot->connection);
     }
-    slot->connected_reported        = false;
-    slot->connection_error_reported = false;
-    slot->connect_deadline_us       = 0u;
-    slot->connect_retries_remaining = 0;
-    slot->connect_pending           = false;
+    slot->connected_reported             = false;
+    slot->connected_notification_pending = false;
+    slot->connection_error_reported      = false;
+    slot->connect_deadline_us            = 0u;
+    slot->connect_retries_remaining      = 0;
+    slot->connect_pending                = false;
     if (slot->zero_rtt_early_packet != NULL) {
         utp_packet_in_release(slot->zero_rtt_early_packet);
         slot->zero_rtt_early_packet = NULL;
@@ -1180,18 +1202,46 @@ static void utp_context_release_connection_slot(utp_context_t* context, utp_cont
     slot->terminal_error_status             = UTP_STATUS_OK;
     slot->terminal_error_reason             = NULL;
     slot->terminal_error_reason_length      = 0u;
-    slot->zero_rtt_early_fin                = false;
-    slot->zero_rtt_awaiting_accept          = false;
-    slot->zero_rtt_accepted                 = false;
-    slot->zero_rtt_response_active          = false;
-    slot->zero_rtt_response_queued          = false;
-    slot->zero_rtt_response_sent            = false;
-    slot->zero_rtt_early_delivered          = false;
-    slot->zero_rtt_confirm_active           = false;
-    slot->zero_rtt_encryption_mode          = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
-    slot->terminal_error_suppressed         = false;
-    slot->used                              = false;
+    utp_allocator_free(NULL, slot->error_notification_reason);
+    slot->error_notification_reason          = NULL;
+    slot->error_notification_reason_length   = 0u;
+    slot->error_notification_message         = NULL;
+    slot->error_notification_status          = UTP_STATUS_OK;
+    slot->error_notification_peer_error_code = 0u;
+    slot->zero_rtt_early_fin                 = false;
+    slot->zero_rtt_awaiting_accept           = false;
+    slot->zero_rtt_accepted                  = false;
+    slot->zero_rtt_response_active           = false;
+    slot->zero_rtt_response_queued           = false;
+    slot->zero_rtt_response_sent             = false;
+    slot->zero_rtt_early_delivered           = false;
+    slot->zero_rtt_confirm_active            = false;
+    slot->zero_rtt_encryption_mode           = UTP_CRYPTO_ENCRYPTION_MODE_NONE;
+    slot->terminal_error_suppressed          = false;
+    slot->error_notification_is_connect      = false;
+    slot->error_notification_peer_initiated  = false;
+    slot->release_after_error_notification   = false;
+    slot->used                               = false;
     TAILQ_INSERT_TAIL(&context->free_connection_slots, slot, free_next);
+}
+
+static void utp_context_release_connection_slot(utp_context_t* context, utp_context_connection_slot_t* slot)
+{
+    assert(context != NULL);
+    assert(slot != NULL);
+    assert(slot->used);
+    if (slot->error_notification_pending) {
+        slot->release_after_error_notification = true;
+        if (slot->punch_node.table == &context->rendezvous_punch_attempts) {
+            (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
+        }
+        if (slot->attempt_node.table == &context->connect_attempts_by_id) {
+            (void)utp_hash_table_remove(&context->connect_attempts_by_id, &slot->attempt_node);
+        }
+        utp_context_unregister_connection_slot(context, slot);
+        return;
+    }
+    utp_context_finalize_connection_slot(context, slot);
 }
 
 static bool utp_context_is_peer_protocol_error(utp_internal_error_t error)
@@ -2330,8 +2380,8 @@ static void utp_context_drain_terminal_errors(utp_context_t* context)
         slot->terminal_error_queued = false;
         if (!slot->terminal_error_suppressed) {
             if (slot->connect_pending && !utp_connection_is_connected(&slot->connection)) {
-                utp_context_report_connect_error(context, slot->terminal_error_status, slot->terminal_error_reason,
-                                                 &slot->connect_attempt);
+                utp_context_queue_connect_error(context, slot, slot->terminal_error_status,
+                                                slot->terminal_error_reason);
             } else {
                 utp_context_report_connection_error(context, slot, slot->terminal_error_status, 0u,
                                                     (const uint8_t*)slot->terminal_error_reason,
@@ -3729,10 +3779,10 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
 {
     assert(context != NULL);
     assert(slot != NULL);
-    if (!slot->connected_reported && utp_connection_is_connected(&slot->connection)) {
+    if (!slot->connected_reported && !slot->connected_notification_pending &&
+        utp_connection_is_connected(&slot->connection)) {
         slot->connect_pending     = false;
         slot->connect_deadline_us = 0u;
-        slot->connected_reported  = true;
         if (slot->punch_node.table == &context->rendezvous_punch_attempts) {
             (void)utp_hash_table_remove(&context->rendezvous_punch_attempts, &slot->punch_node);
         }
@@ -3746,11 +3796,37 @@ static void utp_context_report_connected(utp_context_t* context, utp_context_con
         slot->zero_rtt_early_data      = NULL;
         slot->zero_rtt_early_data_size = 0u;
         if (context->on_connected != NULL) {
-            utp_connection_enter_user_callback(&slot->connection);
-            context->on_connected(&slot->connection, context->on_connected_user_data);
-            if (utp_connection_leave_user_callback(&slot->connection)) {
-                (void)utp_context_flush_connection(context, slot);
-            }
+            slot->connected_notification_pending = true;
+            TAILQ_INSERT_TAIL(&context->connected_notification_slots, slot, connected_notification_next);
+        } else {
+            slot->connected_reported = true;
+        }
+    }
+}
+
+/** @brief 在握手收包路径返回后的事件循环边界调用应用连接成功回调。 */
+static void utp_context_dispatch_connected_notifications(utp_context_t* context)
+{
+    assert(context != NULL);
+    while (!TAILQ_EMPTY(&context->connected_notification_slots)) {
+        utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->connected_notification_slots);
+
+        TAILQ_REMOVE(&context->connected_notification_slots, slot, connected_notification_next);
+        slot->connected_notification_pending = false;
+        if (!slot->used || slot->connected_reported) {
+            continue;
+        }
+        slot->connected_reported = true;
+        if (context->on_connected == NULL) {
+            continue;
+        }
+        utp_connection_enter_user_callback(&slot->connection);
+        context->on_connected(&slot->connection, context->on_connected_user_data);
+        const bool flush = utp_connection_leave_user_callback(&slot->connection);
+
+        utp_connection_notify_pending_incoming_streams(&slot->connection);
+        if (flush) {
+            (void)utp_context_flush_connection(context, slot);
         }
     }
 }
@@ -3874,30 +3950,108 @@ static void utp_context_report_connection_error(utp_context_t* context, utp_cont
 {
     assert(context != NULL);
     assert(slot != NULL);
-    if (!slot->connection_error_reported) {
-        // reason 可能直接引用当前 PacketIn，必须在释放接收包之前同步完成回调。
-        const utp_connection_error_info_t info = {
-            status, peer_error_code, reason, reason_length, peer_initiated,
-        };
-
-        slot->connection_error_reported = true;
-        utp_context_log_close(context, slot, status, peer_error_code, peer_initiated);
-        if (context->on_connection_error != NULL) {
-            context->on_connection_error(&slot->connection, &info, context->on_connection_error_user_data);
+    if (slot->connection_error_reported || slot->error_notification_pending) {
+        return;
+    }
+    slot->connection_error_reported = true;
+    utp_context_log_close(context, slot, status, peer_error_code, peer_initiated);
+    if (context->on_connection_error == NULL) {
+        return;
+    }
+    if (reason_length != 0u) {
+        slot->error_notification_reason = utp_allocator_alloc(NULL, reason_length);
+        if (slot->error_notification_reason != NULL) {
+            memcpy(slot->error_notification_reason, reason, reason_length);
+            slot->error_notification_reason_length = reason_length;
         }
     }
+    slot->error_notification_status          = status;
+    slot->error_notification_peer_error_code = peer_error_code;
+    slot->error_notification_peer_initiated  = peer_initiated;
+    slot->error_notification_is_connect      = false;
+    slot->error_notification_pending         = true;
+    TAILQ_INSERT_TAIL(&context->error_notification_slots, slot, error_notification_next);
 }
 
 static void utp_context_report_connect_error(utp_context_t* context, utp_status_t status, const char* message,
                                              const utp_connect_attempt_info_t* attempt)
 {
+    utp_context_connect_error_notification_t* notification;
+
     assert(context != NULL);
     assert(attempt != NULL);
     if (context->on_connect_error == NULL) {
         return;
     }
-    context->on_connect_error(status, message == NULL ? utp_status_string(status) : message, attempt,
-                              context->on_connect_error_user_data);
+    notification = utp_allocator_alloc(NULL, sizeof(*notification));
+    if (notification == NULL) {
+        return;
+    }
+    notification->attempt = *attempt;
+    notification->status  = status;
+    notification->message = message == NULL ? utp_status_string(status) : message;
+    TAILQ_INSERT_TAIL(&context->orphan_connect_error_notifications, notification, next);
+}
+
+static void utp_context_queue_connect_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                            utp_status_t status, const char* message)
+{
+    assert(context != NULL);
+    assert(slot != NULL);
+    if (context->on_connect_error == NULL || slot->error_notification_pending) {
+        return;
+    }
+    slot->error_notification_status     = status;
+    slot->error_notification_message    = message == NULL ? utp_status_string(status) : message;
+    slot->error_notification_is_connect = true;
+    slot->error_notification_pending    = true;
+    TAILQ_INSERT_TAIL(&context->error_notification_slots, slot, error_notification_next);
+}
+
+static void utp_context_dispatch_error_notifications(utp_context_t* context)
+{
+    assert(context != NULL);
+    while (!TAILQ_EMPTY(&context->error_notification_slots)) {
+        utp_context_connection_slot_t* slot = TAILQ_FIRST(&context->error_notification_slots);
+
+        TAILQ_REMOVE(&context->error_notification_slots, slot, error_notification_next);
+        slot->error_notification_pending = false;
+        if (!slot->used) {
+            continue;
+        }
+        if (slot->error_notification_is_connect) {
+            if (context->on_connect_error != NULL) {
+                context->on_connect_error(slot->error_notification_status, slot->error_notification_message,
+                                          &slot->connect_attempt, context->on_connect_error_user_data);
+            }
+        } else if (context->on_connection_error != NULL) {
+            const utp_connection_error_info_t info = {
+                slot->error_notification_status,         slot->error_notification_peer_error_code,
+                slot->error_notification_reason,         slot->error_notification_reason_length,
+                slot->error_notification_peer_initiated,
+            };
+
+            context->on_connection_error(&slot->connection, &info, context->on_connection_error_user_data);
+        }
+        utp_allocator_free(NULL, slot->error_notification_reason);
+        slot->error_notification_reason        = NULL;
+        slot->error_notification_reason_length = 0u;
+        if (slot->release_after_error_notification) {
+            slot->release_after_error_notification = false;
+            utp_context_finalize_connection_slot(context, slot);
+        }
+    }
+    while (!TAILQ_EMPTY(&context->orphan_connect_error_notifications)) {
+        utp_context_connect_error_notification_t* notification =
+            TAILQ_FIRST(&context->orphan_connect_error_notifications);
+
+        TAILQ_REMOVE(&context->orphan_connect_error_notifications, notification, next);
+        if (context->on_connect_error != NULL) {
+            context->on_connect_error(notification->status, notification->message, &notification->attempt,
+                                      context->on_connect_error_user_data);
+        }
+        utp_allocator_free(NULL, notification);
+    }
 }
 
 static uint64_t utp_context_connect_deadline(uint64_t now_us, uint32_t timeout_ms)
@@ -4142,7 +4296,7 @@ static void utp_context_fail_pending_connect(utp_context_t* context, utp_context
     assert(context != NULL);
     assert(slot != NULL);
     utp_context_log(context, UTP_LOG_LEVEL_WARNING, "connection attempt failed");
-    utp_context_report_connect_error(context, status, message, &slot->connect_attempt);
+    utp_context_queue_connect_error(context, slot, status, message);
     utp_context_release_connection_slot(context, slot);
 }
 
@@ -4209,6 +4363,13 @@ static uint64_t utp_context_next_deadline(const utp_context_t* context, uint64_t
     assert(context != NULL);
     assert(now_us != 0u);
     if (!TAILQ_EMPTY(&context->terminal_error_slots)) {
+        return now_us;
+    }
+    if (!TAILQ_EMPTY(&context->connected_notification_slots)) {
+        return now_us;
+    }
+    if (!TAILQ_EMPTY(&context->error_notification_slots) ||
+        !TAILQ_EMPTY(&context->orphan_connect_error_notifications)) {
         return now_us;
     }
     if (context->nat_probe.active) {
@@ -5891,7 +6052,6 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
                 error = messages[index].error;
             }
             utp_packet_in_release(packet_ins[index]);
-            utp_context_drain_terminal_errors(context);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 utp_internal_log_error(&context->logger, &context->tag, error, "udp packet handling failed");
             }
@@ -5932,7 +6092,6 @@ static void utp_context_on_udp_readable(uint32_t events, void* user_data)
         if (now_us != 0u) {
             utp_internal_error_t refresh_error;
 
-            utp_context_drain_terminal_errors(context);
             refresh_error = utp_context_refresh_timer(context, now_us);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 error = refresh_error;
@@ -6019,7 +6178,6 @@ static void utp_context_on_udp_writable(uint32_t events, void* user_data)
             }
         }
     }
-    utp_context_drain_terminal_errors(context);
     utp_context_disable_udp_write_event_if_idle(context);
     {
         const utp_internal_error_t error = utp_context_refresh_timer(context, utp_context_now_us());
@@ -6222,6 +6380,9 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
     }
     now_us = utp_context_now_us();
     utp_context_purge_completed_attempts(context, now_us);
+    utp_context_dispatch_connected_notifications(context);
+    utp_context_drain_terminal_errors(context);
+    utp_context_dispatch_error_notifications(context);
     error = utp_context_process_connection_timers(context, now_us);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_process_pending_timers(context, now_us);
@@ -6235,7 +6396,6 @@ static void utp_context_timer_callback(uint32_t events, void* user_data)
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_process_ntrs_address_update_timer(context, now_us);
     }
-    utp_context_drain_terminal_errors(context);
     {
         const utp_internal_error_t refresh_error = utp_context_refresh_timer(context, utp_context_now_us());
 
@@ -6281,6 +6441,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->zero_rtt_replay               = (utp_hash_table_t){0};
     TAILQ_INIT(&context->free_connection_slots);
     TAILQ_INIT(&context->terminal_error_slots);
+    TAILQ_INIT(&context->connected_notification_slots);
+    TAILQ_INIT(&context->error_notification_slots);
+    TAILQ_INIT(&context->orphan_connect_error_notifications);
     TAILQ_INIT(&context->free_pending_slots);
     utp_event_init(&context->udp_event);
     utp_event_init(&context->udp_write_event);
@@ -6517,7 +6680,7 @@ void utp_context_destroy(utp_context_t* context)
             if (!slot->terminal_error_queued) {
                 utp_context_send_destroy_close(context, slot);
             }
-            utp_context_release_connection_slot(context, slot);
+            utp_context_finalize_connection_slot(context, slot);
         }
         utp_hash_iter_init(&iter);
         while ((node = utp_hash_iter_next(&context->pending_incoming, &iter)) != NULL) {
@@ -6535,6 +6698,13 @@ void utp_context_destroy(utp_context_t* context)
 
             TAILQ_REMOVE(&context->free_connection_slots, slot, free_next);
             utp_allocator_free(NULL, slot);
+        }
+        while (!TAILQ_EMPTY(&context->orphan_connect_error_notifications)) {
+            utp_context_connect_error_notification_t* notification =
+                TAILQ_FIRST(&context->orphan_connect_error_notifications);
+
+            TAILQ_REMOVE(&context->orphan_connect_error_notifications, notification, next);
+            utp_allocator_free(NULL, notification);
         }
         while (!TAILQ_EMPTY(&context->free_pending_slots)) {
             utp_context_pending_slot_t* slot = TAILQ_FIRST(&context->free_pending_slots);

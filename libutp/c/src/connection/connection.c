@@ -4584,8 +4584,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 }
                 return error;
             }
-            if (stream_created && connection->on_incoming_stream != NULL) {
-                connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+            if (stream_created) {
+                utp_connection_notify_pending_incoming_streams(connection);
             }
             stream->defer_user_notifications = false;
             utp_stream_notify_state_internal(stream);
@@ -4620,8 +4620,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
                 connection->local_stream_data_received_total += stream_delta;
-                if (stream_created && connection->on_incoming_stream != NULL) {
-                    connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+                if (stream_created) {
+                    utp_connection_notify_pending_incoming_streams(connection);
                 }
                 stream->defer_user_notifications = false;
                 utp_stream_notify_state_internal(stream);
@@ -4668,8 +4668,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 }
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
-                if (stream_created && connection->on_incoming_stream != NULL) {
-                    connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+                if (stream_created) {
+                    utp_connection_notify_pending_incoming_streams(connection);
                 }
                 stream->defer_user_notifications = false;
                 utp_stream_notify_state_internal(stream);
@@ -5238,6 +5238,36 @@ void utp_connection_set_on_incoming_stream_internal(utp_connection_t* connection
     if (connection != NULL) {
         connection->on_incoming_stream           = callback;
         connection->on_incoming_stream_user_data = user_data;
+    }
+}
+
+void utp_connection_notify_pending_incoming_streams(utp_connection_t* connection)
+{
+    assert(connection != NULL);
+    for (;;) {
+        utp_hash_iter_t  iter;
+        utp_hash_node_t* node;
+        utp_stream_t*    stream = NULL;
+
+        if (connection->on_incoming_stream == NULL) {
+            return;
+        }
+        utp_hash_iter_init(&iter);
+        while ((node = utp_hash_iter_next(&connection->streams, &iter)) != NULL) {
+            utp_stream_t* candidate = utp_connection_stream_from_node(node);
+
+            if (utp_connection_stream_is_peer_initiated(connection, candidate->stream_id) &&
+                !candidate->incoming_reported) {
+                stream = candidate;
+                break;
+            }
+        }
+        if (stream == NULL) {
+            return;
+        }
+        stream->incoming_reported = true;
+        connection->on_incoming_stream(connection, stream, connection->on_incoming_stream_user_data);
+        utp_stream_notify_state_internal(stream);
     }
 }
 

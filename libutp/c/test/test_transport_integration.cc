@@ -198,13 +198,14 @@ static bool relay_find_stream(const uint8_t* packet, size_t packet_length, uint3
 }
 
 struct endpoint_probe {
-    utp_context_t*    context           = nullptr;
-    utp_connection_t* connection        = nullptr;
-    utp_stream_t*     incoming_stream   = nullptr;
-    int32_t           new_connections   = 0;
-    int32_t           connected         = 0;
-    int32_t           connect_errors    = 0;
-    int32_t           connection_errors = 0;
+    utp_context_t*    context                   = nullptr;
+    utp_connection_t* connection                = nullptr;
+    utp_stream_t*     incoming_stream           = nullptr;
+    int32_t           new_connections           = 0;
+    int32_t           connected                 = 0;
+    int32_t           connect_errors            = 0;
+    int32_t           connection_errors         = 0;
+    bool              setting_incoming_callback = false;
 };
 
 struct stream_send_probe {
@@ -214,6 +215,11 @@ struct stream_send_probe {
     int32_t        writable_callbacks = 0;
     utp_status_t   status             = UTP_STATUS_OK;
     bool           write_shutdown     = false;
+};
+
+struct connected_stream_send_probe {
+    endpoint_probe*    endpoint = nullptr;
+    stream_send_probe* stream   = nullptr;
 };
 
 struct session_token_probe {
@@ -258,6 +264,14 @@ static void on_incoming_stream(utp_connection_t* connection, utp_stream_t* strea
     probe->incoming_stream = stream;
 }
 
+static void on_incoming_stream_after_connected(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<endpoint_probe*>(user_data);
+
+    REQUIRE(!probe->setting_incoming_callback);
+    on_incoming_stream(connection, stream, user_data);
+}
+
 static void on_stream_writable(utp_stream_t* stream, void* user_data)
 {
     auto* probe = static_cast<stream_send_probe*>(user_data);
@@ -284,6 +298,32 @@ static void on_stream_writable(utp_stream_t* stream, void* user_data)
             probe->write_shutdown = true;
         }
     }
+}
+
+static void on_connected_and_send_stream(utp_connection_t* connection, void* user_data)
+{
+    auto*    probe     = static_cast<connected_stream_send_probe*>(user_data);
+    uint32_t stream_id = UINT32_MAX;
+
+    REQUIRE(probe != nullptr);
+    REQUIRE(probe->endpoint != nullptr);
+    REQUIRE(probe->stream != nullptr);
+    on_connected(connection, probe->endpoint);
+    REQUIRE(utp_connection_create_stream(connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) == UTP_STATUS_OK);
+    utp_stream_t* stream = utp_connection_get_stream(connection, stream_id);
+
+    REQUIRE(stream != nullptr);
+    utp_stream_set_on_writable(stream, on_stream_writable, probe->stream);
+}
+
+static void on_connected_and_receive_stream(utp_connection_t* connection, void* user_data)
+{
+    auto* probe = static_cast<endpoint_probe*>(user_data);
+
+    on_connected(connection, probe);
+    probe->setting_incoming_callback = true;
+    utp_connection_set_on_incoming_stream(connection, on_incoming_stream_after_connected, probe);
+    probe->setting_incoming_callback = false;
 }
 
 static void on_session_token_ready(utp_connection_t* connection, void* user_data)
@@ -2140,6 +2180,44 @@ TEST_CASE("large encrypted STREAM is segmented and reassembled", "[transport][in
     REQUIRE(send_probe.offset == payload.size());
     REQUIRE(send_probe.writable_callbacks > 1);
     REQUIRE(send_probe.write_shutdown);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_OK);
+    REQUIRE(received_length == payload.size());
+    REQUIRE(received == payload);
+    REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
+            UTP_STATUS_CLOSED);
+    REQUIRE(pair.client_probe.connection_errors == 0);
+    REQUIRE(pair.server_probe.connection_errors == 0);
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("connected callback can fill the stream send buffer", "[transport][integration]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    std::vector<uint8_t>        payload(64u * 1024u);
+    std::vector<uint8_t>        received(payload.size());
+    stream_send_probe           send_probe      = {};
+    connected_stream_send_probe connected_probe = {};
+    size_t                      received_length = 0u;
+
+    for (size_t index = 0u; index < payload.size(); ++index) {
+        payload[index] = static_cast<uint8_t>(index);
+    }
+    send_probe.data          = payload.data();
+    send_probe.length        = payload.size();
+    connected_probe.endpoint = &pair.client_probe;
+    connected_probe.stream   = &send_probe;
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    utp_context_set_on_connected(pair.client, on_connected_and_send_stream, &connected_probe);
+    utp_context_set_on_connected(pair.server, on_connected_and_receive_stream, &pair.server_probe);
+    drive_until(pair.event_base, [&pair, &send_probe, &payload] {
+        return pair.server_probe.incoming_stream != nullptr && send_probe.write_shutdown &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == payload.size();
+    });
+    REQUIRE(send_probe.status == UTP_STATUS_OK);
+    REQUIRE(send_probe.offset == payload.size());
+    REQUIRE(send_probe.writable_callbacks > 1);
     REQUIRE(utp_stream_read(pair.server_probe.incoming_stream, received.data(), received.size(), &received_length) ==
             UTP_STATUS_OK);
     REQUIRE(received_length == payload.size());

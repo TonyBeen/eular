@@ -113,6 +113,7 @@ struct utp_stream {
     bool                        notifying_writable : 1;                            // 正在执行可写回调，防止重入
     bool                        closed_notified : 1;                               // 关闭回调是否已通知
     bool                        defer_user_notifications : 1;                      // incoming 回调前暂缓状态通知
+    bool                        incoming_reported : 1;  // 是否已调用 Connection 的 incoming stream 回调
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */

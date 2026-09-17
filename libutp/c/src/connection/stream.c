@@ -66,8 +66,8 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 static bool utp_stream_is_writable(const utp_stream_t* stream)
 {
     assert(stream != NULL);
-    return stream->used && utp_stream_local_can_send(stream) &&
-           !utp_stream_send_side_is_closed(stream) && !stream->local_write_reset && !stream->local_fin_queued &&
+    return stream->used && utp_stream_local_can_send(stream) && !utp_stream_send_side_is_closed(stream) &&
+           !stream->local_write_reset && !stream->local_fin_queued &&
            stream->send_buffer_length < UTP_STREAM_SEND_BUFFER_CAPACITY;
 }
 
@@ -121,8 +121,8 @@ static void utp_stream_notify_writable(utp_stream_t* stream)
 static void utp_stream_notify_closed(utp_stream_t* stream)
 {
     assert(stream != NULL);
-    if (stream->defer_user_notifications || stream->closed_notified ||
-        !utp_stream_is_closed(stream) || stream->recv_buffered_bytes != 0u) {
+    if (stream->defer_user_notifications || stream->closed_notified || !utp_stream_is_closed(stream) ||
+        stream->recv_buffered_bytes != 0u) {
         return;
     }
     stream->closed_notified = true;
@@ -476,6 +476,7 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->notifying_writable               = false;
     stream->closed_notified                  = false;
     stream->defer_user_notifications         = false;
+    stream->incoming_reported                = false;
 }
 
 utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset)
