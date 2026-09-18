@@ -1,6 +1,7 @@
 #include "context/context.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -2369,6 +2370,18 @@ static void utp_context_report_terminal_send_error(utp_context_t* context, utp_c
     TAILQ_INSERT_TAIL(&context->terminal_error_slots, slot, terminal_error_next);
 }
 
+static bool utp_context_is_packet_too_large_error(utp_internal_error_t error)
+{
+    if (error == UTP_INTERNAL_ERROR_OVERFLOW) {
+        return true;
+    }
+#ifdef EMSGSIZE
+    return utp_internal_error_to_errno(error) == EMSGSIZE;
+#else
+    return false;
+#endif
+}
+
 /** @brief 在 Context 调度边界投递本地永久发送错误，并释放对应连接。 */
 static void utp_context_drain_terminal_errors(utp_context_t* context)
 {
@@ -3372,11 +3385,17 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
             }
             if (sent_count < packet_count) {
                 utp_packet_out_t* failed_packet = packets[sent_count];
+                const bool        error_consumed =
+                    utp_connection_on_packet_send_error(connection, failed_packet, error, now_us);
 
-                utp_connection_on_packet_send_error(connection, failed_packet, error, now_us);
                 utp_connection_on_packet_abandoned(connection, failed_packet);
                 utp_send_control_forget_packet_attempts(&connection->send_control, failed_packet);
                 utp_packet_out_pool_release(&connection->packet_pool, connection->packet_buffer_pool, failed_packet);
+                if (!error_consumed && utp_context_is_packet_too_large_error(error)) {
+                    utp_send_control_pacer_tick_out(&connection->send_control);
+                    utp_context_report_terminal_send_error(context, slot, error, "udp packet exceeds path MTU");
+                    return error;
+                }
                 if (error != UTP_INTERNAL_ERROR_NOBUFS) {
                     for (size_t index = packet_count; index > sent_count + 1u; --index) {
                         const utp_internal_error_t reschedule_error =
@@ -3387,6 +3406,9 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                             break;
                         }
                     }
+                }
+                if (error_consumed) {
+                    error = UTP_INTERNAL_ERROR_OK;
                 }
             }
             utp_send_control_pacer_tick_out(&connection->send_control);
@@ -3457,6 +3479,11 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
 
                 utp_send_control_pacer_tick_out(&connection->send_control);
                 utp_context_report_terminal_send_error(context, slot, error, reason);
+                return error;
+            }
+            if (utp_context_is_packet_too_large_error(error)) {
+                utp_send_control_pacer_tick_out(&connection->send_control);
+                utp_context_report_terminal_send_error(context, slot, error, "udp packet exceeds path MTU");
                 return error;
             }
         }

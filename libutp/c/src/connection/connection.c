@@ -4131,10 +4131,11 @@ bool utp_connection_on_packet_send_error(utp_connection_t* connection, const utp
     if ((packet->po_flags & UTP_PO_MTU_PROBE) == 0u || !utp_connection_is_mtu_write_error(error)) {
         return false;
     }
-    return utp_mtu_discovery_on_probe_send_failed(
+    (void)utp_mtu_discovery_on_probe_send_failed(
         &connection->mtu_discovery,
         utp_mtu_from_packet_size(utp_connection_packet_wire_size(packet), connection->peer.family),
         now_us / UINT64_C(1000));
+    return true;
 }
 
 void utp_connection_on_packet_abandoned(utp_connection_t* connection, const utp_packet_out_t* packet)

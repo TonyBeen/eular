@@ -690,6 +690,7 @@ int main(int argc, char** argv)
     uint16_t              ntrs_port          = 6600u;
     uint16_t              peer_port          = 0u;
     uint16_t              bind_port          = 0u;
+    uint16_t              mtu_base           = 1400u;
     uint64_t              send_bytes         = 0u;
     uint64_t              timeout_ms         = 60000u;
     uint64_t              nat_timeout_ms     = 3000u;
@@ -697,6 +698,7 @@ int main(int argc, char** argv)
     bool                  register_requested = false;
     bool                  listen_requested   = false;
     bool                  use_ipv6           = false;
+    bool                  disable_mtu_probe  = false;
 
     cli.add_option("-i,--peer-id", peer_id, "Local Context peer ID (1-128 bytes)")->required();
     cli.add_option("-n,--nat-address", nat_address, "NAT probe service address")->required();
@@ -718,6 +720,9 @@ int main(int argc, char** argv)
     cli.add_option("-d,--send-bytes", send_bytes, "Payload bytes to send");
     cli.add_option("-T,--timeout-ms", timeout_ms, "Direct connection and transfer timeout")->check(CLI::PositiveNumber);
     cli.add_option("-M,--nat-timeout-ms", nat_timeout_ms, "NAT probe phase timeout")->check(CLI::PositiveNumber);
+    cli.add_option("--mtu-base", mtu_base, "Initial path MTU (default: 1400)")
+        ->check(CLI::Range(1280u, 1500u));
+    cli.add_flag("--disable-mtu-probe", disable_mtu_probe, "Disable DPLPMTUD for this Context");
     cli.add_option("-e,--encryption", encryption_name, "Encryption mode: none, aes128, or aes256")
         ->check(CLI::IsMember({"none", "aes128", "aes256"}));
     cli.add_flag("-6,--ipv6", use_ipv6, "Use IPv6");
@@ -787,12 +792,13 @@ int main(int argc, char** argv)
             LOG("nat_punch event_base_create_failed");
             return EXIT_FAILURE;
         }
-        context_options.event_base = base;
-        context_options.peer_id    = peer_id.c_str();
-        context_options.mtu_min    = 1280u;
-        context_options.mtu_base   = 1400u;
-        context_options.mtu_max    = 1500u;
-        status                     = utp_context_create(&context_options, &app.context);
+        context_options.event_base      = base;
+        context_options.peer_id         = peer_id.c_str();
+        context_options.mtu_min         = 1280u;
+        context_options.mtu_base        = mtu_base;
+        context_options.mtu_max         = 1500u;
+        context_options.enable_dplpmtud = !disable_mtu_probe;
+        status = utp_context_create(&context_options, &app.context);
         if (status == UTP_STATUS_OK) {
             status = utp_context_bind(app.context, bind_ip, bind_port,
                                       interface_name.empty() ? NULL : interface_name.c_str(), &actual_port);

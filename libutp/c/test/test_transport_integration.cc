@@ -1695,7 +1695,7 @@ TEST_CASE("macOS send hook internally consumes MTU probe EMSGSIZE", "[transport]
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("macOS send hook exposes non-probe EMSGSIZE", "[transport][integration][socket]")
+TEST_CASE("macOS normal packet EMSGSIZE terminates the connection", "[transport][integration][socket]")
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
@@ -1711,7 +1711,8 @@ TEST_CASE("macOS send hook exposes non-probe EMSGSIZE", "[transport][integration
     error = utp_context_flush_public_connection(pair.client, pair.client_probe.connection);
     REQUIRE(utp_internal_error_to_errno(error) == EMSGSIZE);
     REQUIRE(utp_test_send_hook_remaining() == 0u);
-    REQUIRE(pair.client_probe.connection_errors == 0);
+    drive_until(pair.event_base, [&pair] { return pair.client_probe.connection_errors == 1; });
+    REQUIRE(pair.client_probe.connection_errors == 1);
     transport_pair_cleanup(&pair);
 }
 
