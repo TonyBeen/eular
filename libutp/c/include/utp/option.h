@@ -86,9 +86,9 @@ typedef struct utp_context_options {
     uint16_t                    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 时采用 32
     uint16_t                    initial_max_streams_uni;              // 允许对端创建的单向流数，0 时采用 16
     uint64_t                    initial_max_data;                     // 连接级接收窗口，0 时采用 8 MiB
-    uint64_t                    initial_max_stream_data_bidi_local;   // 本端发起双向流的接收窗口，范围为 64 KiB 至 4 MiB
-    uint64_t                    initial_max_stream_data_bidi_remote;  // 对端发起双向流的接收窗口，范围为 64 KiB 至 4 MiB
-    uint64_t                    initial_max_stream_data_uni;          // 对端发起单向流的接收窗口，范围为 64 KiB 至 4 MiB
+    uint64_t                    initial_max_stream_data_bidi_local;   // 本端发起双向流的初始接收窗口，必须大于 0
+    uint64_t                    initial_max_stream_data_bidi_remote;  // 对端发起双向流的初始接收窗口，必须大于 0
+    uint64_t                    initial_max_stream_data_uni;          // 对端发起单向流的初始接收窗口，必须大于 0
     const char*                 peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
 } utp_context_options_t;
 

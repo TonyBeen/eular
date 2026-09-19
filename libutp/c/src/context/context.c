@@ -6451,12 +6451,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
         (options->cc_algorithm != UTP_CONGESTION_DEFAULT && options->cc_algorithm != UTP_CONGESTION_BBR &&
          options->cc_algorithm != UTP_CONGESTION_CUBIC) ||
-        options->initial_max_stream_data_bidi_local < UTP_STREAM_FLOW_WINDOW_MIN ||
-        options->initial_max_stream_data_bidi_local > UTP_STREAM_FLOW_WINDOW_MAX ||
-        options->initial_max_stream_data_bidi_remote < UTP_STREAM_FLOW_WINDOW_MIN ||
-        options->initial_max_stream_data_bidi_remote > UTP_STREAM_FLOW_WINDOW_MAX ||
-        options->initial_max_stream_data_uni < UTP_STREAM_FLOW_WINDOW_MIN ||
-        options->initial_max_stream_data_uni > UTP_STREAM_FLOW_WINDOW_MAX ||
+        options->initial_max_stream_data_bidi_local == 0u ||
+        options->initial_max_stream_data_bidi_remote == 0u || options->initial_max_stream_data_uni == 0u ||
         peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }

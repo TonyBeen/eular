@@ -27,8 +27,6 @@ struct utp_connection;
 #define UTP_STREAM_RECV_FRAGMENT_LIMIT          1024u
 #define UTP_STREAM_SEND_ACK_RANGE_LIMIT         16u
 #define UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY (256u * 1024u)
-#define UTP_STREAM_FLOW_WINDOW_MIN              (64u * 1024u)
-#define UTP_STREAM_FLOW_WINDOW_MAX              (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_MAX_GAP                 (2u * 1024u * 1024u)
 #define UTP_STREAM_DEFAULT_FLOW_WINDOW          (512u * 1024u)
