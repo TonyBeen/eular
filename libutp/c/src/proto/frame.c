@@ -1396,7 +1396,8 @@ utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t c
         params->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ||
         params->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
         params->initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
-        params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL)
+        params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+        params->initial_max_stream_data_uni > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL)
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     error = utp_wire_writer_init(&writer, buffer, UTP_FRAME_TRANSPORT_PARAMS_SIZE);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, UTP_FRAME_TYPE_TRANSPORT_PARAMS);
@@ -1408,8 +1409,8 @@ utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t c
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, params->ack_delay_exponent);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_data);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_local);
-    return error == UTP_INTERNAL_ERROR_OK ? utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_remote)
-                                          : error;
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_remote);
+    return error == UTP_INTERNAL_ERROR_OK ? utp_wire_write_u64(&writer, params->initial_max_stream_data_uni) : error;
 }
 
 utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_params_t* params, const uint8_t* buffer,
@@ -1433,12 +1434,14 @@ utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_param
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &params->initial_max_stream_data_bidi_local);
     if (error == UTP_INTERNAL_ERROR_OK)
         error = utp_wire_read_u64(&reader, &params->initial_max_stream_data_bidi_remote);
+    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_read_u64(&reader, &params->initial_max_stream_data_uni);
     if (error != UTP_INTERNAL_ERROR_OK) return error;
     return (params->flags & (uint16_t)~UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS) != 0u ||
                    params->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ||
                    params->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
                    params->initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
-                   params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL
+                   params->initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ||
+                   params->initial_max_stream_data_uni > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL
                ? UTP_INTERNAL_ERROR_PROTOCOL
                : UTP_INTERNAL_ERROR_OK;
 }

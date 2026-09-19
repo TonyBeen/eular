@@ -691,7 +691,7 @@ TEST_CASE("frame length covers every supported wire frame", "[frame]")
                                                {UTP_FRAME_TYPE_ACK_FREQUENCY, 7u},
                                                {UTP_FRAME_TYPE_VERSION, 5u},
                                                {UTP_FRAME_TYPE_HANDSHAKE_DONE, 9u},
-                                               {UTP_FRAME_TYPE_TRANSPORT_PARAMS, 38u},
+                                               {UTP_FRAME_TYPE_TRANSPORT_PARAMS, UTP_FRAME_TRANSPORT_PARAMS_SIZE},
                                                {UTP_FRAME_TYPE_HANDSHAKE_DELAY, 5u},
                                                {UTP_FRAME_TYPE_MAX_DATA, 9u},
                                                {UTP_FRAME_TYPE_MAX_STREAM_DATA, 13u},
@@ -1082,6 +1082,7 @@ TEST_CASE("transport parameter and ACK frequency frames normalize and validate v
         UINT64_C(1048576),
         UINT64_C(262144),
         UINT64_C(131072),
+        UINT64_C(65536),
         30000u,
         UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
         800u,
@@ -1102,6 +1103,7 @@ TEST_CASE("transport parameter and ACK frequency frames normalize and validate v
     REQUIRE(decoded_params.initial_max_data == params.initial_max_data);
     REQUIRE(decoded_params.initial_max_stream_data_bidi_local == params.initial_max_stream_data_bidi_local);
     REQUIRE(decoded_params.initial_max_stream_data_bidi_remote == params.initial_max_stream_data_bidi_remote);
+    REQUIRE(decoded_params.initial_max_stream_data_uni == params.initial_max_stream_data_uni);
 
     REQUIRE(utp_frame_ack_frequency_encode(frequency_bytes.data(), frequency_bytes.size(), &frequency) ==
             UTP_INTERNAL_ERROR_OK);
@@ -1111,7 +1113,7 @@ TEST_CASE("transport parameter and ACK frequency frames normalize and validate v
     REQUIRE(decoded_frequency.reordering_threshold == 3u);
     REQUIRE(decoded_frequency.max_ack_delay_ms == 25u);
 
-    params_bytes[1] = 0x01u;
+    params_bytes[1] = 0x02u;
     params_bytes[2] = 0x00u;
     REQUIRE(utp_frame_transport_params_decode(&decoded_params, params_bytes.data(), params_bytes.size()) ==
             UTP_INTERNAL_ERROR_PROTOCOL);

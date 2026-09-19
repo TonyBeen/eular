@@ -27,7 +27,7 @@ extern "C" {
 #define UTP_FRAME_CRYPTO_SIZE                  35u
 #define UTP_FRAME_SESSION_TOKEN_HEADER_SIZE    10u
 #define UTP_FRAME_ACK_FREQUENCY_SIZE           7u
-#define UTP_FRAME_TRANSPORT_PARAMS_SIZE        38u
+#define UTP_FRAME_TRANSPORT_PARAMS_SIZE        46u
 #define UTP_FRAME_HANDSHAKE_DELAY_SIZE         5u
 #define UTP_FRAME_MAX_DATA_SIZE                9u
 #define UTP_FRAME_MAX_STREAM_DATA_SIZE         13u
@@ -48,12 +48,14 @@ extern "C" {
 #define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_DATA                    UINT16_C(1) << 5u
 #define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL  UINT16_C(1) << 6u
 #define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE UINT16_C(1) << 7u
+#define UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_UNI         UINT16_C(1) << 8u
 #define UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS                                                                    \
     (UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT | UTP_TRANSPORT_PARAMS_FLAG_HANDSHAKE_TIMEOUT |               \
      UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI | UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_UNI | \
      UTP_TRANSPORT_PARAMS_FLAG_ACK_DELAY_EXPONENT | UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_DATA |              \
      UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL |                                           \
-     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE)
+     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE |                                        \
+     UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_UNI)
 #define UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT         20u
 #define UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL         ((UINT64_C(1) << 60) - UINT64_C(1))
 #define UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD 64u
@@ -87,7 +89,7 @@ extern "C" {
  * TRANSPORT_PARAMS:    type(1), flags(2), max_idle_timeout(4), handshake_timeout(2),
  *                      initial_max_streams_bidi(2), initial_max_streams_uni(2), ack_delay_exponent(1),
  *                      initial_max_data(8), initial_max_stream_data_bidi_local(8),
- *                      initial_max_stream_data_bidi_remote(8)
+ *                      initial_max_stream_data_bidi_remote(8), initial_max_stream_data_uni(8)
  * HANDSHAKE_DELAY:     type(1), delay_time_us(4)
  * MAX_DATA:            type(1), maximum_data(8)
  * MAX_STREAM_DATA:     type(1), stream_id(4), maximum_stream_data(8)
@@ -261,12 +263,13 @@ typedef struct utp_frame_ack_frequency {
     uint8_t  reordering_threshold;     // 检测到乱序缺口后的立即 ACK 阈值
 } utp_frame_ack_frequency_t;
 
-/* TRANSPORT_PARAMS：type(1), flags(2), idle_timeout(4), handshake_timeout(2), streams(2+2), exponent(1), credits(8*3)。
+/* TRANSPORT_PARAMS：type(1), flags(2), idle_timeout(4), handshake_timeout(2), streams(2+2), exponent(1), credits(8*4)。
  */
 typedef struct utp_frame_transport_params {
     uint64_t initial_max_data;                     // 对端可发送的连接级初始额度
     uint64_t initial_max_stream_data_bidi_local;   // 对端发起双向流的初始额度
     uint64_t initial_max_stream_data_bidi_remote;  // 本端发起双向流的初始额度
+    uint64_t initial_max_stream_data_uni;          // 对端发起单向流的初始额度
     uint32_t max_idle_timeout_ms;                  // 最大空闲超时，单位 ms
     uint16_t flags;                                // 传输参数标志位
     uint16_t handshake_timeout_ms;                 // 握手超时，单位 ms

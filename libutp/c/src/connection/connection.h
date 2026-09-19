@@ -152,9 +152,11 @@ typedef struct utp_connection {
     uint32_t                           stream_terminal_allocated;                 // 已实际分配终态槽位数
     uint32_t                           stream_terminal_count;                     // 已用终态槽位数
     uint32_t                           path_validation_buffer_capacity;           // 候选路径缓存最大字节数
+    size_t                             stream_send_buffer_capacity;                // 新建 Stream 发送缓存容量
     uint64_t                           peer_max_data;                             // 对端通告的连接级发送额度
     uint64_t                           peer_initial_max_stream_data_bidi_local;   // 本端双向流发送额度
     uint64_t                           peer_initial_max_stream_data_bidi_remote;  // 对端双向流发送额度
+    uint64_t                           peer_initial_max_stream_data_uni;          // 本端单向流发送额度
     utp_frame_transport_params_t       local_transport_params;                    // 本端握手通告传输参数
     utp_frame_ack_frequency_t          local_ack_frequency;                       // 本端握手通告 ACK 策略
     uint64_t                           local_max_data_advertised;                 // 本端通告连接接收额度

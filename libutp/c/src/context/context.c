@@ -101,6 +101,7 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         utp_connection_set_path_validation_buffer_capacity(connection, context->path_validation_buffer_capacity);
+        connection->stream_send_buffer_capacity = context->stream_send_buffer_capacity;
     }
     return error;
 }
@@ -6450,6 +6451,12 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
         (options->cc_algorithm != UTP_CONGESTION_DEFAULT && options->cc_algorithm != UTP_CONGESTION_BBR &&
          options->cc_algorithm != UTP_CONGESTION_CUBIC) ||
+        options->initial_max_stream_data_bidi_local < UTP_STREAM_FLOW_WINDOW_MIN ||
+        options->initial_max_stream_data_bidi_local > UTP_STREAM_FLOW_WINDOW_MAX ||
+        options->initial_max_stream_data_bidi_remote < UTP_STREAM_FLOW_WINDOW_MIN ||
+        options->initial_max_stream_data_bidi_remote > UTP_STREAM_FLOW_WINDOW_MAX ||
+        options->initial_max_stream_data_uni < UTP_STREAM_FLOW_WINDOW_MIN ||
+        options->initial_max_stream_data_uni > UTP_STREAM_FLOW_WINDOW_MAX ||
         peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
@@ -6549,6 +6556,9 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
                                                        ? UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY
                                                        : options->stream_terminal_capacity;
     context->path_validation_buffer_capacity     = options->path_validation_buffer_capacity;
+    context->stream_send_buffer_capacity         = options->stream_send_buffer_capacity == 0u
+                                                        ? UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY
+                                                        : options->stream_send_buffer_capacity;
     context->handshake_timeout_ms                = options->handshake_timeout == 0u ? 800u : options->handshake_timeout;
     context->handshake_max_retries               = options->handshake_max_retries;
     context->local_transport_params.flags        = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
@@ -6565,19 +6575,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->local_transport_params.initial_max_data =
         options->initial_max_data == 0u ? UINT64_C(8) * 1024u * 1024u : options->initial_max_data;
     context->local_transport_params.initial_max_stream_data_bidi_local =
-        options->initial_max_stream_data_bidi_local == 0u ? UINT64_C(256) * 1024u
-                                                          : options->initial_max_stream_data_bidi_local;
+        options->initial_max_stream_data_bidi_local;
     context->local_transport_params.initial_max_stream_data_bidi_remote =
-        options->initial_max_stream_data_bidi_remote == 0u ? UINT64_C(256) * 1024u
-                                                           : options->initial_max_stream_data_bidi_remote;
+        options->initial_max_stream_data_bidi_remote;
+    context->local_transport_params.initial_max_stream_data_uni =
+        options->initial_max_stream_data_uni;
     if (context->local_transport_params.initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
         context->local_transport_params.initial_max_data = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
-    }
-    if (context->local_transport_params.initial_max_stream_data_bidi_local > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
-        context->local_transport_params.initial_max_stream_data_bidi_local = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
-    }
-    if (context->local_transport_params.initial_max_stream_data_bidi_remote > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
-        context->local_transport_params.initial_max_stream_data_bidi_remote = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
     }
     context->local_ack_frequency.ack_eliciting_threshold =
         options->ack_every_n_packets == 0u ? 4u : options->ack_every_n_packets;
@@ -7270,7 +7274,7 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
             return UTP_STATUS_OVERFLOW;
         }
         first_data_capacity = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
-        if (options->early_data_size > first_data_capacity + UTP_STREAM_SEND_BUFFER_CAPACITY) {
+        if (options->early_data_size > first_data_capacity + context->stream_send_buffer_capacity) {
             utp_crypto_secure_clear(state_payload, state_payload_length);
             return UTP_STATUS_OVERFLOW;
         }

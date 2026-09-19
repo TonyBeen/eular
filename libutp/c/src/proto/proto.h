@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define UTP_PACKET_HEADER_SIZE 20u
-#define UTP_PROTOCOL_VERSION   2u
+#define UTP_PROTOCOL_VERSION   3u
 #define UTP_PACKET_MTU_FLOOR   1280u
 #define UTP_PACKET_NUMBER_MAX  UINT64_C(0x3fffffffffffffff)
 

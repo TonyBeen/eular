@@ -26,16 +26,17 @@ struct utp_connection;
 #define UTP_STREAM_UNIDIRECTIONAL               2u
 #define UTP_STREAM_RECV_FRAGMENT_LIMIT          1024u
 #define UTP_STREAM_SEND_ACK_RANGE_LIMIT         16u
-#define UTP_STREAM_SEND_BUFFER_CAPACITY         32768u
-#define UTP_STREAM_MAX_RECV_BUFFER_BYTES        (2u * 1024u * 1024u)
+#define UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY (256u * 1024u)
+#define UTP_STREAM_FLOW_WINDOW_MIN              (64u * 1024u)
+#define UTP_STREAM_FLOW_WINDOW_MAX              (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_MAX_GAP                 (2u * 1024u * 1024u)
-#define UTP_STREAM_DEFAULT_FLOW_WINDOW          (2u * 1024u * 1024u)
+#define UTP_STREAM_DEFAULT_FLOW_WINDOW          (512u * 1024u)
 
 typedef struct utp_stream_recv_account {
-    size_t* connection_memory_bytes;    // 连接级已占用重组内存计数
+    size_t* connection_memory_bytes;  // 连接级已占用重组内存计数
     size_t* connection_fragment_count;  // 连接级已保留分片数计数
-    size_t  connection_memory_limit;    // 连接级重组内存上限
+    size_t  connection_memory_limit;  // 连接级重组内存上限
     size_t  connection_fragment_limit;  // 连接级重组分片数上限
 } utp_stream_recv_account_t;
 
@@ -82,14 +83,15 @@ struct utp_stream {
     size_t                      send_buffer_length;                              // 发送环形缓冲有效长度
     size_t                      send_buffer_start;                               // 发送环形缓冲物理起始下标
     size_t                      send_in_flight_bytes;                            // 已构造但尚未确认的发送字节
+    size_t                      send_buffer_capacity;                            // 发送环形缓冲容量
     size_t                      recv_buffered_bytes;                             // 等待应用读取的连续或乱序字节
     size_t                      recv_pinned_memory_bytes;                        // 被 PacketIn 引用固定的接收内存
     size_t                      recv_fragment_count;                             // 接收重组分片数
     size_t                      recv_accounted_fragment_count;                   // 已进入连接级预算的分片数
     size_t                      send_ack_range_count;                            // 已确认发送区间数
-    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];  // 按偏移排序的接收分片
     utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];  // 已确认发送区间
-    uint8_t                     send_buffer[UTP_STREAM_SEND_BUFFER_CAPACITY];      // 有界环形发送缓冲
+    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];     // 按偏移排序的接收分片
+    uint8_t*                    send_buffer;                                        // 首次写入时分配的环形发送缓冲
     uint8_t                     priority;                                          // 用户设置的 0 至 7 优先级
     uint8_t                     strict_wait_rounds;                                // Strict 调度等待轮数，用于老化
     utp_stream_read_cb_t        read_cb;                                           // 可读通知回调

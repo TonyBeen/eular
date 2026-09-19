@@ -5,6 +5,7 @@
 
 #include "connection/connection.h"
 #include "context/context.h"
+#include "util/allocator.h"
 
 static bool utp_stream_send_side_is_closed(const utp_stream_t* stream)
 {
@@ -68,7 +69,7 @@ static bool utp_stream_is_writable(const utp_stream_t* stream)
     assert(stream != NULL);
     return stream->used && utp_stream_local_can_send(stream) && !utp_stream_send_side_is_closed(stream) &&
            !stream->local_write_reset && !stream->local_fin_queued &&
-           stream->send_buffer_length < UTP_STREAM_SEND_BUFFER_CAPACITY;
+           stream->send_buffer_length < stream->send_buffer_capacity;
 }
 
 static void utp_stream_enter_user_callback(utp_stream_t* stream)
@@ -142,7 +143,7 @@ void utp_stream_notify_state_internal(utp_stream_t* stream)
 
 static size_t utp_stream_send_index(const utp_stream_t* stream, size_t offset)
 {
-    return (stream->send_buffer_start + offset) % UTP_STREAM_SEND_BUFFER_CAPACITY;
+    return (stream->send_buffer_start + offset) % stream->send_buffer_capacity;
 }
 
 static void utp_stream_copy_into_send_buffer(utp_stream_t* stream, const uint8_t* data, size_t length)
@@ -152,7 +153,7 @@ static void utp_stream_copy_into_send_buffer(utp_stream_t* stream, const uint8_t
     // 发送缓冲是环形区域，最多拆成尾部和头部两个连续段。
     while (length != 0u) {
         size_t index   = utp_stream_send_index(stream, offset);
-        size_t segment = UTP_STREAM_SEND_BUFFER_CAPACITY - index;
+        size_t segment = stream->send_buffer_capacity - index;
 
         if (segment > length) {
             segment = length;
@@ -175,7 +176,7 @@ static const uint8_t* utp_stream_unsent_data(const utp_stream_t* stream, size_t*
         return NULL;
     }
     size_t index      = utp_stream_send_index(stream, stream->send_in_flight_bytes);
-    size_t contiguous = UTP_STREAM_SEND_BUFFER_CAPACITY - index;
+    size_t contiguous = stream->send_buffer_capacity - index;
     if (contiguous > unsent_length) {
         contiguous = unsent_length;
     }
@@ -375,7 +376,6 @@ static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uin
     utp_stream_recv_fragment_t fragment = {NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u, false, false};
 
     if (stream->recv_fragment_count >= UTP_STREAM_RECV_FRAGMENT_LIMIT ||
-        length > UTP_STREAM_MAX_RECV_BUFFER_BYTES - stream->recv_buffered_bytes ||
         (length != 0u && (data == NULL || packet == NULL))) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
@@ -448,6 +448,8 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->send_buffer_length               = 0u;
     stream->send_buffer_start                = 0u;
     stream->send_in_flight_bytes             = 0u;
+    stream->send_buffer_capacity             = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
+    stream->send_buffer                      = NULL;
     stream->recv_buffered_bytes              = 0u;
     stream->recv_pinned_memory_bytes         = 0u;
     stream->recv_fragment_count              = 0u;
@@ -578,6 +580,9 @@ void utp_stream_cleanup(utp_stream_t* stream)
         stream->write_cb_data = NULL;
         stream->close_cb_data = NULL;
         utp_stream_clear_recv_fragments(stream);
+        utp_allocator_free(NULL, stream->send_buffer);
+        stream->send_buffer               = NULL;
+        stream->send_buffer_capacity      = 0u;
         stream->connection                = NULL;
         stream->connection_consumed_total = NULL;
     }
@@ -638,11 +643,17 @@ utp_internal_error_t utp_stream_write_internal(utp_stream_t* stream, const uint8
     if (utp_stream_send_side_is_closed(stream) || stream->local_fin_queued) {
         return UTP_INTERNAL_ERROR_CLOSED;
     }
-    if (stream->send_buffer_length > sizeof(stream->send_buffer) ||
-        length > sizeof(stream->send_buffer) - stream->send_buffer_length) {
+    if (stream->send_buffer_length > stream->send_buffer_capacity ||
+        length > stream->send_buffer_capacity - stream->send_buffer_length) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
     if (length != 0u) {
+        if (stream->send_buffer == NULL) {
+            stream->send_buffer = utp_allocator_alloc(NULL, stream->send_buffer_capacity);
+            if (stream->send_buffer == NULL) {
+                return UTP_INTERNAL_ERROR_NOMEM;
+            }
+        }
         utp_stream_copy_into_send_buffer(stream, data, length);
         stream->send_buffer_length += length;
     }
@@ -714,15 +725,21 @@ utp_internal_error_t utp_stream_acquire_write_views_internal(utp_stream_t* strea
     if (utp_stream_send_side_is_closed(stream) || stream->local_fin_queued) {
         return UTP_INTERNAL_ERROR_CLOSED;
     }
-    if (stream->send_buffer_length > UTP_STREAM_SEND_BUFFER_CAPACITY) {
+    if (stream->send_buffer_length > stream->send_buffer_capacity) {
         return UTP_INTERNAL_ERROR_STATE;
     }
-    size_t free_capacity = UTP_STREAM_SEND_BUFFER_CAPACITY - stream->send_buffer_length;
+    size_t free_capacity = stream->send_buffer_capacity - stream->send_buffer_length;
     if (free_capacity == 0u) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
+    if (stream->send_buffer == NULL) {
+        stream->send_buffer = utp_allocator_alloc(NULL, stream->send_buffer_capacity);
+        if (stream->send_buffer == NULL) {
+            return UTP_INTERNAL_ERROR_NOMEM;
+        }
+    }
     size_t tail         = utp_stream_send_index(stream, stream->send_buffer_length);
-    size_t first_length = UTP_STREAM_SEND_BUFFER_CAPACITY - tail;
+    size_t first_length = stream->send_buffer_capacity - tail;
     if (first_length > free_capacity) {
         first_length = free_capacity;
     }
@@ -753,8 +770,8 @@ utp_internal_error_t utp_stream_commit_write_views_internal(utp_stream_t* stream
     if (utp_stream_send_side_is_closed(stream) || stream->local_fin_queued) {
         return UTP_INTERNAL_ERROR_CLOSED;
     }
-    if (stream->send_buffer_length > UTP_STREAM_SEND_BUFFER_CAPACITY ||
-        length > UTP_STREAM_SEND_BUFFER_CAPACITY - stream->send_buffer_length) {
+    if (stream->send_buffer_length > stream->send_buffer_capacity ||
+        length > stream->send_buffer_capacity - stream->send_buffer_length) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     stream->send_buffer_length += length;
@@ -970,10 +987,10 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
     uint64_t             original_end;
     uint64_t             start;
     uint64_t             end;
+    uint64_t             inserted_offsets[UTP_STREAM_RECV_FRAGMENT_LIMIT];
     size_t               data_index;
     size_t               index;
     size_t               inserted_count = 0u;
-    uint64_t             inserted_offsets[UTP_STREAM_RECV_FRAGMENT_LIMIT];
     utp_internal_error_t error;
 
     if (stream == NULL || frame == NULL || !stream->used) {
@@ -1044,8 +1061,8 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
             uint64_t gap_end = fragment_start < end ? fragment_start : end;
             size_t   gap_len = (size_t)(gap_end - start);
 
-            error =
-                utp_stream_insert_fragment(stream, start, frame->data + data_index, gap_len, false, packet, account);
+            error = utp_stream_insert_fragment(stream, start, frame->data + data_index, gap_len, false, packet,
+                                               account);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
                 return error;

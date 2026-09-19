@@ -80,7 +80,8 @@ static bool utp_connection_transport_params_equal(const utp_frame_transport_para
            left->initial_max_streams_uni == right->initial_max_streams_uni &&
            left->ack_delay_exponent == right->ack_delay_exponent && left->initial_max_data == right->initial_max_data &&
            left->initial_max_stream_data_bidi_local == right->initial_max_stream_data_bidi_local &&
-           left->initial_max_stream_data_bidi_remote == right->initial_max_stream_data_bidi_remote;
+           left->initial_max_stream_data_bidi_remote == right->initial_max_stream_data_bidi_remote &&
+           left->initial_max_stream_data_uni == right->initial_max_stream_data_uni;
 }
 
 /* 收包基础校验与明文握手保护。 */
@@ -1477,15 +1478,21 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
         return UTP_INTERNAL_ERROR_NOMEM;
     }
     utp_stream_init(stream, stream_id);
-    if ((stream_id & UTP_STREAM_UNIDIRECTIONAL) == 0u) {
+    stream->send_buffer_capacity = connection->stream_send_buffer_capacity;
+    {
         const bool locally_initiated =
             (stream_id & UINT32_C(1)) == utp_connection_local_stream_initiator_bit(connection);
 
-        stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
-                                                         : connection->peer_initial_max_stream_data_bidi_local;
-        stream->local_max_stream_data_advertised =
-            locally_initiated ? connection->local_transport_params.initial_max_stream_data_bidi_local
-                              : connection->local_transport_params.initial_max_stream_data_bidi_remote;
+        if ((stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) {
+            stream->peer_max_stream_data = connection->peer_initial_max_stream_data_uni;
+            stream->local_max_stream_data_advertised = connection->local_transport_params.initial_max_stream_data_uni;
+        } else {
+            stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
+                                                             : connection->peer_initial_max_stream_data_bidi_local;
+            stream->local_max_stream_data_advertised =
+                locally_initiated ? connection->local_transport_params.initial_max_stream_data_bidi_local
+                                  : connection->local_transport_params.initial_max_stream_data_bidi_remote;
+        }
     }
     utp_hash_node_init(&stream->hash_node);
     stream->connection                = connection;
@@ -2018,7 +2025,7 @@ static utp_internal_error_t utp_connection_queue_pending_flow_control(utp_connec
         }
         if (utp_connection_flow_update_due(
                 (stream->stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u
-                    ? UTP_STREAM_DEFAULT_FLOW_WINDOW
+                    ? connection->local_transport_params.initial_max_stream_data_uni
                     : (utp_connection_stream_is_peer_initiated(connection, stream->stream_id)
                            ? connection->local_transport_params.initial_max_stream_data_bidi_remote
                            : connection->local_transport_params.initial_max_stream_data_bidi_local),
@@ -2882,6 +2889,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->stream_terminal_allocated              = 0u;
     connection->stream_terminal_count                  = 0u;
     connection->path_validation_buffer_capacity        = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
+    connection->stream_send_buffer_capacity            = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
     connection->rx_bytes                               = 0u;
     connection->tx_bytes                               = 0u;
     connection->rtx_bytes                              = 0u;
@@ -2940,6 +2948,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
+        UTP_STREAM_DEFAULT_FLOW_WINDOW,
         30000u,
         UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
         800u,
@@ -2995,6 +3004,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->peer_max_data                            = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
     connection->peer_initial_max_stream_data_bidi_local  = UTP_STREAM_DEFAULT_FLOW_WINDOW;
     connection->peer_initial_max_stream_data_bidi_remote = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    connection->peer_initial_max_stream_data_uni         = UTP_STREAM_DEFAULT_FLOW_WINDOW;
     connection->local_max_data_advertised                = UTP_CONNECTION_DEFAULT_FLOW_WINDOW;
     connection->stream_data_sent_total                   = 0u;
     connection->local_stream_data_received_total         = 0u;
@@ -3178,6 +3188,9 @@ utp_internal_error_t utp_connection_apply_peer_transport_params(utp_connection_t
     }
     if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE) != 0u) {
         connection->peer_initial_max_stream_data_bidi_remote = params->initial_max_stream_data_bidi_remote;
+    }
+    if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAM_DATA_UNI) != 0u) {
+        connection->peer_initial_max_stream_data_uni = params->initial_max_stream_data_uni;
     }
     if ((params->flags & UTP_TRANSPORT_PARAMS_FLAG_INITIAL_MAX_STREAMS_BIDI) != 0u) {
         connection->peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] = params->initial_max_streams_bidi;
@@ -3555,6 +3568,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->stream_terminal_capacity                                = 0u;
     connection->stream_terminal_count                                   = 0u;
     connection->path_validation_buffer_capacity                         = 0u;
+    connection->stream_send_buffer_capacity                             = 0u;
     connection->candidate_packet_bytes                                  = 0u;
     connection->on_incoming_stream                                      = NULL;
     connection->on_incoming_stream_user_data                            = NULL;
@@ -5513,7 +5527,7 @@ utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* co
     if (connection == NULL || connection->role != UTP_CONNECTION_ROLE_ACTIVE ||
         connection->state != UTP_CONNECTION_STATE_NEW || (data == NULL && data_length != 0u) ||
         early_data_length > data_length || (uint64_t)data_length > connection->peer_max_data ||
-        data_length - early_data_length > UTP_STREAM_SEND_BUFFER_CAPACITY) {
+        data_length - early_data_length > connection->stream_send_buffer_capacity) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     error = utp_connection_alloc_stream(connection, UTP_STREAM_CLIENT_INITIATED, &stream);

@@ -268,6 +268,7 @@ TEST_CASE("connection accepts an identical retransmitted Handshake transport par
         UINT64_C(8388608),
         UINT64_C(2097152),
         UINT64_C(2097152),
+        UINT64_C(1048576),
         600000u,
         UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
         800u,
@@ -1415,7 +1416,7 @@ TEST_CASE("connection keeps a peer idle timeout safety margin", "[connection][ke
     const utp_address_t                peer   = loopback_address(10023u);
     const uint8_t                      ping   = UTP_FRAME_TYPE_PING;
     const utp_frame_transport_params_t params = {
-        0u, 0u, 0u, 40u, UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 40u, UTP_TRANSPORT_PARAMS_FLAG_MAX_IDLE_TIMEOUT, 0u, 0u, 0u, 0u,
     };
     utp_connection_t                                 connection = {};
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> packet     = {};

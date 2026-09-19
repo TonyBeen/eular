@@ -63,8 +63,9 @@ typedef struct utp_context_options {
     uint32_t                    stream_terminal_capacity;             // 每连接流终态记录上限，0 时采用 4096
     uint32_t                    path_validation_buffer_capacity;      // 每连接候选路径缓存上限(bytes)，0 时禁用
 
-    // Context 接收缓存配置
+    // Context 缓存配置
     uint32_t                    packet_in_max_free;  // Context 入站 PacketIn 最大空闲缓存数，0 时采用 256
+    size_t                      stream_send_buffer_capacity;  // 每 Stream 发送缓存，0 时采用 256 KiB
 
     // 被动握手响应的超时与重试配置
     uint16_t                    handshake_timeout;       // 首轮握手超时(ms)，0 时采用 800
@@ -85,8 +86,9 @@ typedef struct utp_context_options {
     uint16_t                    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 时采用 32
     uint16_t                    initial_max_streams_uni;              // 允许对端创建的单向流数，0 时采用 16
     uint64_t                    initial_max_data;                     // 连接级接收窗口，0 时采用 8 MiB
-    uint64_t                    initial_max_stream_data_bidi_local;   // 对端发起双向流的接收窗口，0 时采用 256 KiB
-    uint64_t                    initial_max_stream_data_bidi_remote;  // 本端发起双向流的接收窗口，0 时采用 256 KiB
+    uint64_t                    initial_max_stream_data_bidi_local;   // 本端发起双向流的接收窗口，范围为 64 KiB 至 4 MiB
+    uint64_t                    initial_max_stream_data_bidi_remote;  // 对端发起双向流的接收窗口，范围为 64 KiB 至 4 MiB
+    uint64_t                    initial_max_stream_data_uni;          // 对端发起单向流的接收窗口，范围为 64 KiB 至 4 MiB
     const char*                 peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
 } utp_context_options_t;
 
@@ -129,6 +131,7 @@ typedef struct utp_context_options {
         4096u,                                      /* stream_terminal_capacity: 每连接流终态容量 */              \
         16u * 1024u,                                /* path_validation_buffer_capacity: 候选路径缓存上限 */       \
         256u,                                       /* packet_in_max_free: PacketIn 最大空闲缓存数 */             \
+        256u * 1024u,                               /* stream_send_buffer_capacity: Stream 发送缓存 */           \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
         1024u,                                      /* pending_incoming_limit: 全局未完成被动握手上限 */          \
@@ -143,8 +146,9 @@ typedef struct utp_context_options {
         32u,                                        /* initial_max_streams_bidi: 初始最大双向流数 */              \
         16u,                                        /* initial_max_streams_uni: 初始最大单向流数 */               \
         UINT64_C(8) * 1024u * 1024u,                /* initial_max_data: 初始连接级接收窗口 */                    \
-        UINT64_C(256) * 1024u,                      /* initial_max_stream_data_bidi_local: 对端双向流接收窗口 */  \
-        UINT64_C(256) * 1024u,                      /* initial_max_stream_data_bidi_remote: 本端双向流接收窗口 */ \
+        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_local: 本端双向流接收窗口 */  \
+        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_remote: 对端双向流接收窗口 */ \
+        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_uni: 对端单向流接收窗口 */          \
         NULL                                        /* peer_id: 调用方必须设置的 Context 路由标识 */              \
     }
 

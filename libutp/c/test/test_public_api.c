@@ -232,6 +232,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
     client_options.initial_max_data                    = UINT64_C(1024) * 1024u;
     client_options.initial_max_stream_data_bidi_local  = UINT64_C(192) * 1024u;
     client_options.initial_max_stream_data_bidi_remote = UINT64_C(128) * 1024u;
+    client_options.initial_max_stream_data_uni         = UINT64_C(96) * 1024u;
     server_options.event_base                          = event_base;
     server_options.context_id                          = server_context_id;
     server_probe.expected_encryption                   = encryption;
@@ -277,6 +278,7 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
            UINT64_C(192) * 1024u);
     assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_bidi_remote ==
            UINT64_C(128) * 1024u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_uni == UINT64_C(96) * 1024u);
     assert(server_probe.connected_connection->peer_ack_frequency.ack_eliciting_threshold == 5u);
     assert(server_probe.connected_connection->peer_ack_frequency.max_ack_delay_ms == 40u);
     assert(utp_connection_export_session_token(client_probe.connected_connection, resumption_state,
@@ -409,7 +411,7 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
                          UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
         assert((size_t)target_size >= fixed_length + UTP_FRAME_STREAM_HEADER_SIZE);
         boundary_size =
-            (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE + UTP_STREAM_SEND_BUFFER_CAPACITY;
+            (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE + UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
         boundary_data = malloc(boundary_size);
         assert(boundary_data != NULL);
         memset(boundary_data, 0x5a, boundary_size);
@@ -1034,6 +1036,13 @@ int main(void)
     options.peer_id                                   = oversized_peer_id;
     assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
     options.peer_id = "test";
+    options.initial_max_stream_data_bidi_local = 0u;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    options.initial_max_stream_data_bidi_local = UINT64_C(64) * 1024u - 1u;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    options.initial_max_stream_data_bidi_local = UINT64_C(4) * 1024u * 1024u + 1u;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    options.initial_max_stream_data_bidi_local = UINT64_C(512) * 1024u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     assert(context != NULL);
     assert(strcmp(context->peer_id, "test") == 0);

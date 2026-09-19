@@ -1329,8 +1329,8 @@ TEST_CASE("application reads replenish connection and stream flow-control window
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::array<uint8_t, 192> payload     = {};
-    std::array<uint8_t, 64>  received    = {};
+    std::array<uint8_t, 128u * 1024u> payload  = {};
+    std::array<uint8_t, 64u * 1024u>  received = {};
     utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
     client_opts.peer_id                  = "test";
     utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
@@ -1350,8 +1350,8 @@ TEST_CASE("application reads replenish connection and stream flow-control window
     client_opts.context_id                          = 5101u;
     server_opts.event_base                          = pair.event_base;
     server_opts.context_id                          = 5102u;
-    server_opts.initial_max_data                    = 96u;
-    server_opts.initial_max_stream_data_bidi_remote = 64u;
+    server_opts.initial_max_data                    = UINT64_C(96) * 1024u;
+    server_opts.initial_max_stream_data_bidi_remote = UINT64_C(64) * 1024u;
     REQUIRE(utp_context_create(&client_opts, &pair.client) == UTP_STATUS_OK);
     REQUIRE(utp_context_create(&server_opts, &pair.server) == UTP_STATUS_OK);
     pair.server_probe.context = pair.server;
@@ -1409,8 +1409,8 @@ TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transpo
                                             0u,
                                             false,
                                             false};
-    std::array<uint8_t, 128> payload     = {};
-    std::array<uint8_t, 64>  received    = {};
+    std::array<uint8_t, 128u * 1024u> payload  = {};
+    std::array<uint8_t, 64u * 1024u>  received = {};
     utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
     client_opts.peer_id                  = "test";
     utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
@@ -1430,8 +1430,8 @@ TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transpo
     client_opts.context_id                          = 5201u;
     server_opts.event_base                          = pair.event_base;
     server_opts.context_id                          = 5202u;
-    server_opts.initial_max_data                    = 96u;
-    server_opts.initial_max_stream_data_bidi_remote = 64u;
+    server_opts.initial_max_data                    = UINT64_C(96) * 1024u;
+    server_opts.initial_max_stream_data_bidi_remote = UINT64_C(64) * 1024u;
     REQUIRE(utp_context_create(&client_opts, &pair.client) == UTP_STATUS_OK);
     REQUIRE(utp_context_create(&server_opts, &pair.server) == UTP_STATUS_OK);
     pair.server_probe.context = pair.server;
@@ -2153,7 +2153,7 @@ TEST_CASE("large encrypted STREAM is segmented and reassembled", "[transport][in
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::vector<uint8_t> payload(64u * 1024u);
+    std::vector<uint8_t> payload(512u * 1024u);
     std::vector<uint8_t> received(payload.size());
     stream_send_probe    send_probe = {};
     uint32_t             stream_id  = UINT32_MAX;
@@ -2196,7 +2196,7 @@ TEST_CASE("connected callback can fill the stream send buffer", "[transport][int
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::vector<uint8_t>        payload(64u * 1024u);
+    std::vector<uint8_t>        payload(512u * 1024u);
     std::vector<uint8_t>        received(payload.size());
     stream_send_probe           send_probe      = {};
     connected_stream_send_probe connected_probe = {};
