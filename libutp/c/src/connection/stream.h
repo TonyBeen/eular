@@ -9,6 +9,7 @@
 
 #include "proto/frame.h"
 #include "proto/packet_in.h"
+#include "queue.h"
 #include "util/error.h"
 #include "util/hash.h"
 
@@ -32,9 +33,9 @@ struct utp_connection;
 #define UTP_STREAM_DEFAULT_FLOW_WINDOW          (512u * 1024u)
 
 typedef struct utp_stream_recv_account {
-    size_t* connection_memory_bytes;  // 连接级已占用重组内存计数
+    size_t* connection_memory_bytes;    // 连接级已占用重组内存计数
     size_t* connection_fragment_count;  // 连接级已保留分片数计数
-    size_t  connection_memory_limit;  // 连接级重组内存上限
+    size_t  connection_memory_limit;    // 连接级重组内存上限
     size_t  connection_fragment_limit;  // 连接级重组分片数上限
 } utp_stream_recv_account_t;
 
@@ -62,58 +63,58 @@ typedef utp_on_stream_closed_fn   utp_stream_close_cb_t;
 
 struct utp_stream {
     // 仅由 Connection 创建的流会设置 hash_node 和 connection。
-    utp_hash_node_t             hash_node;                                       // Connection 流表节点
-    struct utp_connection*      connection;                                      // 所属连接，不拥有
-    uint64_t*                   connection_consumed_total;                       // 连接级已消费字节累计指针
-    uint32_t                    stream_id;                                       // 协议流 ID
-    uint64_t                    send_buffer_offset;                              // 发送环形缓冲逻辑起始偏移
-    uint64_t                    next_send_offset;                                // 下一段待发送数据的流偏移
-    uint64_t                    recv_offset;                                     // 下一字节连续读取偏移
-    uint64_t                    local_max_stream_offset_received;                // 已观察到的最大接收末尾偏移
-    uint64_t                    local_stream_offset_consumed;                    // 已从连接接收窗口退休的流偏移
-    uint64_t                    local_max_stream_offset_sent;                    // 已实际写入 UDP 的最大发送末尾偏移
-    uint64_t                    peer_final_size;                                 // FIN 或 RESET 声明的对端最终偏移
-    uint64_t                    peer_max_stream_data;                            // 对端通告的发送额度
-    uint64_t                    local_max_stream_data_advertised;                // 本端通告的接收额度
-    uint64_t                    last_max_stream_data_sent_us;                    // 上次发送 MAX_STREAM_DATA 的时刻
-    uint64_t                    last_stream_data_blocked_sent_us;                // 上次发送 STREAM_DATA_BLOCKED 的时刻
-    uint32_t                    drr_deficit;                                     // DRR 当前可用配额
-    size_t                      send_buffer_length;                              // 发送环形缓冲有效长度
-    size_t                      send_buffer_start;                               // 发送环形缓冲物理起始下标
-    size_t                      send_in_flight_bytes;                            // 已构造但尚未确认的发送字节
-    size_t                      send_buffer_capacity;                            // 发送环形缓冲容量
-    size_t                      recv_buffered_bytes;                             // 等待应用读取的连续或乱序字节
-    size_t                      recv_pinned_memory_bytes;                        // 被 PacketIn 引用固定的接收内存
-    size_t                      recv_fragment_count;                             // 接收重组分片数
-    size_t                      recv_accounted_fragment_count;                   // 已进入连接级预算的分片数
-    size_t                      send_ack_range_count;                            // 已确认发送区间数
+    utp_hash_node_t             hash_node;                         // Connection 流表节点
+    struct utp_connection*      connection;                        // 所属连接，不拥有
+    uint64_t*                   connection_consumed_total;         // 连接级已消费字节累计指针
+    uint32_t                    stream_id;                         // 协议流 ID
+    uint64_t                    send_buffer_offset;                // 发送环形缓冲逻辑起始偏移
+    uint64_t                    next_send_offset;                  // 下一段待发送数据的流偏移
+    uint64_t                    recv_offset;                       // 下一字节连续读取偏移
+    uint64_t                    local_max_stream_offset_received;  // 已观察到的最大接收末尾偏移
+    uint64_t                    local_stream_offset_consumed;      // 已从连接接收窗口退休的流偏移
+    uint64_t                    local_max_stream_offset_sent;      // 已实际写入 UDP 的最大发送末尾偏移
+    uint64_t                    peer_final_size;                   // FIN 或 RESET 声明的对端最终偏移
+    uint64_t                    peer_max_stream_data;              // 对端通告的发送额度
+    uint64_t                    local_max_stream_data_advertised;  // 本端通告的接收额度
+    uint64_t                    last_max_stream_data_sent_us;      // 上次发送 MAX_STREAM_DATA 的时刻
+    uint64_t                    last_stream_data_blocked_sent_us;  // 上次发送 STREAM_DATA_BLOCKED 的时刻
+    uint32_t                    drr_deficit;                       // DRR 当前可用配额
+    size_t                      send_buffer_length;                // 发送环形缓冲有效长度
+    size_t                      send_buffer_start;                 // 发送环形缓冲物理起始下标
+    size_t                      send_in_flight_bytes;              // 已构造但尚未确认的发送字节
+    size_t                      send_buffer_capacity;              // 发送环形缓冲容量
+    size_t                      recv_buffered_bytes;               // 等待应用读取的连续或乱序字节
+    size_t                      recv_pinned_memory_bytes;          // 被 PacketIn 引用固定的接收内存
+    size_t                      recv_fragment_count;               // 接收重组分片数
+    size_t                      recv_accounted_fragment_count;     // 已进入连接级预算的分片数
+    size_t                      send_ack_range_count;              // 已确认发送区间数
     utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];  // 已确认发送区间
-    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];     // 按偏移排序的接收分片
-    uint8_t*                    send_buffer;                                        // 首次写入时分配的环形发送缓冲
+    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];    // 按偏移排序的接收分片
+    uint8_t*                    send_buffer;                                       // 首次写入时分配的环形发送缓冲
     uint8_t                     priority;                                          // 用户设置的 0 至 7 优先级
     uint8_t                     strict_wait_rounds;                                // Strict 调度等待轮数，用于老化
     utp_stream_read_cb_t        read_cb;                                           // 可读通知回调
     utp_stream_write_cb_t       write_cb;                                          // 可写通知回调
     utp_stream_close_cb_t       close_cb;                                          // 双向关闭通知回调
-    void*                       read_cb_data;                                      // 可读回调用户数据
-    void*                       write_cb_data;                                     // 可写回调用户数据
-    void*                       close_cb_data;                                     // 关闭回调用户数据
-    bool                        used : 1;                                          // 是否已初始化为有效流
-    bool                        local_fin_queued : 1;                              // 本端 FIN 已请求发送
-    bool                        local_fin_sent : 1;                                // 本端 FIN 已构造发送
-    bool                        local_fin_transmitted : 1;                         // 本端 FIN 已实际写入 UDP
-    bool                        peer_fin : 1;                                      // 已接收到对端 FIN
-    bool                        local_read_shutdown : 1;                           // 本地已停止读取
-    bool                        local_write_reset : 1;                             // 本地写方向已被 RESET 终止
-    bool                        peer_reset : 1;                                    // 对端已 RESET 其写方向
-    bool                        peer_stop_sending_received : 1;                    // 是否收到过对端 STOP_SENDING
-    bool                        peer_final_size_known : 1;                         // 对端最终偏移是否已经确定
-    bool                        stream_limit_released : 1;                         // 对端流额度是否已归还
-    bool                        notifying_readable : 1;                            // 正在执行可读回调，防止重入
-    bool                        notifying_writable : 1;                            // 正在执行可写回调，防止重入
-    bool                        closed_notified : 1;                               // 关闭回调是否已通知
-    bool                        defer_user_notifications : 1;                      // incoming 回调前暂缓状态通知
-    bool                        incoming_reported : 1;  // 是否已调用 Connection 的 incoming stream 回调
+    TAILQ_ENTRY(utp_stream) read_notification_next;                                // Context 可读通知队列节点
+    TAILQ_ENTRY(utp_stream) write_notification_next;                               // Context 可写通知队列节点
+    void* read_cb_data;                                                            // 可读回调用户数据
+    void* write_cb_data;                                                           // 可写回调用户数据
+    void* close_cb_data;                                                           // 关闭回调用户数据
+    bool  used : 1;                                                                // 是否已初始化为有效流
+    bool  local_fin_queued : 1;                                                    // 本端 FIN 已请求发送
+    bool  local_fin_sent : 1;                                                      // 本端 FIN 已构造发送
+    bool  local_fin_transmitted : 1;                                               // 本端 FIN 已实际写入 UDP
+    bool  peer_fin : 1;                                                            // 已接收到对端 FIN
+    bool  local_read_shutdown : 1;                                                 // 本地已停止读取
+    bool  local_write_reset : 1;                                                   // 本地写方向已被 RESET 终止
+    bool  peer_reset : 1;                                                          // 对端已 RESET 其写方向
+    bool  peer_stop_sending_received : 1;                                          // 是否收到过对端 STOP_SENDING
+    bool  peer_final_size_known : 1;                                               // 对端最终偏移是否已经确定
+    bool  stream_limit_released : 1;                                               // 对端流额度是否已归还
+    bool  closed_notified : 1;                                                     // 关闭回调是否已通知
+    bool  defer_user_notifications : 1;                                            // incoming 回调前暂缓状态通知
+    bool  incoming_reported : 1;  // 是否已调用 Connection 的 incoming stream 回调
 };
 
 /** @brief 初始化由 Connection 管理的流状态。 */
@@ -132,6 +133,10 @@ utp_internal_error_t utp_stream_shutdown_read_internal(utp_stream_t* stream);
 utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset);
 /** @brief 在终止状态提交和 incoming 回调完成后触发关闭通知。 */
 void                 utp_stream_notify_state_internal(utp_stream_t* stream);
+/** @brief 在 Context 异步通知队列中派发可读回调。 */
+void                 utp_stream_dispatch_readable_notification(utp_stream_t* stream);
+/** @brief 在 Context 异步通知队列中派发可写回调。 */
+void                 utp_stream_dispatch_writable_notification(utp_stream_t* stream);
 /** @brief 返回发送缓冲区逻辑末尾偏移。 */
 utp_internal_error_t utp_stream_send_buffered_end_offset(const utp_stream_t* stream, uint64_t* out_offset);
 /** @brief 将数据复制写入流发送环形缓冲。 */
@@ -198,9 +203,9 @@ size_t               utp_stream_readable_bytes(const utp_stream_t* stream);
 size_t               utp_stream_send_in_flight_bytes(const utp_stream_t* stream);
 /** @brief 判断流是否完全关闭或被重置。 */
 bool                 utp_stream_is_closed(const utp_stream_t* stream);
-/** @brief 设置可读回调；已有连续数据或 FIN 时立即同步通知。 */
+/** @brief 设置可读回调；已有连续数据或 FIN 时在下一轮事件循环通知。 */
 void                 utp_stream_set_read_callback(utp_stream_t* stream, utp_stream_read_cb_t callback, void* user_data);
-/** @brief 设置可写回调；当前可写时立即同步通知。 */
+/** @brief 设置可写回调；当前可写时在下一轮事件循环通知。 */
 void utp_stream_set_write_callback(utp_stream_t* stream, utp_stream_write_cb_t callback, void* user_data);
 /** @brief 设置双向关闭回调。 */
 void utp_stream_set_close_callback(utp_stream_t* stream, utp_stream_close_cb_t callback, void* user_data);

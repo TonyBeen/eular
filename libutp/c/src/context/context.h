@@ -16,13 +16,13 @@
 #include "util/hash.h"
 #include "util/log.h"
 
-#define UTP_CONTEXT_PACKET_LIMIT                     SIZE_MAX
-#define UTP_CONTEXT_PACKET_IN_GROW_CAPACITY          64u
-#define UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY         8u
-#define UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE       256u
-#define UTP_CONTEXT_PENDING_PACKET_LIMIT             16u
-#define UTP_CONTEXT_PENDING_STORAGE_CAPACITY         32768u
-#define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE         32u
+#define UTP_CONTEXT_PACKET_LIMIT               SIZE_MAX
+#define UTP_CONTEXT_PACKET_IN_GROW_CAPACITY    64u
+#define UTP_CONTEXT_PACKET_IN_BLOCK_CAPACITY   8u
+#define UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE 256u
+#define UTP_CONTEXT_PENDING_PACKET_LIMIT       16u
+#define UTP_CONTEXT_PENDING_STORAGE_CAPACITY   32768u
+#define UTP_CONTEXT_ZERO_RTT_REPLAY_KEY_SIZE   32u
 #define UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE \
     (UTP_CRYPTO_EARLY_ATTEMPT_NONCE_SIZE + UTP_CRYPTO_ENCRYPTED_SERVER_INFO_SIZE)
 #define UTP_CONTEXT_NAT_RESULT_LIFETIME_US UINT64_C(300000000)
@@ -209,12 +209,14 @@ typedef struct utp_context_pending_slot {
     bool                   queued : 1;                                     // 是否已进入 pending 哈希表
 } utp_context_pending_slot_t;
 TAILQ_HEAD(utp_context_pending_slot_tailq, utp_context_pending_slot);
+TAILQ_HEAD(utp_stream_notification_tailq, utp_stream);
 
 struct utp_context {
     utp_event_loop_t                         event_loop;                       // 借用调用方 libevent 循环
     utp_event_t                              udp_event;                        // UDP 可读事件
     utp_event_t                              udp_write_event;                  // UDP 可写事件
     utp_event_t                              timer_event;                      // 协议定时器事件
+    utp_event_t                              notification_event;               // Stream 异步通知事件
     utp_udp_socket_t                         udp_socket;                       // Context 持有的 UDP socket
     utp_address_t                            bound_address;                    // bind 成功后的本地地址与地址族
     utp_packet_in_pool_t                     packet_in_pool;                   // 入站包对象池
@@ -229,6 +231,8 @@ struct utp_context {
     struct utp_context_connection_slot_tailq connected_notification_slots;     // 待下一轮事件循环投递的连接成功事件
     struct utp_context_connection_slot_tailq error_notification_slots;  // 待下一轮事件循环投递的连接失败或断连事件
     struct utp_context_connect_error_notification_tailq orphan_connect_error_notifications;
+    struct utp_stream_notification_tailq                readable_notification_streams;
+    struct utp_stream_notification_tailq                writable_notification_streams;
     utp_hash_table_t                                    pending_incoming;               // 等待 accept 的被动握手表
     utp_hash_table_t                                    pending_incoming_by_attempt;    // pending 握手 attempt 表
     utp_hash_table_t                                    completed_attempts;             // 已完成被动握手短期去重表
@@ -258,6 +262,7 @@ struct utp_context {
     uint32_t                     stream_terminal_capacity;                             // 新连接流终态表容量
     uint32_t                     path_validation_buffer_capacity;                      // 新连接候选路径缓存上限(bytes)
     size_t                       stream_send_buffer_capacity;                          // 新建 Stream 发送缓存容量
+    uint16_t                     stream_writable_low_watermark_per_mille;              // Stream 可写通知阈值
     utp_nat_probe_task_t         nat_probe;                                            // 当前 NAT 探测任务
     utp_nat_probe_result_t       nat_result;                                           // 最近一次完成的 NAT 探测缓存
     utp_context_ntrs_registration_t   ntrs_registration;    // Context 到单个 NTRS 的半连接注册
@@ -296,5 +301,8 @@ struct utp_context {
 utp_internal_error_t utp_context_flush_public_connection(utp_context_t* context, utp_connection_t* connection);
 bool                 utp_context_suppress_terminal_error(utp_context_t* context, utp_connection_t* connection);
 void                 utp_context_remember_observed_address(utp_context_t* context, const utp_address_t* address);
+void                 utp_context_schedule_stream_readable(utp_context_t* context, utp_stream_t* stream);
+void                 utp_context_schedule_stream_writable(utp_context_t* context, utp_stream_t* stream);
+void                 utp_context_cancel_stream_notifications(utp_context_t* context, utp_stream_t* stream);
 
 #endif  // EULAR_UTP_CONTEXT_CONTEXT_H

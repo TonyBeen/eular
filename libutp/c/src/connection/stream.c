@@ -66,10 +66,15 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 
 static bool utp_stream_is_writable(const utp_stream_t* stream)
 {
+    uint16_t threshold;
+    size_t   low_watermark;
+
     assert(stream != NULL);
+    threshold     = stream->connection == NULL ? 500u : stream->connection->stream_writable_low_watermark_per_mille;
+    low_watermark = (stream->send_buffer_capacity / 1000u) * threshold +
+                    ((stream->send_buffer_capacity % 1000u) * threshold) / 1000u;
     return stream->used && utp_stream_local_can_send(stream) && !utp_stream_send_side_is_closed(stream) &&
-           !stream->local_write_reset && !stream->local_fin_queued &&
-           stream->send_buffer_length < stream->send_buffer_capacity;
+           !stream->local_write_reset && !stream->local_fin_queued && stream->send_buffer_length <= low_watermark;
 }
 
 static void utp_stream_enter_user_callback(utp_stream_t* stream)
@@ -94,29 +99,21 @@ static void utp_stream_leave_user_callback(utp_stream_t* stream)
 static void utp_stream_notify_readable(utp_stream_t* stream)
 {
     assert(stream != NULL);
-    if (stream->defer_user_notifications || stream->read_cb == NULL || stream->notifying_readable ||
-        !utp_stream_has_readable_event(stream)) {
+    if (stream->defer_user_notifications || stream->read_cb == NULL || !utp_stream_has_readable_event(stream) ||
+        stream->connection == NULL || stream->connection->context == NULL) {
         return;
     }
-    stream->notifying_readable = true;
-    utp_stream_enter_user_callback(stream);
-    stream->read_cb(stream, stream->read_cb_data);
-    stream->notifying_readable = false;
-    utp_stream_leave_user_callback(stream);
+    utp_context_schedule_stream_readable(stream->connection->context, stream);
 }
 
 static void utp_stream_notify_writable(utp_stream_t* stream)
 {
     assert(stream != NULL);
-    if (stream->defer_user_notifications || stream->write_cb == NULL || stream->notifying_writable ||
-        !utp_stream_is_writable(stream)) {
+    if (stream->defer_user_notifications || stream->write_cb == NULL || !utp_stream_is_writable(stream) ||
+        stream->connection == NULL || stream->connection->context == NULL) {
         return;
     }
-    stream->notifying_writable = true;
-    utp_stream_enter_user_callback(stream);
-    stream->write_cb(stream, stream->write_cb_data);
-    stream->notifying_writable = false;
-    utp_stream_leave_user_callback(stream);
+    utp_context_schedule_stream_writable(stream->connection->context, stream);
 }
 
 static void utp_stream_notify_closed(utp_stream_t* stream)
@@ -139,6 +136,30 @@ void utp_stream_notify_state_internal(utp_stream_t* stream)
     utp_stream_notify_readable(stream);
     utp_stream_notify_writable(stream);
     utp_stream_notify_closed(stream);
+}
+
+void utp_stream_dispatch_readable_notification(utp_stream_t* stream)
+{
+    assert(stream != NULL);
+    if (stream->defer_user_notifications || stream->read_cb == NULL || !utp_stream_has_readable_event(stream)) {
+        return;
+    }
+    utp_stream_enter_user_callback(stream);
+    stream->read_cb(stream, stream->read_cb_data);
+    utp_stream_leave_user_callback(stream);
+    utp_stream_notify_readable(stream);
+}
+
+void utp_stream_dispatch_writable_notification(utp_stream_t* stream)
+{
+    assert(stream != NULL);
+    if (stream->defer_user_notifications || stream->write_cb == NULL || !utp_stream_is_writable(stream)) {
+        return;
+    }
+    utp_stream_enter_user_callback(stream);
+    stream->write_cb(stream, stream->write_cb_data);
+    utp_stream_leave_user_callback(stream);
+    utp_stream_notify_writable(stream);
 }
 
 static size_t utp_stream_send_index(const utp_stream_t* stream, size_t offset)
@@ -460,6 +481,10 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->read_cb                          = NULL;
     stream->write_cb                         = NULL;
     stream->close_cb                         = NULL;
+    stream->read_notification_next.tqe_next  = NULL;
+    stream->read_notification_next.tqe_prev  = NULL;
+    stream->write_notification_next.tqe_next = NULL;
+    stream->write_notification_next.tqe_prev = NULL;
     stream->read_cb_data                     = NULL;
     stream->write_cb_data                    = NULL;
     stream->close_cb_data                    = NULL;
@@ -474,8 +499,6 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->peer_stop_sending_received       = false;
     stream->peer_final_size_known            = false;
     stream->stream_limit_released            = false;
-    stream->notifying_readable               = false;
-    stream->notifying_writable               = false;
     stream->closed_notified                  = false;
     stream->defer_user_notifications         = false;
     stream->incoming_reported                = false;
@@ -573,6 +596,9 @@ utp_internal_error_t utp_stream_shutdown_read_internal(utp_stream_t* stream)
 void utp_stream_cleanup(utp_stream_t* stream)
 {
     if (stream != NULL && stream->used) {
+        if (stream->connection != NULL && stream->connection->context != NULL) {
+            utp_context_cancel_stream_notifications(stream->connection->context, stream);
+        }
         stream->read_cb       = NULL;
         stream->write_cb      = NULL;
         stream->close_cb      = NULL;
@@ -1061,8 +1087,8 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
             uint64_t gap_end = fragment_start < end ? fragment_start : end;
             size_t   gap_len = (size_t)(gap_end - start);
 
-            error = utp_stream_insert_fragment(stream, start, frame->data + data_index, gap_len, false, packet,
-                                               account);
+            error =
+                utp_stream_insert_fragment(stream, start, frame->data + data_index, gap_len, false, packet, account);
             if (error != UTP_INTERNAL_ERROR_OK) {
                 utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
                 return error;

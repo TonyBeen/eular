@@ -42,6 +42,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
 static utp_internal_error_t utp_context_send_packet(utp_context_t* context, const utp_connection_t* connection,
                                                     const utp_address_t* peer, const utp_packet_out_t* packet);
 static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, uint64_t now_us);
+static void                 utp_context_notification_callback(uint32_t events, void* user_data);
 static utp_internal_error_t utp_context_enable_udp_write_event(utp_context_t* context);
 static void                 utp_context_disable_udp_write_event_if_idle(utp_context_t* context);
 static void                 utp_context_on_udp_writable(uint32_t events, void* user_data);
@@ -102,7 +103,8 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         utp_connection_set_path_validation_buffer_capacity(connection, context->path_validation_buffer_capacity);
-        connection->stream_send_buffer_capacity = context->stream_send_buffer_capacity;
+        connection->stream_send_buffer_capacity             = context->stream_send_buffer_capacity;
+        connection->stream_writable_low_watermark_per_mille = context->stream_writable_low_watermark_per_mille;
     }
     return error;
 }
@@ -2065,13 +2067,14 @@ static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_
 
     assert(context != NULL);
     assert(now_us != 0u);
-    registration          = &context->ntrs_registration;
+    registration                          = &context->ntrs_registration;
     registration->last_activity_us        = now_us;
     registration->keepalive_packet_number = 0u;
     registration->keepalive_pending       = false;
-    registration->keepalive_deadline_us = registration->keepalive_interval_ms == 0u
-                                             ? 0u
-                                             : utp_context_deadline_after_ms(now_us, registration->keepalive_interval_ms);
+    registration->keepalive_deadline_us =
+        registration->keepalive_interval_ms == 0u
+            ? 0u
+            : utp_context_deadline_after_ms(now_us, registration->keepalive_interval_ms);
 }
 
 static bool utp_context_rendezvous_reference_matches_u64(const uint8_t reference[sizeof(uint64_t)], uint64_t value)
@@ -4499,6 +4502,114 @@ static utp_internal_error_t utp_context_refresh_timer(utp_context_t* context, ui
                                context);
 }
 
+static void utp_context_schedule_notification_timer(utp_context_t* context)
+{
+    utp_internal_error_t error;
+
+    if (context->notification_event.active) {
+        return;
+    }
+    error = utp_event_add_timer(&context->event_loop, &context->notification_event, 0u, false,
+                                utp_context_notification_callback, context);
+
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        utp_internal_log_error(&context->logger, &context->tag, error, "stream notification timer registration failed");
+    }
+}
+
+void utp_context_schedule_stream_readable(utp_context_t* context, utp_stream_t* stream)
+{
+    assert(context != NULL);
+    assert(stream != NULL);
+    assert(stream->connection != NULL);
+    assert(stream->connection->context == context);
+    if (stream->read_notification_next.tqe_prev == NULL) {
+        TAILQ_INSERT_TAIL(&context->readable_notification_streams, stream, read_notification_next);
+    }
+    utp_context_schedule_notification_timer(context);
+}
+
+void utp_context_schedule_stream_writable(utp_context_t* context, utp_stream_t* stream)
+{
+    assert(context != NULL);
+    assert(stream != NULL);
+    assert(stream->connection != NULL);
+    assert(stream->connection->context == context);
+    if (stream->write_notification_next.tqe_prev == NULL) {
+        TAILQ_INSERT_TAIL(&context->writable_notification_streams, stream, write_notification_next);
+    }
+    utp_context_schedule_notification_timer(context);
+}
+
+void utp_context_cancel_stream_notifications(utp_context_t* context, utp_stream_t* stream)
+{
+    assert(context != NULL);
+    assert(stream != NULL);
+    if (stream->read_notification_next.tqe_prev != NULL) {
+        TAILQ_REMOVE(&context->readable_notification_streams, stream, read_notification_next);
+        stream->read_notification_next.tqe_next = NULL;
+        stream->read_notification_next.tqe_prev = NULL;
+    }
+    if (stream->write_notification_next.tqe_prev != NULL) {
+        TAILQ_REMOVE(&context->writable_notification_streams, stream, write_notification_next);
+        stream->write_notification_next.tqe_next = NULL;
+        stream->write_notification_next.tqe_prev = NULL;
+    }
+}
+
+static void utp_context_dispatch_stream_notifications(utp_context_t* context, bool readable)
+{
+    struct utp_stream_notification_tailq snapshot;
+
+    assert(context != NULL);
+    if (readable) {
+        // 本轮只派发进入快照前的 Stream；回调再次就绪时会排入下一轮，避免单次 timer 自旋。
+        snapshot = context->readable_notification_streams;
+        TAILQ_INIT(&context->readable_notification_streams);
+        if (!TAILQ_EMPTY(&snapshot)) {
+            snapshot.tqh_first->read_notification_next.tqe_prev = &snapshot.tqh_first;
+        }
+    } else {
+        snapshot = context->writable_notification_streams;
+        TAILQ_INIT(&context->writable_notification_streams);
+        if (!TAILQ_EMPTY(&snapshot)) {
+            snapshot.tqh_first->write_notification_next.tqe_prev = &snapshot.tqh_first;
+        }
+    }
+    while (!TAILQ_EMPTY(&snapshot)) {
+        utp_stream_t* stream = TAILQ_FIRST(&snapshot);
+
+        if (readable) {
+            TAILQ_REMOVE(&snapshot, stream, read_notification_next);
+            stream->read_notification_next.tqe_next = NULL;
+            stream->read_notification_next.tqe_prev = NULL;
+            utp_stream_dispatch_readable_notification(stream);
+        } else {
+            TAILQ_REMOVE(&snapshot, stream, write_notification_next);
+            stream->write_notification_next.tqe_next = NULL;
+            stream->write_notification_next.tqe_prev = NULL;
+            utp_stream_dispatch_writable_notification(stream);
+        }
+    }
+}
+
+static void utp_context_notification_callback(uint32_t events, void* user_data)
+{
+    utp_context_t* context = user_data;
+
+    assert(context != NULL);
+    if ((events & UTP_EVENT_TIMEOUT) == 0u) {
+        return;
+    }
+    utp_event_remove(&context->notification_event);
+    utp_context_dispatch_stream_notifications(context, true);
+    utp_context_dispatch_stream_notifications(context, false);
+    if (!TAILQ_EMPTY(&context->readable_notification_streams) ||
+        !TAILQ_EMPTY(&context->writable_notification_streams)) {
+        utp_context_schedule_notification_timer(context);
+    }
+}
+
 static utp_internal_error_t utp_context_replay_pending_packet(const uint8_t* packet, size_t packet_length,
                                                               size_t wire_packet_length, const utp_address_t* peer,
                                                               const utp_address_t* local, void* user_data)
@@ -6461,16 +6572,15 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         options->bbr_min_rtt_expiry_ms == 0u || options->cubic_init_cwnd_mss == 0u ||
         options->cubic_min_cwnd_mss == 0u || !isfinite(options->cubic_beta) || options->cubic_beta <= 0.0 ||
         options->cubic_beta >= 1.0 || !isfinite(options->cubic_c) || options->cubic_c <= 0.0 ||
-        options->cubic_c > 2.0 || !isfinite(options->bbr_startup_high_gain) ||
-        options->bbr_startup_high_gain <= 1.0 ||
+        options->cubic_c > 2.0 || !isfinite(options->bbr_startup_high_gain) || options->bbr_startup_high_gain <= 1.0 ||
         options->bbr_startup_high_gain > 4.0 || options->bbr_cwnd_gain < 1.0 || options->bbr_cwnd_gain > 4.0 ||
         !isfinite(options->bbr_cwnd_gain) || !isfinite(options->bbr_startup_growth_target) ||
         options->bbr_startup_growth_target <= 1.0 || options->bbr_startup_growth_target > 2.0 ||
         options->stream_terminal_capacity == 0u || options->stream_send_buffer_capacity == 0u ||
-        options->handshake_timeout == 0u || options->ack_every_n_packets == 0u || options->ack_delay == 0u ||
-        options->initial_max_stream_data_bidi_local == 0u ||
-        options->initial_max_stream_data_bidi_remote == 0u || options->initial_max_stream_data_uni == 0u ||
-        peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
+        options->stream_writable_low_watermark_per_mille >= 1000u || options->handshake_timeout == 0u ||
+        options->ack_every_n_packets == 0u || options->ack_delay == 0u ||
+        options->initial_max_stream_data_bidi_local == 0u || options->initial_max_stream_data_bidi_remote == 0u ||
+        options->initial_max_stream_data_uni == 0u || peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
         (options->enable_keepalive &&
          (options->keepalive_interval == 0u || options->keepalive_timeout == 0u || options->keepalive_probes == 0u)) ||
         (options->enable_dplpmtud &&
@@ -6503,10 +6613,13 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     TAILQ_INIT(&context->connected_notification_slots);
     TAILQ_INIT(&context->error_notification_slots);
     TAILQ_INIT(&context->orphan_connect_error_notifications);
+    TAILQ_INIT(&context->readable_notification_streams);
+    TAILQ_INIT(&context->writable_notification_streams);
     TAILQ_INIT(&context->free_pending_slots);
     utp_event_init(&context->udp_event);
     utp_event_init(&context->udp_write_event);
     utp_event_init(&context->timer_event);
+    utp_event_init(&context->notification_event);
     utp_udp_socket_init(&context->udp_socket);
     context->bound_address                 = (utp_address_t){0};
     context->next_nat_probe_packet_number  = 1u;
@@ -6533,24 +6646,24 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->packet_in_pool.dynamic           = false;
     context->packet_out_buffer_pool           = (utp_packet_out_buffer_pool_t){0};
 
-    context->on_connected                  = NULL;
-    context->on_connected_user_data        = NULL;
-    context->on_connect_error              = NULL;
-    context->on_connect_error_user_data    = NULL;
-    context->on_new_connection             = NULL;
-    context->on_new_connection_user_data   = NULL;
-    context->on_connection_error           = NULL;
-    context->on_connection_error_user_data = NULL;
-    context->callback_accept_pending       = NULL;
-    context->callback_accept_zero_rtt      = NULL;
-    context->callback_accept_requested     = false;
-    context->stream_scheduler_mode         = options->stream_scheduler_mode;
-    context->cc_algorithm                  = options->cc_algorithm;
-    context->clock_granularity_us          = options->clock_granularity_us;
-    context->bbr_config.initial_cwnd_mss   = options->bbr_init_cwnd_mss;
-    context->bbr_config.minimum_cwnd_mss   = options->bbr_min_cwnd_mss;
-    context->bbr_config.startup_high_gain  = options->bbr_startup_high_gain;
-    context->bbr_config.cwnd_gain          = options->bbr_cwnd_gain;
+    context->on_connected                             = NULL;
+    context->on_connected_user_data                   = NULL;
+    context->on_connect_error                         = NULL;
+    context->on_connect_error_user_data               = NULL;
+    context->on_new_connection                        = NULL;
+    context->on_new_connection_user_data              = NULL;
+    context->on_connection_error                      = NULL;
+    context->on_connection_error_user_data            = NULL;
+    context->callback_accept_pending                  = NULL;
+    context->callback_accept_zero_rtt                 = NULL;
+    context->callback_accept_requested                = false;
+    context->stream_scheduler_mode                    = options->stream_scheduler_mode;
+    context->cc_algorithm                             = options->cc_algorithm;
+    context->clock_granularity_us                     = options->clock_granularity_us;
+    context->bbr_config.initial_cwnd_mss              = options->bbr_init_cwnd_mss;
+    context->bbr_config.minimum_cwnd_mss              = options->bbr_min_cwnd_mss;
+    context->bbr_config.startup_high_gain             = options->bbr_startup_high_gain;
+    context->bbr_config.cwnd_gain                     = options->bbr_cwnd_gain;
     context->bbr_config.startup_growth_target         = options->bbr_startup_growth_target;
     context->bbr_config.startup_full_bandwidth_rounds = options->bbr_startup_full_bw_rounds;
     context->bbr_config.probe_rtt_ms                  = options->bbr_probe_rtt_ms;
@@ -6558,43 +6671,41 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     for (uint32_t index = 0u; index < UTP_BBR_PACING_GAIN_COUNT; ++index) {
         context->bbr_config.pacing_gains[index] = options->bbr_pacing_gains[index];
     }
-    context->cubic_config.beta                   = options->cubic_beta;
-    context->cubic_config.cubic_c                = options->cubic_c;
-    context->cubic_config.initial_cwnd_mss       = options->cubic_init_cwnd_mss;
-    context->cubic_config.minimum_cwnd_mss       = options->cubic_min_cwnd_mss;
-    context->mtu_config.enabled                  = options->enable_dplpmtud;
-    context->mtu_config.mtu_min                  = options->mtu_min;
-    context->mtu_config.mtu_max                  = options->mtu_max;
-    context->mtu_config.mtu_base                 = options->mtu_base;
-    context->mtu_config.probe_interval_seconds   = options->mtu_probe_interval;
-    context->mtu_config.probe_step               = options->mtu_probe_step;
-    context->mtu_config.probe_timeout_ms         = options->mtu_probe_timeout;
-    context->mtu_config.probe_retries            = options->mtu_probe_retries;
-    context->mtu_config.blackhole_loss_threshold = options->mtu_blackhole_loss_threshold;
-    context->mtu_config.blackhole_loss_window_ms = options->mtu_blackhole_loss_window_ms;
-    context->mtu_config.blackhole_cooldown_ms    = options->mtu_blackhole_cooldown_ms;
-    context->zero_rtt_token_max_lifetime_seconds = options->zero_rtt_token_max_lifetime_seconds;
-    context->zero_rtt_replay_cache_capacity      = options->zero_rtt_replay_cache_capacity;
-    context->stream_terminal_capacity            = options->stream_terminal_capacity;
-    context->path_validation_buffer_capacity     = options->path_validation_buffer_capacity;
-    context->stream_send_buffer_capacity         = options->stream_send_buffer_capacity;
-    context->handshake_timeout_ms                = options->handshake_timeout;
-    context->handshake_max_retries               = options->handshake_max_retries;
-    context->local_transport_params.flags        = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
-    context->local_transport_params.max_idle_timeout_ms = options->max_idle_timeout;
-    context->local_transport_params.handshake_timeout_ms = context->handshake_timeout_ms;
+    context->cubic_config.beta                               = options->cubic_beta;
+    context->cubic_config.cubic_c                            = options->cubic_c;
+    context->cubic_config.initial_cwnd_mss                   = options->cubic_init_cwnd_mss;
+    context->cubic_config.minimum_cwnd_mss                   = options->cubic_min_cwnd_mss;
+    context->mtu_config.enabled                              = options->enable_dplpmtud;
+    context->mtu_config.mtu_min                              = options->mtu_min;
+    context->mtu_config.mtu_max                              = options->mtu_max;
+    context->mtu_config.mtu_base                             = options->mtu_base;
+    context->mtu_config.probe_interval_seconds               = options->mtu_probe_interval;
+    context->mtu_config.probe_step                           = options->mtu_probe_step;
+    context->mtu_config.probe_timeout_ms                     = options->mtu_probe_timeout;
+    context->mtu_config.probe_retries                        = options->mtu_probe_retries;
+    context->mtu_config.blackhole_loss_threshold             = options->mtu_blackhole_loss_threshold;
+    context->mtu_config.blackhole_loss_window_ms             = options->mtu_blackhole_loss_window_ms;
+    context->mtu_config.blackhole_cooldown_ms                = options->mtu_blackhole_cooldown_ms;
+    context->zero_rtt_token_max_lifetime_seconds             = options->zero_rtt_token_max_lifetime_seconds;
+    context->zero_rtt_replay_cache_capacity                  = options->zero_rtt_replay_cache_capacity;
+    context->stream_terminal_capacity                        = options->stream_terminal_capacity;
+    context->path_validation_buffer_capacity                 = options->path_validation_buffer_capacity;
+    context->stream_send_buffer_capacity                     = options->stream_send_buffer_capacity;
+    context->stream_writable_low_watermark_per_mille         = options->stream_writable_low_watermark_per_mille;
+    context->handshake_timeout_ms                            = options->handshake_timeout;
+    context->handshake_max_retries                           = options->handshake_max_retries;
+    context->local_transport_params.flags                    = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
+    context->local_transport_params.max_idle_timeout_ms      = options->max_idle_timeout;
+    context->local_transport_params.handshake_timeout_ms     = context->handshake_timeout_ms;
     context->local_transport_params.initial_max_streams_bidi = options->initial_max_streams_bidi;
-    context->local_transport_params.initial_max_streams_uni = options->initial_max_streams_uni;
+    context->local_transport_params.initial_max_streams_uni  = options->initial_max_streams_uni;
     context->local_transport_params.ack_delay_exponent =
         options->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ? UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT
                                                                             : options->ack_delay_exponent;
-    context->local_transport_params.initial_max_data = options->initial_max_data;
-    context->local_transport_params.initial_max_stream_data_bidi_local =
-        options->initial_max_stream_data_bidi_local;
-    context->local_transport_params.initial_max_stream_data_bidi_remote =
-        options->initial_max_stream_data_bidi_remote;
-    context->local_transport_params.initial_max_stream_data_uni =
-        options->initial_max_stream_data_uni;
+    context->local_transport_params.initial_max_data                    = options->initial_max_data;
+    context->local_transport_params.initial_max_stream_data_bidi_local  = options->initial_max_stream_data_bidi_local;
+    context->local_transport_params.initial_max_stream_data_bidi_remote = options->initial_max_stream_data_bidi_remote;
+    context->local_transport_params.initial_max_stream_data_uni         = options->initial_max_stream_data_uni;
     if (context->local_transport_params.initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL) {
         context->local_transport_params.initial_max_data = UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL;
     }
@@ -6711,6 +6822,7 @@ void utp_context_destroy(utp_context_t* context)
         utp_hash_node_t* node;
 
         utp_context_log(context, UTP_LOG_LEVEL_INFO, "context destroy started");
+        utp_event_remove(&context->notification_event);
         utp_event_remove(&context->timer_event);
         utp_event_remove(&context->udp_write_event);
         utp_event_remove(&context->udp_event);
@@ -6835,10 +6947,10 @@ utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_o
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     utp_nat_probe_task_reset(&context->nat_probe);
-    context->nat_probe.primary_endpoint = endpoint;
-    context->nat_probe.callback         = callback;
-    context->nat_probe.user_data        = user_data;
-    context->nat_probe.phase_timeout_ms = options->phase_timeout_ms;
+    context->nat_probe.primary_endpoint      = endpoint;
+    context->nat_probe.callback              = callback;
+    context->nat_probe.user_data             = user_data;
+    context->nat_probe.phase_timeout_ms      = options->phase_timeout_ms;
     context->nat_probe.result.address_family = context->bound_address.family;
     context->nat_probe.active                = true;
     now_us                                   = utp_context_now_us();
@@ -6953,13 +7065,13 @@ utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_re
     if (error != UTP_INTERNAL_ERROR_OK) {
         return utp_internal_error_to_status(error);
     }
-    registration.packet_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length;
-    now_us                     = utp_context_now_us();
-    registration.deadline_us   = utp_context_deadline_after_ms(now_us, registration.timeout_ms);
-    context->ntrs_registration = registration;
+    registration.packet_length              = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + body_length;
+    now_us                                  = utp_context_now_us();
+    registration.deadline_us                = utp_context_deadline_after_ms(now_us, registration.timeout_ms);
+    context->ntrs_registration              = registration;
     context->ntrs_address_update.timeout_ms = options->address_update_timeout_ms;
-    context->ntrs_address_update.retries = options->address_update_retries;
-    error                                = utp_context_send_ntrs_registration(context);
+    context->ntrs_address_update.retries    = options->address_update_retries;
+    error                                   = utp_context_send_ntrs_registration(context);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_context_refresh_timer(context, now_us);
     }
@@ -7151,7 +7263,8 @@ utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_optio
     size_t target_peer_id_length;
 
     if (context == NULL || options == NULL || options->address == NULL || options->target_peer_id == NULL ||
-        options->port == 0u || options->timeout_ms == 0u || !utp_context_encryption_mode_is_valid(options->encryption)) {
+        options->port == 0u || options->timeout_ms == 0u ||
+        !utp_context_encryption_mode_is_valid(options->encryption)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     target_peer_id_length = strlen(options->target_peer_id);
@@ -7225,8 +7338,7 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
 
     if (context == NULL || options == NULL || options->address == NULL || options->target_peer_id == NULL ||
         options->port == 0u || options->timeout_ms == 0u || options->session_token == NULL ||
-        options->session_token_size == 0u ||
-        (options->early_data == NULL && options->early_data_size != 0u)) {
+        options->session_token_size == 0u || (options->early_data == NULL && options->early_data_size != 0u)) {
         return UTP_STATUS_INVALID_ARGUMENT;
     }
     target_peer_id_length = strlen(options->target_peer_id);

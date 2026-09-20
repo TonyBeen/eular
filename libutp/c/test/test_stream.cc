@@ -122,37 +122,16 @@ const uint8_t* packet_frame_of_type(utp_packet_out_t* packet, uint8_t requested_
 }
 
 struct stream_callback_probe {
-    int32_t readable_count;
-    int32_t writable_count;
     int32_t closed_count;
 };
 
 struct incoming_terminal_probe {
     int32_t incoming_count;
     int32_t closed_count;
-    int32_t writable_count;
     bool    reset_visible;
     bool    read_cancelled;
     bool    write_cancelled;
-    bool    inside_incoming;
-    bool    writable_during_incoming;
 };
-
-void on_stream_readable(utp_stream_t* stream, void* user_data)
-{
-    auto* probe = static_cast<stream_callback_probe*>(user_data);
-
-    REQUIRE(stream != nullptr);
-    ++probe->readable_count;
-}
-
-void on_stream_writable(utp_stream_t* stream, void* user_data)
-{
-    auto* probe = static_cast<stream_callback_probe*>(user_data);
-
-    REQUIRE(stream != nullptr);
-    ++probe->writable_count;
-}
 
 void on_stream_closed(utp_stream_t* stream, void* user_data)
 {
@@ -197,38 +176,15 @@ void on_incoming_stopped(utp_connection_t* connection, utp_stream_t* stream, voi
         utp_stream_write(stream, "x", 1u) == UTP_STATUS_CANCELLED && stream->peer_stop_sending_received;
 }
 
-void on_incoming_writable(utp_stream_t* stream, void* user_data)
-{
-    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
-
-    REQUIRE(stream != nullptr);
-    ++probe->writable_count;
-    probe->writable_during_incoming = probe->inside_incoming;
-}
-
-void on_incoming_register_writable(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
-{
-    auto* probe = static_cast<incoming_terminal_probe*>(user_data);
-
-    REQUIRE(connection != nullptr);
-    REQUIRE(stream != nullptr);
-    ++probe->incoming_count;
-    probe->inside_incoming = true;
-    utp_stream_set_on_writable(stream, on_incoming_writable, probe);
-    probe->inside_incoming = false;
-}
-
 }  // namespace
 
-TEST_CASE("stream callbacks notify readable writable closed and reset state", "[stream][callback]")
+TEST_CASE("stream closed callback follows terminal state", "[stream][callback]")
 {
     utp_packet_in_pool_t  pool                                       = {};
     utp_stream_t          receive                                    = {};
-    utp_stream_t          writable                                   = {};
     utp_frame_stream_t    frame                                      = {};
     utp_packet_in_t*      packet                                     = nullptr;
     stream_callback_probe receive_probe                              = {};
-    stream_callback_probe writable_probe                             = {};
     uint8_t               payload[UTP_FRAME_STREAM_HEADER_SIZE + 1u] = {};
     uint8_t               read_buffer[8]                             = {};
     size_t                payload_length                             = 0u;
@@ -236,16 +192,13 @@ TEST_CASE("stream callbacks notify readable writable closed and reset state", "[
     uint32_t              stream_data_size                           = 0u;
     uint64_t              stream_offset                              = 0u;
     bool                  fin                                        = false;
-    std::vector<uint8_t>  write_data(UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY, 0x5au);
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&receive, 0u);
-    utp_stream_set_on_readable(&receive, on_stream_readable, &receive_probe);
     utp_stream_set_on_closed(&receive, on_stream_closed, &receive_probe);
     packet = stream_frame_packet(&pool, 0u, 0u, "hello", true, &frame);
     REQUIRE(utp_stream_on_frame_packet(&receive, &frame, packet) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_release(packet);
-    REQUIRE(receive_probe.readable_count == 1);
     REQUIRE(receive_probe.closed_count == 0);
     REQUIRE(utp_stream_close_internal(&receive) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_build_frame(&receive, payload, sizeof(payload), &payload_length, &stream_data_size,
@@ -258,19 +211,7 @@ TEST_CASE("stream callbacks notify readable writable closed and reset state", "[
     REQUIRE(read_length == 5u);
     REQUIRE(receive_probe.closed_count == 1);
 
-    utp_stream_init(&writable, 0u);
-    REQUIRE(utp_stream_write_internal(&writable, write_data.data(), write_data.size()) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_build_frame(&writable, payload, sizeof(payload), &payload_length, &stream_data_size,
-                                   &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(stream_data_size != 0u);
-    REQUIRE(utp_stream_commit_built_frame(&writable, stream_data_size, fin) == UTP_INTERNAL_ERROR_OK);
-    utp_stream_set_on_writable(&writable, on_stream_writable, &writable_probe);
-    REQUIRE(writable_probe.writable_count == 0);
-    REQUIRE(utp_stream_on_packet_acked_range(&writable, stream_offset, stream_data_size) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(writable_probe.writable_count == 1);
-
     utp_stream_cleanup(&receive);
-    utp_stream_cleanup(&writable);
     utp_packet_in_pool_cleanup(&pool);
 }
 
@@ -449,13 +390,13 @@ TEST_CASE("stream read views consume packet-backed fragments without copying", "
 
 TEST_CASE("stream write credit includes in-flight bytes until ACKed", "[stream]")
 {
-    utp_stream_t                                                                        stream           = {};
+    utp_stream_t                                                                                stream           = {};
     std::array<uint8_t, UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY>                                data             = {};
     std::array<uint8_t, UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY + UTP_FRAME_STREAM_HEADER_SIZE> payload          = {};
-    size_t                                                                              payload_length   = 0u;
-    uint32_t                                                                            stream_data_size = 0u;
-    uint64_t                                                                            stream_offset    = 0u;
-    bool                                                                                fin              = false;
+    size_t                                                                                      payload_length   = 0u;
+    uint32_t                                                                                    stream_data_size = 0u;
+    uint64_t                                                                                    stream_offset    = 0u;
+    bool                                                                                        fin = false;
 
     utp_stream_init(&stream, 0u);
     REQUIRE(utp_stream_write_internal(&stream, data.data(), data.size()) == UTP_INTERNAL_ERROR_OK);
@@ -474,8 +415,8 @@ TEST_CASE("stream write credit includes in-flight bytes until ACKed", "[stream]"
 
 TEST_CASE("stream send buffer is allocated lazily with configured capacity", "[stream][memory]")
 {
-    utp_stream_t           stream = {};
-    std::array<uint8_t, 65> data  = {};
+    utp_stream_t            stream = {};
+    std::array<uint8_t, 65> data   = {};
 
     utp_stream_init(&stream, 0u);
     stream.send_buffer_capacity = 64u;
@@ -1168,40 +1109,6 @@ TEST_CASE("connection commits STOP_SENDING before incoming stream callback", "[s
     utp_packet_in_pool_cleanup(&receive_pool);
 }
 
-TEST_CASE("connection defers writable notification until incoming callback returns", "[stream][callback]")
-{
-    const utp_address_t     active_address  = loopback_address(13052u);
-    const utp_address_t     passive_address = loopback_address(13053u);
-    utp_packet_in_pool_t    receive_pool    = {};
-    utp_connection_t        active          = {};
-    utp_connection_t        passive         = {};
-    incoming_terminal_probe probe           = {};
-    uint32_t                stream_id       = UINT32_MAX;
-
-    REQUIRE(utp_connection_init(&active, UTP_CONNECTION_ROLE_ACTIVE, 211u, 212u, &passive_address, 8u, 1280u) ==
-            UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_init(&passive, UTP_CONNECTION_ROLE_PASSIVE, 212u, 211u, &active_address, 8u, 1280u) ==
-            UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
-    active.state  = UTP_CONNECTION_STATE_CONNECTED;
-    passive.state = UTP_CONNECTION_STATE_CONNECTED;
-    utp_send_control_set_connected(&active.send_control, true);
-    utp_send_control_set_connected(&passive.send_control, true);
-    utp_connection_set_on_incoming_stream_internal(&active, on_incoming_register_writable, &probe);
-
-    REQUIRE(utp_connection_create_stream_internal(&passive, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&passive, stream_id),
-                                      reinterpret_cast<const uint8_t*>("x"), 1u) == UTP_INTERNAL_ERROR_OK);
-    transfer_next_packet(&passive, &active, &passive_address, 100u, &receive_pool);
-    REQUIRE(probe.incoming_count == 1);
-    REQUIRE(probe.writable_count == 1);
-    REQUIRE_FALSE(probe.writable_during_incoming);
-
-    utp_connection_cleanup(&passive);
-    utp_connection_cleanup(&active);
-    utp_packet_in_pool_cleanup(&receive_pool);
-}
-
 TEST_CASE("connection validates RESET final size and retires skipped receive bytes", "[stream][reset][flow]")
 {
     const utp_address_t      active_address                       = loopback_address(13045u);
@@ -1764,14 +1671,14 @@ TEST_CASE("connection send path respects peer MAX_DATA", "[stream][flow]")
 
 TEST_CASE("zero transport credits block peer streams and data", "[stream][flow][transport_params]")
 {
-    const utp_address_t                 peer       = loopback_address(13026u);
-    utp_connection_t                    connection = {};
-    utp_frame_transport_params_t        params;
-    uint32_t                            stream_id = UINT32_MAX;
-    utp_packet_out_t*                   packet;
-    utp_stream_t*                       stream;
-    uint8_t                             frame_type;
-    size_t                              frame_length;
+    const utp_address_t          peer       = loopback_address(13026u);
+    utp_connection_t             connection = {};
+    utp_frame_transport_params_t params;
+    uint32_t                     stream_id = UINT32_MAX;
+    utp_packet_out_t*            packet;
+    utp_stream_t*                stream;
+    uint8_t                      frame_type;
+    size_t                       frame_length;
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 41u, 42u, &peer, 8u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
@@ -1780,14 +1687,14 @@ TEST_CASE("zero transport credits block peer streams and data", "[stream][flow][
 
     REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(stream_id == 0u);
-    params                                  = connection.peer_transport_params;
-    params.flags                            = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
-    params.initial_max_streams_bidi         = 0u;
-    params.initial_max_streams_uni          = 0u;
-    params.initial_max_data                 = 0u;
+    params                                     = connection.peer_transport_params;
+    params.flags                               = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
+    params.initial_max_streams_bidi            = 0u;
+    params.initial_max_streams_uni             = 0u;
+    params.initial_max_data                    = 0u;
     params.initial_max_stream_data_bidi_local  = UTP_STREAM_DEFAULT_FLOW_WINDOW;
     params.initial_max_stream_data_bidi_remote = UTP_STREAM_DEFAULT_FLOW_WINDOW;
-    params.initial_max_stream_data_uni      = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    params.initial_max_stream_data_uni         = UTP_STREAM_DEFAULT_FLOW_WINDOW;
     REQUIRE(utp_connection_apply_peer_transport_params(&connection, &params) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(connection.peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] == 0u);
     REQUIRE(connection.peer_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL] == 0u);
@@ -2174,7 +2081,7 @@ TEST_CASE("unidirectional streams enforce their sender and receiver roles and ne
 
         params.initial_max_stream_data_uni = 64u;
         REQUIRE(utp_connection_set_local_transport_config(&active, &params, &active.local_ack_frequency, true, 30000u,
-                                                           1500u, 3u) == UTP_INTERNAL_ERROR_OK);
+                                                          1500u, 3u) == UTP_INTERNAL_ERROR_OK);
         REQUIRE(utp_connection_apply_peer_transport_params(&passive, &params) == UTP_INTERNAL_ERROR_OK);
     }
     REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 2u, 1280u) == UTP_INTERNAL_ERROR_OK);
@@ -2219,12 +2126,12 @@ TEST_CASE("unidirectional streams enforce their sender and receiver roles and ne
         REQUIRE(received_length == sizeof(data));
         REQUIRE(std::memcmp(received, data, sizeof(data)) == 0);
         {
-            size_t                      frame_length = 0u;
+            size_t                      frame_length    = 0u;
             utp_frame_max_stream_data_t max_stream_data = {};
-            const uint8_t* frame;
+            const uint8_t*              frame;
 
             packet = utp_connection_next_packet_to_send(&active);
-            frame = packet_frame_of_type(packet, UTP_FRAME_TYPE_MAX_STREAM_DATA, &frame_length);
+            frame  = packet_frame_of_type(packet, UTP_FRAME_TYPE_MAX_STREAM_DATA, &frame_length);
             REQUIRE(frame != nullptr);
             REQUIRE(utp_frame_max_stream_data_decode(&max_stream_data, frame, frame_length) == UTP_INTERNAL_ERROR_OK);
             REQUIRE(max_stream_data.stream_id == peer_stream_id);

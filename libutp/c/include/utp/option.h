@@ -49,13 +49,13 @@ typedef struct utp_context_options {
     uint16_t                    mtu_min;                       // 可服务的最小 MTU，启用探测时必须大于 0
     uint16_t                    mtu_max;                       // 探测的最大 MTU 上限，启用探测时必须大于 0
     uint16_t                    mtu_base;                      // 初始安全 MTU，启用探测时必须大于 0
-    uint32_t                    mtu_probe_interval;             // MTU 探测间隔(秒)，启用探测时必须大于 0
-    uint16_t                    mtu_probe_step;                 // 阶梯探测步长(bytes)，启用探测时必须大于 0
-    uint16_t                    mtu_probe_timeout;               // 单次探测超时(ms)，启用探测时必须大于 0
-    uint8_t                     mtu_probe_retries;               // 单次探测额外重试次数，0 表示不重试
-    uint8_t                     mtu_blackhole_loss_threshold;   // 判定 MTU 黑洞的连续大包丢失阈值，启用探测时必须大于 0
-    uint16_t                    mtu_blackhole_loss_window_ms;   // 黑洞丢失统计时间窗口(ms)，启用探测时必须大于 0
-    uint16_t                    mtu_blackhole_cooldown_ms;      // 黑洞降级后的冷却时间(ms)，启用探测时必须大于 0
+    uint32_t                    mtu_probe_interval;            // MTU 探测间隔(秒)，启用探测时必须大于 0
+    uint16_t                    mtu_probe_step;                // 阶梯探测步长(bytes)，启用探测时必须大于 0
+    uint16_t                    mtu_probe_timeout;             // 单次探测超时(ms)，启用探测时必须大于 0
+    uint8_t                     mtu_probe_retries;             // 单次探测额外重试次数，0 表示不重试
+    uint8_t                     mtu_blackhole_loss_threshold;  // 判定 MTU 黑洞的连续大包丢失阈值，启用探测时必须大于 0
+    uint16_t                    mtu_blackhole_loss_window_ms;  // 黑洞丢失统计时间窗口(ms)，启用探测时必须大于 0
+    uint16_t                    mtu_blackhole_cooldown_ms;     // 黑洞降级后的冷却时间(ms)，启用探测时必须大于 0
 
     // 0-RTT 会话票据与抗重放配置
     uint32_t                    zero_rtt_token_max_lifetime_seconds;  // 会话票据最大有效期(秒)，0 表示立即失效
@@ -66,30 +66,31 @@ typedef struct utp_context_options {
     // Context 缓存配置
     uint32_t                    packet_in_max_free;  // Context 入站 PacketIn 最大空闲缓存数，0 表示不保留空闲缓存
     size_t                      stream_send_buffer_capacity;  // 每 Stream 发送缓存，必须大于 0
+    uint16_t    stream_writable_low_watermark_per_mille;      // Stream 可写通知阈值，范围 [0, 1000)，分母为 1000
 
     // 被动握手响应的超时与重试配置
-    uint16_t                    handshake_timeout;       // 首轮握手超时(ms)，必须大于 0
-    uint8_t                     handshake_max_retries;   // 被动握手响应的最大重试次数
-    uint32_t                    pending_incoming_limit;  // 全局未完成被动握手上限，0 表示不接受 pending
+    uint16_t    handshake_timeout;       // 首轮握手超时(ms)，必须大于 0
+    uint8_t     handshake_max_retries;   // 被动握手响应的最大重试次数
+    uint32_t    pending_incoming_limit;  // 全局未完成被动握手上限，0 表示不接受 pending
 
     // 保活与 ACK 调度配置
-    bool                        enable_keepalive;     // 是否启用空闲 Ping 探测
-    uint32_t                    keepalive_interval;   // 探测间隔(ms)，启用保活时必须大于 0
-    uint32_t                    keepalive_timeout;    // 单次探测等待时间(ms)，启用保活时必须大于 0
-    uint16_t                    keepalive_probes;     // 连续未响应探测次数，启用保活时必须大于 0
-    uint32_t                    max_idle_timeout;     // 本端通告的最大空闲时间(ms)，0 表示不通告空闲超时
-    uint8_t                     ack_every_n_packets;  // ACK-eliciting 包计数阈值，必须大于 0
-    uint8_t                     ack_delay_exponent;   // ACK 延迟编码指数，范围 0..20
-    uint16_t                    ack_delay;            // 最大 ACK 延迟(ms)，必须大于 0
+    bool        enable_keepalive;     // 是否启用空闲 Ping 探测
+    uint32_t    keepalive_interval;   // 探测间隔(ms)，启用保活时必须大于 0
+    uint32_t    keepalive_timeout;    // 单次探测等待时间(ms)，启用保活时必须大于 0
+    uint16_t    keepalive_probes;     // 连续未响应探测次数，启用保活时必须大于 0
+    uint32_t    max_idle_timeout;     // 本端通告的最大空闲时间(ms)，0 表示不通告空闲超时
+    uint8_t     ack_every_n_packets;  // ACK-eliciting 包计数阈值，必须大于 0
+    uint8_t     ack_delay_exponent;   // ACK 延迟编码指数，范围 0..20
+    uint16_t    ack_delay;            // 最大 ACK 延迟(ms)，必须大于 0
 
     // 本端在握手中通告的初始流控与流数量
-    uint16_t                    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 表示不允许
-    uint16_t                    initial_max_streams_uni;              // 允许对端创建的单向流数，0 表示不允许
-    uint64_t                    initial_max_data;                     // 连接级接收窗口，0 表示不提供额度
-    uint64_t                    initial_max_stream_data_bidi_local;   // 本端发起双向流的初始接收窗口，必须大于 0
-    uint64_t                    initial_max_stream_data_bidi_remote;  // 对端发起双向流的初始接收窗口，必须大于 0
-    uint64_t                    initial_max_stream_data_uni;          // 对端发起单向流的初始接收窗口，必须大于 0
-    const char*                 peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
+    uint16_t    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 表示不允许
+    uint16_t    initial_max_streams_uni;              // 允许对端创建的单向流数，0 表示不允许
+    uint64_t    initial_max_data;                     // 连接级接收窗口，0 表示不提供额度
+    uint64_t    initial_max_stream_data_bidi_local;   // 本端发起双向流的初始接收窗口，必须大于 0
+    uint64_t    initial_max_stream_data_bidi_remote;  // 对端发起双向流的初始接收窗口，必须大于 0
+    uint64_t    initial_max_stream_data_uni;          // 对端发起单向流的初始接收窗口，必须大于 0
+    const char* peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
 } utp_context_options_t;
 
 // Context 配置的完整默认值；创建 Context 前必须由调用方设置 event_base。
@@ -131,7 +132,8 @@ typedef struct utp_context_options {
         4096u,                                      /* stream_terminal_capacity: 每连接流终态容量 */              \
         16u * 1024u,                                /* path_validation_buffer_capacity: 候选路径缓存上限 */       \
         256u,                                       /* packet_in_max_free: PacketIn 最大空闲缓存数 */             \
-        256u * 1024u,                               /* stream_send_buffer_capacity: Stream 发送缓存 */           \
+        256u * 1024u,                               /* stream_send_buffer_capacity: Stream 发送缓存 */            \
+        500u,                                       /* stream_writable_low_watermark_per_mille: 可写阈值 */       \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
         1024u,                                      /* pending_incoming_limit: 全局未完成被动握手上限 */          \
@@ -148,7 +150,7 @@ typedef struct utp_context_options {
         UINT64_C(8) * 1024u * 1024u,                /* initial_max_data: 初始连接级接收窗口 */                    \
         UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_local: 本端双向流接收窗口 */  \
         UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_remote: 对端双向流接收窗口 */ \
-        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_uni: 对端单向流接收窗口 */          \
+        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_uni: 对端单向流接收窗口 */         \
         NULL                                        /* peer_id: 调用方必须设置的 Context 路由标识 */              \
     }
 

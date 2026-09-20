@@ -217,6 +217,11 @@ struct stream_send_probe {
     bool           write_shutdown     = false;
 };
 
+struct async_stream_callback_probe {
+    int32_t calls           = 0;
+    bool    cancel_on_first = false;
+};
+
 struct connected_stream_send_probe {
     endpoint_probe*    endpoint = nullptr;
     stream_send_probe* stream   = nullptr;
@@ -297,6 +302,28 @@ static void on_stream_writable(utp_stream_t* stream, void* user_data)
         if (probe->status == UTP_STATUS_OK) {
             probe->write_shutdown = true;
         }
+    }
+}
+
+static void on_async_stream_writable(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<async_stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->calls;
+    if (probe->cancel_on_first) {
+        utp_stream_set_on_writable(stream, nullptr, nullptr);
+    }
+}
+
+static void on_async_stream_readable(utp_stream_t* stream, void* user_data)
+{
+    auto* probe = static_cast<async_stream_callback_probe*>(user_data);
+
+    REQUIRE(stream != nullptr);
+    ++probe->calls;
+    if (probe->cancel_on_first) {
+        utp_stream_set_on_readable(stream, nullptr, nullptr);
     }
 }
 
@@ -1329,15 +1356,15 @@ TEST_CASE("application reads replenish connection and stream flow-control window
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    std::array<uint8_t, 128u * 1024u> payload  = {};
-    std::array<uint8_t, 64u * 1024u>  received = {};
-    utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
-    client_opts.peer_id                  = "test";
-    utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
-    server_opts.peer_id                  = "test";
-    utp_connect_options_t connect_opts   = UTP_CONNECT_OPTIONS_INIT;
-    uint16_t              server_port    = 0u;
-    uint32_t              stream_id      = UINT32_MAX;
+    std::array<uint8_t, 128u * 1024u> payload     = {};
+    std::array<uint8_t, 64u * 1024u>  received    = {};
+    utp_context_options_t             client_opts = UTP_CONTEXT_OPTIONS_INIT;
+    client_opts.peer_id                           = "test";
+    utp_context_options_t server_opts             = UTP_CONTEXT_OPTIONS_INIT;
+    server_opts.peer_id                           = "test";
+    utp_connect_options_t connect_opts            = UTP_CONNECT_OPTIONS_INIT;
+    uint16_t              server_port             = 0u;
+    uint32_t              stream_id               = UINT32_MAX;
     utp_stream_t*         stream;
     size_t                received_length = 0u;
 
@@ -1401,23 +1428,23 @@ TEST_CASE("dropped MAX_DATA is retransmitted and unblocks the sender", "[transpo
 {
     transport_pair   pair    = {};
     const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
-    const relay_rule drop_flow_control   = {relay_direction::server_to_client,
-                                            relay_action::drop,
-                                            UTP_PACKET_TYPE_CTRL,
-                                            UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA),
-                                            true,
-                                            0u,
-                                            false,
-                                            false};
-    std::array<uint8_t, 128u * 1024u> payload  = {};
-    std::array<uint8_t, 64u * 1024u>  received = {};
-    utp_context_options_t    client_opts = UTP_CONTEXT_OPTIONS_INIT;
-    client_opts.peer_id                  = "test";
-    utp_context_options_t server_opts    = UTP_CONTEXT_OPTIONS_INIT;
-    server_opts.peer_id                  = "test";
-    utp_connect_options_t connect_opts   = UTP_CONNECT_OPTIONS_INIT;
-    uint16_t              server_port    = 0u;
-    uint32_t              stream_id      = UINT32_MAX;
+    const relay_rule drop_flow_control            = {relay_direction::server_to_client,
+                                                     relay_action::drop,
+                                                     UTP_PACKET_TYPE_CTRL,
+                                                     UTP_FRAME_BIT(UTP_FRAME_TYPE_MAX_DATA),
+                                                     true,
+                                                     0u,
+                                                     false,
+                                                     false};
+    std::array<uint8_t, 128u * 1024u> payload     = {};
+    std::array<uint8_t, 64u * 1024u>  received    = {};
+    utp_context_options_t             client_opts = UTP_CONTEXT_OPTIONS_INIT;
+    client_opts.peer_id                           = "test";
+    utp_context_options_t server_opts             = UTP_CONTEXT_OPTIONS_INIT;
+    server_opts.peer_id                           = "test";
+    utp_connect_options_t connect_opts            = UTP_CONNECT_OPTIONS_INIT;
+    uint16_t              server_port             = 0u;
+    uint32_t              stream_id               = UINT32_MAX;
     utp_stream_t*         stream;
     size_t                received_length = 0u;
 
@@ -2228,6 +2255,80 @@ TEST_CASE("connected callback can fill the stream send buffer", "[transport][int
     REQUIRE(pair.client_probe.connection_errors == 0);
     REQUIRE(pair.server_probe.connection_errors == 0);
     transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("stream readable and writable callbacks are asynchronous and level triggered",
+          "[transport][integration][stream]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    async_stream_callback_probe writable_probe = {};
+    async_stream_callback_probe readable_probe = {};
+    uint32_t                    stream_id      = UINT32_MAX;
+    utp_stream_t*               client_stream;
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    client_stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(client_stream != nullptr);
+
+    writable_probe.cancel_on_first = true;
+    utp_stream_set_on_writable(client_stream, on_async_stream_writable, &writable_probe);
+    REQUIRE(writable_probe.calls == 0);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(writable_probe.calls == 1);
+
+    writable_probe.cancel_on_first = false;
+    writable_probe.calls           = 0;
+    utp_stream_set_on_writable(client_stream, on_async_stream_writable, &writable_probe);
+    REQUIRE(writable_probe.calls == 0);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(writable_probe.calls == 1);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(writable_probe.calls == 2);
+    utp_stream_set_on_writable(client_stream, nullptr, nullptr);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(writable_probe.calls == 2);
+
+    REQUIRE(utp_stream_write(client_stream, "x", 1u) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair] {
+        return pair.server_probe.incoming_stream != nullptr &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == 1u;
+    });
+    readable_probe.cancel_on_first = true;
+    utp_stream_set_on_readable(pair.server_probe.incoming_stream, on_async_stream_readable, &readable_probe);
+    REQUIRE(readable_probe.calls == 0);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(readable_probe.calls == 1);
+
+    readable_probe.cancel_on_first = false;
+    readable_probe.calls           = 0;
+    utp_stream_set_on_readable(pair.server_probe.incoming_stream, on_async_stream_readable, &readable_probe);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(readable_probe.calls == 1);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(readable_probe.calls == 2);
+    utp_stream_set_on_readable(pair.server_probe.incoming_stream, nullptr, nullptr);
+
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("context rejects an invalid stream writable notification threshold", "[transport][integration][stream]")
+{
+    struct event_base*    event_base = event_base_new();
+    utp_context_options_t options    = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_t*        context    = nullptr;
+
+    REQUIRE(event_base != nullptr);
+    options.event_base                              = event_base;
+    options.peer_id                                 = "test";
+    options.stream_writable_low_watermark_per_mille = 1000u;
+    REQUIRE(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    REQUIRE(context == nullptr);
+    event_base_free(event_base);
 }
 
 TEST_CASE("relay duplicates a STREAM packet without duplicate delivery", "[transport][integration]")

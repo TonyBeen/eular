@@ -1482,7 +1482,7 @@ static utp_internal_error_t utp_connection_alloc_stream(utp_connection_t* connec
             (stream_id & UINT32_C(1)) == utp_connection_local_stream_initiator_bit(connection);
 
         if ((stream_id & UTP_STREAM_UNIDIRECTIONAL) != 0u) {
-            stream->peer_max_stream_data = connection->peer_initial_max_stream_data_uni;
+            stream->peer_max_stream_data             = connection->peer_initial_max_stream_data_uni;
             stream->local_max_stream_data_advertised = connection->local_transport_params.initial_max_stream_data_uni;
         } else {
             stream->peer_max_stream_data = locally_initiated ? connection->peer_initial_max_stream_data_bidi_remote
@@ -2872,77 +2872,78 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         utp_hash_table_cleanup(&connection->stream_terminals, NULL, NULL);
         return error;
     }
-    connection->context                                = NULL;
-    connection->on_incoming_stream                     = NULL;
-    connection->on_incoming_stream_user_data           = NULL;
-    connection->session_token_cb                       = NULL;
-    connection->session_token_cb_data                  = NULL;
-    connection->terminal_blocks                        = NULL;
-    connection->terminal_current_block                 = NULL;
-    connection->candidate_packet_head                  = NULL;
-    connection->candidate_packet_tail                  = NULL;
-    connection->stream_terminal_oldest                 = NULL;
-    connection->stream_terminal_newest                 = NULL;
-    connection->stream_terminal_capacity               = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
-    connection->stream_terminal_allocated              = 0u;
-    connection->stream_terminal_count                  = 0u;
-    connection->path_validation_buffer_capacity        = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
-    connection->stream_send_buffer_capacity            = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
-    connection->rx_bytes                               = 0u;
-    connection->tx_bytes                               = 0u;
-    connection->rtx_bytes                              = 0u;
-    connection->scheduler_select_total                 = 0u;
-    connection->scheduler_select_strict                = 0u;
-    connection->scheduler_select_drr                   = 0u;
-    connection->scheduler_strict_aging_promoted        = 0u;
-    connection->scheduler_mode_switches                = 0u;
-    connection->scheduler_drr_refills                  = 0u;
-    connection->scheduler_drr_consumes                 = 0u;
-    connection->peer_handshake_packet_number           = 0u;
-    connection->peer_handshake_received_us             = 0u;
-    connection->peer_handshake_done_packet_number      = 0u;
-    connection->retransmission_deadline_us             = 0u;
-    connection->close_deadline_us                      = 0u;
-    connection->close_last_sent_us                     = 0u;
-    connection->close_pto_us                           = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
-    connection->keepalive_deadline_us                  = 0u;
-    connection->last_peer_activity_us                  = 0u;
-    connection->close_error_code                       = 0u;
-    connection->peer_close_error_code                  = 0u;
-    connection->peer_close_reason_length               = 0u;
-    connection->user_callback_depth                    = 0u;
-    connection->path_challenge_deadline_us             = 0u;
-    connection->observed_address_challenge_deadline_us = 0u;
-    connection->ack_profile_candidate_since_us         = 0u;
-    connection->ack_profile_last_sent_us               = 0u;
-    connection->ack_profile_baseline_srtt_us           = 0u;
-    connection->ack_loss_window_start_us               = 0u;
-    connection->last_ack_frequency_apply_us            = 0u;
-    connection->last_public_flush_us                   = 0u;
-    connection->candidate_rx_bytes                     = 0u;
-    connection->candidate_tx_bytes                     = 0u;
-    connection->candidate_queued_bytes                 = 0u;
-    connection->candidate_packet_bytes                 = 0u;
-    connection->path_validation_generation             = 0u;
-    connection->path_challenge_retry_count             = 0u;
-    connection->keepalive_missed_probes                = 0u;
-    connection->keepalive_interval_ms                  = UTP_CONNECTION_KEEPALIVE_INTERVAL_US / UINT64_C(1000);
-    connection->keepalive_timeout_ms                   = 1500u;
-    connection->keepalive_probes                       = 3u;
-    connection->ack_loss_count                         = 0u;
-    connection->ack_profile_current                    = UTP_CONNECTION_ACK_PROFILE_STABLE;
-    connection->ack_profile_candidate                  = UTP_CONNECTION_ACK_PROFILE_STABLE;
-    connection->close_pending                          = false;
-    connection->udp_write_pending                      = false;
-    connection->local_close_started                    = false;
-    connection->peer_close_received                    = false;
-    connection->path_challenge_pending                 = false;
-    connection->observed_address_challenge_sent        = false;
-    connection->crypto_type                            = 0u;
-    connection->peer_ack_delay_exponent                = 0u;
-    connection->peer_transport_params                  = (utp_frame_transport_params_t){0};
-    connection->peer_ack_frequency                     = (utp_frame_ack_frequency_t){0};
-    connection->local_transport_params                 = (utp_frame_transport_params_t){
+    connection->context                                 = NULL;
+    connection->on_incoming_stream                      = NULL;
+    connection->on_incoming_stream_user_data            = NULL;
+    connection->session_token_cb                        = NULL;
+    connection->session_token_cb_data                   = NULL;
+    connection->terminal_blocks                         = NULL;
+    connection->terminal_current_block                  = NULL;
+    connection->candidate_packet_head                   = NULL;
+    connection->candidate_packet_tail                   = NULL;
+    connection->stream_terminal_oldest                  = NULL;
+    connection->stream_terminal_newest                  = NULL;
+    connection->stream_terminal_capacity                = UTP_CONNECTION_STREAM_TERMINAL_DEFAULT_CAPACITY;
+    connection->stream_terminal_allocated               = 0u;
+    connection->stream_terminal_count                   = 0u;
+    connection->path_validation_buffer_capacity         = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
+    connection->stream_send_buffer_capacity             = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
+    connection->stream_writable_low_watermark_per_mille = 500u;
+    connection->rx_bytes                                = 0u;
+    connection->tx_bytes                                = 0u;
+    connection->rtx_bytes                               = 0u;
+    connection->scheduler_select_total                  = 0u;
+    connection->scheduler_select_strict                 = 0u;
+    connection->scheduler_select_drr                    = 0u;
+    connection->scheduler_strict_aging_promoted         = 0u;
+    connection->scheduler_mode_switches                 = 0u;
+    connection->scheduler_drr_refills                   = 0u;
+    connection->scheduler_drr_consumes                  = 0u;
+    connection->peer_handshake_packet_number            = 0u;
+    connection->peer_handshake_received_us              = 0u;
+    connection->peer_handshake_done_packet_number       = 0u;
+    connection->retransmission_deadline_us              = 0u;
+    connection->close_deadline_us                       = 0u;
+    connection->close_last_sent_us                      = 0u;
+    connection->close_pto_us                            = UTP_CONNECTION_CLOSE_PTO_DEFAULT_US;
+    connection->keepalive_deadline_us                   = 0u;
+    connection->last_peer_activity_us                   = 0u;
+    connection->close_error_code                        = 0u;
+    connection->peer_close_error_code                   = 0u;
+    connection->peer_close_reason_length                = 0u;
+    connection->user_callback_depth                     = 0u;
+    connection->path_challenge_deadline_us              = 0u;
+    connection->observed_address_challenge_deadline_us  = 0u;
+    connection->ack_profile_candidate_since_us          = 0u;
+    connection->ack_profile_last_sent_us                = 0u;
+    connection->ack_profile_baseline_srtt_us            = 0u;
+    connection->ack_loss_window_start_us                = 0u;
+    connection->last_ack_frequency_apply_us             = 0u;
+    connection->last_public_flush_us                    = 0u;
+    connection->candidate_rx_bytes                      = 0u;
+    connection->candidate_tx_bytes                      = 0u;
+    connection->candidate_queued_bytes                  = 0u;
+    connection->candidate_packet_bytes                  = 0u;
+    connection->path_validation_generation              = 0u;
+    connection->path_challenge_retry_count              = 0u;
+    connection->keepalive_missed_probes                 = 0u;
+    connection->keepalive_interval_ms                   = UTP_CONNECTION_KEEPALIVE_INTERVAL_US / UINT64_C(1000);
+    connection->keepalive_timeout_ms                    = 1500u;
+    connection->keepalive_probes                        = 3u;
+    connection->ack_loss_count                          = 0u;
+    connection->ack_profile_current                     = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->ack_profile_candidate                   = UTP_CONNECTION_ACK_PROFILE_STABLE;
+    connection->close_pending                           = false;
+    connection->udp_write_pending                       = false;
+    connection->local_close_started                     = false;
+    connection->peer_close_received                     = false;
+    connection->path_challenge_pending                  = false;
+    connection->observed_address_challenge_sent         = false;
+    connection->crypto_type                             = 0u;
+    connection->peer_ack_delay_exponent                 = 0u;
+    connection->peer_transport_params                   = (utp_frame_transport_params_t){0};
+    connection->peer_ack_frequency                      = (utp_frame_ack_frequency_t){0};
+    connection->local_transport_params                  = (utp_frame_transport_params_t){
         UTP_CONNECTION_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
         UTP_STREAM_DEFAULT_FLOW_WINDOW,
@@ -3119,8 +3120,7 @@ utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*
     if (connection == NULL || params == NULL || frequency == NULL || utp_hash_table_count(&connection->streams) != 0u ||
         frequency->ack_eliciting_threshold == 0u || frequency->reordering_threshold == 0u ||
         frequency->max_ack_delay_ms == 0u ||
-        (enable_keepalive &&
-         (keepalive_interval_ms == 0u || keepalive_timeout_ms == 0u || keepalive_probes == 0u)) ||
+        (enable_keepalive && (keepalive_interval_ms == 0u || keepalive_timeout_ms == 0u || keepalive_probes == 0u)) ||
         frequency->ack_eliciting_threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD ||
         frequency->reordering_threshold > UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD ||
         frequency->max_ack_delay_ms > UTP_ACK_FREQUENCY_MAX_DELAY_MS ||
@@ -3569,6 +3569,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->stream_terminal_count                                   = 0u;
     connection->path_validation_buffer_capacity                         = 0u;
     connection->stream_send_buffer_capacity                             = 0u;
+    connection->stream_writable_low_watermark_per_mille                 = 0u;
     connection->candidate_packet_bytes                                  = 0u;
     connection->on_incoming_stream                                      = NULL;
     connection->on_incoming_stream_user_data                            = NULL;
