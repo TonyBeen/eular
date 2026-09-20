@@ -1762,6 +1762,53 @@ TEST_CASE("connection send path respects peer MAX_DATA", "[stream][flow]")
     (void)active_address;
 }
 
+TEST_CASE("zero transport credits block peer streams and data", "[stream][flow][transport_params]")
+{
+    const utp_address_t                 peer       = loopback_address(13026u);
+    utp_connection_t                    connection = {};
+    utp_frame_transport_params_t        params;
+    uint32_t                            stream_id = UINT32_MAX;
+    utp_packet_out_t*                   packet;
+    utp_stream_t*                       stream;
+    uint8_t                             frame_type;
+    size_t                              frame_length;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 41u, 42u, &peer, 8u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    connection.state = UTP_CONNECTION_STATE_CONNECTED;
+    utp_send_control_set_connected(&connection.send_control, true);
+
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_id == 0u);
+    params                                  = connection.peer_transport_params;
+    params.flags                            = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;
+    params.initial_max_streams_bidi         = 0u;
+    params.initial_max_streams_uni          = 0u;
+    params.initial_max_data                 = 0u;
+    params.initial_max_stream_data_bidi_local  = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    params.initial_max_stream_data_bidi_remote = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    params.initial_max_stream_data_uni      = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    REQUIRE(utp_connection_apply_peer_transport_params(&connection, &params) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(connection.peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL] == 0u);
+    REQUIRE(connection.peer_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL] == 0u);
+    REQUIRE(connection.peer_max_data == 0u);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_BIDIRECTIONAL) == 0);
+    REQUIRE(utp_connection_creatable_stream_count(&connection, UTP_STREAM_TYPE_UNIDIRECTIONAL) == 0);
+    REQUIRE(utp_connection_create_stream_internal(&connection, true, &stream_id) == UTP_INTERNAL_ERROR_STREAM_LIMIT);
+    REQUIRE(utp_connection_create_stream_internal(&connection, false, &stream_id) == UTP_INTERNAL_ERROR_STREAM_LIMIT);
+
+    stream = utp_connection_find_stream_internal(&connection, 0u);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_write_internal(stream, reinterpret_cast<const uint8_t*>("x"), 1u) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send_at(&connection, 100u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(first_packet_frame(packet, &frame_type, &frame_length) != nullptr);
+    REQUIRE(frame_type == UTP_FRAME_TYPE_DATA_BLOCKED);
+    REQUIRE(frame_length == UTP_FRAME_DATA_BLOCKED_SIZE);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("connection responds to DataBlocked and StreamDataBlocked with current limits", "[stream][flow]")
 {
     const utp_address_t             active_address  = loopback_address(13027u);
@@ -1847,7 +1894,7 @@ TEST_CASE("connection rejects STREAM data beyond local connection receive window
     REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 1u, 1280u) == UTP_INTERNAL_ERROR_OK);
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
-    passive.local_max_data_advertised = 2u;
+    passive.local_max_data_advertised = 0u;
 
     REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
@@ -2126,7 +2173,7 @@ TEST_CASE("unidirectional streams enforce their sender and receiver roles and ne
         utp_frame_transport_params_t params = active.local_transport_params;
 
         params.initial_max_stream_data_uni = 64u;
-        REQUIRE(utp_connection_set_local_transport_config(&active, &params, &active.local_ack_frequency, true, 0u,
+        REQUIRE(utp_connection_set_local_transport_config(&active, &params, &active.local_ack_frequency, true, 30000u,
                                                            1500u, 3u) == UTP_INTERNAL_ERROR_OK);
         REQUIRE(utp_connection_apply_peer_transport_params(&passive, &params) == UTP_INTERNAL_ERROR_OK);
     }

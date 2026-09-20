@@ -107,15 +107,15 @@ typedef void (*utp_on_connection_error_fn)(utp_connection_t* connection, const u
 typedef struct utp_ntrs_register_options {
     const char* ntrs_address;               // NTRS IP 文本地址，仅在调用期间借用
     uint16_t    ntrs_port;                  // NTRS UDP 端口
-    uint32_t    timeout_ms;                 // 首次等待 REGISTERED 的时限，0 时采用 1000 ms
+    uint32_t    timeout_ms;                 // 首次等待 REGISTERED 的时限，必须大于 0
     uint8_t     retries;                    // REGISTERED 丢失后的额外重试次数，0 时不重试
-    uint32_t    address_update_timeout_ms;  // 首次等待 ADDRESS_UPDATED 的时限，0 时采用 1000 ms
+    uint32_t    address_update_timeout_ms;  // 首次等待 ADDRESS_UPDATED 的时限，必须大于 0
     uint8_t     address_update_retries;     // ADDRESS_UPDATED 丢失后的额外重试次数，0 时不重试
-    uint32_t    keepalive_interval_ms;      // NTRS 关联空闲多久后发 PING，0 时采用 15000 ms
-    uint32_t    keepalive_timeout_ms;       // PING 等待 PONG 的时限，0 时采用 3000 ms
+    uint32_t    keepalive_interval_ms;      // NTRS 关联空闲多久后发 PING，0 表示不发送
+    uint32_t    keepalive_timeout_ms;       // PING 等待 PONG 的时限，启用 NTRS 保活时必须大于 0
 } utp_ntrs_register_options_t;
 
-#define UTP_NTRS_REGISTER_OPTIONS_INIT {NULL, 0u, 0u, 3u, 0u, 3u, 0u, 0u}
+#define UTP_NTRS_REGISTER_OPTIONS_INIT {NULL, 0u, 1000u, 3u, 1000u, 3u, 15000u, 3000u}
 
 typedef struct utp_ntrs_register_result {
     const char*    peer_id;        // 仅回调期间借用，等于 Context 创建时的 peer_id

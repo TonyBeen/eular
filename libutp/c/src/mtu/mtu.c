@@ -159,25 +159,24 @@ void utp_mtu_discovery_init(utp_mtu_discovery_t* discovery, const utp_mtu_config
     discovery->mtu_min  = utp_mtu_normalize(configured_min, discovery->family);
     discovery->mtu_max  = utp_mtu_clamp(configured_max, discovery->mtu_min, UTP_MTU_MAX);
     discovery->mtu_base = utp_mtu_clamp(configured_base, discovery->mtu_min, discovery->mtu_max);
-    discovery->probe_step =
-        config == NULL || config->probe_step == 0u ? UTP_MTU_DEFAULT_PROBE_STEP : config->probe_step;
-    discovery->probe_timeout_ms =
-        config == NULL || config->probe_timeout_ms == 0u ? UTP_MTU_DEFAULT_PROBE_TIMEOUT_MS : config->probe_timeout_ms;
+    discovery->probe_step               = config == NULL ? UTP_MTU_DEFAULT_PROBE_STEP : config->probe_step;
+    discovery->probe_timeout_ms         = config == NULL ? UTP_MTU_DEFAULT_PROBE_TIMEOUT_MS : config->probe_timeout_ms;
     discovery->probe_retries            = config == NULL ? 1u : config->probe_retries;
-    discovery->blackhole_loss_threshold = config == NULL || config->blackhole_loss_threshold == 0u
-                                              ? UTP_MTU_DEFAULT_BLACKHOLE_LOSS_THRESHOLD
-                                              : config->blackhole_loss_threshold;
-    discovery->blackhole_loss_window_ms = config == NULL || config->blackhole_loss_window_ms == 0u
-                                              ? UTP_MTU_DEFAULT_BLACKHOLE_LOSS_WINDOW_MS
-                                              : config->blackhole_loss_window_ms;
-    discovery->blackhole_cooldown_ms    = config == NULL || config->blackhole_cooldown_ms == 0u
-                                              ? UTP_MTU_DEFAULT_BLACKHOLE_COOLDOWN_MS
-                                              : config->blackhole_cooldown_ms;
+    discovery->blackhole_loss_threshold = config == NULL ? UTP_MTU_DEFAULT_BLACKHOLE_LOSS_THRESHOLD
+                                                         : config->blackhole_loss_threshold;
+    discovery->blackhole_loss_window_ms = config == NULL ? UTP_MTU_DEFAULT_BLACKHOLE_LOSS_WINDOW_MS
+                                                         : config->blackhole_loss_window_ms;
+    discovery->blackhole_cooldown_ms    = config == NULL ? UTP_MTU_DEFAULT_BLACKHOLE_COOLDOWN_MS
+                                                         : config->blackhole_cooldown_ms;
     configured_interval_ms =
         config == NULL ? UTP_MTU_DEFAULT_PROBE_INTERVAL_MS : (uint64_t)config->probe_interval_seconds * UINT64_C(1000);
-    discovery->probe_interval_ms           = configured_interval_ms < 1000u        ? 1000u
-                                             : configured_interval_ms > UINT32_MAX ? UINT32_MAX
-                                                                                   : (uint32_t)configured_interval_ms;
+    discovery->probe_interval_ms           = configured_interval_ms == 0u
+                                                 ? 0u
+                                                 : configured_interval_ms < 1000u
+                                                     ? 1000u
+                                                     : configured_interval_ms > UINT32_MAX
+                                                         ? UINT32_MAX
+                                                         : (uint32_t)configured_interval_ms;
     discovery->current_mtu                 = discovery->mtu_base;
     discovery->ceiling_mtu                 = discovery->mtu_max;
     discovery->search_low_mtu              = discovery->current_mtu;

@@ -20,7 +20,6 @@ extern "C" {
 #define UTP_NAT_PROBE_MAX_IN_FLIGHT   6u
 #define UTP_NAT_PROBE_BATCH_SIZE      2u
 #define UTP_NAT_PROBE_MAX_ROUNDS      2u
-#define UTP_NAT_PROBE_DEFAULT_TIMEOUT 3000u
 #define UTP_NAT_PROBE_MIN_TIMEOUT     6u
 
 typedef enum utp_nat_probe_message_type {

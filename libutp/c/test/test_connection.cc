@@ -1586,7 +1586,7 @@ TEST_CASE("connection applies configured local ACK parameters to outgoing ACK fr
             UTP_INTERNAL_ERROR_OK);
     params                    = connection.local_transport_params;
     params.ack_delay_exponent = 3u;
-    REQUIRE(utp_connection_set_local_transport_config(&connection, &params, &frequency, true, 0u, 1500u, 3u) ==
+    REQUIRE(utp_connection_set_local_transport_config(&connection, &params, &frequency, true, 30000u, 1500u, 3u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
     incoming[UTP_PACKET_HEADER_SIZE] = ping;

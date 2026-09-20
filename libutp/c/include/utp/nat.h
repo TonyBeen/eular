@@ -28,10 +28,10 @@ typedef enum utp_nat_class {
 typedef struct utp_nat_probe_options {
     const char* nat_service_address;  // NAT 服务 IPv4/IPv6 字面 IP，仅在调用期间借用
     uint16_t    nat_service_port;     // NAT 服务 UDP 端口
-    uint32_t    phase_timeout_ms;     // 每阶段总时限；0 时采用 3000 ms
+    uint32_t    phase_timeout_ms;     // 每阶段总时限，必须不小于 6 ms
 } utp_nat_probe_options_t;
 
-#define UTP_NAT_PROBE_OPTIONS_INIT {NULL, 0u, 0u}
+#define UTP_NAT_PROBE_OPTIONS_INIT {NULL, 0u, 3000u}
 
 /** @brief NAT 探测的只读结果视图，仅在回调期间有效。 */
 typedef struct utp_nat_probe_result {

@@ -28,7 +28,7 @@ struct utp_hash_table {
     utp_hash_node_t**      buckets;       // 桶头数组所有权
     size_t                 bucket_count;  // 当前桶数
     size_t                 count;         // 当前节点数
-    size_t                 max_entries;   // 节点数上限
+    size_t                 max_entries;   // 节点数上限，0 表示禁用插入
     const utp_allocator_t* allocator;     // 分配器，不拥有
 };
 

@@ -413,9 +413,7 @@ static uint64_t utp_connection_keepalive_interval_us(const utp_connection_t* con
     uint64_t srtt_us;
 
     assert(connection != NULL);
-    local_interval_us = utp_connection_milliseconds_to_microseconds(
-        connection->keepalive_interval_ms != 0u ? connection->keepalive_interval_ms
-                                                : connection->local_transport_params.max_idle_timeout_ms);
+    local_interval_us = utp_connection_milliseconds_to_microseconds(connection->keepalive_interval_ms);
     if (local_interval_us < UINT64_C(1000)) {
         local_interval_us = UINT64_C(1000);
     }
@@ -2928,7 +2926,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->path_validation_generation             = 0u;
     connection->path_challenge_retry_count             = 0u;
     connection->keepalive_missed_probes                = 0u;
-    connection->keepalive_interval_ms                  = 0u;
+    connection->keepalive_interval_ms                  = UTP_CONNECTION_KEEPALIVE_INTERVAL_US / UINT64_C(1000);
     connection->keepalive_timeout_ms                   = 1500u;
     connection->keepalive_probes                       = 3u;
     connection->ack_loss_count                         = 0u;
@@ -3121,6 +3119,8 @@ utp_internal_error_t utp_connection_set_local_transport_config(utp_connection_t*
     if (connection == NULL || params == NULL || frequency == NULL || utp_hash_table_count(&connection->streams) != 0u ||
         frequency->ack_eliciting_threshold == 0u || frequency->reordering_threshold == 0u ||
         frequency->max_ack_delay_ms == 0u ||
+        (enable_keepalive &&
+         (keepalive_interval_ms == 0u || keepalive_timeout_ms == 0u || keepalive_probes == 0u)) ||
         frequency->ack_eliciting_threshold > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD ||
         frequency->reordering_threshold > UTP_ACK_FREQUENCY_MAX_REORDERING_THRESHOLD ||
         frequency->max_ack_delay_ms > UTP_ACK_FREQUENCY_MAX_DELAY_MS ||
@@ -5148,8 +5148,7 @@ utp_internal_error_t utp_connection_on_keepalive_timeout(utp_connection_t* conne
         connection->keepalive_deadline_us = activity_deadline;
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (connection->keepalive_missed_probes >=
-        (connection->keepalive_probes == 0u ? 1u : connection->keepalive_probes)) {
+    if (connection->keepalive_missed_probes >= connection->keepalive_probes) {
         connection->state                      = UTP_CONNECTION_STATE_DRAINING;
         connection->keepalive_deadline_us      = 0u;
         connection->retransmission_deadline_us = 0u;

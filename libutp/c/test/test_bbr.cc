@@ -31,7 +31,8 @@ TEST_CASE("bbr starts with configured cwnd and produces a pacing rate after an A
 
 TEST_CASE("bbr applies configured ProbeRTT timings", "[congestion][bbr]")
 {
-    utp_bbr_config_t             config       = {};
+    utp_bbr_config_t             config       = {16u, 4u, 2.885, 2.0, 1.25, 3u, 200u, 10000u,
+                                                 {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
     utp_bbr_t                    bbr          = {};
     utp_rtt_stats_t              rtt          = {};
     utp_bw_packet_state_t        first_state  = {};
@@ -106,7 +107,8 @@ TEST_CASE("bbr applies configured ProbeRTT timings", "[congestion][bbr]")
 
 TEST_CASE("bbr applies configured ProbeBW pacing gains", "[congestion][bbr]")
 {
-    utp_bbr_config_t             config       = {};
+    utp_bbr_config_t             config       = {16u, 4u, 2.885, 2.0, 1.25, 3u, 200u, 10000u,
+                                                 {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
     utp_bbr_t                    bbr          = {};
     utp_rtt_stats_t              rtt          = {};
     utp_bw_packet_state_t        packet_state = {};
@@ -135,7 +137,8 @@ TEST_CASE("bbr applies configured ProbeBW pacing gains", "[congestion][bbr]")
 
 TEST_CASE("bbr rejects invalid scalar gains", "[congestion][bbr]")
 {
-    utp_bbr_config_t config = {};
+    utp_bbr_config_t config = {16u, 4u, 2.885, 2.0, 1.25, 3u, 200u, 10000u,
+                                {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
     utp_bbr_t        bbr    = {};
 
     config.startup_high_gain     = std::numeric_limits<double>::quiet_NaN();

@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -276,17 +277,14 @@ static const utp_congestion_ops_t ops = {on_init, get_cwnd, get_rate, begin_ack,
                                          on_lost, NULL,     end_ack,  NULL,      NULL};
 void                              utp_bbr_init(utp_bbr_t* b, const utp_bbr_config_t* c)
 {
-    uint32_t i            = c == NULL || c->initial_cwnd_mss == 0u ? 16u : c->initial_cwnd_mss,
-             m            = c == NULL || c->minimum_cwnd_mss == 0u ? 4u : c->minimum_cwnd_mss,
-             r            = c == NULL || c->startup_full_bandwidth_rounds == 0u ? 3u : c->startup_full_bandwidth_rounds,
-             probe_rtt_ms = c == NULL ? 200u : (c->probe_rtt_ms < 50u ? 50u : c->probe_rtt_ms),
-             min_rtt_expiry_ms = c == NULL ? 10000u : (c->min_rtt_expiry_ms < 1000u ? 1000u : c->min_rtt_expiry_ms);
-    double high_gain =
-        c != NULL && c->startup_high_gain > 1.0 && c->startup_high_gain <= 4.0 ? c->startup_high_gain : BBR_HIGH_GAIN;
-    double        cwnd_gain     = c != NULL && c->cwnd_gain >= 1.0 && c->cwnd_gain <= 4.0 ? c->cwnd_gain : 2.0;
-    double        growth_target = c != NULL && c->startup_growth_target > 1.0 && c->startup_growth_target <= 2.0
-                                      ? c->startup_growth_target
-                                      : 1.25;
+    uint32_t i                 = c == NULL ? 16u : c->initial_cwnd_mss;
+    uint32_t m                 = c == NULL ? 4u : c->minimum_cwnd_mss;
+    uint32_t r                 = c == NULL ? 3u : c->startup_full_bandwidth_rounds;
+    uint32_t probe_rtt_ms      = c == NULL ? 200u : (c->probe_rtt_ms == 0u ? 0u : (c->probe_rtt_ms < 50u ? 50u : c->probe_rtt_ms));
+    uint32_t min_rtt_expiry_ms = c == NULL ? 10000u : (c->min_rtt_expiry_ms == 0u ? 0u : (c->min_rtt_expiry_ms < 1000u ? 1000u : c->min_rtt_expiry_ms));
+    double   high_gain         = c == NULL || isnan(c->startup_high_gain) ? BBR_HIGH_GAIN : c->startup_high_gain;
+    double   cwnd_gain         = c == NULL || isnan(c->cwnd_gain) ? 2.0 : c->cwnd_gain;
+    double   growth_target     = c == NULL || isnan(c->startup_growth_target) ? 1.25 : c->startup_growth_target;
     const double* pacing_gains  = c == NULL ? k_bbr_default_pacing_gains : c->pacing_gains;
     uint32_t      index;
     assert(b != NULL);

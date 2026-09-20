@@ -7,7 +7,7 @@
 
 `utp_context_probe_nat()` 启动一个异步任务，同一 Context 同时只能有一个任务。任务使用 NAT_PROBE 包类型、独立的包号和 8 字节 probe token，不占用 Connection 的 CID/包号空间。结果通过 `utp_on_nat_probe_fn` 回调交付；取消使用 `utp_context_cancel_nat_probe()`，主动取消不调用完成回调。
 
-`phase_timeout_ms` 是每个阶段的总时限，0 时采用 3000 ms。完整轮次因本地 socket 写入失败而无法提交时，任务以 I/O 状态失败；远端响应不足则以 `UTP_STATUS_OK` 返回 `UNKNOWN` 分类，而不是把网络无响应误报成 UDP_BLOCKED。
+`phase_timeout_ms` 是每个阶段的总时限，必须至少为 6 ms；默认 3000 ms 由 `UTP_NAT_PROBE_OPTIONS_INIT` 提供。完整轮次因本地 socket 写入失败而无法提交时，任务以 I/O 状态失败；远端响应不足则以 `UTP_STATUS_OK` 返回 `UNKNOWN` 分类，而不是把网络无响应误报成 UDP_BLOCKED。
 
 ## 2. Binding 请求和响应
 

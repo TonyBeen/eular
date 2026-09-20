@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1103,6 +1104,12 @@ int main(void)
         quiet_options.cc_algorithm = (utp_congestion_algorithm_t)-1;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
         quiet_options.cc_algorithm = UTP_CONGESTION_DEFAULT;
+        quiet_options.cubic_beta = NAN;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+        quiet_options.cubic_beta = 0.7;
+        quiet_options.bbr_pacing_gains[0u] = INFINITY;
+        assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
+        quiet_options.bbr_pacing_gains[0u] = 1.25;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_OK);
         assert(quiet_context->cc_algorithm == UTP_CONGESTION_DEFAULT);
         utp_context_destroy(quiet_context);
@@ -1118,9 +1125,11 @@ int main(void)
         many_options.context_id             = 72u;
         many_options.mtu_max                = 1450u;
         many_options.pending_incoming_limit = 0u;
+        many_options.zero_rtt_replay_cache_capacity = 0u;
         assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
-        assert(many_context->pending_incoming.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
-        assert(many_context->pending_incoming_by_attempt.max_entries == UTP_CONTEXT_PENDING_INCOMING_DEFAULT_LIMIT);
+        assert(many_context->pending_incoming.max_entries == 0u);
+        assert(many_context->pending_incoming_by_attempt.max_entries == 0u);
+        assert(many_context->zero_rtt_replay.max_entries == 0u);
         assert(many_context->packet_in_pool.buffer_capacity == many_options.mtu_max);
         assert(many_context->packet_in_pool.max_free_capacity == UTP_CONTEXT_PACKET_IN_DEFAULT_MAX_FREE);
         utp_context_destroy(many_context);
@@ -1141,6 +1150,21 @@ int main(void)
         }
         assert(utp_hash_table_count(&many_context->connections) == connection_count);
         utp_context_destroy(many_context);
+    }
+    {
+        utp_context_options_t zero_credit_options = UTP_CONTEXT_OPTIONS_INIT;
+        utp_context_t*        zero_credit_context = NULL;
+
+        zero_credit_options.event_base                          = event_base;
+        zero_credit_options.peer_id                              = "zero-credit";
+        zero_credit_options.initial_max_streams_bidi              = 0u;
+        zero_credit_options.initial_max_streams_uni               = 0u;
+        zero_credit_options.initial_max_data                      = 0u;
+        assert(utp_context_create(&zero_credit_options, &zero_credit_context) == UTP_STATUS_OK);
+        assert(zero_credit_context->local_transport_params.initial_max_streams_bidi == 0u);
+        assert(zero_credit_context->local_transport_params.initial_max_streams_uni == 0u);
+        assert(zero_credit_context->local_transport_params.initial_max_data == 0u);
+        utp_context_destroy(zero_credit_context);
     }
 #if defined(__APPLE__)
     if (if_nametoindex("lo0") != 0u) {

@@ -117,7 +117,7 @@ utp_internal_error_t utp_hash_table_init(utp_hash_table_t* table, const utp_allo
 utp_internal_error_t utp_hash_table_init_with_buckets(utp_hash_table_t* table, const utp_allocator_t* allocator,
                                                       size_t max_entries, size_t initial_bucket_count)
 {
-    if (table == NULL || max_entries == 0) {
+    if (table == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     const utp_allocator_t* resolved = utp_allocator_resolve(allocator);
