@@ -25,7 +25,7 @@ struct utp_connection;
 #define UTP_STREAM_CLIENT_INITIATED             0u
 #define UTP_STREAM_SERVER_INITIATED             1u
 #define UTP_STREAM_UNIDIRECTIONAL               2u
-#define UTP_STREAM_RECV_FRAGMENT_LIMIT          1024u
+#define UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY   64u
 #define UTP_STREAM_SEND_ACK_RANGE_LIMIT         16u
 #define UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY (256u * 1024u)
 #define UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT (4u * 1024u * 1024u)
@@ -33,23 +33,20 @@ struct utp_connection;
 #define UTP_STREAM_DEFAULT_FLOW_WINDOW          (512u * 1024u)
 
 typedef struct utp_stream_recv_account {
-    size_t* connection_memory_bytes;    // 连接级已占用重组内存计数
-    size_t* connection_fragment_count;  // 连接级已保留分片数计数
-    size_t  connection_memory_limit;    // 连接级重组内存上限
-    size_t  connection_fragment_limit;  // 连接级重组分片数上限
+    size_t* connection_memory_bytes;  // 连接级已占用重组内存计数
+    size_t  connection_memory_limit;  // 连接级重组内存上限
 } utp_stream_recv_account_t;
 
 typedef struct utp_stream_recv_fragment {
     utp_packet_in_t* packet;                     // 借用数据所在 PacketIn，可为空
     const uint8_t*   data_view;                  // 分片数据零拷贝视图
-    size_t*          connection_memory_bytes;    // 所属连接的内存计数器
-    size_t*          connection_fragment_count;  // 所属连接的分片计数器
-    uint64_t         offset;                     // 分片在流内的起始偏移
-    size_t           memory_cost;                // 对连接级内存预算的计费字节数
-    size_t           length;                     // 分片总长度
-    size_t           consumed;                   // 已被应用消费的前缀长度
-    bool             fin : 1;                    // 分片末尾是否带 FIN
-    bool             accounted : 1;              // 是否已计入连接级资源计数
+    size_t*        connection_memory_bytes;  // 所属连接的内存计数器
+    uint64_t       offset;                   // 分片在流内的起始偏移
+    size_t         memory_cost;              // 对连接级内存预算的计费字节数
+    size_t         length;                   // 分片总长度
+    size_t         consumed;                 // 已被应用消费的前缀长度
+    bool           fin : 1;                  // 分片末尾是否带 FIN
+    bool           accounted : 1;            // 是否已计入连接级资源计数
 } utp_stream_recv_fragment_t;
 
 typedef struct utp_stream_send_ack_range {
@@ -84,12 +81,15 @@ struct utp_stream {
     size_t                      send_in_flight_bytes;              // 已构造但尚未确认的发送字节
     size_t                      send_buffer_capacity;              // 发送环形缓冲容量
     size_t                      recv_buffered_bytes;               // 等待应用读取的连续或乱序字节
-    size_t                      recv_pinned_memory_bytes;          // 被 PacketIn 引用固定的接收内存
+    size_t                      recv_pinned_memory_bytes;          // PacketIn 和描述符数组占用的重组内存
+    size_t                      recv_fragment_storage_bytes;       // 已计入预算的描述符数组字节数
+    size_t                      recv_fragment_capacity;            // 接收重组描述符已分配容量
+    size_t                      recv_fragment_begin;               // 接收重组首个有效描述符下标
     size_t                      recv_fragment_count;               // 接收重组分片数
-    size_t                      recv_accounted_fragment_count;     // 已进入连接级预算的分片数
     size_t                      send_ack_range_count;              // 已确认发送区间数
     utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];  // 已确认发送区间
-    utp_stream_recv_fragment_t  recv_fragments[UTP_STREAM_RECV_FRAGMENT_LIMIT];    // 按偏移排序的接收分片
+    utp_stream_recv_fragment_t* recv_fragments;                                    // 惰性分配、按偏移排序的接收分片
+    size_t*                     recv_fragment_storage_connection_memory_bytes;    // 描述符数组所属连接内存计数器
     uint8_t*                    send_buffer;                                       // 首次写入时分配的环形发送缓冲
     uint8_t                     priority;                                          // 用户设置的 0 至 7 优先级
     uint8_t                     strict_wait_rounds;                                // Strict 调度等待轮数，用于老化

@@ -28,7 +28,6 @@ extern "C" {
 #define UTP_CONNECTION_MAX_RECEIVE_RANGES               32u
 #define UTP_CONNECTION_STREAM_TYPE_COUNT                2u
 #define UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT     (16u * 1024u * 1024u)
-#define UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT   4096u
 #define UTP_CONNECTION_KEEPALIVE_INTERVAL_US            UINT64_C(30000000)
 #define UTP_CONNECTION_KEEPALIVE_TIMEOUT_US             UINT64_C(1500000)
 #define UTP_CONNECTION_KEEPALIVE_MAX_PROBES             3u
@@ -168,7 +167,6 @@ typedef struct utp_connection {
     uint64_t                           last_data_blocked_sent_us;                 // 最近 DATA_BLOCKED 发送时刻
     uint16_t                           packet_capacity;                           // PacketOut 初始包容量
     size_t                             recv_reassembly_memory_bytes;              // 所有流重组内存计费
-    size_t                             recv_reassembly_fragment_count;            // 所有流重组分片计数
     size_t                             candidate_packet_bytes;                    // 候选路径缓存已占用线长
     uint64_t                           rx_bytes;                                  // 已认证且非重复接收字节数
     uint64_t                           tx_bytes;                                  // 实际发送字节数

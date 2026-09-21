@@ -1,14 +1,5 @@
 # TODO
 
-## Stream 接收分片上限
-
-当前每个 Stream 使用固定的 `UTP_STREAM_RECV_FRAGMENT_LIMIT`（1024）个有序重组分片槽位，Connection
-另有限制全部 Stream 重组分片数量的计数。该限制独立于 `MAX_STREAM_DATA` 的字节流控窗口；大量极小且乱序的
-STREAM 帧可能先耗尽分片槽位。
-
-后续评估改为由每流接收窗口控制可保留的分片数据。实施时需一并设计按需增长的分片索引、单帧多空洞插入的
-原子回滚，以及 PacketIn 与分片元数据的内存计费上限，避免仅删除数量限制后被极小分片无限占用内存。
-
 ## Linux PMTU 缓存兼容性
 
 评估 Linux `IP_PMTUDISC_PROBE` 是否适合 UTP 的 DPLPMTUD。该选项保留 DF 位，并使配置它的 UDP socket

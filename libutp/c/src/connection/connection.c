@@ -3012,7 +3012,6 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->last_data_blocked_sent_us                = 0u;
     connection->packet_capacity                          = packet_capacity;
     connection->recv_reassembly_memory_bytes             = 0u;
-    connection->recv_reassembly_fragment_count           = 0u;
     connection->role                                     = role;
     connection->state = role == UTP_CONNECTION_ROLE_PASSIVE ? UTP_CONNECTION_STATE_CONNECTED : UTP_CONNECTION_STATE_NEW;
     connection->path_state = UTP_CONNECTION_PATH_STATE_VALIDATED;
@@ -3590,7 +3589,6 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->local_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL] = 0u;
     connection->peer_max_streams[UTP_FRAME_STREAM_TYPE_BIDIRECTIONAL]   = 0u;
     connection->peer_max_streams[UTP_FRAME_STREAM_TYPE_UNIDIRECTIONAL]  = 0u;
-    connection->recv_reassembly_fragment_count                          = 0u;
     connection->rx_bytes                                                = 0u;
     connection->tx_bytes                                                = 0u;
     connection->peer_handshake_packet_number                            = 0u;
@@ -4582,11 +4580,9 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 }
             }
             if (error == UTP_INTERNAL_ERROR_OK) {
-                recv_account.connection_memory_bytes   = &connection->recv_reassembly_memory_bytes;
-                recv_account.connection_fragment_count = &connection->recv_reassembly_fragment_count;
-                recv_account.connection_memory_limit   = UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT;
-                recv_account.connection_fragment_limit = UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT;
-                stream->defer_user_notifications       = stream_created;
+                recv_account.connection_memory_bytes = &connection->recv_reassembly_memory_bytes;
+                recv_account.connection_memory_limit = UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT;
+                stream->defer_user_notifications     = stream_created;
                 error = utp_stream_on_frame_packet_accounted(stream, &stream_frame, packet_in, &recv_account);
             }
             if (error == UTP_INTERNAL_ERROR_OK && stream_delta != 0u) {

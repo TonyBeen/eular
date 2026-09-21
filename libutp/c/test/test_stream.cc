@@ -624,17 +624,87 @@ TEST_CASE("stream rolls back partial receive fragments when a split frame hits m
     REQUIRE(utp_stream_on_frame_packet(&stream, &middle, middle_in) == UTP_INTERNAL_ERROR_OK);
     utp_packet_in_release(middle_in);
     REQUIRE(stream.recv_fragment_count == 1u);
-    REQUIRE(stream.recv_fragments[0].offset == 1u);
+    REQUIRE(stream.recv_fragments[stream.recv_fragment_begin].offset == 1u);
 
     stream.recv_pinned_memory_bytes = pinned_base;
     full_in                         = stream_frame_packet(&pool, 0u, 0u, "abc", false, &full);
     REQUIRE(utp_stream_on_frame_packet(&stream, &full, full_in) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
     REQUIRE(stream.recv_fragment_count == 1u);
-    REQUIRE(stream.recv_fragments[0].offset == 1u);
-    REQUIRE(stream.recv_fragments[0].length == 1u);
+    REQUIRE(stream.recv_fragments[stream.recv_fragment_begin].offset == 1u);
+    REQUIRE(stream.recv_fragments[stream.recv_fragment_begin].length == 1u);
     REQUIRE(stream.recv_pinned_memory_bytes == pinned_base);
 
     utp_packet_in_release(full_in);
+    utp_stream_cleanup(&stream);
+    utp_packet_in_pool_cleanup(&pool);
+}
+
+TEST_CASE("stream lazily grows receive fragments beyond the former fixed limit", "[stream][reassembly]")
+{
+    constexpr size_t      fragment_count = 1100u;
+    utp_packet_in_pool_t  pool           = {};
+    utp_stream_t          stream         = {};
+    utp_packet_in_t*      packet;
+    utp_frame_stream_t    frame = {};
+    uint8_t               buffer[2] = {};
+    size_t                length    = 0u;
+    bool                  fin       = false;
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, fragment_count + 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&stream, 0u);
+    for (size_t index = 0u; index < fragment_count; ++index) {
+        REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
+        packet->data[0] = static_cast<uint8_t>(index);
+        frame            = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u + 1u), packet->data, 1u};
+        REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
+        utp_packet_in_release(packet);
+    }
+    REQUIRE(stream.recv_fragment_count == fragment_count);
+    REQUIRE(stream.recv_fragment_capacity >= fragment_count);
+    REQUIRE(stream.recv_fragment_begin == 0u);
+
+    REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
+    packet->data[0] = 0u;
+    packet->data[1] = 1u;
+    frame           = {UTP_STREAM_FLAG_NONE, 0u, 0u, packet->data, 2u};
+    REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(packet);
+    REQUIRE(utp_stream_read_internal(&stream, buffer, sizeof(buffer), &length, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(length == sizeof(buffer));
+    REQUIRE(stream.recv_fragment_begin == 2u);
+    REQUIRE(stream.recv_fragment_count == fragment_count - 1u);
+
+    utp_stream_cleanup(&stream);
+    utp_packet_in_pool_cleanup(&pool);
+}
+
+TEST_CASE("stream FIN data frame reserves only its data fragment", "[stream][reassembly]")
+{
+    constexpr size_t      fragment_count = UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u;
+    utp_packet_in_pool_t  pool           = {};
+    utp_stream_t          stream         = {};
+    utp_packet_in_t*      packet;
+    utp_frame_stream_t    frame = {};
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, fragment_count + 1u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&stream, 0u);
+    for (size_t index = 0u; index < fragment_count; ++index) {
+        REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
+        packet->data[0] = static_cast<uint8_t>(index);
+        frame            = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u), packet->data, 1u};
+        REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
+        utp_packet_in_release(packet);
+    }
+
+    REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
+    packet->data[0] = 0u;
+    frame           = {UTP_STREAM_FLAG_FIN, 0u, (uint64_t)(fragment_count * 2u), packet->data, 1u};
+    REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(packet);
+    REQUIRE(stream.recv_fragment_count == UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY);
+    REQUIRE(stream.recv_fragment_capacity == UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY);
+    REQUIRE(stream.recv_fragments[stream.recv_fragment_begin + fragment_count].fin);
+
     utp_stream_cleanup(&stream);
     utp_packet_in_pool_cleanup(&pool);
 }
@@ -696,7 +766,7 @@ TEST_CASE("connection allocates a local stream, sends STREAM frames, and the pee
     REQUIRE(utp_stream_close_internal(utp_connection_find_stream_internal(&active, stream_id)) ==
             UTP_INTERNAL_ERROR_OK);
     transfer_next_packet(&active, &passive, &active_address, 100u, &receive_pool);
-    REQUIRE(passive.recv_reassembly_fragment_count == 1u);
+    REQUIRE(utp_connection_find_stream_internal(&passive, stream_id)->recv_fragment_count == 1u);
     REQUIRE(passive.recv_reassembly_memory_bytes >= 1280u);
     {
         utp_stream_t* stream = utp_connection_find_stream_internal(&active, stream_id);
@@ -710,7 +780,7 @@ TEST_CASE("connection allocates a local stream, sends STREAM frames, and the pee
     REQUIRE(length == 3u);
     REQUIRE(std::memcmp(buffer, "abc", 3u) == 0);
     REQUIRE_FALSE(fin);
-    REQUIRE(passive.recv_reassembly_fragment_count == 0u);
+    REQUIRE(utp_connection_find_stream_internal(&passive, stream_id)->recv_fragment_count == 0u);
     REQUIRE(passive.recv_reassembly_memory_bytes == 0u);
     REQUIRE(utp_stream_read_internal(utp_connection_find_stream_internal(&passive, stream_id), buffer, sizeof(buffer),
                                      &length, &fin) == UTP_INTERNAL_ERROR_CLOSED);
@@ -1582,7 +1652,7 @@ TEST_CASE("connection applies MAX_STREAM_DATA received before a local stream exi
     utp_packet_in_pool_cleanup(&receive_pool);
 }
 
-TEST_CASE("connection receive reassembly accounting rejects connection-level fragment exhaustion", "[stream][flow]")
+TEST_CASE("connection receive reassembly accounting rejects connection-level memory exhaustion", "[stream][flow]")
 {
     const utp_address_t  active_address  = loopback_address(13033u);
     const utp_address_t  passive_address = loopback_address(13034u);
@@ -1601,7 +1671,7 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
     REQUIRE(utp_packet_in_pool_init(&receive_pool, nullptr, 1u, 1280u) == UTP_INTERNAL_ERROR_OK);
     active.state = UTP_CONNECTION_STATE_CONNECTED;
     utp_send_control_set_connected(&active.send_control, true);
-    passive.recv_reassembly_fragment_count = UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT;
+    passive.recv_reassembly_memory_bytes = UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT;
 
     REQUIRE(utp_connection_create_stream_internal(&active, true, &stream_id) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_stream_write_internal(utp_connection_find_stream_internal(&active, stream_id),
@@ -1614,11 +1684,10 @@ TEST_CASE("connection receive reassembly accounting rejects connection-level fra
     REQUIRE(utp_connection_on_packet_sent(&active, packet, 100u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_on_packet_in_received(&passive, wire, &active_address, 100u) ==
             UTP_INTERNAL_ERROR_WOULD_BLOCK);
-    REQUIRE(passive.recv_reassembly_fragment_count == UTP_CONNECTION_RECV_REASSEMBLY_FRAGMENT_LIMIT);
-    REQUIRE(passive.recv_reassembly_memory_bytes == 0u);
+    REQUIRE(passive.recv_reassembly_memory_bytes == UTP_CONNECTION_RECV_REASSEMBLY_MEMORY_LIMIT);
     REQUIRE(utp_connection_find_stream_internal(&passive, stream_id) == nullptr);
 
-    passive.recv_reassembly_fragment_count = 0u;
+    passive.recv_reassembly_memory_bytes = 0u;
     REQUIRE(utp_connection_on_packet_in_received(&passive, wire, &active_address, 200u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_find_stream_internal(&passive, stream_id) != nullptr);
 

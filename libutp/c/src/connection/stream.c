@@ -50,6 +50,20 @@ static uint64_t utp_stream_fragment_read_offset(const utp_stream_recv_fragment_t
     return fragment->offset + (uint64_t)fragment->consumed;
 }
 
+static utp_stream_recv_fragment_t* utp_stream_recv_fragment_at(utp_stream_t* stream, size_t index)
+{
+    assert(stream != NULL);
+    assert(index < stream->recv_fragment_count);
+    return &stream->recv_fragments[stream->recv_fragment_begin + index];
+}
+
+static const utp_stream_recv_fragment_t* utp_stream_recv_fragment_at_const(const utp_stream_t* stream, size_t index)
+{
+    assert(stream != NULL);
+    assert(index < stream->recv_fragment_count);
+    return &stream->recv_fragments[stream->recv_fragment_begin + index];
+}
+
 static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 {
     assert(stream != NULL);
@@ -60,8 +74,10 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
         return true;
     }
     return stream->recv_fragment_count != 0u &&
-           utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset &&
-           stream->recv_fragments[0].length == stream->recv_fragments[0].consumed && stream->recv_fragments[0].fin;
+           utp_stream_fragment_read_offset(utp_stream_recv_fragment_at_const(stream, 0u)) == stream->recv_offset &&
+           utp_stream_recv_fragment_at_const(stream, 0u)->length ==
+               utp_stream_recv_fragment_at_const(stream, 0u)->consumed &&
+           utp_stream_recv_fragment_at_const(stream, 0u)->fin;
 }
 
 static bool utp_stream_is_writable(const utp_stream_t* stream)
@@ -225,8 +241,7 @@ static void utp_stream_remove_ack_range(utp_stream_t* stream, size_t index)
 static size_t utp_stream_recv_fragment_memory_cost(const utp_stream_recv_fragment_t* fragment)
 {
     assert(fragment != NULL);
-    return sizeof(*fragment) +
-           (fragment->packet != NULL && fragment->length != 0u ? (size_t)fragment->packet->capacity : 0u);
+    return fragment->packet != NULL && fragment->length != 0u ? (size_t)fragment->packet->capacity : 0u;
 }
 
 static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_recv_fragment_t* fragment,
@@ -234,40 +249,26 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
 {
     assert(stream != NULL);
     assert(fragment != NULL);
-    size_t stream_memory_limit   = UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT;
-    size_t stream_fragment_limit = UTP_STREAM_RECV_FRAGMENT_LIMIT;
+    const size_t stream_memory_limit = UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT;
     if (fragment->accounted) {
         return true;
     }
     // PacketIn 被 fragment 持有期间不能回池，容量而非有效载荷才是真实内存成本。
     size_t new_cost = utp_stream_recv_fragment_memory_cost(fragment);
-    if (stream_memory_limit == 0u) {
-        stream_memory_limit = 1u;
-    }
-    if (stream_fragment_limit == 0u) {
-        stream_fragment_limit = 1u;
-    }
     if (stream->recv_pinned_memory_bytes > stream_memory_limit ||
-        new_cost > stream_memory_limit - stream->recv_pinned_memory_bytes ||
-        stream->recv_accounted_fragment_count >= stream_fragment_limit) {
+        new_cost > stream_memory_limit - stream->recv_pinned_memory_bytes) {
         return false;
     }
-    if (account != NULL && account->connection_memory_bytes != NULL && account->connection_fragment_count != NULL) {
+    if (account != NULL && account->connection_memory_bytes != NULL) {
         size_t connection_memory_limit = account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
-        size_t connection_fragment_limit =
-            account->connection_fragment_limit == 0u ? 1u : account->connection_fragment_limit;
         if (*account->connection_memory_bytes > connection_memory_limit ||
-            new_cost > connection_memory_limit - *account->connection_memory_bytes ||
-            *account->connection_fragment_count >= connection_fragment_limit) {
+            new_cost > connection_memory_limit - *account->connection_memory_bytes) {
             return false;
         }
         *account->connection_memory_bytes += new_cost;
-        ++*account->connection_fragment_count;
-        fragment->connection_memory_bytes   = account->connection_memory_bytes;
-        fragment->connection_fragment_count = account->connection_fragment_count;
+        fragment->connection_memory_bytes = account->connection_memory_bytes;
     }
     stream->recv_pinned_memory_bytes += new_cost;
-    ++stream->recv_accounted_fragment_count;
     fragment->memory_cost = new_cost;
     fragment->accounted   = true;
     return true;
@@ -283,20 +284,13 @@ static void utp_stream_unaccount_recv_fragment(utp_stream_t* stream, utp_stream_
     size_t cost = fragment->memory_cost;
     stream->recv_pinned_memory_bytes =
         stream->recv_pinned_memory_bytes >= cost ? stream->recv_pinned_memory_bytes - cost : 0u;
-    if (stream->recv_accounted_fragment_count != 0u) {
-        --stream->recv_accounted_fragment_count;
-    }
     if (fragment->connection_memory_bytes != NULL) {
         *fragment->connection_memory_bytes =
             *fragment->connection_memory_bytes >= cost ? *fragment->connection_memory_bytes - cost : 0u;
     }
-    if (fragment->connection_fragment_count != NULL && *fragment->connection_fragment_count != 0u) {
-        --*fragment->connection_fragment_count;
-    }
-    fragment->connection_memory_bytes   = NULL;
-    fragment->connection_fragment_count = NULL;
-    fragment->memory_cost               = 0u;
-    fragment->accounted                 = false;
+    fragment->connection_memory_bytes = NULL;
+    fragment->memory_cost             = 0u;
+    fragment->accounted               = false;
 }
 
 static utp_internal_error_t utp_stream_insert_ack_range(utp_stream_t* stream, uint64_t start, uint64_t end)
@@ -328,6 +322,29 @@ static utp_internal_error_t utp_stream_insert_ack_range(utp_stream_t* stream, ui
     return UTP_INTERNAL_ERROR_OK;
 }
 
+static void utp_stream_release_recv_fragment_storage(utp_stream_t* stream)
+{
+    assert(stream != NULL);
+    if (stream->recv_fragments == NULL) {
+        return;
+    }
+    utp_allocator_free(NULL, stream->recv_fragments);
+    stream->recv_fragments = NULL;
+    stream->recv_fragment_capacity = 0u;
+    stream->recv_fragment_begin = 0u;
+    stream->recv_pinned_memory_bytes =
+        stream->recv_pinned_memory_bytes >= stream->recv_fragment_storage_bytes
+            ? stream->recv_pinned_memory_bytes - stream->recv_fragment_storage_bytes
+            : 0u;
+    if (stream->recv_fragment_storage_connection_memory_bytes != NULL) {
+        size_t* bytes = stream->recv_fragment_storage_connection_memory_bytes;
+
+        *bytes = *bytes >= stream->recv_fragment_storage_bytes ? *bytes - stream->recv_fragment_storage_bytes : 0u;
+    }
+    stream->recv_fragment_storage_connection_memory_bytes = NULL;
+    stream->recv_fragment_storage_bytes = 0u;
+}
+
 static void utp_stream_release_acked_prefix(utp_stream_t* stream)
 {
     while (stream->send_ack_range_count != 0u && stream->send_ack_ranges[0].start <= stream->send_buffer_offset &&
@@ -350,17 +367,28 @@ static void utp_stream_release_acked_prefix(utp_stream_t* stream)
 
 static void utp_stream_remove_fragment(utp_stream_t* stream, size_t index)
 {
-    utp_stream_unaccount_recv_fragment(stream, &stream->recv_fragments[index]);
-    if (stream->recv_fragments[index].packet != NULL) {
-        utp_packet_in_release(stream->recv_fragments[index].packet);
-        stream->recv_fragments[index].packet    = NULL;
-        stream->recv_fragments[index].data_view = NULL;
+    utp_stream_recv_fragment_t* fragment;
+
+    assert(stream != NULL);
+    assert(index < stream->recv_fragment_count);
+    fragment = utp_stream_recv_fragment_at(stream, index);
+    utp_stream_unaccount_recv_fragment(stream, fragment);
+    if (fragment->packet != NULL) {
+        utp_packet_in_release(fragment->packet);
+        fragment->packet    = NULL;
+        fragment->data_view = NULL;
     }
-    if (index + 1u < stream->recv_fragment_count) {
-        memmove(&stream->recv_fragments[index], &stream->recv_fragments[index + 1u],
+    if (index == 0u) {
+        ++stream->recv_fragment_begin;
+    } else if (index + 1u < stream->recv_fragment_count) {
+        memmove(&stream->recv_fragments[stream->recv_fragment_begin + index],
+                &stream->recv_fragments[stream->recv_fragment_begin + index + 1u],
                 (stream->recv_fragment_count - index - 1u) * sizeof(stream->recv_fragments[0]));
     }
     --stream->recv_fragment_count;
+    if (stream->recv_fragment_count == 0u) {
+        utp_stream_release_recv_fragment_storage(stream);
+    }
 }
 
 static void utp_stream_clear_recv_fragments(utp_stream_t* stream)
@@ -370,23 +398,137 @@ static void utp_stream_clear_recv_fragments(utp_stream_t* stream)
     }
 }
 
-static void utp_stream_rollback_frame_fragments(utp_stream_t* stream, utp_packet_in_t* packet,
-                                                const uint64_t* inserted_offsets, size_t inserted_count)
+static utp_internal_error_t utp_stream_recv_fragment_storage_cost(const utp_stream_t* stream, size_t additional,
+                                                                  size_t* out_cost, size_t* out_capacity)
 {
-    assert(stream != NULL);
-    assert(packet != NULL);
-    assert(inserted_offsets != NULL);
-    for (size_t offset_index = inserted_count; offset_index != 0u; --offset_index) {
-        uint64_t offset = inserted_offsets[offset_index - 1u];
+    size_t required;
+    size_t capacity;
 
-        for (size_t fragment_index = 0u; fragment_index < stream->recv_fragment_count; ++fragment_index) {
-            if (stream->recv_fragments[fragment_index].packet == packet &&
-                stream->recv_fragments[fragment_index].offset == offset) {
-                utp_stream_remove_fragment(stream, fragment_index);
-                break;
+    assert(stream != NULL);
+    assert(out_cost != NULL);
+    if (additional > SIZE_MAX - stream->recv_fragment_count) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    required = stream->recv_fragment_count + additional;
+    if (required == 0u || required <= stream->recv_fragment_capacity - stream->recv_fragment_begin) {
+        *out_cost     = 0u;
+        if (out_capacity != NULL) {
+            *out_capacity = stream->recv_fragment_capacity;
+        }
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (required <= stream->recv_fragment_capacity) {
+        *out_cost     = 0u;
+        if (out_capacity != NULL) {
+            *out_capacity = stream->recv_fragment_capacity;
+        }
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (required > SIZE_MAX - (UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u)) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    capacity = ((required + UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u) /
+                UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY) *
+               UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY;
+    if (capacity > SIZE_MAX / sizeof(utp_stream_recv_fragment_t) ||
+        capacity < stream->recv_fragment_capacity) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    *out_cost     = (capacity - stream->recv_fragment_capacity) * sizeof(utp_stream_recv_fragment_t);
+    if (out_capacity != NULL) {
+        *out_capacity = capacity;
+    }
+    return UTP_INTERNAL_ERROR_OK;
+}
+
+static bool utp_stream_can_account_recv_fragments(const utp_stream_t* stream,
+                                                  const utp_stream_recv_account_t* account,
+                                                  const utp_packet_in_t* packet, size_t data_count, size_t storage_cost)
+{
+    const size_t data_cost = packet == NULL ? 0u : (size_t)packet->capacity;
+    size_t       total_cost;
+
+    assert(stream != NULL);
+    assert(packet != NULL || data_count == 0u);
+    if (data_cost != 0u && data_count > SIZE_MAX / data_cost) {
+        return false;
+    }
+    total_cost = data_count * data_cost;
+    if (storage_cost > SIZE_MAX - total_cost) {
+        return false;
+    }
+    total_cost += storage_cost;
+    if (stream->recv_pinned_memory_bytes > UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT ||
+        total_cost > UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT - stream->recv_pinned_memory_bytes) {
+        return false;
+    }
+    if (account != NULL && account->connection_memory_bytes != NULL &&
+        (*account->connection_memory_bytes > account->connection_memory_limit ||
+         total_cost > account->connection_memory_limit - *account->connection_memory_bytes)) {
+        return false;
+    }
+    return data_count == 0u || (data_count <= UINT16_MAX && packet->ref_count <= UINT16_MAX - data_count);
+}
+
+static utp_internal_error_t utp_stream_reserve_recv_fragments(utp_stream_t* stream, size_t additional,
+                                                              const utp_stream_recv_account_t* account)
+{
+    size_t                       storage_cost;
+    size_t                       capacity;
+    utp_stream_recv_fragment_t* fragments;
+
+    assert(stream != NULL);
+    if (stream->recv_fragment_count == 0u) {
+        stream->recv_fragment_begin = 0u;
+    }
+    if (utp_stream_recv_fragment_storage_cost(stream, additional, &storage_cost, &capacity) !=
+        UTP_INTERNAL_ERROR_OK) {
+        return UTP_INTERNAL_ERROR_OVERFLOW;
+    }
+    if (storage_cost == 0u) {
+        if (stream->recv_fragment_count + additional <= stream->recv_fragment_capacity) {
+            if (stream->recv_fragment_begin != 0u) {
+                memmove(stream->recv_fragments, stream->recv_fragments + stream->recv_fragment_begin,
+                        stream->recv_fragment_count * sizeof(stream->recv_fragments[0]));
+                stream->recv_fragment_begin = 0u;
             }
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        memmove(stream->recv_fragments, stream->recv_fragments + stream->recv_fragment_begin,
+                stream->recv_fragment_count * sizeof(stream->recv_fragments[0]));
+        stream->recv_fragment_begin = 0u;
+        return UTP_INTERNAL_ERROR_OK;
+    }
+    if (stream->recv_pinned_memory_bytes > UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT ||
+        storage_cost > UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT - stream->recv_pinned_memory_bytes) {
+        return UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    }
+    if (account != NULL && account->connection_memory_bytes != NULL) {
+        const size_t connection_memory_limit = account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
+
+        if (*account->connection_memory_bytes > connection_memory_limit ||
+            storage_cost > connection_memory_limit - *account->connection_memory_bytes) {
+            return UTP_INTERNAL_ERROR_WOULD_BLOCK;
         }
     }
+    fragments = utp_allocator_realloc(NULL, stream->recv_fragments, capacity * sizeof(*fragments));
+    if (fragments == NULL) {
+        return UTP_INTERNAL_ERROR_NOMEM;
+    }
+    if (stream->recv_fragment_begin != 0u) {
+        memmove(fragments, fragments + stream->recv_fragment_begin,
+                stream->recv_fragment_count * sizeof(fragments[0]));
+    }
+    stream->recv_fragments         = fragments;
+    stream->recv_fragment_capacity = capacity;
+    stream->recv_fragment_begin    = 0u;
+    stream->recv_pinned_memory_bytes += storage_cost;
+    stream->recv_fragment_storage_bytes += storage_cost;
+    if (account != NULL && account->connection_memory_bytes != NULL) {
+        *account->connection_memory_bytes += storage_cost;
+        stream->recv_fragment_storage_connection_memory_bytes = account->connection_memory_bytes;
+    }
+    return UTP_INTERNAL_ERROR_OK;
 }
 
 static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uint64_t offset, const uint8_t* data,
@@ -394,10 +536,10 @@ static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uin
                                                        const utp_stream_recv_account_t* account)
 {
     size_t                     index    = 0u;
-    utp_stream_recv_fragment_t fragment = {NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u, false, false};
+    utp_stream_recv_fragment_t fragment = {NULL, NULL, NULL, 0u, 0u, 0u, 0u, false, false};
 
-    if (stream->recv_fragment_count >= UTP_STREAM_RECV_FRAGMENT_LIMIT ||
-        (length != 0u && (data == NULL || packet == NULL))) {
+    if ((length != 0u && (data == NULL || packet == NULL)) ||
+        stream->recv_fragment_count == stream->recv_fragment_capacity) {
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
     fragment.offset    = offset;
@@ -417,14 +559,15 @@ static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uin
         }
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
-    while (index < stream->recv_fragment_count && stream->recv_fragments[index].offset < offset) {
+    while (index < stream->recv_fragment_count && utp_stream_recv_fragment_at(stream, index)->offset < offset) {
         ++index;
     }
     if (index < stream->recv_fragment_count) {
-        memmove(&stream->recv_fragments[index + 1u], &stream->recv_fragments[index],
+        memmove(&stream->recv_fragments[stream->recv_fragment_begin + index + 1u],
+                &stream->recv_fragments[stream->recv_fragment_begin + index],
                 (stream->recv_fragment_count - index) * sizeof(stream->recv_fragments[0]));
     }
-    stream->recv_fragments[index] = fragment;
+    stream->recv_fragments[stream->recv_fragment_begin + index] = fragment;
     if (length != 0u) {
         stream->recv_buffered_bytes += length;
     }
@@ -440,8 +583,8 @@ static utp_internal_error_t utp_stream_mark_fin(utp_stream_t* stream, uint64_t f
         return UTP_INTERNAL_ERROR_OK;
     }
     for (size_t index = 0u; index < stream->recv_fragment_count; ++index) {
-        if (utp_stream_fragment_end(&stream->recv_fragments[index]) == fin_offset) {
-            stream->recv_fragments[index].fin = true;
+        if (utp_stream_fragment_end(utp_stream_recv_fragment_at(stream, index)) == fin_offset) {
+            utp_stream_recv_fragment_at(stream, index)->fin = true;
             return UTP_INTERNAL_ERROR_OK;
         }
     }
@@ -473,8 +616,12 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->send_buffer                      = NULL;
     stream->recv_buffered_bytes              = 0u;
     stream->recv_pinned_memory_bytes         = 0u;
+    stream->recv_fragment_capacity           = 0u;
+    stream->recv_fragment_begin              = 0u;
     stream->recv_fragment_count              = 0u;
-    stream->recv_accounted_fragment_count    = 0u;
+    stream->recv_fragment_storage_bytes      = 0u;
+    stream->recv_fragments                   = NULL;
+    stream->recv_fragment_storage_connection_memory_bytes = NULL;
     stream->send_ack_range_count             = 0u;
     stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
     stream->strict_wait_rounds               = 0u;
@@ -557,10 +704,9 @@ utp_internal_error_t utp_stream_on_peer_reset(utp_stream_t* stream, uint64_t fin
         return UTP_INTERNAL_ERROR_OK;
     }
     utp_stream_clear_recv_fragments(stream);
-    stream->recv_buffered_bytes           = 0u;
-    stream->recv_pinned_memory_bytes      = 0u;
-    stream->recv_accounted_fragment_count = 0u;
-    stream->peer_reset                    = true;
+    stream->recv_buffered_bytes      = 0u;
+    stream->recv_pinned_memory_bytes = 0u;
+    stream->peer_reset               = true;
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -585,10 +731,9 @@ utp_internal_error_t utp_stream_shutdown_read_internal(utp_stream_t* stream)
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     utp_stream_clear_recv_fragments(stream);
-    stream->recv_buffered_bytes           = 0u;
-    stream->recv_pinned_memory_bytes      = 0u;
-    stream->recv_accounted_fragment_count = 0u;
-    stream->local_read_shutdown           = true;
+    stream->recv_buffered_bytes      = 0u;
+    stream->recv_pinned_memory_bytes = 0u;
+    stream->local_read_shutdown      = true;
     utp_stream_notify_closed(stream);
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -606,6 +751,7 @@ void utp_stream_cleanup(utp_stream_t* stream)
         stream->write_cb_data = NULL;
         stream->close_cb_data = NULL;
         utp_stream_clear_recv_fragments(stream);
+        utp_stream_release_recv_fragment_storage(stream);
         utp_allocator_free(NULL, stream->send_buffer);
         stream->send_buffer               = NULL;
         stream->send_buffer_capacity      = 0u;
@@ -1013,10 +1159,12 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
     uint64_t             original_end;
     uint64_t             start;
     uint64_t             end;
-    uint64_t             inserted_offsets[UTP_STREAM_RECV_FRAGMENT_LIMIT];
     size_t               data_index;
     size_t               index;
-    size_t               inserted_count = 0u;
+    size_t               data_fragment_count = 0u;
+    size_t               fin_fragment_count  = 0u;
+    size_t               storage_cost;
+    bool                 data_ends_at_final_offset = false;
     utp_internal_error_t error;
 
     if (stream == NULL || frame == NULL || !stream->used) {
@@ -1076,9 +1224,57 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
         start      = stream->recv_offset;
     }
     end = original_end;
+    {
+        uint64_t scan_start = start;
+
+        for (index = 0u; index < stream->recv_fragment_count && scan_start < end; ++index) {
+            const uint64_t fragment_start = utp_stream_recv_fragment_at_const(stream, index)->offset;
+            const uint64_t fragment_end = utp_stream_fragment_end(utp_stream_recv_fragment_at_const(stream, index));
+
+            if (fragment_end <= scan_start) {
+                continue;
+            }
+            if (fragment_start > scan_start) {
+                ++data_fragment_count;
+                scan_start = fragment_start < end ? fragment_start : end;
+            }
+            if (fragment_end > scan_start) {
+                scan_start = fragment_end;
+            }
+        }
+        if (scan_start < end) {
+            ++data_fragment_count;
+            data_ends_at_final_offset = true;
+        }
+    }
+    if ((frame->flags & UTP_STREAM_FLAG_FIN) != 0u && original_end != stream->recv_offset) {
+        fin_fragment_count = 1u;
+        for (index = 0u; index < stream->recv_fragment_count; ++index) {
+            if (utp_stream_fragment_end(utp_stream_recv_fragment_at_const(stream, index)) == original_end) {
+                fin_fragment_count = 0u;
+                break;
+            }
+        }
+        // 最后一个新数据分片的末尾可直接承载 FIN，无需额外的零长度描述符。
+        if (data_ends_at_final_offset) {
+            fin_fragment_count = 0u;
+        }
+    }
+    error = utp_stream_recv_fragment_storage_cost(stream, data_fragment_count + fin_fragment_count, &storage_cost,
+                                                   NULL);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
+    if (!utp_stream_can_account_recv_fragments(stream, account, packet, data_fragment_count, storage_cost)) {
+        return UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    }
+    error = utp_stream_reserve_recv_fragments(stream, data_fragment_count + fin_fragment_count, account);
+    if (error != UTP_INTERNAL_ERROR_OK) {
+        return error;
+    }
     for (index = 0u; index < stream->recv_fragment_count && start < end; ++index) {
-        uint64_t fragment_start = stream->recv_fragments[index].offset;
-        uint64_t fragment_end   = utp_stream_fragment_end(&stream->recv_fragments[index]);
+        uint64_t fragment_start = utp_stream_recv_fragment_at(stream, index)->offset;
+        uint64_t fragment_end   = utp_stream_fragment_end(utp_stream_recv_fragment_at(stream, index));
 
         if (fragment_end <= start) {
             continue;
@@ -1090,11 +1286,8 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
             error =
                 utp_stream_insert_fragment(stream, start, frame->data + data_index, gap_len, false, packet, account);
             if (error != UTP_INTERNAL_ERROR_OK) {
-                utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
                 return error;
             }
-            inserted_offsets[inserted_count] = start;
-            ++inserted_count;
             data_index += gap_len;
             start       = gap_end;
             ++index;
@@ -1108,16 +1301,12 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
         error = utp_stream_insert_fragment(stream, start, frame->data + data_index, (size_t)(end - start), false,
                                            packet, account);
         if (error != UTP_INTERNAL_ERROR_OK) {
-            utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
             return error;
         }
-        inserted_offsets[inserted_count] = start;
-        ++inserted_count;
     }
     if ((frame->flags & UTP_STREAM_FLAG_FIN) != 0u) {
         error = utp_stream_mark_fin(stream, original_end, account);
         if (error != UTP_INTERNAL_ERROR_OK) {
-            utp_stream_rollback_frame_fragments(stream, packet, inserted_offsets, inserted_count);
             return error;
         }
         stream->peer_final_size       = original_end;
@@ -1160,8 +1349,8 @@ utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream,
     // read view 只暴露当前连续前缀，commit 前 PacketIn 会一直保持引用。
     view.offset = stream->recv_offset;
     if (stream->recv_fragment_count != 0u &&
-        utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset) {
-        const utp_stream_recv_fragment_t* fragment  = &stream->recv_fragments[0];
+        utp_stream_fragment_read_offset(utp_stream_recv_fragment_at_const(stream, 0u)) == stream->recv_offset) {
+        const utp_stream_recv_fragment_t* fragment  = utp_stream_recv_fragment_at_const(stream, 0u);
         size_t                            remaining = fragment->length - fragment->consumed;
 
         if (remaining == 0u) {
@@ -1202,8 +1391,10 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
     }
     if (length == 0u) {
         if (stream->recv_fragment_count != 0u &&
-            utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset &&
-            stream->recv_fragments[0].length == stream->recv_fragments[0].consumed && stream->recv_fragments[0].fin) {
+            utp_stream_fragment_read_offset(utp_stream_recv_fragment_at_const(stream, 0u)) == stream->recv_offset &&
+            utp_stream_recv_fragment_at_const(stream, 0u)->length ==
+                utp_stream_recv_fragment_at_const(stream, 0u)->consumed &&
+            utp_stream_recv_fragment_at_const(stream, 0u)->fin) {
             stream->peer_fin = true;
             utp_stream_remove_fragment(stream, 0u);
             utp_stream_notify_closed(stream);
@@ -1212,10 +1403,10 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
         return stream->peer_fin ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (stream->recv_fragment_count == 0u ||
-        utp_stream_fragment_read_offset(&stream->recv_fragments[0]) != stream->recv_offset) {
+        utp_stream_fragment_read_offset(utp_stream_recv_fragment_at_const(stream, 0u)) != stream->recv_offset) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    utp_stream_recv_fragment_t* fragment  = &stream->recv_fragments[0];
+    utp_stream_recv_fragment_t* fragment  = utp_stream_recv_fragment_at(stream, 0u);
     size_t                      available = fragment->length - fragment->consumed;
     if (available == 0u || length > available) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -1265,8 +1456,8 @@ utp_internal_error_t utp_stream_read_internal(utp_stream_t* stream, uint8_t* buf
         return UTP_INTERNAL_ERROR_CLOSED;
     }
     while (copied < capacity && stream->recv_fragment_count != 0u &&
-           utp_stream_fragment_read_offset(&stream->recv_fragments[0]) == stream->recv_offset) {
-        utp_stream_recv_fragment_t* fragment = &stream->recv_fragments[0];
+           utp_stream_fragment_read_offset(utp_stream_recv_fragment_at(stream, 0u)) == stream->recv_offset) {
+        utp_stream_recv_fragment_t* fragment = utp_stream_recv_fragment_at(stream, 0u);
         size_t                      remaining;
         size_t                      to_copy;
 
@@ -1315,7 +1506,7 @@ size_t utp_stream_readable_bytes(const utp_stream_t* stream)
     size_t   readable = 0u;
     uint64_t offset   = stream->recv_offset;
     for (size_t index = 0u; index < stream->recv_fragment_count; ++index) {
-        const utp_stream_recv_fragment_t* fragment = &stream->recv_fragments[index];
+        const utp_stream_recv_fragment_t* fragment = utp_stream_recv_fragment_at_const(stream, index);
         size_t                            remaining;
 
         if (utp_stream_fragment_read_offset(fragment) != offset) {
