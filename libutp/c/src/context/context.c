@@ -95,9 +95,10 @@ static bool utp_context_connection_options_valid(const utp_context_options_t* op
         options->bbr_cwnd_gain > 4.0 || !isfinite(options->bbr_startup_growth_target) ||
         options->bbr_startup_growth_target <= 1.0 || options->bbr_startup_growth_target > 2.0 ||
         options->stream_terminal_capacity == 0u || options->stream_send_buffer_capacity == 0u ||
-        options->stream_writable_low_watermark_per_mille >= 1000u || options->ack_every_n_packets == 0u ||
-        options->ack_delay == 0u || options->initial_max_stream_data_bidi_local == 0u ||
-        options->initial_max_stream_data_bidi_remote == 0u || options->initial_max_stream_data_uni == 0u ||
+        options->stream_writable_space_rate == 0u || options->stream_writable_space_rate > 1000u ||
+        options->ack_every_n_packets == 0u || options->ack_delay == 0u ||
+        options->initial_max_stream_data_bidi_local == 0u || options->initial_max_stream_data_bidi_remote == 0u ||
+        options->initial_max_stream_data_uni == 0u ||
         (options->enable_keepalive &&
          (options->keepalive_interval == 0u || options->keepalive_timeout == 0u || options->keepalive_probes == 0u))) {
         return false;
@@ -184,8 +185,8 @@ static utp_internal_error_t utp_context_configure_connection(utp_context_t* cont
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         utp_connection_set_path_validation_buffer_capacity(connection, options->path_validation_buffer_capacity);
-        connection->stream_send_buffer_capacity             = options->stream_send_buffer_capacity;
-        connection->stream_writable_low_watermark_per_mille = options->stream_writable_low_watermark_per_mille;
+        connection->stream_send_buffer_capacity = options->stream_send_buffer_capacity;
+        connection->stream_writable_space_rate  = options->stream_writable_space_rate;
     }
     return error;
 }
@@ -6661,8 +6662,8 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
         !isfinite(options->bbr_cwnd_gain) || !isfinite(options->bbr_startup_growth_target) ||
         options->bbr_startup_growth_target <= 1.0 || options->bbr_startup_growth_target > 2.0 ||
         options->stream_terminal_capacity == 0u || options->stream_send_buffer_capacity == 0u ||
-        options->stream_writable_low_watermark_per_mille >= 1000u || options->handshake_timeout == 0u ||
-        options->ack_every_n_packets == 0u || options->ack_delay == 0u ||
+        options->stream_writable_space_rate == 0u || options->stream_writable_space_rate > 1000u ||
+        options->handshake_timeout == 0u || options->ack_every_n_packets == 0u || options->ack_delay == 0u ||
         options->initial_max_stream_data_bidi_local == 0u || options->initial_max_stream_data_bidi_remote == 0u ||
         options->initial_max_stream_data_uni == 0u || peer_id_length == 0u || peer_id_length > UTP_PEER_ID_MAX_LENGTH ||
         (options->enable_keepalive &&
@@ -6776,7 +6777,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     context->stream_terminal_capacity                        = options->stream_terminal_capacity;
     context->path_validation_buffer_capacity                 = options->path_validation_buffer_capacity;
     context->stream_send_buffer_capacity                     = options->stream_send_buffer_capacity;
-    context->stream_writable_low_watermark_per_mille         = options->stream_writable_low_watermark_per_mille;
+    context->stream_writable_space_rate                      = options->stream_writable_space_rate;
     context->handshake_timeout_ms                            = options->handshake_timeout;
     context->handshake_max_retries                           = options->handshake_max_retries;
     context->local_transport_params.flags                    = UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS;

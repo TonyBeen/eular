@@ -45,8 +45,8 @@ typedef struct utp_context_ntrs_registration {
     void*                       unregister_user_data;
     uint8_t                     registration_token[UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE];
     uint8_t                     packet[UTP_CONTEXT_NTRS_PACKET_CAPACITY];  // REGISTER 逻辑包及其重传副本
-    uint8_t                     calibration_packets[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]
-                               [UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY];  // 各 calibration PING 的重传副本
+    uint8_t       calibration_packets[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES]
+                                     [UTP_CONTEXT_NTRS_CALIBRATION_CAPACITY];  // 各 calibration PING 的重传副本
     utp_address_t calibration_endpoints[UTP_RENDEZVOUS_MAX_LOCAL_CANDIDATES];
     uint64_t      request_id;     // REGISTER 幂等键
     uint64_t      packet_number;  // 本逻辑包的 Context 级包号
@@ -263,7 +263,7 @@ struct utp_context {
     uint32_t                     stream_terminal_capacity;                             // 新连接流终态表容量
     uint32_t                     path_validation_buffer_capacity;                      // 新连接候选路径缓存上限(bytes)
     size_t                       stream_send_buffer_capacity;                          // 新建 Stream 发送缓存容量
-    uint16_t                     stream_writable_low_watermark_per_mille;              // Stream 可写通知阈值
+    uint16_t                     stream_writable_space_rate;                           // Stream 可写空间通知比率
     utp_nat_probe_task_t         nat_probe;                                            // 当前 NAT 探测任务
     utp_nat_probe_result_t       nat_result;                                           // 最近一次完成的 NAT 探测缓存
     utp_context_ntrs_registration_t   ntrs_registration;    // Context 到单个 NTRS 的半连接注册

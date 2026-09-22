@@ -2316,16 +2316,26 @@ TEST_CASE("stream readable and writable callbacks are asynchronous and level tri
     transport_pair_cleanup(&pair);
 }
 
-TEST_CASE("context rejects an invalid stream writable notification threshold", "[transport][integration][stream]")
+TEST_CASE("context validates stream writable space rate", "[transport][integration][stream]")
 {
     struct event_base*    event_base = event_base_new();
     utp_context_options_t options    = UTP_CONTEXT_OPTIONS_INIT;
     utp_context_t*        context    = nullptr;
 
     REQUIRE(event_base != nullptr);
-    options.event_base                              = event_base;
-    options.peer_id                                 = "test";
-    options.stream_writable_low_watermark_per_mille = 1000u;
+    options.event_base                 = event_base;
+    options.peer_id                    = "test";
+    options.stream_writable_space_rate = 0u;
+    REQUIRE(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
+    REQUIRE(context == nullptr);
+
+    options.stream_writable_space_rate = 1000u;
+    REQUIRE(utp_context_create(&options, &context) == UTP_STATUS_OK);
+    REQUIRE(context != nullptr);
+    utp_context_destroy(context);
+
+    options.stream_writable_space_rate = 1001u;
+    context                            = nullptr;
     REQUIRE(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
     REQUIRE(context == nullptr);
     event_base_free(event_base);

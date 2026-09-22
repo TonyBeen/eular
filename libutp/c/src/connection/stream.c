@@ -82,15 +82,16 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
 
 static bool utp_stream_is_writable(const utp_stream_t* stream)
 {
-    uint16_t threshold;
-    size_t   low_watermark;
+    uint16_t space_rate;
+    size_t   required_space;
 
     assert(stream != NULL);
-    threshold     = stream->connection == NULL ? 500u : stream->connection->stream_writable_low_watermark_per_mille;
-    low_watermark = (stream->send_buffer_capacity / 1000u) * threshold +
-                    ((stream->send_buffer_capacity % 1000u) * threshold) / 1000u;
+    space_rate     = stream->connection == NULL ? 500u : stream->connection->stream_writable_space_rate;
+    required_space = (stream->send_buffer_capacity / 1000u) * space_rate +
+                     ((stream->send_buffer_capacity % 1000u) * space_rate) / 1000u;
     return stream->used && utp_stream_local_can_send(stream) && !utp_stream_send_side_is_closed(stream) &&
-           !stream->local_write_reset && !stream->local_fin_queued && stream->send_buffer_length <= low_watermark;
+           !stream->local_write_reset && !stream->local_fin_queued &&
+           stream->send_buffer_capacity - stream->send_buffer_length >= required_space;
 }
 
 static void utp_stream_enter_user_callback(utp_stream_t* stream)

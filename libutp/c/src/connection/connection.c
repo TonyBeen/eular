@@ -2888,7 +2888,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
     connection->stream_terminal_count                   = 0u;
     connection->path_validation_buffer_capacity         = UTP_CONNECTION_PATH_VALIDATION_BUFFER_CAPACITY;
     connection->stream_send_buffer_capacity             = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
-    connection->stream_writable_low_watermark_per_mille = 500u;
+    connection->stream_writable_space_rate              = 500u;
     connection->rx_bytes                                = 0u;
     connection->tx_bytes                                = 0u;
     connection->rtx_bytes                               = 0u;
@@ -3568,7 +3568,7 @@ void utp_connection_cleanup(utp_connection_t* connection)
     connection->stream_terminal_count                                   = 0u;
     connection->path_validation_buffer_capacity                         = 0u;
     connection->stream_send_buffer_capacity                             = 0u;
-    connection->stream_writable_low_watermark_per_mille                 = 0u;
+    connection->stream_writable_space_rate                              = 0u;
     connection->candidate_packet_bytes                                  = 0u;
     connection->on_incoming_stream                                      = NULL;
     connection->on_incoming_stream_user_data                            = NULL;

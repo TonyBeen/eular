@@ -224,14 +224,14 @@ static void test_connection_option_snapshot(struct event_base* event_base)
     utp_context_connection_slot_t* second_slot;
     uint32_t                       first_local_cid;
 
-    options.event_base                              = event_base;
-    options.peer_id                                 = "snapshot";
-    options.stream_scheduler_mode                   = UTP_STREAM_SCHEDULER_STRICT;
-    options.stream_send_buffer_capacity             = 64u * 1024u;
-    options.stream_writable_low_watermark_per_mille = 250u;
-    options.max_idle_timeout                        = 1100u;
-    options.keepalive_interval                      = 1000u;
-    options.stream_terminal_capacity                = 32u;
+    options.event_base                  = event_base;
+    options.peer_id                     = "snapshot";
+    options.stream_scheduler_mode       = UTP_STREAM_SCHEDULER_STRICT;
+    options.stream_send_buffer_capacity = 64u * 1024u;
+    options.stream_writable_space_rate  = 250u;
+    options.max_idle_timeout            = 1100u;
+    options.keepalive_interval          = 1000u;
+    options.stream_terminal_capacity    = 32u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
 
@@ -254,25 +254,25 @@ static void test_connection_option_snapshot(struct event_base* event_base)
     assert(first_local_cid != 0u);
     assert(first_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_STRICT);
     assert(first_slot->connection.stream_send_buffer_capacity == 64u * 1024u);
-    assert(first_slot->connection.stream_writable_low_watermark_per_mille == 250u);
+    assert(first_slot->connection.stream_writable_space_rate == 250u);
     assert(first_slot->connection.local_transport_params.max_idle_timeout_ms == 1100u);
     assert(first_slot->connection.keepalive_interval_ms == 1000u);
     assert(first_slot->connection.stream_terminal_capacity == 32u);
 
-    options.stream_scheduler_mode                   = UTP_STREAM_SCHEDULER_DRR;
-    options.stream_send_buffer_capacity             = 128u * 1024u;
-    options.stream_writable_low_watermark_per_mille = 750u;
-    options.max_idle_timeout                        = 2200u;
-    options.keepalive_interval                      = 2000u;
-    options.stream_terminal_capacity                = 64u;
-    connect_options.port                            = 31002u;
+    options.stream_scheduler_mode       = UTP_STREAM_SCHEDULER_DRR;
+    options.stream_send_buffer_capacity = 128u * 1024u;
+    options.stream_writable_space_rate  = 750u;
+    options.max_idle_timeout            = 2200u;
+    options.keepalive_interval          = 2000u;
+    options.stream_terminal_capacity    = 64u;
+    connect_options.port                = 31002u;
     assert(utp_context_connect(context, &connect_options) == UTP_STATUS_OK);
     assert(utp_hash_table_count(&context->connections) == 2u);
     second_slot = test_find_connection_slot(context, first_local_cid);
     assert(second_slot == first_slot);
     assert(second_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_STRICT);
     assert(second_slot->connection.stream_send_buffer_capacity == 64u * 1024u);
-    assert(second_slot->connection.stream_writable_low_watermark_per_mille == 250u);
+    assert(second_slot->connection.stream_writable_space_rate == 250u);
     assert(second_slot->connection.local_transport_params.max_idle_timeout_ms == 1100u);
     assert(second_slot->connection.keepalive_interval_ms == 1000u);
     assert(second_slot->connection.stream_terminal_capacity == 32u);
@@ -296,7 +296,7 @@ static void test_connection_option_snapshot(struct event_base* event_base)
     assert(second_slot != NULL);
     assert(second_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_DRR);
     assert(second_slot->connection.stream_send_buffer_capacity == 128u * 1024u);
-    assert(second_slot->connection.stream_writable_low_watermark_per_mille == 750u);
+    assert(second_slot->connection.stream_writable_space_rate == 750u);
     assert(second_slot->connection.local_transport_params.max_idle_timeout_ms == 2200u);
     assert(second_slot->connection.keepalive_interval_ms == 2000u);
     assert(second_slot->connection.stream_terminal_capacity == 64u);

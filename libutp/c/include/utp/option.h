@@ -71,9 +71,9 @@ typedef struct utp_context_options {
     uint32_t                    path_validation_buffer_capacity;      // 新连接：候选路径缓存上限(bytes)，0 时禁用
 
     // Context 固定的池配置，以及新连接使用的 Stream 缓存配置。
-    uint32_t                    packet_in_max_free;                       // Context 固定：入站 PacketIn 最大空闲缓存数
-    size_t                      stream_send_buffer_capacity;              // 新连接：每 Stream 发送缓存，必须大于 0
-    uint16_t                    stream_writable_low_watermark_per_mille;  // 新连接：可写通知阈值，范围 [0, 1000)
+    uint32_t                    packet_in_max_free;           // Context 固定：入站 PacketIn 最大空闲缓存数
+    size_t                      stream_send_buffer_capacity;  // 新连接：每 Stream 发送缓存，必须大于 0
+    uint16_t                    stream_writable_space_rate;   // 新连接：可写空间通知比率，范围 (0, 1000]，分母为 1000
 
     // Context 固定：这些字段参与 pending 表和握手重试状态的初始化。
     uint16_t                    handshake_timeout;       // 首轮握手超时(ms)，必须大于 0
@@ -140,7 +140,7 @@ typedef struct utp_context_options {
         16u * 1024u,                                /* path_validation_buffer_capacity: 候选路径缓存上限 */       \
         256u,                                       /* packet_in_max_free: PacketIn 最大空闲缓存数 */             \
         256u * 1024u,                               /* stream_send_buffer_capacity: Stream 发送缓存 */            \
-        500u,                                       /* stream_writable_low_watermark_per_mille: 可写阈值 */       \
+        500u,                                       /* stream_writable_space_rate: 可写空间比率 */                \
         800u,                                       /* handshake_timeout: 握手首轮超时(ms) */                     \
         2u,                                         /* handshake_max_retries: 握手重试次数 */                     \
         1024u,                                      /* pending_incoming_limit: 全局未完成被动握手上限 */          \
