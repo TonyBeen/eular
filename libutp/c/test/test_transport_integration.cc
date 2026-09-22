@@ -234,12 +234,14 @@ struct session_token_probe {
 };
 
 struct transport_pair {
-    struct event_base* event_base   = nullptr;
-    utp_context_t*     client       = nullptr;
-    utp_context_t*     server       = nullptr;
-    endpoint_probe     client_probe = {};
-    endpoint_probe     server_probe = {};
-    udp_relay          relay        = {};
+    struct event_base*    event_base     = nullptr;
+    utp_context_options_t client_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_options_t server_options = UTP_CONTEXT_OPTIONS_INIT;
+    utp_context_t*        client         = nullptr;
+    utp_context_t*        server         = nullptr;
+    endpoint_probe        client_probe   = {};
+    endpoint_probe        server_probe   = {};
+    udp_relay             relay          = {};
 };
 
 static bool on_new_connection(const utp_new_connection_info_t* info, void* user_data)
@@ -679,27 +681,25 @@ static void transport_pair_init_with_options(transport_pair* pair, relay_rule ru
                                              const utp_context_options_t* client_options,
                                              const utp_context_options_t* server_options)
 {
-    utp_context_options_t client_opts     = UTP_CONTEXT_OPTIONS_INIT;
-    client_opts.peer_id                   = "test";
-    utp_context_options_t server_opts     = UTP_CONTEXT_OPTIONS_INIT;
-    server_opts.peer_id                   = "test";
     utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
     uint16_t              server_port     = 0u;
 
+    pair->client_options.peer_id = "test";
+    pair->server_options.peer_id = "test";
     if (client_options != nullptr) {
-        client_opts = *client_options;
+        pair->client_options = *client_options;
     }
     if (server_options != nullptr) {
-        server_opts = *server_options;
+        pair->server_options = *server_options;
     }
     pair->event_base = event_base_new();
     REQUIRE(pair->event_base != nullptr);
-    client_opts.event_base = pair->event_base;
-    client_opts.context_id = client_opts.context_id == 0u ? 5001u : client_opts.context_id;
-    server_opts.event_base = pair->event_base;
-    server_opts.context_id = server_opts.context_id == 0u ? 5002u : server_opts.context_id;
-    REQUIRE(utp_context_create(&client_opts, &pair->client) == UTP_STATUS_OK);
-    REQUIRE(utp_context_create(&server_opts, &pair->server) == UTP_STATUS_OK);
+    pair->client_options.event_base = pair->event_base;
+    pair->client_options.context_id = pair->client_options.context_id == 0u ? 5001u : pair->client_options.context_id;
+    pair->server_options.event_base = pair->event_base;
+    pair->server_options.context_id = pair->server_options.context_id == 0u ? 5002u : pair->server_options.context_id;
+    REQUIRE(utp_context_create(&pair->client_options, &pair->client) == UTP_STATUS_OK);
+    REQUIRE(utp_context_create(&pair->server_options, &pair->server) == UTP_STATUS_OK);
     pair->server_probe.context = pair->server;
     REQUIRE(utp_context_bind(pair->client, "127.0.0.1", 0u, nullptr, nullptr) == UTP_STATUS_OK);
     REQUIRE(utp_context_bind(pair->server, "127.0.0.1", 0u, nullptr, &server_port) == UTP_STATUS_OK);

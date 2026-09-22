@@ -129,7 +129,11 @@ typedef void (*utp_on_ntrs_unregistered_fn)(utp_context_t* context, void* user_d
 
 /** @brief 返回当前链接的 C 库语义版本字符串。 */
 const char*  utp_version(void);
-/** @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。 */
+/**
+ * @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。
+ * @note Context 借用 @p options 指针直至销毁。调用方可在此期间修改连接级字段，修改只对之后创建的
+ *       Connection 生效；Context 级固定字段不得修改，且整个生命周期内不得释放或移动该结构体。
+ */
 utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
 /**
  * @brief 同步销毁 Context 管理的连接和流；已建立连接仅尽力发送一次 CONNECTION_CLOSE。

@@ -78,33 +78,114 @@ static void utp_context_report_ntrs_register_result(utp_context_t* context, utp_
 static void utp_context_finish_ntrs_unregistration(utp_context_t* context);
 static void utp_context_note_ntrs_activity(utp_context_t* context, uint64_t now_us);
 static void utp_context_remember_local_candidate(utp_context_t* context, const utp_address_t* candidate);
+
+static bool utp_context_connection_options_valid(const utp_context_options_t* options)
+{
+    assert(options != NULL);
+    if (options->stream_scheduler_mode > UTP_STREAM_SCHEDULER_DRR ||
+        (options->cc_algorithm != UTP_CONGESTION_DEFAULT && options->cc_algorithm != UTP_CONGESTION_BBR &&
+         options->cc_algorithm != UTP_CONGESTION_CUBIC) ||
+        options->clock_granularity_us == 0u || options->bbr_init_cwnd_mss == 0u || options->bbr_min_cwnd_mss == 0u ||
+        options->bbr_startup_full_bw_rounds == 0u || options->bbr_probe_rtt_ms == 0u ||
+        options->bbr_min_rtt_expiry_ms == 0u || options->cubic_init_cwnd_mss == 0u ||
+        options->cubic_min_cwnd_mss == 0u || !isfinite(options->cubic_beta) || options->cubic_beta <= 0.0 ||
+        options->cubic_beta >= 1.0 || !isfinite(options->cubic_c) || options->cubic_c <= 0.0 ||
+        options->cubic_c > 2.0 || !isfinite(options->bbr_startup_high_gain) || options->bbr_startup_high_gain <= 1.0 ||
+        options->bbr_startup_high_gain > 4.0 || !isfinite(options->bbr_cwnd_gain) || options->bbr_cwnd_gain < 1.0 ||
+        options->bbr_cwnd_gain > 4.0 || !isfinite(options->bbr_startup_growth_target) ||
+        options->bbr_startup_growth_target <= 1.0 || options->bbr_startup_growth_target > 2.0 ||
+        options->stream_terminal_capacity == 0u || options->stream_send_buffer_capacity == 0u ||
+        options->stream_writable_low_watermark_per_mille >= 1000u || options->ack_every_n_packets == 0u ||
+        options->ack_delay == 0u || options->initial_max_stream_data_bidi_local == 0u ||
+        options->initial_max_stream_data_bidi_remote == 0u || options->initial_max_stream_data_uni == 0u ||
+        (options->enable_keepalive &&
+         (options->keepalive_interval == 0u || options->keepalive_timeout == 0u || options->keepalive_probes == 0u))) {
+        return false;
+    }
+    for (size_t index = 0u; index < UTP_BBR_PACING_GAIN_COUNT; ++index) {
+        if (!isfinite(options->bbr_pacing_gains[index]) || options->bbr_pacing_gains[index] <= 0.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void utp_context_build_local_transport_config(const utp_context_options_t*  options,
+                                                     utp_frame_transport_params_t* params,
+                                                     utp_frame_ack_frequency_t*    frequency)
+{
+    assert(options != NULL);
+    assert(params != NULL);
+    assert(frequency != NULL);
+    *params = (utp_frame_transport_params_t){
+        options->initial_max_data > UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL ? UTP_TRANSPORT_PARAMS_MAX_FLOW_CONTROL
+                                                                          : options->initial_max_data,
+        options->initial_max_stream_data_bidi_local,
+        options->initial_max_stream_data_bidi_remote,
+        options->initial_max_stream_data_uni,
+        options->max_idle_timeout,
+        UTP_TRANSPORT_PARAMS_DEFAULT_FLAGS,
+        options->handshake_timeout,
+        options->initial_max_streams_bidi,
+        options->initial_max_streams_uni,
+        options->ack_delay_exponent > UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT ? UTP_TRANSPORT_PARAMS_MAX_ACK_EXPONENT
+                                                                            : options->ack_delay_exponent,
+    };
+    *frequency = (utp_frame_ack_frequency_t){
+        options->ack_delay > UTP_ACK_FREQUENCY_MAX_DELAY_MS ? UTP_ACK_FREQUENCY_MAX_DELAY_MS : options->ack_delay,
+        options->ack_every_n_packets > UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD
+            ? UTP_ACK_FREQUENCY_MAX_ACK_ELICITING_THRESHOLD
+            : options->ack_every_n_packets,
+        3u,
+    };
+}
+
 /** @brief 将 Context 固定配置应用至新建连接，所有建连路径必须调用。 */
 static utp_internal_error_t utp_context_configure_connection(utp_context_t* context, utp_connection_t* connection)
 {
-    utp_internal_error_t error;
+    const utp_context_options_t* options;
+    utp_bbr_config_t             bbr_config;
+    utp_cubic_config_t           cubic_config;
+    utp_frame_transport_params_t local_transport_params;
+    utp_frame_ack_frequency_t    local_ack_frequency;
+    utp_internal_error_t         error;
 
     assert(context != NULL);
     assert(connection != NULL);
+    options = context->options;
+    assert(options != NULL);
+    if (!utp_context_connection_options_valid(options)) {
+        return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+    }
+    bbr_config = (utp_bbr_config_t){
+        options->bbr_init_cwnd_mss, options->bbr_min_cwnd_mss,          options->bbr_startup_high_gain,
+        options->bbr_cwnd_gain,     options->bbr_startup_growth_target, options->bbr_startup_full_bw_rounds,
+        options->bbr_probe_rtt_ms,  options->bbr_min_rtt_expiry_ms,     {0},
+    };
+    memcpy(bbr_config.pacing_gains, options->bbr_pacing_gains, sizeof(bbr_config.pacing_gains));
+    cubic_config = (utp_cubic_config_t){options->cubic_beta, options->cubic_c, options->cubic_init_cwnd_mss,
+                                        options->cubic_min_cwnd_mss};
+    utp_context_build_local_transport_config(options, &local_transport_params, &local_ack_frequency);
     connection->context = context;
-    error = utp_connection_set_congestion_algorithm(connection, context->cc_algorithm, &context->bbr_config,
-                                                    &context->cubic_config, context->clock_granularity_us);
+    error = utp_connection_set_congestion_algorithm(connection, options->cc_algorithm, &bbr_config, &cubic_config,
+                                                    options->clock_granularity_us);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
     utp_connection_set_mtu_config(connection, &context->mtu_config);
-    error = utp_connection_set_local_transport_config(
-        connection, &context->local_transport_params, &context->local_ack_frequency, context->enable_keepalive,
-        context->keepalive_interval_ms, context->keepalive_timeout_ms, context->keepalive_probes);
+    error = utp_connection_set_local_transport_config(connection, &local_transport_params, &local_ack_frequency,
+                                                      options->enable_keepalive, options->keepalive_interval,
+                                                      options->keepalive_timeout, options->keepalive_probes);
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_set_stream_scheduler_mode(connection, (uint8_t)context->stream_scheduler_mode);
+        error = utp_connection_set_stream_scheduler_mode(connection, (uint8_t)options->stream_scheduler_mode);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_connection_set_stream_terminal_capacity(connection, context->stream_terminal_capacity);
+        error = utp_connection_set_stream_terminal_capacity(connection, options->stream_terminal_capacity);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        utp_connection_set_path_validation_buffer_capacity(connection, context->path_validation_buffer_capacity);
-        connection->stream_send_buffer_capacity             = context->stream_send_buffer_capacity;
-        connection->stream_writable_low_watermark_per_mille = context->stream_writable_low_watermark_per_mille;
+        utp_connection_set_path_validation_buffer_capacity(connection, options->path_validation_buffer_capacity);
+        connection->stream_send_buffer_capacity             = options->stream_send_buffer_capacity;
+        connection->stream_writable_low_watermark_per_mille = options->stream_writable_low_watermark_per_mille;
     }
     return error;
 }
@@ -3623,15 +3704,18 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
                                                                const utp_pending_handshake_path_t* path,
                                                                uint64_t*                           out_packet_number)
 {
-    uint8_t              payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
+    uint8_t payload[UTP_FRAME_VERSION_SIZE + UTP_FRAME_CRYPTO_SIZE + UTP_FRAME_TRANSPORT_PARAMS_SIZE +
                     UTP_FRAME_ACK_FREQUENCY_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE];
-    size_t               payload_length;
-    utp_internal_error_t error;
+    size_t  payload_length;
+    utp_frame_transport_params_t local_transport_params;
+    utp_frame_ack_frequency_t    local_ack_frequency;
+    utp_internal_error_t         error;
 
     assert(context != NULL);
     assert(pending != NULL);
     assert(path != NULL);
     assert(out_packet_number != NULL);
+    utp_context_build_local_transport_config(context->options, &local_transport_params, &local_ack_frequency);
     error = utp_context_encode_version_frame(payload, sizeof(payload), &payload_length);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
@@ -3645,11 +3729,11 @@ static utp_internal_error_t utp_context_send_pending_handshake(utp_context_t* co
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_frame_transport_params_encode(payload + payload_length, sizeof(payload) - payload_length,
-                                                  &context->local_transport_params);
+                                                  &local_transport_params);
         if (error == UTP_INTERNAL_ERROR_OK) {
             payload_length += UTP_FRAME_TRANSPORT_PARAMS_SIZE;
             error           = utp_frame_ack_frequency_encode(payload + payload_length, sizeof(payload) - payload_length,
-                                                             &context->local_ack_frequency);
+                                                             &local_ack_frequency);
             if (error == UTP_INTERNAL_ERROR_OK) {
                 payload_length += UTP_FRAME_ACK_FREQUENCY_SIZE;
             }
@@ -6600,6 +6684,7 @@ utp_status_t utp_context_create(const utp_context_options_t* options, utp_contex
     if (context == NULL) {
         return UTP_STATUS_NOMEM;
     }
+    context->options                       = options;
     context->connections                   = (utp_hash_table_t){0};
     context->zero_rtt_responses_by_attempt = (utp_hash_table_t){0};
     context->connect_attempts_by_id        = (utp_hash_table_t){0};
@@ -7400,7 +7485,7 @@ utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_
             return UTP_STATUS_OVERFLOW;
         }
         first_data_capacity = (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE;
-        if (options->early_data_size > first_data_capacity + context->stream_send_buffer_capacity) {
+        if (options->early_data_size > first_data_capacity + context->options->stream_send_buffer_capacity) {
             utp_crypto_secure_clear(state_payload, state_payload_length);
             return UTP_STATUS_OVERFLOW;
         }

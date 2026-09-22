@@ -13,6 +13,7 @@ typedef struct concurrent_connection_test concurrent_connection_test_t;
 
 typedef struct concurrent_connection_client {
     concurrent_connection_test_t* test;        // 所属测试状态，不拥有
+    utp_context_options_t         options;     // Context 借用，必须覆盖其生命周期
     utp_context_t*                context;     // 客户端 Context 所有者
     utp_connection_t*             connection;  // 已连接的 Connection，Context 借用
     struct event*                 hold_event;  // 建连后的保持定时器
@@ -269,16 +270,16 @@ int main(int argc, char** argv)
         goto cleanup;
     }
     for (index = 0u; index < test.connection_count; ++index) {
-        concurrent_connection_client_t* client         = &test.clients[index];
-        utp_context_options_t           client_options = UTP_CONTEXT_OPTIONS_INIT;
-        client_options.peer_id                         = "test";
-        utp_connect_options_t connect_options          = UTP_CONNECT_OPTIONS_INIT;
+        concurrent_connection_client_t* client          = &test.clients[index];
+        utp_connect_options_t           connect_options = UTP_CONNECT_OPTIONS_INIT;
 
-        client->test                    = &test;
-        client_options.event_base       = test.event_base;
-        client_options.context_id       = (uint64_t)index + 2u;
-        client_options.enable_keepalive = false;
-        if (utp_context_create(&client_options, &client->context) != UTP_STATUS_OK ||
+        client->test                     = &test;
+        client->options                  = (utp_context_options_t)UTP_CONTEXT_OPTIONS_INIT;
+        client->options.peer_id          = "test";
+        client->options.event_base       = test.event_base;
+        client->options.context_id       = (uint64_t)index + 2u;
+        client->options.enable_keepalive = false;
+        if (utp_context_create(&client->options, &client->context) != UTP_STATUS_OK ||
             utp_context_bind(client->context, "127.0.0.1", 0u, NULL, NULL) != UTP_STATUS_OK) {
             fprintf(stderr, "client %" PRIu32 " setup failed\n", index);
             goto cleanup;

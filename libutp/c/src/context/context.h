@@ -212,6 +212,7 @@ TAILQ_HEAD(utp_context_pending_slot_tailq, utp_context_pending_slot);
 TAILQ_HEAD(utp_stream_notification_tailq, utp_stream);
 
 struct utp_context {
+    const utp_context_options_t*             options;                          // 调用方持有，必须覆盖 Context 生命周期
     utp_event_loop_t                         event_loop;                       // 借用调用方 libevent 循环
     utp_event_t                              udp_event;                        // UDP 可读事件
     utp_event_t                              udp_write_event;                  // UDP 可写事件

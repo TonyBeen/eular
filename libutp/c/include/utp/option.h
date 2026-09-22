@@ -22,29 +22,35 @@ typedef enum utp_congestion_algorithm {
     UTP_CONGESTION_CUBIC   = 2,
 } utp_congestion_algorithm_t;
 
+/*
+ * Context 借用该结构体直至销毁。标记为“新连接”的字段在每次创建 Connection 时读取并复制；修改它们只
+ * 影响后续 Connection。标记为“Context 固定”的字段在 utp_context_create() 期间读取，运行中不得修改。
+ */
 typedef struct utp_context_options {
-    struct event_base*          event_base;                  // 由调用方创建并驱动, Context 仅借用该事件循环
-    utp_log_sink_fn             log_sink;                    // 为空时关闭日志, 回调由协议处理线程同步调用
-    uint64_t                    context_id;                  // 用于日志标签，不参与随机 CID 生成
-    utp_log_level_t             log_level;                   // 最低输出级别, 低于该级别的日志会被过滤
-    utp_stream_scheduler_mode_t stream_scheduler_mode;       // 新建连接采用的流发送调度策略
-    utp_congestion_algorithm_t  cc_algorithm;                // 新建连接采用的拥塞控制算法
-    uint32_t                    clock_granularity_us;        // pacer 时钟粒度(us)，必须大于 0
-    uint32_t                    bbr_init_cwnd_mss;           // BBR 初始拥塞窗口(MSS)，必须大于 0
-    uint32_t                    bbr_min_cwnd_mss;            // BBR 最小拥塞窗口(MSS)，必须大于 0
-    double                      bbr_startup_high_gain;       // BBR STARTUP pacing/cwnd 增益
-    double                      bbr_cwnd_gain;               // BBR PROBE_BW cwnd 增益
-    double                      bbr_startup_growth_target;   // BBR STARTUP 带宽增长阈值
-    uint32_t                    bbr_startup_full_bw_rounds;  // BBR 退出 STARTUP 所需轮数
-    uint32_t                    bbr_probe_rtt_ms;            // BBR PROBE_RTT 最短持续时间(ms)，最小 50
-    uint32_t                    bbr_min_rtt_expiry_ms;       // BBR min_rtt 过期时间(ms)，最小 1000
+    struct event_base*          event_base;  // Context 固定：调用方创建并驱动，Context 仅借用
+    utp_log_sink_fn             log_sink;    // Context 固定：可用 utp_context_set_logger 动态修改
+    uint64_t                    context_id;  // Context 固定：用于日志标签，不参与随机 CID 生成
+    utp_log_level_t             log_level;   // Context 固定：可用 utp_context_set_logger 动态修改
+    const char*                 peer_id;  // Context 固定：路由标识，必须为 1..128 字节的字符串
+    // 新连接：流调度和拥塞控制参数在 Connection 创建时复制。
+    utp_stream_scheduler_mode_t stream_scheduler_mode;                        // 流发送调度策略
+    utp_congestion_algorithm_t  cc_algorithm;                                 // 拥塞控制算法
+    uint32_t                    clock_granularity_us;                         // 新连接：pacer 时钟粒度(us)，必须大于 0
+    uint32_t                    bbr_init_cwnd_mss;                            // BBR 初始拥塞窗口(MSS)，必须大于 0
+    uint32_t                    bbr_min_cwnd_mss;                             // BBR 最小拥塞窗口(MSS)，必须大于 0
+    double                      bbr_startup_high_gain;                        // BBR STARTUP pacing/cwnd 增益
+    double                      bbr_cwnd_gain;                                // BBR PROBE_BW cwnd 增益
+    double                      bbr_startup_growth_target;                    // BBR STARTUP 带宽增长阈值
+    uint32_t                    bbr_startup_full_bw_rounds;                   // BBR 退出 STARTUP 所需轮数
+    uint32_t                    bbr_probe_rtt_ms;                             // BBR PROBE_RTT 最短持续时间(ms)，最小 50
+    uint32_t                    bbr_min_rtt_expiry_ms;                        // BBR min_rtt 过期时间(ms)，最小 1000
     double                      bbr_pacing_gains[UTP_BBR_PACING_GAIN_COUNT];  // BBR PROBE_BW 的 8 项 pacing 增益周期
     double                      cubic_beta;                                   // CUBIC 丢包回退系数，范围 (0, 1)
     double                      cubic_c;                                      // CUBIC 曲线常数，范围 (0, 2]
     uint32_t                    cubic_init_cwnd_mss;                          // CUBIC 初始拥塞窗口(MSS)，必须大于 0
     uint32_t                    cubic_min_cwnd_mss;                           // CUBIC 最小拥塞窗口(MSS)，必须大于 0
 
-    // MTU 阶梯探测与黑洞检测配置
+    // Context 固定：MTU 配置还决定 Context PacketIn 池的最大数据容量。
     bool                        enable_dplpmtud;               // 是否启用 DPLPMTUD
     uint16_t                    mtu_min;                       // 可服务的最小 MTU，启用探测时必须大于 0
     uint16_t                    mtu_max;                       // 探测的最大 MTU 上限，启用探测时必须大于 0
@@ -57,40 +63,39 @@ typedef struct utp_context_options {
     uint16_t                    mtu_blackhole_loss_window_ms;  // 黑洞丢失统计时间窗口(ms)，启用探测时必须大于 0
     uint16_t                    mtu_blackhole_cooldown_ms;     // 黑洞降级后的冷却时间(ms)，启用探测时必须大于 0
 
-    // 0-RTT 会话票据与抗重放配置
-    uint32_t                    zero_rtt_token_max_lifetime_seconds;  // 会话票据最大有效期(秒)，0 表示立即失效
-    uint32_t                    zero_rtt_replay_cache_capacity;       // Context 级抗重放缓存容量，0 表示禁用缓存
-    uint32_t                    stream_terminal_capacity;             // 每连接流终态记录上限，必须大于 0
-    uint32_t                    path_validation_buffer_capacity;      // 每连接候选路径缓存上限(bytes)，0 时禁用
+    // Context 固定：票据有效期和抗重放表在创建时确定；其余两项为新连接配置。
+    uint32_t                    zero_rtt_token_max_lifetime_seconds;  // Context 固定：会话票据最大有效期(秒)
+    uint32_t                    zero_rtt_replay_cache_capacity;       // Context 固定：抗重放缓存容量，0 表示禁用
+    uint32_t                    stream_terminal_capacity;             // 新连接：每连接流终态记录上限，必须大于 0
+    uint32_t                    path_validation_buffer_capacity;      // 新连接：候选路径缓存上限(bytes)，0 时禁用
 
-    // Context 缓存配置
-    uint32_t                    packet_in_max_free;  // Context 入站 PacketIn 最大空闲缓存数，0 表示不保留空闲缓存
-    size_t                      stream_send_buffer_capacity;  // 每 Stream 发送缓存，必须大于 0
-    uint16_t    stream_writable_low_watermark_per_mille;      // Stream 可写通知阈值，范围 [0, 1000)，分母为 1000
+    // Context 固定的池配置，以及新连接使用的 Stream 缓存配置。
+    uint32_t                    packet_in_max_free;                       // Context 固定：入站 PacketIn 最大空闲缓存数
+    size_t                      stream_send_buffer_capacity;              // 新连接：每 Stream 发送缓存，必须大于 0
+    uint16_t                    stream_writable_low_watermark_per_mille;  // 新连接：可写通知阈值，范围 [0, 1000)
 
-    // 被动握手响应的超时与重试配置
-    uint16_t    handshake_timeout;       // 首轮握手超时(ms)，必须大于 0
-    uint8_t     handshake_max_retries;   // 被动握手响应的最大重试次数
-    uint32_t    pending_incoming_limit;  // 全局未完成被动握手上限，0 表示不接受 pending
+    // Context 固定：这些字段参与 pending 表和握手重试状态的初始化。
+    uint16_t                    handshake_timeout;       // 首轮握手超时(ms)，必须大于 0
+    uint8_t                     handshake_max_retries;   // 被动握手响应的最大重试次数
+    uint32_t                    pending_incoming_limit;  // 全局未完成被动握手上限，0 表示不接受 pending
 
-    // 保活与 ACK 调度配置
-    bool        enable_keepalive;     // 是否启用空闲 Ping 探测
-    uint32_t    keepalive_interval;   // 探测间隔(ms)，启用保活时必须大于 0
-    uint32_t    keepalive_timeout;    // 单次探测等待时间(ms)，启用保活时必须大于 0
-    uint16_t    keepalive_probes;     // 连续未响应探测次数，启用保活时必须大于 0
-    uint32_t    max_idle_timeout;     // 本端通告的最大空闲时间(ms)，0 表示不通告空闲超时
-    uint8_t     ack_every_n_packets;  // ACK-eliciting 包计数阈值，必须大于 0
-    uint8_t     ack_delay_exponent;   // ACK 延迟编码指数，范围 0..20
-    uint16_t    ack_delay;            // 最大 ACK 延迟(ms)，必须大于 0
+    // 新连接：保活、ACK 和本端传输参数在 Connection 创建时复制。
+    bool                        enable_keepalive;     // 是否启用空闲 Ping 探测
+    uint32_t                    keepalive_interval;   // 探测间隔(ms)，启用保活时必须大于 0
+    uint32_t                    keepalive_timeout;    // 单次探测等待时间(ms)，启用保活时必须大于 0
+    uint16_t                    keepalive_probes;     // 连续未响应探测次数，启用保活时必须大于 0
+    uint32_t                    max_idle_timeout;     // 本端通告的最大空闲时间(ms)，0 表示不通告空闲超时
+    uint8_t                     ack_every_n_packets;  // ACK-eliciting 包计数阈值，必须大于 0
+    uint8_t                     ack_delay_exponent;   // ACK 延迟编码指数，范围 0..20
+    uint16_t                    ack_delay;            // 最大 ACK 延迟(ms)，必须大于 0
 
-    // 本端在握手中通告的初始流控与流数量
-    uint16_t    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 表示不允许
-    uint16_t    initial_max_streams_uni;              // 允许对端创建的单向流数，0 表示不允许
-    uint64_t    initial_max_data;                     // 连接级接收窗口，0 表示不提供额度
-    uint64_t    initial_max_stream_data_bidi_local;   // 本端发起双向流的初始接收窗口，必须大于 0
-    uint64_t    initial_max_stream_data_bidi_remote;  // 对端发起双向流的初始接收窗口，必须大于 0
-    uint64_t    initial_max_stream_data_uni;          // 对端发起单向流的初始接收窗口，必须大于 0
-    const char* peer_id;                              // Context 路由标识，必须为 1..128 字节的字符串
+    // 新连接：本端在握手中通告的初始流控与流数量。
+    uint16_t                    initial_max_streams_bidi;             // 允许对端创建的双向流数，0 表示不允许
+    uint16_t                    initial_max_streams_uni;              // 允许对端创建的单向流数，0 表示不允许
+    uint64_t                    initial_max_data;                     // 连接级接收窗口，0 表示不提供额度
+    uint64_t                    initial_max_stream_data_bidi_local;   // 本端发起双向流的初始接收窗口，必须大于 0
+    uint64_t                    initial_max_stream_data_bidi_remote;  // 对端发起双向流的初始接收窗口，必须大于 0
+    uint64_t                    initial_max_stream_data_uni;          // 对端发起单向流的初始接收窗口，必须大于 0
 } utp_context_options_t;
 
 // Context 配置的完整默认值；创建 Context 前必须由调用方设置 event_base。

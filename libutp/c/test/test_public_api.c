@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,6 +195,112 @@ static void pump_event_loop(struct event_base* event_base, int32_t iterations)
     for (index = 0; index < iterations; ++index) {
         (void)event_base_loop(event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK);
     }
+}
+
+static utp_context_connection_slot_t* test_find_connection_slot(utp_context_t* context, uint32_t local_cid)
+{
+    utp_hash_iter_t  iter;
+    utp_hash_node_t* node;
+
+    assert(context != NULL);
+    utp_hash_iter_init(&iter);
+    while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+        utp_context_connection_slot_t* slot =
+            (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
+
+        if (slot->connection.local_cid == local_cid) {
+            return slot;
+        }
+    }
+    return NULL;
+}
+
+static void test_connection_option_snapshot(struct event_base* event_base)
+{
+    utp_context_options_t          options         = UTP_CONTEXT_OPTIONS_INIT;
+    utp_connect_options_t          connect_options = UTP_CONNECT_OPTIONS_INIT;
+    utp_context_t*                 context         = NULL;
+    utp_context_connection_slot_t* first_slot;
+    utp_context_connection_slot_t* second_slot;
+    uint32_t                       first_local_cid;
+
+    options.event_base                              = event_base;
+    options.peer_id                                 = "snapshot";
+    options.stream_scheduler_mode                   = UTP_STREAM_SCHEDULER_STRICT;
+    options.stream_send_buffer_capacity             = 64u * 1024u;
+    options.stream_writable_low_watermark_per_mille = 250u;
+    options.max_idle_timeout                        = 1100u;
+    options.keepalive_interval                      = 1000u;
+    options.stream_terminal_capacity                = 32u;
+    assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
+    assert(utp_context_bind(context, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
+
+    connect_options.address        = "127.0.0.1";
+    connect_options.target_peer_id = "remote";
+    connect_options.port           = 31001u;
+    connect_options.timeout_ms     = 5000u;
+    assert(utp_context_connect(context, &connect_options) == UTP_STATUS_OK);
+    assert(utp_hash_table_count(&context->connections) == 1u);
+    {
+        utp_hash_iter_t  iter;
+        utp_hash_node_t* node;
+
+        utp_hash_iter_init(&iter);
+        node = utp_hash_iter_next(&context->connections, &iter);
+        assert(node != NULL);
+        first_slot = (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
+    }
+    first_local_cid = first_slot->connection.local_cid;
+    assert(first_local_cid != 0u);
+    assert(first_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_STRICT);
+    assert(first_slot->connection.stream_send_buffer_capacity == 64u * 1024u);
+    assert(first_slot->connection.stream_writable_low_watermark_per_mille == 250u);
+    assert(first_slot->connection.local_transport_params.max_idle_timeout_ms == 1100u);
+    assert(first_slot->connection.keepalive_interval_ms == 1000u);
+    assert(first_slot->connection.stream_terminal_capacity == 32u);
+
+    options.stream_scheduler_mode                   = UTP_STREAM_SCHEDULER_DRR;
+    options.stream_send_buffer_capacity             = 128u * 1024u;
+    options.stream_writable_low_watermark_per_mille = 750u;
+    options.max_idle_timeout                        = 2200u;
+    options.keepalive_interval                      = 2000u;
+    options.stream_terminal_capacity                = 64u;
+    connect_options.port                            = 31002u;
+    assert(utp_context_connect(context, &connect_options) == UTP_STATUS_OK);
+    assert(utp_hash_table_count(&context->connections) == 2u);
+    second_slot = test_find_connection_slot(context, first_local_cid);
+    assert(second_slot == first_slot);
+    assert(second_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_STRICT);
+    assert(second_slot->connection.stream_send_buffer_capacity == 64u * 1024u);
+    assert(second_slot->connection.stream_writable_low_watermark_per_mille == 250u);
+    assert(second_slot->connection.local_transport_params.max_idle_timeout_ms == 1100u);
+    assert(second_slot->connection.keepalive_interval_ms == 1000u);
+    assert(second_slot->connection.stream_terminal_capacity == 32u);
+
+    second_slot = NULL;
+    {
+        utp_hash_iter_t  iter;
+        utp_hash_node_t* node;
+
+        utp_hash_iter_init(&iter);
+        while ((node = utp_hash_iter_next(&context->connections, &iter)) != NULL) {
+            utp_context_connection_slot_t* slot =
+                (utp_context_connection_slot_t*)((uint8_t*)node - offsetof(utp_context_connection_slot_t, node));
+
+            if (slot->connection.local_cid != first_local_cid) {
+                second_slot = slot;
+                break;
+            }
+        }
+    }
+    assert(second_slot != NULL);
+    assert(second_slot->connection.stream_scheduler_mode == UTP_STREAM_SCHEDULER_DRR);
+    assert(second_slot->connection.stream_send_buffer_capacity == 128u * 1024u);
+    assert(second_slot->connection.stream_writable_low_watermark_per_mille == 750u);
+    assert(second_slot->connection.local_transport_params.max_idle_timeout_ms == 2200u);
+    assert(second_slot->connection.keepalive_interval_ms == 2000u);
+    assert(second_slot->connection.stream_terminal_capacity == 64u);
+    utp_context_destroy(context);
 }
 
 static void test_encrypted_connection(struct event_base* event_base, utp_encryption_mode_t encryption,
@@ -1280,6 +1387,7 @@ int main(void)
     test_plaintext_zero_rtt(event_base);
     test_encrypted_zero_rtt(event_base);
     test_congestion_algorithm_selection(event_base);
+    test_connection_option_snapshot(event_base);
     {
         utp_context_options_t client_options  = UTP_CONTEXT_OPTIONS_INIT;
         client_options.peer_id                = "test";
