@@ -413,7 +413,7 @@ int main(int argc, char** argv)
     std::string bind_address;
     uint16_t    bind_port = 0u;
     std::string interface_name;
-    uint32_t    phase_timeout_ms = 0u;
+    uint32_t    phase_timeout_ms = 3000u;
     bool        verbose          = false;
     bool        use_ipv6         = false;
 
