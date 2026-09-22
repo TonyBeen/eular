@@ -6,7 +6,8 @@ extern "C" {
 #include "congestion/minmax.h"
 }
 
-TEST_CASE("minmax retains a windowed maximum without allocation", "[congestion][minmax]") {
+TEST_CASE("minmax retains a windowed maximum without allocation", "[congestion][minmax]")
+{
     utp_minmax_t maximum = {};
 
     utp_minmax_init(&maximum, 100u);
@@ -21,7 +22,8 @@ TEST_CASE("minmax retains a windowed maximum without allocation", "[congestion][
     REQUIRE(utp_minmax_get(&maximum) == 60u);
 }
 
-TEST_CASE("minmax retains a windowed minimum without allocation", "[congestion][minmax]") {
+TEST_CASE("minmax retains a windowed minimum without allocation", "[congestion][minmax]")
+{
     utp_minmax_t minimum = {};
 
     utp_minmax_init(&minimum, 100u);

@@ -1409,7 +1409,8 @@ utp_internal_error_t utp_frame_transport_params_encode(uint8_t* buffer, size_t c
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u8(&writer, params->ack_delay_exponent);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_data);
     if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_local);
-    if (error == UTP_INTERNAL_ERROR_OK) error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_remote);
+    if (error == UTP_INTERNAL_ERROR_OK)
+        error = utp_wire_write_u64(&writer, params->initial_max_stream_data_bidi_remote);
     return error == UTP_INTERNAL_ERROR_OK ? utp_wire_write_u64(&writer, params->initial_max_stream_data_uni) : error;
 }
 

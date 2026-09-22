@@ -20,7 +20,8 @@ struct CongestionTrace {
     uint32_t calls         = 0u;
 };
 
-void trace_init(void* state, const utp_rtt_stats_t* rtt_stats) {
+void trace_init(void* state, const utp_rtt_stats_t* rtt_stats)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     REQUIRE(rtt_stats != nullptr);
@@ -29,13 +30,15 @@ void trace_init(void* state, const utp_rtt_stats_t* rtt_stats) {
 
 uint64_t trace_get_cwnd(void* state) { return static_cast<CongestionTrace*>(state)->cwnd; }
 
-uint64_t trace_get_pacing_rate(void* state, int32_t in_recovery) {
+uint64_t trace_get_pacing_rate(void* state, int32_t in_recovery)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     return in_recovery != 0 ? trace->pacing_rate / 2u : trace->pacing_rate;
 }
 
-void trace_begin_ack(void* state, uint64_t now_us, uint64_t inflight_bytes) {
+void trace_begin_ack(void* state, uint64_t now_us, uint64_t inflight_bytes)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     trace->last_now      = now_us;
@@ -43,7 +46,8 @@ void trace_begin_ack(void* state, uint64_t now_us, uint64_t inflight_bytes) {
     ++trace->calls;
 }
 
-void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited) {
+void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t now_us, int32_t app_limited)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     REQUIRE(packet != nullptr);
@@ -58,26 +62,28 @@ void trace_packet(void* state, utp_congestion_packet_info_t* packet, uint64_t no
     ++trace->calls;
 }
 
-void trace_packet_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes,
-                       int32_t app_limited) {
+void trace_packet_sent(void* state, utp_congestion_packet_info_t* packet, uint64_t inflight_bytes, int32_t app_limited)
+{
     trace_packet(state, packet, 0u, app_limited);
     static_cast<CongestionTrace*>(state)->last_inflight = inflight_bytes;
 }
 
 void trace_lost(void* state, utp_congestion_packet_info_t* packet) { trace_packet(state, packet, 0u, 0); }
 
-void trace_was_quiet(void* state, uint64_t now_us, uint64_t inflight_bytes) {
+void trace_was_quiet(void* state, uint64_t now_us, uint64_t inflight_bytes)
+{
     trace_begin_ack(state, now_us, inflight_bytes);
 }
 
-void trace_end_ack(void* state, uint64_t inflight_bytes) {
+void trace_end_ack(void* state, uint64_t inflight_bytes)
+{
     auto* trace = static_cast<CongestionTrace*>(state);
 
     trace->last_inflight = inflight_bytes;
     ++trace->calls;
 }
 
-void trace_event(void* state) { ++static_cast<CongestionTrace*>(state)->calls; }
+void                       trace_event(void* state) { ++static_cast<CongestionTrace*>(state)->calls; }
 
 const utp_congestion_ops_t kTraceOps = {
     trace_init, trace_get_cwnd,  trace_get_pacing_rate, trace_begin_ack, trace_packet_sent, trace_packet,
@@ -86,7 +92,8 @@ const utp_congestion_ops_t kTraceOps = {
 
 }  // namespace
 
-TEST_CASE("pacer consumes burst tokens then reports its pacing deadline", "[congestion][pacer]") {
+TEST_CASE("pacer consumes burst tokens then reports its pacing deadline", "[congestion][pacer]")
+{
     utp_pacer_t pacer = {};
 
     utp_pacer_init(&pacer, 100u);
@@ -104,7 +111,8 @@ TEST_CASE("pacer consumes burst tokens then reports its pacing deadline", "[cong
     REQUIRE(utp_pacer_next_scheduled_time(&pacer) == 1200u);
 }
 
-TEST_CASE("congestion dispatches complete packet and transaction events", "[congestion]") {
+TEST_CASE("congestion dispatches complete packet and transaction events", "[congestion]")
+{
     CongestionTrace              trace      = {};
     utp_congestion_t             congestion = {&trace, &kTraceOps};
     utp_rtt_stats_t              rtt_stats  = {};
@@ -133,7 +141,8 @@ TEST_CASE("congestion dispatches complete packet and transaction events", "[cong
     REQUIRE(trace.calls == 9u);
 }
 
-TEST_CASE("cubic performs slow start, loss recovery, and timeout backoff", "[congestion][cubic]") {
+TEST_CASE("cubic performs slow start, loss recovery, and timeout backoff", "[congestion][cubic]")
+{
     utp_cubic_t                  cubic     = {};
     utp_rtt_stats_t              rtt_stats = {};
     utp_congestion_packet_info_t packet    = {1u, 100u, UTP_CUBIC_DEFAULT_MSS, nullptr};

@@ -14,13 +14,13 @@
 extern "C" {
 #endif
 
-#define UTP_NAT_PROBE_VERSION         2u
-#define UTP_NAT_PROBE_TOKEN_SIZE      12u
-#define UTP_NAT_PROBE_PACKET_SIZE     128u
-#define UTP_NAT_PROBE_MAX_IN_FLIGHT   6u
-#define UTP_NAT_PROBE_BATCH_SIZE      2u
-#define UTP_NAT_PROBE_MAX_ROUNDS      2u
-#define UTP_NAT_PROBE_MIN_TIMEOUT     6u
+#define UTP_NAT_PROBE_VERSION       2u
+#define UTP_NAT_PROBE_TOKEN_SIZE    12u
+#define UTP_NAT_PROBE_PACKET_SIZE   128u
+#define UTP_NAT_PROBE_MAX_IN_FLIGHT 6u
+#define UTP_NAT_PROBE_BATCH_SIZE    2u
+#define UTP_NAT_PROBE_MAX_ROUNDS    2u
+#define UTP_NAT_PROBE_MIN_TIMEOUT   6u
 
 typedef enum utp_nat_probe_message_type {
     UTP_NAT_PROBE_MESSAGE_BINDING_REQUEST  = 1,

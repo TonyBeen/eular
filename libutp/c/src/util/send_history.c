@@ -2,7 +2,8 @@
 
 #include "proto/proto.h"
 
-void utp_send_history_init(utp_send_history_t *history, uint64_t gap_warning_threshold) {
+void utp_send_history_init(utp_send_history_t* history, uint64_t gap_warning_threshold)
+{
     if (history != NULL) {
         history->largest               = 0u;
         history->gap_warning_threshold = gap_warning_threshold;
@@ -10,7 +11,8 @@ void utp_send_history_init(utp_send_history_t *history, uint64_t gap_warning_thr
     }
 }
 
-utp_internal_error_t utp_send_history_update(utp_send_history_t *history, uint64_t packet_number) {
+utp_internal_error_t utp_send_history_update(utp_send_history_t* history, uint64_t packet_number)
+{
     if (history == NULL || packet_number == 0u || packet_number > UTP_PACKET_NUMBER_MAX) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
@@ -24,8 +26,9 @@ utp_internal_error_t utp_send_history_update(utp_send_history_t *history, uint64
     return UTP_INTERNAL_ERROR_OK;
 }
 
-uint64_t utp_send_history_largest(const utp_send_history_t *history) { return history == NULL ? 0u : history->largest; }
+uint64_t utp_send_history_largest(const utp_send_history_t* history) { return history == NULL ? 0u : history->largest; }
 
-bool utp_send_history_gap_detected(const utp_send_history_t *history) {
+bool     utp_send_history_gap_detected(const utp_send_history_t* history)
+{
     return history != NULL && history->gap_detected;
 }

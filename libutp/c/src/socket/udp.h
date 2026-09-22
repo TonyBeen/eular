@@ -15,8 +15,8 @@
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600
 #endif
-#include <winsock2.h>
 #include <mswsock.h>
+#include <winsock2.h>
 #endif
 
 #ifdef __cplusplus

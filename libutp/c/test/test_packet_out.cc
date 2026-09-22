@@ -245,16 +245,16 @@ TEST_CASE("packet_out strips a transient prefix without moving external stream d
 {
     std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 2u + UTP_FRAME_STREAM_HEADER_SIZE> raw         = {};
     std::array<uint8_t, 4u>                                                         stream_data = {'d', 'a', 't', 'a'};
-    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> wire = {};
-    const utp_packet_header_t header  = {11u,
-                                         22u,
-                                         33u,
-                                         static_cast<uint16_t>(2u + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()),
-                                         UTP_PACKET_TYPE_CTRL,
-                                         0u};
-    utp_packet_header_t       decoded = {};
-    utp_packet_out_t          packet  = {};
-    size_t                    length  = 0u;
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()> wire    = {};
+    const utp_packet_header_t                                                                       header  = {11u,
+                                                                                                               22u,
+                                                                                                               33u,
+                                                                                                               static_cast<uint16_t>(2u + UTP_FRAME_STREAM_HEADER_SIZE + stream_data.size()),
+                                                                                                               UTP_PACKET_TYPE_CTRL,
+                                                                                                               0u};
+    utp_packet_header_t                                                                             decoded = {};
+    utp_packet_out_t                                                                                packet  = {};
+    size_t                                                                                          length  = 0u;
 
     REQUIRE(utp_proto_encode_header(raw.data(), raw.size(), &header) == UTP_INTERNAL_ERROR_OK);
     raw[UTP_PACKET_HEADER_SIZE]     = UTP_FRAME_TYPE_ACK;

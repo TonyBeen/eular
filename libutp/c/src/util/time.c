@@ -13,7 +13,8 @@
 #include <time.h>
 #endif
 
-static uint64_t utp_system_monotonic_now_us(void) {
+static uint64_t utp_system_monotonic_now_us(void)
+{
 #if defined(_WIN32)
     LARGE_INTEGER counter;
     LARGE_INTEGER frequency;
@@ -40,7 +41,8 @@ static uint64_t utp_system_monotonic_now_us(void) {
 #endif
 }
 
-uint64_t utp_clock_now_us(const utp_clock_t *clock) {
+uint64_t utp_clock_now_us(const utp_clock_t* clock)
+{
     if (clock != NULL && clock->now_us != NULL) {
         return clock->now_us(clock->user_data);
     }

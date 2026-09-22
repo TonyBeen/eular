@@ -240,10 +240,10 @@ void utp_cubic_init(utp_cubic_t* cubic, const utp_cubic_config_t* config)
 
     assert(cubic != NULL);
     memset(cubic, 0, sizeof(*cubic));
-    cubic->beta = config == NULL ? UTP_CUBIC_DEFAULT_BETA : config->beta;
+    cubic->beta    = config == NULL ? UTP_CUBIC_DEFAULT_BETA : config->beta;
     cubic->cubic_c = config == NULL ? UTP_CUBIC_DEFAULT_C : config->cubic_c;
-    minimum_cwnd = utp_cubic_mss_to_bytes(config == NULL ? UTP_CUBIC_DEFAULT_MIN_MSS : config->minimum_cwnd_mss);
-    initial_cwnd = utp_cubic_mss_to_bytes(config == NULL ? UTP_CUBIC_DEFAULT_INIT_MSS : config->initial_cwnd_mss);
+    minimum_cwnd   = utp_cubic_mss_to_bytes(config == NULL ? UTP_CUBIC_DEFAULT_MIN_MSS : config->minimum_cwnd_mss);
+    initial_cwnd   = utp_cubic_mss_to_bytes(config == NULL ? UTP_CUBIC_DEFAULT_INIT_MSS : config->initial_cwnd_mss);
     cubic->minimum_cwnd     = utp_cubic_min(minimum_cwnd, UTP_CUBIC_MAX_CWND);
     cubic->initial_cwnd     = utp_cubic_min(utp_cubic_max(initial_cwnd, cubic->minimum_cwnd), UTP_CUBIC_MAX_CWND);
     cubic->cwnd             = cubic->initial_cwnd;

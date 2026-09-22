@@ -279,7 +279,8 @@ static void test_encrypted_connection(struct event_base* event_base, utp_encrypt
            UINT64_C(192) * 1024u);
     assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_bidi_remote ==
            UINT64_C(128) * 1024u);
-    assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_uni == UINT64_C(96) * 1024u);
+    assert(server_probe.connected_connection->peer_transport_params.initial_max_stream_data_uni ==
+           UINT64_C(96) * 1024u);
     assert(server_probe.connected_connection->peer_ack_frequency.ack_eliciting_threshold == 5u);
     assert(server_probe.connected_connection->peer_ack_frequency.max_ack_delay_ms == 40u);
     assert(utp_connection_export_session_token(client_probe.connected_connection, resumption_state,
@@ -408,8 +409,8 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
         request_length = UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 1u +
                          strlen(early_options.peer_id) + 1u + strlen("test") + 1u + 1u + 1u + 2u + 1u +
                          address_length * (size_t)boundary_client->local_candidate_count;
-        fixed_length   = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                         UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
+        fixed_length = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
+                       UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
         assert((size_t)target_size >= fixed_length + UTP_FRAME_STREAM_HEADER_SIZE);
         boundary_size =
             (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE + UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
@@ -1036,21 +1037,21 @@ int main(void)
     oversized_peer_id[sizeof(oversized_peer_id) - 1u] = '\0';
     options.peer_id                                   = oversized_peer_id;
     assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
-    options.peer_id = "test";
+    options.peer_id                            = "test";
     options.initial_max_stream_data_bidi_local = 0u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
-    options.initial_max_stream_data_bidi_local = UINT64_C(512) * 1024u;
+    options.initial_max_stream_data_bidi_local  = UINT64_C(512) * 1024u;
     options.initial_max_stream_data_bidi_remote = 0u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
     options.initial_max_stream_data_bidi_remote = UINT64_C(512) * 1024u;
-    options.initial_max_stream_data_uni = 0u;
+    options.initial_max_stream_data_uni         = 0u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_INVALID_ARGUMENT);
     options.initial_max_stream_data_uni = 1u;
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     utp_context_destroy(context);
-    context = NULL;
+    context                             = NULL;
     options.initial_max_stream_data_uni = UINT64_C(512) * 1024u;
-    test_log_count = 0;
+    test_log_count                      = 0;
     assert(utp_context_create(&options, &context) == UTP_STATUS_OK);
     assert(context != NULL);
     assert(strcmp(context->peer_id, "test") == 0);
@@ -1104,9 +1105,9 @@ int main(void)
         quiet_options.cc_algorithm = (utp_congestion_algorithm_t)-1;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
         quiet_options.cc_algorithm = UTP_CONGESTION_DEFAULT;
-        quiet_options.cubic_beta = NAN;
+        quiet_options.cubic_beta   = NAN;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
-        quiet_options.cubic_beta = 0.7;
+        quiet_options.cubic_beta           = 0.7;
         quiet_options.bbr_pacing_gains[0u] = INFINITY;
         assert(utp_context_create(&quiet_options, &quiet_context) == UTP_STATUS_INVALID_ARGUMENT);
         quiet_options.bbr_pacing_gains[0u] = 1.25;
@@ -1121,10 +1122,10 @@ int main(void)
         utp_context_t*        many_context     = NULL;
         static const uint32_t connection_count = 33u;
 
-        many_options.event_base             = event_base;
-        many_options.context_id             = 72u;
-        many_options.mtu_max                = 1450u;
-        many_options.pending_incoming_limit = 0u;
+        many_options.event_base                     = event_base;
+        many_options.context_id                     = 72u;
+        many_options.mtu_max                        = 1450u;
+        many_options.pending_incoming_limit         = 0u;
         many_options.zero_rtt_replay_cache_capacity = 0u;
         assert(utp_context_create(&many_options, &many_context) == UTP_STATUS_OK);
         assert(many_context->pending_incoming.max_entries == 0u);
@@ -1155,11 +1156,11 @@ int main(void)
         utp_context_options_t zero_credit_options = UTP_CONTEXT_OPTIONS_INIT;
         utp_context_t*        zero_credit_context = NULL;
 
-        zero_credit_options.event_base                          = event_base;
-        zero_credit_options.peer_id                              = "zero-credit";
-        zero_credit_options.initial_max_streams_bidi              = 0u;
-        zero_credit_options.initial_max_streams_uni               = 0u;
-        zero_credit_options.initial_max_data                      = 0u;
+        zero_credit_options.event_base               = event_base;
+        zero_credit_options.peer_id                  = "zero-credit";
+        zero_credit_options.initial_max_streams_bidi = 0u;
+        zero_credit_options.initial_max_streams_uni  = 0u;
+        zero_credit_options.initial_max_data         = 0u;
         assert(utp_context_create(&zero_credit_options, &zero_credit_context) == UTP_STATUS_OK);
         assert(zero_credit_context->local_transport_params.initial_max_streams_bidi == 0u);
         assert(zero_credit_context->local_transport_params.initial_max_streams_uni == 0u);

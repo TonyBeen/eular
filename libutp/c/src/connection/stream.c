@@ -266,11 +266,11 @@ static bool utp_stream_account_recv_fragment(utp_stream_t* stream, utp_stream_re
             return false;
         }
         *account->connection_memory_bytes += new_cost;
-        fragment->connection_memory_bytes = account->connection_memory_bytes;
+        fragment->connection_memory_bytes  = account->connection_memory_bytes;
     }
     stream->recv_pinned_memory_bytes += new_cost;
-    fragment->memory_cost = new_cost;
-    fragment->accounted   = true;
+    fragment->memory_cost             = new_cost;
+    fragment->accounted               = true;
     return true;
 }
 
@@ -329,20 +329,19 @@ static void utp_stream_release_recv_fragment_storage(utp_stream_t* stream)
         return;
     }
     utp_allocator_free(NULL, stream->recv_fragments);
-    stream->recv_fragments = NULL;
-    stream->recv_fragment_capacity = 0u;
-    stream->recv_fragment_begin = 0u;
-    stream->recv_pinned_memory_bytes =
-        stream->recv_pinned_memory_bytes >= stream->recv_fragment_storage_bytes
-            ? stream->recv_pinned_memory_bytes - stream->recv_fragment_storage_bytes
-            : 0u;
+    stream->recv_fragments           = NULL;
+    stream->recv_fragment_capacity   = 0u;
+    stream->recv_fragment_begin      = 0u;
+    stream->recv_pinned_memory_bytes = stream->recv_pinned_memory_bytes >= stream->recv_fragment_storage_bytes
+                                           ? stream->recv_pinned_memory_bytes - stream->recv_fragment_storage_bytes
+                                           : 0u;
     if (stream->recv_fragment_storage_connection_memory_bytes != NULL) {
         size_t* bytes = stream->recv_fragment_storage_connection_memory_bytes;
 
         *bytes = *bytes >= stream->recv_fragment_storage_bytes ? *bytes - stream->recv_fragment_storage_bytes : 0u;
     }
     stream->recv_fragment_storage_connection_memory_bytes = NULL;
-    stream->recv_fragment_storage_bytes = 0u;
+    stream->recv_fragment_storage_bytes                   = 0u;
 }
 
 static void utp_stream_release_acked_prefix(utp_stream_t* stream)
@@ -411,14 +410,14 @@ static utp_internal_error_t utp_stream_recv_fragment_storage_cost(const utp_stre
     }
     required = stream->recv_fragment_count + additional;
     if (required == 0u || required <= stream->recv_fragment_capacity - stream->recv_fragment_begin) {
-        *out_cost     = 0u;
+        *out_cost = 0u;
         if (out_capacity != NULL) {
             *out_capacity = stream->recv_fragment_capacity;
         }
         return UTP_INTERNAL_ERROR_OK;
     }
     if (required <= stream->recv_fragment_capacity) {
-        *out_cost     = 0u;
+        *out_cost = 0u;
         if (out_capacity != NULL) {
             *out_capacity = stream->recv_fragment_capacity;
         }
@@ -427,22 +426,19 @@ static utp_internal_error_t utp_stream_recv_fragment_storage_cost(const utp_stre
     if (required > SIZE_MAX - (UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u)) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    capacity = ((required + UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u) /
-                UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY) *
+    capacity = ((required + UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u) / UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY) *
                UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY;
-    if (capacity > SIZE_MAX / sizeof(utp_stream_recv_fragment_t) ||
-        capacity < stream->recv_fragment_capacity) {
+    if (capacity > SIZE_MAX / sizeof(utp_stream_recv_fragment_t) || capacity < stream->recv_fragment_capacity) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
-    *out_cost     = (capacity - stream->recv_fragment_capacity) * sizeof(utp_stream_recv_fragment_t);
+    *out_cost = (capacity - stream->recv_fragment_capacity) * sizeof(utp_stream_recv_fragment_t);
     if (out_capacity != NULL) {
         *out_capacity = capacity;
     }
     return UTP_INTERNAL_ERROR_OK;
 }
 
-static bool utp_stream_can_account_recv_fragments(const utp_stream_t* stream,
-                                                  const utp_stream_recv_account_t* account,
+static bool utp_stream_can_account_recv_fragments(const utp_stream_t* stream, const utp_stream_recv_account_t* account,
                                                   const utp_packet_in_t* packet, size_t data_count, size_t storage_cost)
 {
     const size_t data_cost = packet == NULL ? 0u : (size_t)packet->capacity;
@@ -473,16 +469,15 @@ static bool utp_stream_can_account_recv_fragments(const utp_stream_t* stream,
 static utp_internal_error_t utp_stream_reserve_recv_fragments(utp_stream_t* stream, size_t additional,
                                                               const utp_stream_recv_account_t* account)
 {
-    size_t                       storage_cost;
-    size_t                       capacity;
+    size_t                      storage_cost;
+    size_t                      capacity;
     utp_stream_recv_fragment_t* fragments;
 
     assert(stream != NULL);
     if (stream->recv_fragment_count == 0u) {
         stream->recv_fragment_begin = 0u;
     }
-    if (utp_stream_recv_fragment_storage_cost(stream, additional, &storage_cost, &capacity) !=
-        UTP_INTERNAL_ERROR_OK) {
+    if (utp_stream_recv_fragment_storage_cost(stream, additional, &storage_cost, &capacity) != UTP_INTERNAL_ERROR_OK) {
         return UTP_INTERNAL_ERROR_OVERFLOW;
     }
     if (storage_cost == 0u) {
@@ -504,7 +499,8 @@ static utp_internal_error_t utp_stream_reserve_recv_fragments(utp_stream_t* stre
         return UTP_INTERNAL_ERROR_WOULD_BLOCK;
     }
     if (account != NULL && account->connection_memory_bytes != NULL) {
-        const size_t connection_memory_limit = account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
+        const size_t connection_memory_limit =
+            account->connection_memory_limit == 0u ? 1u : account->connection_memory_limit;
 
         if (*account->connection_memory_bytes > connection_memory_limit ||
             storage_cost > connection_memory_limit - *account->connection_memory_bytes) {
@@ -516,17 +512,16 @@ static utp_internal_error_t utp_stream_reserve_recv_fragments(utp_stream_t* stre
         return UTP_INTERNAL_ERROR_NOMEM;
     }
     if (stream->recv_fragment_begin != 0u) {
-        memmove(fragments, fragments + stream->recv_fragment_begin,
-                stream->recv_fragment_count * sizeof(fragments[0]));
+        memmove(fragments, fragments + stream->recv_fragment_begin, stream->recv_fragment_count * sizeof(fragments[0]));
     }
-    stream->recv_fragments         = fragments;
-    stream->recv_fragment_capacity = capacity;
-    stream->recv_fragment_begin    = 0u;
-    stream->recv_pinned_memory_bytes += storage_cost;
+    stream->recv_fragments               = fragments;
+    stream->recv_fragment_capacity       = capacity;
+    stream->recv_fragment_begin          = 0u;
+    stream->recv_pinned_memory_bytes    += storage_cost;
     stream->recv_fragment_storage_bytes += storage_cost;
     if (account != NULL && account->connection_memory_bytes != NULL) {
-        *account->connection_memory_bytes += storage_cost;
-        stream->recv_fragment_storage_connection_memory_bytes = account->connection_memory_bytes;
+        *account->connection_memory_bytes                     += storage_cost;
+        stream->recv_fragment_storage_connection_memory_bytes  = account->connection_memory_bytes;
     }
     return UTP_INTERNAL_ERROR_OK;
 }
@@ -594,61 +589,61 @@ static utp_internal_error_t utp_stream_mark_fin(utp_stream_t* stream, uint64_t f
 void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
 {
     assert(stream != NULL);
-    stream->connection                       = NULL;
-    stream->connection_consumed_total        = NULL;
-    stream->send_buffer_offset               = 0u;
-    stream->next_send_offset                 = 0u;
-    stream->recv_offset                      = 0u;
-    stream->local_max_stream_offset_received = 0u;
-    stream->local_stream_offset_consumed     = 0u;
-    stream->local_max_stream_offset_sent     = 0u;
-    stream->peer_final_size                  = 0u;
-    stream->stream_id                        = stream_id;
-    stream->peer_max_stream_data             = UTP_STREAM_DEFAULT_FLOW_WINDOW;
-    stream->local_max_stream_data_advertised = UTP_STREAM_DEFAULT_FLOW_WINDOW;
-    stream->last_max_stream_data_sent_us     = 0u;
-    stream->last_stream_data_blocked_sent_us = 0u;
-    stream->drr_deficit                      = 0u;
-    stream->send_buffer_length               = 0u;
-    stream->send_buffer_start                = 0u;
-    stream->send_in_flight_bytes             = 0u;
-    stream->send_buffer_capacity             = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
-    stream->send_buffer                      = NULL;
-    stream->recv_buffered_bytes              = 0u;
-    stream->recv_pinned_memory_bytes         = 0u;
-    stream->recv_fragment_capacity           = 0u;
-    stream->recv_fragment_begin              = 0u;
-    stream->recv_fragment_count              = 0u;
-    stream->recv_fragment_storage_bytes      = 0u;
-    stream->recv_fragments                   = NULL;
+    stream->connection                                    = NULL;
+    stream->connection_consumed_total                     = NULL;
+    stream->send_buffer_offset                            = 0u;
+    stream->next_send_offset                              = 0u;
+    stream->recv_offset                                   = 0u;
+    stream->local_max_stream_offset_received              = 0u;
+    stream->local_stream_offset_consumed                  = 0u;
+    stream->local_max_stream_offset_sent                  = 0u;
+    stream->peer_final_size                               = 0u;
+    stream->stream_id                                     = stream_id;
+    stream->peer_max_stream_data                          = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    stream->local_max_stream_data_advertised              = UTP_STREAM_DEFAULT_FLOW_WINDOW;
+    stream->last_max_stream_data_sent_us                  = 0u;
+    stream->last_stream_data_blocked_sent_us              = 0u;
+    stream->drr_deficit                                   = 0u;
+    stream->send_buffer_length                            = 0u;
+    stream->send_buffer_start                             = 0u;
+    stream->send_in_flight_bytes                          = 0u;
+    stream->send_buffer_capacity                          = UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
+    stream->send_buffer                                   = NULL;
+    stream->recv_buffered_bytes                           = 0u;
+    stream->recv_pinned_memory_bytes                      = 0u;
+    stream->recv_fragment_capacity                        = 0u;
+    stream->recv_fragment_begin                           = 0u;
+    stream->recv_fragment_count                           = 0u;
+    stream->recv_fragment_storage_bytes                   = 0u;
+    stream->recv_fragments                                = NULL;
     stream->recv_fragment_storage_connection_memory_bytes = NULL;
-    stream->send_ack_range_count             = 0u;
-    stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
-    stream->strict_wait_rounds               = 0u;
-    stream->read_cb                          = NULL;
-    stream->write_cb                         = NULL;
-    stream->close_cb                         = NULL;
-    stream->read_notification_next.tqe_next  = NULL;
-    stream->read_notification_next.tqe_prev  = NULL;
-    stream->write_notification_next.tqe_next = NULL;
-    stream->write_notification_next.tqe_prev = NULL;
-    stream->read_cb_data                     = NULL;
-    stream->write_cb_data                    = NULL;
-    stream->close_cb_data                    = NULL;
-    stream->used                             = true;
-    stream->local_fin_queued                 = false;
-    stream->local_fin_sent                   = false;
-    stream->local_fin_transmitted            = false;
-    stream->peer_fin                         = false;
-    stream->local_read_shutdown              = false;
-    stream->local_write_reset                = false;
-    stream->peer_reset                       = false;
-    stream->peer_stop_sending_received       = false;
-    stream->peer_final_size_known            = false;
-    stream->stream_limit_released            = false;
-    stream->closed_notified                  = false;
-    stream->defer_user_notifications         = false;
-    stream->incoming_reported                = false;
+    stream->send_ack_range_count                          = 0u;
+    stream->priority                                      = UTP_STREAM_PRIORITY_DEFAULT;
+    stream->strict_wait_rounds                            = 0u;
+    stream->read_cb                                       = NULL;
+    stream->write_cb                                      = NULL;
+    stream->close_cb                                      = NULL;
+    stream->read_notification_next.tqe_next               = NULL;
+    stream->read_notification_next.tqe_prev               = NULL;
+    stream->write_notification_next.tqe_next              = NULL;
+    stream->write_notification_next.tqe_prev              = NULL;
+    stream->read_cb_data                                  = NULL;
+    stream->write_cb_data                                 = NULL;
+    stream->close_cb_data                                 = NULL;
+    stream->used                                          = true;
+    stream->local_fin_queued                              = false;
+    stream->local_fin_sent                                = false;
+    stream->local_fin_transmitted                         = false;
+    stream->peer_fin                                      = false;
+    stream->local_read_shutdown                           = false;
+    stream->local_write_reset                             = false;
+    stream->peer_reset                                    = false;
+    stream->peer_stop_sending_received                    = false;
+    stream->peer_final_size_known                         = false;
+    stream->stream_limit_released                         = false;
+    stream->closed_notified                               = false;
+    stream->defer_user_notifications                      = false;
+    stream->incoming_reported                             = false;
 }
 
 utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset)
@@ -1229,7 +1224,7 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
 
         for (index = 0u; index < stream->recv_fragment_count && scan_start < end; ++index) {
             const uint64_t fragment_start = utp_stream_recv_fragment_at_const(stream, index)->offset;
-            const uint64_t fragment_end = utp_stream_fragment_end(utp_stream_recv_fragment_at_const(stream, index));
+            const uint64_t fragment_end   = utp_stream_fragment_end(utp_stream_recv_fragment_at_const(stream, index));
 
             if (fragment_end <= scan_start) {
                 continue;
@@ -1260,8 +1255,8 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
             fin_fragment_count = 0u;
         }
     }
-    error = utp_stream_recv_fragment_storage_cost(stream, data_fragment_count + fin_fragment_count, &storage_cost,
-                                                   NULL);
+    error =
+        utp_stream_recv_fragment_storage_cost(stream, data_fragment_count + fin_fragment_count, &storage_cost, NULL);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }

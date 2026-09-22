@@ -2,7 +2,8 @@
 
 #include <stddef.h>
 
-utp_internal_error_t utp_rtt_stats_update(utp_rtt_stats_t *stats, uint64_t measured_rtt) {
+utp_internal_error_t utp_rtt_stats_update(utp_rtt_stats_t* stats, uint64_t measured_rtt)
+{
     uint64_t srtt;
     uint64_t delta;
 
@@ -25,9 +26,10 @@ utp_internal_error_t utp_rtt_stats_update(utp_rtt_stats_t *stats, uint64_t measu
     return UTP_INTERNAL_ERROR_OK;
 }
 
-utp_internal_error_t utp_rtt_stats_update_from_ack(utp_rtt_stats_t *stats, uint64_t now_us, uint64_t sent_time_us,
+utp_internal_error_t utp_rtt_stats_update_from_ack(utp_rtt_stats_t* stats, uint64_t now_us, uint64_t sent_time_us,
                                                    uint64_t peer_ack_delay_us, uint64_t peer_max_ack_delay_us,
-                                                   uint64_t *sample_rtt_us) {
+                                                   uint64_t* sample_rtt_us)
+{
     uint64_t             sample;
     uint64_t             ack_delay;
     utp_internal_error_t error;
@@ -51,6 +53,6 @@ utp_internal_error_t utp_rtt_stats_update_from_ack(utp_rtt_stats_t *stats, uint6
     return UTP_INTERNAL_ERROR_OK;
 }
 
-uint64_t utp_rtt_stats_srtt(const utp_rtt_stats_t *stats) { return stats == NULL ? 0u : stats->scaled_srtt >> 3u; }
-uint64_t utp_rtt_stats_variance(const utp_rtt_stats_t *stats) { return stats == NULL ? 0u : stats->variance; }
-uint64_t utp_rtt_stats_minimum(const utp_rtt_stats_t *stats) { return stats == NULL ? 0u : stats->minimum; }
+uint64_t utp_rtt_stats_srtt(const utp_rtt_stats_t* stats) { return stats == NULL ? 0u : stats->scaled_srtt >> 3u; }
+uint64_t utp_rtt_stats_variance(const utp_rtt_stats_t* stats) { return stats == NULL ? 0u : stats->variance; }
+uint64_t utp_rtt_stats_minimum(const utp_rtt_stats_t* stats) { return stats == NULL ? 0u : stats->minimum; }

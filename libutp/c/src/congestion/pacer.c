@@ -97,7 +97,7 @@ void utp_pacer_on_loss(utp_pacer_t* pacer)
     pacer->burst_tokens = 0u;
 }
 
-bool     utp_pacer_delayed(const utp_pacer_t* pacer)
+bool utp_pacer_delayed(const utp_pacer_t* pacer)
 {
     assert(pacer != NULL);
     return pacer->last_schedule_delayed;

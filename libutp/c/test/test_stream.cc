@@ -641,21 +641,21 @@ TEST_CASE("stream rolls back partial receive fragments when a split frame hits m
 
 TEST_CASE("stream lazily grows receive fragments beyond the former fixed limit", "[stream][reassembly]")
 {
-    constexpr size_t      fragment_count = 1100u;
-    utp_packet_in_pool_t  pool           = {};
-    utp_stream_t          stream         = {};
-    utp_packet_in_t*      packet;
-    utp_frame_stream_t    frame = {};
-    uint8_t               buffer[2] = {};
-    size_t                length    = 0u;
-    bool                  fin       = false;
+    constexpr size_t     fragment_count = 1100u;
+    utp_packet_in_pool_t pool           = {};
+    utp_stream_t         stream         = {};
+    utp_packet_in_t*     packet;
+    utp_frame_stream_t   frame     = {};
+    uint8_t              buffer[2] = {};
+    size_t               length    = 0u;
+    bool                 fin       = false;
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, fragment_count + 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&stream, 0u);
     for (size_t index = 0u; index < fragment_count; ++index) {
         REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
         packet->data[0] = static_cast<uint8_t>(index);
-        frame            = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u + 1u), packet->data, 1u};
+        frame           = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u + 1u), packet->data, 1u};
         REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
         utp_packet_in_release(packet);
     }
@@ -680,18 +680,18 @@ TEST_CASE("stream lazily grows receive fragments beyond the former fixed limit",
 
 TEST_CASE("stream FIN data frame reserves only its data fragment", "[stream][reassembly]")
 {
-    constexpr size_t      fragment_count = UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u;
-    utp_packet_in_pool_t  pool           = {};
-    utp_stream_t          stream         = {};
-    utp_packet_in_t*      packet;
-    utp_frame_stream_t    frame = {};
+    constexpr size_t     fragment_count = UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY - 1u;
+    utp_packet_in_pool_t pool           = {};
+    utp_stream_t         stream         = {};
+    utp_packet_in_t*     packet;
+    utp_frame_stream_t   frame = {};
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, fragment_count + 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     utp_stream_init(&stream, 0u);
     for (size_t index = 0u; index < fragment_count; ++index) {
         REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
         packet->data[0] = static_cast<uint8_t>(index);
-        frame            = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u), packet->data, 1u};
+        frame           = {UTP_STREAM_FLAG_NONE, 0u, (uint64_t)(index * 2u), packet->data, 1u};
         REQUIRE(utp_stream_on_frame_packet(&stream, &frame, packet) == UTP_INTERNAL_ERROR_OK);
         utp_packet_in_release(packet);
     }
