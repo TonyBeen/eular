@@ -4,9 +4,9 @@ set -Eeuo pipefail
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
-INSTALL_ROOT="${NTRS_INSTALL_ROOT:-/opt/eular/ntrs}"
-STATE_ROOT="${NTRS_STATE_ROOT:-/var/lib/eular-ntrs}"
-LOG_ROOT="${NTRS_LOG_ROOT:-/var/log/eular-ntrs}"
+INSTALL_ROOT="${NTRS_INSTALL_ROOT:-/opt/ntrs}"
+STATE_ROOT="${NTRS_STATE_ROOT:-/var/lib/ntrs}"
+LOG_ROOT="${NTRS_LOG_ROOT:-/var/log/ntrs}"
 RELEASE_ROOT="${INSTALL_ROOT}/releases"
 CURRENT_ROOT="${INSTALL_ROOT}/current"
 
@@ -15,35 +15,36 @@ readonly SERVICES=(ntrs natd_hub natd_node)
 usage() {
     cat <<'EOF'
 Usage:
-  deploy_ntrs.sh install SERVICE [--url URL] [--version VERSION]
-  deploy_ntrs.sh install all [--version VERSION]
-  deploy_ntrs.sh start SERVICE [SERVICE_ARGS...]
-  deploy_ntrs.sh stop SERVICE [-6]|all
-  deploy_ntrs.sh restart SERVICE [SERVICE_ARGS...]
-  deploy_ntrs.sh status SERVICE [-6]|all
+  ntrs_deploy.sh install SERVICE [--url URL] [--version VERSION]
+  ntrs_deploy.sh install all [--version VERSION]
+  ntrs_deploy.sh start SERVICE [SERVICE_ARGS...]
+  ntrs_deploy.sh stop SERVICE [-6]|all
+  ntrs_deploy.sh restart SERVICE [SERVICE_ARGS...]
+  ntrs_deploy.sh status SERVICE [-6]|all
+  ntrs_deploy.sh clean
 
 Environment:
-  NTRS_INSTALL_ROOT  Install root (default: /opt/eular/ntrs)
-  NTRS_STATE_ROOT    PID/state directory (default: /var/lib/eular-ntrs)
-  NTRS_LOG_ROOT      Log directory (default: /var/log/eular-ntrs)
+  NTRS_INSTALL_ROOT  Install root (default: /opt/ntrs)
+  NTRS_STATE_ROOT    PID/state directory (default: /var/lib/ntrs)
+  NTRS_LOG_ROOT      Log directory (default: /var/log/ntrs)
 
 When SERVICE is not installed, start downloads its binary from the built-in URL
 before launching it. Service stdout and stderr are appended to SERVICE.log.
 When SERVICE_ARGS contains -h or --help, the service runs in the foreground.
 
 Examples:
-  sudo ./tools/deploy_ntrs.sh install ntrs
-  sudo ./tools/deploy_ntrs.sh install all
-  sudo ./tools/deploy_ntrs.sh start ntrs -a 0.0.0.0 -p 6600 -w 4
-  sudo ./tools/deploy_ntrs.sh start ntrs -6 -p 6600 -w 4
-  sudo ./tools/deploy_ntrs.sh start natd_hub --listen 0.0.0.0:7700 -i eth0
-  sudo ./tools/deploy_ntrs.sh start natd_node --hub hub.example.com:7700 --node-id node-1 -i eth0
-  sudo ./tools/deploy_ntrs.sh start natd_node -6 --hub hub.example.com:7700 --node-id node-1 -i eth0
+  sudo ./ntrs_deploy.sh install ntrs
+  sudo ./ntrs_deploy.sh install all
+  sudo ./ntrs_deploy.sh start ntrs -a 0.0.0.0 -p 6600 -w 4
+  sudo ./ntrs_deploy.sh start ntrs -6 -p 6600 -w 4
+  sudo ./ntrs_deploy.sh start natd_hub --listen 0.0.0.0:7700 -i eth0
+  sudo ./ntrs_deploy.sh start natd_node --hub hub.example.com:7700 --node-id node-xxx -i eth0
+  sudo ./ntrs_deploy.sh start natd_node -6 --hub hub.example.com:7700 --node-id node-xxx -i eth0
 EOF
 }
 
 die() {
-    printf 'deploy_ntrs: %s\n' "$*" >&2
+    printf 'ntrs_deploy: %s\n' "$*" >&2
     exit 1
 }
 
@@ -345,6 +346,21 @@ status_service() {
     fi
 }
 
+clean_installation() {
+    local service
+
+    for service in "${SERVICES[@]}"; do
+        stop_service "$service"
+    done
+    for service in "${SERVICES[@]}"; do
+        stop_service "$service" -6
+    done
+
+    rm -rf -- "$RELEASE_ROOT" "$CURRENT_ROOT" "$STATE_ROOT" "$LOG_ROOT"
+    rm -f -- "$SCRIPT_PATH"
+    printf 'ntrs_deploy: removed installed services, logs, state, and %s\n' "$SCRIPT_PATH"
+}
+
 main() {
     local command="${1:-}"
     local service
@@ -409,6 +425,10 @@ main() {
             shift
             stop_service "$service" "$@"
             start_service "$service" "$@"
+            ;;
+        clean)
+            (($# == 0)) || die 'clean does not accept arguments'
+            clean_installation
             ;;
         daemon)
             (($# > 0)) || die 'daemon requires a service'

@@ -1,0 +1,76 @@
+<mxfile host="65bd71144e">
+    <diagram id="utp-architecture" name="UTP 架构">
+        <mxGraphModel dx="1920" dy="1313" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="libutp C 版整体架构" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=22;fontStyle=1;fontColor=#1f2937;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="420" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="单线程 Context 驱动事件循环；Connection 保存创建时的配置快照；Stream 承载应用数据" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#6b7280;" parent="1" vertex="1">
+                    <mxGeometry x="42" y="63" width="720" height="26" as="geometry"/>
+                </mxCell>
+                <mxCell id="app" value="应用层&#xa;utp_context_create / bind / connect&#xa;Connection 与 Stream 回调&#xa;options 结构体由应用持有" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=2;fontSize=14;fontColor=#0c4a6e;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="130" width="280" height="135" as="geometry"/>
+                </mxCell>
+                <mxCell id="context" value="Context&#xa;统一生命周期与所有权边界&#xa;连接表 / pending 握手表 / attempt 表&#xa;本地候选地址、NTRS 状态、定时器" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontSize=14;fontColor=#1e3a8a;" parent="1" vertex="1">
+                    <mxGeometry x="390" y="115" width="350" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="event" value="事件循环&#xa;UDP 可读 / 统一可写&#xa;协议定时器 / 异步通知队列&#xa;连接成功、错误、Stream 读写通知" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#60a5fa;fontSize=13;fontColor=#1e3a8a;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="115" width="265" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="socket" value="UDP Socket&#xa;bind 地址 / 网卡&#xa;recvmsg 获取本地目标地址&#xa;批量发送与 WOULD_BLOCK 重试" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#16a34a;strokeWidth=2;fontSize=13;fontColor=#14532d;" parent="1" vertex="1">
+                    <mxGeometry x="1145" y="115" width="265" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="connections" value="Connection 集合&#xa;每条连接独立保存 options 快照&#xa;CID / peer / path / 加密状态&#xa;拥塞控制、ACK、保活、MTU、流控" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontColor=#78350f;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="360" width="350" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="streams" value="Stream 集合&#xa;双向流 / 单向流&#xa;发送缓存与惰性分片重组&#xa;流级流控、读写异步通知" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=14;fontColor=#713f12;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="360" width="300" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="proto" value="协议处理层&#xa;Packet Header / Frame 编解码&#xa;Initial、Handshake、0-RTT、1-RTT&#xa;ACK、CRYPTO、STREAM、PATH、CLOSE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;strokeWidth=2;fontSize=14;fontColor=#831843;" parent="1" vertex="1">
+                    <mxGeometry x="1097.5" y="360" width="360" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory" value="内存与资源池&#xa;Context 共享 PacketIn / PacketOut buffer pool&#xa;Connection 私有 PacketOut 描述符池&#xa;Stream 发送缓存、接收分片与终态表&#xa;运行期按需扩容，Context 销毁统一回收" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontSize=13;fontColor=#581c87;" parent="1" vertex="1">
+                    <mxGeometry x="105" y="625" width="425" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="crypto" value="安全与可靠性&#xa;AEAD 加密 / X25519 密钥&#xa;重传账本、RTO、拥塞控制 BBR/CUBIC&#xa;路径验证、MTU 探测与黑洞降级" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=13;fontColor=#4c1d95;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="625" width="350" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="services" value="外部服务&#xa;NTRS：注册、保活、Rendezvous 候选交换&#xa;NAT 探测服务：映射端口与 NAT 类型探测&#xa;连接路径：直接地址或打洞候选地址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#15803d;strokeWidth=2;fontSize=13;fontColor=#14532d;" parent="1" vertex="1">
+                    <mxGeometry x="1030" y="625" width="380" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="app-context" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563eb;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="app" target="context" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="context-event" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563eb;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="context" target="event" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="event-socket" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16a34a;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="event" target="socket" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="context-connections" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d97706;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="context" target="connections" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="connection-streams" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#ca8a04;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="connections" target="streams" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="connection-proto" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#db2777;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="streams" target="proto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="proto-socket" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16a34a;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="proto" target="socket" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="connections-memory" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;dashed=1;endArrow=none;" parent="1" source="connections" target="memory" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="streams-memory" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;dashed=1;endArrow=none;" parent="1" source="streams" target="memory" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="实线：主数据路径&#xa;虚线：资源、控制或辅助关系" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9ca3af;fontSize=11;fontColor=#4b5563;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="875" width="300" height="70" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
