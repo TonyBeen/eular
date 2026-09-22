@@ -2131,6 +2131,23 @@ static void utp_context_report_ntrs_register_result(utp_context_t* context, utp_
     registration->callback(context, status, &result, registration->user_data);
 }
 
+static void utp_context_report_ntrs_registration_lost(utp_context_t* context)
+{
+    utp_context_ntrs_registration_t registration;
+    utp_ntrs_register_result_t      result;
+
+    assert(context != NULL);
+    registration                 = context->ntrs_registration;
+    context->ntrs_registration   = (utp_context_ntrs_registration_t){0};
+    context->ntrs_address_update = (utp_context_ntrs_address_update_t){0};
+    utp_context_disable_udp_write_event_if_idle(context);
+    if (registration.callback == NULL) return;
+    result.peer_id     = context->peer_id;
+    result.reason_code = 0u;
+    utp_context_endpoint_from_address(&result.ntrs_endpoint, &registration.endpoint);
+    registration.callback(context, UTP_STATUS_TIMEOUT, &result, registration.user_data);
+}
+
 static void utp_context_finish_ntrs_unregistration(utp_context_t* context)
 {
     assert(context != NULL);
@@ -3291,10 +3308,8 @@ static utp_internal_error_t utp_context_process_ntrs_registration_timer(utp_cont
         if (registration->registered && registration->keepalive_deadline_us != 0u &&
             registration->keepalive_deadline_us <= now_us) {
             if (registration->keepalive_pending) {
-                utp_context_log(context, UTP_LOG_LEVEL_WARNING, "NTRS keepalive timed out");
-                context->ntrs_registration   = (utp_context_ntrs_registration_t){0};
-                context->ntrs_address_update = (utp_context_ntrs_address_update_t){0};
-                utp_context_disable_udp_write_event_if_idle(context);
+                utp_context_log(context, UTP_LOG_LEVEL_WARNING, "NTRS registration keepalive timed out");
+                utp_context_report_ntrs_registration_lost(context);
                 return UTP_INTERNAL_ERROR_OK;
             }
             return utp_context_send_ntrs_keepalive_ping(context, now_us);
@@ -5999,6 +6014,11 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
 
                     if (slot != NULL && slot->connect_pending && !utp_connection_is_connected(&slot->connection) &&
                         utp_address_equal(peer, &slot->connection.peer)) {
+                        char message[96];
+
+                        (void)snprintf(message, sizeof(message),
+                                       "NTRS rendezvous request rejected reason_code=%" PRIu16, rejected.reason_code);
+                        utp_context_log(context, UTP_LOG_LEVEL_WARNING, message);
                         utp_context_fail_pending_connect(context, slot, UTP_STATUS_RENDEZVOUS_REJECTED,
                                                          "NTRS rendezvous request rejected");
                     }

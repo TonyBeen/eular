@@ -1780,6 +1780,76 @@ int main(void)
         assert(probe.result_count == 3);
         assert(probe.last_status == UTP_STATUS_TIMEOUT);
         assert(probe.last_reason_code == 0u);
+        while (utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer) ==
+               UTP_INTERNAL_ERROR_OK) {
+        }
+
+        register_options.timeout_ms            = 100u;
+        register_options.keepalive_interval_ms = 20u;
+        register_options.keepalive_timeout_ms  = 2u;
+        assert(utp_context_register_ntrs(ntrs_context, &register_options, test_on_ntrs_registered, &probe) ==
+               UTP_STATUS_OK);
+        receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+        for (uint8_t attempt = 0u; attempt < 40u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+            receive_error =
+                utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+            if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                assert(event_base_loopexit(event_base, &retry_delay) == 0);
+                assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+            }
+        }
+        assert(receive_error == UTP_INTERNAL_ERROR_OK);
+        assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(utp_rendezvous_register_decode(&registration, frame.payload, frame.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        registered.registration_request_id = registration.registration_request_id;
+        for (size_t index = 0u; index < sizeof(registered.registration_token); ++index) {
+            registered.registration_token[index] = (uint8_t)(index + 1u);
+        }
+        assert(utp_rendezvous_registered_encode(response_body, sizeof(response_body), &registered,
+                                                &response_body_length) == UTP_INTERNAL_ERROR_OK);
+        response_header = (utp_packet_header_t){0u,
+                                                0u,
+                                                UINT64_C(11),
+                                                (uint16_t)(UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length),
+                                                UTP_PACKET_TYPE_RENDEZVOUS,
+                                                0u};
+        assert(utp_proto_encode_header(response, sizeof(response), &response_header) == UTP_INTERNAL_ERROR_OK);
+        frame =
+            (utp_frame_rendezvous_t){response_body, (uint16_t)response_body_length, UTP_RENDEZVOUS_MESSAGE_REGISTERED};
+        assert(utp_frame_rendezvous_encode(response + UTP_PACKET_HEADER_SIZE, sizeof(response) - UTP_PACKET_HEADER_SIZE,
+                                           &frame) == UTP_INTERNAL_ERROR_OK);
+        response_length = UTP_PACKET_HEADER_SIZE + UTP_FRAME_RENDEZVOUS_HEADER_SIZE + response_body_length;
+        assert(utp_udp_socket_send_to(&ntrs_socket, response, response_length, &client_peer, &sent_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        pump_event_loop(event_base, 4);
+        assert(probe.result_count == 4);
+        assert(probe.last_status == UTP_STATUS_OK);
+        assert(ntrs_context->ntrs_registration.registered);
+
+        receive_error = UTP_INTERNAL_ERROR_WOULD_BLOCK;
+        for (uint16_t attempt = 0u; attempt < 100u && receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK; ++attempt) {
+            receive_error =
+                utp_udp_socket_recv_from(&ntrs_socket, packet, sizeof(packet), &packet_length, &client_peer);
+            if (receive_error == UTP_INTERNAL_ERROR_WOULD_BLOCK) {
+                assert(event_base_loopexit(event_base, &retry_delay) == 0);
+                assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+            }
+        }
+        assert(receive_error == UTP_INTERNAL_ERROR_OK);
+        assert(utp_packet_view_decode(&packet_view, packet, packet_length) == UTP_INTERNAL_ERROR_OK);
+        assert(utp_frame_rendezvous_decode(&frame, packet_view.payload, packet_view.payload_length) ==
+               UTP_INTERNAL_ERROR_OK);
+        assert(frame.message_type == UTP_RENDEZVOUS_MESSAGE_PING);
+
+        for (uint8_t attempt = 0u; attempt < 16u && probe.result_count != 5; ++attempt) {
+            assert(event_base_loop(event_base, EVLOOP_ONCE) == 0);
+        }
+        assert(probe.result_count == 5);
+        assert(probe.last_status == UTP_STATUS_TIMEOUT);
+        assert(!ntrs_context->ntrs_registration.registered);
 
         utp_udp_socket_close(&ntrs_socket);
         utp_context_destroy(ntrs_context);

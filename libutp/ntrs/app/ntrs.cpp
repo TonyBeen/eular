@@ -1304,9 +1304,17 @@ void NtrsServer::expireRegistrations(uint64_t now_ms)
         const Registration& registration = entry->second;
         const bool keepalive_expired = registration.keepalive_probes_sent >= k_keepalive_probe_count &&
                                        now_ms - registration.last_keepalive_ping_ms >= k_keepalive_retry_interval_ms;
+        const uint64_t idle_ms       = now_ms - registration.last_activity_ms;
 
-        if (now_ms - registration.last_activity_ms >= registration_timeout_ms_ || keepalive_expired) {
+        if (idle_ms >= registration_timeout_ms_ || keepalive_expired) {
+            char endpoint_text[INET6_ADDRSTRLEN + 8u] = {};
             const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token = entry->second.token;
+
+            fprintf(stderr,
+                    "NTRS <- Node=%s [Disconnected] peer_id=%s reason=%s idle_ms=%" PRIu64 " keepalive_probes=%u\n",
+                    utp_ntrs_endpoint_format(&registration.endpoint, endpoint_text, sizeof(endpoint_text)),
+                    entry->first.c_str(), keepalive_expired ? "keepalive_timeout" : "registration_timeout", idle_ms,
+                    static_cast<unsigned int>(registration.keepalive_probes_sent));
             shared_state_->active_registration_tokens.erase(registration_token_key(token.data()));
             entry = shared_state_->registrations.erase(entry);
         } else
@@ -1667,12 +1675,16 @@ void NtrsServer::handleUnregister(UdpSocket* socket, const sockaddr_storage& pee
         return;
     const std::string key          = registration_token_key(unregister_message.registration_token);
     bool              unregistered = false;
+    std::string       peer_id;
+    utp_ntrs_endpoint_t endpoint = {};
 
     {
         std::lock_guard<std::mutex> lock(shared_state_->mutex);
         for (std::unordered_map<std::string, Registration>::iterator entry = shared_state_->registrations.begin();
              entry != shared_state_->registrations.end(); ++entry) {
             if (entry->second.matchesToken(unregister_message.registration_token)) {
+                peer_id  = entry->first;
+                endpoint = entry->second.endpoint;
                 shared_state_->active_registration_tokens.erase(key);
                 shared_state_->registrations.erase(entry);
                 shared_state_->unregistration_tombstones[key] = now_ms + k_unregistration_tombstone_lifetime_ms;
@@ -1685,6 +1697,12 @@ void NtrsServer::handleUnregister(UdpSocket* socket, const sockaddr_storage& pee
             unregistered = true;
     }
     if (unregistered) {
+        if (!peer_id.empty()) {
+            char endpoint_text[INET6_ADDRSTRLEN + 8u] = {};
+
+            fprintf(stderr, "NTRS <- Node=%s [Disconnected] peer_id=%s reason=client_unregister\n",
+                    utp_ntrs_endpoint_format(&endpoint, endpoint_text, sizeof(endpoint_text)), peer_id.c_str());
+        }
         (void)sendMessage(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_UNREGISTERED,
                           unregister_message.registration_token, sizeof(unregister_message.registration_token));
         return;
@@ -1804,6 +1822,9 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
         }
     }
     if (rejected) {
+        fprintf(stderr, "NTRS <- Node=%s [RequestRejected] target_peer_id=%s reason=peer_not_found code=%u\n",
+                utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str(),
+                static_cast<unsigned int>(rejection_reason));
         (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.attempt_id,
                            sizeof(request.attempt_id), rejection_reason);
         return;

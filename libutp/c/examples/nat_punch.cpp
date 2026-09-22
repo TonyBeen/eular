@@ -83,6 +83,15 @@ static void        nat_punch_try_write(NatPunchApp* app);
 static void        nat_punch_flush_response(NatPunchApp* app);
 static void        nat_punch_incoming_stream(utp_connection_t* connection, utp_stream_t* stream, void* user_data);
 
+static void nat_punch_context_log(utp_log_level_t level, const char* message)
+{
+    if (level == UTP_LOG_LEVEL_WARNING) {
+        LOG("nat_punch [UTP WARNING] %s", message);
+    } else if (level == UTP_LOG_LEVEL_ERROR) {
+        LOG("nat_punch [UTP ERROR] %s", message);
+    }
+}
+
 static const char* nat_punch_nat_name(utp_nat_class_t nat_class)
 {
     switch (nat_class) {
@@ -601,6 +610,13 @@ static void nat_punch_register_result(utp_context_t*, utp_status_t status, const
             nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint));
         return;
     }
+    if (app->ntrs_registered && status == UTP_STATUS_TIMEOUT) {
+        app->ntrs_registered = false;
+        LOG("nat_punch peer=%s <- NTRS=%s [RegistrationLost] status=%s reason=keepalive_timeout", app->peer_id,
+            nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint), utp_status_string(status));
+        nat_punch_fail(app, "ntrs_keepalive_timeout");
+        return;
+    }
     if (status == UTP_STATUS_RENDEZVOUS_REJECTED) {
         LOG("nat_punch peer=%s <- NTRS=%s [RegisterFailed] status=rejected reason=%s code=%" PRIu16, app->peer_id,
             nat_punch_endpoint_format(&result->ntrs_endpoint, endpoint),
@@ -798,6 +814,8 @@ int main(int argc, char** argv)
         context_options.mtu_base        = mtu_base;
         context_options.mtu_max         = 1500u;
         context_options.enable_dplpmtud = !disable_mtu_probe;
+        context_options.log_sink        = nat_punch_context_log;
+        context_options.log_level       = UTP_LOG_LEVEL_WARNING;
         status = utp_context_create(&context_options, &app.context);
         if (status == UTP_STATUS_OK) {
             status = utp_context_bind(app.context, bind_ip, bind_port,

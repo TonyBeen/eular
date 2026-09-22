@@ -159,7 +159,7 @@ void utp_context_set_resumption_key(utp_context_t* context, const uint8_t root_k
 utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 /** @brief 基于会话票据发起非加密 0-RTT 建连；早数据固定写入客户端首个双向流，可能被重放。 */
 utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_0rtt_options_t* options);
-/** @brief 异步注册当前 Context 到 NTRS；成功、拒绝或超时均调用 @p callback，重复调用会更新已有注册。 */
+/** @brief 异步注册当前 Context 到 NTRS；注册结果及后续保活失效均通过 @p callback 通知，重复调用会更新已有注册。 */
 utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
                                        utp_on_ntrs_register_fn callback, void* user_data);
 /** @brief 异步反注册当前 Context；收到 UNREGISTERED 后清除本地 NTRS 关联并调用 @p callback。 */
