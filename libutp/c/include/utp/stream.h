@@ -34,7 +34,7 @@ typedef struct utp_stream_read_view {
     const uint8_t* data;    // 连续可读数据视图，commit 前有效
     uint64_t       offset;  // 数据在流内的起始偏移
     size_t         length;  // 可提交消费的数据长度
-    bool           fin;     // 此视图末尾是否为对端 FIN
+    bool           fin;     // 此视图末尾是否为对端 FIN；完整提交该视图时一并消费 FIN
 } utp_stream_read_view_t;
 
 typedef struct utp_stream_write_view {

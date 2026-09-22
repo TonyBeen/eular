@@ -222,6 +222,13 @@ struct async_stream_callback_probe {
     bool    cancel_on_first = false;
 };
 
+struct fin_readable_callback_probe {
+    int32_t      calls  = 0;
+    size_t       bytes  = 0u;
+    bool         fin    = false;
+    utp_status_t status = UTP_STATUS_OK;
+};
+
 struct connected_stream_send_probe {
     endpoint_probe*    endpoint = nullptr;
     stream_send_probe* stream   = nullptr;
@@ -327,6 +334,22 @@ static void on_async_stream_readable(utp_stream_t* stream, void* user_data)
     if (probe->cancel_on_first) {
         utp_stream_set_on_readable(stream, nullptr, nullptr);
     }
+}
+
+static void on_fin_readable(utp_stream_t* stream, void* user_data)
+{
+    auto*                  probe = static_cast<fin_readable_callback_probe*>(user_data);
+    utp_stream_read_view_t view  = {};
+
+    REQUIRE(stream != nullptr);
+    REQUIRE(probe != nullptr);
+    ++probe->calls;
+    probe->status = utp_stream_acquire_read_view(stream, &view);
+    REQUIRE(probe->status == UTP_STATUS_OK);
+    probe->bytes  = view.length;
+    probe->fin    = view.fin;
+    probe->status = utp_stream_commit_read_view(stream, view.offset, view.length);
+    REQUIRE(probe->status == UTP_STATUS_OK);
 }
 
 static void on_connected_and_send_stream(utp_connection_t* connection, void* user_data)
@@ -2313,6 +2336,42 @@ TEST_CASE("stream readable and writable callbacks are asynchronous and level tri
     REQUIRE(readable_probe.calls == 2);
     utp_stream_set_on_readable(pair.server_probe.incoming_stream, nullptr, nullptr);
 
+    transport_pair_cleanup(&pair);
+}
+
+TEST_CASE("a readable callback consumes data and FIN without a repeated EOF notification",
+          "[transport][integration][stream]")
+{
+    transport_pair   pair    = {};
+    const relay_rule no_rule = {relay_direction::client_to_server, relay_action::drop, 0u, 0u, false, 0u, false, false};
+    fin_readable_callback_probe readable_probe = {};
+    uint32_t                    stream_id      = UINT32_MAX;
+    utp_stream_t*               client_stream;
+    utp_stream_read_view_t      final_view = {};
+
+    transport_pair_init(&pair, no_rule, UTP_ENCRYPTION_NONE);
+    transport_pair_connect(&pair);
+    utp_connection_set_on_incoming_stream(pair.server_probe.connection, on_incoming_stream, &pair.server_probe);
+    REQUIRE(utp_connection_create_stream(pair.client_probe.connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) ==
+            UTP_STATUS_OK);
+    client_stream = utp_connection_get_stream(pair.client_probe.connection, stream_id);
+    REQUIRE(client_stream != nullptr);
+    REQUIRE(utp_stream_write(client_stream, "x", 1u) == UTP_STATUS_OK);
+    REQUIRE(utp_stream_shutdown(client_stream, UTP_STREAM_SHUTDOWN_WRITE) == UTP_STATUS_OK);
+    drive_until(pair.event_base, [&pair] {
+        return pair.server_probe.incoming_stream != nullptr && pair.server_probe.incoming_stream->peer_fin &&
+               utp_stream_readable_bytes(pair.server_probe.incoming_stream) == 1u;
+    });
+
+    utp_stream_set_on_readable(pair.server_probe.incoming_stream, on_fin_readable, &readable_probe);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(readable_probe.calls == 1);
+    REQUIRE(readable_probe.bytes == 1u);
+    REQUIRE(readable_probe.fin);
+    REQUIRE(readable_probe.status == UTP_STATUS_OK);
+    REQUIRE(event_base_loop(pair.event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
+    REQUIRE(readable_probe.calls == 1);
+    REQUIRE(utp_stream_acquire_read_view(pair.server_probe.incoming_stream, &final_view) == UTP_STATUS_CLOSED);
     transport_pair_cleanup(&pair);
 }
 

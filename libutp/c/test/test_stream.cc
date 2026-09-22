@@ -341,14 +341,13 @@ TEST_CASE("stream packet-backed fragments accept payloads larger than the 1280 M
 
 TEST_CASE("stream read views consume packet-backed fragments without copying", "[stream][read_view][packet_in]")
 {
-    utp_packet_in_pool_t     pool     = {};
-    utp_packet_in_t*         packet   = nullptr;
-    utp_stream_t             stream   = {};
-    const char*              data     = "hello";
-    const utp_frame_stream_t frame    = {UTP_STREAM_FLAG_FIN, 0u, 0u, reinterpret_cast<const uint8_t*>(data), 5u};
-    utp_frame_stream_t       decoded  = {};
-    utp_stream_read_view_t   view     = {};
-    utp_stream_read_view_t   fin_view = {};
+    utp_packet_in_pool_t     pool    = {};
+    utp_packet_in_t*         packet  = nullptr;
+    utp_stream_t             stream  = {};
+    const char*              data    = "hello";
+    const utp_frame_stream_t frame   = {UTP_STREAM_FLAG_FIN, 0u, 0u, reinterpret_cast<const uint8_t*>(data), 5u};
+    utp_frame_stream_t       decoded = {};
+    utp_stream_read_view_t   view    = {};
 
     REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 1u, 128u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_packet_in_pool_acquire(&pool, &packet) == UTP_INTERNAL_ERROR_OK);
@@ -364,7 +363,7 @@ TEST_CASE("stream read views consume packet-backed fragments without copying", "
     REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.offset == 0u);
     REQUIRE(view.length == 5u);
-    REQUIRE_FALSE(view.fin);
+    REQUIRE(view.fin);
     REQUIRE(view.data == decoded.data);
     REQUIRE(std::memcmp(view.data, data, view.length) == 0);
     REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, 2u) == UTP_INTERNAL_ERROR_OK);
@@ -374,17 +373,59 @@ TEST_CASE("stream read views consume packet-backed fragments without copying", "
     REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(view.offset == 2u);
     REQUIRE(view.length == 3u);
+    REQUIRE(view.fin);
     REQUIRE(std::memcmp(view.data, data + 2u, view.length) == 0);
     REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
     REQUIRE_FALSE(packet->in_use);
     REQUIRE(packet->ref_count == 0u);
 
-    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &fin_view) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(fin_view.offset == 5u);
-    REQUIRE(fin_view.length == 0u);
-    REQUIRE(fin_view.data == nullptr);
-    REQUIRE(fin_view.fin);
-    REQUIRE(utp_stream_commit_read_view_internal(&stream, fin_view.offset, fin_view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_CLOSED);
+    utp_packet_in_pool_cleanup(&pool);
+}
+
+TEST_CASE("stream read view delivers and consumes a standalone FIN", "[stream][read_view][fin]")
+{
+    utp_stream_t             stream = {};
+    utp_stream_read_view_t   view   = {};
+    const utp_frame_stream_t frame  = {UTP_STREAM_FLAG_FIN, 0u, 0u, nullptr, 0u};
+
+    utp_stream_init(&stream, 0u);
+    REQUIRE(utp_stream_on_frame(&stream, &frame) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(view.offset == 0u);
+    REQUIRE(view.data == nullptr);
+    REQUIRE(view.length == 0u);
+    REQUIRE(view.fin);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_CLOSED);
+}
+
+TEST_CASE("stream read view joins a FIN received before the final data", "[stream][read_view][fin]")
+{
+    utp_packet_in_pool_t   pool    = {};
+    utp_packet_in_t*       packet  = nullptr;
+    utp_stream_t           stream  = {};
+    utp_frame_stream_t     decoded = {};
+    utp_stream_read_view_t view    = {};
+
+    REQUIRE(utp_packet_in_pool_init(&pool, nullptr, 2u, 128u) == UTP_INTERNAL_ERROR_OK);
+    utp_stream_init(&stream, 0u);
+    packet = stream_frame_packet(&pool, 0u, 5u, "", true, &decoded);
+    REQUIRE(utp_stream_on_frame_packet(&stream, &decoded, packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(packet);
+    REQUIRE(stream.peer_fin);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_WOULD_BLOCK);
+
+    packet = stream_frame_packet(&pool, 0u, 0u, "hello", false, &decoded);
+    REQUIRE(utp_stream_on_frame_packet(&stream, &decoded, packet) == UTP_INTERNAL_ERROR_OK);
+    utp_packet_in_release(packet);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(view.offset == 0u);
+    REQUIRE(view.length == 5u);
+    REQUIRE(view.fin);
+    REQUIRE(std::memcmp(view.data, "hello", view.length) == 0);
+    REQUIRE(utp_stream_commit_read_view_internal(&stream, view.offset, view.length) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_stream_acquire_read_view_internal(&stream, &view) == UTP_INTERNAL_ERROR_CLOSED);
     utp_packet_in_pool_cleanup(&pool);
 }
 

@@ -70,7 +70,7 @@ static bool utp_stream_has_readable_event(const utp_stream_t* stream)
     if (!utp_stream_local_can_receive(stream) || stream->local_read_shutdown || stream->peer_reset) {
         return false;
     }
-    if (utp_stream_readable_bytes(stream) != 0u || stream->peer_fin) {
+    if (utp_stream_readable_bytes(stream) != 0u) {
         return true;
     }
     return stream->recv_fragment_count != 0u &&
@@ -137,7 +137,8 @@ static void utp_stream_notify_closed(utp_stream_t* stream)
 {
     assert(stream != NULL);
     if (stream->defer_user_notifications || stream->closed_notified || !utp_stream_is_closed(stream) ||
-        stream->recv_buffered_bytes != 0u) {
+        stream->recv_buffered_bytes != 0u || utp_stream_has_readable_event(stream) ||
+        (stream->peer_fin && (!stream->peer_final_size_known || stream->recv_offset != stream->peer_final_size))) {
         return;
     }
     stream->closed_notified = true;
@@ -574,17 +575,34 @@ static utp_internal_error_t utp_stream_insert_fragment(utp_stream_t* stream, uin
 static utp_internal_error_t utp_stream_mark_fin(utp_stream_t* stream, uint64_t fin_offset,
                                                 const utp_stream_recv_account_t* account)
 {
-    if (fin_offset == stream->recv_offset) {
-        stream->peer_fin = true;
-        return UTP_INTERNAL_ERROR_OK;
-    }
     for (size_t index = 0u; index < stream->recv_fragment_count; ++index) {
         if (utp_stream_fragment_end(utp_stream_recv_fragment_at(stream, index)) == fin_offset) {
             utp_stream_recv_fragment_at(stream, index)->fin = true;
+            stream->peer_fin                                = true;
             return UTP_INTERNAL_ERROR_OK;
         }
     }
-    return utp_stream_insert_fragment(stream, fin_offset, NULL, 0u, true, NULL, account);
+    const utp_internal_error_t error = utp_stream_insert_fragment(stream, fin_offset, NULL, 0u, true, NULL, account);
+
+    if (error == UTP_INTERNAL_ERROR_OK) {
+        stream->peer_fin = true;
+    }
+    return error;
+}
+
+/** @brief 将先到的零长度 FIN 合并到后续补齐的末段数据，确保一次 read view 同时交付。 */
+static void utp_stream_merge_terminal_fin_fragment(utp_stream_t* stream)
+{
+    assert(stream != NULL);
+    for (size_t index = 1u; index < stream->recv_fragment_count; ++index) {
+        utp_stream_recv_fragment_t* const fin      = utp_stream_recv_fragment_at(stream, index);
+        utp_stream_recv_fragment_t* const previous = utp_stream_recv_fragment_at(stream, index - 1u);
+
+        if (fin->length == 0u && fin->fin && utp_stream_fragment_end(previous) == fin->offset) {
+            previous->fin = true;
+            utp_stream_remove_fragment(stream, index);
+        }
+    }
 }
 
 void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
@@ -1243,7 +1261,7 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
             data_ends_at_final_offset = true;
         }
     }
-    if ((frame->flags & UTP_STREAM_FLAG_FIN) != 0u && original_end != stream->recv_offset) {
+    if ((frame->flags & UTP_STREAM_FLAG_FIN) != 0u) {
         fin_fragment_count = 1u;
         for (index = 0u; index < stream->recv_fragment_count; ++index) {
             if (utp_stream_fragment_end(utp_stream_recv_fragment_at_const(stream, index)) == original_end) {
@@ -1308,6 +1326,7 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
         stream->peer_final_size       = original_end;
         stream->peer_final_size_known = true;
     }
+    utp_stream_merge_terminal_fin_fragment(stream);
     if (original_end > stream->local_max_stream_offset_received) {
         stream->local_max_stream_offset_received = original_end;
     }
@@ -1359,13 +1378,12 @@ utp_internal_error_t utp_stream_acquire_read_view_internal(utp_stream_t* stream,
         }
         view.data   = fragment->data_view + fragment->consumed;
         view.length = remaining;
+        view.fin    = fragment->fin;
         *out_view   = view;
         return UTP_INTERNAL_ERROR_OK;
     }
-    if (stream->peer_fin) {
-        view.fin  = true;
-        *out_view = view;
-        return UTP_INTERNAL_ERROR_OK;
+    if (stream->peer_fin && stream->peer_final_size_known && stream->recv_offset == stream->peer_final_size) {
+        return UTP_INTERNAL_ERROR_CLOSED;
     }
     *out_view = view;
     return UTP_INTERNAL_ERROR_WOULD_BLOCK;
@@ -1396,7 +1414,9 @@ utp_internal_error_t utp_stream_commit_read_view_internal(utp_stream_t* stream, 
             utp_stream_notify_closed(stream);
             return UTP_INTERNAL_ERROR_OK;
         }
-        return stream->peer_fin ? UTP_INTERNAL_ERROR_OK : UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
+        return stream->peer_fin && stream->peer_final_size_known && stream->recv_offset == stream->peer_final_size
+                   ? UTP_INTERNAL_ERROR_CLOSED
+                   : UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     if (stream->recv_fragment_count == 0u ||
         utp_stream_fragment_read_offset(utp_stream_recv_fragment_at_const(stream, 0u)) != stream->recv_offset) {
@@ -1486,12 +1506,13 @@ utp_internal_error_t utp_stream_read_internal(utp_stream_t* stream, uint8_t* buf
     }
     stream->local_stream_offset_consumed += (uint64_t)copied;
     *out_length                           = copied;
-    *out_fin                              = copied == 0u && stream->peer_fin;
+    *out_fin                              = copied == 0u && stream->peer_fin && stream->peer_final_size_known &&
+                                            stream->recv_offset == stream->peer_final_size;
     utp_stream_notify_closed(stream);
     if (copied != 0u) {
         return UTP_INTERNAL_ERROR_OK;
     }
-    return stream->peer_fin ? UTP_INTERNAL_ERROR_CLOSED : UTP_INTERNAL_ERROR_WOULD_BLOCK;
+    return *out_fin ? UTP_INTERNAL_ERROR_CLOSED : UTP_INTERNAL_ERROR_WOULD_BLOCK;
 }
 
 size_t utp_stream_readable_bytes(const utp_stream_t* stream)
