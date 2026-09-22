@@ -28,10 +28,11 @@ typedef enum utp_congestion_algorithm {
  */
 typedef struct utp_context_options {
     struct event_base*          event_base;  // Context 固定：调用方创建并驱动，Context 仅借用
-    utp_log_sink_fn             log_sink;    // Context 固定：可用 utp_context_set_logger 动态修改
+    const char*                 peer_id;     // Context 固定：路由标识，必须为 1..128 字节的字符串
     uint64_t                    context_id;  // Context 固定：用于日志标签，不参与随机 CID 生成
+    utp_log_sink_fn             log_sink;    // Context 固定：可用 utp_context_set_logger 动态修改
     utp_log_level_t             log_level;   // Context 固定：可用 utp_context_set_logger 动态修改
-    const char*                 peer_id;  // Context 固定：路由标识，必须为 1..128 字节的字符串
+
     // 新连接：流调度和拥塞控制参数在 Connection 创建时复制。
     utp_stream_scheduler_mode_t stream_scheduler_mode;                        // 流发送调度策略
     utp_congestion_algorithm_t  cc_algorithm;                                 // 拥塞控制算法
@@ -102,8 +103,9 @@ typedef struct utp_context_options {
 #define UTP_CONTEXT_OPTIONS_INIT                                                                                  \
     {                                                                                                             \
         NULL,                                       /* event_base: 调用方提供的事件循环 */                        \
-        NULL,                                       /* log_sink: 默认关闭日志 */                                  \
+        NULL,                                       /* peer_id: 调用方必须设置的 Context 路由标识 */              \
         0u,                                         /* context_id: 日志标识 */                                    \
+        NULL,                                       /* log_sink: 默认关闭日志 */                                  \
         UTP_LOG_LEVEL_INFO,                         /* log_level: 最低日志级别 */                                 \
         UTP_STREAM_SCHEDULER_STRICT,                /* stream_scheduler_mode: Strict 调度 */                      \
         UTP_CONGESTION_DEFAULT,                     /* cc_algorithm: 默认 BBR */                                  \
@@ -155,8 +157,7 @@ typedef struct utp_context_options {
         UINT64_C(8) * 1024u * 1024u,                /* initial_max_data: 初始连接级接收窗口 */                    \
         UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_local: 本端双向流接收窗口 */  \
         UINT64_C(512) * 1024u,                      /* initial_max_stream_data_bidi_remote: 对端双向流接收窗口 */ \
-        UINT64_C(512) * 1024u,                      /* initial_max_stream_data_uni: 对端单向流接收窗口 */         \
-        NULL                                        /* peer_id: 调用方必须设置的 Context 路由标识 */              \
+        UINT64_C(512) * 1024u                       /* initial_max_stream_data_uni: 对端单向流接收窗口 */         \
     }
 
 #endif  // EULAR_UTP_C_OPTION_H
