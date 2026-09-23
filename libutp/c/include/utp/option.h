@@ -110,7 +110,7 @@ typedef struct utp_context_options {
         UTP_STREAM_SCHEDULER_STRICT,                /* stream_scheduler_mode: Strict 调度 */                      \
         UTP_CONGESTION_DEFAULT,                     /* cc_algorithm: 默认 BBR */                                  \
         1u,                                         /* clock_granularity_us: pacer 时钟粒度 */                    \
-        16u,                                        /* bbr_init_cwnd_mss: BBR 初始 cwnd */                        \
+        10u,                                        /* bbr_init_cwnd_mss: BBR 初始 cwnd */                        \
         4u,                                         /* bbr_min_cwnd_mss: BBR 最小 cwnd */                         \
         2.885,                                      /* bbr_startup_high_gain: BBR STARTUP 增益 */                 \
         2.0,                                        /* bbr_cwnd_gain: BBR PROBE_BW cwnd 增益 */                   \
@@ -121,7 +121,7 @@ typedef struct utp_context_options {
         {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}, /* bbr_pacing_gains: BBR PROBE_BW 增益周期 */                 \
         0.7,                                        /* cubic_beta: CUBIC 丢包回退系数 */                          \
         0.4,                                        /* cubic_c: CUBIC 曲线常数 */                                 \
-        32u,                                        /* cubic_init_cwnd_mss: CUBIC 初始 cwnd */                    \
+        10u,                                        /* cubic_init_cwnd_mss: CUBIC 初始 cwnd */                    \
         4u,                                         /* cubic_min_cwnd_mss: CUBIC 最小 cwnd */                     \
         true,                                       /* enable_dplpmtud: 启用 MTU 探测 */                          \
         1280u,                                      /* mtu_min: MTU 下限 */                                       \

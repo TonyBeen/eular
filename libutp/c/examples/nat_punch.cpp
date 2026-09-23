@@ -9,7 +9,9 @@
 #include <string.h>
 
 #include <algorithm>
+#include <map>
 #include <string>
+#include <utility>
 
 #include <arpa/inet.h>
 #include <event2/event.h>
@@ -25,6 +27,25 @@ static const size_t kPayloadSize = 16384u;
         fprintf(stdout, "\n");        \
         fflush(stdout);               \
     } while (0)
+
+struct NatPunchApp;
+
+struct NatPunchPassiveTransfer {
+    NatPunchApp*     app;
+    utp_connection_t* connection;
+    utp_stream_t*     stream;
+    uint64_t          received_bytes;
+    uint64_t          expected_bytes;
+    char              response[64];
+    size_t            response_length;
+    char              input_header[64];
+    size_t            input_header_length;
+    bool              response_pending;
+    bool              response_sent;
+    bool              input_header_finished;
+    bool              input_fin_received;
+    bool              failed;
+};
 
 struct NatPunchApp {
     event_base*                 base;
@@ -76,12 +97,13 @@ struct NatPunchApp {
     bool                        finish_failed;
     bool                        finished;
     bool                        failed;
+    std::map<utp_connection_t*, NatPunchPassiveTransfer> passive_transfers;
 };
 
 static void        nat_punch_fail(NatPunchApp* app, const char* reason);
 static void        nat_punch_try_write(NatPunchApp* app);
-static void        nat_punch_flush_response(NatPunchApp* app);
-static void        nat_punch_incoming_stream(utp_connection_t* connection, utp_stream_t* stream, void* user_data);
+static void        nat_punch_passive_incoming_stream(utp_connection_t* connection, utp_stream_t* stream,
+                                                      void* user_data);
 
 static void nat_punch_context_log(utp_log_level_t level, const char* message)
 {
@@ -197,6 +219,24 @@ static bool nat_punch_parse_header(const char* header, const char* prefix, uint6
     if (errno != 0 || end == header + prefix_length || (*end != '\0' && *end != '\n')) return false;
     *value = static_cast<uint64_t>(parsed);
     return true;
+}
+
+static void nat_punch_log_connection_statistics(const NatPunchApp* app, const utp_connection_t* connection,
+                                                const char* event)
+{
+    utp_connection_statistic_t statistic;
+
+    if (utp_connection_get_statistic(connection, &statistic) != UTP_STATUS_OK) return;
+    const uint64_t retransmission_per_mille =
+        statistic.tx_bytes == 0u || statistic.rtx_bytes > UINT64_MAX / 1000u
+            ? 0u
+            : statistic.rtx_bytes * 1000u / statistic.tx_bytes;
+
+    LOG("nat_punch peer=%s [%s] pmtu=%" PRIu16 " rtt_ms=%" PRIu64 " bw_estimate_Bps=%" PRIu64
+        " udp_tx_bytes=%" PRIu64 " udp_rx_bytes=%" PRIu64 " retransmitted_bytes=%" PRIu64
+        " retransmitted_per_mille=%" PRIu64,
+        app->peer_id, event, statistic.pmtu, statistic.rtt / 1000u, statistic.bw_estimate, statistic.tx_bytes,
+        statistic.rx_bytes, statistic.rtx_bytes, retransmission_per_mille);
 }
 
 static void nat_punch_complete(NatPunchApp* app)
@@ -330,86 +370,6 @@ static void nat_punch_try_write(NatPunchApp* app)
             app->peer_id, utp_stream_id(app->stream), app->sent_bytes - sent_before, app->sent_bytes, app->send_bytes);
 }
 
-static void nat_punch_flush_response(NatPunchApp* app)
-{
-    utp_status_t status;
-
-    if (app->stream == NULL || !app->response_pending || app->finished) return;
-    status = utp_stream_write(app->stream, app->response, app->response_length);
-    if (status == UTP_STATUS_WOULD_BLOCK) return;
-    if (status != UTP_STATUS_OK) {
-        nat_punch_fail(app, "response_write_failed");
-        return;
-    }
-    app->response_pending = false;
-    app->response_sent    = true;
-    LOG("nat_punch peer=%s -> Peer [StreamWrite] id=%" PRIu32 " response=\"DONE %" PRIu64 "\\n\"", app->peer_id,
-        utp_stream_id(app->stream), app->received_bytes);
-    status = utp_stream_shutdown(app->stream, UTP_STREAM_SHUTDOWN_WRITE);
-    if (status != UTP_STATUS_OK && status != UTP_STATUS_CLOSED) {
-        nat_punch_fail(app, "response_shutdown_failed");
-        return;
-    }
-}
-
-static void nat_punch_finish_input(NatPunchApp* app)
-{
-    int count;
-
-    if (!app->input_header_finished || !app->input_fin_received || app->response_pending || app->response_sent) return;
-    if (app->received_bytes != app->expected_bytes) {
-        nat_punch_fail(app, "received_size_mismatch");
-        return;
-    }
-    count = snprintf(app->response, sizeof(app->response), "DONE %" PRIu64 "\n", app->received_bytes);
-    if (count <= 0 || static_cast<size_t>(count) >= sizeof(app->response)) {
-        nat_punch_fail(app, "response_format_failed");
-        return;
-    }
-    app->response_length  = static_cast<size_t>(count);
-    app->response_pending = true;
-    LOG("nat_punch peer=%s [PayloadReceived] id=%" PRIu32 " bytes=%" PRIu64 "/%" PRIu64, app->peer_id,
-        utp_stream_id(app->stream), app->received_bytes, app->expected_bytes);
-    nat_punch_flush_response(app);
-}
-
-static void nat_punch_consume_input(NatPunchApp* app, const uint8_t* data, size_t length)
-{
-    size_t offset = 0u;
-
-    while (offset < length && !app->finished) {
-        if (!app->input_header_finished) {
-            const uint8_t byte = data[offset++];
-            if (byte == static_cast<uint8_t>('\n')) {
-                uint64_t expected                           = 0u;
-                app->input_header[app->input_header_length] = '\0';
-                if (app->input_header_length == 0u || !nat_punch_parse_header(app->input_header, "DATA ", &expected)) {
-                    nat_punch_fail(app, "bad_data_header");
-                    return;
-                }
-                app->expected_bytes        = expected;
-                app->input_header_finished = true;
-                LOG("nat_punch peer=%s <- Peer [DataHeader] id=%" PRIu32 " expected_bytes=%" PRIu64, app->peer_id,
-                    utp_stream_id(app->stream), app->expected_bytes);
-                continue;
-            }
-            if (app->input_header_length + 1u >= sizeof(app->input_header)) {
-                nat_punch_fail(app, "data_header_too_long");
-                return;
-            }
-            app->input_header[app->input_header_length++] = static_cast<char>(byte);
-            continue;
-        }
-        if (app->received_bytes > app->expected_bytes ||
-            static_cast<uint64_t>(length - offset) > app->expected_bytes - app->received_bytes) {
-            nat_punch_fail(app, "received_payload_overflow");
-            return;
-        }
-        app->received_bytes += static_cast<uint64_t>(length - offset);
-        offset               = length;
-    }
-}
-
 static void nat_punch_consume_response(NatPunchApp* app, const uint8_t* data, size_t length)
 {
     if (app->response_received) return;
@@ -430,6 +390,7 @@ static void nat_punch_consume_response(NatPunchApp* app, const uint8_t* data, si
     app->response_received = true;
     LOG("nat_punch peer=%s <- Peer [TransferComplete] id=%" PRIu32 " bytes=%" PRIu64, app->peer_id,
         utp_stream_id(app->stream), done_bytes);
+    nat_punch_log_connection_statistics(app, app->connection, "TransferStatistic");
     nat_punch_finish(app, "transfer_complete");
 }
 
@@ -442,33 +403,20 @@ static void nat_punch_stream_readable(utp_stream_t* stream, void* user_data)
         utp_stream_read_view_t view;
         const utp_status_t     status = utp_stream_acquire_read_view(stream, &view);
         if (status == UTP_STATUS_WOULD_BLOCK) return;
-        if (status == UTP_STATUS_CLOSED) {
-            app->input_fin_received = true;
-            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
-            if (!app->initiator) nat_punch_finish_input(app);
-            return;
-        }
+        if (status == UTP_STATUS_CLOSED) return;
         if (status != UTP_STATUS_OK) {
             nat_punch_fail(app, "read_view_failed");
             return;
         }
         LOG("nat_punch peer=%s <- Peer [StreamRead] id=%" PRIu32 " bytes=%zu offset=%" PRIu64 " fin=%s", app->peer_id,
             utp_stream_id(stream), view.length, view.offset, view.fin ? "true" : "false");
-        if (app->initiator)
-            nat_punch_consume_response(app, view.data, view.length);
-        else
-            nat_punch_consume_input(app, view.data, view.length);
+        nat_punch_consume_response(app, view.data, view.length);
         if (app->finished) return;
         if (utp_stream_commit_read_view(stream, view.offset, view.length) != UTP_STATUS_OK) {
             nat_punch_fail(app, "read_commit_failed");
             return;
         }
-        if (view.fin) {
-            app->input_fin_received = true;
-            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
-            if (!app->initiator) nat_punch_finish_input(app);
-            return;
-        }
+        if (view.fin) return;
     }
 }
 
@@ -477,10 +425,7 @@ static void nat_punch_stream_writable(utp_stream_t* stream, void* user_data)
     NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
 
     if (app->stream != stream || app->finished) return;
-    if (app->initiator)
-        nat_punch_try_write(app);
-    else
-        nat_punch_flush_response(app);
+    nat_punch_try_write(app);
 }
 
 static void nat_punch_stream_closed(utp_stream_t* stream, void* user_data)
@@ -489,10 +434,158 @@ static void nat_punch_stream_closed(utp_stream_t* stream, void* user_data)
 
     if (app->stream != stream || app->finished) return;
     LOG("nat_punch peer=%s [StreamClosed] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
-    if (!app->initiator && app->response_pending)
-        nat_punch_fail(app, "stream_closed_before_response");
-    else if (!app->initiator)
-        nat_punch_finish(app, "transfer_complete");
+    if (!app->response_received) nat_punch_fail(app, "stream_closed_before_response");
+}
+
+static void nat_punch_passive_fail(NatPunchPassiveTransfer* transfer, const char* reason)
+{
+    utp_connection_description_t description;
+
+    if (transfer->failed) return;
+    const uint32_t local_cid =
+        utp_connection_get_description(transfer->connection, &description) == UTP_STATUS_OK ? description.local_cid : 0u;
+    transfer->failed           = true;
+    transfer->response_pending = false;
+    LOG("nat_punch peer=%s [TransferFailed] local_cid=%" PRIu32 " reason=%s", transfer->app->peer_id, local_cid,
+        reason);
+    utp_connection_close(transfer->connection);
+}
+
+static void nat_punch_passive_flush_response(NatPunchPassiveTransfer* transfer)
+{
+    const utp_status_t status = utp_stream_write(transfer->stream, transfer->response, transfer->response_length);
+
+    if (status == UTP_STATUS_WOULD_BLOCK) return;
+    if (status != UTP_STATUS_OK) {
+        nat_punch_passive_fail(transfer, "response_write_failed");
+        return;
+    }
+    transfer->response_pending = false;
+    transfer->response_sent    = true;
+    LOG("nat_punch peer=%s -> Peer [StreamWrite] id=%" PRIu32 " response=\"DONE %" PRIu64 "\\n\"",
+        transfer->app->peer_id, utp_stream_id(transfer->stream), transfer->received_bytes);
+    const utp_status_t shutdown_status = utp_stream_shutdown(transfer->stream, UTP_STREAM_SHUTDOWN_WRITE);
+    if (shutdown_status != UTP_STATUS_OK && shutdown_status != UTP_STATUS_CLOSED) {
+        nat_punch_passive_fail(transfer, "response_shutdown_failed");
+    }
+}
+
+static void nat_punch_passive_finish_input(NatPunchPassiveTransfer* transfer)
+{
+    const int count = snprintf(transfer->response, sizeof(transfer->response), "DONE %" PRIu64 "\n",
+                               transfer->received_bytes);
+
+    if (!transfer->input_header_finished || !transfer->input_fin_received || transfer->response_pending ||
+        transfer->response_sent) {
+        return;
+    }
+    if (transfer->received_bytes != transfer->expected_bytes) {
+        nat_punch_passive_fail(transfer, "received_size_mismatch");
+        return;
+    }
+    if (count <= 0 || static_cast<size_t>(count) >= sizeof(transfer->response)) {
+        nat_punch_passive_fail(transfer, "response_format_failed");
+        return;
+    }
+    transfer->response_length  = static_cast<size_t>(count);
+    transfer->response_pending = true;
+    LOG("nat_punch peer=%s [PayloadReceived] id=%" PRIu32 " bytes=%" PRIu64 "/%" PRIu64, transfer->app->peer_id,
+        utp_stream_id(transfer->stream), transfer->received_bytes, transfer->expected_bytes);
+    nat_punch_passive_flush_response(transfer);
+}
+
+static bool nat_punch_passive_consume_input(NatPunchPassiveTransfer* transfer, const uint8_t* data, size_t length)
+{
+    size_t offset = 0u;
+
+    while (offset < length) {
+        if (!transfer->input_header_finished) {
+            const uint8_t byte = data[offset++];
+
+            if (byte == static_cast<uint8_t>('\n')) {
+                uint64_t expected = 0u;
+
+                transfer->input_header[transfer->input_header_length] = '\0';
+                if (transfer->input_header_length == 0u ||
+                    !nat_punch_parse_header(transfer->input_header, "DATA ", &expected)) {
+                    nat_punch_passive_fail(transfer, "bad_data_header");
+                    return false;
+                }
+                transfer->expected_bytes        = expected;
+                transfer->input_header_finished = true;
+                LOG("nat_punch peer=%s <- Peer [DataHeader] id=%" PRIu32 " expected_bytes=%" PRIu64,
+                    transfer->app->peer_id, utp_stream_id(transfer->stream), transfer->expected_bytes);
+                continue;
+            }
+            if (transfer->input_header_length + 1u >= sizeof(transfer->input_header)) {
+                nat_punch_passive_fail(transfer, "data_header_too_long");
+                return false;
+            }
+            transfer->input_header[transfer->input_header_length++] = static_cast<char>(byte);
+            continue;
+        }
+        if (transfer->received_bytes > transfer->expected_bytes ||
+            static_cast<uint64_t>(length - offset) > transfer->expected_bytes - transfer->received_bytes) {
+            nat_punch_passive_fail(transfer, "received_payload_overflow");
+            return false;
+        }
+        transfer->received_bytes += static_cast<uint64_t>(length - offset);
+        offset                    = length;
+    }
+    return true;
+}
+
+static void nat_punch_passive_stream_readable(utp_stream_t* stream, void* user_data)
+{
+    NatPunchPassiveTransfer* transfer = static_cast<NatPunchPassiveTransfer*>(user_data);
+
+    if (transfer->stream != stream || transfer->failed) return;
+    for (;;) {
+        utp_stream_read_view_t view;
+        const utp_status_t     status = utp_stream_acquire_read_view(stream, &view);
+
+        if (status == UTP_STATUS_WOULD_BLOCK) return;
+        if (status == UTP_STATUS_CLOSED) {
+            transfer->input_fin_received = true;
+            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, transfer->app->peer_id, utp_stream_id(stream));
+            nat_punch_passive_finish_input(transfer);
+            return;
+        }
+        if (status != UTP_STATUS_OK) {
+            nat_punch_passive_fail(transfer, "read_view_failed");
+            return;
+        }
+        LOG("nat_punch peer=%s <- Peer [StreamRead] id=%" PRIu32 " bytes=%zu offset=%" PRIu64 " fin=%s",
+            transfer->app->peer_id, utp_stream_id(stream), view.length, view.offset, view.fin ? "true" : "false");
+        if (!nat_punch_passive_consume_input(transfer, view.data, view.length)) return;
+        if (utp_stream_commit_read_view(stream, view.offset, view.length) != UTP_STATUS_OK) {
+            nat_punch_passive_fail(transfer, "read_commit_failed");
+            return;
+        }
+        if (view.fin) {
+            transfer->input_fin_received = true;
+            LOG("nat_punch peer=%s <- Peer [StreamFin] id=%" PRIu32, transfer->app->peer_id, utp_stream_id(stream));
+            nat_punch_passive_finish_input(transfer);
+            return;
+        }
+    }
+}
+
+static void nat_punch_passive_stream_writable(utp_stream_t* stream, void* user_data)
+{
+    NatPunchPassiveTransfer* transfer = static_cast<NatPunchPassiveTransfer*>(user_data);
+
+    if (transfer->stream == stream && !transfer->failed && transfer->response_pending)
+        nat_punch_passive_flush_response(transfer);
+}
+
+static void nat_punch_passive_stream_closed(utp_stream_t* stream, void* user_data)
+{
+    NatPunchPassiveTransfer* transfer = static_cast<NatPunchPassiveTransfer*>(user_data);
+
+    if (transfer->stream != stream) return;
+    LOG("nat_punch peer=%s [StreamClosed] id=%" PRIu32, transfer->app->peer_id, utp_stream_id(stream));
+    if (transfer->response_pending) nat_punch_passive_fail(transfer, "stream_closed_before_response");
 }
 
 static void nat_punch_connected(utp_connection_t* connection, void* user_data)
@@ -501,8 +594,10 @@ static void nat_punch_connected(utp_connection_t* connection, void* user_data)
     uint32_t                     stream_id = 0u;
     utp_connection_description_t description;
 
-    app->connection = connection;
-    app->connected  = true;
+    if (app->initiator) {
+        app->connection = connection;
+        app->connected  = true;
+    }
     if (utp_connection_get_description(connection, &description) == UTP_STATUS_OK) {
         LOG("nat_punch peer=%s [Connected] role=%s remote=%s:%" PRIu16 " local_cid=%" PRIu32 " peer_cid=%" PRIu32,
             app->peer_id, app->initiator ? "active" : "passive", description.remote_host, description.remote_port,
@@ -511,7 +606,18 @@ static void nat_punch_connected(utp_connection_t* connection, void* user_data)
         LOG("nat_punch peer=%s [Connected] role=%s", app->peer_id, app->initiator ? "active" : "passive");
     }
     if (!app->initiator) {
-        utp_connection_set_on_incoming_stream(connection, nat_punch_incoming_stream, app);
+        NatPunchPassiveTransfer transfer = {};
+        const std::pair<std::map<utp_connection_t*, NatPunchPassiveTransfer>::iterator, bool> inserted =
+            app->passive_transfers.insert(std::make_pair(connection, transfer));
+
+        if (!inserted.second) {
+            LOG("nat_punch peer=%s [ConnectionRejected] reason=duplicate_connection", app->peer_id);
+            utp_connection_close(connection);
+            return;
+        }
+        inserted.first->second.app        = app;
+        inserted.first->second.connection = connection;
+        utp_connection_set_on_incoming_stream(connection, nat_punch_passive_incoming_stream, &inserted.first->second);
         return;
     }
     if (utp_connection_create_stream(connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id) != UTP_STATUS_OK) {
@@ -530,16 +636,21 @@ static void nat_punch_connected(utp_connection_t* connection, void* user_data)
     nat_punch_try_write(app);
 }
 
-static void nat_punch_incoming_stream(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
+static void nat_punch_passive_incoming_stream(utp_connection_t* connection, utp_stream_t* stream, void* user_data)
 {
-    NatPunchApp* app = static_cast<NatPunchApp*>(user_data);
+    NatPunchPassiveTransfer* transfer = static_cast<NatPunchPassiveTransfer*>(user_data);
 
-    app->connection = connection;
-    app->stream     = stream;
-    utp_stream_set_on_readable(stream, nat_punch_stream_readable, app);
-    utp_stream_set_on_writable(stream, nat_punch_stream_writable, app);
-    utp_stream_set_on_closed(stream, nat_punch_stream_closed, app);
-    LOG("nat_punch peer=%s <- Peer [IncomingStream] id=%" PRIu32, app->peer_id, utp_stream_id(stream));
+    if (transfer->connection != connection || transfer->stream != NULL) {
+        LOG("nat_punch peer=%s <- Peer [IncomingStreamRejected] id=%" PRIu32 " reason=single_transfer_only",
+            transfer->app->peer_id, utp_stream_id(stream));
+        utp_stream_shutdown(stream, UTP_STREAM_SHUTDOWN_BOTH);
+        return;
+    }
+    transfer->stream = stream;
+    utp_stream_set_on_readable(stream, nat_punch_passive_stream_readable, transfer);
+    utp_stream_set_on_writable(stream, nat_punch_passive_stream_writable, transfer);
+    utp_stream_set_on_closed(stream, nat_punch_passive_stream_closed, transfer);
+    LOG("nat_punch peer=%s <- Peer [IncomingStream] id=%" PRIu32, transfer->app->peer_id, utp_stream_id(stream));
 }
 
 static bool nat_punch_new_connection(const utp_new_connection_info_t* info, void* user_data)
@@ -580,6 +691,11 @@ static void nat_punch_connection_error(utp_connection_t* connection, const utp_c
         LOG("nat_punch peer=%s [ConnectionError] status=unknown", app->peer_id);
     }
 
+    if (!app->initiator) {
+        app->passive_transfers.erase(connection);
+        return;
+    }
+    nat_punch_log_connection_statistics(app, connection, "ConnectionStatistic");
     if (!app->finished && (info == NULL || info->status != UTP_STATUS_OK))
         nat_punch_fail(app, info == NULL ? "connection_error" : utp_status_string(info->status));
 }
@@ -723,8 +839,8 @@ int main(int argc, char** argv)
     cli.add_option("-s,--ntrs-address", ntrs_address, "NTRS address");
     cli.add_option("-S,--ntrs-port", ntrs_port, "NTRS port (default: 6600)")
         ->check(CLI::Range(1u, static_cast<unsigned>(UINT16_MAX)));
-    cli.add_flag("-r,--register", register_requested, "Register this Context at NTRS");
-    cli.add_flag("-l,--listen", listen_requested, "Wait for one direct incoming connection");
+    cli.add_flag("-r,--register", register_requested, "Register at NTRS and keep accepting incoming connections");
+    cli.add_flag("-l,--listen", listen_requested, "Accept direct incoming connections without NTRS");
     cli.add_option("-t,--target-peer-id", target_peer_id, "Peer ID to connect to");
     cli.add_option("-a,--peer-address", peer_address, "Direct peer address");
     cli.add_option("-p,--peer-port", peer_port, "Direct peer port")
