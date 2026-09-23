@@ -108,6 +108,17 @@ utp_internal_error_t utp_range_set_insert(utp_range_set_t* set, uint64_t start, 
     return UTP_INTERNAL_ERROR_OK;
 }
 
+void utp_range_set_remove_first(utp_range_set_t* set)
+{
+    if (set == NULL || set->count == 0u) {
+        return;
+    }
+    if (set->count > 1u) {
+        memmove(set->ranges, &set->ranges[1], (set->count - 1u) * sizeof(*set->ranges));
+    }
+    --set->count;
+}
+
 bool utp_range_set_contains(const utp_range_set_t* set, uint64_t value)
 {
     if (set == NULL) {

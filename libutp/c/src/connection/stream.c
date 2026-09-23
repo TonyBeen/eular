@@ -231,15 +231,6 @@ static void utp_stream_pop_send_prefix(utp_stream_t* stream, size_t length)
     stream->send_in_flight_bytes -= length;
 }
 
-static void utp_stream_remove_ack_range(utp_stream_t* stream, size_t index)
-{
-    if (index + 1u < stream->send_ack_range_count) {
-        memmove(&stream->send_ack_ranges[index], &stream->send_ack_ranges[index + 1u],
-                (stream->send_ack_range_count - index - 1u) * sizeof(stream->send_ack_ranges[0]));
-    }
-    --stream->send_ack_range_count;
-}
-
 static size_t utp_stream_recv_fragment_memory_cost(const utp_stream_recv_fragment_t* fragment)
 {
     assert(fragment != NULL);
@@ -295,35 +286,6 @@ static void utp_stream_unaccount_recv_fragment(utp_stream_t* stream, utp_stream_
     fragment->accounted               = false;
 }
 
-static utp_internal_error_t utp_stream_insert_ack_range(utp_stream_t* stream, uint64_t start, uint64_t end)
-{
-    size_t index = 0u;
-
-    while (index < stream->send_ack_range_count && stream->send_ack_ranges[index].end < start) {
-        ++index;
-    }
-    while (index < stream->send_ack_range_count && stream->send_ack_ranges[index].start <= end) {
-        if (stream->send_ack_ranges[index].start < start) {
-            start = stream->send_ack_ranges[index].start;
-        }
-        if (stream->send_ack_ranges[index].end > end) {
-            end = stream->send_ack_ranges[index].end;
-        }
-        utp_stream_remove_ack_range(stream, index);
-    }
-    if (stream->send_ack_range_count >= UTP_STREAM_SEND_ACK_RANGE_LIMIT) {
-        return UTP_INTERNAL_ERROR_LIMIT;
-    }
-    if (index < stream->send_ack_range_count) {
-        memmove(&stream->send_ack_ranges[index + 1u], &stream->send_ack_ranges[index],
-                (stream->send_ack_range_count - index) * sizeof(stream->send_ack_ranges[0]));
-    }
-    stream->send_ack_ranges[index].start = start;
-    stream->send_ack_ranges[index].end   = end;
-    ++stream->send_ack_range_count;
-    return UTP_INTERNAL_ERROR_OK;
-}
-
 static void utp_stream_release_recv_fragment_storage(utp_stream_t* stream)
 {
     assert(stream != NULL);
@@ -348,9 +310,11 @@ static void utp_stream_release_recv_fragment_storage(utp_stream_t* stream)
 
 static void utp_stream_release_acked_prefix(utp_stream_t* stream)
 {
-    while (stream->send_ack_range_count != 0u && stream->send_ack_ranges[0].start <= stream->send_buffer_offset &&
-           stream->send_ack_ranges[0].end > stream->send_buffer_offset) {
-        size_t length = (size_t)(stream->send_ack_ranges[0].end - stream->send_buffer_offset);
+    const utp_range_t* range;
+
+    while ((range = utp_range_set_at(&stream->send_ack_ranges, 0u)) != NULL &&
+           range->start <= stream->send_buffer_offset && range->end > stream->send_buffer_offset) {
+        size_t length = (size_t)(range->end - stream->send_buffer_offset);
 
         if (length > stream->send_in_flight_bytes) {
             length = stream->send_in_flight_bytes;
@@ -362,7 +326,7 @@ static void utp_stream_release_acked_prefix(utp_stream_t* stream)
             return;
         }
         utp_stream_pop_send_prefix(stream, length);
-        utp_stream_remove_ack_range(stream, 0u);
+        utp_range_set_remove_first(&stream->send_ack_ranges);
     }
 }
 
@@ -607,6 +571,8 @@ static void utp_stream_merge_terminal_fin_fragment(utp_stream_t* stream)
 
 void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
 {
+    utp_internal_error_t error;
+
     assert(stream != NULL);
     stream->connection                                    = NULL;
     stream->connection_consumed_total                     = NULL;
@@ -636,7 +602,9 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     stream->recv_fragment_storage_bytes                   = 0u;
     stream->recv_fragments                                = NULL;
     stream->recv_fragment_storage_connection_memory_bytes = NULL;
-    stream->send_ack_range_count                          = 0u;
+    error = utp_range_set_init(&stream->send_ack_ranges, NULL, SIZE_MAX);
+    assert(error == UTP_INTERNAL_ERROR_OK);
+    (void)error;
     stream->priority                                      = UTP_STREAM_PRIORITY_DEFAULT;
     stream->strict_wait_rounds                            = 0u;
     stream->read_cb                                       = NULL;
@@ -766,6 +734,7 @@ void utp_stream_cleanup(utp_stream_t* stream)
         stream->close_cb_data = NULL;
         utp_stream_clear_recv_fragments(stream);
         utp_stream_release_recv_fragment_storage(stream);
+        utp_range_set_cleanup(&stream->send_ack_ranges);
         utp_allocator_free(NULL, stream->send_buffer);
         stream->send_buffer               = NULL;
         stream->send_buffer_capacity      = 0u;
@@ -879,7 +848,7 @@ utp_internal_error_t utp_stream_abort_write_internal(utp_stream_t* stream)
     stream->send_buffer_length    = 0u;
     stream->send_buffer_start     = 0u;
     stream->send_in_flight_bytes  = 0u;
-    stream->send_ack_range_count  = 0u;
+    utp_range_set_clear(&stream->send_ack_ranges);
     stream->local_fin_queued      = false;
     stream->local_fin_sent        = false;
     stream->local_fin_transmitted = false;
@@ -1144,7 +1113,7 @@ utp_internal_error_t utp_stream_on_packet_acked_range(utp_stream_t* stream, uint
         return UTP_INTERNAL_ERROR_OK;
     }
     // ACK 可能乱序到达，先合并区间，仅释放从 send_buffer_offset 开始的连续前缀。
-    utp_internal_error_t error = utp_stream_insert_ack_range(stream, stream_offset, end);
+    utp_internal_error_t error = utp_range_set_insert(&stream->send_ack_ranges, stream_offset, end);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }

@@ -12,6 +12,7 @@
 #include "queue.h"
 #include "util/error.h"
 #include "util/hash.h"
+#include "util/range_set.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +27,6 @@ struct utp_connection;
 #define UTP_STREAM_SERVER_INITIATED             1u
 #define UTP_STREAM_UNIDIRECTIONAL               2u
 #define UTP_STREAM_RECV_FRAGMENT_GROW_CAPACITY  64u
-#define UTP_STREAM_SEND_ACK_RANGE_LIMIT         16u
 #define UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY (256u * 1024u)
 #define UTP_STREAM_RECV_REASSEMBLY_MEMORY_LIMIT (4u * 1024u * 1024u)
 #define UTP_STREAM_RECV_MAX_GAP                 (2u * 1024u * 1024u)
@@ -48,11 +48,6 @@ typedef struct utp_stream_recv_fragment {
     bool             fin : 1;                  // 分片末尾是否带 FIN
     bool             accounted : 1;            // 是否已计入连接级资源计数
 } utp_stream_recv_fragment_t;
-
-typedef struct utp_stream_send_ack_range {
-    uint64_t start;  // 已确认数据区间起始偏移（含）
-    uint64_t end;    // 已确认数据区间结束偏移（不含）
-} utp_stream_send_ack_range_t;
 
 typedef utp_on_stream_readable_fn utp_stream_read_cb_t;
 typedef utp_on_stream_writable_fn utp_stream_write_cb_t;
@@ -86,8 +81,7 @@ struct utp_stream {
     size_t                      recv_fragment_capacity;            // 接收重组描述符已分配容量
     size_t                      recv_fragment_begin;               // 接收重组首个有效描述符下标
     size_t                      recv_fragment_count;               // 接收重组分片数
-    size_t                      send_ack_range_count;              // 已确认发送区间数
-    utp_stream_send_ack_range_t send_ack_ranges[UTP_STREAM_SEND_ACK_RANGE_LIMIT];  // 已确认发送区间
+    utp_range_set_t             send_ack_ranges;                    // 已确认、尚不能释放的发送字节区间
     utp_stream_recv_fragment_t* recv_fragments;                                    // 惰性分配、按偏移排序的接收分片
     size_t*                     recv_fragment_storage_connection_memory_bytes;     // 描述符数组所属连接内存计数器
     uint8_t*                    send_buffer;                                       // 首次写入时分配的环形发送缓冲

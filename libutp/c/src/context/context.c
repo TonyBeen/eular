@@ -2458,15 +2458,15 @@ static void utp_context_send_destroy_close(utp_context_t* context, utp_context_c
     }
 }
 
-static void utp_context_report_terminal_send_error(utp_context_t* context, utp_context_connection_slot_t* slot,
-                                                   utp_internal_error_t error, const char* reason)
+static void utp_context_report_terminal_local_error(utp_context_t* context, utp_context_connection_slot_t* slot,
+                                                    utp_internal_error_t error, const char* reason)
 {
     assert(context != NULL);
     assert(slot != NULL);
     if (!slot->used || slot->terminal_error_queued) {
         return;
     }
-    // 本地永久发送错误后立即屏蔽收发；回调和资源释放必须等到当前 Context 调度边界。
+    // 本地永久错误后立即屏蔽收发；回调和资源释放必须等到当前 Context 调度边界。
     slot->terminal_error_status          = utp_internal_error_to_status(error);
     slot->terminal_error_reason          = reason;
     slot->terminal_error_reason_length   = reason == NULL ? 0u : strlen(reason);
@@ -3486,7 +3486,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 if (error == UTP_INTERNAL_ERROR_OK) {
                     return UTP_INTERNAL_ERROR_OK;
                 }
-                utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
+                utp_context_report_terminal_local_error(context, slot, error, "failed to wait for udp writable");
                 return error;
             }
             if (sent_count < packet_count) {
@@ -3499,7 +3499,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 utp_packet_out_pool_release(&connection->packet_pool, connection->packet_buffer_pool, failed_packet);
                 if (!error_consumed && utp_context_is_packet_too_large_error(error)) {
                     utp_send_control_pacer_tick_out(&connection->send_control);
-                    utp_context_report_terminal_send_error(context, slot, error, "udp packet exceeds path MTU");
+                    utp_context_report_terminal_local_error(context, slot, error, "udp packet exceeds path MTU");
                     return error;
                 }
                 if (error != UTP_INTERNAL_ERROR_NOBUFS) {
@@ -3519,7 +3519,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
             }
             utp_send_control_pacer_tick_out(&connection->send_control);
             if (error == UTP_INTERNAL_ERROR_NOBUFS) {
-                utp_context_report_terminal_send_error(context, slot, error, "udp send ENOBUFS");
+                utp_context_report_terminal_local_error(context, slot, error, "udp send ENOBUFS");
             }
             return error;
         }
@@ -3547,7 +3547,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                     return UTP_INTERNAL_ERROR_OK;
                 }
                 utp_send_control_pacer_tick_out(&connection->send_control);
-                utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
+                utp_context_report_terminal_local_error(context, slot, error, "failed to wait for udp writable");
                 return error;
             }
             error = utp_send_control_reschedule_packet(&connection->send_control, packet);
@@ -3564,7 +3564,7 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                 return UTP_INTERNAL_ERROR_OK;
             }
             utp_send_control_pacer_tick_out(&connection->send_control);
-            utp_context_report_terminal_send_error(context, slot, error, "failed to wait for udp writable");
+            utp_context_report_terminal_local_error(context, slot, error, "failed to wait for udp writable");
             return error;
         } else {
             const bool close_packet   = utp_connection_is_close_packet(connection, packet);
@@ -3584,12 +3584,12 @@ static utp_internal_error_t utp_context_flush_connection_at(utp_context_t* conte
                     error == UTP_INTERNAL_ERROR_NOBUFS ? "udp send ENOBUFS" : "send connection close failed";
 
                 utp_send_control_pacer_tick_out(&connection->send_control);
-                utp_context_report_terminal_send_error(context, slot, error, reason);
+                utp_context_report_terminal_local_error(context, slot, error, reason);
                 return error;
             }
             if (utp_context_is_packet_too_large_error(error)) {
                 utp_send_control_pacer_tick_out(&connection->send_control);
-                utp_context_report_terminal_send_error(context, slot, error, "udp packet exceeds path MTU");
+                utp_context_report_terminal_local_error(context, slot, error, "udp packet exceeds path MTU");
                 return error;
             }
         }
@@ -4971,6 +4971,10 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
             slot->connect_attempt.remote    = previous_remote;
         }
         if (error == UTP_INTERNAL_ERROR_AUTH || error == UTP_INTERNAL_ERROR_CRYPTO) {
+            return UTP_INTERNAL_ERROR_OK;
+        }
+        if (error == UTP_INTERNAL_ERROR_NOMEM) {
+            utp_context_report_terminal_local_error(context, slot, error, "connection packet processing allocation failed");
             return UTP_INTERNAL_ERROR_OK;
         }
         if (utp_context_is_peer_protocol_error(error)) {

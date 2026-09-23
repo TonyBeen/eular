@@ -924,9 +924,11 @@ static utp_internal_error_t utp_connection_handle_observed_address(utp_connectio
 }
 
 /* 已发送包确认、丢失与控制帧生命周期。 */
-static void utp_connection_release_queue(utp_connection_t* connection, struct utp_packet_out_tailq* packets)
+static utp_internal_error_t utp_connection_release_queue(utp_connection_t* connection,
+                                                          struct utp_packet_out_tailq* packets)
 {
     utp_packet_out_t* packet;
+    utp_internal_error_t result = UTP_INTERNAL_ERROR_OK;
 
     assert(connection != NULL);
     assert(packets != NULL);
@@ -948,13 +950,19 @@ static void utp_connection_release_queue(utp_connection_t* connection, struct ut
             utp_stream_t* stream = utp_connection_find_stream_internal(connection, packet->stream_id);
 
             if (stream != NULL) {
-                (void)utp_stream_on_packet_acked_range(stream, packet->stream_offset, packet->stream_data_size);
+                const utp_internal_error_t error =
+                    utp_stream_on_packet_acked_range(stream, packet->stream_offset, packet->stream_data_size);
+
+                if (result == UTP_INTERNAL_ERROR_OK && error != UTP_INTERNAL_ERROR_OK) {
+                    result = error;
+                }
             }
         }
         TAILQ_REMOVE(packets, packet, po_next);
         utp_send_control_forget_packet_attempts(&connection->send_control, packet);
         utp_connection_packet_release(connection, packet);
     }
+    return result;
 }
 
 static void utp_connection_process_acknowledged_packets(utp_connection_t*                  connection,
@@ -4401,7 +4409,10 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
                 ack_progress = true;
             }
             utp_connection_process_acknowledged_packets(connection, &acknowledged, now_us);
-            utp_connection_release_queue(connection, &acknowledged);
+            error = utp_connection_release_queue(connection, &acknowledged);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
             utp_connection_process_detected_losses(connection, now_us);
             utp_connection_release_discarded_packets(connection, now_us);
         } else if (frame_type == UTP_FRAME_TYPE_CRYPTO) {
@@ -4819,10 +4830,13 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             error = utp_send_control_retire_handshake_packets(&connection->send_control, now_us,
                                                               &retired_handshake_packets);
             if (error != UTP_INTERNAL_ERROR_OK) {
-                utp_connection_release_queue(connection, &retired_handshake_packets);
+                (void)utp_connection_release_queue(connection, &retired_handshake_packets);
                 return error;
             }
-            utp_connection_release_queue(connection, &retired_handshake_packets);
+            error = utp_connection_release_queue(connection, &retired_handshake_packets);
+            if (error != UTP_INTERNAL_ERROR_OK) {
+                return error;
+            }
             connection->state = UTP_CONNECTION_STATE_CONNECTED;
             utp_send_control_set_connected(&connection->send_control, true);
             utp_connection_schedule_observed_address_challenge(connection, now_us);
@@ -5566,7 +5580,13 @@ utp_internal_error_t utp_connection_retire_handshake_flight(utp_connection_t* co
     }
     TAILQ_INIT(&retired_packets);
     error = utp_send_control_retire_handshake_packets(&connection->send_control, now_us, &retired_packets);
-    utp_connection_release_queue(connection, &retired_packets);
+    {
+        const utp_internal_error_t release_error = utp_connection_release_queue(connection, &retired_packets);
+
+        if (error == UTP_INTERNAL_ERROR_OK) {
+            error = release_error;
+        }
+    }
     return error;
 }
 

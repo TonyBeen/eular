@@ -178,6 +178,32 @@ void on_incoming_stopped(utp_connection_t* connection, utp_stream_t* stream, voi
 
 }  // namespace
 
+TEST_CASE("stream releases a dynamically sized set of out-of-order send acknowledgements", "[stream][send]")
+{
+    utp_stream_t stream = {};
+
+    utp_stream_init(&stream, 0u);
+    stream.send_buffer_length   = 128u;
+    stream.send_in_flight_bytes = 128u;
+
+    // Insert 64 disjoint ranges before their preceding bytes are acknowledged.
+    for (uint64_t offset = 1u; offset < 128u; offset += 2u) {
+        REQUIRE(utp_stream_on_packet_acked_range(&stream, offset, 1u) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(stream.send_ack_ranges.count == 64u);
+    REQUIRE(stream.send_buffer_length == 128u);
+
+    // Filling each gap must merge and retire the newly contiguous prefix immediately.
+    for (uint64_t offset = 0u; offset < 128u; offset += 2u) {
+        REQUIRE(utp_stream_on_packet_acked_range(&stream, offset, 1u) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(stream.send_ack_ranges.count == 0u);
+    REQUIRE(stream.send_buffer_length == 0u);
+    REQUIRE(stream.send_in_flight_bytes == 0u);
+
+    utp_stream_cleanup(&stream);
+}
+
 TEST_CASE("stream closed callback follows terminal state", "[stream][callback]")
 {
     utp_packet_in_pool_t  pool                                       = {};

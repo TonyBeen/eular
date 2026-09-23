@@ -29,6 +29,7 @@ utp_internal_error_t utp_range_set_init(utp_range_set_t* set, const utp_allocato
 void                 utp_range_set_cleanup(utp_range_set_t* set);
 void                 utp_range_set_clear(utp_range_set_t* set);
 utp_internal_error_t utp_range_set_insert(utp_range_set_t* set, uint64_t start, uint64_t end);
+void                 utp_range_set_remove_first(utp_range_set_t* set);
 bool                 utp_range_set_contains(const utp_range_set_t* set, uint64_t value);
 const utp_range_t*   utp_range_set_at(const utp_range_set_t* set, size_t index);
 
