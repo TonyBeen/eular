@@ -152,7 +152,7 @@ f.crypto_reserved = ProtoField.uint8("eular_utp.crypto.reserved", "Reserved", ba
 f.crypto_pubkey = ProtoField.bytes("eular_utp.crypto.pubkey", "Ephemeral Public Key")
 
 f.token_size = ProtoField.uint8("eular_utp.token.size", "Token Size", base.DEC)
-f.token_validity = ProtoField.uint16("eular_utp.token.validity", "Token Validity Period", base.DEC)
+f.token_expires_at = ProtoField.uint64("eular_utp.token.expires_at", "Token Expires At (Unix seconds)", base.DEC)
 f.token_data = ProtoField.bytes("eular_utp.token.data", "Token")
 
 f.ack_freq_thresh = ProtoField.uint8("eular_utp.ack_frequency.ack_eliciting_threshold", "Ack Eliciting Threshold", base.DEC)
@@ -172,6 +172,7 @@ f.tp_ack_delay_exponent = ProtoField.uint8("eular_utp.transport_params.ack_delay
 f.tp_initial_max_data = ProtoField.uint64("eular_utp.transport_params.initial_max_data", "Initial Max Data", base.DEC)
 f.tp_initial_max_stream_data_bidi_local = ProtoField.uint64("eular_utp.transport_params.initial_max_stream_data_bidi_local", "Initial Max Stream Data Bidi Local", base.DEC)
 f.tp_initial_max_stream_data_bidi_remote = ProtoField.uint64("eular_utp.transport_params.initial_max_stream_data_bidi_remote", "Initial Max Stream Data Bidi Remote", base.DEC)
+f.tp_initial_max_stream_data_uni = ProtoField.uint64("eular_utp.transport_params.initial_max_stream_data_uni", "Initial Max Stream Data Uni", base.DEC)
 
 f.reset_error = ProtoField.uint16("eular_utp.reset.error", "Reset Error Code", base.DEC)
 f.reset_stream_id = ProtoField.uint32("eular_utp.reset.stream_id", "Reset Stream ID", base.DEC)
@@ -792,10 +793,11 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         end
         frame_len = 3 + payload(payload_offset + 1, 2):uint()
     elseif frame_type == 12 then
-        if payload_offset + 4 > payload_len then
+        if payload_offset + 10 > payload_len then
             return -1
         end
-        frame_len = 4 + payload(payload_offset + 1, 1):uint()
+        -- FRAME_SESSION_TOKEN_HEADER_SIZE = type(1) + payload_length(1) + expires_at_seconds(8)
+        frame_len = 10 + payload(payload_offset + 1, 1):uint()
     elseif frame_type == 4 then
         if payload_offset + 5 > payload_len then
             return -1
@@ -819,8 +821,8 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 13 then
         frame_len = 7
     elseif frame_type == 16 then
-        -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 + 8 + 8 + 8 = 38
-        frame_len = 38
+        -- FRAME_TRANSPORT_PARAMS_SIZE = 1 + 2 + 4 + 2 + 2 + 2 + 1 + 8 + 8 + 8 + 8 = 46
+        frame_len = 46
     elseif frame_type == 17 then
         -- FRAME_HANDSHAKE_DELAY_SIZE = 1 + 4 = 5
         frame_len = 5
@@ -954,9 +956,9 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
     elseif frame_type == 12 then
         local token_size = payload(payload_offset + 1, 1):uint()
         node:add(f.token_size, payload(payload_offset + 1, 1))
-        node:add(f.token_validity, payload(payload_offset + 2, 2))
+        node:add(f.token_expires_at, payload(payload_offset + 2, 8))
         if token_size > 0 then
-            node:add(f.token_data, payload(payload_offset + 4, token_size))
+            node:add(f.token_data, payload(payload_offset + 10, token_size))
         end
         append_summary(summaries, string.format("TOKEN len=%u", token_size))
     elseif frame_type == 13 then
@@ -977,6 +979,7 @@ local function parse_frame(payload, payload_offset, payload_len, tree, frame_ind
         node:add(f.tp_initial_max_data, payload(payload_offset + 14, 8))
         node:add(f.tp_initial_max_stream_data_bidi_local, payload(payload_offset + 22, 8))
         node:add(f.tp_initial_max_stream_data_bidi_remote, payload(payload_offset + 30, 8))
+        node:add(f.tp_initial_max_stream_data_uni, payload(payload_offset + 38, 8))
         append_summary(summaries, string.format("TP hs_to=%u max_data=%s",
             payload(payload_offset + 7, 2):uint(),
             tostring(payload(payload_offset + 14, 8):uint64())))
