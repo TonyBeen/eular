@@ -1,5 +1,16 @@
 # TODO
 
+## ACK-of-ACK 接收历史回收
+
+当前 Connection 的 `receive_history` 固定保留 1000 个范围，ACK 仅从最新范围开始按当前 PacketOut 可用空间
+编码，且不拆分单个 ACK frame。该固定上限保证接收热路径不分配内存，但在极端乱序下仍会按既有淘汰逻辑
+提高 `cutoff`。
+
+后续可参考 lsquic，在“携带 ACK 的本端发送 attempt 已被对端确认”后回收已安全过期的接收历史。实现时应在
+构造 ACK 时记录所确认的最大对端包号，并为每个发送 attempt 保留该快照。不能直接以 ACK 的最大确认号推进
+`cutoff`：ACK range 可能存在间隙，且重传会剥离 transient ACK；须先定义等价于 STOP_WAITING 的安全回收
+语义，再调用 `utp_receive_history_stop_wait()`。
+
 ## 发送 ACK 区间资源控制
 
 当前 Stream 的 `send_ack_ranges` 使用动态、按偏移合并的区间表。乱序 ACK 不能再因固定区间数被丢弃，

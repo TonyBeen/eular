@@ -755,6 +755,100 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
     utp_connection_cleanup(&active);
 }
 
+TEST_CASE("connection ACK keeps receive history beyond the current packet budget", "[connection][ack][mtu]")
+{
+    const utp_address_t      peer = [] {
+        utp_address_t address = {};
+
+        REQUIRE(utp_address_parse(&address, "2001:db8::1", 10009u) == UTP_INTERNAL_ERROR_OK);
+        return address;
+    }();
+    utp_mtu_config_t         config     = UTP_MTU_CONFIG_INIT;
+    utp_connection_t         connection = {};
+    utp_packet_out_t*        packet;
+    utp_ack_range_t          ranges[UTP_ACK_MAX_RANGES] = {};
+    utp_ack_info_t           ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t                   consumed = 0u;
+
+    config.enabled  = false;
+    config.mtu_min  = 1280u;
+    config.mtu_base = 1280u;
+    config.mtu_max  = 1280u;
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 77u, 11u, &peer, 4u, UINT16_MAX) ==
+            UTP_INTERNAL_ERROR_OK);
+    utp_connection_set_mtu_config(&connection, &config);
+    REQUIRE(connection.receive_history.range_capacity == UTP_CONNECTION_MAX_RECEIVE_HISTORY_RANGES);
+    for (uint64_t packet_number = 2u; packet_number <= 400u; packet_number += 2u) {
+        REQUIRE(utp_receive_history_insert(&connection.receive_history, packet_number, 100u) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(utp_receive_history_range_count(&connection.receive_history) == 200u);
+    REQUIRE(utp_ack_scheduler_on_packet(&connection.ack_scheduler, 400u, 0u, true, false, 100u) ==
+            UTP_ACK_SCHEDULE_IMMEDIATE);
+
+    packet = utp_connection_next_packet_to_send_at(&connection, 101u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->data_size == 1228u);
+    REQUIRE(utp_ack_decode(&ack, packet->raw_data + UTP_PACKET_HEADER_SIZE,
+                           packet->data_size - UTP_PACKET_HEADER_SIZE, connection.local_transport_params.ack_delay_exponent,
+                           &consumed) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(consumed == 1208u);
+    REQUIRE(ack.range_count == 150u);
+    REQUIRE(ack.ranges[0].low == 400u);
+    REQUIRE(ack.ranges[149u].low == 102u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 101u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection rebuilds a queued ACK when the path MTU decreases", "[connection][ack][mtu]")
+{
+    const utp_address_t      peer = [] {
+        utp_address_t address = {};
+
+        REQUIRE(utp_address_parse(&address, "2001:db8::2", 10010u) == UTP_INTERNAL_ERROR_OK);
+        return address;
+    }();
+    utp_mtu_config_t         large_config = UTP_MTU_CONFIG_INIT;
+    utp_mtu_config_t         small_config = UTP_MTU_CONFIG_INIT;
+    utp_connection_t         connection   = {};
+    utp_packet_out_t*        packet;
+    utp_ack_range_t          ranges[UTP_ACK_MAX_RANGES] = {};
+    utp_ack_info_t           ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t                   consumed = 0u;
+
+    large_config.enabled  = false;
+    large_config.mtu_min  = 1280u;
+    large_config.mtu_base = 1400u;
+    large_config.mtu_max  = 1400u;
+    small_config.enabled  = false;
+    small_config.mtu_min  = 1280u;
+    small_config.mtu_base = 1280u;
+    small_config.mtu_max  = 1280u;
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 78u, 12u, &peer, 4u, UINT16_MAX) ==
+            UTP_INTERNAL_ERROR_OK);
+    utp_connection_set_mtu_config(&connection, &large_config);
+    for (uint64_t packet_number = 2u; packet_number <= 340u; packet_number += 2u) {
+        REQUIRE(utp_receive_history_insert(&connection.receive_history, packet_number, 100u) == UTP_INTERNAL_ERROR_OK);
+    }
+    REQUIRE(utp_ack_scheduler_on_packet(&connection.ack_scheduler, 340u, 0u, true, false, 100u) ==
+            UTP_ACK_SCHEDULE_IMMEDIATE);
+    REQUIRE(utp_connection_queue_ack(&connection, 101u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_ack_pending_count(&connection) == 0u);
+
+    utp_connection_set_mtu_config(&connection, &small_config);
+    packet = utp_connection_next_packet_to_send_at(&connection, 102u);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 2u);
+    REQUIRE(packet->data_size == 1228u);
+    REQUIRE(utp_ack_decode(&ack, packet->raw_data + UTP_PACKET_HEADER_SIZE,
+                           packet->data_size - UTP_PACKET_HEADER_SIZE, connection.local_transport_params.ack_delay_exponent,
+                           &consumed) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(ack.range_count == 150u);
+    REQUIRE(ack.ranges[0].low == 340u);
+    REQUIRE(ack.ranges[149u].low == 42u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 102u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&connection);
+}
+
 TEST_CASE("connection gives a queued ACK ownership of its receive generation", "[connection][ack]")
 {
     const utp_address_t                              peer       = loopback_address(10028u);

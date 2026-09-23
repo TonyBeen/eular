@@ -180,6 +180,39 @@ TEST_CASE("receive history projects its newest ranges into an ACK", "[receive_hi
     utp_receive_history_cleanup(&history);
 }
 
+TEST_CASE("receive history retains a delayed gap beyond one ACK frame range budget", "[receive_history][ack]")
+{
+    constexpr size_t          ack_range_limit     = 32u;
+    constexpr size_t          history_range_limit = ack_range_limit + 1u;
+    utp_receive_history_t     history         = {};
+    utp_ack_range_t           ranges[ack_range_limit] = {};
+    utp_ack_info_t            ack = {0u, 0u, ranges, 0u, ack_range_limit};
+    const utp_receive_range_t* range;
+
+    REQUIRE(utp_receive_history_init(&history, nullptr, history_range_limit) == UTP_INTERNAL_ERROR_OK);
+    for (uint64_t packet_number = 4u; packet_number <= 66u; packet_number += 2u) {
+        REQUIRE(utp_receive_history_insert(&history, packet_number, packet_number) == UTP_INTERNAL_ERROR_OK);
+    }
+
+    // 32 个范围仍可由单个 ACK 帧发送，不能因此成为接收历史的上限。
+    REQUIRE(utp_ack_from_receive_history(&ack, &history, 100u, ack_range_limit) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(ack.range_count == ack_range_limit);
+    REQUIRE(ack.ranges[0].low == 66u);
+    REQUIRE(ack.ranges[ack_range_limit - 1u].low == 4u);
+
+    // 包 1 是严重乱序后到达的有效包；必须保留，供后续 ACK 策略确认。
+    REQUIRE_FALSE(utp_receive_history_contains(&history, 1u));
+    REQUIRE(utp_receive_history_insert(&history, 1u, 101u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_receive_history_cutoff(&history) == 0u);
+    REQUIRE(utp_receive_history_range_count(&history) == ack_range_limit + 1u);
+    range = utp_receive_history_range_at(&history, ack_range_limit);
+    REQUIRE(range != nullptr);
+    REQUIRE(range->low == 1u);
+    REQUIRE(range->high == 1u);
+
+    utp_receive_history_cleanup(&history);
+}
+
 TEST_CASE("ACK scheduler sends immediately for thresholds and otherwise exposes a deadline", "[ack_scheduler]")
 {
     utp_ack_scheduler_t scheduler = {};

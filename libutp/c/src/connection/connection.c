@@ -487,6 +487,21 @@ static utp_packet_out_t* utp_connection_next_scheduled_admitted(utp_connection_t
 
     assert(connection != NULL);
     while ((packet = utp_send_control_peek_scheduled(&connection->send_control)) != NULL) {
+        const bool has_transient_ack = packet->transient_ack_size != 0u;
+
+        // ACK 是可从 receive_history 重建的瞬态前缀；MTU 收缩后仅丢弃含 ACK 的旧包，
+        // 避免握手和 0-RTT 等没有通用重建来源的普通排队包被静默丢弃。
+        if (has_transient_ack &&
+            utp_connection_packet_wire_size(packet) > utp_connection_current_packet_capacity(connection)) {
+
+            packet = utp_send_control_next_scheduled(&connection->send_control);
+            utp_connection_on_packet_abandoned(connection, packet);
+            connection->ack_scheduler.pending_count = connection->ack_scheduler.ack_eliciting_threshold;
+            connection->ack_scheduler.deadline      = 0u;
+            utp_send_control_forget_packet_attempts(&connection->send_control, packet);
+            utp_connection_packet_release(connection, packet);
+            continue;
+        }
         if (utp_connection_packet_stream_is_reset(connection, packet)) {
             packet = utp_send_control_next_scheduled(&connection->send_control);
             utp_connection_on_packet_abandoned(connection, packet);
@@ -2143,16 +2158,24 @@ static utp_internal_error_t utp_connection_encode_control_slot(const utp_connect
 static utp_internal_error_t utp_connection_encode_ack_payload(utp_connection_t* connection, uint64_t now_us,
                                                               uint8_t* payload, size_t capacity, size_t* out_length)
 {
-    utp_ack_range_t      ranges[UTP_CONNECTION_MAX_RECEIVE_RANGES];
-    utp_ack_info_t       ack = {0u, 0u, ranges, 0u, UTP_CONNECTION_MAX_RECEIVE_RANGES};
+    utp_ack_range_t      ranges[UTP_ACK_MAX_RANGES];
+    utp_ack_info_t       ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
     utp_internal_error_t error;
+    size_t               max_ranges;
 
     assert(connection != NULL);
     assert(payload != NULL);
     assert(out_length != NULL);
     assert(now_us != 0u);
     assert(utp_ack_scheduler_pending_count(&connection->ack_scheduler) != 0u);
-    error = utp_ack_from_receive_history(&ack, &connection->receive_history, now_us, UTP_CONNECTION_MAX_RECEIVE_RANGES);
+    if (capacity < UTP_ACK_FRAME_HEADER_SIZE) {
+        return UTP_INTERNAL_ERROR_LIMIT;
+    }
+    max_ranges = 1u + (capacity - UTP_ACK_FRAME_HEADER_SIZE) / UTP_ACK_FRAME_RANGE_SIZE;
+    if (max_ranges > UTP_ACK_MAX_RANGES) {
+        max_ranges = UTP_ACK_MAX_RANGES;
+    }
+    error = utp_ack_from_receive_history(&ack, &connection->receive_history, now_us, max_ranges);
     if (error != UTP_INTERNAL_ERROR_OK) {
         return error;
     }
@@ -2165,7 +2188,7 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
 {
     utp_connection_control_slot_t* selected[UTP_PACKET_OUT_MAX_FRAMES];
     uint8_t
-        ack_payload[UTP_ACK_FRAME_HEADER_SIZE + (UTP_CONNECTION_MAX_RECEIVE_RANGES - 1u) * UTP_ACK_FRAME_RANGE_SIZE];
+        ack_payload[UTP_ACK_FRAME_HEADER_SIZE + (UTP_ACK_MAX_RANGES - 1u) * UTP_ACK_FRAME_RANGE_SIZE];
     utp_packet_out_t*    packet = NULL;
     utp_internal_error_t error;
     uint64_t             packet_number;
@@ -2190,7 +2213,8 @@ static utp_internal_error_t utp_connection_queue_control_packet(utp_connection_t
     }
     // ACK 是瞬态前缀，可靠 control 按优先级填充剩余 MTU；重传时会自动剔除旧 ACK。
     if (include_ack) {
-        error = utp_connection_encode_ack_payload(connection, now_us, ack_payload, sizeof(ack_payload), &ack_length);
+        error = utp_connection_encode_ack_payload(connection, now_us, ack_payload,
+                                                   (size_t)packet_capacity - UTP_PACKET_HEADER_SIZE, &ack_length);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -2438,7 +2462,7 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
                                                                     bool* queued)
 {
     uint8_t
-        ack_payload[UTP_ACK_FRAME_HEADER_SIZE + (UTP_CONNECTION_MAX_RECEIVE_RANGES - 1u) * UTP_ACK_FRAME_RANGE_SIZE];
+        ack_payload[UTP_ACK_FRAME_HEADER_SIZE + (UTP_ACK_MAX_RANGES - 1u) * UTP_ACK_FRAME_RANGE_SIZE];
     uint8_t                        stream_header[UTP_FRAME_STREAM_HEADER_SIZE];
     utp_packet_out_t*              packet = NULL;
     utp_stream_t*                  stream;
@@ -2470,12 +2494,14 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
         return UTP_INTERNAL_ERROR_OK;
     }
     packet_capacity = utp_connection_plaintext_packet_capacity(connection);
-    if (packet_capacity < UTP_PACKET_HEADER_SIZE) {
+    if (packet_capacity < UTP_PACKET_HEADER_SIZE + UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     // 包内布局固定为 ACK、可靠 control、STREAM header、外部数据视图，数据本身不复制。
     if (include_ack) {
-        error = utp_connection_encode_ack_payload(connection, now_us, ack_payload, sizeof(ack_payload), &ack_length);
+        error = utp_connection_encode_ack_payload(
+            connection, now_us, ack_payload,
+            (size_t)packet_capacity - UTP_PACKET_HEADER_SIZE - UTP_FRAME_STREAM_HEADER_SIZE, &ack_length);
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
@@ -2991,7 +3017,7 @@ utp_internal_error_t utp_connection_init(utp_connection_t* connection, utp_conne
         error = utp_connection_set_congestion_algorithm(connection, UTP_CONGESTION_BBR, NULL, NULL, 1u);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_receive_history_init(&connection->receive_history, NULL, UTP_CONNECTION_MAX_RECEIVE_RANGES);
+        error = utp_receive_history_init(&connection->receive_history, NULL, UTP_CONNECTION_MAX_RECEIVE_HISTORY_RANGES);
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_ack_scheduler_init(&connection->ack_scheduler, UTP_CONNECTION_ACK_ELICITING_THRESHOLD,
@@ -4378,8 +4404,8 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
             rendezvous_seen = true;
         } else if (frame_type == UTP_FRAME_TYPE_ACK) {
-            utp_ack_range_t               ranges[UTP_CONNECTION_MAX_RECEIVE_RANGES];
-            utp_ack_info_t                ack = {0u, 0u, ranges, 0u, UTP_CONNECTION_MAX_RECEIVE_RANGES};
+            utp_ack_range_t               ranges[UTP_ACK_MAX_RANGES];
+            utp_ack_info_t                ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
             utp_send_control_ack_result_t result;
             struct utp_packet_out_tailq   acknowledged;
             size_t                        consumed;
