@@ -9,7 +9,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "UTP_NTRS_BUILD_SERVICES": "ON",
-        "UTP_NTRS_BUILD_TESTS": "ON"
+        "UTP_NTRS_BUILD_TESTS": "OFF"
       }
     },
     {

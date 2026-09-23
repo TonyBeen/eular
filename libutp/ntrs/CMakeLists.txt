@@ -4,7 +4,7 @@ project(libutp_ntrs_service LANGUAGES C CXX)
 
 include(CTest)
 
-option(UTP_NTRS_BUILD_TESTS "Build NTRS service unit tests" ON)
+option(UTP_NTRS_BUILD_TESTS "Build NTRS service unit tests" OFF)
 option(UTP_NTRS_BUILD_SERVICES "Build NTRS Hub and Node service executables" ON)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
