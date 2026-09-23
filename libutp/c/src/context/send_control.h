@@ -97,7 +97,7 @@ bool                 utp_send_control_can_record_attempt(utp_send_control_t* con
 /** @brief 删除 PacketOut 的所有历史发送尝试索引，释放前必须调用。 */
 void                 utp_send_control_forget_packet_attempts(utp_send_control_t* control, utp_packet_out_t* packet);
 utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t* control, uint64_t* packet_number);
-// pending 阶段已经使用的包号属于同一发送方向；晋升后从 next_packet_number 继续分配。
+// pending 阶段已发送的包号属于同一发送方向；晋升时同步其 ACK 校验历史，并从 next_packet_number 继续分配。
 utp_internal_error_t utp_send_control_adopt_next_packet_number(utp_send_control_t* control,
                                                                uint64_t            next_packet_number);
 // 将包排队等待一次发送；成功发送或显式释放前，PacketOut 所有权仍属于调用方。

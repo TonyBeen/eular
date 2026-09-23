@@ -517,12 +517,23 @@ utp_internal_error_t utp_send_control_allocate_packet_number(utp_send_control_t*
 
 utp_internal_error_t utp_send_control_adopt_next_packet_number(utp_send_control_t* control, uint64_t next_packet_number)
 {
+    uint64_t             largest_adopted_packet_number;
+    utp_internal_error_t error;
+
     assert(control != NULL);
     if (next_packet_number == 0u || next_packet_number > UTP_PACKET_NUMBER_MAX + 1u ||
         next_packet_number <= control->current_packet_number) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    control->current_packet_number = next_packet_number - 1u;
+    largest_adopted_packet_number = next_packet_number - 1u;
+    if (largest_adopted_packet_number != 0u) {
+        // pending 握手包绕过了 Connection 的 ledger；晋升后仍须接受对端对这些包的迟到 ACK。
+        error = utp_send_history_update(&control->send_history, largest_adopted_packet_number);
+        if (error != UTP_INTERNAL_ERROR_OK) {
+            return error;
+        }
+    }
+    control->current_packet_number = largest_adopted_packet_number;
     return UTP_INTERNAL_ERROR_OK;
 }
 

@@ -249,14 +249,32 @@ TEST_CASE("handshake retirement clears flight bytes without reporting an ACK", "
 
 TEST_CASE("send control adopts a pending connection next packet number", "[send_control][packet_number]")
 {
+    utp_send_control_t            control = {};
+    uint64_t                      packet_number;
+    struct utp_packet_out_tailq   acknowledged;
+    utp_ack_range_t               ranges[] = {{1u, 2u}};
+    const utp_ack_info_t          ack      = {2u, 0u, ranges, 1u, 1u};
+    utp_send_control_ack_result_t result   = {};
+
+    TAILQ_INIT(&acknowledged);
+    REQUIRE(utp_send_control_init(&control, 2u, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 3u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_largest_sent(&control) == 2u);
+    REQUIRE(utp_send_control_on_ack(&control, &ack, 1000u, &acknowledged, &result) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_allocate_packet_number(&control, &packet_number) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(packet_number == 3u);
+    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 3u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+
+    utp_send_control_cleanup(&control);
+}
+
+TEST_CASE("send control adopts an unused pending packet number without sent history", "[send_control][packet_number]")
+{
     utp_send_control_t control = {};
-    uint64_t           packet_number;
 
     REQUIRE(utp_send_control_init(&control, 2u, UINT32_C(0x01), 16u, 100u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 7u) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_send_control_allocate_packet_number(&control, &packet_number) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(packet_number == 7u);
-    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 7u) == UTP_INTERNAL_ERROR_INVALID_ARGUMENT);
+    REQUIRE(utp_send_control_adopt_next_packet_number(&control, 1u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_send_control_largest_sent(&control) == 0u);
 
     utp_send_control_cleanup(&control);
 }
