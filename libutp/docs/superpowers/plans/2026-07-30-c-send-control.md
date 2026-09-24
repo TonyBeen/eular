@@ -13,9 +13,9 @@
 ### Task 1: Complete Send-Control State and Packet Scheduling
 
 **Files:**
-- Modify: `c/src/context/send_control.{c,h}`
-- Modify: `c/src/proto/packet_out.{c,h}`
-- Test: `c/test/test_send_control.cc`
+- Modify: `utp/src/context/send_control.{c,h}`
+- Modify: `utp/src/proto/packet_out.{c,h}`
+- Test: `utp/test/test_send_control.cc`
 
 - [ ] Write failing tests for FIFO scheduling, explicit `TRACK_ON_SEND`, capacity limits, and dequeue state cleanup.
 - [ ] Add bounded scheduled and lost `TAILQ`s, counters, packet-number allocation, and lifecycle flags to `utp_send_control_t`.
@@ -25,8 +25,8 @@
 ### Task 2: Loss Detection and Retransmission Preparation
 
 **Files:**
-- Modify: `c/src/context/send_control.{c,h}`
-- Test: `c/test/test_send_control.cc`
+- Modify: `utp/src/context/send_control.{c,h}`
+- Test: `utp/test/test_send_control.cc`
 
 - [ ] Write failing tests for FACK loss, send-time loss, duplicate-loss suppression, non-retransmittable packet discard, and MTU-probe discard.
 - [ ] Implement the C++/lsquic-style unacked scan: FACK threshold and send-time conditions only for packet numbers not above `largest_acked`.
@@ -36,8 +36,8 @@
 ### Task 3: Retransmission Timing and Expiration
 
 **Files:**
-- Modify: `c/src/context/send_control.{c,h}`
-- Test: `c/test/test_send_control.cc`
+- Modify: `utp/src/context/send_control.{c,h}`
+- Test: `utp/test/test_send_control.cc`
 
 - [ ] Write failing tests for handshake, loss, TLP, and RTO mode priority; 60-second cap; 200-ms RTO floor; bounded exponential backoff.
 - [ ] Implement pure timing calculations and `on_retransmission_timeout`, which moves the appropriate bounded packet subset to the lost queue.
@@ -47,10 +47,10 @@
 ### Task 4: Pacer and Congestion Interfaces
 
 **Files:**
-- Create: `c/src/congestion/congestion.{c,h}`
-- Create: `c/src/congestion/pacer.{c,h}`
-- Modify: `c/src/context/send_control.{c,h}`
-- Test: `c/test/test_congestion.cc`, `c/test/test_send_control.cc`
+- Create: `utp/src/congestion/congestion.{c,h}`
+- Create: `utp/src/congestion/pacer.{c,h}`
+- Modify: `utp/src/context/send_control.{c,h}`
+- Test: `utp/test/test_congestion.cc`, `utp/test/test_send_control.cc`
 
 - [ ] Write failing deterministic tests for cwnd admission, packet accounting, loss callback ordering, and pacing deadlines.
 - [ ] Port the small C-compatible pacing mechanism from lsquic, then define a C vtable for BBR/CUBIC packet-sent/ACK/loss/timeout events.
@@ -60,9 +60,9 @@
 ### Task 5: Connection Integration
 
 **Files:**
-- Create: `c/src/connection/connection.{c,h}`
-- Modify: `c/src/context/context.{c,h}`
-- Test: `c/test/test_connection.cc`
+- Create: `utp/src/connection/connection.{c,h}`
+- Modify: `utp/src/context/context.{c,h}`
+- Test: `utp/test/test_connection.cc`
 
 - [ ] Write failing loopback tests for Initial-to-HandshakeDone, send-controller callback order, retransmission after dropped datagram, and clean packet-pool return.
 - [ ] Connect send-control output to packet encoding, UDP send completion, connection timers, and CID demux without adding allocation to established receive/send paths.

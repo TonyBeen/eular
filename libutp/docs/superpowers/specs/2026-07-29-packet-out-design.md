@@ -2,7 +2,7 @@
 
 - 日期:2026-07-29
 - 状态:设计定稿,待写实现计划
-- 范围:`c/` 下新增 `utp_packet_out_t` 发送包对象与 `utp_packet_out_pool_t` 池(仅对象生命周期 + 缓冲区管理),不含队列编排、拥塞控制、限速逻辑
+- 范围:`utp/` 下新增 `utp_packet_out_t` 发送包对象与 `utp_packet_out_pool_t` 池(仅对象生命周期 + 缓冲区管理),不含队列编排、拥塞控制、限速逻辑
 
 ---
 
@@ -65,7 +65,7 @@ typedef struct utp_frame_meta_info {
     void    *owner;          // 不透明指针;stream 层落地前恒为 NULL,本模块不解引用
     uint16_t offset;
     uint16_t length;
-    uint8_t  frame_type;      // 复用 c/src/internal/frame.h 的 utp_frame_type_t
+    uint8_t  frame_type;      // 复用 utp/src/internal/frame.h 的 utp_frame_type_t
     uint8_t  frame_flags;     // UTP_FRAME_META_* 位图(新增,语义对齐 cpp FrameMetaFlags)
 } utp_frame_meta_info_t;
 
@@ -164,12 +164,12 @@ void                 utp_packet_out_pool_release(utp_packet_out_pool_t *pool,
 
 ## 7. 错误处理
 
-- 公开输入和资源耗尽路径返回 `utp_internal_error_t`,不记录 payload 内容(遵循 `c/STYLE.md` / `c/ERRORS.md`)；内部对象归还依赖 acquire/release 所建立的不变量。
+- 公开输入和资源耗尽路径返回 `utp_internal_error_t`,不记录 payload 内容(遵循 `utp/STYLE.md` / `utp/ERRORS.md`)；内部对象归还依赖 acquire/release 所建立的不变量。
 - `acquire` 不存在固定容量耗尽；32 个一批的扩容失败时返回 `UTP_INTERNAL_ERROR_NOMEM`，请求大小为零时返回 `UTP_INTERNAL_ERROR_INVALID_ARGUMENT`。
 
 ## 8. 测试计划
 
-新增 `c/test/test_packet_out.cc`,按 `test_receive_history.cc` 的风格接入 `utp_c_configure_cpp_test`:
+新增 `utp/test/test_packet_out.cc`,按 `test_receive_history.cc` 的风格接入 `utp_c_configure_cpp_test`:
 
 - 初始化不分配；32 个一批的描述符和缓冲惰性增长、分配失败回滚。
 - `acquire` 按五档固定最小可容纳桶选取，覆盖 `uint16_t` 上限。

@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.22)
 
 include(cmake/configure_version.cmake)
 
-project(libutp_c VERSION ${UTP_C_VERSION_STRING} LANGUAGES C CXX)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(libutp_c VERSION ${UTP_C_VERSION_STRING} LANGUAGES C CXX)
+endif()
+
+include(GNUInstallDirs)
 
 set(UTP_C_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${UTP_C_GENERATED_INCLUDE_DIR}")
@@ -14,6 +18,7 @@ include(CheckSymbolExists)
 option(UTP_C_BUILD_TESTS "Build libutp C migration tests" OFF)
 option(UTP_C_BUILD_BENCHMARKS "Build libutp C migration benchmarks" OFF)
 option(UTP_C_BUILD_EXAMPLES "Build libutp C examples" ON)
+option(UTP_C_BUILD_SHARED "Build libutp C as a shared library" OFF)
 option(UTP_C_ENABLE_FORMAT_CHECK "Run the clang-format gate during the default build" OFF)
 option(UTP_C_ENABLE_SANITIZERS "Instrument libutp C and its tests with AddressSanitizer and UBSan" OFF)
 option(UTP_C_BUILD_FUZZERS "Build libFuzzer targets for packet-facing parsers" OFF)
@@ -91,27 +96,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
-set(UTP_C_SOURCES
-    src/util/allocator.c src/proto/ack.c src/socket/address.c src/util/buffer.c src/crypto/crypto.c src/crypto/token.c src/util/error.c
-    src/context/event_loop.c src/proto/frame.c src/util/hash.c src/util/log.c src/util/range_set.c src/util/ring.c
-    src/status.c src/util/time.c src/socket/udp.c src/proto/proto.c src/context/ack_scheduler.c src/util/send_history.c
-    src/util/rtt.c src/util/receive_history.c src/proto/packet_out.c src/proto/packet_in.c src/context/send_ledger.c
-    src/context/send_control.c src/context/pending_incoming.c src/congestion/bbr.c src/congestion/bw_sampler.c src/congestion/congestion.c src/congestion/cubic.c
-    src/congestion/minmax.c src/congestion/pacer.c src/mtu/mtu.c src/nat/nat.c src/rendezvous/rendezvous.c
-    src/connection/stream.c src/connection/connection.c src/context/context.c src/utp.c)
-set(UTP_C_HEADERS
-    include/utp/connection.h include/utp/context.h include/utp/log.h include/utp/nat.h include/utp/option.h include/utp/status.h include/utp/stream.h include/utp/utp.h src/util/allocator.h src/proto/ack.h src/socket/address.h
-    src/util/buffer.h src/crypto/crypto.h src/crypto/token.h src/util/error.h src/context/event_loop.h src/proto/frame.h src/util/hash.h
-    src/util/log.h src/util/range_set.h src/util/ring.h src/util/time.h src/socket/udp.h src/proto/proto.h
-    src/util/receive_history.h src/context/ack_scheduler.h src/util/send_history.h src/util/rtt.h src/proto/packet_out.h src/proto/packet_in.h
-    src/proto/wire.h src/context/send_ledger.h src/context/send_control.h src/context/pending_incoming.h src/congestion/congestion.h
-    src/congestion/bbr.h src/congestion/bw_sampler.h src/congestion/cubic.h src/congestion/minmax.h src/congestion/pacer.h src/context/context.h)
-list(APPEND UTP_C_HEADERS src/connection/stream.h src/connection/connection.h src/mtu/mtu.h src/nat/nat.h src/rendezvous/rendezvous.h)
-add_library(utp_c STATIC ${UTP_C_SOURCES} ${UTP_C_HEADERS})
+include(cmake/utp_c_sources.cmake)
+if(UTP_C_BUILD_SHARED)
+    set(UTP_C_LIBRARY_TYPE SHARED)
+else()
+    set(UTP_C_LIBRARY_TYPE STATIC)
+endif()
+add_library(utp_c ${UTP_C_LIBRARY_TYPE} ${UTP_C_SOURCES} ${UTP_C_HEADERS})
 add_library(eular::utp_c ALIAS utp_c)
 set_target_properties(utp_c PROPERTIES OUTPUT_NAME utp)
-target_link_libraries(utp_c PRIVATE event_core crypto)
-target_compile_definitions(utp_c PRIVATE ${UTP_C_SOCKET_BATCH_DEFINITIONS})
+target_link_libraries(utp_c PRIVATE $<BUILD_INTERFACE:event_core> $<BUILD_INTERFACE:crypto>)
+target_compile_definitions(utp_c PRIVATE UTP_C_BUILD ${UTP_C_SOCKET_BATCH_DEFINITIONS})
+if(NOT UTP_C_BUILD_SHARED)
+    target_compile_definitions(utp_c PUBLIC UTP_C_STATIC)
+endif()
 if(UTP_C_SANITIZER_FLAGS)
     target_compile_options(utp_c PRIVATE ${UTP_C_SANITIZER_FLAGS})
 endif()
@@ -133,87 +131,7 @@ elseif(MSVC)
     target_compile_options(utp_c PRIVATE /utf-8 /W4 /WX)
 endif()
 
-function(utp_c_configure_c_test target)
-    target_link_libraries(${target} PRIVATE utp_c event_core)
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    if(UTP_C_SANITIZER_FLAGS)
-        target_compile_options(${target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-        target_link_options(${target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-    endif()
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
-            -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -UNDEBUG)
-    elseif(MSVC)
-        target_compile_options(${target} PRIVATE /utf-8 /W4 /WX /UNDEBUG)
-    endif()
-    add_test(NAME ${target} COMMAND ${target})
-endfunction()
-
-function(utp_c_configure_cpp_test target)
-    target_link_libraries(${target} PRIVATE utp_c event_core)
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
-    target_compile_definitions(${target} PRIVATE ${UTP_C_SOCKET_BATCH_DEFINITIONS})
-    if(UTP_C_SANITIZER_FLAGS)
-        target_compile_options(${target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-        target_link_options(${target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-    endif()
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2 -UNDEBUG)
-    elseif(MSVC)
-        target_compile_options(${target} PRIVATE /utf-8 /W4 /WX /EHsc /UNDEBUG)
-    endif()
-    add_test(NAME ${target} COMMAND ${target})
-endfunction()
-
-if(BUILD_TESTING AND UTP_C_BUILD_TESTS)
-    find_package(Threads REQUIRED)
-    add_executable(utp_c_api_test test/test_core.c)
-    utp_c_configure_c_test(utp_c_api_test)
-    target_include_directories(utp_c_api_test PRIVATE "${UTP_C_GENERATED_INCLUDE_DIR}")
-    add_executable(utp_c_public_api_test test/test_public_api.c)
-    utp_c_configure_c_test(utp_c_public_api_test)
-    target_include_directories(utp_c_public_api_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
-    foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming stream connection congestion minmax bw_sampler bbr mtu nat parser_fuzz transport_integration)
-        add_executable(utp_c_${test_name}_test test/test_${test_name}.cc)
-        utp_c_configure_cpp_test(utp_c_${test_name}_test)
-    endforeach()
-    target_link_libraries(utp_c_transport_integration_test PRIVATE Threads::Threads)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTP_C_NTRS_EXECUTABLE)
-        add_executable(utp_c_ntrs_integration_test test/test_ntrs_integration.cc)
-        utp_c_configure_cpp_test(utp_c_ntrs_integration_test)
-        set_tests_properties(utp_c_ntrs_integration_test PROPERTIES
-            ENVIRONMENT "UTP_C_NTRS_EXECUTABLE=${UTP_C_NTRS_EXECUTABLE}")
-    endif()
-    if(APPLE)
-        add_subdirectory(test/socket_fault)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTP_C_SOCKET_BATCH_DEFINITIONS)
-        add_subdirectory(test/socket_batch_fault)
-    endif()
-endif()
-
-if(UTP_C_BUILD_FUZZERS)
-    add_executable(utp_c_packet_parser_fuzzer test/fuzz/packet_parser_fuzz.cc)
-    target_link_libraries(utp_c_packet_parser_fuzzer PRIVATE utp_c)
-    target_include_directories(utp_c_packet_parser_fuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_options(utp_c_packet_parser_fuzzer PRIVATE ${UTP_C_FUZZER_FLAGS})
-    target_link_options(utp_c_packet_parser_fuzzer PRIVATE ${UTP_C_FUZZER_FLAGS})
-    add_custom_target(utp_c_fuzz_packet_parser
-        COMMAND $<TARGET_FILE:utp_c_packet_parser_fuzzer> -runs=100000 -max_len=2048
-        DEPENDS utp_c_packet_parser_fuzzer
-        COMMENT "Running the packet parser libFuzzer target")
-endif()
-
-if(UTP_C_BUILD_BENCHMARKS)
-    add_executable(utp_c_container_benchmark benchmark/bench_containers.c)
-    utp_c_configure_c_test(utp_c_container_benchmark)
-    add_executable(utp_c_concurrent_connection_benchmark benchmark/bench_concurrent_connections.c)
-    utp_c_configure_c_test(utp_c_concurrent_connection_benchmark)
-endif()
-
-if(UTP_C_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
+include(cmake/utp_c_tests.cmake)
 
 set(UTP_C_FORMAT_SOURCES benchmark/bench_containers.c benchmark/bench_concurrent_connections.c examples/echo_client.c examples/echo_server.c ${UTP_C_HEADERS}
     ${UTP_C_SOURCES}
@@ -237,3 +155,16 @@ if(CLANG_FORMAT_EXECUTABLE)
 elseif(UTP_C_ENABLE_FORMAT_CHECK)
     message(FATAL_ERROR "UTP_C_ENABLE_FORMAT_CHECK requires clang-format")
 endif()
+
+install(TARGETS utp_c
+    EXPORT libutpCTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${UTP_C_GENERATED_INCLUDE_DIR}/utp_version.h"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/utp")
+install(EXPORT libutpCTargets
+    FILE libutpCTargets.cmake
+    NAMESPACE eular::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/libutp")

@@ -88,7 +88,7 @@ do not run as a hard gate on shared CI hosts.
 Build the optional container benchmark with:
 
 ```sh
-cmake -S c -B build/c-bench -DUTP_C_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S utp -B build/c-bench -DUTP_C_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/c-bench --parallel
 build/c-bench/utp_c_container_benchmark 1000000
 ```
@@ -107,7 +107,7 @@ Use AddressSanitizer and UndefinedBehaviorSanitizer for changes to packet
 parsing, allocation, or connection state:
 
 ```sh
-cmake -S c -B build/c-sanitize -DUTP_C_ENABLE_SANITIZERS=ON
+cmake -S utp -B build/c-sanitize -DUTP_C_ENABLE_SANITIZERS=ON
 cmake --build build/c-sanitize --parallel
 ctest --test-dir build/c-sanitize --output-on-failure
 ```
@@ -123,6 +123,6 @@ MSVC. It uses the same `UTP_C_SANITIZER_LIST` override when a platform cannot
 initialize ASan.
 
 ```sh
-cmake -S c -B build/c-fuzz -DUTP_C_BUILD_TESTS=OFF -DUTP_C_BUILD_FUZZERS=ON
+cmake -S utp -B build/c-fuzz -DUTP_C_BUILD_TESTS=OFF -DUTP_C_BUILD_FUZZERS=ON
 cmake --build build/c-fuzz --target utp_c_fuzz_packet_parser
 ```

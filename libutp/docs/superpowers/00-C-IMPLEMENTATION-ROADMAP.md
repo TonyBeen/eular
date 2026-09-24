@@ -2,7 +2,7 @@
 
 - 日期:2026-07-27
 - 状态:历史迁移基线，已冻结。本文不描述当前实现状态、API 或构建产物。
-- 当前权威来源：`c/include/utp/`、`c/src/`、`doc/README.md` 及其模块文档；本文和同目录需求/spec 仅用于追溯当时的设计决策。
+- 当前权威来源：`utp/include/utp/`、`utp/src/`、`doc/README.md` 及其模块文档；本文和同目录需求/spec 仅用于追溯当时的设计决策。
 - 读法:需要了解迁移背景时再读本文 §0–§4；实现或审核模块时不要按本文的未完成清单排期。
 
 ---
@@ -11,7 +11,7 @@
 
 **背景（历史）**:当时的 `cpp/` 是传输行为参考，项目据此决定:
 
-1. **用 C11 在 `c/` 中重写传输核心**(不再改 `cpp/`)。
+1. **用 C11 在 `utp/` 中重写传输核心**(不再改 `cpp/`)。
 2. `cpp/` 冻结为**行为 ground truth + 交叉参考**;12 份反推需求文档(utp-01..12)是"C 要复刻的行为蓝图"。
 3. C 核心稳定后,**再用 C++ 薄封装**暴露对象式 API(opaque handle 之上)。
 
@@ -23,7 +23,7 @@
 
 **产品目标**(punch spec §1):P2P **快可达优先**(最小 RTT 建连)。明文无身份加密为**核心**,加密/认证为**可选叠加**,不阻塞可达性。P2P **只需弱安全**。
 
-**C11 工程约束**(`c/STYLE.md` + `c/ERRORS.md`,实现时逐条遵守):
+**C11 工程约束**(`utp/STYLE.md` + `utp/ERRORS.md`,实现时逐条遵守):
 
 | 约束 | 要点 |
 |---|---|
@@ -49,10 +49,10 @@
 | **NTRS 半连接与打洞** | `specs/2026-08-22-libutp-ntrs-rendezvous-half-association.md` | 注册、保活、校准、地址样本、Rendezvous、开洞与多 worker 模型 |
 | **NTRS 服务拆分** | `specs/2026-08-18-libutp-ntrs-service-requirements.md` | NAT 服务与打洞服务隔离、Context 显式 NAT 探测、Node/Hub 部署与协同 |
 | **NTRS 认证** | 待专项设计 | 基于半连接的服务端认证与凭据保护 |
-| **C 工程规范** | `c/STYLE.md` / `c/ERRORS.md` / `c/README.md` | 强制约束 + 迁移顺序 + 容器策略 |
+| **C 工程规范** | `utp/STYLE.md` / `utp/ERRORS.md` / `utp/README.md` | 强制约束 + 迁移顺序 + 容器策略 |
 | **C 数据拷贝策略** | `docs/superpowers/02-C-ZERO-COPY-COPY-REDUCTION.md` | `memcpy/memset` 使用边界、零拷贝演进顺序、当前可删项 |
 | **C 发送/关闭决策** | `docs/superpowers/specs/2026-07-31-c-send-composition-and-close.md` | close 屏障、transient strip、ACK+STREAM 合包、frame priority |
-| **历史交叉参考** | `cpp/`(冻结) / `doc/`(当时可能过时) | 仅用于追溯迁移依据，当前以 `c/` 和现行 `doc/` 为准 |
+| **历史交叉参考** | `cpp/`(冻结) / `doc/`(当时可能过时) | 仅用于追溯迁移依据，当前以 `utp/` 和现行 `doc/` 为准 |
 
 12 需求模块速查（历史）:01 包/帧 · 02 连接生命周期/CID/HandshakeDone · 03 流 · 04 可靠性/ACK · 05 流控 · 06 拥塞(BBR/CUBIC) · 07 路径验证/抗放大 · 08 keepalive · 09 MTU/PLPMTUD · 10 加密/0-RTT · 11 socket · 12 公共 API/配置/错误码。
 
@@ -60,7 +60,7 @@
 
 ## 3. C 迁移顺序 × 需求模块映射
 
-来源:`c/README.md` 的 6 步迁移顺序；以下状态是 2026-07-27 的历史快照，不代表当前 `c/src/` 状态。
+来源:`utp/README.md` 的 6 步迁移顺序；以下状态是 2026-07-27 的历史快照，不代表当前 `utp/src/` 状态。
 
 | 步 | 迁移顺序(README) | 对应需求 | 现状 |
 |---:|---|---|---|
@@ -71,7 +71,7 @@
 | 5 | stream / connection / context 状态机 | utp-02,03,05,08 | 未开始 |
 | 6 | C API 对等测试 / 集成 / sanitizer / 性能 | 全部 | 未开始 |
 
-**现有 `c/` 资产**(第 1–2 步容器部分,已带测试):`allocator` `buffer` `hash`(侵入表)`ring` `range_set` `error`(内部错误+POSIX 映射)`log`(层级 tag)`status`。
+**现有 `utp/` 资产**(第 1–2 步容器部分,已带测试):`allocator` `buffer` `hash`(侵入表)`ring` `range_set` `error`(内部错误+POSIX 映射)`log`(层级 tag)`status`。
 
 ---
 
@@ -104,7 +104,7 @@
 | **C2** | **普通 1-RTT** 保持 server 收到 client 的 HandshakeDone 帧(ack 匹配)才 promote + connected；**加密恢复 0-RTT** 例外：server 验证后以 early_s2c 加密 `HANDSHAKE`，客户端验证该响应即 connected，并发送 `HANDSHAKE_DONE` 确认；server 成功写出响应即可 connected，但在收到确认前保留响应重传状态。两者都不得由任意非 Initial 包 promote。 | connection/context(步5) | utp-10 §10.6;index C2 |
 | **C3** | 抗放大 credit 常量 **`3×MTU`(≈3840)**；多候选地址分别跟踪收/发字节并独立计算额度，直连保持整连接模型。 | path-validation(步4)+ NTRS(步5) | index C3 |
 | **C4** | **握手/打洞/RENDEZVOUS 包 MTU floor = 1280**(置 DF,IPv6 min);连接后 PLPMTUD 从 `mtu_base` 经 `{1380,1450,1492,1500}` 梯队后继续二分至配置的 `mtu_max`。`1500` 是默认值和梯队节点，不是 C 端硬上限。 | proto(步2)+ mtu(步4) | 半连接规格 §5;index C4 |
-| **C5** | **公共 API 直接返错误码 + 出参**:`0`=成功;**所有错误 < 0**;`>0` 仅返值接口(如 createStream 返流 ID)。断连/拒绝经回调抛出的错误也为负。**C 里原生如此**(`utp_status_t` 已是负值),无需 cpp 的 0/-1 归一。 | 全公共 API(步1) | utp-12;`c/ERRORS.md` |
+| **C5** | **公共 API 直接返错误码 + 出参**:`0`=成功;**所有错误 < 0**;`>0` 仅返值接口(如 createStream 返流 ID)。断连/拒绝经回调抛出的错误也为负。**C 里原生如此**(`utp_status_t` 已是负值),无需 cpp 的 0/-1 归一。 | 全公共 API(步1) | utp-12;`utp/ERRORS.md` |
 
 ### 5.2 H1–H5(评审高风险处置)
 
@@ -153,11 +153,11 @@
 
 ---
 
-## 7. 迁移期 c/ 状态与 proto 里程碑（历史快照）
+## 7. 迁移期 utp/ 状态与 proto 里程碑（历史快照）
 
 以下内容是当时冻结的迁移任务记录，不是当前排期或实现缺口：
 
-> 2026-08-01 状态补丁（历史）：当时 `c/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。该段只保留迁移过程中的阶段记录；当前能力和缺口请以 `doc/设计实现文档.md` 及模块文档为准。
+> 2026-08-01 状态补丁（历史）：当时 `utp/` 已越过 proto 里程碑，进入 connection / stream 核心闭环实现。该段只保留迁移过程中的阶段记录；当前能力和缺口请以 `doc/设计实现文档.md` 及模块文档为准。
 
 1. **wire 底座**:`src/internal/wire.h` 有界大端 read/write u8/u16/u32/u64(游标 + capacity 检查,溢出返 `INTERNAL_ERROR_OVERFLOW`)。
 2. **包头 + 常量**:`src/internal/proto.h` + `src/proto.c`:头 encode/decode、包类型(含 RENDEZVOUS)、版本、packno 上限、MTU floor 1280。
@@ -165,7 +165,7 @@
 4. **定长帧编解码**:Ping/Path*/HandshakeDone/HandshakeDelay/Max*/DataBlocked/ResetStream/Version/AckFrequency(normalize)/Crypto(reserved==0)。
 5. **变长帧编解码**:Stream/Padding/ConnectionClose/SessionToken/TransportParams(限值校验)。
 6. **Ack 帧**:largest/first_range/range_count/ack_delay(exp 位移)/附加 range;逐条不变量。
-7. **fuzz + 接线 + 提交**:随机/差分解析 fuzz(≥10 万混合输入);接入 `c/CMakeLists.txt`;warnings-as-errors 绿;clang-format;分阶段提交。
+7. **fuzz + 接线 + 提交**:随机/差分解析 fuzz(≥10 万混合输入);接入 `utp/CMakeLists.txt`;warnings-as-errors 绿;clang-format;分阶段提交。
 
 **验收**:每帧 roundtrip + 类型不匹配/越界/不变量拒绝;整包铺满校验 + 未知帧拒绝;差分 fuzz 对照参考模型。
 
@@ -181,4 +181,4 @@
 
 ---
 
-*本文由 NTRS 半连接规格、utp-00 index、utp-01、utp-10、c/STYLE.md、c/ERRORS.md、c/README.md 汇总冻结。后续决策变更须先改本表再改实现。*
+*本文由 NTRS 半连接规格、utp-00 index、utp-01、utp-10、utp/STYLE.md、utp/ERRORS.md、utp/README.md 汇总冻结。后续决策变更须先改本表再改实现。*

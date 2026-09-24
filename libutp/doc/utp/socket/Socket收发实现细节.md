@@ -2,7 +2,7 @@
 
 ## 1. Socket 所有权
 
-一个 Context 持有一个 UDP socket 和一个本地端口。`c/src/socket/udp.c` 负责创建、绑定、非阻塞收发、地址转换、批量 I/O 和本地目的地址信息；事件注册由 Context 负责。
+一个 Context 持有一个 UDP socket 和一个本地端口。`utp/src/socket/udp.c` 负责创建、绑定、非阻塞收发、地址转换、批量 I/O 和本地目的地址信息；事件注册由 Context 负责。
 
 ## 2. 收发路径
 

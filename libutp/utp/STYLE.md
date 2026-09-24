@@ -2,7 +2,7 @@
 
 This subtree follows the Google C++ Style Guide where it applies to C, adapted
 for strict C11. C has no separate Google style guide; this document makes the
-adaptation explicit and is normative for `c/` production code and tests.
+adaptation explicit and is normative for `utp/` production code and tests.
 
 ## Mechanical Rules
 

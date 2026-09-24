@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <utp/export.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -82,7 +84,7 @@ enum {
     UTP_STATUS_APPLICATION_ERROR_BASE = -0x0100
 };
 
-const char* utp_status_string(utp_status_t status);
+UTP_API const char* utp_status_string(utp_status_t status);
 
 #ifdef __cplusplus
 }

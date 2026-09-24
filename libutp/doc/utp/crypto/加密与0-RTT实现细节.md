@@ -2,11 +2,11 @@
 
 ## 1. 密码学组件
 
-`c/src/crypto/crypto.c` 提供 X25519 共享密钥、HKDF 派生、方向隔离的 AES-GCM key/nonce，以及包级加解密。发送和接收方向使用不同的密钥材料；解密失败的包不进入连接状态机。
+`utp/src/crypto/crypto.c` 提供 X25519 共享密钥、HKDF 派生、方向隔离的 AES-GCM key/nonce，以及包级加解密。发送和接收方向使用不同的密钥材料；解密失败的包不进入连接状态机。
 
 ## 2. SessionToken
 
-`c/src/crypto/token.c` 负责编解码恢复票据和恢复状态。Context 保存恢复根密钥、票据有效期和短窗口重放表。票据校验失败、过期或重放时，0-RTT 请求被拒绝并回到普通握手路径。
+`utp/src/crypto/token.c` 负责编解码恢复票据和恢复状态。Context 保存恢复根密钥、票据有效期和短窗口重放表。票据校验失败、过期或重放时，0-RTT 请求被拒绝并回到普通握手路径。
 
 ## 3. 0-RTT
 

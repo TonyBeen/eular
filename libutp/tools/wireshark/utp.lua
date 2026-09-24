@@ -1,5 +1,5 @@
 -- UTP Wireshark Lua dissector
--- Protocol layout comes from c/src/proto, c/src/nat and c/src/rendezvous.
+-- Protocol layout comes from utp/src/proto, utp/src/nat and utp/src/rendezvous.
 
 local utp = Proto("UTP", "UTP")
 

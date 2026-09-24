@@ -7,6 +7,7 @@
 
 #include <utp/log.h>
 #include <utp/option.h>
+#include <utp/export.h>
 #include <utp/status.h>
 
 #ifdef __cplusplus
@@ -128,46 +129,46 @@ typedef void (*utp_on_ntrs_register_fn)(utp_context_t* context, utp_status_t sta
 typedef void (*utp_on_ntrs_unregistered_fn)(utp_context_t* context, void* user_data);
 
 /** @brief 返回当前链接的 C 库语义版本字符串。 */
-const char*  utp_version(void);
+UTP_API const char*  utp_version(void);
 /**
  * @brief 按选项创建 Context；成功时由 @p out_context 返回所有权。
  * @note Context 借用 @p options 指针直至销毁。调用方可在此期间修改连接级字段，修改只对之后创建的
  *       Connection 生效；Context 级固定字段不得修改，且整个生命周期内不得释放或移动该结构体。
  */
-utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
+UTP_API utp_status_t utp_context_create(const utp_context_options_t* options, utp_context_t** out_context);
 /**
  * @brief 同步销毁 Context 管理的连接和流；已建立连接仅尽力发送一次 CONNECTION_CLOSE。
  * @note 本调用是调用者主动终止，不会触发连接、流或建连失败回调；调用者负责释放关联的上层资源。
  */
-void         utp_context_destroy(utp_context_t* context);
+UTP_API void         utp_context_destroy(utp_context_t* context);
 /** @brief 绑定 UDP 地址及可选网卡，空 @p ifname 表示不绑定特定网卡；Windows 调用方须先初始化 Winsock。 */
-utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,
-                              uint16_t* out_port);
+UTP_API utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint16_t port, const char* ifname,
+                                     uint16_t* out_port);
 /** @brief 动态设置日志回调和最低输出级别；非线程安全，NULL 回调会关闭日志输出。 */
-void         utp_context_set_logger(utp_context_t* context, utp_log_sink_fn callback, utp_log_level_t level);
+UTP_API void         utp_context_set_logger(utp_context_t* context, utp_log_sink_fn callback, utp_log_level_t level);
 /** @brief 设置连接建立成功回调，回调内获得的连接由 Context 持有。 */
-void         utp_context_set_on_connected(utp_context_t* context, utp_on_connected_fn callback, void* user_data);
+UTP_API void         utp_context_set_on_connected(utp_context_t* context, utp_on_connected_fn callback, void* user_data);
 /** @brief 设置主动建连失败回调。 */
-void utp_context_set_on_connect_error(utp_context_t* context, utp_on_connect_error_fn callback, void* user_data);
+UTP_API void utp_context_set_on_connect_error(utp_context_t* context, utp_on_connect_error_fn callback, void* user_data);
 /** @brief 设置被动建连决策回调，返回 false 会拒绝该连接。 */
-void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connection_fn callback, void* user_data);
+UTP_API void utp_context_set_on_new_connection(utp_context_t* context, utp_on_new_connection_fn callback, void* user_data);
 /** @brief 设置被动关闭或本地致命错误回调，关闭原因仅在回调期间有效。 */
-void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
+UTP_API void utp_context_set_on_connection_error(utp_context_t* context, utp_on_connection_error_fn callback, void* user_data);
 /** @brief 设置恢复根密钥；替换后立即废止该 Context 已签发的恢复凭证。 */
-void utp_context_set_resumption_key(utp_context_t* context, const uint8_t root_key[32]);
+UTP_API void utp_context_set_resumption_key(utp_context_t* context, const uint8_t root_key[32]);
 /** @brief 发起异步主动连接，建连结果通过回调报告。 */
-utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
+UTP_API utp_status_t utp_context_connect(utp_context_t* context, const utp_connect_options_t* options);
 /** @brief 基于会话票据发起非加密 0-RTT 建连；早数据固定写入客户端首个双向流，可能被重放。 */
-utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_0rtt_options_t* options);
+UTP_API utp_status_t utp_context_connect_0rtt(utp_context_t* context, const utp_connect_0rtt_options_t* options);
 /** @brief 异步注册当前 Context 到 NTRS；注册结果及后续保活失效均通过 @p callback 通知，重复调用会更新已有注册。 */
-utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
-                                       utp_on_ntrs_register_fn callback, void* user_data);
+UTP_API utp_status_t utp_context_register_ntrs(utp_context_t* context, const utp_ntrs_register_options_t* options,
+                                              utp_on_ntrs_register_fn callback, void* user_data);
 /** @brief 异步反注册当前 Context；收到 UNREGISTERED 后清除本地 NTRS 关联并调用 @p callback。 */
-utp_status_t utp_context_unregister_ntrs(utp_context_t* context, utp_on_ntrs_unregistered_fn callback, void* user_data);
+UTP_API utp_status_t utp_context_unregister_ntrs(utp_context_t* context, utp_on_ntrs_unregistered_fn callback, void* user_data);
 /** @brief 立即尝试将 Context 缓存的 OBSERVED_ADDRESS 样本批量上报给已注册 NTRS。 */
-utp_status_t utp_context_update_address(utp_context_t* context);
+UTP_API utp_status_t utp_context_update_address(utp_context_t* context);
 /** @brief 接受一个已通过 on_new_connection 回调的 pending 被动连接。 */
-utp_status_t utp_context_accept(utp_context_t* context);
+UTP_API utp_status_t utp_context_accept(utp_context_t* context);
 
 #ifdef __cplusplus
 }

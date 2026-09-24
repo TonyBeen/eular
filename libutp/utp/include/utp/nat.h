@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <utp/context.h>
+#include <utp/export.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,10 +53,10 @@ typedef void (*utp_on_nat_probe_fn)(utp_context_t* context, utp_status_t status,
                                     void* user_data);
 
 /** @brief 启动异步 NAT 探测；同一 Context 同时仅允许一个任务。 */
-utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_options_t* options,
-                                   utp_on_nat_probe_fn callback, void* user_data);
+UTP_API utp_status_t utp_context_probe_nat(utp_context_t* context, const utp_nat_probe_options_t* options,
+                                          utp_on_nat_probe_fn callback, void* user_data);
 /** @brief 同步取消正在执行的 NAT 探测，主动取消不触发原完成回调。 */
-utp_status_t utp_context_cancel_nat_probe(utp_context_t* context);
+UTP_API utp_status_t utp_context_cancel_nat_probe(utp_context_t* context);
 
 #ifdef __cplusplus
 }

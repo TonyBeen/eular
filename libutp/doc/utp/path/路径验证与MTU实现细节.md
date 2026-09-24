@@ -12,7 +12,7 @@ Connection 维护 active path 和 candidate path。来自新 endpoint 的有效�
 
 ## 2. MTU 探测
 
-`c/src/mtu/mtu.c` 只负责状态机；Connection 负责构造 Ping + Padding 探测包并把 ACK、丢失、超时事件回灌给状态机。
+`utp/src/mtu/mtu.c` 只负责状态机；Connection 负责构造 Ping + Padding 探测包并把 ACK、丢失、超时事件回灌给状态机。
 
 - 握手期间使用 MTU floor。
 - 连接建立后按梯队探测，再在上下界之间二分收敛。

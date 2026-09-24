@@ -13,8 +13,8 @@
 ### Task 1: Link The Bundled Crypto Provider And Add Test Target
 
 **Files:**
-- Modify: `c/CMakeLists.txt`
-- Create: `c/test/test_crypto.cc`
+- Modify: `utp/CMakeLists.txt`
+- Create: `utp/test/test_crypto.cc`
 
 - [ ] **Step 1: Write a compile-time failing internal crypto test**
 
@@ -39,9 +39,9 @@ Expected: FAIL on undeclared internal crypto types/functions, proving CMake link
 ### Task 2: Implement X25519 And Traffic-Key Derivation
 
 **Files:**
-- Create: `c/src/internal/crypto.h`
-- Create: `c/src/crypto.c`
-- Modify: `c/test/test_crypto.cc`
+- Create: `utp/src/internal/crypto.h`
+- Create: `utp/src/crypto.c`
+- Modify: `utp/test/test_crypto.cc`
 
 - [ ] **Step 1: Add failing behavioral tests**
 
@@ -66,9 +66,9 @@ Expected: PASS.
 ### Task 3: Implement Packet AEAD Contexts
 
 **Files:**
-- Modify: `c/src/internal/crypto.h`
-- Modify: `c/src/crypto.c`
-- Modify: `c/test/test_crypto.cc`
+- Modify: `utp/src/internal/crypto.h`
+- Modify: `utp/src/crypto.c`
+- Modify: `utp/test/test_crypto.cc`
 
 - [ ] **Step 1: Add failing AEAD tests**
 
@@ -93,7 +93,7 @@ Expected: PASS.
 ### Task 4: Verify The C Foundation
 
 **Files:**
-- Modify: `c/CMakeLists.txt`
+- Modify: `utp/CMakeLists.txt`
 - Modify: `docs/superpowers/plans/2026-07-29-c-crypto-foundation.md`
 
 - [ ] **Step 1: Include new sources in the format target**

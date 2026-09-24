@@ -1,6 +1,6 @@
 # libutp 实现文档
 
-实现细节按模块组织。当前 C11 实现、公共 API 和线格式以 `c/include/utp/`、`c/src/` 及本文档目录为准；`docs/superpowers/` 保留为历史设计和迁移参考，不应覆盖当前 C11 代码语义。
+实现细节按模块组织。当前 C11 实现、公共 API 和线格式以 `utp/include/utp/`、`utp/src/` 及本文档目录为准；`docs/superpowers/` 保留为历史设计和迁移参考，不应覆盖当前 C11 代码语义。
 
 - [TODO](TODO.md)
 - [限制与边界](限制与边界.md)

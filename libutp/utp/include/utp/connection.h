@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <utp/status.h>
+#include <utp/export.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,33 +55,33 @@ typedef void (*utp_on_incoming_stream_fn)(utp_connection_t* connection, utp_stre
 typedef void (*utp_on_session_token_ready_fn)(utp_connection_t* connection, void* user_data);
 
 /** @brief 发起连接关闭；发送错误通过 Context 的错误回调异步报告。 */
-void          utp_connection_close(utp_connection_t* connection);
+UTP_API void          utp_connection_close(utp_connection_t* connection);
 /** @brief 创建本端发起流，并通过 @p out_stream_id 返回流标识。 */
-utp_status_t  utp_connection_create_stream(utp_connection_t* connection, utp_stream_type_t type,
-                                           uint32_t* out_stream_id);
+UTP_API utp_status_t  utp_connection_create_stream(utp_connection_t* connection, utp_stream_type_t type,
+                                                  uint32_t* out_stream_id);
 /** @brief 返回由 Connection 持有的借用流指针，流回收或 Connection 销毁后失效。 */
-utp_stream_t* utp_connection_get_stream(utp_connection_t* connection, uint32_t stream_id);
+UTP_API utp_stream_t* utp_connection_get_stream(utp_connection_t* connection, uint32_t stream_id);
 /** @brief 设置对端新建流回调；回调在 Context 事件循环线程的入站包处理期间同步执行，传入 NULL 可关闭通知。 */
-void          utp_connection_set_on_incoming_stream(utp_connection_t* connection, utp_on_incoming_stream_fn callback,
-                                                    void* user_data);
+UTP_API void          utp_connection_set_on_incoming_stream(utp_connection_t* connection, utp_on_incoming_stream_fn callback,
+                                                           void* user_data);
 /** @brief 设置恢复状态就绪回调；若当前已缓存恢复状态，设置回调时会立即同步通知一次，传入 NULL 可关闭通知。 */
-void    utp_connection_set_on_session_token_ready(utp_connection_t* connection, utp_on_session_token_ready_fn callback,
-                                                  void* user_data);
+UTP_API void    utp_connection_set_on_session_token_ready(utp_connection_t* connection, utp_on_session_token_ready_fn callback,
+                                                         void* user_data);
 /** @brief 判断连接是否处于可读写的 CONNECTED 状态。 */
-bool    utp_connection_is_connected(const utp_connection_t* connection);
+UTP_API bool    utp_connection_is_connected(const utp_connection_t* connection);
 /** @brief 返回指定类型的现存流数；UTP_STREAM_TYPE_ALL 表示全部流，参数无效返回 -1。 */
-int32_t utp_connection_stream_count(const utp_connection_t* connection, utp_stream_type_t type);
+UTP_API int32_t utp_connection_stream_count(const utp_connection_t* connection, utp_stream_type_t type);
 /** @brief 返回当前仍可由本端创建的流数；仅接受双向或单向流类型，参数无效返回 -1。 */
-int32_t utp_connection_creatable_stream_count(const utp_connection_t* connection, utp_stream_type_t type);
+UTP_API int32_t utp_connection_creatable_stream_count(const utp_connection_t* connection, utp_stream_type_t type);
 /** @brief 获取连接运行统计快照。 */
-utp_status_t utp_connection_get_statistic(const utp_connection_t*     connection,
-                                          utp_connection_statistic_t* out_statistic);
+UTP_API utp_status_t utp_connection_get_statistic(const utp_connection_t*     connection,
+                                                 utp_connection_statistic_t* out_statistic);
 /** @brief 获取连接 CID 与对端地址描述。 */
-utp_status_t utp_connection_get_description(const utp_connection_t*       connection,
-                                            utp_connection_description_t* out_description);
+UTP_API utp_status_t utp_connection_get_description(const utp_connection_t*       connection,
+                                                   utp_connection_description_t* out_description);
 /** @brief 导出最近接收的会话票据；缓冲区不足时返回 OVERFLOW 并给出所需长度。 */
-utp_status_t utp_connection_export_session_token(const utp_connection_t* connection, uint8_t* buffer, size_t capacity,
-                                                 size_t* out_length);
+UTP_API utp_status_t utp_connection_export_session_token(const utp_connection_t* connection, uint8_t* buffer, size_t capacity,
+                                                        size_t* out_length);
 
 #ifdef __cplusplus
 }

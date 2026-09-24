@@ -1,7 +1,7 @@
 # NAT 探测实现细节
 
 > 更新时间：2026-09-15
-> 实现位于 `c/src/nat/nat.c` 和 `c/src/context/context.c`，公共入口位于 `c/include/utp/nat.h`。
+> 实现位于 `utp/src/nat/nat.c` 和 `utp/src/context/context.c`，公共入口位于 `utp/include/utp/nat.h`。
 
 ## 1. 入口和生命周期
 

@@ -1,6 +1,6 @@
 # 公共 API 与错误码
 
-公共头文件位于 `c/include/utp/`，句柄类型是不透明指针，Context 持有 Connection，Connection 持有 Stream。除回调执行期间的只读视图外，应用不得保存内部缓冲或在对象回收后继续使用借用指针。
+公共头文件位于 `utp/include/utp/`，句柄类型是不透明指针，Context 持有 Connection，Connection 持有 Stream。除回调执行期间的只读视图外，应用不得保存内部缓冲或在对象回收后继续使用借用指针。
 
 ## Context 入口
 
@@ -18,7 +18,7 @@
 
 ## 状态码分组
 
-错误码定义在 `c/include/utp/status.h`，包括：
+错误码定义在 `utp/include/utp/status.h`，包括：
 
 - 通用：`INVALID_ARGUMENT`、`NOMEM`、`LIMIT`、`STATE`、`WOULD_BLOCK`、`TIMEOUT`、`CLOSED`、`CANCELLED`；
 - Socket/Context：`SOCKET_*`、`CONTEXT_*`；

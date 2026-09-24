@@ -2,7 +2,7 @@
 
 - 日期: 2026-07-31
 - 状态: 已确认，C 实现必须遵守
-- 范围: `c/` 的 PacketOut、connection 发送调度、重传、ACK piggyback 与连接关闭
+- 范围: `utp/` 的 PacketOut、connection 发送调度、重传、ACK piggyback 与连接关闭
 
 本文记录 C 实现阶段已确认的设计决定。`docs/superpowers/requirements/` 仍是功能需求基线；本文对 C
 发送路径的实现取舍优先，尤其在旧 `doc/` 或 cpp 当前行为不一致时。

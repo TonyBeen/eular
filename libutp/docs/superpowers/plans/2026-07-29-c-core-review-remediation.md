@@ -13,8 +13,8 @@
 ### Task 1: Align Padding Wire Compatibility
 
 **Files:**
-- Modify: `c/test/test_proto.cc`
-- Modify: `c/src/frame.c`
+- Modify: `utp/test/test_proto.cc`
+- Modify: `utp/src/frame.c`
 
 - [x] **Step 1: Write the failing test**
 
@@ -39,9 +39,9 @@ Expected: PASS.
 ### Task 2: Make ACK Range Decoding Single-Pass And Atomic
 
 **Files:**
-- Modify: `c/src/internal/ack.h`
-- Modify: `c/src/ack.c`
-- Test: `c/test/test_proto.cc`
+- Modify: `utp/src/internal/ack.h`
+- Modify: `utp/src/ack.c`
+- Test: `utp/test/test_proto.cc`
 
 - [x] **Step 1: Extend malformed-range coverage**
 
@@ -66,11 +66,11 @@ Expected: PASS, including the unchanged-output assertion.
 ### Task 3: Centralize Shared Wire And Address Mechanisms
 
 **Files:**
-- Modify: `c/src/frame.c`
-- Modify: `c/src/address.c`
-- Modify: `c/src/internal/address.h`
-- Modify: `c/src/udp.c`
-- Test: `c/test/test_proto.cc`
+- Modify: `utp/src/frame.c`
+- Modify: `utp/src/address.c`
+- Modify: `utp/src/internal/address.h`
+- Modify: `utp/src/udp.c`
+- Test: `utp/test/test_proto.cc`
 
 - [x] **Step 1: Add address predicate coverage**
 
@@ -95,9 +95,9 @@ Expected: PASS.
 ### Task 4: Remove Premature Policy And Correct Documentation
 
 **Files:**
-- Modify: `c/src/internal/frame.h`
-- Modify: `c/src/internal/proto.h`
-- Modify: `c/ERRORS.md`
+- Modify: `utp/src/internal/frame.h`
+- Modify: `utp/src/internal/proto.h`
+- Modify: `utp/ERRORS.md`
 
 - [x] **Step 1: Remove unused policy declarations**
 
@@ -105,7 +105,7 @@ Delete `UTP_FRAME_RETRANSMISSION_MASK`, `UTP_DEFAULT_ACK_THRESHOLD`, `UTP_DEFAUL
 
 - [x] **Step 2: Correct the logging contract**
 
-Change the documented formatted-message maximum in `c/ERRORS.md` from 1024 to 2048 bytes, excluding the null terminator.
+Change the documented formatted-message maximum in `utp/ERRORS.md` from 1024 to 2048 bytes, excluding the null terminator.
 
 - [x] **Step 3: Build and run all tests**
 
@@ -116,7 +116,7 @@ Expected: build succeeds and all CTest tests pass in an environment allowed to b
 ### Task 5: Record Deferred Architectural Review Items
 
 **Files:**
-- Modify: `c/STYLE.md`
+- Modify: `utp/STYLE.md`
 
 - [x] **Step 1: Document the third-party allocation exception**
 

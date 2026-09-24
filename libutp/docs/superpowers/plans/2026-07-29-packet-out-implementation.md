@@ -17,6 +17,6 @@
 
 ## 验证
 
-- `c/test/test_packet_out.cc`: 初始化零分配、固定桶选择、32 项增长、跨 Connection 复用、收缩与状态重置。
-- `c/test/test_send_control.cc`: `SIZE_MAX` 队列策略和 32 项发送尝试块。
+- `utp/test/test_packet_out.cc`: 初始化零分配、固定桶选择、32 项增长、跨 Connection 复用、收缩与状态重置。
+- `utp/test/test_send_control.cc`: `SIZE_MAX` 队列策略和 32 项发送尝试块。
 - Context、Connection、Stream 与传输集成测试验证共享池接入、连接清理和 UDP 发送路径。

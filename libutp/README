@@ -1,125 +1,83 @@
 # libutp
 
-一个基于 UDP 的可靠传输协议库，提供连接管理、多流复用、拥塞控制、MTU 探测、会话恢复与 0-RTT 等能力。
+基于 UDP 的可靠传输协议库，当前主工程是 C11 实现，提供连接管理、多流复用、拥塞控制、MTU 探测、会话恢复、0-RTT 和 NAT 打洞支持。
 
-## 当前仓库概览（已扫描）
+旧版 C++ 实现仅作为历史参考保存在 `backup/cpp/`，不参与默认构建。
 
-- 核心代码：`src/`
-- 对外头文件：`include/utp/`
-- 测试：`test/`
-- 示例程序：`examples/`
-- 协议与设计文档：`doc/`、`openspec/`
-- 第三方依赖：`3rd/`（含 BoringSSL 子模块）
-- CMake 配置：根目录 `CMakeLists.txt`、`cmake/`
+## 目录
 
-## 目录说明
+- `utp/include/utp/`：稳定的 C 公共 API 和可安装头文件
+- `utp/src/`：libutp C 实现
+- `utp/test/`：C API、协议、连接、流控、拥塞控制和传输集成测试
+- `utp/examples/`：`nat_punch`、`ntrs_natc` 和回显示例
+- `ntrs/`：NTRS rendezvous、NAT 探测 Hub/Node 服务
+- `doc/`：按模块组织的实现和使用文档
+- `backup/cpp/`：旧 C++ 实现、测试和示例，仅供迁移参考
 
-- `include/utp/`
-	- `utp.h`：`Context` 入口（bind/connect/accept/0-RTT、回调注册等）
-	- `connection.h`：`Connection` 抽象（建流、关闭、统计、会话票据导出）
-	- `stream.h`：`Stream` 抽象（读写、状态、优先级、重置）
-	- `config.h`：协议与调度参数（MTU、keepalive、拥塞控制、ACK、调度器等）
-	- `errno.h`、`logger.h`、`platform.h`、`types.h`：错误码、日志、平台与基础类型
-- `src/`
-	- `context/`：连接生命周期、握手、收发控制
-	- `proto/`：包与帧编码解码
-	- `congestion/`：BBR/CUBIC 与 pacing
-	- `mtu/`：DPLPMTUD 探测
-	- `crypto/`：会话票据、恢复态、加密相关
-	- `socket/`：UDP、地址与批量收发
-	- `util/`、`logger/`、`fmt/`：通用工具与日志
-- `test/`
-	- 覆盖 ACK、帧编解码、上下文集成、0-RTT、拥塞控制、MTU、收发路径等
-- `examples/`
-	- 回显：`utp_echo_server` / `utp_echo_client`
-	- 会话恢复：`utp_session_resume_server` / `utp_session_resume_client`
-	- MTU+保活：`utp_mtu_keepalive_server` / `utp_mtu_keepalive_client`
+## 依赖
 
-## 依赖要求
+默认使用仓库内的以下依赖：
 
-本项目依赖以下兄弟仓库（默认相对路径）：
+- `../libevent/libevent_V2_1_10`
+- `3rd/boringssl`
 
-- `../utils`（要求存在 `CMakeLists.txt`）
-- `../libevent`（要求存在 `CMakeLists.txt`）
-
-此外，默认使用仓库内子模块：
-
-- `3rd/boringssl`（`UTP_USE_BUNDLED_BORINGSSL=ON` 时必须存在）
-
-如果以上路径不一致，可在配置时覆盖：
-
-- `UTP_UTILS_ROOT`
-- `UTP_EVENT_ROOT`
+也可以通过 `UTP_C_LIBEVENT_ROOT` 和 `UTP_C_BORINGSSL_ROOT` 覆盖路径。NTRS 服务还需要 Linux、线程库和仓库旁的 `../utils` 头文件。
 
 ## 构建
 
-最低 CMake 版本：3.22
+最低 CMake 版本：3.22。
+
+构建 C 库、C 示例和 Linux NTRS 服务：
 
 ```bash
 cmake -S . -B build \
-	-DUTP_UTILS_ROOT=/path/to/utils \
-	-DUTP_EVENT_ROOT=/path/to/libevent
-
+  -DUTP_BUILD_C_LIBRARY=ON \
+  -DUTP_BUILD_NTRS=ON \
+  -DUTP_C_BUILD_EXAMPLES=ON
 cmake --build build -j
 ```
+
+顶层工程会在 Linux 上同时生成 `utp_c`、`nat_punch`、`ntrs_natc`、`ntrs`、`natd_hub` 和 `natd_node`。非 Linux 平台仍可构建 C 库和示例，但 NTRS 服务会自动跳过。
 
 常用选项：
 
-- `-DUTP_BUILD_TESTS=ON`：构建测试
-- `-DUTP_USE_BUNDLED_BORINGSSL=ON|OFF`：是否使用仓库内 BoringSSL（默认 ON）
+- `-DUTP_C_BUILD_SHARED=ON`：生成共享库；关闭时生成静态库
+- `-DUTP_C_BUILD_TESTS=ON`：构建 C/C++ 混合测试目标
+- `-DUTP_C_BUILD_BENCHMARKS=ON`：构建基准测试
+- `-DUTP_C_BUILD_FUZZERS=ON`：构建 libFuzzer 目标（需要 Clang）
+- `-DUTP_C_BUILD_EXAMPLES=OFF`：关闭 C 示例
+- `-DUTP_NTRS_BUILD_SERVICES=OFF`：只配置 NTRS 核心，不生成服务进程
 
-安装：
-
-```bash
-cmake --install build
-```
-
-## 运行测试
+只构建 C 库也可以直接配置 `utp/`：
 
 ```bash
-cmake -S . -B build \
-	-DUTP_BUILD_TESTS=ON \
-	-DUTP_UTILS_ROOT=/path/to/utils \
-	-DUTP_EVENT_ROOT=/path/to/libevent
-
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cmake -S utp -B build-c \
+  -DUTP_C_BUILD_TESTS=ON \
+  -DUTP_C_BUILD_EXAMPLES=ON
+cmake --build build-c -j
 ```
 
-## 运行示例
-
-先启动服务端，再启动客户端：
+## 测试
 
 ```bash
-# Echo
-./build/examples/utp_echo_server
-./build/examples/utp_echo_client
-
-# Session resume
-./build/examples/utp_session_resume_server
-./build/examples/utp_session_resume_client
-
-# MTU keepalive
-./build/examples/utp_mtu_keepalive_server
-./build/examples/utp_mtu_keepalive_client
+cmake -S . -B build-test \
+  -DUTP_C_BUILD_TESTS=ON \
+  -DUTP_C_BUILD_EXAMPLES=OFF \
+  -DUTP_BUILD_NTRS=OFF
+cmake --build build-test -j
+ctest --test-dir build-test --output-on-failure
 ```
 
-## 对外 API 入口
+NTRS 集成测试可通过 `UTP_C_NTRS_EXECUTABLE` 指定已构建的 NTRS 可执行文件。Linux 上还可以使用 `UTP_NTRS_BUILD_TESTS=ON` 构建 NTRS 自身测试。
 
-最小使用路径：
+## C 公共 API
 
-1. 创建 `eular::utp::Config`
-2. 创建 `eular::utp::Context(event_base*, Config*)`
-3. 设置连接与错误回调（如 `setOnConnected`、`setOnConnectError`）
-4. 调用 `bind` 与 `connect`（或服务端 `accept`）
-5. 在 `Connection` 上创建/获取 `Stream`，进行读写
+公共入口位于 `utp/include/utp/utp.h`、`context.h`、`connection.h`、`stream.h`、`option.h` 和 `status.h`。句柄是不透明指针；Context 持有 Connection，Connection 持有 Stream。回调中的借用指针只在回调期间有效，除非接口明确说明所有权转移。
 
-## 文档
+库目标导出为 `eular::utp_c`，同时提供兼容别名 `eular::utp`。Windows 下使用 `UTP_C_BUILD_SHARED=ON` 时，公共声明通过 `utp/export.h` 自动使用 DLL 导出/导入标记。
 
-- 设计与协议文档见 `doc/`
-- 规范草案见 `openspec/`
-- NAT 说明见 `nat.md`
+详细行为和协议实现见 `doc/`，当前 C 代码和公共头文件是权威实现；`backup/cpp/` 不作为当前 API 或协议行为的依据。
 
 ## 版本
 
-当前 CMake 工程版本：`1.2.0`
+当前工程版本：`1.2.0`
