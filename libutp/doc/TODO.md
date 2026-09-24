@@ -11,6 +11,22 @@
 `cutoff`：ACK range 可能存在间隙，且重传会剥离 transient ACK；须先定义等价于 STOP_WAITING 的安全回收
 语义，再调用 `utp_receive_history_stop_wait()`。
 
+## 延迟 ACK 的旧快照与乱序反馈
+
+当前 ACK-only PacketOut 是 `receive_history` 的瞬态快照。若 UDP `WOULD_BLOCK` 将其重新排队，且此后收到新的
+ack-eliciting 包，发送前会丢弃旧 ACK-only PacketOut，并从最新接收历史重新构造 ACK。这样不会先发送旧快照、再紧随
+一份新 ACK。
+
+仍需完善以下部分：
+
+- ACK 与 STREAM 或可靠 control 合包后，若该 PacketOut 因 `WOULD_BLOCK` 留在发送队列，不能直接丢弃，因为其中包含
+  业务数据或语义 control。需要设计可安全剥离、重建 transient ACK 前缀的机制，并保持 frame metadata、外部 STREAM
+  数据视图、加密封装和重传语义正确；在设计完成前允许该类包发送旧 ACK，并由后续 ACK 覆盖新历史。
+- 当前立即 ACK 仅覆盖收到的包号超过此前最大包号且中间缺口达到阈值的情形。对于较小包号的迟到包，需参考 lsquic 的
+  `WM_SMALLER` / `ACK_HAD_MISS` 语义，先确定 UTP 的立即反馈条件，避免在乱序微分片下制造 ACK 小包风暴。
+- 补充 Context/socket 层确定性测试：覆盖 `sendmmsg` 部分发送、真实 `WOULD_BLOCK`、加密包及 ACK-only 被重建后的
+  发送顺序，确认旧 ACK 不会先于新快照写入 socket。
+
 ## 发送 ACK 区间资源控制
 
 当前 Stream 的 `send_ack_ranges` 使用动态、按偏移合并的区间表。乱序 ACK 不能再因固定区间数被丢弃，

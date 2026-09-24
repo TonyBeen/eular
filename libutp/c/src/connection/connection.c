@@ -489,6 +489,18 @@ static utp_packet_out_t* utp_connection_next_scheduled_admitted(utp_connection_t
     while ((packet = utp_send_control_peek_scheduled(&connection->send_control)) != NULL) {
         const bool has_transient_ack = packet->transient_ack_size != 0u;
 
+        // ACK-only packets are snapshots of receive_history.  If another
+        // packet arrived before the snapshot was sent, rebuild it instead of
+        // emitting an obsolete ACK followed by a second ACK.
+        if (has_transient_ack && packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK) &&
+            utp_connection_ack_pending_count(connection) != 0u) {
+            packet = utp_send_control_next_scheduled(&connection->send_control);
+            utp_connection_on_packet_abandoned(connection, packet);
+            utp_send_control_forget_packet_attempts(&connection->send_control, packet);
+            utp_connection_packet_release(connection, packet);
+            continue;
+        }
+
         // ACK 是可从 receive_history 重建的瞬态前缀；MTU 收缩后仅丢弃含 ACK 的旧包，
         // 避免握手和 0-RTT 等没有通用重建来源的普通排队包被静默丢弃。
         if (has_transient_ack &&
@@ -3895,6 +3907,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
     bool              queued_control       = false;
     bool              queued_stream_packet = false;
     bool              include_ack;
+    bool              ack_due;
     bool              has_pending_controls;
 
     if (connection == NULL) {
@@ -3919,6 +3932,8 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
     }
     if (utp_send_control_peek_scheduled(&connection->send_control) != NULL) {
         if (now_us != 0u && utp_ack_scheduler_pending_count(&connection->ack_scheduler) != 0u &&
+            (utp_ack_scheduler_deadline(&connection->ack_scheduler) == 0u ||
+             utp_ack_scheduler_deadline(&connection->ack_scheduler) <= now_us) &&
             utp_connection_queue_control_packet(connection, now_us, true, false, true, &queued_control) ==
                 UTP_INTERNAL_ERROR_OK &&
             queued_control) {
@@ -3931,7 +3946,18 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
 
         (void)utp_connection_queue_pending_flow_control(connection, now_us, &flow_control_due);
     }
-    include_ack          = now_us != 0u && utp_ack_scheduler_pending_count(&connection->ack_scheduler) != 0u;
+    {
+        const uint32_t pending_ack = utp_ack_scheduler_pending_count(&connection->ack_scheduler);
+        const uint64_t ack_deadline = utp_ack_scheduler_deadline(&connection->ack_scheduler);
+
+        // A delayed ACK is only emitted alone after its deadline.  If a data or
+        // control packet is being built, it may still be piggybacked below.
+        include_ack = now_us != 0u && pending_ack != 0u;
+        // Handshake packets are latency-sensitive; keep their ACK path immediate.
+        ack_due = include_ack &&
+                  (connection->state != UTP_CONNECTION_STATE_CONNECTED || ack_deadline == 0u ||
+                   ack_deadline <= now_us);
+    }
     has_pending_controls = utp_connection_has_pending_controls(connection);
     if (has_pending_controls &&
         utp_connection_queue_next_stream_packet(connection, now_us, include_ack, true, &queued_stream_packet) ==
@@ -3948,7 +3974,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         queued_control) {
         return utp_connection_next_scheduled_admitted(connection);
     }
-    if (include_ack &&
+    if (ack_due &&
         utp_connection_queue_next_stream_packet(connection, now_us, true, false, &queued_stream_packet) ==
             UTP_INTERNAL_ERROR_OK &&
         queued_stream_packet) {
@@ -3957,7 +3983,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
             return packet;
         }
     }
-    if (include_ack &&
+    if (ack_due &&
         utp_connection_queue_control_packet(connection, now_us, true, false, false, &queued_control) ==
             UTP_INTERNAL_ERROR_OK &&
         queued_control) {
@@ -3987,7 +4013,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         goto rewrite_packet_number;
     }
     has_pending_controls = utp_connection_has_pending_controls(connection);
-    if (utp_connection_queue_next_stream_packet(connection, now_us, false, has_pending_controls,
+    if (utp_connection_queue_next_stream_packet(connection, now_us, include_ack, has_pending_controls,
                                                 &queued_stream_packet) == UTP_INTERNAL_ERROR_OK &&
         queued_stream_packet) {
         packet = utp_connection_next_scheduled_admitted(connection);
@@ -4002,7 +4028,7 @@ utp_packet_out_t* utp_connection_next_packet_to_send_at(utp_connection_t* connec
         queued_control) {
         return utp_connection_next_scheduled_admitted(connection);
     }
-    if (utp_connection_queue_next_stream_packet(connection, now_us, false, false, &queued_stream_packet) ==
+    if (utp_connection_queue_next_stream_packet(connection, now_us, include_ack, false, &queued_stream_packet) ==
             UTP_INTERNAL_ERROR_OK &&
         queued_stream_packet) {
         packet = utp_connection_next_scheduled_admitted(connection);
@@ -4832,7 +4858,10 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
     }
     if (!candidate_path && !peer_close) {
         (void)utp_ack_scheduler_on_packet(&connection->ack_scheduler, view.header.packet_number, largest_before,
-                                          utp_connection_packet_is_ack_eliciting(&view), handshake_done, now_us);
+                                          utp_connection_packet_is_ack_eliciting(&view),
+                                          handshake_done || view.header.type == UTP_PACKET_TYPE_HANDSHAKE ||
+                                              view.header.type == UTP_PACKET_TYPE_0RTT,
+                                          now_us);
     }
     if (!candidate_path) {
         if ((uint64_t)wire_packet_length > UINT64_MAX - connection->rx_bytes) {

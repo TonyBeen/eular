@@ -216,6 +216,7 @@ TEST_CASE("receive history retains a delayed gap beyond one ACK frame range budg
 TEST_CASE("ACK scheduler sends immediately for thresholds and otherwise exposes a deadline", "[ack_scheduler]")
 {
     utp_ack_scheduler_t scheduler = {};
+    utp_ack_scheduler_t burst_scheduler = {};
 
     REQUIRE(utp_ack_scheduler_init(&scheduler, 2u, 3u, 25u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_ack_scheduler_on_packet(&scheduler, 10u, 9u, true, false, 100u) == UTP_ACK_SCHEDULE_DELAYED);
@@ -224,6 +225,12 @@ TEST_CASE("ACK scheduler sends immediately for thresholds and otherwise exposes 
     utp_ack_scheduler_on_ack_queued(&scheduler);
     REQUIRE(utp_ack_scheduler_pending_count(&scheduler) == 0u);
     REQUIRE(utp_ack_scheduler_on_packet(&scheduler, 20u, 10u, true, false, 300u) == UTP_ACK_SCHEDULE_IMMEDIATE);
+
+    REQUIRE(utp_ack_scheduler_init(&burst_scheduler, 4u, 3u, 25u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_ack_scheduler_on_packet(&burst_scheduler, 1u, 0u, true, false, 100u) == UTP_ACK_SCHEDULE_DELAYED);
+    REQUIRE(utp_ack_scheduler_deadline(&burst_scheduler) == 25100u);
+    REQUIRE(utp_ack_scheduler_on_packet(&burst_scheduler, 2u, 1u, true, false, 200u) == UTP_ACK_SCHEDULE_DELAYED);
+    REQUIRE(utp_ack_scheduler_deadline(&burst_scheduler) == 25100u);
 }
 
 TEST_CASE("send history advances monotonically and records one packet-number gap", "[send_history]")

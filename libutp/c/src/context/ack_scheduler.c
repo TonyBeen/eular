@@ -33,10 +33,15 @@ utp_ack_schedule_decision_t utp_ack_scheduler_on_packet(utp_ack_scheduler_t* sch
         packet_number > largest_before && packet_number - largest_before - 1u >= scheduler->reordering_threshold;
     if ((has_handshake_done && scheduler->pending_count > 0u) ||
         scheduler->pending_count >= scheduler->ack_eliciting_threshold || reordered_gap) {
+        // deadline == 0 means an immediate ACK while pending_count is non-zero.
         scheduler->deadline = 0u;
         return UTP_ACK_SCHEDULE_IMMEDIATE;
     }
-    scheduler->deadline = now + (uint64_t)scheduler->max_ack_delay_ms * UINT64_C(1000);
+    // Keep the first delayed-ACK deadline.  Extending it for every packet can
+    // indefinitely postpone an ACK during a continuous receive burst.
+    if (scheduler->deadline == 0u) {
+        scheduler->deadline = now + (uint64_t)scheduler->max_ack_delay_ms * UINT64_C(1000);
+    }
     return UTP_ACK_SCHEDULE_DELAYED;
 }
 

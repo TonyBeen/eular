@@ -4468,18 +4468,6 @@ static utp_internal_error_t utp_context_send_handshake_done(utp_context_t* conte
     return error;
 }
 
-static utp_internal_error_t utp_context_queue_ack_if_due(utp_connection_t* connection, uint64_t now_us)
-{
-    assert(connection != NULL);
-    const uint64_t deadline = utp_connection_ack_deadline(connection);
-
-    if (utp_connection_ack_pending_count(connection) == 0u || (deadline != 0u && deadline > now_us)) {
-        return UTP_INTERNAL_ERROR_OK;
-    }
-    // ACK 保持 pending，由 flush 决定与 STREAM/control 合包还是单独发送。
-    return UTP_INTERNAL_ERROR_OK;
-}
-
 static void utp_context_timer_callback(uint32_t events, void* user_data);
 
 static void utp_context_take_deadline(uint64_t* deadline, uint64_t candidate)
@@ -4831,9 +4819,6 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         }
     }
     if (error == UTP_INTERNAL_ERROR_OK) {
-        error = utp_context_queue_ack_if_due(&slot->connection, now_us);
-    }
-    if (error == UTP_INTERNAL_ERROR_OK) {
         utp_context_replay_t replay = {
             context, &slot->connection, peer, &slot->connection.local, now_us,
         };
@@ -5031,10 +5016,6 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
         if (error != UTP_INTERNAL_ERROR_OK) {
             return error;
         }
-    }
-    error = utp_context_queue_ack_if_due(&slot->connection, now_us);
-    if (error != UTP_INTERNAL_ERROR_OK) {
-        return error;
     }
     utp_context_report_connected(context, slot);
     error = utp_context_queue_session_token(context, slot);
@@ -6553,9 +6534,6 @@ static utp_internal_error_t utp_context_process_connection_timers(utp_context_t*
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_connection_on_observed_address_challenge_timeout(&slot->connection, now_us);
-        }
-        if (error == UTP_INTERNAL_ERROR_OK) {
-            error = utp_context_queue_ack_if_due(&slot->connection, now_us);
         }
         if (error == UTP_INTERNAL_ERROR_OK) {
             error = utp_context_flush_connection(context, slot);

@@ -867,7 +867,8 @@ TEST_CASE("connection gives a queued ACK ownership of its receive generation", "
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
 
-    first_ack = utp_connection_next_packet_to_send_at(&connection, 101u);
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, 101u) == nullptr);
+    first_ack = utp_connection_next_packet_to_send_at(&connection, 25100u);
     REQUIRE(first_ack != nullptr);
     REQUIRE(first_ack->transient_ack_size != 0u);
     REQUIRE(utp_connection_ack_pending_count(&connection) == 0u);
@@ -875,17 +876,64 @@ TEST_CASE("connection gives a queued ACK ownership of its receive generation", "
 
     header.packet_number = 2u;
     REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 102u) ==
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 25200u) ==
             UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
-    REQUIRE(utp_connection_on_packet_sent(&connection, first_ack, 103u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(&connection, first_ack, 25101u) == UTP_INTERNAL_ERROR_OK);
     REQUIRE(utp_connection_ack_pending_count(&connection) == 1u);
 
-    second_ack = utp_connection_next_packet_to_send_at(&connection, 104u);
+    second_ack = utp_connection_next_packet_to_send_at(&connection, 50200u);
     REQUIRE(second_ack != nullptr);
     REQUIRE(second_ack->transient_ack_size != 0u);
     REQUIRE(utp_connection_ack_pending_count(&connection) == 0u);
-    REQUIRE(utp_connection_on_packet_sent(&connection, second_ack, 105u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(&connection, second_ack, 50201u) == UTP_INTERNAL_ERROR_OK);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("connection rebuilds a queued ACK after a newer packet arrives", "[connection][ack][reordering]")
+{
+    const utp_address_t                              peer       = loopback_address(10029u);
+    const uint8_t                                    ping       = UTP_FRAME_TYPE_PING;
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 1u> incoming   = {};
+    utp_packet_header_t                              header     = {33u, 44u, 1u, 1u, UTP_PACKET_TYPE_CTRL, 0u};
+    utp_connection_t                                 connection = {};
+    utp_packet_out_t*                                stale_ack;
+    utp_packet_out_t*                                rebuilt_ack;
+    utp_ack_range_t                                  ranges[UTP_ACK_MAX_RANGES] = {};
+    utp_ack_info_t                                   ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t                                            consumed = 0u;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 44u, 33u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    incoming[UTP_PACKET_HEADER_SIZE] = ping;
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 100u) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    stale_ack = utp_connection_next_packet_to_send_at(&connection, 25100u);
+    REQUIRE(stale_ack != nullptr);
+    REQUIRE(stale_ack->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK));
+    REQUIRE(utp_send_control_reschedule_packet(&connection.send_control, stale_ack) == UTP_INTERNAL_ERROR_OK);
+
+    header.packet_number = 3u;
+    REQUIRE(utp_proto_encode_header(incoming.data(), incoming.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_received(&connection, incoming.data(), incoming.size(), &peer, 25200u) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    rebuilt_ack = utp_connection_next_packet_to_send_at(&connection, 25201u);
+    REQUIRE(rebuilt_ack != nullptr);
+    REQUIRE(rebuilt_ack->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK));
+    REQUIRE(utp_ack_decode(&ack, rebuilt_ack->raw_data + UTP_PACKET_HEADER_SIZE,
+                           rebuilt_ack->data_size - UTP_PACKET_HEADER_SIZE,
+                           connection.local_transport_params.ack_delay_exponent, &consumed) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(ack.range_count == 2u);
+    REQUIRE(ack.ranges[0].low == 3u);
+    REQUIRE(ack.ranges[0].high == 3u);
+    REQUIRE(ack.ranges[1].low == 1u);
+    REQUIRE(ack.ranges[1].high == 1u);
+    REQUIRE(utp_connection_on_packet_sent(&connection, rebuilt_ack, 25202u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_next_packet_to_send_at(&connection, 25202u) == nullptr);
     utp_connection_cleanup(&connection);
 }
 
@@ -965,10 +1013,10 @@ TEST_CASE("connection sends a pure ACK while cwnd or pacer blocks ordinary packe
     REQUIRE(utp_connection_on_packet_received(&connection, wire.data(), wire_length, &peer, 200u) ==
             UTP_INTERNAL_ERROR_OK);
 
-    packet = utp_connection_next_packet_to_send_at(&connection, 200u);
+    packet = utp_connection_next_packet_to_send_at(&connection, 25200u);
     REQUIRE(packet != nullptr);
     REQUIRE(packet->frame_types == UTP_FRAME_BIT(UTP_FRAME_TYPE_ACK));
-    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 25201u) == UTP_INTERNAL_ERROR_OK);
 
     utp_connection_cleanup(&connection);
 }
