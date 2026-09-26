@@ -22,7 +22,7 @@ Change the padding test to set one payload byte to `1` and require `utp_frame_pa
 
 - [x] **Step 2: Run the focused test to verify it fails**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: FAIL because the decoder returns `UTP_INTERNAL_ERROR_PROTOCOL` for non-zero padding.
 
@@ -32,7 +32,7 @@ Remove the padding-payload byte loop from `utp_frame_padding_decode()`. Retain h
 
 - [x] **Step 4: Run the focused test to verify it passes**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: PASS.
 
@@ -49,7 +49,7 @@ Add a two-range ACK whose second range has a zero length. Require a protocol err
 
 - [x] **Step 2: Run the focused test to establish the invariant**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: PASS on the current implementation; the test documents the existing failure-atomic contract before refactoring.
 
@@ -59,7 +59,7 @@ Define `UTP_ACK_FRAME_HEADER_SIZE` and `UTP_ACK_FRAME_RANGE_SIZE` in `internal/a
 
 - [x] **Step 4: Run the focused test after refactoring**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: PASS, including the unchanged-output assertion.
 
@@ -78,7 +78,7 @@ Add tests for IPv6 `::`, `::1`, and an IPv4 address. Require only `::` to be cla
 
 - [x] **Step 2: Run the focused test to verify it fails**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: FAIL until the new predicate is declared and implemented.
 
@@ -88,7 +88,7 @@ Add `utp_address_is_unspecified_ipv6()` to the internal address interface and im
 
 - [x] **Step 4: Run the focused test to verify it passes**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_proto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_proto_test`
 
 Expected: PASS.
 

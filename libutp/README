@@ -21,39 +21,39 @@
 - `../libevent/libevent_V2_1_10`
 - `3rd/boringssl`
 
-也可以通过 `UTP_C_LIBEVENT_ROOT` 和 `UTP_C_BORINGSSL_ROOT` 覆盖路径。NTRS 服务还需要 Linux、线程库和仓库旁的 `../utils` 头文件。
+也可以通过 `UTP_LIBEVENT_ROOT` 和 `UTP_BORINGSSL_ROOT` 覆盖路径。NTRS 服务还需要 Linux、线程库和仓库旁的 `../utils` 头文件。
 
 ## 构建
 
 最低 CMake 版本：3.22。
 
-构建 C 库、C 示例和 Linux NTRS 服务：
+构建库、示例和 Linux NTRS 服务：
 
 ```bash
 cmake -S . -B build \
-  -DUTP_BUILD_C_LIBRARY=ON \
+  -DUTP_BUILD_LIBRARY=ON \
   -DUTP_BUILD_NTRS=ON \
-  -DUTP_C_BUILD_EXAMPLES=ON
+  -DUTP_BUILD_EXAMPLES=ON
 cmake --build build -j
 ```
 
-顶层工程会在 Linux 上同时生成 `utp_c`、`nat_punch`、`ntrs_natc`、`ntrs`、`natd_hub` 和 `natd_node`。非 Linux 平台仍可构建 C 库和示例，但 NTRS 服务会自动跳过。
+顶层工程会在 Linux 上同时生成 `utp`、`nat_punch`、`ntrs_natc`、`ntrs`、`natd_hub` 和 `natd_node`。非 Linux 平台仍可构建库和示例，但 NTRS 服务会自动跳过。
 
 常用选项：
 
-- `-DUTP_C_BUILD_SHARED=ON`：生成共享库；关闭时生成静态库
-- `-DUTP_C_BUILD_TESTS=ON`：构建 C/C++ 混合测试目标
-- `-DUTP_C_BUILD_BENCHMARKS=ON`：构建基准测试
-- `-DUTP_C_BUILD_FUZZERS=ON`：构建 libFuzzer 目标（需要 Clang）
-- `-DUTP_C_BUILD_EXAMPLES=OFF`：关闭 C 示例
+- `-DUTP_BUILD_SHARED=ON`：生成共享库；关闭时生成静态库
+- `-DUTP_BUILD_TESTS=ON`：构建 C/C++ 混合测试目标
+- `-DUTP_BUILD_BENCHMARKS=ON`：构建基准测试
+- `-DUTP_BUILD_FUZZERS=ON`：构建 libFuzzer 目标（需要 Clang）
+- `-DUTP_BUILD_EXAMPLES=OFF`：关闭示例
 - `-DUTP_NTRS_BUILD_SERVICES=OFF`：只配置 NTRS 核心，不生成服务进程
 
-只构建 C 库也可以直接配置 `utp/`：
+只构建库也可以直接配置 `utp/`：
 
 ```bash
 cmake -S utp -B build-c \
-  -DUTP_C_BUILD_TESTS=ON \
-  -DUTP_C_BUILD_EXAMPLES=ON
+  -DUTP_BUILD_TESTS=ON \
+  -DUTP_BUILD_EXAMPLES=ON
 cmake --build build-c -j
 ```
 
@@ -61,20 +61,20 @@ cmake --build build-c -j
 
 ```bash
 cmake -S . -B build-test \
-  -DUTP_C_BUILD_TESTS=ON \
-  -DUTP_C_BUILD_EXAMPLES=OFF \
+  -DUTP_BUILD_TESTS=ON \
+  -DUTP_BUILD_EXAMPLES=OFF \
   -DUTP_BUILD_NTRS=OFF
 cmake --build build-test -j
 ctest --test-dir build-test --output-on-failure
 ```
 
-NTRS 集成测试可通过 `UTP_C_NTRS_EXECUTABLE` 指定已构建的 NTRS 可执行文件。Linux 上还可以使用 `UTP_NTRS_BUILD_TESTS=ON` 构建 NTRS 自身测试。
+NTRS 集成测试可通过 `UTP_NTRS_EXECUTABLE` 指定已构建的 NTRS 可执行文件。Linux 上还可以使用 `UTP_NTRS_BUILD_TESTS=ON` 构建 NTRS 自身测试。
 
 ## C 公共 API
 
 公共入口位于 `utp/include/utp/utp.h`、`context.h`、`connection.h`、`stream.h`、`option.h` 和 `status.h`。句柄是不透明指针；Context 持有 Connection，Connection 持有 Stream。回调中的借用指针只在回调期间有效，除非接口明确说明所有权转移。
 
-库目标导出为 `eular::utp_c`，同时提供兼容别名 `eular::utp`。Windows 下使用 `UTP_C_BUILD_SHARED=ON` 时，公共声明通过 `utp/export.h` 自动使用 DLL 导出/导入标记。
+库目标导出为 `eular::utp`。Windows 下使用 `UTP_BUILD_SHARED=ON` 时，公共声明通过 `utp/export.h` 自动使用 DLL 导出/导入标记。
 
 详细行为和协议实现见 `doc/`，当前 C 代码和公共头文件是权威实现；`backup/cpp/` 不作为当前 API 或协议行为的依据。
 

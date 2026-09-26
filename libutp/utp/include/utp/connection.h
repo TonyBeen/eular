@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_CONNECTION_H
-#define EULAR_UTP_C_CONNECTION_H
+#ifndef EULAR_UTP_CONNECTION_H
+#define EULAR_UTP_CONNECTION_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -87,4 +87,4 @@ UTP_API utp_status_t utp_connection_export_session_token(const utp_connection_t*
 }
 #endif
 
-#endif  // EULAR_UTP_C_CONNECTION_H
+#endif  // EULAR_UTP_CONNECTION_H

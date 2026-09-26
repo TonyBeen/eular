@@ -1,4 +1,4 @@
-set(UTP_C_SOURCES
+set(UTP_SOURCES
     src/util/allocator.c
     src/proto/ack.c
     src/socket/address.c
@@ -39,7 +39,7 @@ set(UTP_C_SOURCES
     src/context/context.c
     src/utp.c)
 
-set(UTP_C_HEADERS
+set(UTP_HEADERS
     include/utp/connection.h
     include/utp/context.h
     include/utp/export.h

@@ -88,9 +88,9 @@ do not run as a hard gate on shared CI hosts.
 Build the optional container benchmark with:
 
 ```sh
-cmake -S utp -B build/c-bench -DUTP_C_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S utp -B build/c-bench -DUTP_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/c-bench --parallel
-build/c-bench/utp_c_container_benchmark 1000000
+build/c-bench/utp_container_benchmark 1000000
 ```
 
 The optional argument is the number of lookup and range-insert operations. The
@@ -99,7 +99,7 @@ also include the compiler and flags, build mode, CPU, and operating system.
 
 ## Sanitizer And Fuzz Gate
 
-`utp_c_parser_fuzz_test` is a deterministic packet-parser stress test and runs
+`utp_parser_fuzz_test` is a deterministic packet-parser stress test and runs
 on every supported platform. It feeds 100,000 mixed raw and structurally valid
 packets through the header and frame walkers on each CTest run.
 
@@ -107,22 +107,22 @@ Use AddressSanitizer and UndefinedBehaviorSanitizer for changes to packet
 parsing, allocation, or connection state:
 
 ```sh
-cmake -S utp -B build/c-sanitize -DUTP_C_ENABLE_SANITIZERS=ON
+cmake -S utp -B build/c-sanitize -DUTP_ENABLE_SANITIZERS=ON
 cmake --build build/c-sanitize --parallel
 ctest --test-dir build/c-sanitize --output-on-failure
 ```
 
-`UTP_C_SANITIZER_LIST` defaults to `address,undefined`. Platforms whose ASan
+`UTP_SANITIZER_LIST` defaults to `address,undefined`. Platforms whose ASan
 runtime is unavailable can retain the same build gate with a supported subset,
-for example `-DUTP_C_SANITIZER_LIST=undefined`.
+for example `-DUTP_SANITIZER_LIST=undefined`.
 
 The optional libFuzzer target requires Clang with libFuzzer support. It
 instruments the library with `fuzzer,address,undefined` by default and runs
 100,000 parser inputs; ordinary test targets remain available with GCC and
-MSVC. It uses the same `UTP_C_SANITIZER_LIST` override when a platform cannot
+MSVC. It uses the same `UTP_SANITIZER_LIST` override when a platform cannot
 initialize ASan.
 
 ```sh
-cmake -S utp -B build/c-fuzz -DUTP_C_BUILD_TESTS=OFF -DUTP_C_BUILD_FUZZERS=ON
-cmake --build build/c-fuzz --target utp_c_fuzz_packet_parser
+cmake -S utp -B build/c-fuzz -DUTP_BUILD_TESTS=OFF -DUTP_BUILD_FUZZERS=ON
+cmake --build build/c-fuzz --target utp_fuzz_packet_parser
 ```

@@ -20,7 +20,7 @@ set(UTP_NTRS_SERVICE_SOURCES
     src/service_util.c
     src/tls_stream.c)
 
-if(NOT TARGET utp_c)
+if(NOT TARGET utp)
     list(PREPEND UTP_NTRS_SERVICE_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/../utp/src/proto/proto.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../utp/src/proto/frame.c"
@@ -69,8 +69,8 @@ find_package(Threads REQUIRED)
 add_library(utp_ntrs_service_runtime INTERFACE)
 target_link_libraries(utp_ntrs_service_runtime INTERFACE event_core event_pthreads Threads::Threads)
 target_link_libraries(utp_ntrs_service_core PUBLIC utp_ntrs_service_runtime)
-if(TARGET utp_c)
-    target_link_libraries(utp_ntrs_service_core PUBLIC utp_c)
+if(TARGET utp)
+    target_link_libraries(utp_ntrs_service_core PUBLIC utp)
 endif()
 
 add_library(utp_ntrs_node_udp OBJECT src/udp_probe.c)

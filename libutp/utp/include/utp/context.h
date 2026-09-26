@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_CONTEXT_H
-#define EULAR_UTP_C_CONTEXT_H
+#ifndef EULAR_UTP_CONTEXT_H
+#define EULAR_UTP_CONTEXT_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -177,4 +177,4 @@ UTP_API utp_status_t utp_context_accept(utp_context_t* context);
 #include <utp/connection.h>
 #include <utp/stream.h>
 
-#endif  // EULAR_UTP_C_CONTEXT_H
+#endif  // EULAR_UTP_CONTEXT_H

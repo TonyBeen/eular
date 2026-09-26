@@ -1,25 +1,22 @@
 find_package(Threads REQUIRED)
 
-set(UTP_C_EXAMPLES
-    utp_c_echo_server
-    utp_c_echo_client
+set(UTP_EXAMPLES
+    utp_echo_server
+    utp_echo_client
     ntrs_natc
     nat_punch
 )
 
-add_executable(utp_c_echo_server echo_server.c)
-add_executable(utp_c_echo_client echo_client.c)
+add_executable(utp_echo_server echo_server.c)
+add_executable(utp_echo_client echo_client.c)
 add_executable(ntrs_natc ntrs_natc.cpp)
 add_executable(nat_punch nat_punch.cpp)
 
-foreach(example_target IN LISTS UTP_C_EXAMPLES)
-    target_link_libraries(${example_target} PRIVATE utp_c event_core Threads::Threads)
+foreach(example_target IN LISTS UTP_EXAMPLES)
+    target_link_libraries(${example_target} PRIVATE utp event_core Threads::Threads)
     target_include_directories(${example_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../3rd")
     target_compile_features(${example_target} PRIVATE c_std_11)
-    if(UTP_C_SANITIZER_FLAGS)
-        target_compile_options(${example_target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-        target_link_options(${example_target} PRIVATE ${UTP_C_SANITIZER_FLAGS})
-    endif()
+    utp_apply_toolchain_flags(${example_target} UTP_SANITIZER_FLAGS)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         if(example_target STREQUAL "ntrs_natc" OR example_target STREQUAL "nat_punch")
             target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow

@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_NAT_H
-#define EULAR_UTP_C_NAT_H
+#ifndef EULAR_UTP_NAT_H
+#define EULAR_UTP_NAT_H
 
 #include <stdint.h>
 
@@ -62,4 +62,4 @@ UTP_API utp_status_t utp_context_cancel_nat_probe(utp_context_t* context);
 }
 #endif
 
-#endif  // EULAR_UTP_C_NAT_H
+#endif  // EULAR_UTP_NAT_H

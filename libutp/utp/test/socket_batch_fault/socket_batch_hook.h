@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_TEST_SOCKET_BATCH_HOOK_H
-#define EULAR_UTP_C_TEST_SOCKET_BATCH_HOOK_H
+#ifndef EULAR_UTP_TEST_SOCKET_BATCH_HOOK_H
+#define EULAR_UTP_TEST_SOCKET_BATCH_HOOK_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,4 +17,4 @@ bool     utp_test_batch_hook_configure_truncated_receive(int32_t native_socket);
 uint32_t utp_test_batch_hook_truncated_receive_count(void);
 #endif
 
-#endif  // EULAR_UTP_C_TEST_SOCKET_BATCH_HOOK_H
+#endif  // EULAR_UTP_TEST_SOCKET_BATCH_HOOK_H

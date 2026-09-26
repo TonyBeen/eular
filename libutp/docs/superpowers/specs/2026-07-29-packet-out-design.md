@@ -169,7 +169,7 @@ void                 utp_packet_out_pool_release(utp_packet_out_pool_t *pool,
 
 ## 8. 测试计划
 
-新增 `utp/test/test_packet_out.cc`,按 `test_receive_history.cc` 的风格接入 `utp_c_configure_cpp_test`:
+新增 `utp/test/test_packet_out.cc`,按 `test_receive_history.cc` 的风格接入 `utp_configure_cpp_test`:
 
 - 初始化不分配；32 个一批的描述符和缓冲惰性增长、分配失败回滚。
 - `acquire` 按五档固定最小可容纳桶选取，覆盖 `uint16_t` 上限。

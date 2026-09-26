@@ -207,7 +207,7 @@ TEST_CASE("NTRS process completes Context rendezvous", "[ntrs][integration]")
     integration_probe_t         client_probe     = {};
     integration_probe_t         server_probe     = {};
 
-    ntrs_executable = getenv("UTP_C_NTRS_EXECUTABLE");
+    ntrs_executable = getenv("UTP_NTRS_EXECUTABLE");
     REQUIRE(ntrs_executable != NULL);
     REQUIRE(access(ntrs_executable, X_OK) == 0);
     event_base = event_base_new();
@@ -285,7 +285,7 @@ TEST_CASE("NTRS process carries 0-RTT early data through rendezvous", "[ntrs][in
     std::array<uint8_t, early_data.size()> received         = {};
     size_t                                 received_length  = 0u;
 
-    ntrs_executable = getenv("UTP_C_NTRS_EXECUTABLE");
+    ntrs_executable = getenv("UTP_NTRS_EXECUTABLE");
     REQUIRE(ntrs_executable != NULL);
     REQUIRE(access(ntrs_executable, X_OK) == 0);
     event_base = event_base_new();

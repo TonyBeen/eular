@@ -20,7 +20,7 @@
 - [ ] Write failing tests for FIFO scheduling, explicit `TRACK_ON_SEND`, capacity limits, and dequeue state cleanup.
 - [ ] Add bounded scheduled and lost `TAILQ`s, counters, packet-number allocation, and lifecycle flags to `utp_send_control_t`.
 - [ ] Implement `schedule_packet`, `next_packet_to_send`, and `packet_sent`; only `packet_sent` inserts a tracked packet into the ACK ledger.
-- [ ] Run `utp_c_send_control_test` and the format check.
+- [ ] Run `utp_send_control_test` and the format check.
 
 ### Task 2: Loss Detection and Retransmission Preparation
 

@@ -22,17 +22,17 @@ Create `test_crypto.cc`, include `internal/crypto.h`, instantiate `utp_crypto_ke
 
 - [ ] **Step 2: Build the test to verify it fails**
 
-Run: `cmake --build /tmp/libutp-c-proto-build --target utp_c_crypto_test --parallel`
+Run: `cmake --build /tmp/libutp-c-proto-build --target utp_crypto_test --parallel`
 
 Expected: FAIL because the target/header/function do not exist.
 
 - [ ] **Step 3: Add provider wiring**
 
-Add the bundled `3rd/boringssl` subdirectory to the standalone C build with tests/install disabled, add `src/crypto.c` to `utp_c`, link target `crypto` privately, and register `utp_c_crypto_test` with CTest.
+Add the bundled `3rd/boringssl` subdirectory to the standalone C build with tests/install disabled, add `src/crypto.c` to `utp_c`, link target `crypto` privately, and register `utp_crypto_test` with CTest.
 
 - [ ] **Step 4: Rebuild to verify the missing API remains the only failure**
 
-Run: `cmake --build /tmp/libutp-c-proto-build --target utp_c_crypto_test --parallel`
+Run: `cmake --build /tmp/libutp-c-proto-build --target utp_crypto_test --parallel`
 
 Expected: FAIL on undeclared internal crypto types/functions, proving CMake linkage is ready.
 
@@ -49,7 +49,7 @@ Use two generated X25519 key pairs to derive equal shared secrets. Require zero 
 
 - [ ] **Step 2: Run the crypto test to verify it fails**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_crypto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_crypto_test`
 
 Expected: FAIL because the crypto primitive implementation is absent.
 
@@ -59,7 +59,7 @@ Implement explicit key-pair clear/generate/from-private/derive functions with Bo
 
 - [ ] **Step 4: Run the crypto test to verify it passes**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_crypto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_crypto_test`
 
 Expected: PASS.
 
@@ -76,7 +76,7 @@ Initialize AES-256-GCM with a derived key and prefix. Seal a payload using a 20-
 
 - [ ] **Step 2: Run the crypto test to verify it fails**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_crypto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_crypto_test`
 
 Expected: FAIL because AEAD context APIs are absent.
 
@@ -86,7 +86,7 @@ Allocate and initialize BoringSSL `EVP_AEAD_CTX` only in `utp_crypto_aead_init`;
 
 - [ ] **Step 4: Run the crypto test to verify it passes**
 
-Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_c_crypto_test`
+Run: `ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure -R utp_crypto_test`
 
 Expected: PASS.
 
@@ -98,11 +98,11 @@ Expected: PASS.
 
 - [ ] **Step 1: Include new sources in the format target**
 
-Add `src/crypto.c`, `src/internal/crypto.h`, and `test/test_crypto.cc` to `UTP_C_FORMAT_SOURCES`.
+Add `src/crypto.c`, `src/internal/crypto.h`, and `test/test_crypto.cc` to `UTP_FORMAT_SOURCES`.
 
 - [ ] **Step 2: Run normal verification**
 
-Run: `cmake --build /tmp/libutp-c-proto-build --parallel && cmake --build /tmp/libutp-c-proto-build --target utp_c_format_check && ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure`
+Run: `cmake --build /tmp/libutp-c-proto-build --parallel && cmake --build /tmp/libutp-c-proto-build --target utp_format_check && ctest --test-dir /tmp/libutp-c-proto-build --output-on-failure`
 
 Expected: build succeeds, format check passes, and all CTest tests pass.
 

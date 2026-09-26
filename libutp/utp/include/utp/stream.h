@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_STREAM_H
-#define EULAR_UTP_C_STREAM_H
+#ifndef EULAR_UTP_STREAM_H
+#define EULAR_UTP_STREAM_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -83,4 +83,4 @@ UTP_API uint8_t      utp_stream_priority(const utp_stream_t* stream);
 }
 #endif
 
-#endif  // EULAR_UTP_C_STREAM_H
+#endif  // EULAR_UTP_STREAM_H

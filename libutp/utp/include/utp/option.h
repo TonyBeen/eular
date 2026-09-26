@@ -1,5 +1,5 @@
-#ifndef EULAR_UTP_C_OPTION_H
-#define EULAR_UTP_C_OPTION_H
+#ifndef EULAR_UTP_OPTION_H
+#define EULAR_UTP_OPTION_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -160,4 +160,4 @@ typedef struct utp_context_options {
         UINT64_C(512) * 1024u                       /* initial_max_stream_data_uni: 对端单向流接收窗口 */         \
     }
 
-#endif  // EULAR_UTP_C_OPTION_H
+#endif  // EULAR_UTP_OPTION_H
