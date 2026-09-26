@@ -1,5 +1,19 @@
 # TODO
 
+## 全包混淆与零拷贝
+
+暂不在当前实现中开启全包混淆。对现有 `stream_write()` 提供的外部明文 slice，全包 XOR 需要在最终分片、endpoint 和包号确定后生成 wire 缓冲，因此与通用的 socket 零拷贝路径冲突。不得就地修改应用缓冲，也不得在异步发送后恢复。
+
+后续如果重启该方案，应优先采用 MTU 级 wire scratch 池，同一发送尝试只 materialize 一次，并另设计面向应用生成数据的 packet-builder/write-view API。详细协议见 [全包轻量混淆与 Padding 方案](utp/proto/全包轻量混淆与Padding方案.md)。
+
+## 连接级动态混淆种子
+
+启动和握手使用 libutp 与 `ntrs` 共用的 4 组内置种子（索引 `0..3`）。主动端为每次连接尝试生成 `seed_root`，随 Initial 中的 `OBFUSCATION` 帧发送；被动端解析 Initial 后安装动态表，并以 Handshake 作为确认。主动端收到 Handshake 后才发送动态索引 `4..255` 的包；两端共用同一张动态表，不区分 direction。
+
+动态种子由 `HKDF-Extract("libutp-obf-table-v1", seed_root || epoch_be32)` 与 `HKDF-Expand(prk, "entry" || uint8(selector - 4), 16)` 派生。实施前需定义连接轮换时的 epoch 控制帧、旧 epoch 宽限、重传和回滚规则。
+
+非加密时动态种子只是混淆参数，不是密钥；加密模式下需绑定到已认证的握手转录。`NAT_PROBE` 不使用该帧和种子表。
+
 ## ACK-of-ACK 接收历史回收
 
 当前 Connection 的 `receive_history` 固定保留 1000 个范围，ACK 仅从最新范围开始按当前 PacketOut 可用空间

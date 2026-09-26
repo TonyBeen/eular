@@ -21,6 +21,7 @@
 
 - [公共 API 与错误码](api/公共API与错误码.md)
 - [事件循环与统一写事件](event/事件循环与统一写事件.md)
+- [全包轻量混淆与 Padding 方案（协议草案，未落地）](proto/全包轻量混淆与Padding方案.md)
 - [加密与 0-RTT 实现细节](crypto/加密与0-RTT实现细节.md)
 - [全包加密与 CID 混淆方案（未来设计，未落地）](crypto/全包加密与无状态可验证CID混淆方案.md)
 - [Rendezvous 与握手关联](rendezvous/Rendezvous与握手关联.md)

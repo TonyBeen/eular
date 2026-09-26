@@ -9,6 +9,7 @@
 
 - [Context 与连接](utp/context/连接与异常处理流程.md)
 - [包与帧](utp/proto/包与帧实现细节.md)
+- [全包轻量混淆与 Padding 方案（协议草案，未落地）](utp/proto/全包轻量混淆与Padding方案.md)
 - [Stream 与流控](utp/stream/流与流控实现细节.md)
 - [ACK 与重传](utp/reliability/ACK与重传实现细节.md)
 - [拥塞控制](utp/congestion/bbr.md)、[CUBIC](utp/congestion/cubic.md)
