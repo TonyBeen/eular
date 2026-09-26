@@ -301,18 +301,42 @@ MTU Probe 继续使用现有专用 PING + PADDING 规则，不受 32 字节通�
 - 丢包重传使用新包号重新组包，因此生成新 selector、Padding、AEAD 密文和混淆 wire 字节。
 - 候选路径变化时，需要为新 endpoint 创建新发送尝试；不得在相同包号的 AEAD 包上只改 Padding。
 
+这里的“canonical 数据”是 PacketOut 的逻辑源数据，可能由 `raw_data` 和外部
+STREAM slice 组成；“wire 数据”是已经完成 AEAD、Padding 和 XOR 后、可以直接交给
+UDP 的连续字节。两者不能因为一次发送成功就混为同一生命周期对象：同一发送尝试在
+`WOULD_BLOCK` 重试时必须继续保留稳定的 wire 数据，而重传或重新分片时必须能够重新
+构造 canonical 数据。
+
 ## 10. 内存与零拷贝影响
 
 全包 XOR 与当前非加密 STREAM 外部 slice 的直接发送不兼容。原因是应用缓冲区只读且由外部所有，libutp 不能为发送而就地 XOR，也不能在异步 `sendmmsg` 后安全恢复。
 
 实现要求：
 
-- 非加密包从 Context 级分桶池取得 MTU 级 wire scratch。
-- 先将 PacketOut 的 raw slice 和 external STREAM slice 整并到 scratch，再原地全包 XOR。
-- 加密包可复用 AEAD 输出缓冲，在密文完成后原地 XOR，不再增加一次 payload 拷贝。
-- wire scratch 的生命期要覆盖批量发送和 writable 重试，不得共用一个 Context 临时数组覆盖多个待发包。
+- PacketOut 应有一块统一的 wire 输出缓冲。实现上可以先将现有
+  `encrypt_data` 重命名为 `wire_data`，将 `encrypt_data_size` 重命名为
+  `wire_data_size`；这两个字段描述的是“可直接发送的连续 wire 字节”，不再暗示
+  只有加密包才会使用它。
+- 非加密包从 PacketOut 缓冲池取得 MTU 级 wire 缓冲。遍历 `raw_data` 和外部
+  STREAM slice 时直接执行 `wire[i] = source[i] ^ mask(i)`，把整并和 XOR 合并为
+  一次写入，不需要先复制 canonical 数据再复制一次混淆数据。
+- 加密包先把 canonical 包编码到 wire 缓冲并完成 AEAD，然后在同一缓冲区内原地
+  XOR。这样加密和混淆不会额外增加第二块 MTU 级 payload 缓冲。
+- 只有在 canonical 数据不再需要被重新编码、且当前发送尝试的 wire 字节已经固定时，
+  才允许让 wire 缓冲与原有 PacketOut 内联缓冲复用同一分配。若后续操作仍需要读取
+  canonical header，必须使用独立的 wire 缓冲，不能覆盖 `raw_data`。
+- wire 缓冲的生命期要覆盖批量发送、`WOULD_BLOCK` 和 writable 重试；不得使用一个
+  Context 临时数组覆盖多个排队中的 PacketOut。
 
-因此，非加密模式每个实际发送包会增加一次 MTU 以内的内存拷贝。这是隐藏 STREAM payload 固定字节特征必须付出的成本，不应在文档或 API 中继续宣称该路径是端到端零拷贝。
+当前代码中的字段事实需要特别区分：`utp_packet_out_pool_acquire()` 会把
+`encrypt_data` 初始化为与 `raw_data` 相同的池缓冲地址，因此非加密 PacketOut 中该
+指针通常也不为 NULL。是否存在有效加密输出由 `UTP_PO_ENCRYPTED` 和
+`encrypt_data_size` 判断，不能用指针是否为空判断。实现混淆时应以长度和状态判断
+wire 缓冲是否已生成；重命名为 `wire_data` 后可避免继续传播这一歧义。
+
+因此，非加密模式每个实际发送包仍会增加一次 MTU 以内的内存写入，但可以与混淆过程
+合并为一次；加密模式可以复用 AEAD 输出缓冲并原地混淆。这保留了应用层外部
+STREAM 缓冲区零拷贝接口，但不应在文档或 API 中宣称混淆路径是端到端零拷贝。
 
 ## 11. 编译开关与兼容性
 
