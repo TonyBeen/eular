@@ -16,41 +16,60 @@
 
 static uint8_t echo_client_payload[16384u];  // 固定测试负载，最大长度受命令行校验约束
 
+typedef enum echo_client_phase {
+    ECHO_CLIENT_PHASE_DIRECT_CONNECT,
+    ECHO_CLIENT_PHASE_TICKET_CONNECT,
+    ECHO_CLIENT_PHASE_TICKET_WAIT,
+    ECHO_CLIENT_PHASE_ZERO_RTT_CONNECT,
+    ECHO_CLIENT_PHASE_ECHO,
+} echo_client_phase_t;
+
 typedef struct echo_client_app {
-    struct event_base* event_base;          // 调用方拥有的事件循环
-    struct event*      timeout_event;       // 整个上传的保护超时
-    utp_connection_t*  connection;          // Context 借用的活动连接
-    utp_stream_t*      stream;              // Connection 借用的上传流
-    XXH3_state_t*      hash;                // 本地发送负载校验状态
-    uint32_t           payload_length;      // 单次生成的负载长度
-    size_t             payload_offset;      // 下次写入固定负载的起始位置
-    uint64_t           target_bytes;        // 本次上传总字节数
-    uint64_t           sent_bytes;          // 已提交到协议发送缓冲的负载字节数
-    uint64_t           done_bytes;          // 服务端 DONE 中声明的字节数
-    uint64_t           started_ms;          // 发起连接时间
-    uint64_t           connected_ms;        // 完成握手时间
-    uint64_t           upload_done_ms;      // 本地写 FIN 时间
-    uint64_t           done_ms;             // 收到 DONE 时间
-    char               header[64];          // UPLOAD 请求行
-    size_t             header_length;       // 请求行长度
-    bool               header_sent;         // 请求行是否已提交
-    bool               write_shutdown;      // 本地写方向是否已经关闭
-    bool               writing;             // 防止 writable 回调重入
-    bool               finished;            // 结果是否已经输出
-    bool               passed;              // 最终校验结果
-    bool               quiet;               // 是否关闭过程输出
-    char               local_hash[33];      // 发送端 XXH128
-    char               server_hash[33];     // 服务端返回的 XXH128
-    char               response_line[128];  // 未完成的响应行
-    size_t             response_length;     // response_line 已接收长度
+    struct event_base*  event_base;                 // 调用方拥有的事件循环
+    struct event*       timeout_event;              // 整个上传的保护超时
+    struct event*       reconnect_event;            // 延后到下一轮循环发起 0-RTT 重连
+    utp_context_t*      context;                    // 调用方拥有的 Context
+    utp_connection_t*   connection;                 // Context 借用的活动连接
+    utp_connection_t*   ticket_connection;          // 首次建连，仅用于取得恢复票据
+    utp_stream_t*       stream;                     // Connection 借用的上传流
+    uint8_t*            session_token;              // 本地恢复状态，仅用于本进程 0-RTT 重连
+    size_t              session_token_size;         // session_token 的有效长度
+    const char*         server_ip;                  // 命令行或静态默认值，在 main 生命周期内有效
+    uint16_t            server_port;                // 0-RTT 重连的目标端口
+    XXH3_state_t*       hash;                       // 本地发送负载校验状态
+    uint32_t            payload_length;             // 单次生成的负载长度
+    size_t              payload_offset;             // 下次写入固定负载的起始位置
+    uint64_t            target_bytes;               // 本次上传总字节数
+    uint64_t            sent_bytes;                 // 已提交到协议发送缓冲的负载字节数
+    uint64_t            done_bytes;                 // 服务端 DONE 中声明的字节数
+    uint64_t            started_ms;                 // 发起连接时间
+    uint64_t            connected_ms;               // 完成握手时间
+    uint64_t            upload_done_ms;             // 本地写 FIN 时间
+    uint64_t            done_ms;                    // 收到 DONE 时间
+    char                header[64];                 // UPLOAD 请求行
+    size_t              header_length;              // 请求行长度
+    bool                header_sent;                // 请求行是否已提交
+    bool                write_shutdown;             // 本地写方向是否已经关闭
+    bool                writing;                    // 防止 writable 回调重入
+    bool                zero_rtt_reconnect;         // 是否先获取票据再使用 0-RTT 重连
+    bool                ticket_connection_closing;  // 首连取票据后已主动关闭，忽略其终止通知
+    bool                finished;                   // 结果是否已经输出
+    bool                passed;                     // 最终校验结果
+    bool                quiet;                      // 是否关闭过程输出
+    echo_client_phase_t phase;                      // 首连取票据、0-RTT 重连或正常 echo
+    char                local_hash[33];             // 发送端 XXH128
+    char                server_hash[33];            // 服务端返回的 XXH128
+    char                response_line[128];         // 未完成的响应行
+    size_t              response_length;            // response_line 已接收长度
 } echo_client_app_t;
 
 static void echo_client_usage(const char* program)
 {
-    fprintf(stderr,
-            "Usage: %s [--server-ip IP] [--server-port PORT] [--bind-ip IP] [--bind-port PORT]\n"
-            "          [--count N] [--length N] [--total-bytes N] [--encryption MODE] [--quiet]\n",
-            program);
+    fprintf(
+        stderr,
+        "Usage: %s [--server-ip IP] [--server-port PORT] [--bind-ip IP] [--bind-port PORT]\n"
+        "          [--count N] [--length N] [--total-bytes N] [--encryption MODE] [--zero-rtt-reconnect] [--quiet]\n",
+        program);
 }
 
 static uint64_t echo_now_ms(void)
@@ -179,6 +198,74 @@ static void echo_client_fail(echo_client_app_t* app, const char* reason)
 {
     if (app != NULL && !app->finished) {
         echo_client_finish(app, reason);
+    }
+}
+
+static void echo_client_start_zero_rtt_reconnect(evutil_socket_t socket, short events, void* user_data)
+{
+    echo_client_app_t*         app     = user_data;
+    utp_connect_0rtt_options_t options = UTP_CONNECT_0RTT_OPTIONS_INIT;
+    utp_status_t               status;
+
+    (void)socket;
+    (void)events;
+    if (app == NULL || app->finished || app->phase != ECHO_CLIENT_PHASE_TICKET_WAIT || app->context == NULL ||
+        app->session_token == NULL || app->session_token_size == 0u) {
+        return;
+    }
+    options.address            = app->server_ip;
+    options.target_peer_id     = "echo-server";
+    options.port               = app->server_port;
+    options.timeout_ms         = 3000u;
+    options.retries            = 0;
+    options.session_token      = app->session_token;
+    options.session_token_size = app->session_token_size;
+    app->phase                 = ECHO_CLIENT_PHASE_ZERO_RTT_CONNECT;
+    status                     = utp_context_connect_0rtt(app->context, &options);
+    if (status != UTP_STATUS_OK) {
+        echo_client_fail(app, "zero_rtt_connect_start_failed");
+    } else if (!app->quiet) {
+        fprintf(stdout, "[client] reconnecting with 0-rtt to %s:%" PRIu16 "\n", app->server_ip, app->server_port);
+    }
+}
+
+static void echo_client_session_token_ready(utp_connection_t* connection, void* user_data)
+{
+    echo_client_app_t*   app = user_data;
+    uint8_t*             token;
+    size_t               token_size = 0u;
+    utp_status_t         status;
+    const struct timeval zero_delay = {0, 0};
+
+    if (app == NULL || app->finished || app->phase != ECHO_CLIENT_PHASE_TICKET_CONNECT ||
+        app->ticket_connection != connection || app->reconnect_event == NULL) {
+        return;
+    }
+    status = utp_connection_export_session_token(connection, NULL, 0u, &token_size);
+    if (status != UTP_STATUS_OVERFLOW || token_size == 0u) {
+        echo_client_fail(app, "session_token_size_failed");
+        return;
+    }
+    token = malloc(token_size);
+    if (token == NULL) {
+        echo_client_fail(app, "session_token_allocation_failed");
+        return;
+    }
+    status = utp_connection_export_session_token(connection, token, token_size, &token_size);
+    if (status != UTP_STATUS_OK || token_size == 0u) {
+        free(token);
+        echo_client_fail(app, "session_token_export_failed");
+        return;
+    }
+    free(app->session_token);
+    app->session_token             = token;
+    app->session_token_size        = token_size;
+    app->phase                     = ECHO_CLIENT_PHASE_TICKET_WAIT;
+    app->ticket_connection_closing = true;
+    utp_connection_set_on_session_token_ready(connection, NULL, NULL);
+    utp_connection_close(connection);
+    if (event_add(app->reconnect_event, &zero_delay) != 0) {
+        echo_client_fail(app, "zero_rtt_reconnect_schedule_failed");
     }
 }
 
@@ -383,8 +470,18 @@ static void echo_client_connected(utp_connection_t* connection, void* user_data)
     if (app == NULL || app->finished) {
         return;
     }
+    if (app->zero_rtt_reconnect && app->phase == ECHO_CLIENT_PHASE_TICKET_CONNECT) {
+        app->ticket_connection = connection;
+        utp_connection_set_on_session_token_ready(connection, echo_client_session_token_ready, app);
+        return;
+    }
+    if (app->zero_rtt_reconnect && app->phase != ECHO_CLIENT_PHASE_ZERO_RTT_CONNECT) {
+        echo_client_fail(app, "unexpected_connected_callback");
+        return;
+    }
     app->connection   = connection;
     app->connected_ms = echo_now_ms();
+    app->phase        = ECHO_CLIENT_PHASE_ECHO;
     status            = utp_connection_create_stream(connection, UTP_STREAM_TYPE_BIDIRECTIONAL, &stream_id);
     if (status != UTP_STATUS_OK) {
         echo_client_fail(app, "stream_create_failed");
@@ -416,8 +513,12 @@ static void echo_client_connection_error(utp_connection_t* connection, const utp
 {
     echo_client_app_t* app = user_data;
 
-    (void)connection;
     (void)info;
+    if (app != NULL && app->zero_rtt_reconnect && app->ticket_connection_closing &&
+        connection == app->ticket_connection) {
+        app->ticket_connection = NULL;
+        return;
+    }
     if (app != NULL && !app->finished) {
         echo_client_fail(app, "connection_error");
     }
@@ -434,15 +535,16 @@ static void echo_client_timeout(evutil_socket_t socket, short events, void* user
 
 int main(int argc, char** argv)
 {
-    const char*           server_ip   = "127.0.0.1";
-    const char*           bind_ip     = "0.0.0.0";
-    uint16_t              server_port = 9000u;
-    uint16_t              bind_port   = 0u;
-    uint32_t              count       = 5u;
-    uint32_t              length      = 16u;
-    uint64_t              total_bytes = 0u;
-    utp_encryption_mode_t encryption  = UTP_ENCRYPTION_NONE;
-    bool                  quiet       = false;
+    const char*           server_ip          = "127.0.0.1";
+    const char*           bind_ip            = "0.0.0.0";
+    uint16_t              server_port        = 9000u;
+    uint16_t              bind_port          = 0u;
+    uint32_t              count              = 5u;
+    uint32_t              length             = 16u;
+    uint64_t              total_bytes        = 0u;
+    utp_encryption_mode_t encryption         = UTP_ENCRYPTION_NONE;
+    bool                  quiet              = false;
+    bool                  zero_rtt_reconnect = false;
     struct event_base*    event_base;
     utp_context_options_t options         = UTP_CONTEXT_OPTIONS_INIT;
     utp_connect_options_t connect_options = UTP_CONNECT_OPTIONS_INIT;
@@ -489,6 +591,8 @@ int main(int argc, char** argv)
                 echo_client_usage(argv[0]);
                 return 2;
             }
+        } else if (strcmp(argv[index], "--zero-rtt-reconnect") == 0) {
+            zero_rtt_reconnect = true;
         } else if (strcmp(argv[index], "--quiet") == 0 || strcmp(argv[index], "--silent") == 0) {
             quiet = true;
         } else {
@@ -526,11 +630,16 @@ int main(int argc, char** argv)
         event_base_free(event_base);
         return 1;
     }
-    app.event_base     = event_base;
-    app.payload_length = length;
-    app.target_bytes   = target_bytes;
-    app.started_ms     = echo_now_ms();
-    app.quiet          = quiet;
+    app.event_base         = event_base;
+    app.context            = context;
+    app.server_ip          = server_ip;
+    app.server_port        = server_port;
+    app.payload_length     = length;
+    app.target_bytes       = target_bytes;
+    app.started_ms         = echo_now_ms();
+    app.quiet              = quiet;
+    app.zero_rtt_reconnect = zero_rtt_reconnect;
+    app.phase              = zero_rtt_reconnect ? ECHO_CLIENT_PHASE_TICKET_CONNECT : ECHO_CLIENT_PHASE_DIRECT_CONNECT;
     {
         static const uint8_t alphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -568,6 +677,17 @@ int main(int argc, char** argv)
 
         (void)event_add(app.timeout_event, &timeout);
     }
+    if (zero_rtt_reconnect) {
+        app.reconnect_event = evtimer_new(event_base, echo_client_start_zero_rtt_reconnect, &app);
+        if (app.reconnect_event == NULL) {
+            fprintf(stderr, "[client] 0-rtt reconnect event allocation failed\n");
+            event_free(app.timeout_event);
+            XXH3_freeState(app.hash);
+            utp_context_destroy(context);
+            event_base_free(event_base);
+            return 1;
+        }
+    }
     utp_context_set_on_connected(context, echo_client_connected, &app);
     utp_context_set_on_connect_error(context, echo_client_connect_error, &app);
     utp_context_set_on_connection_error(context, echo_client_connection_error, &app);
@@ -589,7 +709,11 @@ int main(int argc, char** argv)
     if (!app.finished) {
         echo_client_fail(&app, "loop_exit");
     }
+    if (app.reconnect_event != NULL) {
+        event_free(app.reconnect_event);
+    }
     event_free(app.timeout_event);
+    free(app.session_token);
     XXH3_freeState(app.hash);
     utp_context_destroy(context);
     event_base_free(event_base);
