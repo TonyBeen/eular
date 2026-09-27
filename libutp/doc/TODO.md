@@ -12,7 +12,7 @@
 
 动态种子由 `HKDF-Extract("libutp-obf-table-v1", seed_root || epoch_be32)` 与 `HKDF-Expand(prk, "entry" || uint8(selector - 4), 16)` 派生。实施前需定义连接轮换时的 epoch 控制帧、旧 epoch 宽限、重传和回滚规则。
 
-非加密时动态种子只是混淆参数，不是密钥；加密模式下需绑定到已认证的握手转录。`NAT_PROBE` 不使用该帧和种子表。
+非加密时动态种子只是混淆参数，不是密钥。加密连接中，`seed_root` 和 `epoch` 必须参与握手密钥生成；否则它们被篡改后，双方仍可能完成加密握手，但会使用不同的混淆表，导致后续通信失败。`NAT_PROBE` 不使用该帧和种子表。
 
 ## ACK-of-ACK 接收历史回收
 
