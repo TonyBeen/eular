@@ -2,15 +2,19 @@
 
 ## 全包混淆与零拷贝
 
+混淆是后续必须支持的能力，但当前优先完成 UTP 传输可靠性、异常路径和跨平台验证；在 PacketOut
+生命周期、`WOULD_BLOCK` 重试和重传语义没有通过测试前，不开始实现混淆。混淆草案可以继续演进，不能视为
+已冻结的 v4 wire 规范。
+
 暂不在当前实现中开启全包混淆。对现有 `stream_write()` 提供的外部明文 slice，全包 XOR 需要在最终分片、endpoint 和包号确定后生成 wire 缓冲，因此与通用的 socket 零拷贝路径冲突。不得就地修改应用缓冲，也不得在异步发送后恢复。
 
 后续如果重启该方案，应优先采用 MTU 级 wire scratch 池，同一发送尝试只 materialize 一次，并另设计面向应用生成数据的 packet-builder/write-view API。详细协议见 [全包轻量混淆与 Padding 方案](utp/proto/全包轻量混淆与Padding方案.md)。
 
 ## 连接级动态混淆种子
 
-启动和握手使用 libutp 与 `ntrs` 共用的 4 组内置种子（索引 `0..3`）。主动端为每次连接尝试生成 `seed_root`，随 Initial 中的 `OBFUSCATION` 帧发送；被动端解析 Initial 后安装动态表，并以 Handshake 作为确认。主动端收到 Handshake 后才发送动态索引 `4..255` 的包；两端共用同一张动态表，不区分 direction。
+启动和握手使用 libutp 与 `ntrs` 共用的 16 组内置种子（索引 `0..15`）。主动端为每次连接尝试生成 `seed_root`，随 Initial 中的 `OBFUSCATION` 帧发送；被动端解析 Initial 后安装动态表，并以 Handshake 作为确认。主动端收到 Handshake 后才发送动态索引 `16..255` 的包；两端共用同一张动态表，不区分 direction。
 
-动态种子由 `HKDF-Extract("libutp-obf-table-v1", seed_root || epoch_be32)` 与 `HKDF-Expand(prk, "entry" || uint8(selector - 4), 16)` 派生。实施前需定义连接轮换时的 epoch 控制帧、旧 epoch 宽限、重传和回滚规则。
+动态种子由 `HKDF-Extract("libutp-obf-table-v1", seed_root || epoch_be32)` 与 `HKDF-Expand(prk, "entry" || uint8(selector - 16), 16)` 派生。实施前需定义连接轮换时的 epoch 控制帧、旧 epoch 宽限、重传和回滚规则；这些细节当前不冻结。
 
 非加密时动态种子只是混淆参数，不是密钥。加密连接中，`seed_root` 和 `epoch` 必须参与握手密钥生成；否则它们被篡改后，双方仍可能完成加密握手，但会使用不同的混淆表，导致后续通信失败。`NAT_PROBE` 不使用该帧和种子表。
 

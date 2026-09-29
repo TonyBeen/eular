@@ -1,6 +1,8 @@
 # 全包轻量混淆与 Padding 方案
 
-> 状态：协议设计草案，当前代码尚未实现。
+> 状态：协议设计草案，当前代码尚未实现，尚未冻结任何 v4 wire 细节。
+> 本文中的 v4 只是候选版本标识；PacketOut 生命周期、selector 混合器、动态种子轮换和
+> 发送/接收组合顺序仍需结合传输层实现与故障测试继续调整。
 >
 > 适用范围：加密和非加密的 libutp、Rendezvous 和 NTRS 报文。`NAT_PROBE` 保持明文。
 >
@@ -27,7 +29,7 @@
 
 轻量混淆不提供密码学安全性：
 
-- 内置的 4 组种子（索引 `0..3`）是协议常量，不是秘密密钥。
+- 内置的 16 组种子（索引 `0..15`）是协议常量，不是秘密密钥。
 - 了解实现或提取二进制常量的对手可以恢复明文。
 - 非加密模式不提供机密性、完整性或身份认证。
 - 本方案只用于消除简单的固定偏移、固定帧值和重复包长特征，不伪装 QUIC、DTLS、DNS 或其他协议。
@@ -65,8 +67,8 @@ SCID(4) | DCID(4) | PacketNumber(8) | PayloadLength(2) | Type(1) | Reserve(1)
 ```text
 endpoint_bytes = family | address | port | IPv6 scope_id
 hash = HASH64(endpoint_bytes || PacketNumber || "utp-wire-selector-v1")
-selector = hash mod 4                          // 内置表阶段
-selector = 4 + (hash mod 252)                  // 动态表阶段
+selector = hash mod 16                         // 内置表阶段
+selector = 16 + (hash mod 240)                 // 动态表阶段
 ```
 
 `HASH` 必须作为 wire protocol 的一部分固定，不能使用平台 `rand()`、容器哈希或编译器相关实现。它不负责安全性，只需在所有平台产生完全一致的 8 bit 结果。
@@ -91,16 +93,16 @@ selector = 4 + (hash mod 252)                  // 动态表阶段
 
 ### 5.1 种子表
 
-协议内置 4 组固定种子表，编号为 `0..3`，用于无状态启动和握手阶段：
+协议内置 16 组固定种子表，编号为 `0..15`，用于无状态启动和握手阶段：
 
 ```text
-seed = builtin_seed_table[selector]       // selector 为 0..3
+seed = builtin_seed_table[selector]       // selector 为 0..15
 ```
 
 种子表必须：
 
 - 由离线工具一次生成后以常量形式提交。
-- 成为协议版本的一部分，所有 libutp 端和 `ntrs` 使用完全相同的 4 组顺序和数值。
+- 成为协议版本的一部分，所有 libutp 端和 `ntrs` 使用完全相同的 16 组顺序和数值。
 - 不在运行时修改，不被当作用户密钥或安全配置。
 
 此表与 NAT 探测协议无关：`NAT_PROBE` 不选种子、不执行 XOR，`ntrs_natc` 也不需要链接或加载此表。`libutp` 与 `ntrs` 只共用这份启动表；连接建立后的动态表属于单条连接，不是 NTRS 全局配置。
@@ -146,7 +148,9 @@ for i = 0 .. WireLength - 1:
 - 发送与接收共用同一函数，偶数偏移和奇数偏移都需有测试向量。
 - 偏移 19 是唯一的 selector 启动特例；该偏移的掩码必须等于 selector。
 
-共有 256 个 selector，其中 `0..3` 是内置表，`4..255` 是当前连接的动态表。按 endpoint 和包号选索引的目的是让连续报文分散在各组掩码中，不是提供密码学强度。
+共有 256 个 selector，其中 `0..15` 是内置表，`16..255` 是当前连接的动态表。按 endpoint 和包号选索引的目的是让连续报文分散在各组掩码中，不是提供密码学强度。
+
+16 组启动种子用于提高启动阶段的掩码多样性，但不改变“轻量混淆不是加密”的边界。后续实现需要评估更复杂的、跨平台固定的字节混合器和域分离方式，避免使用过于简单的单字节线性递推；具体轮数、常量、Hash/Expand 原语和 CPU 开销目前都不冻结，必须先通过传输层故障测试和跨平台向量测试。
 
 ### 5.3 为什么不从 payload 推导 selector
 
@@ -173,7 +177,7 @@ prk = HKDF-Extract(
 )
 dynamic_seed[selector] = HKDF-Expand(
     prk,
-    info   = "entry" || uint8(selector - 4),
+    info   = "entry" || uint8(selector - 16),
     length = 16
 )
 ```
@@ -183,20 +187,20 @@ dynamic_seed[selector] = HKDF-Expand(
 - `salt` ：固定协议域标识，不在线传输，用于避免与其他派生用途冲突。
 - `seed_root` ：主动端为一次连接尝试生成的 16 字节根，重传时不改变。
 - `epoch_be32` ：以大端序编码的 4 字节表版本，用于区分不同动态表。
-- `selector - 4` ：动态表内部序号，`selector=4` 对应第 0 项。
+- `selector - 16` ：动态表内部序号，`selector=16` 对应第 0 项。
 - `length=16` ：每项动态种子的固定长度，不需要额外编码。
 
-种子索引空间统一为 `0..255`：`0..3` 永远指向内置表，`4..255` 指向当前连接的动态表。因此报文无需增加“使用哪张表”的额外标志；看到 selector 即可知道是启动表还是动态表。动态表仅为 `4..255` 生成条目，不覆盖 `0..3`。
+种子索引空间统一为 `0..255`：`0..15` 永远指向内置表，`16..255` 指向当前连接的动态表。因此报文无需增加“使用哪张表”的额外标志；看到 selector 即可知道是启动表还是动态表。动态表仅为 `16..255` 生成条目，不覆盖 `0..15`。
 
-`active_seed_table[selector]` 不是另一个实体表：`selector < 4` 时它是 `builtin_seed_table[selector]`；`selector >= 4` 时它是按上述 HKDF 懒惰派生的 `dynamic_seed[selector]`。
+`active_seed_table[selector]` 不是另一个实体表：`selector < 16` 时它是 `builtin_seed_table[selector]`；`selector >= 16` 时它是按上述 HKDF 懒惰派生的 `dynamic_seed[selector]`。
 
 这样每条连接只需保存很小的根和 epoch，不需要分配 256 组大表。HKDF 只用于定义良好、跨平台一致的种子扩展，不改变非加密模式不提供安全性的边界。
 
 交换使用 Initial 与 Handshake 的现有握手时序，不再新增方向字段或独立 ACK 帧：
 
-1. 主动端在连接尝试开始时生成 `seed_root`，随 Initial 中的 `OBFUSCATION` 帧发送。Initial 使用 selector `0..3` 的内置表，因此被动端可在获得动态根之前解码。
+1. 主动端在连接尝试开始时生成 `seed_root`，随 Initial 中的 `OBFUSCATION` 帧发送。Initial 使用 selector `0..15` 的内置表，因此被动端可在获得动态根之前解码。
 2. 被动端收到并校验 Initial 后立即安装动态表，并用内置表返回 Handshake 确认。重复 Initial 必须幂等，不重新生成 `seed_root`。
-3. 主动端只在收到 Handshake 后允许发送 selector `4..255` 的动态包；在此之前，包括 0-RTT 和重传，使用内置表。
+3. 主动端只在收到 Handshake 后允许发送 selector `16..255` 的动态包；在此之前，包括 0-RTT 和重传，使用内置表。
 4. 被动端在收到 Initial 后可以使用动态表回包，但 Handshake 本身使用内置表，以保证主动端可以获得切换确认。
 5. 切换期同时保留内置表和动态表；接收时根据 selector 选择表，不做所有 Connection 遍历。迟到的内置表包在切换窗口内仍然有效。
 
