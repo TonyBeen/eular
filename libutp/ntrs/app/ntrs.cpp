@@ -1587,8 +1587,9 @@ void NtrsServer::handlePong(const utp_ntrs_endpoint_t& observed, const utp_frame
          entry != shared_state_->registrations.end(); ++entry) {
         Registration& registration = entry->second;
 
-        if (endpoints_equal(registration.endpoint, observed) && registration.matchesToken(pong.registration_token) &&
+        if (registration.matchesToken(pong.registration_token) && registration.acceptsFamily(observed) &&
             registration.keepalive_packet_number == pong.acknowledged_packet_number) {
+            registration.updateEndpoint(observed);
             registration.touch(utp_ntrs_now_ms());
             return;
         }
