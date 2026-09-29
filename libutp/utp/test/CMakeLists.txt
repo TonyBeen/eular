@@ -1,3 +1,5 @@
+set(UTP_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
 function(utp_apply_toolchain_flags target flags_variable)
     set(flags ${${flags_variable}})
     if(NOT flags)
@@ -23,7 +25,7 @@ endfunction()
 
 function(utp_configure_c_test target)
     target_link_libraries(${target} PRIVATE utp event_core)
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(${target} PRIVATE "${UTP_ROOT_DIR}/src")
     utp_apply_toolchain_flags(${target} UTP_SANITIZER_FLAGS)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
@@ -36,8 +38,8 @@ endfunction()
 
 function(utp_configure_cpp_test target)
     target_link_libraries(${target} PRIVATE utp event_core)
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/test"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
+    target_include_directories(${target} PRIVATE "${UTP_ROOT_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${UTP_ROOT_DIR}/../3rd")
     target_compile_definitions(${target} PRIVATE ${UTP_SOCKET_BATCH_DEFINITIONS})
     utp_apply_toolchain_flags(${target} UTP_SANITIZER_FLAGS)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -50,34 +52,39 @@ endfunction()
 
 if(BUILD_TESTING AND UTP_BUILD_TESTS)
     find_package(Threads REQUIRED)
-    add_executable(utp_api_test test/test_core.c)
+    add_executable(utp_api_test test_core.c)
     utp_configure_c_test(utp_api_test)
     target_include_directories(utp_api_test PRIVATE "${UTP_GENERATED_INCLUDE_DIR}")
-    add_executable(utp_public_api_test test/test_public_api.c)
+
+    add_executable(utp_public_api_test test_public_api.c)
     utp_configure_c_test(utp_public_api_test)
-    target_include_directories(utp_public_api_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../3rd")
-    foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming stream connection congestion minmax bw_sampler bbr mtu nat parser_fuzz transport_integration)
-        add_executable(utp_${test_name}_test test/test_${test_name}.cc)
+    target_include_directories(utp_public_api_test PRIVATE "${UTP_ROOT_DIR}/../3rd")
+
+    foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming
+            stream connection congestion minmax bw_sampler bbr mtu nat parser_fuzz transport_integration)
+        add_executable(utp_${test_name}_test test_${test_name}.cc)
         utp_configure_cpp_test(utp_${test_name}_test)
     endforeach()
+
     target_link_libraries(utp_transport_integration_test PRIVATE Threads::Threads)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTP_NTRS_EXECUTABLE)
-        add_executable(utp_ntrs_integration_test test/test_ntrs_integration.cc)
+        add_executable(utp_ntrs_integration_test test_ntrs_integration.cc)
         utp_configure_cpp_test(utp_ntrs_integration_test)
         set_tests_properties(utp_ntrs_integration_test PROPERTIES
             ENVIRONMENT "UTP_NTRS_EXECUTABLE=${UTP_NTRS_EXECUTABLE}")
     endif()
+
     if(APPLE)
-        add_subdirectory(test/socket_fault)
+        add_subdirectory(socket_fault)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND UTP_SOCKET_BATCH_DEFINITIONS)
-        add_subdirectory(test/socket_batch_fault)
+        add_subdirectory(socket_batch_fault)
     endif()
 endif()
 
 if(UTP_BUILD_FUZZERS)
-    add_executable(utp_packet_parser_fuzzer test/fuzz/packet_parser_fuzz.cc)
+    add_executable(utp_packet_parser_fuzzer fuzz/packet_parser_fuzz.cc)
     target_link_libraries(utp_packet_parser_fuzzer PRIVATE utp)
-    target_include_directories(utp_packet_parser_fuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(utp_packet_parser_fuzzer PRIVATE "${UTP_ROOT_DIR}/src")
     utp_apply_toolchain_flags(utp_packet_parser_fuzzer UTP_FUZZER_FLAGS)
     add_custom_target(utp_fuzz_packet_parser
         COMMAND $<TARGET_FILE:utp_packet_parser_fuzzer> -runs=100000 -max_len=2048
@@ -86,12 +93,9 @@ if(UTP_BUILD_FUZZERS)
 endif()
 
 if(UTP_BUILD_BENCHMARKS)
-    add_executable(utp_container_benchmark benchmark/bench_containers.c)
+    add_executable(utp_container_benchmark "${UTP_ROOT_DIR}/benchmark/bench_containers.c")
     utp_configure_c_test(utp_container_benchmark)
-    add_executable(utp_concurrent_connection_benchmark benchmark/bench_concurrent_connections.c)
+    add_executable(utp_concurrent_connection_benchmark
+        "${UTP_ROOT_DIR}/benchmark/bench_concurrent_connections.c")
     utp_configure_c_test(utp_concurrent_connection_benchmark)
-endif()
-
-if(UTP_BUILD_EXAMPLES)
-    add_subdirectory(examples)
 endif()
