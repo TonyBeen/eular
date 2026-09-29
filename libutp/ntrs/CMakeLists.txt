@@ -103,7 +103,8 @@ if(UTP_NTRS_BUILD_SERVICES)
     target_compile_features(ntrs PRIVATE cxx_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(ntrs PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
-        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
+        set_source_files_properties(app/app_log.c PROPERTIES
+            COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes;-Wno-error=format-nonliteral")
     endif()
     add_executable(natd_hub app/natd_hub.cpp app/app_log.c)
     target_link_libraries(natd_hub PRIVATE
@@ -117,7 +118,8 @@ if(UTP_NTRS_BUILD_SERVICES)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(natd_hub PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
-        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
+        set_source_files_properties(app/app_log.c PROPERTIES
+            COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes;-Wno-error=format-nonliteral")
     elseif(MSVC)
         target_compile_options(natd_hub PRIVATE /utf-8 /W4 /WX)
     endif()
@@ -137,7 +139,8 @@ if(UTP_NTRS_BUILD_SERVICES)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(natd_node PRIVATE
             -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
-        set_source_files_properties(app/app_log.c PROPERTIES COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes")
+        set_source_files_properties(app/app_log.c PROPERTIES
+            COMPILE_OPTIONS "-Wstrict-prototypes;-Wmissing-prototypes;-Wno-error=format-nonliteral")
     elseif(MSVC)
         target_compile_options(natd_node PRIVATE /utf-8 /W4 /WX)
     endif()

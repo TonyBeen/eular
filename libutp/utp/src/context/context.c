@@ -1755,6 +1755,18 @@ static utp_internal_error_t utp_context_send_ntrs_keepalive_ping(utp_context_t* 
     }
     if (error != UTP_INTERNAL_ERROR_OK) return error;
     error = utp_context_send_rendezvous_output(context, &registration->endpoint, packet, sizeof(packet));
+    if (utp_internal_log_enabled(&context->logger,
+                                 error == UTP_INTERNAL_ERROR_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING)) {
+        char address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+        char message[256];
+
+        if (utp_address_format(&registration->endpoint, address, sizeof(address)) == UTP_INTERNAL_ERROR_OK) {
+            (void)snprintf(message, sizeof(message), "NTRS -> Node=%s [KeepalivePing] packet=%" PRIu64 " result=%s",
+                           address, header.packet_number, utp_status_string(utp_internal_error_to_status(error)));
+            utp_context_log(context, error == UTP_INTERNAL_ERROR_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING,
+                            message);
+        }
+    }
     if (error == UTP_INTERNAL_ERROR_OK) {
         registration->keepalive_packet_number = header.packet_number;
         registration->keepalive_pending       = true;
@@ -1802,6 +1814,18 @@ static utp_internal_error_t utp_context_send_ntrs_pong(utp_context_t* context, c
     if (error == UTP_INTERNAL_ERROR_OK) {
         ++context->next_rendezvous_packet_number;
         error = utp_context_send_rendezvous_output(context, peer, packet, sizeof(packet));
+    }
+    if (utp_internal_log_enabled(&context->logger,
+                                 error == UTP_INTERNAL_ERROR_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING)) {
+        char address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+        char message[256];
+
+        if (utp_address_format(peer, address, sizeof(address)) == UTP_INTERNAL_ERROR_OK) {
+            (void)snprintf(message, sizeof(message), "NTRS -> Node=%s [KeepalivePong] ack=%" PRIu64 " result=%s",
+                           address, acknowledged_packet_number, utp_status_string(utp_internal_error_to_status(error)));
+            utp_context_log(context, error == UTP_INTERNAL_ERROR_OK ? UTP_LOG_LEVEL_INFO : UTP_LOG_LEVEL_WARNING,
+                            message);
+        }
     }
     return error;
 }
@@ -5873,6 +5897,17 @@ static utp_internal_error_t utp_context_on_rendezvous_packet(utp_context_t* cont
                     memcmp(ping.registration_token, context->ntrs_registration.registration_token,
                            sizeof(ping.registration_token)) != 0) {
                     return UTP_INTERNAL_ERROR_PROTOCOL;
+                }
+                if (utp_internal_log_enabled(&context->logger, UTP_LOG_LEVEL_INFO)) {
+                    char address[UTP_ADDRESS_TEXT_MAX_LENGTH];
+                    char message[256];
+
+                    if (utp_address_format(peer, address, sizeof(address)) == UTP_INTERNAL_ERROR_OK) {
+                        (void)snprintf(message, sizeof(message),
+                                       "NTRS <- Node=%s [KeepalivePing] packet=%" PRIu64 " result=ok", address,
+                                       header->packet_number);
+                        utp_context_log(context, UTP_LOG_LEVEL_INFO, message);
+                    }
                 }
                 utp_context_note_ntrs_activity(context, now_us);
                 ntrs_ping_seen = true;

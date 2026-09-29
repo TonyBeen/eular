@@ -1,19 +1,42 @@
 #include <errno.h>
 #include <inttypes.h>
+#if !defined(_WIN32)
 #include <netdb.h>
+#endif
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
+#include <time.h>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
+#include <unistd.h>
+#else
+#include <pthread.h>
+#endif
 
 #include <algorithm>
 #include <map>
 #include <string>
 #include <utility>
 
+#if !defined(_WIN32)
 #include <arpa/inet.h>
+#endif
 #include <event2/event.h>
 #include <event2/util.h>
 #include <utils/CLI11.hpp>
@@ -21,12 +44,92 @@
 
 static const size_t kPayloadSize = 16384u;
 
-#define LOG(...)                      \
-    do {                              \
-        fprintf(stdout, __VA_ARGS__); \
-        fprintf(stdout, "\n");        \
-        fflush(stdout);               \
-    } while (0)
+static unsigned long nat_punch_thread_id(void)
+{
+#if defined(_WIN32)
+    return static_cast<unsigned long>(GetCurrentThreadId());
+#elif defined(__linux__)
+    return static_cast<unsigned long>(syscall(SYS_gettid));
+#else
+    return static_cast<unsigned long>(reinterpret_cast<uintptr_t>(pthread_self()));
+#endif
+}
+
+static void nat_punch_log(const char* source, int line, const char* level, const char* format, ...)
+{
+    struct timeval timestamp;
+    struct tm       local_time = {};
+    time_t          seconds;
+    char            time_text[32];
+    const char*     source_name;
+    va_list         arguments;
+
+    seconds = 0;
+    if (evutil_gettimeofday(&timestamp, NULL) != 0) {
+        timestamp.tv_sec  = 0;
+        timestamp.tv_usec = 0;
+    }
+    seconds = static_cast<time_t>(timestamp.tv_sec);
+#if defined(_WIN32)
+    if (localtime_s(&local_time, &seconds) != 0) {
+#else
+    if (localtime_r(&seconds, &local_time) == NULL) {
+#endif
+        (void)snprintf(time_text, sizeof(time_text), "0000-00-00 00:00:00");
+        timestamp.tv_usec = 0L;
+    } else if (strftime(time_text, sizeof(time_text), "%Y-%m-%d %H:%M:%S", &local_time) == 0u) {
+        (void)snprintf(time_text, sizeof(time_text), "0000-00-00 00:00:00");
+        timestamp.tv_usec = 0L;
+    }
+    source_name = strrchr(source, '/');
+#if defined(_WIN32)
+    {
+        const char* windows_source_name = strrchr(source, '\\');
+        if (windows_source_name != NULL && (source_name == NULL || windows_source_name > source_name)) {
+            source_name = windows_source_name;
+        }
+    }
+#endif
+    source_name = source_name == NULL ? source : source_name + 1;
+    fprintf(stdout, "%s.%03u %lu %s nat_punch: ", time_text, (unsigned int)(timestamp.tv_usec / 1000L),
+            nat_punch_thread_id(), level);
+    va_start(arguments, format);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+    vfprintf(stdout, format, arguments);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+    va_end(arguments);
+    fprintf(stdout, " %s:%d\n", source_name, line);
+    fflush(stdout);
+}
+
+#define LOG(...) nat_punch_log(__FILE__, __LINE__, "I", __VA_ARGS__)
+
+#if defined(_WIN32)
+struct NatPunchWinsock {
+    bool initialized;
+
+    NatPunchWinsock() : initialized(false)
+    {
+        WSADATA data;
+        initialized = WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }
+
+    ~NatPunchWinsock()
+    {
+        if (initialized) WSACleanup();
+    }
+};
+#endif
 
 struct NatPunchApp;
 
@@ -107,10 +210,12 @@ static void        nat_punch_passive_incoming_stream(utp_connection_t* connectio
 
 static void nat_punch_context_log(utp_log_level_t level, const char* message)
 {
-    if (level == UTP_LOG_LEVEL_WARNING) {
-        LOG("nat_punch [UTP WARNING] %s", message);
+    if (level == UTP_LOG_LEVEL_INFO) {
+        nat_punch_log(__FILE__, __LINE__, "I", "%s", message);
+    } else if (level == UTP_LOG_LEVEL_WARNING) {
+        nat_punch_log(__FILE__, __LINE__, "W", "UTP %s", message);
     } else if (level == UTP_LOG_LEVEL_ERROR) {
-        LOG("nat_punch [UTP ERROR] %s", message);
+        nat_punch_log(__FILE__, __LINE__, "E", "UTP %s", message);
     }
 }
 
@@ -870,6 +975,14 @@ int main(int argc, char** argv)
         return error.get_exit_code();
     }
 
+#if defined(_WIN32)
+    NatPunchWinsock winsock;
+    if (!winsock.initialized) {
+        LOG("nat_punch winsock_start_failed");
+        return EXIT_FAILURE;
+    }
+#endif
+
     if (encryption_name == "aes128")
         encryption = UTP_ENCRYPTION_AES_GCM_128;
     else if (encryption_name == "aes256")
@@ -931,7 +1044,7 @@ int main(int argc, char** argv)
         context_options.mtu_max         = 1500u;
         context_options.enable_dplpmtud = !disable_mtu_probe;
         context_options.log_sink        = nat_punch_context_log;
-        context_options.log_level       = UTP_LOG_LEVEL_WARNING;
+        context_options.log_level       = UTP_LOG_LEVEL_INFO;
         status = utp_context_create(&context_options, &app.context);
         if (status == UTP_STATUS_OK) {
             status = utp_context_bind(app.context, bind_ip, bind_port,

@@ -22,9 +22,9 @@ foreach(example_target IN LISTS UTP_EXAMPLES)
             target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
                 -Wformat=2)
             if(example_target STREQUAL "ntrs_natc")
-                # C 日志桥接到 C++ 时需要透传受控的可变格式串。
+                # 日志桥接会透传受控的可变格式串；保留格式检查，但不将该项升级为错误。
                 set_source_files_properties(ntrs_natc.cpp PROPERTIES
-                    COMPILE_OPTIONS "-Wno-format-nonliteral")
+                    COMPILE_OPTIONS "-Wno-error=format-nonliteral")
             endif()
         else()
             target_compile_options(${example_target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow
@@ -37,9 +37,14 @@ endforeach()
 
 target_compile_features(nat_punch PRIVATE cxx_std_11)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(nat_punch PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2)
+    target_compile_options(nat_punch PRIVATE -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wformat=2
+        -Wno-error=format-nonliteral)
 endif()
 
 target_include_directories(ntrs_natc SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
 target_include_directories(nat_punch SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../utils/include")
 target_compile_features(ntrs_natc PRIVATE cxx_std_11)
+
+if(WIN32)
+    target_link_libraries(nat_punch PRIVATE ws2_32)
+endif()
