@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <inttypes.h>
 #include <signal.h>
 #include <stdint.h>
 #include <string.h>
@@ -1311,9 +1310,10 @@ void NtrsServer::expireRegistrations(uint64_t now_ms)
             const std::array<uint8_t, UTP_RENDEZVOUS_REGISTRATION_TOKEN_SIZE> token = entry->second.token;
 
             fprintf(stderr,
-                    "NTRS <- Node=%s [Disconnected] peer_id=%s reason=%s idle_ms=%" PRIu64 " keepalive_probes=%u\n",
+                    "NTRS <- Node=%s [Disconnected] peer_id=%s reason=%s idle_ms=%llu keepalive_probes=%u\n",
                     utp_ntrs_endpoint_format(&registration.endpoint, endpoint_text, sizeof(endpoint_text)),
-                    entry->first.c_str(), keepalive_expired ? "keepalive_timeout" : "registration_timeout", idle_ms,
+                    entry->first.c_str(), keepalive_expired ? "keepalive_timeout" : "registration_timeout",
+                    static_cast<unsigned long long>(idle_ms),
                     static_cast<unsigned int>(registration.keepalive_probes_sent));
             shared_state_->active_registration_tokens.erase(registration_token_key(token.data()));
             entry = shared_state_->registrations.erase(entry);
