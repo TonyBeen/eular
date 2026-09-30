@@ -383,7 +383,6 @@ static const uint8_t         k_primary_socket_index                 = UINT8_MAX;
 static volatile sig_atomic_t g_stop_requested                       = 0;
 
 enum NtrsRejectionReason {
-    k_rejection_peer_not_found = 2u,
     k_rejection_peer_id_exists = 3u,
     k_rejection_token_invalid  = 4u
 };
@@ -1727,11 +1726,10 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
     PendingRendezvous               existing_transaction               = {};
     std::string                     target_peer_id;
     std::string                     attempt_key;
-    bool                            rejected            = false;
+    bool                            target_unavailable  = false;
     bool                            existing            = false;
     bool                            prepare_calibration = false;
     bool                            prepare_rendezvous  = false;
-    uint16_t                        rejection_reason    = 0u;
 
     assert(shared_state_ != NULL);
     if (utp_rendezvous_request_decode(&request, frame.payload, frame.payload_length) != UTP_INTERNAL_ERROR_OK ||
@@ -1771,8 +1769,7 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
                 !appendRegistrationObservedCandidates(&target_plan, target_registration, public_candidate_count_) ||
                 !appendRegistrationPredictedCandidates(&target_plan, target_registration, public_candidate_count_) ||
                 !utp_ntrs_endpoint_to_sockaddr(&target_registration.endpoint, &target_address, &target_length)) {
-                rejected         = true;
-                rejection_reason = k_rejection_peer_not_found;
+                target_unavailable = true;
             } else {
                 if (!random_token(&transaction.punch_token)) return;
                 memcpy(transaction.attempt_id.data(), request.attempt_id, transaction.attempt_id.size());
@@ -1822,19 +1819,16 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
             }
         }
     }
-    if (rejected) {
-        fprintf(stderr, "NTRS <- Node=%s [RequestRejected] target_peer_id=%s reason=peer_not_found code=%u\n",
-                utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str(),
-                static_cast<unsigned int>(rejection_reason));
-        (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.attempt_id,
-                           sizeof(request.attempt_id), rejection_reason);
+    if (target_unavailable) {
+        fprintf(stderr, "NTRS <- Node=%s [RequestDropped] target_peer_id=%s reason=target_unavailable\n",
+                utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
         return;
     }
     if (existing) {
         if (!isRegistrationTokenActive(existing_transaction.target_token)) {
             erasePendingRendezvous(attempt_key);
-            (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.attempt_id,
-                               sizeof(request.attempt_id), k_rejection_peer_not_found);
+            fprintf(stderr, "NTRS <- Node=%s [RequestDropped] target_peer_id=%s reason=target_unavailable\n",
+                    utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
             return;
         }
         if (existing_transaction.calibration_pending) {
@@ -1856,8 +1850,8 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
     if (prepare_calibration) {
         if (!isRegistrationTokenActive(transaction.target_token)) {
             erasePendingRendezvous(attempt_key);
-            (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.attempt_id,
-                               sizeof(request.attempt_id), k_rejection_peer_not_found);
+            fprintf(stderr, "NTRS <- Node=%s [RequestDropped] target_peer_id=%s reason=target_unavailable\n",
+                    utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
             return;
         }
         CalibrationStartTask start = {};
@@ -1879,8 +1873,8 @@ void NtrsServer::handleRequest(UdpSocket* socket, const sockaddr_storage& peer, 
     if (!prepare_rendezvous) return;
     if (!isRegistrationTokenActive(transaction.target_token)) {
         erasePendingRendezvous(attempt_key);
-        (void)sendRejected(socket, peer, peer_length, UTP_RENDEZVOUS_MESSAGE_REQUEST, request.attempt_id,
-                           sizeof(request.attempt_id), k_rejection_peer_not_found);
+        fprintf(stderr, "NTRS <- Node=%s [RequestDropped] target_peer_id=%s reason=target_unavailable\n",
+                utp_ntrs_endpoint_format(&observed, source_text, sizeof(source_text)), target_peer_id.c_str());
         return;
     }
     PreparedDatagram redirect_datagram = {};

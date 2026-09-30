@@ -37,7 +37,7 @@
 3. B 向 A 的候选地址发送 `PUNCH`；A 收到合法 token 后只向对应来源 endpoint 重发保留的 Initial。
 4. 后续由普通 UTP Initial/Handshake/HandshakeDone 建立 Connection；NTRS 不转发业务数据。
 
-候选按完整 endpoint 去重，IPv6 还比较 scope；不同端口仍是不同候选。REQUEST/FORWARD 及重试在 pending 生命周期内幂等，旧的 pending、punch token 和 forward owner 超时清理，默认约 30 秒。目标注册失效或双对称 NAT 不具备可行候选时，NTRS 返回 `REJECTED`。
+候选按完整 endpoint 去重，IPv6 还比较 scope；不同端口仍是不同候选。REQUEST/FORWARD 及重试在 pending 生命周期内幂等，旧的 pending、punch token 和 forward owner 超时清理，默认约 30 秒。目标未注册、已失效、地址族不匹配或没有可行候选时，NTRS 静默丢弃 REQUEST，不回复 `REJECTED`，避免通过响应枚举在线 peer-id；请求方由自身的连接超时处理失败。REGISTER/UNREGISTER 的 token 或参数错误仍可返回 `REJECTED`。
 
 ## 5. 线程模型和队列
 

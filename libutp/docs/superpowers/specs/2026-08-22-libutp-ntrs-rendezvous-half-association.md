@@ -506,8 +506,10 @@ reference_id:bytes               // REGISTER 为 8，REQUEST 为 16，UNREGISTER
 reason_code:u16
 ```
 
-`reason_code` 是 NTRS 私有协议码，例如 `INVALID_REQUEST`、`PEER_NOT_FOUND`、`PEER_ID_EXISTS`、
-`TOKEN_INVALID`、`OVERLOADED`。Context 仅将其映射为既有公开 `utp_status_t` 或日志，不将其作为公开 ABI。
+`reason_code` 是 NTRS 私有协议码，例如 `INVALID_REQUEST`、`PEER_ID_EXISTS`、`TOKEN_INVALID`、
+`OVERLOADED`。Context 仅将其映射为既有公开 `utp_status_t` 或日志，不将其作为公开 ABI。对于目标
+peer 未注册、已失效、地址族不匹配或没有可行候选的 `REQUEST`，NTRS 必须静默丢弃，不能返回
+`REJECTED` 或其他响应，以免泄露 peer 在线状态。
 
 ## 8. NTRS 多线程服务模型
 

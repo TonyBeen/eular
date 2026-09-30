@@ -613,17 +613,10 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
     send_unregister(target.primary, service_port, registered.registration_token);
     expect_unregistered(target.primary, registered.registration_token);
     {
-        std::vector<uint8_t>      body;
-        uint64_t                  packet_number = 0u;
-        utp_rendezvous_rejected_t rejected      = {};
+        Datagram ignored = {};
 
         send_packet(source, service_port, request);
-        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
-        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
-        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
-        CHECK(rejected.reference_length == UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
-        CHECK(memcmp(rejected.reference_id, unacknowledged_id, sizeof(unacknowledged_id)) == 0);
-        CHECK(rejected.reason_code == 2u);
+        CHECK(!receive_datagram(source, 300u, &ignored));
     }
     {
         Datagram ignored = {};
@@ -636,17 +629,10 @@ static void test_registered_symmetric_prediction(uint16_t service_port)
         const uint8_t  rejected_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE] = {4u};
         const Datagram rejected_request = make_request("source-port-restricted", "symmetric-target",
                                                        UTP_NAT_CLASS_PORT_RESTRICTED, socket_port(source), rejected_id);
-        std::vector<uint8_t>      body;
-        uint64_t                  packet_number = 0u;
-        utp_rendezvous_rejected_t rejected      = {};
+        Datagram ignored = {};
 
         send_packet(source, service_port, rejected_request);
-        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
-        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
-        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
-        CHECK(rejected.reference_length == UTP_RENDEZVOUS_ATTEMPT_ID_SIZE);
-        CHECK(memcmp(rejected.reference_id, rejected_id, sizeof(rejected_id)) == 0);
-        CHECK(rejected.reason_code == 2u);
+        CHECK(!receive_datagram(source, 300u, &ignored));
     }
     (void)close(moved_source);
     (void)close(source);
@@ -724,19 +710,17 @@ static void test_registration_timeout(const char* executable)
     utp_rendezvous_registered_t registered;
     const Datagram            request = make_request("timeout-source", "expired-target", UTP_NAT_CLASS_PORT_RESTRICTED,
                                                      socket_port(source), attempt_id);
-    std::vector<uint8_t>      body;
-    uint64_t                  packet_number = 0u;
-    utp_rendezvous_rejected_t rejected      = {};
 
     NtrsProcess               server(executable, service_port, 200u, 100u);
     registered = register_peer(target, service_port, "expired-target", UTP_NAT_CLASS_PORT_RESTRICTED, 4u);
     CHECK(registered.registration_token[0u] != 0u);
     poll(NULL, 0u, 400);
     send_packet(source, service_port, request);
-    CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
-    CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
-    CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
-    CHECK(rejected.reason_code == 2u);
+    {
+        Datagram ignored = {};
+
+        CHECK(!receive_datagram(source, 300u, &ignored));
+    }
     (void)close(source);
     (void)close(target);
 }
@@ -766,13 +750,9 @@ static void test_keepalive_retry_timeout(const char* executable)
     poll(NULL, 0u, 1200);
     send_packet(source, service_port, request);
     {
-        uint64_t                  packet_number = 0u;
-        utp_rendezvous_rejected_t rejected      = {};
+        Datagram ignored = {};
 
-        CHECK(receive_message(source, UTP_RENDEZVOUS_MESSAGE_REJECTED, 1000u, &packet_number, &body));
-        CHECK(utp_rendezvous_rejected_decode(&rejected, body.data(), body.size()) == UTP_INTERNAL_ERROR_OK);
-        CHECK(rejected.rejected_message_type == UTP_RENDEZVOUS_MESSAGE_REQUEST);
-        CHECK(rejected.reason_code == 2u);
+        CHECK(!receive_datagram(source, 300u, &ignored));
     }
     (void)close(source);
     (void)close(target);
