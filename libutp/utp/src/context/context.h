@@ -130,9 +130,7 @@ typedef struct utp_context_connection_slot {
     uint8_t                    rendezvous_punch_token[UTP_RENDEZVOUS_PUNCH_TOKEN_SIZE];
     utp_address_t              rendezvous_candidates[UTP_CONTEXT_RENDEZVOUS_MAX_CANDIDATES];
     char                       target_peer_id[UTP_PEER_ID_MAX_LENGTH + 1u];  // 主动连接目标路由标识
-    uint8_t*                   zero_rtt_early_data;                          // 主动 0-RTT 重传期间持有的早期流数据
     uint64_t*                  zero_rtt_response_packet_numbers;             // 本轮实际发出的 HANDSHAKE 包号集合
-    size_t                     zero_rtt_early_data_size;                     // 缓存早期数据长度
     uint64_t                   zero_rtt_expires_at_seconds;                  // 票据绝对过期时间
     utp_status_t               terminal_error_status;                        // 待投递的本地终止错误
     const char*                terminal_error_reason;                        // 待投递错误原因，只借用静态字符串
@@ -149,7 +147,6 @@ typedef struct utp_context_connection_slot {
     uint8_t                    zero_rtt_encryption_mode;  // 票据指定加密模式
     uint8_t                    target_peer_id_length;
     uint8_t                    rendezvous_candidate_count;
-    bool                       zero_rtt_early_fin : 1;              // 早期流数据是否带 FIN
     bool                       zero_rtt_awaiting_accept : 1;        // 是否等待 on_new_connection 决策
     bool                       zero_rtt_accepted : 1;               // 应用是否已接受 0-RTT
     bool                       zero_rtt_response_active : 1;        // 是否维护 0-RTT 响应重传状态

@@ -605,32 +605,32 @@ void utp_stream_init(utp_stream_t* stream, uint32_t stream_id)
     error = utp_range_set_init(&stream->send_ack_ranges, NULL, SIZE_MAX);
     assert(error == UTP_INTERNAL_ERROR_OK);
     (void)error;
-    stream->priority                                      = UTP_STREAM_PRIORITY_DEFAULT;
-    stream->strict_wait_rounds                            = 0u;
-    stream->read_cb                                       = NULL;
-    stream->write_cb                                      = NULL;
-    stream->close_cb                                      = NULL;
-    stream->read_notification_next.tqe_next               = NULL;
-    stream->read_notification_next.tqe_prev               = NULL;
-    stream->write_notification_next.tqe_next              = NULL;
-    stream->write_notification_next.tqe_prev              = NULL;
-    stream->read_cb_data                                  = NULL;
-    stream->write_cb_data                                 = NULL;
-    stream->close_cb_data                                 = NULL;
-    stream->used                                          = true;
-    stream->local_fin_queued                              = false;
-    stream->local_fin_sent                                = false;
-    stream->local_fin_transmitted                         = false;
-    stream->peer_fin                                      = false;
-    stream->local_read_shutdown                           = false;
-    stream->local_write_reset                             = false;
-    stream->peer_reset                                    = false;
-    stream->peer_stop_sending_received                    = false;
-    stream->peer_final_size_known                         = false;
-    stream->stream_limit_released                         = false;
-    stream->closed_notified                               = false;
-    stream->defer_user_notifications                      = false;
-    stream->incoming_reported                             = false;
+    stream->priority                         = UTP_STREAM_PRIORITY_DEFAULT;
+    stream->strict_wait_rounds               = 0u;
+    stream->read_cb                          = NULL;
+    stream->write_cb                         = NULL;
+    stream->close_cb                         = NULL;
+    stream->read_notification_next.tqe_next  = NULL;
+    stream->read_notification_next.tqe_prev  = NULL;
+    stream->write_notification_next.tqe_next = NULL;
+    stream->write_notification_next.tqe_prev = NULL;
+    stream->read_cb_data                     = NULL;
+    stream->write_cb_data                    = NULL;
+    stream->close_cb_data                    = NULL;
+    stream->used                             = true;
+    stream->local_fin_queued                 = false;
+    stream->local_fin_sent                   = false;
+    stream->local_fin_transmitted            = false;
+    stream->peer_fin                         = false;
+    stream->local_read_shutdown              = false;
+    stream->local_write_reset                = false;
+    stream->peer_reset                       = false;
+    stream->peer_stop_sending_received       = false;
+    stream->peer_final_size_known            = false;
+    stream->stream_limit_released            = false;
+    stream->closed_notified                  = false;
+    stream->defer_user_notifications         = false;
+    stream->incoming_reported                = false;
 }
 
 utp_internal_error_t utp_stream_retire_receive_offset(utp_stream_t* stream, uint64_t offset)
@@ -845,9 +845,9 @@ utp_internal_error_t utp_stream_abort_write_internal(utp_stream_t* stream)
         return UTP_INTERNAL_ERROR_CLOSED;
     }
     // 已进入发送账本的旧 STREAM 包会被 Connection 丢弃重传；迟到 ACK 由确认路径幂等忽略。
-    stream->send_buffer_length    = 0u;
-    stream->send_buffer_start     = 0u;
-    stream->send_in_flight_bytes  = 0u;
+    stream->send_buffer_length   = 0u;
+    stream->send_buffer_start    = 0u;
+    stream->send_in_flight_bytes = 0u;
     utp_range_set_clear(&stream->send_ack_ranges);
     stream->local_fin_queued      = false;
     stream->local_fin_sent        = false;
@@ -948,7 +948,7 @@ utp_internal_error_t utp_stream_build_frame(utp_stream_t* stream, uint8_t* paylo
         out_stream_offset == NULL || out_fin == NULL || !utp_stream_has_send_work(stream)) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (capacity <= UTP_FRAME_STREAM_HEADER_SIZE) {
+    if (capacity < UTP_FRAME_STREAM_HEADER_SIZE) {
         return UTP_INTERNAL_ERROR_LIMIT;
     }
     size_t         contiguous_length = 0u;

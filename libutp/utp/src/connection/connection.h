@@ -424,9 +424,9 @@ utp_internal_error_t utp_connection_get_description_internal(const utp_connectio
 /** @brief 导出连接缓存的会话票据。 */
 utp_internal_error_t utp_connection_export_session_token_internal(const utp_connection_t* connection, uint8_t* buffer,
                                                                   size_t capacity, size_t* out_length);
-/** @brief 为 0-RTT 首个双向流保留已发送前缀，并将余量写入普通 1-RTT 发送缓冲。 */
-utp_internal_error_t utp_connection_reserve_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
-                                                            size_t data_length, size_t early_data_length, bool fin);
+/** @brief 创建 0-RTT 首个双向流，并将全部早期数据写入其发送缓存。 */
+utp_internal_error_t utp_connection_prepare_zero_rtt_stream(utp_connection_t* connection, const uint8_t* data,
+                                                            size_t data_length, bool fin);
 /** @brief 标记被动 0-RTT 正在等待首个 HANDSHAKE 响应成功写出。 */
 utp_internal_error_t utp_connection_begin_zero_rtt_response(utp_connection_t* connection);
 /** @brief 退休本连接仍在发送、未确认或待重排的握手 flight。 */

@@ -504,33 +504,24 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
         utp_connect_0rtt_options_t boundary = UTP_CONNECT_0RTT_OPTIONS_INIT;
         utp_context_t*             boundary_client;
         uint8_t*                   boundary_data;
-        size_t                     request_length;
-        size_t                     fixed_length;
         size_t                     boundary_size;
-        const size_t               address_length = 4u;
-        const uint16_t target_size = utp_mtu_packet_size_from_mtu(early_options.mtu_min, UTP_ADDRESS_FAMILY_IPV4);
 
         assert(utp_context_create(&early_options, &boundary_client) == UTP_STATUS_OK);
         assert(utp_context_bind(boundary_client, "127.0.0.1", 0u, NULL, NULL) == UTP_STATUS_OK);
         assert(!boundary_client->nat_result_valid);
-        request_length = UTP_FRAME_RENDEZVOUS_HEADER_SIZE + UTP_RENDEZVOUS_ATTEMPT_ID_SIZE + 1u +
-                         strlen(early_options.peer_id) + 1u + strlen("test") + 1u + 1u + 1u + 2u + 1u +
-                         address_length * (size_t)boundary_client->local_candidate_count;
-        fixed_length = UTP_PACKET_HEADER_SIZE + request_length + UTP_FRAME_SESSION_TOKEN_HEADER_SIZE +
-                       UTP_CONTEXT_ZERO_RTT_TOKEN_PAYLOAD_SIZE;
-        assert((size_t)target_size >= fixed_length + UTP_FRAME_STREAM_HEADER_SIZE);
-        boundary_size =
-            (size_t)target_size - fixed_length - UTP_FRAME_STREAM_HEADER_SIZE + UTP_STREAM_DEFAULT_SEND_BUFFER_CAPACITY;
-        boundary_data = malloc(boundary_size);
+        boundary_size = boundary_client->stream_send_buffer_capacity;
+        boundary_data = malloc(boundary_size + 1u);
         assert(boundary_data != NULL);
-        memset(boundary_data, 0x5a, boundary_size);
+        memset(boundary_data, 0x5a, boundary_size + 1u);
         boundary.address            = "127.0.0.1";
         boundary.target_peer_id     = "test";
         boundary.port               = 9u;
         boundary.session_token      = token;
         boundary.session_token_size = token_length;
         boundary.early_data         = boundary_data;
-        boundary.early_data_size    = boundary_size;
+        boundary.early_data_size    = boundary_size + 1u;
+        assert(utp_context_connect_0rtt(boundary_client, &boundary) == UTP_STATUS_OVERFLOW);
+        boundary.early_data_size = boundary_size;
         assert(utp_context_connect_0rtt(boundary_client, &boundary) == UTP_STATUS_OK);
         utp_context_destroy(boundary_client);
         free(boundary_data);
@@ -550,7 +541,9 @@ static void test_plaintext_zero_rtt(struct event_base* event_base)
     assert(utp_context_connect_0rtt(early_client, &early) == UTP_STATUS_OK);
     pump_event_loop(event_base, 24);
     assert(early_probe.connected_connection != NULL);
-    assert(utp_connection_get_stream(early_probe.connected_connection, 0u) != NULL);
+    stream = utp_connection_get_stream(early_probe.connected_connection, 0u);
+    assert(stream != NULL);
+    assert(stream->send_buffer_length == 0u);
     assert(early_probe.connected_connection->congestion_algorithm == UTP_CONGESTION_CUBIC);
     assert(early_probe.connected_connection->send_control.pacer.clock_granularity_us == 29u);
     assert(early_probe.connected_connection->cubic_congestion.initial_cwnd == UINT64_C(28) * 1460u);

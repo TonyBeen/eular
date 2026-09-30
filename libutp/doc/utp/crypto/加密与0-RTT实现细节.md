@@ -11,6 +11,8 @@
 ## 3. 0-RTT
 
 - 主动端可携带票据和早期数据发送 0-RTT。
+- 全部早期数据先进入 stream 0 的发送缓存；首包只发送受 MTU 限制的前缀，Handshake ACK 确认后按普通 ACK 规则释放。超过首包的部分保留至 1-RTT 发送，`early_data` 不能超过 `stream_send_buffer_capacity`。
+- 0-RTT 重传复用原 PacketOut 的明文和票据，只更新包号并重新 AEAD；不创建第二份早期数据缓存，也不重建 Connection。
 - 被动端先校验票据、地址绑定、包号和重放状态，再按 `on_new_connection` 决定是否交付早期数据。
 - 服务端 Handshake 响应保留待确认状态；客户端用 HandshakeDone 确认实际收到的响应。
 - 响应丢失时由 Context 定时器重发，不要求应用再次调用 connect。

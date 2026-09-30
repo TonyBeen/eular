@@ -8,6 +8,8 @@
 
 接收历史记录 ack-eliciting 包号并按 AckFrequency 触发 ACK。触发条件包括累计阈值、乱序和延迟 ACK 到期；ACK 可与其他控制或 STREAM 帧合包。
 
+握手包最多携带一个 ACK 帧；多个 ACK range 应放在同一个 ACK 帧内。收到多个 ACK 帧的异常握手不会回协议错误包，Connection 直接进入 draining，避免对异常输入继续响应。
+
 发送侧收到 ACK 后：
 
 1. 回收已确认 PacketOut；

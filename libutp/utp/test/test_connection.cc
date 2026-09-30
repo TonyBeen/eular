@@ -641,7 +641,7 @@ TEST_CASE("encrypted 0-RTT promotes matching bidirectional 1-RTT keys", "[connec
     utp_connection_cleanup(&client);
 }
 
-TEST_CASE("0-RTT retains overflow early data for the first 1-RTT stream frame", "[connection][0rtt][stream]")
+TEST_CASE("0-RTT keeps all early data in the stream send buffer", "[connection][0rtt][stream]")
 {
     const utp_address_t             peer       = loopback_address(10015u);
     const std::array<uint8_t, 128u> data       = {};
@@ -650,16 +650,143 @@ TEST_CASE("0-RTT retains overflow early data for the first 1-RTT stream frame", 
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 63u, 64u, &peer, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
-    REQUIRE(utp_connection_reserve_zero_rtt_stream(&connection, data.data(), data.size(), 40u, true) ==
+    REQUIRE(utp_connection_prepare_zero_rtt_stream(&connection, data.data(), data.size(), true) ==
             UTP_INTERNAL_ERROR_OK);
     stream = utp_connection_find_stream_internal(&connection, 0u);
     REQUIRE(stream != nullptr);
-    REQUIRE(stream->send_buffer_offset == 40u);
-    REQUIRE(stream->next_send_offset == 40u);
-    REQUIRE(stream->send_buffer_length == data.size() - 40u);
+    REQUIRE(stream->send_buffer_offset == 0u);
+    REQUIRE(stream->next_send_offset == 0u);
+    REQUIRE(stream->send_buffer_length == data.size());
     REQUIRE(stream->local_fin_queued);
     REQUIRE_FALSE(stream->local_fin_sent);
-    REQUIRE(connection.stream_data_sent_total == 40u);
+    REQUIRE(connection.stream_data_sent_total == 0u);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("0-RTT retransmission and handshake retirement preserve unacknowledged stream data",
+          "[connection][0rtt][stream][retransmission]")
+{
+    const utp_address_t             peer = loopback_address(10016u);
+    const std::array<uint8_t, 128u> data = {};
+    std::array<uint8_t, 64u>        payload = {};
+    std::array<uint8_t, UTP_FRAME_VERSION_SIZE + UTP_ACK_FRAME_HEADER_SIZE + UTP_FRAME_HANDSHAKE_DELAY_SIZE>
+        handshake_payload = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + UTP_FRAME_VERSION_SIZE + UTP_ACK_FRAME_HEADER_SIZE +
+                           UTP_FRAME_HANDSHAKE_DELAY_SIZE>
+        handshake_packet = {};
+    utp_connection_t                connection = {};
+    utp_stream_t*                   stream;
+    utp_packet_out_t*               packet;
+    utp_ack_range_t                  ranges[] = {{1u, 1u}};
+    const utp_ack_info_t             ack = {1u, 0u, ranges, 1u, 1u};
+    const utp_frame_handshake_delay_t delay = {0u};
+    const utp_frame_version_t        version = {UTP_PROTOCOL_VERSION};
+    utp_packet_header_t              header;
+    size_t                          payload_length = 0u;
+    size_t                          ack_length = 0u;
+    uint32_t                        stream_data_size = 0u;
+    uint64_t                        stream_offset = 0u;
+    uint64_t                        deadline;
+    bool                            fin = false;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 65u, 0u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_prepare_zero_rtt_stream(&connection, data.data(), data.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    stream = utp_connection_find_stream_internal(&connection, 0u);
+    REQUIRE(stream != nullptr);
+    REQUIRE(utp_stream_build_frame(stream, payload.data(), payload.size(), &payload_length, &stream_data_size,
+                                   &stream_offset, &fin) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(stream_offset == 0u);
+    REQUIRE(stream_data_size < data.size());
+    REQUIRE_FALSE(fin);
+    REQUIRE(utp_stream_commit_built_frame(stream, stream_data_size, fin) == UTP_INTERNAL_ERROR_OK);
+    connection.stream_data_sent_total += stream_data_size;
+    REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_0RTT, payload.data(), payload_length, true) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->stream_data_size == stream_data_size);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, 100u) == UTP_INTERNAL_ERROR_OK);
+    deadline = utp_connection_retransmission_deadline(&connection);
+    REQUIRE(deadline > 100u);
+    REQUIRE(utp_connection_on_retransmission_timeout(&connection, deadline) == UTP_INTERNAL_ERROR_OK);
+    packet = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(packet != nullptr);
+    REQUIRE(packet->packet_number == 2u);
+    REQUIRE(packet->stream_offset == 0u);
+    REQUIRE(packet->stream_data_size == stream_data_size);
+    REQUIRE(utp_connection_on_packet_sent(&connection, packet, deadline + 1u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_frame_version_encode(handshake_payload.data(), UTP_FRAME_VERSION_SIZE, &version) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_ack_encode(handshake_payload.data() + UTP_FRAME_VERSION_SIZE,
+                           handshake_payload.size() - UTP_FRAME_VERSION_SIZE, &ack, 0u, &ack_length) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_frame_handshake_delay_encode(handshake_payload.data() + UTP_FRAME_VERSION_SIZE + ack_length,
+                                             handshake_payload.size() - UTP_FRAME_VERSION_SIZE - ack_length, &delay) ==
+            UTP_INTERNAL_ERROR_OK);
+    header = {65u, 66u, 1u, (uint16_t)(UTP_FRAME_VERSION_SIZE + ack_length + UTP_FRAME_HANDSHAKE_DELAY_SIZE),
+              UTP_PACKET_TYPE_HANDSHAKE, 0u};
+    REQUIRE(utp_proto_encode_header(handshake_packet.data(), handshake_packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(handshake_packet.data() + UTP_PACKET_HEADER_SIZE, handshake_payload.data(), header.payload_length);
+    REQUIRE(utp_connection_on_packet_received(&connection, handshake_packet.data(),
+                                              UTP_PACKET_HEADER_SIZE + header.payload_length, &peer, deadline + 2u) ==
+            UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_connection_is_connected(&connection));
+    REQUIRE(stream->send_buffer_offset == stream_data_size);
+    REQUIRE(stream->send_buffer_length == data.size() - stream_data_size);
+    REQUIRE(stream->send_in_flight_bytes == 0u);
+    REQUIRE(stream->next_send_offset == stream_data_size);
+    REQUIRE(connection.stream_data_sent_total == stream_data_size);
+    utp_connection_cleanup(&connection);
+}
+
+TEST_CASE("Handshake with multiple ACK frames drains without sending a protocol response",
+          "[connection][handshake][ack]")
+{
+    const utp_address_t                                      peer = loopback_address(10017u);
+    const std::array<uint8_t, UTP_FRAME_VERSION_SIZE>        version = version_frame();
+    const utp_frame_handshake_delay_t                         delay = {0u};
+    utp_ack_range_t                                           ranges[] = {{1u, 1u}};
+    const utp_ack_info_t                                      ack = {1u, 0u, ranges, 1u, 1u};
+    std::array<uint8_t, 128u>                                 payload = {};
+    std::array<uint8_t, UTP_PACKET_HEADER_SIZE + 128u>        packet = {};
+    std::array<uint8_t, UTP_ACK_FRAME_HEADER_SIZE>            ack_frame = {};
+    size_t                                                    ack_length = 0u;
+    size_t                                                    payload_length = 0u;
+    utp_packet_header_t                                       header;
+    utp_connection_t                                          connection = {};
+    utp_packet_out_t*                                         outgoing;
+
+    REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_ACTIVE, 67u, 68u, &peer, 4u, 1280u) ==
+            UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_queue_packet(&connection, UTP_PACKET_TYPE_INITIAL, version.data(), version.size(), true) ==
+            UTP_INTERNAL_ERROR_OK);
+    outgoing = utp_connection_next_packet_to_send(&connection);
+    REQUIRE(outgoing != nullptr);
+    REQUIRE(utp_connection_on_packet_sent(&connection, outgoing, 100u) == UTP_INTERNAL_ERROR_OK);
+
+    REQUIRE(utp_ack_encode(ack_frame.data(), ack_frame.size(), &ack, 0u, &ack_length) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(payload.data() + payload_length, version.data(), version.size());
+    payload_length += version.size();
+    std::memcpy(payload.data() + payload_length, ack_frame.data(), ack_length);
+    payload_length += ack_length;
+    std::memcpy(payload.data() + payload_length, ack_frame.data(), ack_length);
+    payload_length += ack_length;
+    REQUIRE(utp_frame_handshake_delay_encode(payload.data() + payload_length, payload.size() - payload_length, &delay) ==
+            UTP_INTERNAL_ERROR_OK);
+    payload_length += UTP_FRAME_HANDSHAKE_DELAY_SIZE;
+    header = {67u, 68u, 1u, (uint16_t)payload_length, UTP_PACKET_TYPE_HANDSHAKE, 0u};
+    REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
+    std::memcpy(packet.data() + UTP_PACKET_HEADER_SIZE, payload.data(), payload_length);
+
+    REQUIRE(utp_connection_on_packet_received(&connection, packet.data(), UTP_PACKET_HEADER_SIZE + payload_length, &peer,
+                                              200u) == UTP_INTERNAL_ERROR_OK);
+    REQUIRE(utp_connection_state(&connection) == UTP_CONNECTION_STATE_DRAINING);
+    REQUIRE(utp_connection_next_packet_to_send(&connection) == nullptr);
     utp_connection_cleanup(&connection);
 }
 
@@ -757,18 +884,18 @@ TEST_CASE("connection queues an ACK frame from receive history and clears peer u
 
 TEST_CASE("connection ACK keeps receive history beyond the current packet budget", "[connection][ack][mtu]")
 {
-    const utp_address_t      peer = [] {
+    const utp_address_t peer = [] {
         utp_address_t address = {};
 
         REQUIRE(utp_address_parse(&address, "2001:db8::1", 10009u) == UTP_INTERNAL_ERROR_OK);
         return address;
     }();
-    utp_mtu_config_t         config     = UTP_MTU_CONFIG_INIT;
-    utp_connection_t         connection = {};
-    utp_packet_out_t*        packet;
-    utp_ack_range_t          ranges[UTP_ACK_MAX_RANGES] = {};
-    utp_ack_info_t           ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
-    size_t                   consumed = 0u;
+    utp_mtu_config_t  config     = UTP_MTU_CONFIG_INIT;
+    utp_connection_t  connection = {};
+    utp_packet_out_t* packet;
+    utp_ack_range_t   ranges[UTP_ACK_MAX_RANGES] = {};
+    utp_ack_info_t    ack                        = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t            consumed                   = 0u;
 
     config.enabled  = false;
     config.mtu_min  = 1280u;
@@ -801,19 +928,19 @@ TEST_CASE("connection ACK keeps receive history beyond the current packet budget
 
 TEST_CASE("connection rebuilds a queued ACK when the path MTU decreases", "[connection][ack][mtu]")
 {
-    const utp_address_t      peer = [] {
+    const utp_address_t peer = [] {
         utp_address_t address = {};
 
         REQUIRE(utp_address_parse(&address, "2001:db8::2", 10010u) == UTP_INTERNAL_ERROR_OK);
         return address;
     }();
-    utp_mtu_config_t         large_config = UTP_MTU_CONFIG_INIT;
-    utp_mtu_config_t         small_config = UTP_MTU_CONFIG_INIT;
-    utp_connection_t         connection   = {};
-    utp_packet_out_t*        packet;
-    utp_ack_range_t          ranges[UTP_ACK_MAX_RANGES] = {};
-    utp_ack_info_t           ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
-    size_t                   consumed = 0u;
+    utp_mtu_config_t  large_config = UTP_MTU_CONFIG_INIT;
+    utp_mtu_config_t  small_config = UTP_MTU_CONFIG_INIT;
+    utp_connection_t  connection   = {};
+    utp_packet_out_t* packet;
+    utp_ack_range_t   ranges[UTP_ACK_MAX_RANGES] = {};
+    utp_ack_info_t    ack                        = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t            consumed                   = 0u;
 
     large_config.enabled  = false;
     large_config.mtu_min  = 1280u;
@@ -900,8 +1027,8 @@ TEST_CASE("connection rebuilds a queued ACK after a newer packet arrives", "[con
     utp_packet_out_t*                                stale_ack;
     utp_packet_out_t*                                rebuilt_ack;
     utp_ack_range_t                                  ranges[UTP_ACK_MAX_RANGES] = {};
-    utp_ack_info_t                                   ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
-    size_t                                            consumed = 0u;
+    utp_ack_info_t                                   ack      = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
+    size_t                                           consumed = 0u;
 
     REQUIRE(utp_connection_init(&connection, UTP_CONNECTION_ROLE_PASSIVE, 44u, 33u, &peer, 4u, 1280u) ==
             UTP_INTERNAL_ERROR_OK);
