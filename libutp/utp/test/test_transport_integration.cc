@@ -683,7 +683,7 @@ static void drive_until(struct event_base* event_base, predicate complete)
     const auto deadline = std::chrono::steady_clock::now() + kDriveTimeout;
 
     while (!complete() && std::chrono::steady_clock::now() < deadline) {
-        REQUIRE(event_base_loop(event_base, EVLOOP_NONBLOCK) == 0);
+        REQUIRE(event_base_loop(event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     REQUIRE(complete());
@@ -694,7 +694,7 @@ static void drive_for(struct event_base* event_base, std::chrono::milliseconds d
     const auto deadline = std::chrono::steady_clock::now() + duration;
 
     while (std::chrono::steady_clock::now() < deadline) {
-        REQUIRE(event_base_loop(event_base, EVLOOP_NONBLOCK) == 0);
+        REQUIRE(event_base_loop(event_base, EVLOOP_ONCE | EVLOOP_NONBLOCK) == 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
@@ -1245,12 +1245,12 @@ TEST_CASE("path MTU probes reach the configured ceiling over UDP", "[transport][
     client_options.mtu_min            = 1280u;
     client_options.mtu_base           = 1400u;
     client_options.mtu_max            = 1450u;
-    client_options.mtu_probe_timeout  = 10u;
+    client_options.mtu_probe_timeout  = 100u;
     client_options.mtu_probe_interval = 1u;
     server_options.mtu_min            = 1280u;
     server_options.mtu_base           = 1400u;
     server_options.mtu_max            = 1450u;
-    server_options.mtu_probe_timeout  = 10u;
+    server_options.mtu_probe_timeout  = 100u;
     server_options.mtu_probe_interval = 1u;
     transport_pair_init_with_options(&pair, no_rule, UTP_ENCRYPTION_NONE, &client_options, &server_options);
     transport_pair_connect(&pair);

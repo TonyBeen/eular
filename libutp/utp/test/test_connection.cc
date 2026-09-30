@@ -727,7 +727,7 @@ TEST_CASE("0-RTT retransmission and handshake retirement preserve unacknowledged
     REQUIRE(utp_frame_handshake_delay_encode(handshake_payload.data() + UTP_FRAME_VERSION_SIZE + ack_length,
                                              handshake_payload.size() - UTP_FRAME_VERSION_SIZE - ack_length, &delay) ==
             UTP_INTERNAL_ERROR_OK);
-    header = {65u, 66u, 1u, (uint16_t)(UTP_FRAME_VERSION_SIZE + ack_length + UTP_FRAME_HANDSHAKE_DELAY_SIZE),
+    header = {66u, 65u, 1u, (uint16_t)(UTP_FRAME_VERSION_SIZE + ack_length + UTP_FRAME_HANDSHAKE_DELAY_SIZE),
               UTP_PACKET_TYPE_HANDSHAKE, 0u};
     REQUIRE(utp_proto_encode_header(handshake_packet.data(), handshake_packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
     std::memcpy(handshake_packet.data() + UTP_PACKET_HEADER_SIZE, handshake_payload.data(), header.payload_length);
@@ -779,7 +779,7 @@ TEST_CASE("Handshake with multiple ACK frames drains without sending a protocol 
     REQUIRE(utp_frame_handshake_delay_encode(payload.data() + payload_length, payload.size() - payload_length, &delay) ==
             UTP_INTERNAL_ERROR_OK);
     payload_length += UTP_FRAME_HANDSHAKE_DELAY_SIZE;
-    header = {67u, 68u, 1u, (uint16_t)payload_length, UTP_PACKET_TYPE_HANDSHAKE, 0u};
+    header = {68u, 67u, 1u, (uint16_t)payload_length, UTP_PACKET_TYPE_HANDSHAKE, 0u};
     REQUIRE(utp_proto_encode_header(packet.data(), packet.size(), &header) == UTP_INTERNAL_ERROR_OK);
     std::memcpy(packet.data() + UTP_PACKET_HEADER_SIZE, payload.data(), payload_length);
 
