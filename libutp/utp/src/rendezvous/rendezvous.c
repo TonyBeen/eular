@@ -164,7 +164,7 @@ utp_internal_error_t utp_rendezvous_register_decode(utp_rendezvous_register_t* r
     utp_internal_error_t      error;
     size_t                    address_length;
     size_t                    index;
-    uint8_t                   reported_public_present;
+    uint8_t                   reported_public_present = 0u;
 
     if (registration == NULL || buffer == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -870,7 +870,7 @@ utp_internal_error_t utp_rendezvous_request_decode(utp_rendezvous_request_t* req
     size_t                   index;
     size_t                   address_index;
     utp_internal_error_t     error;
-    uint8_t                  reported_public_present;
+    uint8_t                  reported_public_present = 0u;
 
     if (request == NULL || buffer == NULL) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;

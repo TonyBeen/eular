@@ -4809,7 +4809,7 @@ static utp_internal_error_t utp_context_promote_pending(utp_context_t*          
         error = utp_connection_on_plaintext_packet_in_received(&slot->connection, packet_in, wire_packet_length, peer,
                                                                now_us);
     } else {
-        utp_packet_in_t* promoted_packet;
+        utp_packet_in_t* promoted_packet = NULL;
 
         error = packet_length > UINT16_MAX ? UTP_INTERNAL_ERROR_OVERFLOW
                                            : utp_packet_in_pool_acquire(&context->packet_in_pool, &promoted_packet);
@@ -4863,9 +4863,9 @@ static utp_internal_error_t utp_context_on_connection_packet(utp_context_t*     
     bool                 rendezvous_peer_changed;
     bool                 zero_rtt_peer_changed;
     bool                 handshake_peer_changed;
-    utp_address_t        previous_peer;
-    utp_address_t        previous_candidate_peer;
-    utp_endpoint_t       previous_remote;
+    utp_address_t        previous_peer           = {0};
+    utp_address_t        previous_candidate_peer = {0};
+    utp_endpoint_t       previous_remote         = {0};
 
     assert(context != NULL);
     assert(slot != NULL);
@@ -5111,7 +5111,7 @@ static utp_internal_error_t utp_context_decode_initial_request(const utp_context
 
     if (error == UTP_INTERNAL_ERROR_OK) {
         utp_frame_rendezvous_t   rendezvous;
-        utp_rendezvous_request_t request;
+        utp_rendezvous_request_t request = {0};
 
         error = utp_frame_rendezvous_decode(&rendezvous, view->payload, frame_length);
         if (error == UTP_INTERNAL_ERROR_OK && rendezvous.message_type != UTP_RENDEZVOUS_MESSAGE_REQUEST) {
@@ -5137,7 +5137,7 @@ static utp_internal_error_t utp_context_on_initial_packet(utp_context_t* context
                                                           const utp_address_t* peer, const utp_address_t* local)
 {
     utp_context_pending_slot_t* slot;
-    utp_frame_crypto_t          peer_crypto;
+    utp_frame_crypto_t          peer_crypto = {0};
     uint8_t                     attempt_id[UTP_RENDEZVOUS_ATTEMPT_ID_SIZE] = {0u};
     uint32_t                    local_cid;
     size_t                      frame_offset;
@@ -5444,7 +5444,7 @@ static utp_internal_error_t utp_context_on_encrypted_zero_rtt_packet(
     uint8_t                        client_public_key[UTP_CRYPTO_X25519_KEY_SIZE];
     uint8_t                        crypto_type;
     size_t                         token_length;
-    size_t                         plaintext_length;
+    size_t                         plaintext_length = 0u;
     size_t                         post_offset;
     uint64_t                       received_at_us;
     uint64_t                       now_us;
@@ -7000,7 +7000,7 @@ utp_status_t utp_context_bind(utp_context_t* context, const char* address, uint1
         return UTP_STATUS_SOCKET_OPEN;
     }
     utp_address_t        requested;
-    utp_address_t        local;
+    utp_address_t        local = {0};
     utp_internal_error_t error = utp_address_parse(&requested, address, port);
     if (error == UTP_INTERNAL_ERROR_OK) {
         error = utp_udp_socket_open(&context->udp_socket, requested.family);

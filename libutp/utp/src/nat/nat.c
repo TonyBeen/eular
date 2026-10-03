@@ -27,8 +27,8 @@ static utp_internal_error_t utp_nat_probe_write_tlv(utp_wire_writer_t* writer, u
 static utp_internal_error_t utp_nat_probe_decode_endpoint(const uint8_t* value, size_t length, utp_address_t* endpoint)
 {
     utp_wire_reader_t    reader;
-    uint8_t              family;
-    uint8_t              reserved;
+    uint8_t              family   = 0u;
+    uint8_t              reserved = 0u;
     size_t               address_length;
     utp_address_t        decoded = {0};
     utp_internal_error_t error;
@@ -171,8 +171,8 @@ utp_internal_error_t utp_nat_probe_decode_response(const uint8_t* payload, size_
         }
     }
     while (error == UTP_INTERNAL_ERROR_OK && reader.remaining != 0u) {
-        uint16_t       type;
-        uint16_t       length;
+        uint16_t       type   = 0u;
+        uint16_t       length = 0u;
         const uint8_t* value;
 
         error = utp_wire_read_u16(&reader, &type);

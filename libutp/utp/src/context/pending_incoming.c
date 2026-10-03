@@ -409,9 +409,9 @@ utp_internal_error_t utp_pending_incoming_replay(const utp_pending_incoming_t*  
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
     while (offset < pending->storage_length) {
-        uint8_t              path_index;
-        uint16_t             packet_length;
-        uint16_t             wire_packet_length;
+        uint8_t              path_index        = 0u;
+        uint16_t             packet_length     = 0u;
+        uint16_t             wire_packet_length = 0u;
         utp_internal_error_t error;
 
         error = utp_wire_reader_init(&reader, pending->storage + offset, pending->storage_length - offset);

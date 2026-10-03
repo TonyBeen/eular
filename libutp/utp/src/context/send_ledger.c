@@ -64,7 +64,7 @@ void utp_send_ledger_cleanup(utp_send_ledger_t* ledger)
     }
     while ((packet = TAILQ_FIRST(&ledger->unacked_packets)) != NULL) {
         TAILQ_REMOVE(&ledger->unacked_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_UNACKED;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_UNACKED);
     }
     TAILQ_INIT(&ledger->unacked_packets);
     ledger->bytes_in_flight                 = 0u;
@@ -122,7 +122,7 @@ utp_internal_error_t utp_send_ledger_remove(utp_send_ledger_t* ledger, utp_packe
     }
 
     TAILQ_REMOVE(&ledger->unacked_packets, packet, po_next);
-    packet->po_flags        &= (uint16_t)~UTP_PO_UNACKED;
+    packet->po_flags        &= (uint16_t)(UINT16_MAX ^ UTP_PO_UNACKED);
     ledger->bytes_in_flight -= packet_size;
     --ledger->packet_count;
     if (retransmittable) {

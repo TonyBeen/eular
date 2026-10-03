@@ -297,7 +297,7 @@ static utp_internal_error_t utp_send_control_acknowledge_packet(utp_send_control
             return UTP_INTERNAL_ERROR_STATE;
         }
         TAILQ_REMOVE(&control->lost_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_LOST);
         --control->lost_packet_count;
     } else {
         return UTP_INTERNAL_ERROR_STATE;
@@ -395,11 +395,11 @@ void utp_send_control_cleanup(utp_send_control_t* control)
     }
     while ((packet = TAILQ_FIRST(&control->scheduled_packets)) != NULL) {
         TAILQ_REMOVE(&control->scheduled_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_SCHED;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_SCHED);
     }
     while ((packet = TAILQ_FIRST(&control->lost_packets)) != NULL) {
         TAILQ_REMOVE(&control->lost_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_LOST);
     }
     while ((packet = TAILQ_FIRST(&control->discarded_packets)) != NULL) {
         TAILQ_REMOVE(&control->discarded_packets, packet, po_next);
@@ -498,8 +498,8 @@ utp_internal_error_t utp_send_control_on_packet_sent(utp_send_control_t* control
     if (packet->packet_number > control->current_packet_number) {
         control->current_packet_number = packet->packet_number;
     }
-    packet->po_flags    &= (uint16_t)~(UTP_PO_LOST | UTP_PO_LOSS_RECORDED | UTP_PO_RESET_PACKNO);
-    packet->local_flags &= (uint16_t)~(UTP_POL_FACKED | UTP_POL_LOSS);
+    packet->po_flags    &= (uint16_t)(UINT16_MAX ^ (UTP_PO_LOST | UTP_PO_LOSS_RECORDED | UTP_PO_RESET_PACKNO));
+    packet->local_flags &= (uint16_t)(UINT16_MAX ^ (UTP_POL_FACKED | UTP_POL_LOSS));
     return UTP_INTERNAL_ERROR_OK;
 }
 
@@ -563,9 +563,9 @@ static utp_internal_error_t utp_send_control_schedule_packet_at(utp_send_control
     packet->po_flags |= UTP_PO_SCHED;
     if (track_on_send) {
         packet->local_flags |= UTP_POL_TRACK_ON_SEND;
-        packet->local_flags &= (uint16_t)~UTP_POL_NO_TRACK_ON_SEND;
+        packet->local_flags &= (uint16_t)(UINT16_MAX ^ UTP_POL_NO_TRACK_ON_SEND);
     } else {
-        packet->local_flags &= (uint16_t)~UTP_POL_TRACK_ON_SEND;
+        packet->local_flags &= (uint16_t)(UINT16_MAX ^ UTP_POL_TRACK_ON_SEND);
         packet->local_flags |= UTP_POL_NO_TRACK_ON_SEND;
     }
     control->scheduled_byte_count += packet_size;
@@ -622,7 +622,7 @@ utp_packet_out_t* utp_send_control_next_scheduled(utp_send_control_t* control)
     assert(packet_size <= control->scheduled_byte_count);
 
     TAILQ_REMOVE(&control->scheduled_packets, packet, po_next);
-    packet->po_flags &= (uint16_t)~UTP_PO_SCHED;
+    packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_SCHED);
     --control->scheduled_packet_count;
     control->scheduled_byte_count -= packet_size;
     return packet;
@@ -750,7 +750,7 @@ utp_packet_out_t* utp_send_control_next_lost(utp_send_control_t* control)
     }
     assert(control->lost_packet_count != 0u);
     TAILQ_REMOVE(&control->lost_packets, packet, po_next);
-    packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+    packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_LOST);
     --control->lost_packet_count;
     return packet;
 }
@@ -1213,7 +1213,7 @@ utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_
             return UTP_INTERNAL_ERROR_STATE;
         }
         TAILQ_REMOVE(&control->scheduled_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_SCHED;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_SCHED);
         --control->scheduled_packet_count;
         control->scheduled_byte_count -= packet_size;
         TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
@@ -1240,7 +1240,7 @@ utp_internal_error_t utp_send_control_retire_handshake_packets(utp_send_control_
             return UTP_INTERNAL_ERROR_STATE;
         }
         TAILQ_REMOVE(&control->lost_packets, packet, po_next);
-        packet->po_flags &= (uint16_t)~UTP_PO_LOST;
+        packet->po_flags &= (uint16_t)(UINT16_MAX ^ UTP_PO_LOST);
         --control->lost_packet_count;
         TAILQ_INSERT_TAIL(retired_packets, packet, po_next);
     }

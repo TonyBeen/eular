@@ -18,9 +18,7 @@ extern "C" {
 #include <utp/context.h>
 
 #include "connection/connection.h"
-#if defined(__APPLE__) || defined(__linux__)
 #include "context/context.h"
-#endif
 #include "context/event_loop.h"
 #include "proto/ack.h"
 #include "proto/frame.h"
@@ -478,7 +476,7 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
         const relay_direction direction = utp_address_equal(&source, &relay->server)
                                               ? relay_direction::server_to_client
                                               : relay_direction::client_to_server;
-        const utp_address_t*  destination;
+        const utp_address_t*  destination = NULL;
         bool                  target_stream_ack;
 
         {
@@ -504,6 +502,7 @@ static void relay_on_readable_from(udp_relay* relay, utp_udp_socket_t* receive_s
             // 服务端发往候选 relay 的验证报文，必须经原 relay 返回，避免客户端也误判路径迁移。
             send_socket = migration_socket ? &relay->socket : receive_socket;
         }
+        REQUIRE(destination != NULL);
         if (direction == relay_direction::client_to_server) {
             utp_packet_view_t view = {};
 

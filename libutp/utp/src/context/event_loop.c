@@ -1,11 +1,16 @@
 #include "context/event_loop.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <string.h>
 
 #include <event2/event.h>
 
+#if defined(_WIN32)
+#define UTP_EVENT_MAX_TIMER_DELAY_US ((uint64_t)LONG_MAX * UINT64_C(1000000))
+#else
 #define UTP_EVENT_MAX_TIMER_DELAY_US (UINT64_C(4294967295) * UINT64_C(1000000))
+#endif
 
 static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval* timeout)
 {
@@ -13,10 +18,11 @@ static bool utp_event_timer_timeout(uint64_t delay_us, struct timeval* timeout)
     if (delay_us > UTP_EVENT_MAX_TIMER_DELAY_US) {
         return false;
     }
-    timeout->tv_sec = (time_t)(delay_us / UINT64_C(1000000));
 #if defined(_WIN32)
+    timeout->tv_sec  = (long)(delay_us / UINT64_C(1000000));
     timeout->tv_usec = (long)(delay_us % UINT64_C(1000000));
 #else
+    timeout->tv_sec  = (time_t)(delay_us / UINT64_C(1000000));
     timeout->tv_usec = (suseconds_t)(delay_us % UINT64_C(1000000));
 #endif
     return true;

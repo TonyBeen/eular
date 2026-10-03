@@ -31,7 +31,7 @@ foreach(example_target IN LISTS UTP_EXAMPLES)
                 -Wstrict-prototypes -Wmissing-prototypes -Wformat=2)
         endif()
     elseif(MSVC)
-        target_compile_options(${example_target} PRIVATE /W4 /WX)
+        target_compile_options(${example_target} PRIVATE /utf-8 /W4 /WX)
     endif()
 endforeach()
 

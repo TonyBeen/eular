@@ -245,8 +245,8 @@ utp_internal_error_t utp_frame_path_decode(utp_frame_path_t* path, const uint8_t
                                            uint8_t expected_type)
 {
     utp_wire_reader_t    reader;
-    utp_frame_path_t     decoded;
-    uint8_t              type;
+    utp_frame_path_t     decoded = {0};
+    uint8_t              type    = 0u;
     size_t               index;
     utp_internal_error_t error;
 
@@ -312,8 +312,8 @@ utp_internal_error_t utp_frame_rendezvous_decode(utp_frame_rendezvous_t* rendezv
                                                  size_t length)
 {
     utp_wire_reader_t      reader;
-    utp_frame_rendezvous_t decoded;
-    uint8_t                type;
+    utp_frame_rendezvous_t decoded = {0};
+    uint8_t                type    = 0u;
     utp_internal_error_t   error;
     size_t                 frame_length;
 
@@ -393,7 +393,7 @@ utp_internal_error_t utp_frame_observed_address_decode(utp_frame_observed_addres
     size_t                       address_length;
     size_t                       frame_length;
     size_t                       index;
-    uint8_t                      type;
+    uint8_t                      type = 0u;
     utp_internal_error_t         error;
 
     if (length < UTP_FRAME_OBSERVED_ADDRESS_IPV4_SIZE) {
@@ -469,9 +469,9 @@ utp_internal_error_t utp_frame_crypto_encode(uint8_t* buffer, size_t capacity, c
 utp_internal_error_t utp_frame_crypto_decode(utp_frame_crypto_t* crypto, const uint8_t* buffer, size_t length)
 {
     utp_wire_reader_t    reader;
-    utp_frame_crypto_t   decoded;
-    uint8_t              type;
-    uint8_t              reserved;
+    utp_frame_crypto_t   decoded  = {0};
+    uint8_t              type     = 0u;
+    uint8_t              reserved = 0u;
     size_t               index;
     utp_internal_error_t error;
 
@@ -526,8 +526,8 @@ utp_internal_error_t utp_frame_version_encode(uint8_t* buffer, size_t capacity, 
 utp_internal_error_t utp_frame_version_decode(utp_frame_version_t* version, const uint8_t* buffer, size_t length)
 {
     utp_wire_reader_t    reader;
-    utp_frame_version_t  decoded;
-    uint8_t              type;
+    utp_frame_version_t  decoded = {0};
+    uint8_t              type    = 0u;
     utp_internal_error_t error;
 
     if (length < UTP_FRAME_VERSION_SIZE) {
@@ -576,8 +576,8 @@ utp_internal_error_t utp_frame_handshake_done_decode(utp_frame_handshake_done_t*
                                                      size_t length)
 {
     utp_wire_reader_t          reader;
-    utp_frame_handshake_done_t decoded;
-    uint8_t                    type;
+    utp_frame_handshake_done_t decoded = {0};
+    uint8_t                    type    = 0u;
     utp_internal_error_t       error;
 
     if (length < UTP_FRAME_HANDSHAKE_DONE_SIZE) {
@@ -625,8 +625,8 @@ utp_internal_error_t utp_frame_handshake_delay_decode(utp_frame_handshake_delay_
                                                       size_t length)
 {
     utp_wire_reader_t           reader;
-    utp_frame_handshake_delay_t decoded;
-    uint8_t                     type;
+    utp_frame_handshake_delay_t decoded = {0};
+    uint8_t                     type    = 0u;
     utp_internal_error_t        error;
 
     if (length < UTP_FRAME_HANDSHAKE_DELAY_SIZE) {
@@ -707,8 +707,8 @@ utp_internal_error_t utp_frame_stream_header_encode(uint8_t* buffer, size_t capa
 utp_internal_error_t utp_frame_stream_decode(utp_frame_stream_t* stream, const uint8_t* buffer, size_t length)
 {
     utp_wire_reader_t    reader;
-    utp_frame_stream_t   decoded;
-    uint8_t              type;
+    utp_frame_stream_t   decoded = {0};
+    uint8_t              type    = 0u;
     size_t               frame_length;
     utp_internal_error_t error;
 
@@ -784,8 +784,8 @@ utp_internal_error_t utp_frame_session_token_decode(utp_frame_session_token_t* t
                                                     size_t length)
 {
     utp_wire_reader_t         reader;
-    utp_frame_session_token_t decoded;
-    uint8_t                   type;
+    utp_frame_session_token_t decoded = {0};
+    uint8_t                   type    = 0u;
     utp_internal_error_t      error;
 
     if (length < UTP_FRAME_SESSION_TOKEN_HEADER_SIZE) {
@@ -924,8 +924,8 @@ utp_internal_error_t utp_frame_connection_close_decode(utp_frame_connection_clos
                                                        size_t length)
 {
     utp_wire_reader_t            reader;
-    utp_frame_connection_close_t decoded;
-    uint8_t                      type;
+    utp_frame_connection_close_t decoded = {0};
+    uint8_t                      type    = 0u;
     size_t                       frame_length;
     utp_internal_error_t         error;
 
@@ -992,8 +992,8 @@ utp_internal_error_t utp_frame_reset_stream_decode(utp_frame_reset_stream_t* res
                                                    size_t length)
 {
     utp_wire_reader_t        reader;
-    utp_frame_reset_stream_t decoded;
-    uint8_t                  type;
+    utp_frame_reset_stream_t decoded = {0};
+    uint8_t                  type    = 0u;
     utp_internal_error_t     error;
 
     if (length < UTP_FRAME_RESET_STREAM_SIZE) {
@@ -1051,8 +1051,8 @@ utp_internal_error_t utp_frame_stop_sending_encode(uint8_t* buffer, size_t capac
 utp_internal_error_t utp_frame_stop_sending_decode(utp_frame_stop_sending_t* stop, const uint8_t* buffer, size_t length)
 {
     utp_wire_reader_t        reader;
-    utp_frame_stop_sending_t decoded;
-    uint8_t                  type;
+    utp_frame_stop_sending_t decoded = {0};
+    uint8_t                  type    = 0u;
     utp_internal_error_t     error;
 
     if (length < UTP_FRAME_STOP_SENDING_SIZE) {
@@ -1110,8 +1110,8 @@ static utp_internal_error_t utp_frame_streams_limit_decode(utp_frame_streams_lim
                                                            size_t length, uint8_t expected_type)
 {
     utp_wire_reader_t         reader;
-    utp_frame_streams_limit_t decoded;
-    uint8_t                   type;
+    utp_frame_streams_limit_t decoded = {0};
+    uint8_t                   type    = 0u;
     utp_internal_error_t      error;
 
     /* expected_type 由本文件的固定帧包装函数传入。 */
@@ -1362,7 +1362,7 @@ utp_internal_error_t utp_frame_ack_frequency_decode(utp_frame_ack_frequency_t* f
                                                     size_t length)
 {
     utp_wire_reader_t    reader;
-    uint8_t              type;
+    uint8_t              type = 0u;
     utp_internal_error_t error;
 
     if (length != UTP_FRAME_ACK_FREQUENCY_SIZE) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
@@ -1418,7 +1418,7 @@ utp_internal_error_t utp_frame_transport_params_decode(utp_frame_transport_param
                                                        size_t length)
 {
     utp_wire_reader_t    reader;
-    uint8_t              type;
+    uint8_t              type = 0u;
     utp_internal_error_t error;
 
     if (length != UTP_FRAME_TRANSPORT_PARAMS_SIZE) return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;

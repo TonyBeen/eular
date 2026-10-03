@@ -805,7 +805,7 @@ static utp_internal_error_t utp_connection_queue_path_frame(utp_connection_t* co
     utp_packet_out_t*            packet   = NULL;
     utp_frame_observed_address_t observed = {{0}, 0u, 0u};
     utp_internal_error_t         error;
-    uint64_t                     packet_number;
+    uint64_t                     packet_number = 0u;
     size_t                       observed_length;
     size_t                       payload_length;
     size_t                       packet_length;
@@ -2576,7 +2576,7 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
     size_t                         priority;
     uint32_t                       stream_data_size;
     uint64_t                       stream_offset;
-    uint64_t                       packet_number;
+    uint64_t                       packet_number = 0u;
     uint16_t                       packet_capacity;
     bool                           fin;
     bool                           stream_committed = false;
@@ -2851,14 +2851,13 @@ static utp_internal_error_t utp_connection_queue_next_stream_packet(utp_connecti
         }
         return error;
     }
-    return UTP_INTERNAL_ERROR_OK;
 }
 
 static utp_internal_error_t utp_connection_queue_mtu_probe(utp_connection_t* connection, uint64_t now_us, bool* queued)
 {
     utp_packet_out_t*    packet = NULL;
     utp_internal_error_t error;
-    uint64_t             packet_number;
+    uint64_t             packet_number = 0u;
     uint64_t             now_ms;
     uint16_t             probe_mtu;
     uint16_t             packet_size;
@@ -3568,7 +3567,7 @@ utp_internal_error_t utp_connection_encode_packet_wire(const utp_connection_t* c
 {
     utp_packet_header_t  header;
     size_t               plaintext_length;
-    size_t               ciphertext_length;
+    size_t               ciphertext_length = 0u;
     utp_internal_error_t error;
 
     if (out_length != NULL) {
@@ -4152,7 +4151,7 @@ utp_internal_error_t utp_connection_on_packet_sent(utp_connection_t* connection,
                                                    uint64_t now_us)
 {
     utp_packet_view_t          view;
-    utp_frame_handshake_done_t done;
+    utp_frame_handshake_done_t done = {0};
     utp_internal_error_t       error;
     uint64_t                   wire_size;
     bool                       has_handshake_done;
@@ -4529,7 +4528,7 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
         } else if (frame_type == UTP_FRAME_TYPE_ACK) {
             utp_ack_range_t               ranges[UTP_ACK_MAX_RANGES];
             utp_ack_info_t                ack = {0u, 0u, ranges, 0u, UTP_ACK_MAX_RANGES};
-            utp_send_control_ack_result_t result;
+            utp_send_control_ack_result_t result = {0};
             struct utp_packet_out_tailq   acknowledged;
             size_t                        consumed;
 
@@ -4695,12 +4694,12 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             }
         } else if (frame_type == UTP_FRAME_TYPE_STREAM) {
             utp_frame_stream_t                stream_frame;
-            utp_stream_t*                     stream;
+            utp_stream_t*                     stream = NULL;
             utp_connection_stream_terminal_t* terminal;
             utp_stream_recv_account_t         recv_account;
             uint64_t                          frame_end;
             uint64_t                          stream_delta = 0u;
-            bool                              stream_created;
+            bool                              stream_created = false;
 
             error    = utp_frame_stream_decode(&stream_frame, frame, frame_length);
             terminal = error == UTP_INTERNAL_ERROR_OK
@@ -4770,10 +4769,10 @@ static utp_internal_error_t utp_connection_on_packet_received_internal(
             utp_stream_notify_state_internal(stream);
         } else if (frame_type == UTP_FRAME_TYPE_RESET_STREAM) {
             utp_frame_reset_stream_t          reset;
-            utp_stream_t*                     stream;
+            utp_stream_t*                     stream = NULL;
             utp_connection_stream_terminal_t* terminal;
-            uint64_t                          stream_delta;
-            bool                              stream_created;
+            uint64_t                          stream_delta   = 0u;
+            bool                              stream_created = false;
 
             error    = utp_frame_reset_stream_decode(&reset, frame, frame_length);
             terminal = error == UTP_INTERNAL_ERROR_OK ? utp_connection_find_stream_terminal(connection, reset.stream_id)

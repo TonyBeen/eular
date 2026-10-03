@@ -1153,7 +1153,7 @@ utp_internal_error_t utp_stream_on_frame_packet_accounted(utp_stream_t* stream, 
     if (stream == NULL || frame == NULL || !stream->used) {
         return UTP_INTERNAL_ERROR_INVALID_ARGUMENT;
     }
-    if (frame->stream_id != stream->stream_id || (frame->flags & (uint8_t)~UTP_STREAM_FLAG_FIN) != 0u ||
+    if (frame->stream_id != stream->stream_id || (frame->flags & (uint8_t)(UINT8_MAX ^ UTP_STREAM_FLAG_FIN)) != 0u ||
         (frame->data_length == 0u && (frame->flags & UTP_STREAM_FLAG_FIN) == 0u) ||
         (frame->data == NULL && frame->data_length != 0u) || (frame->data_length != 0u && packet == NULL)) {
         return UTP_INTERNAL_ERROR_PROTOCOL;

@@ -36,6 +36,12 @@ function(utp_configure_c_test target)
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+if(WIN32)
+    set(UTP_TEST_PLATFORM_SOURCES windows_test_init.c)
+else()
+    set(UTP_TEST_PLATFORM_SOURCES)
+endif()
+
 function(utp_configure_cpp_test target)
     target_link_libraries(${target} PRIVATE utp event_core)
     target_include_directories(${target} PRIVATE "${UTP_ROOT_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -52,17 +58,17 @@ endfunction()
 
 if(BUILD_TESTING AND UTP_BUILD_TESTS)
     find_package(Threads REQUIRED)
-    add_executable(utp_api_test test_core.c)
+    add_executable(utp_api_test test_core.c ${UTP_TEST_PLATFORM_SOURCES})
     utp_configure_c_test(utp_api_test)
     target_include_directories(utp_api_test PRIVATE "${UTP_GENERATED_INCLUDE_DIR}")
 
-    add_executable(utp_public_api_test test_public_api.c)
+    add_executable(utp_public_api_test test_public_api.c ${UTP_TEST_PLATFORM_SOURCES})
     utp_configure_c_test(utp_public_api_test)
     target_include_directories(utp_public_api_test PRIVATE "${UTP_ROOT_DIR}/../3rd")
 
     foreach(test_name IN ITEMS proto crypto receive_history packet_out packet_in send_ledger send_control pending_incoming
             stream connection congestion minmax bw_sampler bbr mtu nat parser_fuzz transport_integration)
-        add_executable(utp_${test_name}_test test_${test_name}.cc)
+        add_executable(utp_${test_name}_test test_${test_name}.cc ${UTP_TEST_PLATFORM_SOURCES})
         utp_configure_cpp_test(utp_${test_name}_test)
     endforeach()
 

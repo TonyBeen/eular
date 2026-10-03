@@ -1112,8 +1112,8 @@ int main(int argc, char** argv)
         probe_options.phase_timeout_ms    = static_cast<uint32_t>(std::min<uint64_t>(nat_timeout_ms, UINT32_MAX));
         app.timeout_event = (app.initiator || app.listen_requested) ? evtimer_new(base, nat_punch_timeout, &app) : NULL;
         if (app.timeout_event != NULL) {
-            timeval timeout = {static_cast<time_t>(timeout_ms / 1000u),
-                               static_cast<suseconds_t>((timeout_ms % 1000u) * 1000u)};
+            timeval timeout = {static_cast<decltype(timeval{}.tv_sec)>(timeout_ms / 1000u),
+                               static_cast<decltype(timeval{}.tv_usec)>((timeout_ms % 1000u) * 1000u)};
             event_add(app.timeout_event, &timeout);
         }
         app.signal_int               = evsignal_new(base, SIGINT, nat_punch_signal, &app);
