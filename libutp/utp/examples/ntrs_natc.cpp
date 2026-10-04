@@ -268,35 +268,51 @@ static bool ntrs_natc_address_is_ipv6(const char* address)
 }
 
 /** @brief 将 NAT 服务主机名解析为指定地址族的数字 IP。 */
-static bool ntrs_natc_resolve_nat_address(const char* input, int32_t family, char output[INET6_ADDRSTRLEN])
+static bool ntrs_natc_resolve_nat_address(const char* input, int32_t family, char output[INET6_ADDRSTRLEN],
+                                          int32_t* resolver_error)
 {
-    struct evutil_addrinfo  hints     = {};
-    struct evutil_addrinfo* addresses = NULL;
-    struct evutil_addrinfo* current;
+    struct addrinfo  hints     = {};
+    struct addrinfo* addresses = NULL;
+    struct addrinfo* current;
+    int32_t          result;
 
+    if (resolver_error != NULL) *resolver_error = 0;
     hints.ai_family   = family;
     hints.ai_socktype = SOCK_DGRAM;
-    if (evutil_getaddrinfo(input, NULL, &hints, &addresses) != 0) {
+    hints.ai_protocol = IPPROTO_UDP;
+    result            = getaddrinfo(input, NULL, &hints, &addresses);
+    if (result != 0) {
+        if (resolver_error != NULL) *resolver_error = result;
         return false;
     }
     for (current = addresses; current != NULL; current = current->ai_next) {
         if (family == AF_INET && current->ai_family == AF_INET &&
             inet_ntop(AF_INET, &((const struct sockaddr_in*)current->ai_addr)->sin_addr, output, INET6_ADDRSTRLEN) !=
                 NULL) {
-            evutil_freeaddrinfo(addresses);
+            freeaddrinfo(addresses);
             return true;
         }
         if (family == AF_INET6 && current->ai_family == AF_INET6) {
             const struct in6_addr* address = &((const struct sockaddr_in6*)current->ai_addr)->sin6_addr;
 
             if (!IN6_IS_ADDR_V4MAPPED(address) && inet_ntop(AF_INET6, address, output, INET6_ADDRSTRLEN) != NULL) {
-                evutil_freeaddrinfo(addresses);
+                freeaddrinfo(addresses);
                 return true;
             }
         }
     }
-    evutil_freeaddrinfo(addresses);
+    freeaddrinfo(addresses);
+    if (resolver_error != NULL) *resolver_error = EAI_NONAME;
     return false;
+}
+
+static const char* ntrs_natc_gai_error_string(int32_t error)
+{
+#if defined(_WIN32)
+    return gai_strerrorA(error);
+#else
+    return gai_strerror(error);
+#endif
 }
 
 static int32_t ntrs_natc_run(const char* nat_address, uint16_t nat_port, const char* bind_address, uint16_t bind_port,
@@ -308,6 +324,7 @@ static int32_t ntrs_natc_run(const char* nat_address, uint16_t nat_port, const c
     char                    nat_numeric_address[INET6_ADDRSTRLEN];
     uint16_t                local_port = 0u;
     utp_status_t            status;
+    int32_t                 resolver_error;
 #if defined(_WIN32)
     WSADATA winsock_data;
     bool    winsock_started = false;
@@ -324,9 +341,11 @@ static int32_t ntrs_natc_run(const char* nat_address, uint16_t nat_port, const c
     }
     winsock_started = true;
 #endif
-    if (!ntrs_natc_resolve_nat_address(nat_address, use_ipv6 ? AF_INET6 : AF_INET, nat_numeric_address)) {
-        (void)fprintf(stderr, "ntrs_natc event=nat_address_resolve_failed address=%s family=%s\n", nat_address,
-                      use_ipv6 ? "ipv6" : "ipv4");
+    if (!ntrs_natc_resolve_nat_address(nat_address, use_ipv6 ? AF_INET6 : AF_INET, nat_numeric_address,
+                                       &resolver_error)) {
+        (void)fprintf(
+            stderr, "ntrs_natc event=nat_address_resolve_failed address=%s family=%s error=%" PRId32 " reason=%s\n",
+            nat_address, use_ipv6 ? "ipv6" : "ipv4", resolver_error, ntrs_natc_gai_error_string(resolver_error));
         goto cleanup;
     }
     if (bind_address == NULL) {
