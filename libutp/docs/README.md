@@ -1,6 +1,6 @@
 # libutp 实现文档
 
-实现细节按模块组织。当前 C11 实现、公共 API 和线格式以 `utp/include/utp/`、`utp/src/` 及本文档目录为准；`docs/superpowers/` 保留为历史设计和迁移参考，不应覆盖当前 C11 代码语义。
+实现细节按模块组织。当前 C11 实现、公共 API 和线格式以 `utp/include/utp/`、`utp/src/` 及本文档目录为准。历史迁移草案已清理；不再维护第二套设计来源。
 
 - [TODO](TODO.md)
 - [限制与边界](限制与边界.md)
@@ -21,6 +21,7 @@
 
 - [NAT 探测](nat/NAT探测实现细节.md)
 - [NTRS 服务](ntrs/NTRS服务实现细节.md)
+- [NAT 服务控制面](ntrs/NAT服务控制面实现细节.md)
 - [内存池与对象生命周期](memory/内存池与对象生命周期.md)
 - [读写链路内存流转](memory/读写链路内存流转分析.md)
 - [有序分片与 PacketIn 引用](memory/有序分片与PacketIn引用模型.md)

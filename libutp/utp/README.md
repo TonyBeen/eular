@@ -2,7 +2,7 @@
 
 This directory contains the C11 implementation of libutp. Functional details
 and module ownership are documented in the [implementation documentation
-index](../doc/README.md). The C headers and sources are the implementation
+index](../docs/README.md). The C headers and sources are the implementation
 authority; the historical C++ tree is not a runtime dependency.
 
 The binding C11 design and code rules are in [STYLE.md](STYLE.md). They adapt

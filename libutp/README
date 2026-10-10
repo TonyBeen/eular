@@ -11,7 +11,7 @@
 - `utp/test/`：C API、协议、连接、流控、拥塞控制和传输集成测试
 - `utp/examples/`：`nat_punch`、`ntrs_natc` 和回显示例
 - `ntrs/`：NTRS rendezvous、NAT 探测 Hub/Node 服务
-- `doc/`：按模块组织的实现和使用文档
+- `docs/`：按模块组织的实现和使用文档
 - `backup/cpp/`：旧 C++ 实现、测试和示例，仅供迁移参考
 
 ## 依赖
@@ -76,7 +76,7 @@ NTRS 集成测试可通过 `UTP_NTRS_EXECUTABLE` 指定已构建的 NTRS 可执�
 
 库目标导出为 `eular::utp`。Windows 下使用 `UTP_BUILD_SHARED=ON` 时，公共声明通过 `utp/export.h` 自动使用 DLL 导出/导入标记。
 
-详细行为和协议实现见 `doc/`，当前 C 代码和公共头文件是权威实现；`backup/cpp/` 不作为当前 API 或协议行为的依据。
+详细行为和协议实现见 `docs/`，当前 C 代码和公共头文件是权威实现；`backup/cpp/` 不作为当前 API 或协议行为的依据。
 
 ## 版本
 
